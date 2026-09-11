@@ -1,0 +1,25 @@
+class Counter:
+    total: int64
+
+    def bump(mut self) -> int64:
+        self.total = self.total + 1
+        return self.total
+
+type Bumper = Callable[mut def() -> int64]
+
+def make_bumper() -> Bumper:
+    counter = Counter(total=0)
+    return Bumper(lambda [own counter]: counter.bump())
+
+def bump_through(bumper: mut Bumper) -> int64:
+    return bumper()
+
+def main():
+    mut bumper = make_bumper()
+    print(bumper())
+    print(bumper())
+    print(bump_through(bumper))
+    other = Counter(total=10)
+    mut direct = lambda [own other]: other.bump()
+    print(direct())
+    print(direct())

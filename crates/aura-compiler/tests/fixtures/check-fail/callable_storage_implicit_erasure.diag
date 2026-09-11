@@ -1,0 +1,6 @@
+error[AU2015]: callable contract mismatch: implicit erased storage; a lambda becomes `Callable[def(value: int64) -> int64]` only through an explicit `Callable(lambda ...)` constructor call
+ --> crates/aura-compiler/tests/fixtures/check-fail/callable_storage_implicit_erasure.au:5:18
+  |
+5 |     tool: Tool = lambda value: value + offset
+  |                  ^
+  = help: annotate the destination with a contract every value satisfies, or adapt a value explicitly through a thin callable alias call such as `Alias(function)`

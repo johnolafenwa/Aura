@@ -720,6 +720,7 @@ fn direct_runtime_type_substitutions_respect_callable_structure_and_capabilities
             ty: Type::TypeParam("U".to_string()),
             mode: ClosureCaptureMode::MutableView,
             span: Span::new(1, 1),
+            mutated: false,
         }]),
         call_kind: ClosureCallKind::MutableRepeatable,
     };
@@ -735,6 +736,7 @@ fn direct_runtime_type_substitutions_respect_callable_structure_and_capabilities
             ty: Type::named("str"),
             mode: ClosureCaptureMode::MutableView,
             span: Span::new(1, 1),
+            mutated: false,
         }]),
         call_kind: ClosureCallKind::MutableRepeatable,
     };

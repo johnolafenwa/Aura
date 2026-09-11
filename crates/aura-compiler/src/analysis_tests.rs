@@ -8382,6 +8382,7 @@ fn closure_types_preserve_analysis_shape_unknown_detection_and_call_results() {
             ty: capture_ty,
             mode: crate::sema::ClosureCaptureMode::Copy,
             span: Span::new(4, 31),
+            mutated: false,
         }]),
         call_kind: crate::sema::ClosureCallKind::Repeatable,
     };

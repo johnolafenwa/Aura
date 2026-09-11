@@ -202,10 +202,10 @@ fn generic_functions_return_unions_of_their_type_parameters() {
 }
 
 #[test]
-fn owned_callable_type_forms_require_batch_one_lowering() {
+fn owned_callable_types_pack_only_through_their_constructor() {
     rejects(
-        "def main():\n    callback: Callable[def() -> None] = print\n",
-        "requires Batch 1 semantic lowering",
+        "def helper():\n    pass\ndef main():\n    callback: Callable[def() -> None] = helper\n",
+        "implicit erased storage",
     );
 }
 

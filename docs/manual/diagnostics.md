@@ -47,8 +47,9 @@ the invalidation. `AU2015` reports a callable contract mismatch: a value whose
 complete contract (exposed names, keyword-only boundary, default availability)
 is not admitted by the written destination, a rebinding, branch join,
 container literal, or generic observation that would need an invented common
-contract, a lambda that does not meet its expected contract, or an invalid
-thin-alias adaptation; its message names the differing slot. `AU2004` also
+contract, a lambda that does not meet its expected contract, an invalid
+thin-alias adaptation, implicit erased storage into `Callable[...]`, or a
+packed call kind that would strengthen; its message names the difference. `AU2004` also
 reports a positional argument reaching a keyword-only parameter
 (`parameter `x` of function `f` is keyword-only`) and a named argument aimed
 at a positional-only slot of a written callable type.
@@ -309,7 +310,7 @@ imported module is never mislabeled with the entry module's path.
 
 The arrays are an additive schema-version-1 extension. Schema-version-1
 readers MUST ignore unrecognized object members while continuing to validate
-the fields they use. The compiler-service semantic-interface version is `12`.
+the fields they use. The compiler-service semantic-interface version is `13`.
 
 The process exits unsuccessfully after emitting a JSON error report. Tools MUST
 parse standard error as one JSON document in JSON mode and MUST NOT scrape the

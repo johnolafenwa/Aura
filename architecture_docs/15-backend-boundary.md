@@ -364,3 +364,26 @@ keyword-only slot for direct calls, indirect calls, lowering, and both
 backends alike. The thin alias adapter `Alias(value)` lowers to the adapted
 operand in a temporary typed with the alias contract; no runtime
 representation changes. The semantic interface schema is 12.
+
+## Batch 1 phase 1: callable packing and call kinds
+
+Both runtimes already represent a closure as one boxed function value whose
+`ClosureEnvironment` owns its captures, so `Callable[...]` /
+`TaskCallable[...]` storage (Q13-Q16 A) is a compile-time erasure over that
+value rather than a second representation: `Type::Callable` records the
+task flag, the call kind, and the complete contract, and a packed value is
+the closure or function value moved into a temporary of that type. The
+checkpoint's four-word inline buffer with an operations table is the native
+ABI target this boxed environment stands in for; no packing allocation is
+added and destruction stays the environment's own. Owned-capture mutation
+marks the capture `mutated` in the checker and MIR: the closure function
+takes it mutably, the interpreter writes the updated value back into the
+environment after each call, and the direct runtime's existing mutable
+capture writeback covers it. The MIR closure rvalue carries a `mutable` bit
+so the validator's authoritative identity is the closure's real kind; the
+validator admits an erased destination only when its kind is no weaker than
+the value's, checks erased contracts for top-level arguments, call results,
+task starts, and function operands, and merges disagreeing identities under
+one erased element type into that contract. Runtime type patterns admit a
+function or closure signature for an erased declared type when the ABI
+matches and the kind is admitted. The semantic interface schema is 13.

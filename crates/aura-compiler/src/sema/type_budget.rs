@@ -289,6 +289,21 @@ fn prospective_nodes(
                         .map(|param| (&param.ty, child_depth, substitute)),
                 );
             }
+            Type::Callable(callable) => {
+                let children =
+                    callable.params.len().checked_add(1).ok_or_else(|| {
+                        capacity_error(span, "type expansion child-count overflow")
+                    })?;
+                reserve_stack(&mut stack, children, span)?;
+                stack.push((&callable.return_type, child_depth, substitute));
+                stack.extend(
+                    callable
+                        .params
+                        .iter()
+                        .rev()
+                        .map(|param| (&param.ty, child_depth, substitute)),
+                );
+            }
             Type::Closure {
                 params,
                 return_type,
@@ -451,6 +466,52 @@ fn check_key_shape(
                 stack.push((return_type, child_depth, module, resolve_names, substitute));
                 stack.extend(
                     params
+                        .iter()
+                        .rev()
+                        .map(|param| (&param.ty, child_depth, module, resolve_names, substitute)),
+                );
+            }
+            Type::Callable(callable) => {
+                add_key_bytes(&mut bytes, 12, byte_limit, span)?;
+                add_key_bytes(
+                    &mut bytes,
+                    bool_json_len(callable.task) + closure_call_kind_json_len(callable.call_kind),
+                    byte_limit,
+                    span,
+                )?;
+                add_key_collection_overhead(
+                    &mut bytes,
+                    2,
+                    callable.params.len(),
+                    byte_limit,
+                    span,
+                )?;
+                for param in &callable.params {
+                    add_key_bytes(&mut bytes, 7, byte_limit, span)?;
+                    add_json_string(&mut bytes, &param.name, byte_limit, span)?;
+                    add_key_bytes(
+                        &mut bytes,
+                        receiver_kind_json_len(param.passing)
+                            + bool_json_len(param.has_default)
+                            + bool_json_len(param.keyword_only),
+                        byte_limit,
+                        span,
+                    )?;
+                }
+                let children = callable.params.len().checked_add(1).ok_or_else(|| {
+                    capacity_error(span, "canonical type-key child-count overflow")
+                })?;
+                reserve_key_stack(&mut stack, children, span)?;
+                stack.push((
+                    &callable.return_type,
+                    child_depth,
+                    module,
+                    resolve_names,
+                    substitute,
+                ));
+                stack.extend(
+                    callable
+                        .params
                         .iter()
                         .rev()
                         .map(|param| (&param.ty, child_depth, module, resolve_names, substitute)),

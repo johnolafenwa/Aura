@@ -3600,6 +3600,7 @@ fn mir_projection_and_unknown_type_helpers_preserve_fallback_contracts() {
             ty: Type::named("Unknown"),
             mode: crate::sema::ClosureCaptureMode::Copy,
             span: Span::new(1, 1),
+            mutated: false,
         }],
         Type::Unit,
     )));
@@ -11094,6 +11095,7 @@ fn mir_function_value_helpers_preserve_nested_types_and_imported_specialization(
             ty: Type::Named("Option".to_string(), vec![Type::named("Unknown")]),
             mode: crate::sema::ClosureCaptureMode::Copy,
             span: Span::new(1, 1),
+            mutated: false,
         }]),
         call_kind: crate::sema::ClosureCallKind::Repeatable,
     };
@@ -11962,6 +11964,7 @@ def main():
                         signature,
                         captures,
                         consuming,
+                        mutable: _,
                     },
                 ..
             } => Some((function, signature, captures, consuming)),
@@ -12141,6 +12144,7 @@ def main() -> int32:
                         signature,
                         captures,
                         consuming,
+                        mutable: _,
                     },
             } => Some((target, function, signature, captures, consuming)),
             _ => None,

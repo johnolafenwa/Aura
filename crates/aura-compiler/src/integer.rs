@@ -939,7 +939,7 @@ pub fn integer_type_bounds(ty: &Type) -> Option<IntegerBounds> {
         Type::Module(_) => None,
         Type::TypeParam(_) => None,
         Type::Tuple(_) => None,
-        Type::Function { .. } | Type::Closure { .. } => None,
+        Type::Function { .. } | Type::Closure { .. } | Type::Callable(_) => None,
         Type::Named(_, args) if !args.is_empty() => None,
         Type::Named(name, _) => IntegerKind::from_runtime_type_name(name).map(IntegerKind::bounds),
     }

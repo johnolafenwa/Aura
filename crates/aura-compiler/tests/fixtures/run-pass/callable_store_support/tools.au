@@ -1,0 +1,5 @@
+public type Tool = Callable[def(value: int64) -> int64]
+
+public def make_adder(amount: int64) -> Tool:
+    added = amount
+    return Tool(lambda value: value + added)

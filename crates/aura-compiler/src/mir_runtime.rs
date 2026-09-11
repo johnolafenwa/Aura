@@ -3825,6 +3825,7 @@ impl MirRuntime {
                 signature,
                 captures,
                 consuming,
+                mutable: _,
             } => {
                 let mut captured = Vec::with_capacity(captures.len());
                 for capture in captures {
@@ -3839,7 +3840,7 @@ impl MirRuntime {
                         ty: capture.ty.clone(),
                         value: self.evaluate_owned_operand(&capture.value, env)?,
                         source_place,
-                        mutable: capture.passing == MirReceiverKind::BorrowMut,
+                        mutable: capture.passing == MirReceiverKind::BorrowMut || capture.mutated,
                     });
                 }
                 let metadata = self.functions.get(function);
@@ -5599,6 +5600,7 @@ impl MirRuntime {
             })?;
         if let Some(closure) = &function_value.closure_environment {
             let captures = closure.arguments(&function_value.name)?;
+            let capture_count = captures.len();
             let mut combined = Vec::with_capacity(captures.len() + evaluated_args.len());
             for capture in captures {
                 let value = match &capture.source_place {
@@ -5616,10 +5618,23 @@ impl MirRuntime {
             let writeback_places = bind_function_writeback_places(&function.params, &combined)?;
             let outcome =
                 self.call_function_for_target(&function, None, combined, expected_return_type)?;
+            // Environment-owned mutable captures have no caller place: their
+            // updated values return to the closure environment (C2).
+            let mut place_updates = Vec::with_capacity(outcome.updated_params.len());
+            for (index, value) in outcome.updated_params {
+                if index < capture_count
+                    && writeback_places.get(index).is_some_and(Option::is_none)
+                    && function.params[index].passing == MirReceiverKind::BorrowMut
+                {
+                    closure.write_back_mutable(index, value)?;
+                } else {
+                    place_updates.push((index, value));
+                }
+            }
             self.apply_borrowed_param_writebacks(
                 &function.params,
                 &writeback_places,
-                outcome.updated_params,
+                place_updates,
                 env,
             )?;
             let value = outcome.value.into_result()?;
@@ -10786,6 +10801,28 @@ fn collect_runtime_type_substitutions(
             }
             collect_runtime_type_substitutions(pattern_return, actual_return, substitutions);
         }
+        Type::Callable(pattern_callable) => {
+            let Type::Callable(actual_callable) = actual else {
+                return;
+            };
+            if pattern_callable.params.len() != actual_callable.params.len() {
+                return;
+            }
+            for (pattern_param, actual_param) in
+                pattern_callable.params.iter().zip(&actual_callable.params)
+            {
+                collect_runtime_type_substitutions(
+                    &pattern_param.ty,
+                    &actual_param.ty,
+                    substitutions,
+                );
+            }
+            collect_runtime_type_substitutions(
+                &pattern_callable.return_type,
+                &actual_callable.return_type,
+                substitutions,
+            );
+        }
         Type::Closure {
             params: pattern_params,
             return_type: pattern_return,
@@ -10894,6 +10931,12 @@ fn collect_type_params_from_type(ty: &Type, collected: &mut std::collections::BT
                 collect_type_params_from_type(&param.ty, collected);
             }
             collect_type_params_from_type(return_type, collected);
+        }
+        Type::Callable(callable) => {
+            for param in &callable.params {
+                collect_type_params_from_type(&param.ty, collected);
+            }
+            collect_type_params_from_type(&callable.return_type, collected);
         }
         Type::Closure {
             params,

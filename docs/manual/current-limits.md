@@ -76,9 +76,11 @@ This page documents known current limits of the Aura compiler and runtime.
   annotated returns because those boundaries describe capture-free code
   pointers. Compiler-known repeatable callback sites preserve closure
   metadata; task start accepts a qualifying closure by move for one call.
-  Conditional and `match` expressions cannot merge capturing closures from
-  multiple branches because Phase 6.3 has no closure-union type; invoke the
-  closure within each branch or use capture-free lambdas or named functions.
+  Conditional and `match` expressions merge capturing closures only through
+  an explicit common `Callable[...]` contract on the destination; otherwise
+  invoke the closure within each branch or use capture-free lambdas or named
+  functions. Owned callable storage (`Callable[...]`, `TaskCallable[...]`)
+  holds owned captures only and is packed explicitly through an alias call.
 - List, set, and dictionary comprehensions are eager and always return fresh owned
   collections. Their clauses use bare-loop iteration only; there is no
   comprehension `mut`/`own` source form, early `break`/`continue`, or lazy

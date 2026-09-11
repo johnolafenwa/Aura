@@ -2934,7 +2934,7 @@ The JSON result is an array of `{ "name": str, "kind": str, "detail": str }` obj
 `ast-json`, `analyze`, `complete`, and `lsp` emit JSON. The `analyze` and `complete` shapes described here are maintained tooling contracts for Aura 0.3. `ast`, `ast-json`, and `mir` expose compiler inspection data for people and tests; their exact formatting and internal node/block shape are not a stable cross-version serialization API.
 
 `aura lsp` is a persistent JSON-lines compiler service. Every request requires
-`semantic_interface_version: 12` plus string fields `method`, `path`, and
+`semantic_interface_version: 13` plus string fields `method`, `path`, and
 `source`; `id` is optional and is echoed in the response. Supported requests
 are:
 
@@ -2944,7 +2944,7 @@ are:
 ```
 
 Each response is one line containing the same `id`,
-`semantic_interface_version: 12`, and either `result` or an `error` string.
+`semantic_interface_version: 13`, and either `result` or an `error` string.
 Paths give the virtual source a package/import context; ranges and completion
 positions are zero-based. A missing or different semantic interface version is
 an incompatible request and returns a schema-mismatch error.
@@ -3150,7 +3150,7 @@ The parser, checker, package resolver, diagnostic model, analysis engine, and MI
 
 `aura run --backend auto` prefers the direct backend and degrades to the MIR runtime only when direct building or launching is unavailable. Once a direct child runs, an Aura trap, signal termination, wait failure, or diagnostic-protocol failure is a final program/execution outcome and never triggers MIR fallback. Human mode prints an actual fallback reason on standard error before the MIR program runs; JSON mode includes it in the final structured report after execution. A forced `direct` run never degrades, so a parity or benchmark caller cannot silently measure the other backend. Every backend observes the same program arguments, standard output, exit code, and complete runtime diagnostic, including typed call frames and task ancestry.
 
-The native path is content-addressed. A successful direct build atomically publishes its binary, that artifact's SHA-256, and a key-bound unique entry identity into a cache keyed by native cache format `v5`, compiler-owned semantic-interface schema version `12`, this compiler's version, the host target, the backend, the exact linked runtime archive content, its ordered native link arguments, and the complete lowered program, which already incorporates the entry source and every resolved dependency source. The format and semantic identities are independent key fields: changing compiler-owned type or ownership metadata invalidates artifacts even if the native container format remains readable. Cache artifacts above 512 MiB are simply not retained; the just-built program still runs. A later run with the same inputs requires a regular directory and bounded regular sidecars, verifies the entry identity, digest, artifact size, execute permission, and platform-native executable shape, and only then uses the entry. It launches a private copy of exactly those verified bytes through a no-shell-fallback native execution path, so replacement of the shared cache pathname after verification cannot substitute different bytes. Missing or mismatched metadata, truncation, a non-regular member, a lost execute permission, or an executable-format/architecture rejection makes the entry a cache miss: Aura quarantines and removes that exact entry, then rebuilds before running. A temporary-directory failure, process-resource failure, `noexec` mount, or other environmental launch failure is not evidence that verified cache bytes are corrupt; Aura preserves the entry and reports or falls back according to the selected backend.
+The native path is content-addressed. A successful direct build atomically publishes its binary, that artifact's SHA-256, and a key-bound unique entry identity into a cache keyed by native cache format `v5`, compiler-owned semantic-interface schema version `13`, this compiler's version, the host target, the backend, the exact linked runtime archive content, its ordered native link arguments, and the complete lowered program, which already incorporates the entry source and every resolved dependency source. The format and semantic identities are independent key fields: changing compiler-owned type or ownership metadata invalidates artifacts even if the native container format remains readable. Cache artifacts above 512 MiB are simply not retained; the just-built program still runs. A later run with the same inputs requires a regular directory and bounded regular sidecars, verifies the entry identity, digest, artifact size, execute permission, and platform-native executable shape, and only then uses the entry. It launches a private copy of exactly those verified bytes through a no-shell-fallback native execution path, so replacement of the shared cache pathname after verification cannot substitute different bytes. Missing or mismatched metadata, truncation, a non-regular member, a lost execute permission, or an executable-format/architecture rejection makes the entry a cache miss: Aura quarantines and removes that exact entry, then rebuilds before running. A temporary-directory failure, process-resource failure, `noexec` mount, or other environmental launch failure is not evidence that verified cache bytes are corrupt; Aura preserves the entry and reports or falls back according to the selected backend.
 
 On maintained Unix hosts, cache establishment is coordinated across processes. A short runtime-identity lock protects source-checkout runtime discovery, and a separate writer lock for each content key protects the miss/recheck/build/publish sequence. Therefore, N concurrent cold runs of the same program perform one build; after that publication, the other N-1 processes recheck and consume the verified entry. Existing verified hits take the optimistic read path and do not wait for a writer holding that key. Locks are released before linking output is executed, while atomic publication and invalidation continue to ensure that readers never observe a partial entry and a stale invalidator cannot delete a replacement published for the same key.
 
@@ -3173,7 +3173,7 @@ streaming contract is ratified.
 
 `AURA_CACHE_DIR` selects the cache directory; the default is `~/.cache/aura/native`. The directory is a trust boundary. Its colocated SHA-256 detects corruption but does not authenticate bytes written by a hostile account, so the root must be private to the current OS user and every writer with access to it must be trusted. On the maintained Unix hosts, Aura rejects a root that is owned by another user or writable by group/other and creates or tightens accepted cache directories to mode `0700`. Private launch copies are removed after the child exits. Each launch carries an inherited exclusive lease, so later cleanup preserves the directory while either the `aura` parent or native child is still using it. Interrupted cache-publication, memo, and quarantine stages are collected only after their encoded 24-hour grace period and confirmation that their owner process is gone. An installed immutable runtime can still perform a direct build when caching is disabled or unavailable; no cache lock is required merely to build, and the uncached artifact is not retained.
 
-ADR-0031 ratifies the command split: `aura run` defaults to `mir` for the interactive edit-run path, while `aura build` defaults to `auto` for artifact production. Maintained measurements put a cold miss at about 1.3 seconds; a direct hello-world executable is roughly 57 MB of statically linked runtime. Each cache hit reads, hashes, and privately materializes the artifact, and workloads dominated by programs seen once, including CI, still pay the cold path on every program. `aura build --backend direct` uses native direct emission, and `--backend auto` may select the checked MIR-launcher fallback. The language server delegates semantic analysis and completion to the persistent compiler service; every JSON-lines request and response identifies semantic-interface schema version `12`. A missing or different identity closes the incompatible service and invalidates all document analysis before the lexical recovery path is used, so cached function-type or ownership metadata cannot cross compiler versions. The lexical fallback is recovery-only and is not a second language implementation.
+ADR-0031 ratifies the command split: `aura run` defaults to `mir` for the interactive edit-run path, while `aura build` defaults to `auto` for artifact production. Maintained measurements put a cold miss at about 1.3 seconds; a direct hello-world executable is roughly 57 MB of statically linked runtime. Each cache hit reads, hashes, and privately materializes the artifact, and workloads dominated by programs seen once, including CI, still pay the cold path on every program. `aura build --backend direct` uses native direct emission, and `--backend auto` may select the checked MIR-launcher fallback. The language server delegates semantic analysis and completion to the persistent compiler service; every JSON-lines request and response identifies semantic-interface schema version `13`. A missing or different identity closes the incompatible service and invalidates all document analysis before the lexical recovery path is used, so cached function-type or ownership metadata cannot cross compiler versions. The lexical fallback is recovery-only and is not a second language implementation.
 
 Backend parity is a release gate. A construct accepted by one maintained
 execution backend must have the same observable result or complete diagnostic
@@ -3326,18 +3326,83 @@ A capturing closure retains semantic environment and call-kind metadata that
 an arbitrary written `def(...) -> R` storage type does not describe. It may be
 held in an immutable inferred or contextually typed local, called directly,
 passed directly to compiler-known repeatable callback sites such as the list
-algorithms and `control.retry`, or moved into a qualifying task start. It
-cannot be coerced through an arbitrary written `def` parameter, stored in a
-`def` field or collection element, or returned through an annotated `def`
-result. Those metadata-erasing boundaries report `AU2002`.
+algorithms and `control.retry`, moved into a qualifying task start, or packed
+into an owned callable storage type. It cannot be coerced through a thin
+`def` parameter, field, element, or annotated result; those boundaries
+report `AU2002`.
 
-A conditional or `match` expression also cannot merge capturing closure
-values from different branches. The branches may have different capture
-sets, ownership states, and call kinds, and Phase 6.3 has no closure-union
-type that preserves those differences. Call the closure inside each branch,
-or return capture-free lambdas or named functions with one structural
-`def(...) -> R` type. Creating and calling a closure wholly inside a branch
-remains supported.
+`Callable[def(...) -> R]`, `Callable[mut def(...) -> R]`, and
+`Callable[own def(...) -> R]` are owned storage types for a Shared, Mutable,
+or Consuming callable with a complete contract (see [Function
+Values](/manual/functions#function-values)) and an erased capture set;
+`TaskCallable[...]` is the same storage whose every capture is proven
+Transfer. Packing is explicit: calling a non-generic alias of such a type
+with one value packs it, and the packed value keeps the closure's own
+environment.
+
+```aura
+class Counter:
+    total: int64
+
+    def bump(mut self) -> int64:
+        self.total = self.total + 1
+        return self.total
+
+type Reader = Callable[def() -> int64]
+type Bumper = Callable[mut def() -> int64]
+type Finish = Callable[own def() -> str]
+
+def make_reader(base: int64) -> Reader:
+    offset = base + 1
+    return Reader(lambda: offset)
+
+def make_bumper() -> Bumper:
+    counter = Counter(total=0)
+    return Bumper(lambda [own counter]: counter.bump())
+
+reader = make_reader(1)
+print(reader())
+print(reader())
+def make_finish(text: own str) -> Finish:
+    return Finish(lambda [own text]: text)
+
+def finish_once(finish: own Finish) -> str:
+    return finish()
+
+mut bumper = make_bumper()
+print(bumper())
+print(bumper())
+print(finish_once(make_finish("done")))
+```
+
+The packed value's contract must be admitted by the storage contract, and
+its call kind may only weaken: a Shared value packs into any kind, a
+Mutable value into Mutable or Consuming storage, and a Consuming value only
+into Consuming storage; the reverse reports `AU2015`. A closure or function
+value that reaches a `Callable` destination without the constructor reports
+`AU2015` as implicit erased storage. A loan capture (`[values]`,
+`[mut values]`, or a live view) cannot be packed (`AU3010`); move or clone
+an owned value into the lambda instead. Packing into `TaskCallable[...]`
+additionally requires every capture type to be Transfer (`AU3008`, naming
+the capture); an ordinary erased `Callable` is never Transfer.
+
+Packed values are non-Copy and non-cloneable, so `dict.get`, snapshots, and
+generic cloning reject them (`AU3007`), they have no equality (`AU2008`), and
+they move like any owned value (`AU3001` after a move or a consuming call).
+They may be stored in parameters (`mut Bumper`, `own Finish`), results,
+class fields, list and dictionary elements, and cross modules through public
+aliases. A Shared value is called through any access, a Mutable value only
+through a mutable place (`AU3003`), and a Consuming value once, by an owner;
+a callable element of a list or dictionary is called through a call-scoped
+shared read, and a Consuming element must be removed before it is consumed.
+
+A conditional or `match` expression merges capturing closures only through
+an explicit common `Callable` contract on the destination (an annotation,
+parameter, or return type): each reached branch packs its own value, and
+untaken lambda expressions acquire no captures. Without such a contract,
+different capturing closures still cannot merge; call the closure inside
+each branch, or return capture-free lambdas or named functions with one
+structural `def(...) -> R` type.
 
 A resolved name in a lambda without a list is a capture only when it denotes
 an outer owned local or an `own` parameter. Lambda parameters, module
@@ -3420,6 +3485,14 @@ non-Transfer leaf retains the ordinary `AU3008` boundary explanation. A
 closure containing any shared or mutable loan is always non-Transfer and
 cannot cross a task, Queue, supervisor, detached-work, or FFI boundary.
 
+A body may call a `mut` operation on an owned capture, whether it moved or
+copied into the environment implicitly or through `own name`. The closure is
+then Mutable: it must be held in a `mut` local or called through a mutable
+place, and the updated capture value persists in the environment across
+calls, so a packed counter counts across invocations. The original outer
+binding is not changed. A shared-view capture stays read-only (`AU3003`);
+capture it `mut` for a mutable view of the original place instead.
+
 ### Comprehension Interaction
 
 Comprehensions do not change closure capture. A lambda enclosing a
@@ -3447,15 +3520,20 @@ consuming closure.
 
 `AU1101` reports malformed lambda parameter or body syntax. `AU2002` reports a
 missing or mismatched parameter context, parameter capability, result type,
-metadata-erasing storage boundary, or a consuming closure supplied where a
-repeatable callback is required. `AU3001` reports use after a non-Copy value
-moved into a closure and use after a consuming closure call. `AU3002` rejects
-overlapping capture loans and source accesses. `AU3003` rejects capability
-escalation or a mutable-repeatable call through an immutable closure place.
-`AU3008` reports a closure whose
-captured environment cannot cross a task boundary because some captured value
-is not Transfer. `AU3010` reports a loan closure escaping into storage or a
-metadata-erasing callable boundary.
+thin-`def` storage boundary, or a consuming closure supplied where a
+repeatable callback is required. `AU2015` reports implicit erased storage
+(a closure or function reaching `Callable[...]` without its constructor), a
+packed value whose contract is not admitted, or a call kind that would
+strengthen. `AU3001` reports use after a non-Copy value moved into a closure
+and use after a consuming closure or consuming callable call. `AU3002`
+rejects overlapping capture loans and source accesses. `AU3003` rejects
+capability escalation, mutation of a shared-view capture, or a Mutable call
+through an immutable place. `AU3007` rejects duplicating a packed callable.
+`AU3008` reports a closure whose captured environment cannot cross a task
+boundary or become `TaskCallable` because some captured value is not
+Transfer. `AU3010` reports a loan closure escaping into storage, a loan
+capture packed into owned callable storage, or a metadata-erasing callable
+boundary.
 
 The shared-capability diagnostic recommends cloning to an owned local or
 taking owned input. Move diagnostics identify closure creation or the
@@ -3478,6 +3556,13 @@ Closures are expression-only and contextually typed. They do not support
 statement bodies, inline parameter types, defaults, generics, implicit
 reference capture, method values, trait objects, FFI callbacks, asynchronous
 syntax, returned loan closures, or lifetime-bearing structural callable types.
+Owned callable storage holds owned captures only; loan captures stay in
+local loan closures. A packed value keeps the closure's existing environment
+as its storage, so packing allocates no second environment on either
+backend; the checkpoint's inline-buffer plan is the native ABI target this
+representation stands in for. `TaskCallable[...]` values are packed and
+validated, but the `TaskGroup` start methods do not accept a stored target
+yet.
 Explicit lists accept local identifiers; project a field into a named view
 before capturing it.
 
@@ -5141,9 +5226,11 @@ This page documents known current limits of the Aura compiler and runtime.
   annotated returns because those boundaries describe capture-free code
   pointers. Compiler-known repeatable callback sites preserve closure
   metadata; task start accepts a qualifying closure by move for one call.
-  Conditional and `match` expressions cannot merge capturing closures from
-  multiple branches because Phase 6.3 has no closure-union type; invoke the
-  closure within each branch or use capture-free lambdas or named functions.
+  Conditional and `match` expressions merge capturing closures only through
+  an explicit common `Callable[...]` contract on the destination; otherwise
+  invoke the closure within each branch or use capture-free lambdas or named
+  functions. Owned callable storage (`Callable[...]`, `TaskCallable[...]`)
+  holds owned captures only and is packed explicitly through an alias call.
 - List, set, and dictionary comprehensions are eager and always return fresh owned
   collections. Their clauses use bare-loop iteration only; there is no
   comprehension `mut`/`own` source form, early `break`/`continue`, or lazy
@@ -5462,8 +5549,9 @@ the invalidation. `AU2015` reports a callable contract mismatch: a value whose
 complete contract (exposed names, keyword-only boundary, default availability)
 is not admitted by the written destination, a rebinding, branch join,
 container literal, or generic observation that would need an invented common
-contract, a lambda that does not meet its expected contract, or an invalid
-thin-alias adaptation; its message names the differing slot. `AU2004` also
+contract, a lambda that does not meet its expected contract, an invalid
+thin-alias adaptation, implicit erased storage into `Callable[...]`, or a
+packed call kind that would strengthen; its message names the difference. `AU2004` also
 reports a positional argument reaching a keyword-only parameter
 (`parameter `x` of function `f` is keyword-only`) and a named argument aimed
 at a positional-only slot of a written callable type.
@@ -5724,7 +5812,7 @@ imported module is never mislabeled with the entry module's path.
 
 The arrays are an additive schema-version-1 extension. Schema-version-1
 readers MUST ignore unrecognized object members while continuing to validate
-the fields they use. The compiler-service semantic-interface version is `12`.
+the fields they use. The compiler-service semantic-interface version is `13`.
 
 The process exits unsuccessfully after emitting a JSON error report. Tools MUST
 parse standard error as one JSON document in JSON mode and MUST NOT scrape the
@@ -9069,8 +9157,8 @@ as an annotation, or adapt a value explicitly: calling a non-generic alias of
 a thin `def` type with one function value or capture-free lambda, such as
 `Unary(increment)`, yields that alias contract when the alias admits the
 value and reports `AU2015` otherwise. No environment is added; a capturing
-closure needs an owned `Callable[...]` storage type, which is not yet
-available.
+closure packs into an owned `Callable[...]` storage type instead (see
+[Closures](/manual/closures#typing-rules)).
 
 Function values are code pointers. They are copy values, cloning is
 unnecessary, and copying or passing one as an `own def(...) -> R` parameter
@@ -10121,7 +10209,12 @@ type
 type-primary
     = identifier-path, [ "[", type-list, "]" ]
     | tuple-type
-    | function-type ;
+    | function-type
+    | owned-callable-type ;
+
+owned-callable-type
+    = ( "Callable" | "TaskCallable" ), "[",
+      [ "mut" | "own" ], function-type, "]" ;
 
 type-list = type, { ",", type } ;
 
@@ -10166,7 +10259,11 @@ that the target supplies a default, so a literal or expression after `=` in a
 type is rejected (`AU1101`). The same boundary rule applies to declaration
 and lambda parameter lists: at most one `*`, followed by at least one named
 parameter, adding no variadics. `indirect` is invalid on a function type
-because the value is already a code pointer.
+because the value is already a code pointer. `Callable[...]` and
+`TaskCallable[...]` wrap one function type as owned callable storage; a bare
+`def` inside the brackets is Shared, `mut def` Mutable, and `own def`
+Consuming, and `mut def`/`own def` are not valid outside those brackets.
+`indirect` is invalid on owned callable types.
 
 `T?` denotes `Option[T]`, including when `T` is a tuple type. Type and
 type-parameter lists are nonempty when brackets are present and do not accept
@@ -16280,8 +16377,12 @@ through a mutable closure place, and consuming owned-capture use is single-use.
 A by-value closure is Transfer only when every capture is Transfer; a loan
 closure is never Transfer. Zero-parameter lambdas may infer their result
 without a contextual callable type. Capturing closures retain compiler
-metadata and therefore do not cross arbitrary written-`def` parameter, field,
-collection, or annotated return boundaries.
+metadata and therefore do not cross thin written-`def` parameter, field,
+collection, or annotated return boundaries; under the Batch 1 phase 1
+checkpoint they cross those boundaries as explicitly packed `Callable[...]`
+or `TaskCallable[...]` values whose call kind may only weaken and whose
+captures are owned, and a body may mutate an owned capture, which makes the
+closure Mutable.
 
 Phase 6.5 implements ADR-0038 place-based loans and views. Local shared and
 mutable views cover roots, fixed class fields, and tuple positions; lifetimes
@@ -16437,7 +16538,7 @@ youngest-first task ancestry. Each public schema-version-1 frame span has its
 own required source `path`; the analysis/LSP editor shape permits an optional
 `file_path` for source-only analysis. The public diagnostic schema remains
 version `1` because the always-present arrays are an additive extension;
-compiler-service/editor transport uses semantic schema version `12`. This
+compiler-service/editor transport uses semantic schema version `13`. This
 version includes structural function values, import aliases, and the expanded
 numeric expression surface, and forwards the same diagnostic records.
 
@@ -17212,7 +17313,11 @@ and non-numeric casts are unavailable, and recursive value fields require
 same source-level callable signature; a capturing closure additionally owns
 its hidden environment. Arbitrary stored and parameter `def` types describe
 capture-free code pointers; compiler-known callback and task-start sites
-preserve the additional closure metadata. `intsize` and
+preserve the additional closure metadata. `Callable[def(...) -> R]`,
+`Callable[mut def(...) -> R]`, `Callable[own def(...) -> R]`, and
+`TaskCallable[...]` are owned storage types for a Shared, Mutable, or
+Consuming callable with an erased capture set; they are non-Copy,
+non-cloneable, and Transfer only as `TaskCallable`. `intsize` and
 `uintsize` follow the target pointer width, and host process exit transport may
 narrow an `int32` after Aura returns it. Other numeric widths and overflow
 behavior are language-defined rather than implementation-defined. FFI v0

@@ -240,6 +240,13 @@ fn type_contains_unknown(ty: &Type) -> bool {
             params.iter().any(|param| type_contains_unknown(&param.ty))
                 || type_contains_unknown(return_type.as_ref())
         }
+        Type::Callable(callable) => {
+            callable
+                .params
+                .iter()
+                .any(|param| type_contains_unknown(&param.ty))
+                || type_contains_unknown(&callable.return_type)
+        }
         Type::Closure {
             params,
             return_type,
@@ -304,6 +311,12 @@ fn collect_type_params_from_type(ty: &Type, collected: &mut BTreeSet<String>) {
                 collect_type_params_from_type(&param.ty, collected);
             }
             collect_type_params_from_type(return_type, collected);
+        }
+        Type::Callable(callable) => {
+            for param in &callable.params {
+                collect_type_params_from_type(&param.ty, collected);
+            }
+            collect_type_params_from_type(&callable.return_type, collected);
         }
         Type::Closure {
             params,
@@ -784,6 +797,11 @@ pub enum Rvalue {
         signature: Type,
         captures: Vec<MirClosureCapture>,
         consuming: bool,
+        /// The closure mutates closure-owned or mutably borrowed captured
+        /// state on each call (Mutable kind); the validator keeps this
+        /// authoritative so no boundary can weaken it to Shared.
+        #[serde(default)]
+        mutable: bool,
     },
     FormatString {
         parts: Vec<MirFormatPart>,
@@ -873,6 +891,11 @@ pub struct MirClosureCapture {
     pub value: Operand,
     pub ty: Type,
     pub passing: MirReceiverKind,
+    /// An environment-owned capture the closure body mutates: the closure
+    /// function takes it mutably and the runtime writes the updated value
+    /// back into the environment after each call.
+    #[serde(default)]
+    pub mutated: bool,
     #[serde(default)]
     pub source_place: Option<String>,
     /// Resolve a loan-backed source to its selected concrete place when the
@@ -1557,7 +1580,10 @@ impl<'a> MirLoanValidationContext<'a> {
         state: &ValidatedLoanState,
         site: CallableContractSite,
     ) -> std::result::Result<(), String> {
-        if !matches!(expected, Type::Function { .. } | Type::Closure { .. }) {
+        if !matches!(
+            expected,
+            Type::Function { .. } | Type::Closure { .. } | Type::Callable(_)
+        ) {
             return Ok(());
         }
         let site_name = match site {
@@ -1599,11 +1625,13 @@ impl<'a> MirLoanValidationContext<'a> {
         expected: &Type,
         site_name: &str,
     ) -> std::result::Result<(), String> {
+        // (params, return, call kind, erased): an erased destination admits a
+        // weaker-or-equal source kind; a concrete closure contract is exact.
         let parts = |ty: &Type| match ty {
             Type::Function {
                 params,
                 return_type,
-            } => Some((params.clone(), (**return_type).clone(), None)),
+            } => Some((params.clone(), (**return_type).clone(), None, false)),
             Type::Closure {
                 params,
                 return_type,
@@ -1613,16 +1641,25 @@ impl<'a> MirLoanValidationContext<'a> {
                 params.as_ref().clone(),
                 (**return_type).clone(),
                 Some(*call_kind),
+                false,
+            )),
+            Type::Callable(callable) => Some((
+                callable.params.clone(),
+                callable.return_type.clone(),
+                Some(callable.call_kind),
+                true,
             )),
             _ => None,
         };
-        let Some((mut actual_params, actual_return, actual_kind)) = parts(actual) else {
+        let Some((mut actual_params, actual_return, actual_kind, _)) = parts(actual) else {
             return Err(format!(
                 "invalid MIR {site_name} from `{}` passes a non-callable value for a callable contract",
                 caller.name
             ));
         };
-        let Some((expected_params, expected_return, expected_kind)) = parts(expected) else {
+        let Some((expected_params, expected_return, expected_kind, expected_erased)) =
+            parts(expected)
+        else {
             return Err(format!(
                 "invalid MIR {site_name} from `{}` expects a non-callable contract",
                 caller.name
@@ -1636,6 +1673,7 @@ impl<'a> MirLoanValidationContext<'a> {
             }
         }
         let kinds_match = match (actual_kind, expected_kind) {
+            (Some(actual), Some(expected)) if expected_erased => expected.admits(actual),
             (Some(actual), Some(expected)) => actual == expected,
             (Some(ClosureCallKind::Consuming), None) => false,
             _ => true,
@@ -1860,7 +1898,7 @@ impl<'a> MirLoanValidationContext<'a> {
             visiting: &mut BTreeSet<String>,
         ) -> bool {
             match ty {
-                Type::Union(_) | Type::Closure { .. } | Type::Module(_) => true,
+                Type::Union(_) | Type::Closure { .. } | Type::Callable(_) | Type::Module(_) => true,
                 Type::Tuple(elements) => elements
                     .iter()
                     .any(|element| visit(context, element, visiting)),
@@ -2033,6 +2071,7 @@ impl<'a> MirLoanValidationContext<'a> {
                 Type::TypeParam(_) => return Ok(None),
                 Type::Function { .. }
                 | Type::Closure { .. }
+                | Type::Callable(_)
                 | Type::Module(_)
                 | Type::Unit => {
                     return Err(format!(
@@ -3326,6 +3365,7 @@ fn authoritative_callable_for_rvalue(value: &Rvalue) -> Option<ValidatedCallable
     let Rvalue::Closure {
         signature,
         consuming,
+        mutable,
         ..
     } = value
     else {
@@ -3356,6 +3396,8 @@ fn authoritative_callable_for_rvalue(value: &Rvalue) -> Option<ValidatedCallable
             captures: Box::new(captures),
             call_kind: if *consuming {
                 ClosureCallKind::Consuming
+            } else if *mutable {
+                ClosureCallKind::MutableRepeatable
             } else {
                 ClosureCallKind::Repeatable
             },
@@ -3628,7 +3670,7 @@ fn callable_identities_in_type(
             return;
         }
         match ty {
-            Type::Function { .. } | Type::Closure { .. } => out.push((
+            Type::Function { .. } | Type::Closure { .. } | Type::Callable(_) => out.push((
                 prefix.to_owned(),
                 ValidatedCallable {
                     function: None,
@@ -3776,6 +3818,7 @@ fn call_result_callable_identities(
                 Type::Function { return_type, .. } | Type::Closure { return_type, .. } => {
                     Some((*return_type).clone())
                 }
+                Type::Callable(callable) => Some(callable.return_type.clone()),
                 _ => None,
             })
         }
@@ -3975,13 +4018,36 @@ fn merge_validated_callables<'a>(
         };
     };
     let mut same_identity = true;
+    let mut erased: Option<&ValidatedCallable> =
+        matches!(first.signature, Type::Callable(_)).then_some(first);
     for candidate in candidates {
         if candidate.signature != first.signature {
-            return unknown_validated_callable();
+            // Values admitted into one erased callable storage type keep
+            // that contract as their common identity: each of them was
+            // validated against it when it entered the storage.
+            if matches!(candidate.signature, Type::Callable(_)) && erased.is_none() {
+                erased = Some(candidate);
+            }
+            match erased {
+                Some(contract)
+                    if callable_admitted_by_erased(&contract.signature, &candidate.signature)
+                        && callable_admitted_by_erased(&contract.signature, &first.signature) =>
+                {
+                    same_identity = false;
+                    continue;
+                }
+                _ => return unknown_validated_callable(),
+            }
         }
         if candidate.function != first.function {
             same_identity = false;
         }
+    }
+    if let Some(contract) = erased.filter(|_| !same_identity) {
+        return ValidatedCallable {
+            function: None,
+            signature: contract.signature.clone(),
+        };
     }
     if same_identity {
         first.clone()
@@ -3991,6 +4057,42 @@ fn merge_validated_callables<'a>(
             signature: first.signature.clone(),
         }
     }
+}
+
+/// Whether a function, closure, or erased callable signature may stand
+/// where `erased` (an erased callable contract) is the declared storage.
+fn callable_admitted_by_erased(erased: &Type, signature: &Type) -> bool {
+    let Type::Callable(contract) = erased else {
+        return false;
+    };
+    let (params, return_type, kind): (&[FunctionParamContract], &Type, Option<ClosureCallKind>) =
+        match signature {
+            Type::Callable(other) => {
+                return other.task == contract.task
+                    && other.call_kind == contract.call_kind
+                    && erased == signature;
+            }
+            Type::Function {
+                params,
+                return_type,
+            } => (params.as_slice(), return_type.as_ref(), None),
+            Type::Closure {
+                params,
+                return_type,
+                call_kind,
+                ..
+            } => (params.as_slice(), return_type.as_ref(), Some(*call_kind)),
+            _ => return false,
+        };
+    kind.is_none_or(|kind| contract.call_kind.admits(kind))
+        && params.len() == contract.params.len()
+        && params
+            .iter()
+            .zip(&contract.params)
+            .all(|(actual, expected)| {
+                actual.ty == expected.ty && actual.passing == expected.passing
+            })
+        && *return_type == contract.return_type
 }
 
 /// Splits an authoritative place under `receiver` into its element key and
@@ -5530,6 +5632,7 @@ fn validate_loan_rvalue(
             signature,
             captures,
             consuming,
+            mutable: _,
         } => {
             let declaration = context
                 .functions
@@ -5713,8 +5816,15 @@ fn validate_loan_rvalue(
                 .take(captures.len())
                 .zip(captures)
                 .any(|(param, capture)| {
+                    // An environment-owned capture the body mutates is
+                    // passed by value into the environment and taken mutably
+                    // by the closure function on every call (C2).
+                    let passing_matches = param.passing == capture.passing
+                        || (capture.mutated
+                            && capture.passing == MirReceiverKind::Value
+                            && param.passing == MirReceiverKind::BorrowMut);
                     param.name != capture.name
-                        || param.passing != capture.passing
+                        || !passing_matches
                         || param.ty != capture.ty && !matches!(capture.ty, Type::TypeParam(_))
                 })
             {
@@ -5803,6 +5913,12 @@ fn validate_loan_rvalue(
                                     args,
                                     state,
                                 )?,
+                            Type::Callable(callable) => context.validate_owned_typed_call_args(
+                                function,
+                                &callable.params,
+                                args,
+                                state,
+                            )?,
                             _ => {
                                 return Err(format!(
                                     "invalid MIR task call in `{}` has no authoritative callable contract",
@@ -6008,6 +6124,13 @@ fn validate_loan_rvalue(
                                     .validate_owned_typed_call_args(
                                         function,
                                         params.as_ref(),
+                                        args,
+                                        state,
+                                    )?,
+                                Type::Callable(callable) => context
+                                    .validate_owned_typed_call_args(
+                                        function,
+                                        &callable.params,
                                         args,
                                         state,
                                     )?,
@@ -8753,6 +8876,11 @@ impl<'a> Lowerer<'a> {
                 passing: match capture.mode {
                     ClosureCaptureMode::SharedView => MirReceiverKind::Borrow,
                     ClosureCaptureMode::MutableView => MirReceiverKind::BorrowMut,
+                    // An owned capture the body mutates is closure-owned
+                    // state taken mutably on every call (C2).
+                    ClosureCaptureMode::Copy | ClosureCaptureMode::Move if capture.mutated => {
+                        MirReceiverKind::BorrowMut
+                    }
                     ClosureCaptureMode::Copy | ClosureCaptureMode::Move => MirReceiverKind::Value,
                 },
                 ty: capture.ty.clone(),
@@ -8850,6 +8978,7 @@ impl<'a> Lowerer<'a> {
                             MirReceiverKind::Value
                         }
                     },
+                    mutated: capture.mutated,
                     source_place,
                     resolve_source_at_capture: returned_source,
                 }
@@ -8863,6 +8992,7 @@ impl<'a> Lowerer<'a> {
                 signature,
                 captures,
                 consuming: info.call_kind == ClosureCallKind::Consuming,
+                mutable: info.call_kind == ClosureCallKind::MutableRepeatable,
             },
         });
         Operand::Place(temp)
@@ -8915,7 +9045,15 @@ impl<'a> Lowerer<'a> {
                 &self.program.canonical_type_names,
             )
             .expect("checked union has members"),
-            TypeRefKind::Callable { .. } => Type::named("Unknown"),
+            TypeRefKind::Callable {
+                task,
+                call_kind,
+                signature,
+            } => lower_callable_type_ref(
+                *task,
+                *call_kind,
+                self.lower_type_ref_with_provenance(signature),
+            ),
             TypeRefKind::Tuple(elements) => Type::Tuple(
                 elements
                     .iter()
@@ -16440,6 +16578,30 @@ impl<'a> Lowerer<'a> {
             .then(|| alias.target.clone())
     }
 
+    /// A non-generic alias of an owned callable type used as a callee is the
+    /// packing constructor `Alias(value)`; the packed value keeps the
+    /// closure's own environment and only its static type is erased.
+    fn callable_alias_target(&self, callee: &Expr) -> Option<(Type, Type)> {
+        let alias = match &callee.kind {
+            ExprKind::Name(name)
+                if !self.local_types.contains_key(&self.render_local_name(name)) =>
+            {
+                self.program.alias_info(name, self.module_name)
+            }
+            ExprKind::Member { object, field } => self
+                .infer_module_path(object)
+                .and_then(|module| self.module_namespace(&module))
+                .and_then(|namespace| namespace.aliases.get(field)),
+            _ => None,
+        }?;
+        match &alias.target {
+            Type::Callable(callable) if alias.decl.type_params.is_empty() => {
+                Some((alias.target.clone(), callable.contract()))
+            }
+            _ => None,
+        }
+    }
+
     fn lower_call(
         &mut self,
         expr: &Expr,
@@ -16452,6 +16614,19 @@ impl<'a> Lowerer<'a> {
                 unreachable!("checked thin alias adapters take one callable value")
             };
             let value = self.lower_expr_with_expected(&argument.value, Some(&alias_ty));
+            let temp = self.new_typed_temp(alias_ty);
+            self.emit(Instruction::Assign {
+                target: temp.clone(),
+                value: Rvalue::Use(value),
+            });
+            return Operand::Place(temp);
+        }
+        if let Some((alias_ty, contract)) = self.callable_alias_target(callee) {
+            let [argument] = args else {
+                unreachable!("checked callable packing takes one callable value")
+            };
+            let value =
+                self.lower_expr_for_passing(&argument.value, Some(&contract), ReceiverKind::Value);
             let temp = self.new_typed_temp(alias_ty);
             self.emit(Instruction::Assign {
                 target: temp.clone(),
@@ -16498,6 +16673,7 @@ impl<'a> Lowerer<'a> {
             if let Some(params) = self.infer_expr_type(callee).and_then(|ty| match ty {
                 Type::Function { params, .. } => Some(params),
                 Type::Closure { params, .. } => Some(*params),
+                Type::Callable(callable) => Some(callable.params),
                 _ => None,
             }) {
                 let function = self.lower_expr_at_sequence_point(callee, None);
@@ -18229,6 +18405,9 @@ impl<'a> Lowerer<'a> {
             if let Some(alias_ty) = self.thin_callable_alias_target(callee) {
                 return Some(alias_ty);
             }
+            if let Some((alias_ty, _)) = self.callable_alias_target(callee) {
+                return Some(alias_ty);
+            }
             if let Some(expanded) = self.expanded_alias_callee(callee) {
                 return self.infer_expr_type(&Expr {
                     kind: ExprKind::Call {
@@ -18401,11 +18580,14 @@ impl<'a> Lowerer<'a> {
                     _ => false,
                 };
                 if !direct_decl_callee {
-                    if let Some(
-                        Type::Function { return_type, .. } | Type::Closure { return_type, .. },
-                    ) = self.infer_expr_type(callee)
-                    {
-                        return Some(*return_type);
+                    match self.infer_expr_type(callee) {
+                        Some(
+                            Type::Function { return_type, .. } | Type::Closure { return_type, .. },
+                        ) => {
+                            return Some(*return_type);
+                        }
+                        Some(Type::Callable(callable)) => return Some(callable.return_type),
+                        _ => {}
                     }
                 }
                 match &base_callee.kind {
@@ -20331,7 +20513,12 @@ fn array_coordinate_type(expr: &Expr) -> Type {
 #[cfg(test)]
 fn lower_type_ref(type_ref: &crate::ast::TypeRef) -> Type {
     match &type_ref.kind {
-        TypeRefKind::Union(_) | TypeRefKind::Callable { .. } => Type::named("Unknown"),
+        TypeRefKind::Union(_) => Type::named("Unknown"),
+        TypeRefKind::Callable {
+            task,
+            call_kind,
+            signature,
+        } => lower_callable_type_ref(*task, *call_kind, lower_type_ref(signature)),
         TypeRefKind::Tuple(elements) => Type::Tuple(elements.iter().map(lower_type_ref).collect()),
         TypeRefKind::Function {
             params,
@@ -20480,3 +20667,24 @@ fn mir_class_type_name(
 #[cfg(test)]
 #[path = "mir_tests.rs"]
 mod tests;
+
+/// Lowers a written `Callable[...]`/`TaskCallable[...]` reference around an
+/// already lowered `def(...)` signature; any other signature stays unknown.
+fn lower_callable_type_ref(
+    task: bool,
+    call_kind: crate::ast::ReceiverKind,
+    signature: Type,
+) -> Type {
+    match signature {
+        Type::Function {
+            params,
+            return_type,
+        } => Type::Callable(Box::new(crate::sema::CallableType {
+            task,
+            call_kind: crate::sema::closure_call_kind_for(call_kind),
+            params,
+            return_type: *return_type,
+        })),
+        _ => Type::named("Unknown"),
+    }
+}

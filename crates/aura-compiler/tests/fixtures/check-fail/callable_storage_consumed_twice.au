@@ -1,0 +1,7 @@
+type Finish = Callable[own def() -> str]
+
+def main():
+    text = "done"
+    finish = Finish(lambda [own text]: text)
+    print(finish())
+    print(finish())

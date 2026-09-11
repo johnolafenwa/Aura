@@ -1447,6 +1447,13 @@ fn runtime_type_pattern_from_name(name: &str) -> Type {
                     .collect(),
                 return_type: Box::new(decode_pattern(*return_type)),
             },
+            Type::Callable(mut callable) => {
+                for param in callable.params.iter_mut() {
+                    param.ty = decode_pattern(param.ty.clone());
+                }
+                callable.return_type = decode_pattern(callable.return_type.clone());
+                Type::Callable(callable)
+            }
             Type::Closure {
                 params,
                 return_type,
@@ -1539,6 +1546,55 @@ fn runtime_type_pattern_matches(
                     },
                 )
                 && runtime_type_pattern_matches(pattern_return, actual_return, substitutions)
+        }
+        // A packed callable value carries its own function or closure
+        // signature at run time; the declared erased type admits it when the
+        // contract ABI matches and the value's kind is no stronger.
+        Type::Callable(pattern_callable) => {
+            let (actual_params, actual_return, actual_kind): (
+                &[crate::sema::FunctionParamContract],
+                &Type,
+                Option<crate::sema::ClosureCallKind>,
+            ) = match actual {
+                Type::Callable(actual_callable) => {
+                    if actual_callable.task != pattern_callable.task
+                        || actual_callable.call_kind != pattern_callable.call_kind
+                    {
+                        return false;
+                    }
+                    (
+                        actual_callable.params.as_slice(),
+                        &actual_callable.return_type,
+                        None,
+                    )
+                }
+                Type::Function {
+                    params,
+                    return_type,
+                } => (params.as_slice(), return_type.as_ref(), None),
+                Type::Closure {
+                    params,
+                    return_type,
+                    call_kind,
+                    ..
+                } => (params.as_slice(), return_type.as_ref(), Some(*call_kind)),
+                _ => return false,
+            };
+            actual_kind.is_none_or(|kind| pattern_callable.call_kind.admits(kind))
+                && pattern_callable.params.len() == actual_params.len()
+                && pattern_callable
+                    .params
+                    .iter()
+                    .zip(actual_params)
+                    .all(|(pattern, actual)| {
+                        pattern.passing == actual.passing
+                            && runtime_type_pattern_matches(&pattern.ty, &actual.ty, substitutions)
+                    })
+                && runtime_type_pattern_matches(
+                    &pattern_callable.return_type,
+                    actual_return,
+                    substitutions,
+                )
         }
         Type::Closure {
             params: pattern_params,
@@ -7026,6 +7082,7 @@ pub extern "C-unwind" fn aura_direct_value_type_matches(
                 },
                 Type::Function { .. }
                 | Type::Closure { .. }
+                | Type::Callable(_)
                 | Type::Unit
                 | Type::Module(_)
                 | Type::TypeParam(_) => false,

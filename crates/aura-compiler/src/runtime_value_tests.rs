@@ -2760,6 +2760,7 @@ fn closure_environments_share_identity_and_enforce_capture_ownership() {
             ty: capture_type.clone(),
             mode: crate::sema::ClosureCaptureMode::Copy,
             span: Span::new(2, 41),
+            mutated: false,
         }]),
         call_kind: crate::sema::ClosureCallKind::Repeatable,
     };

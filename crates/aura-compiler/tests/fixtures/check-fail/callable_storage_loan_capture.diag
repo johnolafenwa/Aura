@@ -1,0 +1,6 @@
+error[AU3010]: capture `values` is a live shared loan and cannot be packed into `Tool`
+ --> crates/aura-compiler/tests/fixtures/check-fail/callable_storage_loan_capture.au:5:25
+  |
+5 |     tool = Tool(lambda [values] value: value + values.len())
+  |                         ^
+  = help: move or clone an owned value into the lambda, or keep the loan closure in a local and call it directly

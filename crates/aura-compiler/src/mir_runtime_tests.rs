@@ -19954,6 +19954,7 @@ fn mir_runtime_closure_environment_is_by_value_repeatable_and_one_shot_when_cons
             ty: int_type.clone(),
             mode: crate::sema::ClosureCaptureMode::Copy,
             span: Span::new(2, 16),
+            mutated: false,
         }]),
         call_kind: crate::sema::ClosureCallKind::Repeatable,
     };
@@ -19969,8 +19970,10 @@ fn mir_runtime_closure_environment_is_by_value_repeatable_and_one_shot_when_cons
                     passing: MirReceiverKind::Value,
                     source_place: None,
                     resolve_source_at_capture: false,
+                    mutated: false,
                 }],
                 consuming: false,
+                mutable: false,
             },
             &mut env,
         )
@@ -20008,6 +20011,7 @@ fn mir_runtime_closure_environment_is_by_value_repeatable_and_one_shot_when_cons
             ty: Type::named("str"),
             mode: crate::sema::ClosureCaptureMode::Move,
             span: Span::new(4, 16),
+            mutated: false,
         }]),
         call_kind: crate::sema::ClosureCallKind::Consuming,
     };
@@ -20023,8 +20027,10 @@ fn mir_runtime_closure_environment_is_by_value_repeatable_and_one_shot_when_cons
                     passing: MirReceiverKind::Value,
                     source_place: None,
                     resolve_source_at_capture: false,
+                    mutated: false,
                 }],
                 consuming: true,
+                mutable: false,
             },
             &mut env,
         )

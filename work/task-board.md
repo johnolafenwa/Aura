@@ -115,10 +115,15 @@ Last updated: 2026-09-10
   keyword-only binding is enforced (AU2004), a thin alias call adapts a
   function value explicitly, trait conformance compares the boundary, and the
   validator checks admission at every callable boundary; schema 12.
-- Next: commit the callable contracts family, then callable packing and call
-  kinds, TaskCallable targets, bound methods, stored argument-origin views,
-  Shared callback sites, editor/docs/reference-agent updates, full gates and
-  integration.
+- Callable packing and call kinds family (2026-09-11): `Callable[...]` and
+  `TaskCallable[...]` owned storage types with explicit alias-call packing,
+  contract admission, kind weakening only, loan captures refused, Transfer
+  proof for task callables, owned-capture mutation making closures Mutable
+  with environment writeback on both backends, calls through fields and
+  elements, and erased identities validated at every boundary; schema 13.
+- Next: commit the packing family, then TaskCallable targets, bound methods,
+  stored argument-origin views, Shared callback sites, editor/docs/
+  reference-agent updates, full gates and integration.
 - Option removal and all phase 2 signature changes remain excluded; protected
   user files and coverage floors remain unchanged.
 - Work and handoff ledger: [2026-09-09-batch-1-phase-1.md](2026-09-09-batch-1-phase-1.md).

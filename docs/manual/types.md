@@ -513,7 +513,11 @@ and non-numeric casts are unavailable, and recursive value fields require
 same source-level callable signature; a capturing closure additionally owns
 its hidden environment. Arbitrary stored and parameter `def` types describe
 capture-free code pointers; compiler-known callback and task-start sites
-preserve the additional closure metadata. `intsize` and
+preserve the additional closure metadata. `Callable[def(...) -> R]`,
+`Callable[mut def(...) -> R]`, `Callable[own def(...) -> R]`, and
+`TaskCallable[...]` are owned storage types for a Shared, Mutable, or
+Consuming callable with an erased capture set; they are non-Copy,
+non-cloneable, and Transfer only as `TaskCallable`. `intsize` and
 `uintsize` follow the target pointer width, and host process exit transport may
 narrow an `int32` after Aura returns it. Other numeric widths and overflow
 behavior are language-defined rather than implementation-defined. FFI v0

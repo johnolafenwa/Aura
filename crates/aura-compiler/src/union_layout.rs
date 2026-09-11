@@ -208,6 +208,13 @@ pub fn plan_module_unions(module: &mut crate::mir::MirModule, is_copy: impl Fn(&
                     .for_each(|capture| collect(&capture.ty, unions));
                 collect(return_type, unions);
             }
+            Type::Callable(callable) => {
+                callable
+                    .params
+                    .iter()
+                    .for_each(|param| collect(&param.ty, unions));
+                collect(&callable.return_type, unions);
+            }
             Type::Unit | Type::Module(_) | Type::TypeParam(_) => {}
         }
     }

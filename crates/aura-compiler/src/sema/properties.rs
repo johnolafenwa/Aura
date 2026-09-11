@@ -152,7 +152,9 @@ pub(super) fn rng_clone_safety_in_context_inner(
                     })
             }
             Type::TypeParam(_) => RngCloneSafety::Unknown,
-            Type::Unit | Type::Module(_) | Type::Function { .. } => RngCloneSafety::Safe,
+            Type::Unit | Type::Module(_) | Type::Function { .. } | Type::Callable(_) => {
+                RngCloneSafety::Safe
+            }
             Type::Closure { captures, .. } => {
                 captures
                     .iter()
@@ -361,6 +363,7 @@ pub(super) fn collect_rng_clone_obligation_params_in_context_inner(
             params.insert(name.clone());
         }
         Type::Unit | Type::Module(_) | Type::Function { .. } => {}
+        Type::Callable(_) => {}
         Type::Closure { captures, .. } => {
             for capture in captures.iter() {
                 collect_rng_clone_obligation_params_in_context_inner(
@@ -626,7 +629,7 @@ pub(super) fn type_is_copy_in_context_inner(
             )
         }),
         Type::Function { .. } => true,
-        Type::Closure { .. } => false,
+        Type::Closure { .. } | Type::Callable(_) => false,
         Type::Named(name, args) if name == "Task" && args.len() == 1 => {
             type_is_copy_in_context_inner(
                 &args[0],
@@ -757,6 +760,13 @@ pub(super) fn type_contains_named(ty: &Type, target: &str) -> bool {
         Type::Closure { captures, .. } => captures
             .iter()
             .any(|capture| type_contains_named(&capture.ty, target)),
+        Type::Callable(callable) => {
+            callable
+                .params
+                .iter()
+                .any(|param| type_contains_named(&param.ty, target))
+                || type_contains_named(&callable.return_type, target)
+        }
     }
 }
 
@@ -769,6 +779,7 @@ pub(super) fn type_contains_closure_value(ty: &Type) -> bool {
         }
         // Function parameter and return types describe calls; they are not
         // values stored inside the function pointer itself.
+        Type::Callable(_) => false,
         Type::Function { .. } | Type::TypeParam(_) | Type::Module(_) | Type::Unit => false,
     }
 }
@@ -776,6 +787,7 @@ pub(super) fn type_contains_closure_value(ty: &Type) -> bool {
 pub(super) fn type_contains_loan_closure(ty: &Type) -> bool {
     match ty {
         Type::Union(union) => union.members.iter().any(type_contains_loan_closure),
+        Type::Callable(_) => false,
         Type::Closure { captures, .. } => captures.iter().any(|capture| {
             matches!(
                 capture.mode,
@@ -834,6 +846,7 @@ pub(super) fn type_reaches_class_through_non_indirect_fields(
             reaches_target
         }
         Type::Function { .. } | Type::TypeParam(_) | Type::Module(_) | Type::Unit => false,
+        Type::Callable(_) => false,
         Type::Closure { captures, .. } => captures.iter().any(|capture| {
             type_reaches_class_through_non_indirect_fields(&capture.ty, target, classes, visiting)
         }),
@@ -1204,6 +1217,18 @@ impl<'a> FunctionChecker<'a> {
                 result
             }
             Type::Unit | Type::Function { .. } => TransferSummary::default(),
+            Type::Callable(callable) => {
+                if callable.task {
+                    return TransferSummary::default();
+                }
+                TransferSummary {
+                    failure: Some(
+                        "an erased `Callable` hides its environment and is not Transfer; pack a `TaskCallable[...]` to prove its captures"
+                            .to_string(),
+                    ),
+                    ..TransferSummary::default()
+                }
+            }
             Type::Closure { captures, .. } => {
                 if let Some(capture) = captures.iter().find(|capture| {
                     matches!(
@@ -1573,7 +1598,7 @@ impl<'a> FunctionChecker<'a> {
                 }
                 result
             }
-            Type::Unit | Type::Module(_) | Type::Function { .. } => {
+            Type::Unit | Type::Module(_) | Type::Function { .. } | Type::Callable(_) => {
                 TaskObservationSummary::default()
             }
             Type::Closure { captures, .. } => {
@@ -1737,7 +1762,7 @@ impl<'a> FunctionChecker<'a> {
                 self.combine_symbolic_copy_shapes(union.members.iter(), formals, visiting)
             }
             Type::Unit | Type::Function { .. } => SymbolicCopyShape::default(),
-            Type::Closure { .. } => SymbolicCopyShape {
+            Type::Closure { .. } | Type::Callable(_) => SymbolicCopyShape {
                 intrinsic_noncopy: true,
                 noncopy_formals: Vec::new(),
             },
@@ -1896,7 +1921,7 @@ impl<'a> FunctionChecker<'a> {
                 .members
                 .iter()
                 .find_map(|member| self.callable_in_equality_type_inner(member, visiting)),
-            Type::Function { .. } | Type::Closure { .. } => Some(ty.clone()),
+            Type::Function { .. } | Type::Closure { .. } | Type::Callable(_) => Some(ty.clone()),
             Type::Tuple(elements) => elements
                 .iter()
                 .find_map(|element| self.callable_in_equality_type_inner(element, visiting)),
@@ -2009,6 +2034,7 @@ impl<'a> FunctionChecker<'a> {
             // runtime values, while generic equality obligations are enforced
             // when concrete substitutions are available.
             Type::Closure { .. }
+            | Type::Callable(_)
             | Type::Function { .. }
             | Type::TypeParam(_)
             | Type::Module(_)
@@ -2086,7 +2112,11 @@ impl<'a> FunctionChecker<'a> {
                     self.collect_array_equality_type_params_inner(arg, visiting, params);
                 }
             }
-            Type::Closure { .. } | Type::Function { .. } | Type::Module(_) | Type::Unit => {}
+            Type::Closure { .. }
+            | Type::Callable(_)
+            | Type::Function { .. }
+            | Type::Module(_)
+            | Type::Unit => {}
         }
     }
 
@@ -2104,7 +2134,7 @@ impl<'a> FunctionChecker<'a> {
                 .members
                 .iter()
                 .find_map(|member| self.noncloneable_closure_in_type_inner(member, visiting)),
-            Type::Closure { .. } => Some(ty.clone()),
+            Type::Closure { .. } | Type::Callable(_) => Some(ty.clone()),
             Type::Tuple(elements) => elements
                 .iter()
                 .find_map(|element| self.noncloneable_closure_in_type_inner(element, visiting)),

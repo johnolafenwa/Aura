@@ -64,8 +64,12 @@ through a mutable closure place, and consuming owned-capture use is single-use.
 A by-value closure is Transfer only when every capture is Transfer; a loan
 closure is never Transfer. Zero-parameter lambdas may infer their result
 without a contextual callable type. Capturing closures retain compiler
-metadata and therefore do not cross arbitrary written-`def` parameter, field,
-collection, or annotated return boundaries.
+metadata and therefore do not cross thin written-`def` parameter, field,
+collection, or annotated return boundaries; under the Batch 1 phase 1
+checkpoint they cross those boundaries as explicitly packed `Callable[...]`
+or `TaskCallable[...]` values whose call kind may only weaken and whose
+captures are owned, and a body may mutate an owned capture, which makes the
+closure Mutable.
 
 Phase 6.5 implements ADR-0038 place-based loans and views. Local shared and
 mutable views cover roots, fixed class fields, and tuple positions; lifetimes
@@ -221,7 +225,7 @@ youngest-first task ancestry. Each public schema-version-1 frame span has its
 own required source `path`; the analysis/LSP editor shape permits an optional
 `file_path` for source-only analysis. The public diagnostic schema remains
 version `1` because the always-present arrays are an additive extension;
-compiler-service/editor transport uses semantic schema version `12`. This
+compiler-service/editor transport uses semantic schema version `13`. This
 version includes structural function values, import aliases, and the expanded
 numeric expression surface, and forwards the same diagnostic records.
 

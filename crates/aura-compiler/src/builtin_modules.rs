@@ -19,6 +19,25 @@ fn type_ref(name: &str, args: Vec<TypeRef>) -> TypeRef {
     TypeRef::named(name, args, false, builtin_span())
 }
 
+fn lower_callable_type_ref(
+    task: bool,
+    call_kind: crate::ast::ReceiverKind,
+    signature: Type,
+) -> Type {
+    match signature {
+        Type::Function {
+            params,
+            return_type,
+        } => Type::Callable(Box::new(crate::sema::CallableType {
+            task,
+            call_kind: crate::sema::closure_call_kind_for(call_kind),
+            params,
+            return_type: *return_type,
+        })),
+        _ => Type::named("Unknown"),
+    }
+}
+
 fn lower_type_ref(type_ref: &TypeRef) -> Type {
     lower_type_ref_with_type_params(type_ref, None)
 }
@@ -41,7 +60,11 @@ fn lower_type_ref_with_type_params(
             &BTreeMap::new(),
         )
         .expect("builtin union declarations have bounded normalized types"),
-        crate::ast::TypeRefKind::Callable { .. } => Type::named("Unknown"),
+        crate::ast::TypeRefKind::Callable {
+            task,
+            call_kind,
+            signature,
+        } => lower_callable_type_ref(*task, *call_kind, lower_type_ref(signature)),
         crate::ast::TypeRefKind::Tuple(elements) => Type::Tuple(
             elements
                 .iter()

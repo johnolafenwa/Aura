@@ -257,7 +257,12 @@ type
 type-primary
     = identifier-path, [ "[", type-list, "]" ]
     | tuple-type
-    | function-type ;
+    | function-type
+    | owned-callable-type ;
+
+owned-callable-type
+    = ( "Callable" | "TaskCallable" ), "[",
+      [ "mut" | "own" ], function-type, "]" ;
 
 type-list = type, { ",", type } ;
 
@@ -302,7 +307,11 @@ that the target supplies a default, so a literal or expression after `=` in a
 type is rejected (`AU1101`). The same boundary rule applies to declaration
 and lambda parameter lists: at most one `*`, followed by at least one named
 parameter, adding no variadics. `indirect` is invalid on a function type
-because the value is already a code pointer.
+because the value is already a code pointer. `Callable[...]` and
+`TaskCallable[...]` wrap one function type as owned callable storage; a bare
+`def` inside the brackets is Shared, `mut def` Mutable, and `own def`
+Consuming, and `mut def`/`own def` are not valid outside those brackets.
+`indirect` is invalid on owned callable types.
 
 `T?` denotes `Option[T]`, including when `T` is a tuple type. Type and
 type-parameter lists are nonempty when brackets are present and do not accept

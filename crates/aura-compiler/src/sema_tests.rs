@@ -632,6 +632,7 @@ fn s1_sema_type_pattern_unification_rejects_callable_kind_and_capture_mismatches
             ty: Type::named("int64"),
             mode: ClosureCaptureMode::SharedView,
             span: Span::new(1, 1),
+            mutated: false,
         }]),
         call_kind: ClosureCallKind::Repeatable,
     };
@@ -7515,6 +7516,16 @@ fn type_to_ref(ty: &Type) -> TypeRef {
                 })
                 .collect(),
             type_to_ref(return_type),
+            Span::new(1, 1),
+        ),
+        Type::Callable(callable) => TypeRef::callable(
+            callable.task,
+            match callable.call_kind {
+                ClosureCallKind::Repeatable => ReceiverKind::Borrow,
+                ClosureCallKind::MutableRepeatable => ReceiverKind::BorrowMut,
+                ClosureCallKind::Consuming => ReceiverKind::Value,
+            },
+            type_to_ref(&callable.contract()),
             Span::new(1, 1),
         ),
         Type::Closure {
@@ -25312,6 +25323,7 @@ fn closure_type_keeps_compact_runtime_layout_and_stable_serialization() {
             ty: Type::named("str"),
             mode: ClosureCaptureMode::Move,
             span: Span::new(4, 17),
+            mutated: false,
         }]),
         call_kind: ClosureCallKind::Repeatable,
     };
@@ -25360,7 +25372,8 @@ fn closure_type_keeps_compact_runtime_layout_and_stable_serialization() {
                     "name": "prefix",
                     "ty": {"Named": ["str", []]},
                     "mode": "Move",
-                    "span": {"line": 4, "column": 17}
+                    "span": {"line": 4, "column": 17},
+                    "mutated": false
                 }],
                 "call_kind": "Repeatable"
             }
@@ -25434,20 +25447,53 @@ def build(value: str):
 }
 
 #[test]
-fn mutable_access_to_a_capture_is_rejected_until_fnmut_exists() {
-    let diagnostic = crate::check_source(
+fn mutable_access_to_an_owned_capture_makes_the_closure_mutable() {
+    let stored_immutably = crate::check_source(
         r#"
 def main():
     mut values = ["kept"]
     update: def() -> None = lambda: values.append("new")
 "#,
     )
-    .expect_err("Phase 6.3 does not define mutable closures");
-    assert_eq!(diagnostic.code, "AU3003");
+    .expect_err("a Mutable closure must live in a mutable local");
     assert_eq!(
-        diagnostic.message,
-        "lambda capture `values` cannot be mutably accessed because mutable closures are not supported"
+        stored_immutably.message,
+        "a mutable-repeatable closure must be stored in a mutable local"
     );
+
+    let program = crate::check_source(
+        r#"
+def main():
+    mut values = ["kept"]
+    mut update: def() -> None = lambda: values.append("new")
+    update()
+    update()
+"#,
+    )
+    .expect("mutating an owned capture mutates closure-owned state (C2)");
+    let closure = program
+        .closures
+        .values()
+        .next()
+        .expect("closure metadata is retained");
+    assert_eq!(closure.call_kind, ClosureCallKind::MutableRepeatable);
+    assert!(closure
+        .captures
+        .iter()
+        .any(|capture| capture.name == "values" && capture.mutated));
+
+    let shared_view = crate::check_source(
+        r#"
+def main():
+    mut values = ["kept"]
+    update: def() -> None = lambda [values]: values.append("new")
+"#,
+    )
+    .expect_err("a shared-view capture stays read-only");
+    assert_eq!(shared_view.code, "AU3003");
+    assert!(shared_view
+        .message
+        .contains("is a shared view and cannot be mutably accessed"));
 }
 
 #[test]
@@ -26104,6 +26150,7 @@ def hold[T](value: own T):
                 ty: Type::named("str"),
                 mode: ClosureCaptureMode::Move,
                 span: generic_closure.captures[0].span,
+                mutated: false,
             }]),
             call_kind: ClosureCallKind::Repeatable,
         }
@@ -30715,6 +30762,7 @@ fn closure_types_have_canonical_keys_and_empty_unions_are_rejected() {
             ty: Type::named("int64"),
             mode: ClosureCaptureMode::Copy,
             span: crate::diag::Span::new(1, 1),
+            mutated: false,
         }]),
         call_kind: ClosureCallKind::Consuming,
     };

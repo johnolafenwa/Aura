@@ -534,6 +534,11 @@ fn private_type(program: &Program, ty: &Type) -> Option<String> {
                     .iter()
                     .find_map(|capture| private_type(program, &capture.ty))
             }),
+        Type::Callable(callable) => callable
+            .params
+            .iter()
+            .find_map(|param| private_type(program, &param.ty))
+            .or_else(|| private_type(program, &callable.return_type)),
         Type::Unit | Type::TypeParam(_) | Type::Module(_) => None,
     }
 }

@@ -86,7 +86,7 @@ pub const MAX_INTERNAL_DIAGNOSTIC_BYTES: usize = 1024 * 1024;
 /// Every persisted artifact or long-lived tooling cache that can contain
 /// compiler semantic metadata must bind this value. Bump it whenever the
 /// meaning or representation of checked source changes incompatibly.
-pub const SEMANTIC_INTERFACE_SCHEMA_VERSION: u32 = 12;
+pub const SEMANTIC_INTERFACE_SCHEMA_VERSION: u32 = 13;
 
 /// Lowercase hexadecimal SHA-256 of `bytes`, for content-addressed identities.
 pub fn sha256_hex(bytes: &[u8]) -> String {
@@ -1082,6 +1082,22 @@ fn qualify_export_type(program: &Program, ty: &sema::Type) -> sema::Type {
                 .collect(),
             return_type: Box::new(qualify_export_type(program, return_type)),
         },
+        sema::Type::Callable(callable) => sema::Type::Callable(Box::new(sema::CallableType {
+            task: callable.task,
+            call_kind: callable.call_kind,
+            params: callable
+                .params
+                .iter()
+                .map(|param| sema::FunctionParamContract {
+                    keyword_only: param.keyword_only,
+                    name: param.name.clone(),
+                    ty: qualify_export_type(program, &param.ty),
+                    passing: param.passing,
+                    has_default: param.has_default,
+                })
+                .collect(),
+            return_type: qualify_export_type(program, &callable.return_type),
+        })),
         sema::Type::Closure {
             params,
             return_type,
@@ -1109,6 +1125,7 @@ fn qualify_export_type(program: &Program, ty: &sema::Type) -> sema::Type {
                         ty: qualify_export_type(program, &capture.ty),
                         mode: capture.mode,
                         span: capture.span,
+                        mutated: capture.mutated,
                     })
                     .collect(),
             ),
@@ -1630,6 +1647,7 @@ fn exported_namespace(path: &[String], program: &Program) -> ModuleNamespace {
                         ty: qualify_export_type(program, &capture.ty),
                         mode: capture.mode,
                         span: capture.span,
+                        mutated: capture.mutated,
                     })
                     .collect();
                 (id.clone(), qualified)

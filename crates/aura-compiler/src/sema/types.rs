@@ -3,9 +3,9 @@
 use super::{
     check_callable_positions, fmt, function_type_mismatch_message, is_array_dtype,
     is_builtin_copy_named_type, is_builtin_type, preserves_qualified_builtin_type_name,
-    resolve_param_passing, BTreeMap, BTreeSet, ClosureCallKind, ClosureCapture, Deserialize,
-    Diagnostic, FunctionParamContract, HashMap, ReceiverKind, Result, Serialize, TraitImplInfo,
-    TypeRef,
+    resolve_param_passing, BTreeMap, BTreeSet, CallableType, ClosureCallKind, ClosureCapture,
+    Deserialize, Diagnostic, FunctionParamContract, HashMap, ReceiverKind, Result, Serialize,
+    TraitImplInfo, TypeRef,
 };
 
 /// Name inventory and transparent alias templates used by semantic type lowering.
@@ -199,6 +199,9 @@ pub enum Type {
         captures: Box<Vec<ClosureCapture>>,
         call_kind: ClosureCallKind,
     },
+    /// `Callable[...]` / `TaskCallable[...]` owned storage with an erased
+    /// environment; boxed so `Type` keeps its size budget.
+    Callable(Box<CallableType>),
     TypeParam(String),
     Module(String),
     Unit,
@@ -315,6 +318,19 @@ impl Type {
                     .collect::<Result<Vec<_>>>()?,
                 return_type: Box::new(return_type.source_type_ref(span)?),
             },
+            Type::Callable(callable) => {
+                let signature = callable.contract().source_type_ref(span)?;
+                return Ok(TypeRef::callable(
+                    callable.task,
+                    match callable.call_kind {
+                        ClosureCallKind::Repeatable => ReceiverKind::Borrow,
+                        ClosureCallKind::MutableRepeatable => ReceiverKind::BorrowMut,
+                        ClosureCallKind::Consuming => ReceiverKind::Value,
+                    },
+                    signature,
+                    span,
+                ));
+            }
             Type::Module(_) | Type::Closure { .. } => {
                 return Err(Diagnostic::coded_at(
                     "AU2010",
@@ -388,6 +404,23 @@ impl Type {
                         ]))
                         .collect::<Vec<_>>(),
                     key(return_type, module, names)
+                ]),
+                Type::Callable(callable) => json!([
+                    "callable",
+                    callable.task,
+                    callable.call_kind,
+                    callable
+                        .params
+                        .iter()
+                        .map(|p| json!([
+                            p.name,
+                            p.passing,
+                            p.has_default,
+                            p.keyword_only,
+                            key(&p.ty, module, names)
+                        ]))
+                        .collect::<Vec<_>>(),
+                    key(&callable.return_type, module, names)
                 ]),
                 Type::Closure {
                     params,
@@ -511,6 +544,16 @@ fn write_contract_params(
     Ok(())
 }
 
+/// The call kind a written `Callable[...]` prefix denotes: bare `def` is
+/// Shared, `mut def` Mutable, `own def` Consuming (C1).
+pub(crate) fn closure_call_kind_for(call_kind: crate::ast::ReceiverKind) -> ClosureCallKind {
+    match call_kind {
+        crate::ast::ReceiverKind::Borrow => ClosureCallKind::Repeatable,
+        crate::ast::ReceiverKind::BorrowMut => ClosureCallKind::MutableRepeatable,
+        crate::ast::ReceiverKind::Value => ClosureCallKind::Consuming,
+    }
+}
+
 impl PartialEq for Type {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
@@ -559,6 +602,17 @@ impl PartialEq for Type {
                     && left_captures == right_captures
                     && left_call_kind == right_call_kind
             }
+            (Self::Callable(left), Self::Callable(right)) => {
+                left.task == right.task
+                    && left.call_kind == right.call_kind
+                    && left.params.len() == right.params.len()
+                    && left
+                        .params
+                        .iter()
+                        .zip(right.params.iter())
+                        .all(|(left, right)| left.ty == right.ty && left.passing == right.passing)
+                    && left.return_type == right.return_type
+            }
             (Self::TypeParam(left), Self::TypeParam(right))
             | (Self::Module(left), Self::Module(right)) => left == right,
             (Self::Unit, Self::Unit) => true,
@@ -582,7 +636,7 @@ impl Type {
             Type::TypeParam(_) => false,
             Type::Tuple(elements) => elements.iter().all(Type::is_copy),
             Type::Function { .. } => true,
-            Type::Closure { .. } => false,
+            Type::Closure { .. } | Type::Callable(_) => false,
             Type::Named(name, args) if name == "Task" && args.len() == 1 => args[0].is_copy(),
             Type::Named(name, args) => is_builtin_copy_named_type(name, args),
         }
@@ -627,6 +681,20 @@ impl fmt::Display for Type {
                     write!(f, ") -> ({return_type})")
                 } else {
                     write!(f, ") -> {return_type}")
+                }
+            }
+            Type::Callable(callable) => {
+                write!(
+                    f,
+                    "{}[{}def(",
+                    callable.constructor_name(),
+                    callable.call_kind.spelling()
+                )?;
+                write_contract_params(f, &callable.params)?;
+                if matches!(callable.return_type, Type::Union(_)) {
+                    write!(f, ") -> ({})]", callable.return_type)
+                } else {
+                    write!(f, ") -> {}]", callable.return_type)
                 }
             }
             Type::Closure {
@@ -736,11 +804,35 @@ pub(super) fn lower_type_with_self(
                 type_ref.span,
             );
         }
-        crate::ast::TypeRefKind::Callable { .. } => {
-            return Err(Diagnostic::at(
-                type_ref.span,
-                "this type form requires Batch 1 semantic lowering",
-            ));
+        crate::ast::TypeRefKind::Callable {
+            task,
+            call_kind,
+            signature,
+        } => {
+            let contract = lower_type_with_self(
+                signature,
+                type_names,
+                type_arities,
+                canonical_type_names,
+                type_params,
+                self_type,
+            )?;
+            let Type::Function {
+                params,
+                return_type,
+            } = contract
+            else {
+                return Err(Diagnostic::at(
+                    type_ref.span,
+                    "an owned callable type wraps a `def(...) -> ...` contract",
+                ));
+            };
+            return Ok(Type::Callable(Box::new(CallableType {
+                task: *task,
+                call_kind: closure_call_kind_for(*call_kind),
+                params,
+                return_type: *return_type,
+            })));
         }
         crate::ast::TypeRefKind::Tuple(elements) => {
             return elements
@@ -1207,6 +1299,22 @@ fn substitute_type_in_context(
                 context,
             )),
         },
+        Type::Callable(callable) => Type::Callable(Box::new(CallableType {
+            task: callable.task,
+            call_kind: callable.call_kind,
+            params: callable
+                .params
+                .iter()
+                .map(|param| FunctionParamContract {
+                    keyword_only: param.keyword_only,
+                    name: param.name.clone(),
+                    ty: substitute_type_in_context(&param.ty, substitutions, context),
+                    passing: param.passing,
+                    has_default: param.has_default,
+                })
+                .collect(),
+            return_type: substitute_type_in_context(&callable.return_type, substitutions, context),
+        })),
         Type::Closure {
             params,
             return_type,
@@ -1238,6 +1346,7 @@ fn substitute_type_in_context(
                         ty: substitute_type_in_context(&capture.ty, substitutions, context),
                         mode: capture.mode,
                         span: capture.span,
+                        mutated: capture.mutated,
                     })
                     .collect(),
             ),
@@ -1315,6 +1424,12 @@ pub(super) fn collect_type_params_from_type(ty: &Type, collected: &mut BTreeSet<
             }
             collect_type_params_from_type(return_type, collected);
         }
+        Type::Callable(callable) => {
+            for param in &callable.params {
+                collect_type_params_from_type(&param.ty, collected);
+            }
+            collect_type_params_from_type(&callable.return_type, collected);
+        }
         Type::Closure {
             params,
             return_type,
@@ -1355,6 +1470,14 @@ pub(crate) fn type_pattern_specificity(ty: &Type) -> usize {
                 .map(|param| type_pattern_specificity(&param.ty))
                 .sum::<usize>()
                 + type_pattern_specificity(return_type)
+        }
+        Type::Callable(callable) => {
+            1 + callable
+                .params
+                .iter()
+                .map(|param| type_pattern_specificity(&param.ty))
+                .sum::<usize>()
+                + type_pattern_specificity(&callable.return_type)
         }
         Type::Closure {
             params,
@@ -1463,6 +1586,33 @@ pub(crate) fn type_pattern_matches(
                     })
                 && type_pattern_matches(return_type, actual_return, type_params, substitutions)
         }
+        Type::Callable(callable) => {
+            let Type::Callable(actual_callable) = actual else {
+                return false;
+            };
+            callable.task == actual_callable.task
+                && callable.call_kind == actual_callable.call_kind
+                && callable.params.len() == actual_callable.params.len()
+                && callable
+                    .params
+                    .iter()
+                    .zip(actual_callable.params.iter())
+                    .all(|(pattern, actual)| {
+                        pattern.passing == actual.passing
+                            && type_pattern_matches(
+                                &pattern.ty,
+                                &actual.ty,
+                                type_params,
+                                substitutions,
+                            )
+                    })
+                && type_pattern_matches(
+                    &callable.return_type,
+                    &actual_callable.return_type,
+                    type_params,
+                    substitutions,
+                )
+        }
         Type::Closure {
             params,
             return_type,
@@ -1529,6 +1679,13 @@ pub(crate) fn has_unresolved_type_params(ty: &Type) -> bool {
                 .iter()
                 .any(|param| has_unresolved_type_params(&param.ty))
                 || has_unresolved_type_params(return_type)
+        }
+        Type::Callable(callable) => {
+            callable
+                .params
+                .iter()
+                .any(|param| has_unresolved_type_params(&param.ty))
+                || has_unresolved_type_params(&callable.return_type)
         }
         Type::Closure {
             params,
@@ -1759,12 +1916,13 @@ pub(super) fn unify_type_pattern(
                 Type::Function {
                     params,
                     return_type,
-                } => (params.as_slice(), return_type),
+                } => (params.as_slice(), return_type.as_ref()),
                 Type::Closure {
                     params,
                     return_type,
                     ..
-                } => (params.as_slice(), return_type),
+                } => (params.as_slice(), return_type.as_ref()),
+                Type::Callable(callable) => (callable.params.as_slice(), &callable.return_type),
                 _ => {
                     return Err(Diagnostic::new(format!(
                         "expected `{pattern}`, found `{actual}`"
@@ -1785,6 +1943,34 @@ pub(super) fn unify_type_pattern(
                 unify_type_pattern(&param.ty, &actual_param.ty, substitutions)?;
             }
             unify_type_pattern(return_type, actual_return, substitutions)
+        }
+        Type::Callable(callable) => {
+            let Type::Callable(actual_callable) = actual else {
+                return Err(Diagnostic::new(format!(
+                    "expected `{pattern}`, found `{actual}`"
+                )));
+            };
+            if callable.task != actual_callable.task
+                || callable.call_kind != actual_callable.call_kind
+                || callable.params.len() != actual_callable.params.len()
+                || callable
+                    .params
+                    .iter()
+                    .zip(actual_callable.params.iter())
+                    .any(|(expected, actual)| expected.passing != actual.passing)
+            {
+                return Err(Diagnostic::new(format!(
+                    "expected `{pattern}`, found `{actual}`"
+                )));
+            }
+            for (param, actual_param) in callable.params.iter().zip(actual_callable.params.iter()) {
+                unify_type_pattern(&param.ty, &actual_param.ty, substitutions)?;
+            }
+            unify_type_pattern(
+                &callable.return_type,
+                &actual_callable.return_type,
+                substitutions,
+            )
         }
         Type::Closure {
             params,

@@ -106,18 +106,83 @@ A capturing closure retains semantic environment and call-kind metadata that
 an arbitrary written `def(...) -> R` storage type does not describe. It may be
 held in an immutable inferred or contextually typed local, called directly,
 passed directly to compiler-known repeatable callback sites such as the list
-algorithms and `control.retry`, or moved into a qualifying task start. It
-cannot be coerced through an arbitrary written `def` parameter, stored in a
-`def` field or collection element, or returned through an annotated `def`
-result. Those metadata-erasing boundaries report `AU2002`.
+algorithms and `control.retry`, moved into a qualifying task start, or packed
+into an owned callable storage type. It cannot be coerced through a thin
+`def` parameter, field, element, or annotated result; those boundaries
+report `AU2002`.
 
-A conditional or `match` expression also cannot merge capturing closure
-values from different branches. The branches may have different capture
-sets, ownership states, and call kinds, and Phase 6.3 has no closure-union
-type that preserves those differences. Call the closure inside each branch,
-or return capture-free lambdas or named functions with one structural
-`def(...) -> R` type. Creating and calling a closure wholly inside a branch
-remains supported.
+`Callable[def(...) -> R]`, `Callable[mut def(...) -> R]`, and
+`Callable[own def(...) -> R]` are owned storage types for a Shared, Mutable,
+or Consuming callable with a complete contract (see [Function
+Values](/manual/functions#function-values)) and an erased capture set;
+`TaskCallable[...]` is the same storage whose every capture is proven
+Transfer. Packing is explicit: calling a non-generic alias of such a type
+with one value packs it, and the packed value keeps the closure's own
+environment.
+
+```aura
+class Counter:
+    total: int64
+
+    def bump(mut self) -> int64:
+        self.total = self.total + 1
+        return self.total
+
+type Reader = Callable[def() -> int64]
+type Bumper = Callable[mut def() -> int64]
+type Finish = Callable[own def() -> str]
+
+def make_reader(base: int64) -> Reader:
+    offset = base + 1
+    return Reader(lambda: offset)
+
+def make_bumper() -> Bumper:
+    counter = Counter(total=0)
+    return Bumper(lambda [own counter]: counter.bump())
+
+reader = make_reader(1)
+print(reader())
+print(reader())
+def make_finish(text: own str) -> Finish:
+    return Finish(lambda [own text]: text)
+
+def finish_once(finish: own Finish) -> str:
+    return finish()
+
+mut bumper = make_bumper()
+print(bumper())
+print(bumper())
+print(finish_once(make_finish("done")))
+```
+
+The packed value's contract must be admitted by the storage contract, and
+its call kind may only weaken: a Shared value packs into any kind, a
+Mutable value into Mutable or Consuming storage, and a Consuming value only
+into Consuming storage; the reverse reports `AU2015`. A closure or function
+value that reaches a `Callable` destination without the constructor reports
+`AU2015` as implicit erased storage. A loan capture (`[values]`,
+`[mut values]`, or a live view) cannot be packed (`AU3010`); move or clone
+an owned value into the lambda instead. Packing into `TaskCallable[...]`
+additionally requires every capture type to be Transfer (`AU3008`, naming
+the capture); an ordinary erased `Callable` is never Transfer.
+
+Packed values are non-Copy and non-cloneable, so `dict.get`, snapshots, and
+generic cloning reject them (`AU3007`), they have no equality (`AU2008`), and
+they move like any owned value (`AU3001` after a move or a consuming call).
+They may be stored in parameters (`mut Bumper`, `own Finish`), results,
+class fields, list and dictionary elements, and cross modules through public
+aliases. A Shared value is called through any access, a Mutable value only
+through a mutable place (`AU3003`), and a Consuming value once, by an owner;
+a callable element of a list or dictionary is called through a call-scoped
+shared read, and a Consuming element must be removed before it is consumed.
+
+A conditional or `match` expression merges capturing closures only through
+an explicit common `Callable` contract on the destination (an annotation,
+parameter, or return type): each reached branch packs its own value, and
+untaken lambda expressions acquire no captures. Without such a contract,
+different capturing closures still cannot merge; call the closure inside
+each branch, or return capture-free lambdas or named functions with one
+structural `def(...) -> R` type.
 
 A resolved name in a lambda without a list is a capture only when it denotes
 an outer owned local or an `own` parameter. Lambda parameters, module
@@ -200,6 +265,14 @@ non-Transfer leaf retains the ordinary `AU3008` boundary explanation. A
 closure containing any shared or mutable loan is always non-Transfer and
 cannot cross a task, Queue, supervisor, detached-work, or FFI boundary.
 
+A body may call a `mut` operation on an owned capture, whether it moved or
+copied into the environment implicitly or through `own name`. The closure is
+then Mutable: it must be held in a `mut` local or called through a mutable
+place, and the updated capture value persists in the environment across
+calls, so a packed counter counts across invocations. The original outer
+binding is not changed. A shared-view capture stays read-only (`AU3003`);
+capture it `mut` for a mutable view of the original place instead.
+
 ### Comprehension Interaction
 
 Comprehensions do not change closure capture. A lambda enclosing a
@@ -227,15 +300,20 @@ consuming closure.
 
 `AU1101` reports malformed lambda parameter or body syntax. `AU2002` reports a
 missing or mismatched parameter context, parameter capability, result type,
-metadata-erasing storage boundary, or a consuming closure supplied where a
-repeatable callback is required. `AU3001` reports use after a non-Copy value
-moved into a closure and use after a consuming closure call. `AU3002` rejects
-overlapping capture loans and source accesses. `AU3003` rejects capability
-escalation or a mutable-repeatable call through an immutable closure place.
-`AU3008` reports a closure whose
-captured environment cannot cross a task boundary because some captured value
-is not Transfer. `AU3010` reports a loan closure escaping into storage or a
-metadata-erasing callable boundary.
+thin-`def` storage boundary, or a consuming closure supplied where a
+repeatable callback is required. `AU2015` reports implicit erased storage
+(a closure or function reaching `Callable[...]` without its constructor), a
+packed value whose contract is not admitted, or a call kind that would
+strengthen. `AU3001` reports use after a non-Copy value moved into a closure
+and use after a consuming closure or consuming callable call. `AU3002`
+rejects overlapping capture loans and source accesses. `AU3003` rejects
+capability escalation, mutation of a shared-view capture, or a Mutable call
+through an immutable place. `AU3007` rejects duplicating a packed callable.
+`AU3008` reports a closure whose captured environment cannot cross a task
+boundary or become `TaskCallable` because some captured value is not
+Transfer. `AU3010` reports a loan closure escaping into storage, a loan
+capture packed into owned callable storage, or a metadata-erasing callable
+boundary.
 
 The shared-capability diagnostic recommends cloning to an owned local or
 taking owned input. Move diagnostics identify closure creation or the
@@ -258,6 +336,13 @@ Closures are expression-only and contextually typed. They do not support
 statement bodies, inline parameter types, defaults, generics, implicit
 reference capture, method values, trait objects, FFI callbacks, asynchronous
 syntax, returned loan closures, or lifetime-bearing structural callable types.
+Owned callable storage holds owned captures only; loan captures stay in
+local loan closures. A packed value keeps the closure's existing environment
+as its storage, so packing allocates no second environment on either
+backend; the checkpoint's inline-buffer plan is the native ABI target this
+representation stands in for. `TaskCallable[...]` values are packed and
+validated, but the `TaskGroup` start methods do not accept a stored target
+yet.
 Explicit lists accept local identifiers; project a field into a named view
 before capturing it.
 

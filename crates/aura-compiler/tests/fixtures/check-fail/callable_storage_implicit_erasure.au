@@ -1,0 +1,6 @@
+type Tool = Callable[def(value: int64) -> int64]
+
+def main():
+    offset = 3
+    tool: Tool = lambda value: value + offset
+    print(tool(1))

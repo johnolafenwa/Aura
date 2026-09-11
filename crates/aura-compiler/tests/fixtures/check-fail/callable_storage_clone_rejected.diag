@@ -1,0 +1,6 @@
+error[AU3007]: cannot use `dict.get` because duplicating `Callable[def(value: int64) -> int64]` would duplicate non-cloneable closure `Callable[def(value: int64) -> int64]`
+ --> crates/aura-compiler/tests/fixtures/check-fail/callable_storage_clone_rejected.au:6:23
+  |
+6 |     copied = registry.get("inc")
+  |                       ^
+  = help: move the closure so its environment has one owner, or use a named function value when no capture is required

@@ -335,6 +335,12 @@
       "stderr": ""
     },
     "docs/manual/closures.md#aura-4": {
+      "sha256": "5c0038b796903c270cfcd1f2a66356e4bd067a00c526cbf3fca5c43ddfde9c95",
+      "mode": "run",
+      "stdout": "2\n2\n1\n2\ndone\n",
+      "stderr": ""
+    },
+    "docs/manual/closures.md#aura-5": {
       "sha256": "a114f89b8c82ea558ed71a568e035ba0158511b9d3b82596cfdb3b11cd32c396",
       "mode": "run",
       "stdout": "Aura\n4\n",
@@ -1049,7 +1055,7 @@
       "reason": "Normative item-declaration EBNF fragment interpreted by the grammar prose, not Aura source."
     },
     "docs/manual/grammar.md#ebnf-4": {
-      "sha256": "5bbef878b82bfb1e3ba730f3bbbcc6a2a8d229f08f8e8e901ccfc314eba76727",
+      "sha256": "0be0d57ba8ddaa3f2ad50921aea9238e148f774f34beb8338f1a9243fded826d",
       "mode": "illustrative",
       "reason": "Normative type-and-type-parameter EBNF fragment interpreted by the grammar prose, not Aura source."
     },

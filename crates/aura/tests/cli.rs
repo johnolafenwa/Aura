@@ -948,6 +948,7 @@ fn adr0038_mutable_closure_type() -> Type {
             ty: Type::named("int64"),
             mode: ClosureCaptureMode::MutableView,
             span: Span::new(1, 1),
+            mutated: false,
         }]),
         call_kind: ClosureCallKind::MutableRepeatable,
     }
@@ -1043,8 +1044,10 @@ fn adr0038_closure_branch_module(flag: bool, reverse_branch_storage: bool) -> Mi
                         passing: MirReceiverKind::BorrowMut,
                         source_place: Some(source.to_string()),
                         resolve_source_at_capture: false,
+                        mutated: false,
                     }],
                     consuming: false,
+                    mutable: false,
                 },
             },
             Instruction::EndLoan {
@@ -1272,8 +1275,10 @@ fn adr0038_selector_reuse_module() -> MirModule {
                     passing: MirReceiverKind::BorrowMut,
                     source_place: Some("selected".to_string()),
                     resolve_source_at_capture: true,
+                    mutated: false,
                 }],
                 consuming: false,
+                mutable: false,
             },
         },
         Instruction::EndLoan {

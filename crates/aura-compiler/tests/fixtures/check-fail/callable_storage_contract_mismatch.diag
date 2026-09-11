@@ -1,0 +1,6 @@
+error[AU2015]: callable contract mismatch: parameter `amount` would be renamed to `value`; renaming requires an explicit wrapper
+ --> crates/aura-compiler/tests/fixtures/check-fail/callable_storage_contract_mismatch.au:7:17
+  |
+7 |     tool = Tool(double)
+  |                 ^
+  = help: annotate the destination with a contract every value satisfies, or adapt a value explicitly through a thin callable alias call such as `Alias(function)`

@@ -105,12 +105,77 @@ pub enum ClosureCallKind {
     Consuming,
 }
 
+impl ClosureCallKind {
+    /// Shared < Mutable < Consuming: a value may be packed into a callable
+    /// type of the same or a weaker kind, never a stronger one (C2).
+    pub(crate) fn rank(self) -> u8 {
+        match self {
+            Self::Repeatable => 0,
+            Self::MutableRepeatable => 1,
+            Self::Consuming => 2,
+        }
+    }
+
+    pub(crate) fn admits(self, source: Self) -> bool {
+        source.rank() <= self.rank()
+    }
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Repeatable => "Shared",
+            Self::MutableRepeatable => "Mutable",
+            Self::Consuming => "Consuming",
+        }
+    }
+
+    pub(crate) fn spelling(self) -> &'static str {
+        match self {
+            Self::Repeatable => "",
+            Self::MutableRepeatable => "mut ",
+            Self::Consuming => "own ",
+        }
+    }
+}
+
+/// An owned, environment-erased callable storage type (C1, Q13 A): the
+/// complete call contract plus the call kind, with the capture set erased.
+/// Non-Copy and non-cloneable; Transfer only as a checked `TaskCallable`.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CallableType {
+    pub task: bool,
+    pub call_kind: ClosureCallKind,
+    pub params: Vec<FunctionParamContract>,
+    pub return_type: Type,
+}
+
+impl CallableType {
+    /// The thin contract every packed value must meet.
+    pub(crate) fn contract(&self) -> Type {
+        Type::Function {
+            params: self.params.clone(),
+            return_type: Box::new(self.return_type.clone()),
+        }
+    }
+
+    pub(crate) fn constructor_name(&self) -> &'static str {
+        if self.task {
+            "TaskCallable"
+        } else {
+            "Callable"
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ClosureCapture {
     pub name: String,
     pub ty: Type,
     pub mode: ClosureCaptureMode,
     pub span: crate::diag::Span,
+    /// An owned (`Copy`/`Move`) capture the body mutates in place (C2):
+    /// the closure is Mutable and the environment keeps the updated value.
+    #[serde(default)]
+    pub mutated: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -514,6 +579,17 @@ pub(crate) fn check_callable_positions(
             callable_contract_admission(expected_params, actual_params)?;
             check_callable_positions(expected_return, actual_return)
         }
+        (Type::Callable(expected_callable), Type::Callable(actual_callable)) => {
+            if expected_callable.task != actual_callable.task
+                || expected_callable.call_kind != actual_callable.call_kind
+            {
+                return Err(format!(
+                    "expected `{expected}`, found `{actual}`; pack the value through the destination constructor to change its storage kind"
+                ));
+            }
+            callable_contract_admission(&expected_callable.params, &actual_callable.params)?;
+            check_callable_positions(&expected_callable.return_type, &actual_callable.return_type)
+        }
         (Type::Tuple(expected), Type::Tuple(actual)) => expected
             .iter()
             .zip(actual)
@@ -561,6 +637,22 @@ pub(crate) fn same_callable_contracts(
                 ));
             }
             same_callable_contracts(left_return, right_return)
+        }
+        (Type::Callable(left_callable), Type::Callable(right_callable)) => {
+            if let Some((index, (left_param, right_param))) = left_callable
+                .params
+                .iter()
+                .zip(&right_callable.params)
+                .enumerate()
+                .find(|(_, (left, right))| left != right)
+            {
+                return Err(format!(
+                    "{} differs from {} in its name, keyword-only boundary, or default availability",
+                    contract_slot_label(left_param, index),
+                    contract_slot_label(right_param, index)
+                ));
+            }
+            same_callable_contracts(&left_callable.return_type, &right_callable.return_type)
         }
         (Type::Tuple(left), Type::Tuple(right)) => left
             .iter()
@@ -1029,6 +1121,15 @@ impl<'a> FunctionChecker<'a> {
                     ..
                 }),
             ) => Some((params.as_slice(), Some(return_type.as_ref()))),
+            (None, Some(expected @ Type::Callable(callable))) => {
+                return Err(callable_contract_mismatch(
+                    span,
+                    format!(
+                        "implicit erased storage; a lambda becomes `{expected}` only through an explicit `{}(lambda ...)` constructor call",
+                        callable.constructor_name()
+                    ),
+                ))
+            }
             (None, Some(expected)) => {
                 return Err(Diagnostic::coded_at(
                     "AU2002",
@@ -1291,6 +1392,7 @@ impl<'a> FunctionChecker<'a> {
                 ty: binding.ty.clone(),
                 mode,
                 span: capture_span,
+                mutated: false,
             });
             lambda_locals.insert(
                 name.clone(),
@@ -1378,6 +1480,9 @@ impl<'a> FunctionChecker<'a> {
         let expected_return = expected_signature.and_then(|(_, return_type)| return_type);
         self.reject_mutable_returned_view_value(body, &mut lambda_locals, false)?;
         self.reject_owned_view_value(body, &mut lambda_locals, "an owned lambda result")?;
+        // Owned captures mutated by the body make the closure Mutable (C2);
+        // the set is scoped to this lambda so nested lambdas do not leak.
+        let outer_mutated_captures = std::mem::take(&mut *self.mutated_captures.borrow_mut());
         let return_type = self.type_of_expr_hint(body, &mut lambda_locals, expected_return)?;
         if let Some(expected_return) = expected_return {
             if return_type != *expected_return {
@@ -1399,6 +1504,16 @@ impl<'a> FunctionChecker<'a> {
             ));
         }
         self.consume_value_expr(body, &mut lambda_locals)?;
+        let mutated_captures = std::mem::replace(
+            &mut *self.mutated_captures.borrow_mut(),
+            outer_mutated_captures,
+        );
+        for capture in &mut captures {
+            capture.mutated = matches!(
+                capture.mode,
+                ClosureCaptureMode::Copy | ClosureCaptureMode::Move
+            ) && mutated_captures.contains(&capture.name);
+        }
         let call_kind = if captures.iter().any(|capture| {
             lambda_locals
                 .get(&capture.name)
@@ -1407,7 +1522,7 @@ impl<'a> FunctionChecker<'a> {
             ClosureCallKind::Consuming
         } else if captures
             .iter()
-            .any(|capture| capture.mode == ClosureCaptureMode::MutableView)
+            .any(|capture| capture.mode == ClosureCaptureMode::MutableView || capture.mutated)
         {
             ClosureCallKind::MutableRepeatable
         } else {

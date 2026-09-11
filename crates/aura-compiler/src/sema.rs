@@ -11,9 +11,10 @@ use callables::{
     ClosureArgumentPolicy, LambdaTypingRequest,
 };
 pub use callables::{
-    ClosureCallKind, ClosureCapture, ClosureCaptureMode, ClosureId, ClosureInfo, ClosureOwner,
-    FunctionParamContract,
+    CallableType, ClosureCallKind, ClosureCapture, ClosureCaptureMode, ClosureId, ClosureInfo,
+    ClosureOwner, FunctionParamContract,
 };
+pub(crate) use types::closure_call_kind_for;
 mod resolve;
 use resolve::{find_namespace_in_modules, reject_reserved_type_name, validate_type_params};
 mod traits;
@@ -952,6 +953,8 @@ struct FunctionChecker<'a> {
     /// Set while an argument bound to a `mut` union parameter is typed: the
     /// declared union is exposed whole, so refinements do not apply.
     suppress_narrowing: Rc<std::cell::Cell<bool>>,
+    /// Owned lambda captures the current lambda body mutates in place (C2).
+    mutated_captures: Rc<RefCell<BTreeSet<String>>>,
     rng_clone_obligations: Rc<RefCell<BTreeSet<String>>>,
     array_equality_obligations: Rc<RefCell<BTreeSet<String>>>,
     expr_result_entries: Rc<RefCell<HashMap<usize, ExprResultEntry>>>,
@@ -1307,6 +1310,7 @@ impl<'a> FunctionChecker<'a> {
             // parameter and result types are call contracts, not values
             // retained inside a capture-free code pointer.
             Type::Closure { .. }
+            | Type::Callable(_)
             | Type::Function { .. }
             | Type::TypeParam(_)
             | Type::Module(_)
@@ -1791,6 +1795,7 @@ impl<'a> FunctionChecker<'a> {
             implicit_borrowed_params: BTreeMap::new(),
             active_match_borrow_places: Rc::new(RefCell::new(Vec::new())),
             suppress_narrowing: Rc::new(std::cell::Cell::new(false)),
+            mutated_captures: Rc::new(RefCell::new(BTreeSet::new())),
             rng_clone_obligations: Rc::new(RefCell::new(BTreeSet::new())),
             array_equality_obligations: Rc::new(RefCell::new(BTreeSet::new())),
             expr_result_entries: Rc::new(RefCell::new(HashMap::new())),
@@ -1843,6 +1848,7 @@ impl<'a> FunctionChecker<'a> {
             union_injections: self.union_injections.clone(),
             narrowed_reads: self.narrowed_reads.clone(),
             suppress_narrowing: self.suppress_narrowing.clone(),
+            mutated_captures: self.mutated_captures.clone(),
         }
     }
 
@@ -1881,6 +1887,7 @@ impl<'a> FunctionChecker<'a> {
             union_injections: self.union_injections.clone(),
             narrowed_reads: self.narrowed_reads.clone(),
             suppress_narrowing: self.suppress_narrowing.clone(),
+            mutated_captures: self.mutated_captures.clone(),
         }
     }
 
@@ -1915,6 +1922,7 @@ impl<'a> FunctionChecker<'a> {
             union_injections: self.union_injections.clone(),
             narrowed_reads: self.narrowed_reads.clone(),
             suppress_narrowing: self.suppress_narrowing.clone(),
+            mutated_captures: self.mutated_captures.clone(),
         }
     }
 
@@ -1949,6 +1957,7 @@ impl<'a> FunctionChecker<'a> {
             union_injections: self.union_injections.clone(),
             narrowed_reads: self.narrowed_reads.clone(),
             suppress_narrowing: self.suppress_narrowing.clone(),
+            mutated_captures: self.mutated_captures.clone(),
         }
     }
 
@@ -5878,6 +5887,178 @@ impl<'a> FunctionChecker<'a> {
         }
     }
 
+    /// `Alias(value)` for a `Callable[...]`/`TaskCallable[...]` alias packs one
+    /// callable value into owned erased storage (C1, C2, C8): the value's
+    /// contract must be admitted, its call kind may only weaken, loan
+    /// captures cannot be packed, and a task callable proves every capture
+    /// Transfer. Erasure happens only here; the environment is the closure's
+    /// own captured state.
+    fn type_of_callable_pack(
+        &self,
+        alias: &AliasInfo,
+        callable: &CallableType,
+        args: &[Argument],
+        span: crate::diag::Span,
+        locals: &mut HashMap<String, LocalBinding>,
+    ) -> Result<Type> {
+        if !alias.decl.type_params.is_empty() {
+            return Err(Diagnostic::coded_at(
+                "AU2002",
+                span,
+                format!(
+                    "callable alias `{}` is generic; pack through a concrete callable annotation instead",
+                    alias.decl.name
+                ),
+            ));
+        }
+        let [argument] = args else {
+            return Err(Diagnostic::coded_at(
+                "AU2004",
+                span,
+                format!(
+                    "`{}(...)` packs exactly one callable value, found {} argument{}",
+                    alias.decl.name,
+                    args.len(),
+                    if args.len() == 1 { "" } else { "s" }
+                ),
+            ));
+        };
+        if argument.name.is_some() {
+            return Err(Diagnostic::coded_at(
+                "AU2004",
+                argument.span,
+                format!(
+                    "`{}(...)` takes its callable value positionally",
+                    alias.decl.name
+                ),
+            ));
+        }
+        let contract = callable.contract();
+        // Only a lambda needs the contract as its typing context; every other
+        // value carries its own callable type.
+        let lambda_context =
+            matches!(argument.value.kind, ExprKind::Lambda { .. }).then_some(&contract);
+        let actual = self.type_of_expr_hint(&argument.value, locals, lambda_context)?;
+        let (source_kind, source_task_ready) = match &actual {
+            Type::Callable(source) => {
+                if actual != alias.target {
+                    let source_contract = source.contract();
+                    if source_contract != contract {
+                        return Err(Diagnostic::coded_at(
+                            "AU2002",
+                            argument.value.span,
+                            function_type_mismatch_message(&contract, &source_contract),
+                        ));
+                    }
+                    check_callable_positions(&contract, &source_contract).map_err(|reason| {
+                        callable_contract_mismatch(argument.value.span, reason)
+                    })?;
+                }
+                (source.call_kind, source.task)
+            }
+            Type::Function { .. } => {
+                if actual != contract {
+                    return Err(Diagnostic::coded_at(
+                        "AU2002",
+                        argument.value.span,
+                        function_type_mismatch_message(&contract, &actual),
+                    ));
+                }
+                check_callable_positions(&contract, &actual)
+                    .map_err(|reason| callable_contract_mismatch(argument.value.span, reason))?;
+                (ClosureCallKind::Repeatable, true)
+            }
+            Type::Closure {
+                captures,
+                call_kind,
+                ..
+            } => {
+                if !closure_signature_matches_function(&actual, &contract) {
+                    return Err(Diagnostic::coded_at(
+                        "AU2002",
+                        argument.value.span,
+                        function_type_mismatch_message(&contract, &actual),
+                    ));
+                }
+                check_callable_positions(&contract, &actual)
+                    .map_err(|reason| callable_contract_mismatch(argument.value.span, reason))?;
+                if let Some(capture) = captures.iter().find(|capture| {
+                    matches!(
+                        capture.mode,
+                        ClosureCaptureMode::SharedView | ClosureCaptureMode::MutableView
+                    )
+                }) {
+                    return Err(Diagnostic::coded_at(
+                        "AU3010",
+                        capture.span,
+                        format!(
+                            "capture `{}` is a live {} loan and cannot be packed into `{}`",
+                            capture.name,
+                            if capture.mode == ClosureCaptureMode::MutableView {
+                                "mutable"
+                            } else {
+                                "shared"
+                            },
+                            alias.decl.name
+                        ),
+                    )
+                    .with_help(
+                        "move or clone an owned value into the lambda, or keep the loan closure in a local and call it directly",
+                    ));
+                }
+                if callable.task {
+                    if let Some((capture, failure)) = captures.iter().find_map(|capture| {
+                        self.transfer_failure(&capture.ty)
+                            .map(|failure| (capture, failure))
+                    }) {
+                        return Err(Diagnostic::coded_at(
+                            "AU3008",
+                            capture.span,
+                            format!(
+                                "capture `{}` of type `{}` is not Transfer, so the closure cannot become `{}`: {failure}",
+                                capture.name, capture.ty, alias.decl.name
+                            ),
+                        ));
+                    }
+                }
+                (*call_kind, true)
+            }
+            _ => {
+                return Err(Diagnostic::coded_at(
+                    "AU2002",
+                    argument.value.span,
+                    format!(
+                        "`{}(...)` expects a function value, lambda, or packed callable, found `{actual}`",
+                        alias.decl.name
+                    ),
+                ));
+            }
+        };
+        if callable.task && !source_task_ready {
+            return Err(Diagnostic::coded_at(
+                "AU3008",
+                argument.value.span,
+                format!(
+                    "an erased `Callable` cannot become `{}`; its environment was never proven Transfer",
+                    alias.decl.name
+                ),
+            ));
+        }
+        if !callable.call_kind.admits(source_kind) {
+            return Err(callable_contract_mismatch(
+                argument.value.span,
+                format!(
+                    "a {} value cannot be packed as {} `{}`; a call kind may only weaken",
+                    source_kind.label(),
+                    callable.call_kind.label(),
+                    alias.decl.name
+                ),
+            ));
+        }
+        self.consume_value_expr(&argument.value, locals)?;
+        Ok(alias.target.clone())
+    }
+
     /// `Alias(value)` for a thin `def(...)` alias adapts one function value or
     /// capture-free lambda to the alias's complete contract (C5): the value's
     /// contract must be admitted by the alias, and no environment is added.
@@ -5964,6 +6145,19 @@ impl<'a> FunctionChecker<'a> {
             if actual == *expected {
                 check_callable_positions(expected, &actual)
                     .map_err(|reason| callable_contract_mismatch(expr.span, reason))?;
+            } else if let (Type::Callable(callable), Type::Closure { .. } | Type::Function { .. }) =
+                (expected, &actual)
+            {
+                // Erasure into owned callable storage is explicit (C1): a
+                // closure or function value reaches `Callable[...]` only
+                // through the constructor call.
+                return Err(callable_contract_mismatch(
+                    expr.span,
+                    format!(
+                        "implicit erased storage; `{actual}` becomes `{expected}` only through an explicit `{}(...)` constructor call",
+                        callable.constructor_name()
+                    ),
+                ));
             }
         }
         Ok(actual)
@@ -8697,13 +8891,17 @@ impl<'a> FunctionChecker<'a> {
         };
         let inferred_alias = resolve_alias(grouped_expr(callee));
         if let Some(alias) = inferred_alias {
-            if matches!(alias.target, Type::Function { .. })
-                && matches!(
-                    grouped_expr(callee).kind,
-                    ExprKind::Name(_) | ExprKind::Member { .. }
-                )
-            {
+            let bare_alias_callee = matches!(
+                grouped_expr(callee).kind,
+                ExprKind::Name(_) | ExprKind::Member { .. }
+            );
+            if matches!(alias.target, Type::Function { .. }) && bare_alias_callee {
                 return self.type_of_thin_alias_adapter(alias, args, span, locals);
+            }
+            if let Type::Callable(callable) = &alias.target {
+                if bare_alias_callee {
+                    return self.type_of_callable_pack(alias, callable, args, span, locals);
+                }
             }
         }
         if let Some(expanded) = expand_alias_callee(
@@ -13749,6 +13947,43 @@ impl<'a> FunctionChecker<'a> {
                         expected,
                     );
                 }
+                if let Ok(Type::Callable(callable)) =
+                    self.resolve_member_type(&receiver_ty, field, span)
+                {
+                    if explicit_type_args.is_some() {
+                        return Err(Diagnostic::coded_at(
+                            "AU2005",
+                            span,
+                            "packed callable values have a concrete contract and do not take explicit type arguments",
+                        ));
+                    }
+                    match callable.call_kind {
+                        ClosureCallKind::Consuming => {
+                            self.consume_value_expr(base_callee, locals)?;
+                        }
+                        ClosureCallKind::MutableRepeatable => {
+                            if !self.is_mutable_place(base_callee, locals)? {
+                                return Err(Diagnostic::coded_at(
+                                    "AU3003",
+                                    base_callee.span,
+                                    "a Mutable callable field must be called through a mutable place",
+                                )
+                                .with_help(
+                                    "hold the owner in a `mut` local, or take it as a `mut` parameter",
+                                ));
+                            }
+                        }
+                        ClosureCallKind::Repeatable => {}
+                    }
+                    return self.type_check_function_value_args(
+                        &callable.params,
+                        &callable.return_type,
+                        args,
+                        span,
+                        locals,
+                        expected,
+                    );
+                }
                 match (&receiver_ty, field.as_str()) {
                     (Type::Named(name, type_args), method_name)
                         if type_args.is_empty()
@@ -13827,6 +14062,70 @@ impl<'a> FunctionChecker<'a> {
                 ) {
                     return Err(self.unsupported_call_target_diagnostic(callee, span));
                 }
+                // A packed callable stored in a list or dict element is
+                // called through a call-scoped shared read of that element;
+                // no second owner of the environment is created.
+                if let ExprKind::Index { object, index } = &grouped_expr(base_callee).kind {
+                    // Probe the container without committing moves; a generic
+                    // function name in this position is a specialization, not
+                    // an element read, and falls through unchanged.
+                    let element = self
+                        .type_of_expr_without_move_state(object, locals, None)
+                        .ok()
+                        .and_then(|object_ty| {
+                            vec_element_type(&object_ty).cloned().or_else(|| {
+                                map_key_value_types(&object_ty).map(|(_, value)| value.clone())
+                            })
+                        });
+                    if let Some(Type::Callable(callable)) = element {
+                        let object_ty = self.type_of_expr(object, locals)?;
+                        if vec_element_type(&object_ty).is_some() {
+                            self.check_vec_index_type(index, index.span, locals)?;
+                        } else if let Some((key_ty, _)) = map_key_value_types(&object_ty) {
+                            let actual_key = self.type_of_expr_hint(index, locals, Some(key_ty))?;
+                            if actual_key != *key_ty {
+                                return Err(Diagnostic::coded_at(
+                                    "AU2002",
+                                    index.span,
+                                    format!(
+                                        "dict index has type `{actual_key}`, expected `{key_ty}`"
+                                    ),
+                                ));
+                            }
+                        }
+                        match callable.call_kind {
+                            ClosureCallKind::Consuming => {
+                                return Err(Diagnostic::coded_at(
+                                    "AU3001",
+                                    base_callee.span,
+                                    "a Consuming callable cannot be consumed inside a collection element",
+                                )
+                                .with_help(
+                                    "remove the callable from the collection first, then call the owned value",
+                                ));
+                            }
+                            ClosureCallKind::MutableRepeatable => {
+                                if !self.is_mutable_place(object, locals)? {
+                                    return Err(Diagnostic::coded_at(
+                                        "AU3003",
+                                        base_callee.span,
+                                        "a Mutable callable element must be called through a mutable collection",
+                                    )
+                                    .with_help("hold the collection in a `mut` local"));
+                                }
+                            }
+                            ClosureCallKind::Repeatable => {}
+                        }
+                        return self.type_check_function_value_args(
+                            &callable.params,
+                            &callable.return_type,
+                            args,
+                            span,
+                            locals,
+                            expected,
+                        );
+                    }
+                }
                 let callee_ty = self.type_of_expr(base_callee, locals)?;
                 match callee_ty {
                     Type::Function {
@@ -13840,6 +14139,43 @@ impl<'a> FunctionChecker<'a> {
                         locals,
                         expected,
                     ),
+                    Type::Callable(callable) => {
+                        if explicit_type_args.is_some() {
+                            return Err(Diagnostic::coded_at(
+                                "AU2005",
+                                span,
+                                "packed callable values have a concrete contract and do not take explicit type arguments",
+                            ));
+                        }
+                        match callable.call_kind {
+                            ClosureCallKind::Consuming => {
+                                self.consume_value_expr(base_callee, locals)?;
+                            }
+                            ClosureCallKind::MutableRepeatable => {
+                                if !self.is_mutable_place(base_callee, locals)? {
+                                    return Err(Diagnostic::coded_at(
+                                        "AU3003",
+                                        base_callee.span,
+                                        "a Mutable callable must be called through a mutable place",
+                                    )
+                                    .with_help(
+                                        "store the callable in a `mut` local, or take it as a `mut` parameter",
+                                    ));
+                                }
+                            }
+                            ClosureCallKind::Repeatable => {}
+                        }
+                        let params = callable.params.clone();
+                        let return_type = callable.return_type.clone();
+                        self.type_check_function_value_args(
+                            &params,
+                            &return_type,
+                            args,
+                            span,
+                            locals,
+                            expected,
+                        )
+                    }
                     Type::Closure {
                         params,
                         return_type,
@@ -13967,7 +14303,11 @@ impl<'a> FunctionChecker<'a> {
                         )
                     });
             }
-            Type::Function { .. } | Type::Closure { .. } | Type::Tuple(_) | Type::Unit => {
+            Type::Function { .. }
+            | Type::Closure { .. }
+            | Type::Callable(_)
+            | Type::Tuple(_)
+            | Type::Unit => {
                 return Err(Diagnostic::at(
                     span,
                     format!("cannot access field `{}` on `{}`", field, object_ty),

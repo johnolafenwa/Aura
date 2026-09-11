@@ -1,0 +1,9 @@
+type Tool = Callable[def(value: int64) -> int64]
+
+def increment(value: int64) -> int64:
+    return value + 1
+
+def main():
+    left = Tool(increment)
+    right = Tool(increment)
+    print(left == right)

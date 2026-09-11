@@ -414,8 +414,8 @@ as an annotation, or adapt a value explicitly: calling a non-generic alias of
 a thin `def` type with one function value or capture-free lambda, such as
 `Unary(increment)`, yields that alias contract when the alias admits the
 value and reports `AU2015` otherwise. No environment is added; a capturing
-closure needs an owned `Callable[...]` storage type, which is not yet
-available.
+closure packs into an owned `Callable[...]` storage type instead (see
+[Closures](/manual/closures#typing-rules)).
 
 Function values are code pointers. They are copy values, cloning is
 unnecessary, and copying or passing one as an `own def(...) -> R` parameter

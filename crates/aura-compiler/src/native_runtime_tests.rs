@@ -5678,6 +5678,7 @@ fn direct_closure_type_matching_preserves_callable_and_capture_contracts() {
         ty,
         mode,
         span: Span::new(3, 5),
+        mutated: false,
     };
     let closure = |parameter_ty, passing, capture_ty, mode, call_kind| Type::Closure {
         params: Box::new(vec![param(parameter_ty, passing)]),
@@ -16317,6 +16318,7 @@ fn native_runtime_closure_task_handoff_transfers_capture_ownership_to_child() {
                         ty: capture_type.clone(),
                         mode: crate::sema::ClosureCaptureMode::Copy,
                         span: Span::new(2, 1),
+                        mutated: false,
                     }]),
                     call_kind: crate::sema::ClosureCallKind::Repeatable,
                 },
@@ -16405,6 +16407,7 @@ fn native_runtime_closure_task_handoff_preserves_repeatable_and_one_shot_semanti
                         crate::sema::ClosureCaptureMode::Copy
                     },
                     span: Span::new(2, 1),
+                    mutated: false,
                 }]),
                 call_kind: if consuming {
                     crate::sema::ClosureCallKind::Consuming
@@ -16566,6 +16569,7 @@ fn native_runtime_closure_task_rejects_negative_public_arity_then_allows_valid_r
                         ty: Type::named("int64"),
                         mode: crate::sema::ClosureCaptureMode::Copy,
                         span: Span::new(2, 1),
+                        mutated: false,
                     }]),
                     call_kind: crate::sema::ClosureCallKind::Repeatable,
                 },
@@ -16682,6 +16686,7 @@ fn native_runtime_detached_closure_task_surfaces_unobserved_trap_and_cleans_capt
                                 ty: Type::named("str"),
                                 mode: crate::sema::ClosureCaptureMode::Move,
                                 span: Span::new(2, 1),
+                                mutated: false,
                             }]),
                             call_kind: crate::sema::ClosureCallKind::Consuming,
                         },
@@ -17098,6 +17103,7 @@ fn native_runtime_closure_calls_preserve_results_writebacks_and_call_kind() {
                         ty: Type::named("int64"),
                         mode: crate::sema::ClosureCaptureMode::Copy,
                         span: Span::new(2, 17),
+                        mutated: false,
                     }]),
                     call_kind: crate::sema::ClosureCallKind::Repeatable,
                 },
@@ -17176,6 +17182,7 @@ fn native_runtime_closure_calls_preserve_results_writebacks_and_call_kind() {
                         ty: Type::named("int64"),
                         mode: crate::sema::ClosureCaptureMode::Move,
                         span: Span::new(4, 17),
+                        mutated: false,
                     }]),
                     call_kind: crate::sema::ClosureCallKind::Consuming,
                 },
@@ -17234,6 +17241,7 @@ fn native_runtime_closure_call_moves_owned_args_and_copies_only_mutable_writebac
                         ty: Type::named("int64"),
                         mode: crate::sema::ClosureCaptureMode::Copy,
                         span: Span::new(3, 17),
+                        mutated: false,
                     }]),
                     call_kind: crate::sema::ClosureCallKind::Repeatable,
                 },
@@ -17565,6 +17573,7 @@ fn native_runtime_trapping_closure_call_releases_combined_buffer_without_mut_wri
             ty: Type::named("str"),
             mode: crate::sema::ClosureCaptureMode::Move,
             span: Span::new(3, 13),
+            mutated: false,
         }]),
         call_kind: crate::sema::ClosureCallKind::Consuming,
     };
@@ -17641,6 +17650,7 @@ fn native_runtime_uncalled_closure_releases_owned_capture_environment() {
                         ty: Type::named("str"),
                         mode: crate::sema::ClosureCaptureMode::Move,
                         span: Span::new(2, 17),
+                        mutated: false,
                     }]),
                     call_kind: crate::sema::ClosureCallKind::Consuming,
                 },
@@ -20749,6 +20759,7 @@ fn coverage_native_runtime_decodes_closure_patterns_and_uses_type_fallbacks() {
             ty: Type::named("?Captured"),
             mode: ClosureCaptureMode::Copy,
             span: Span::new(3, 7),
+            mutated: false,
         }]),
         call_kind: ClosureCallKind::Repeatable,
     });

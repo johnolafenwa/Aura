@@ -1,0 +1,5 @@
+error[AU3008]: capture `reader` of type `Callable[def() -> int64]` is not Transfer, so the closure cannot become `Work`: an erased `Callable` hides its environment and is not Transfer; pack a `TaskCallable[...]` to prove its captures
+ --> crates/aura-compiler/tests/fixtures/check-fail/callable_storage_task_capture.au:7:29
+  |
+7 |     work = Work(lambda [own reader]: reader())
+  |                             ^

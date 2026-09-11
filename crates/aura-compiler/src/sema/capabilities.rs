@@ -704,17 +704,25 @@ impl<'a> FunctionChecker<'a> {
     ) -> Result<bool> {
         match &expr.kind {
             ExprKind::Name(name) => {
-                if locals.get(name).is_some_and(|binding| binding.captured) {
+                if let Some(binding) = locals.get(name).filter(|binding| binding.captured) {
+                    // An owned capture is the closure's own state: mutating it
+                    // makes the closure Mutable and keeps the updated value in
+                    // its environment (C2). A shared-view capture stays
+                    // read-only.
+                    if binding.passing == ReceiverKind::Value {
+                        self.mutated_captures.borrow_mut().insert(name.clone());
+                        return Ok(true);
+                    }
                     return Err(Diagnostic::coded_at(
                         "AU3003",
                         expr.span,
                         format!(
-                            "lambda capture `{name}` cannot be mutably accessed because mutable closures are not supported"
+                            "lambda capture `{name}` is a shared view and cannot be mutably accessed"
                         ),
                     )
-                    .with_help(
-                        "move the mutation outside the lambda, or pass the value as a `mut` lambda parameter",
-                    ));
+                    .with_help(format!(
+                        "capture `mut {name}` for a mutable view, or move an owned value into the lambda to mutate closure-owned state"
+                    )));
                 }
                 Ok(locals
                     .get(name)

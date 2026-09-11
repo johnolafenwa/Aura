@@ -1,0 +1,19 @@
+type Tool = Callable[def(value: int64) -> int64]
+type Sink = Callable[own def(value: int64) -> int64]
+
+def choose(flag: bool, left: own Tool, right: own Tool) -> Tool:
+    return left if flag else right
+
+def make_offset(amount: int64) -> Tool:
+    offset = amount
+    return Tool(lambda value: value + offset)
+
+def main():
+    chosen = choose(true, make_offset(1), make_offset(2))
+    print(chosen(10))
+    other = choose(false, make_offset(1), make_offset(2))
+    print(other(10))
+    picked: Tool = make_offset(5) if false else make_offset(6)
+    print(picked(1))
+    weakened: Sink = Sink(make_offset(7))
+    print(weakened(1))

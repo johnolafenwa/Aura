@@ -3882,7 +3882,13 @@ impl<'a> AnalysisBuilder<'a> {
                 &self.program.canonical_type_names,
             )
             .expect("checked union has members"),
-            crate::ast::TypeRefKind::Callable { .. } => Type::named("Unknown"),
+            crate::ast::TypeRefKind::Callable {
+                task,
+                call_kind,
+                signature,
+            } => {
+                lower_callable_type_ref(*task, *call_kind, self.lower_analysis_type_ref(signature))
+            }
             crate::ast::TypeRefKind::Tuple(elements) => Type::Tuple(
                 elements
                     .iter()
@@ -5349,7 +5355,11 @@ fn lower_type_ref(ty: &TypeRef) -> Type {
             &BTreeMap::new(),
         )
         .unwrap_or_else(|_| Type::named("Unknown")),
-        crate::ast::TypeRefKind::Callable { .. } => Type::named("Unknown"),
+        crate::ast::TypeRefKind::Callable {
+            task,
+            call_kind,
+            signature,
+        } => lower_callable_type_ref(*task, *call_kind, lower_type_ref(signature)),
         crate::ast::TypeRefKind::Tuple(elements) => {
             Type::Tuple(elements.iter().map(lower_type_ref).collect())
         }
@@ -5390,6 +5400,13 @@ fn base_type_name(ty: &Type) -> &str {
         Type::Tuple(_) => "tuple",
         Type::Function { .. } => "function",
         Type::Closure { .. } => "closure",
+        Type::Callable(callable) => {
+            if callable.task {
+                "TaskCallable"
+            } else {
+                "Callable"
+            }
+        }
         Type::Named(name, _) => name.as_str(),
     }
 }
@@ -5639,7 +5656,7 @@ impl TypeExt for Type {
             Type::TypeParam(_) => &[],
             Type::Tuple(elements) => elements.as_slice(),
             Type::Function { .. } => &[],
-            Type::Closure { .. } => &[],
+            Type::Closure { .. } | Type::Callable(_) => &[],
             Type::Named(_, args) => args.as_slice(),
         }
     }
@@ -7282,3 +7299,24 @@ fn is_identifier_char(ch: char) -> bool {
 #[cfg(test)]
 #[path = "analysis_tests.rs"]
 mod tests;
+
+/// Lowers a written `Callable[...]`/`TaskCallable[...]` reference around an
+/// already lowered `def(...)` signature; any other signature stays unknown.
+fn lower_callable_type_ref(
+    task: bool,
+    call_kind: crate::ast::ReceiverKind,
+    signature: Type,
+) -> Type {
+    match signature {
+        Type::Function {
+            params,
+            return_type,
+        } => Type::Callable(Box::new(crate::sema::CallableType {
+            task,
+            call_kind: crate::sema::closure_call_kind_for(call_kind),
+            params,
+            return_type: *return_type,
+        })),
+        _ => Type::named("Unknown"),
+    }
+}

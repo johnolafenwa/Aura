@@ -5601,6 +5601,7 @@ impl<'a> FunctionCompiler<'a> {
                 signature,
                 captures,
                 consuming,
+                mutable: _,
             } => self.compile_closure(function, signature, captures, *consuming),
             Rvalue::FormatString { parts } => self.compile_format_string(parts),
             Rvalue::Unary { op, value, span } => {
@@ -5850,7 +5851,7 @@ impl<'a> FunctionCompiler<'a> {
         for (index, capture) in captures.iter().enumerate() {
             let mutable = self.builder.ins().iconst(
                 types::I64,
-                i64::from(capture.passing == MirReceiverKind::BorrowMut),
+                i64::from(capture.passing == MirReceiverKind::BorrowMut || capture.mutated),
             );
             self.builder
                 .ins()
@@ -6917,6 +6918,9 @@ impl<'a> FunctionCompiler<'a> {
                 return_type,
                 ..
             }) => (*params, return_type),
+            DirectType::Opaque(Type::Callable(callable)) => {
+                (callable.params, Box::new(callable.return_type))
+            }
             _ => {
                 return Err("direct backend expected an indirect function value".to_string());
             }
@@ -15526,7 +15530,7 @@ impl<'a> FunctionCompiler<'a> {
                 let pattern = crate::native_runtime::canonical_runtime_type_name(ty);
                 self.value_matches_type(value, &pattern)
             }
-            Type::Function { .. } | Type::Closure { .. } => {
+            Type::Function { .. } | Type::Closure { .. } | Type::Callable(_) => {
                 let pattern = crate::native_runtime::canonical_runtime_type_name(ty);
                 self.value_matches_type(value, &pattern)
             }
@@ -16029,6 +16033,13 @@ fn direct_type_contains_unknown(ty: &DirectType) -> bool {
             } => {
                 params.iter().any(|param| type_contains_unknown(&param.ty))
                     || type_contains_unknown(return_type.as_ref())
+            }
+            Type::Callable(callable) => {
+                callable
+                    .params
+                    .iter()
+                    .any(|param| type_contains_unknown(&param.ty))
+                    || type_contains_unknown(&callable.return_type)
             }
             Type::Closure {
                 params,
@@ -16544,7 +16555,9 @@ fn direct_type_inner(
             }
             Some(DirectType::Opaque(Type::Tuple(elements.clone())))
         }
-        Type::Function { .. } | Type::Closure { .. } => Some(DirectType::Opaque(ty.clone())),
+        Type::Function { .. } | Type::Closure { .. } | Type::Callable(_) => {
+            Some(DirectType::Opaque(ty.clone()))
+        }
         Type::Named(name, args) if args.is_empty() && name == "int32" => {
             Some(DirectType::Scalar(ScalarKind::Int32))
         }
@@ -16629,6 +16642,12 @@ fn collect_type_params_from_type(ty: &Type, collected: &mut BTreeSet<String>) {
                 collect_type_params_from_type(&param.ty, collected);
             }
             collect_type_params_from_type(return_type, collected);
+        }
+        Type::Callable(callable) => {
+            for param in &callable.params {
+                collect_type_params_from_type(&param.ty, collected);
+            }
+            collect_type_params_from_type(&callable.return_type, collected);
         }
         Type::Closure {
             params,
@@ -18639,6 +18658,28 @@ fn collect_direct_runtime_type_substitutions(
             }
             collect_direct_runtime_type_substitutions(pattern_return, actual_return, substitutions);
         }
+        Type::Callable(pattern_callable) => {
+            let Type::Callable(actual_callable) = actual else {
+                return;
+            };
+            if pattern_callable.params.len() != actual_callable.params.len() {
+                return;
+            }
+            for (pattern_param, actual_param) in
+                pattern_callable.params.iter().zip(&actual_callable.params)
+            {
+                collect_direct_runtime_type_substitutions(
+                    &pattern_param.ty,
+                    &actual_param.ty,
+                    substitutions,
+                );
+            }
+            collect_direct_runtime_type_substitutions(
+                &pattern_callable.return_type,
+                &actual_callable.return_type,
+                substitutions,
+            );
+        }
         Type::Closure {
             params: pattern_params,
             return_type: pattern_return,
@@ -18709,6 +18750,13 @@ fn runtime_type_is_wildcard(ty: &Type) -> bool {
                 .iter()
                 .any(|param| runtime_type_is_wildcard(&param.ty))
                 || runtime_type_is_wildcard(return_type)
+        }
+        Type::Callable(callable) => {
+            callable
+                .params
+                .iter()
+                .any(|param| runtime_type_is_wildcard(&param.ty))
+                || runtime_type_is_wildcard(&callable.return_type)
         }
         Type::Closure {
             params,
