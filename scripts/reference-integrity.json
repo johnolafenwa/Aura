@@ -329,6 +329,12 @@
       "stderr": ""
     },
     "docs/manual/closures.md#aura-3": {
+      "sha256": "ad6025c45ae7fc7d91086506782b6d679b232be268496df9e63275906241556a",
+      "mode": "run",
+      "stdout": "7\n",
+      "stderr": ""
+    },
+    "docs/manual/closures.md#aura-4": {
       "sha256": "a114f89b8c82ea558ed71a568e035ba0158511b9d3b82596cfdb3b11cd32c396",
       "mode": "run",
       "stdout": "Aura\n4\n",
@@ -727,66 +733,78 @@
       "stderr": ""
     },
     "docs/manual/functions.md#aura-10": {
-      "sha256": "1acfaded744a8dbc59652be00c7277a01cb3183827807454c6f3e19ad11db8f4",
+      "sha256": "044b56ff271447df773d6cd63eb0e2549276c87c0f6e8ad225d97b80fd0b32bc",
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""
     },
     "docs/manual/functions.md#aura-11": {
-      "sha256": "7ea81eff6bd22d8432f3fdd0e21d3c64822fc51f35168b6a4db6dd82e048e27f",
+      "sha256": "1acfaded744a8dbc59652be00c7277a01cb3183827807454c6f3e19ad11db8f4",
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""
     },
     "docs/manual/functions.md#aura-12": {
-      "sha256": "74aa29b51437f20b85b2afef67aa9bb53ea6802504ba303c1a52760b4f21bca3",
+      "sha256": "7ea81eff6bd22d8432f3fdd0e21d3c64822fc51f35168b6a4db6dd82e048e27f",
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""
     },
     "docs/manual/functions.md#aura-13": {
+      "sha256": "74aa29b51437f20b85b2afef67aa9bb53ea6802504ba303c1a52760b4f21bca3",
+      "mode": "check",
+      "stdout": "ok\n",
+      "stderr": ""
+    },
+    "docs/manual/functions.md#aura-14": {
       "sha256": "6815a0f3245e19e2d617aa35c2c0da687b42d50a26d0567b87254c5b755ad980",
       "mode": "illustrative",
       "reason": "Owned-return patterns: this fragment depends on the User declaration in the preceding verified block."
     },
-    "docs/manual/functions.md#aura-14": {
+    "docs/manual/functions.md#aura-15": {
       "sha256": "742cfab3eb9dbcce5cdae2ebdd3a87478167695dc5a3677f0a36bdfead03f278",
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""
     },
-    "docs/manual/functions.md#aura-15": {
+    "docs/manual/functions.md#aura-16": {
       "sha256": "fc3193fbb535d88ed415b1db5b0822f130cfbf5a1da2d72380a66424a73de3ee",
       "mode": "illustrative",
       "reason": "Bound-function catalog: Greeter, First, and Second are traits declared outside this block."
     },
-    "docs/manual/functions.md#aura-16": {
+    "docs/manual/functions.md#aura-17": {
       "sha256": "278f9ef1f4246b70c448055a09dbb748dde43fc3a87881c8bfcb01de00df5c70",
       "mode": "illustrative",
       "reason": "Specialized-call fragment: identity is declared in the preceding generic-function block."
     },
-    "docs/manual/functions.md#aura-17": {
-      "sha256": "a61d05136f63a839ff21f11a00d99c2eb113dc82487db0b346b75a4535bb2e25",
-      "mode": "check",
-      "stdout": "ok\n",
-      "stderr": ""
-    },
     "docs/manual/functions.md#aura-18": {
-      "sha256": "36664202da5a831e2a5b82dd2b3c25f9d75939155dc3d225aa7b4302c6537c41",
-      "mode": "check",
-      "stdout": "ok\n",
+      "sha256": "7171e14ac7524da39a7a53c92a0150e3323b866e3d59931f00f07856f08f15fc",
+      "mode": "run",
+      "stdout": "value: 4\nn: 4\n5\n",
       "stderr": ""
     },
     "docs/manual/functions.md#aura-19": {
-      "sha256": "e83ee7f4913e0ee3b032c7ac099aa0c23cb989c97e28d897455df838abdec10b",
-      "mode": "run",
-      "stdout": "done\n",
+      "sha256": "a61d05136f63a839ff21f11a00d99c2eb113dc82487db0b346b75a4535bb2e25",
+      "mode": "check",
+      "stdout": "ok\n",
       "stderr": ""
     },
     "docs/manual/functions.md#aura-2": {
       "sha256": "e9a1e82adafd40a72e31507d07bb289cca4e56bccf1a0b63d7fb84e1fdd434de",
       "mode": "check",
       "stdout": "ok\n",
+      "stderr": ""
+    },
+    "docs/manual/functions.md#aura-20": {
+      "sha256": "36664202da5a831e2a5b82dd2b3c25f9d75939155dc3d225aa7b4302c6537c41",
+      "mode": "check",
+      "stdout": "ok\n",
+      "stderr": ""
+    },
+    "docs/manual/functions.md#aura-21": {
+      "sha256": "e83ee7f4913e0ee3b032c7ac099aa0c23cb989c97e28d897455df838abdec10b",
+      "mode": "run",
+      "stdout": "done\n",
       "stderr": ""
     },
     "docs/manual/functions.md#aura-3": {
@@ -819,13 +837,13 @@
       "stderr": ""
     },
     "docs/manual/functions.md#aura-8": {
-      "sha256": "ea4decb87d01b596768b5e53a12e789645d9c994ea45144574d741dd5ae7ebad",
+      "sha256": "40e90f1216e14a87837d3f8cdc85dca68439a14b8e5ac4ac78a79107d3ffbb3b",
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""
     },
     "docs/manual/functions.md#aura-9": {
-      "sha256": "044b56ff271447df773d6cd63eb0e2549276c87c0f6e8ad225d97b80fd0b32bc",
+      "sha256": "ea4decb87d01b596768b5e53a12e789645d9c994ea45144574d741dd5ae7ebad",
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""
@@ -1001,7 +1019,7 @@
       "reason": "Normative match-statement-and-pattern EBNF fragment interpreted by the grammar prose, not Aura source."
     },
     "docs/manual/grammar.md#ebnf-13": {
-      "sha256": "649291b50c914914381ae8129978211e9599a8fc44fdaec6e371509f0dbd0a29",
+      "sha256": "e911faa01d370e665d8be17aa71228b394ff60a03dbf67783d118caa26cc30ee",
       "mode": "illustrative",
       "reason": "Normative EBNF expression grammar, not an executable Aura program."
     },
@@ -1031,7 +1049,7 @@
       "reason": "Normative item-declaration EBNF fragment interpreted by the grammar prose, not Aura source."
     },
     "docs/manual/grammar.md#ebnf-4": {
-      "sha256": "0fbe230a3be3eb6dd17a0bc2898c819c80d3fc91573a05b9f1ac5f65c9c4c7e8",
+      "sha256": "5bbef878b82bfb1e3ba730f3bbbcc6a2a8d229f08f8e8e901ccfc314eba76727",
       "mode": "illustrative",
       "reason": "Normative type-and-type-parameter EBNF fragment interpreted by the grammar prose, not Aura source."
     },
@@ -1046,7 +1064,7 @@
       "reason": "Normative enum-declaration EBNF fragment interpreted by the grammar prose, not Aura source."
     },
     "docs/manual/grammar.md#ebnf-7": {
-      "sha256": "3e8540c47d94d43a06a4ac15bb41f19a2295d376a6e2e617f190ad0082d68fff",
+      "sha256": "cbc2d8a57a27d09401a5adf7c74f82e0edd8e295157acf80b4c3d27300108ccb",
       "mode": "illustrative",
       "reason": "Normative callable-and-parameter EBNF fragment interpreted by the grammar prose, not Aura source."
     },

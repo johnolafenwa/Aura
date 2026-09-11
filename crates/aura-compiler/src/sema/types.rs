@@ -1,11 +1,11 @@
 //! Semantic type identity, lowering, substitution, and unification.
 
 use super::{
-    erase_type_callable_contracts, fmt, function_type_mismatch_message, is_array_dtype,
-    is_builtin_copy_named_type, is_builtin_type, merge_type_callable_contracts,
-    preserves_qualified_builtin_type_name, resolve_param_passing, BTreeMap, BTreeSet,
-    ClosureCallKind, ClosureCapture, Deserialize, Diagnostic, FunctionParamContract, HashMap,
-    ReceiverKind, Result, Serialize, TraitImplInfo, TypeRef,
+    check_callable_positions, fmt, function_type_mismatch_message, is_array_dtype,
+    is_builtin_copy_named_type, is_builtin_type, preserves_qualified_builtin_type_name,
+    resolve_param_passing, BTreeMap, BTreeSet, ClosureCallKind, ClosureCapture, Deserialize,
+    Diagnostic, FunctionParamContract, HashMap, ReceiverKind, Result, Serialize, TraitImplInfo,
+    TypeRef,
 };
 
 /// Name inventory and transparent alias templates used by semantic type lowering.
@@ -383,7 +383,6 @@ impl Type {
                             p.name,
                             p.passing,
                             p.has_default,
-                            p.default_erased,
                             p.keyword_only,
                             key(&p.ty, module, names)
                         ]))
@@ -404,7 +403,6 @@ impl Type {
                             p.name,
                             p.passing,
                             p.has_default,
-                            p.default_erased,
                             p.keyword_only,
                             key(&p.ty, module, names)
                         ]))
@@ -480,6 +478,37 @@ impl Type {
             }
         }
     }
+}
+
+/// Renders a complete callable contract: slot names, the keyword-only
+/// boundary, capabilities, types, and default availability.
+fn write_contract_params(
+    f: &mut fmt::Formatter<'_>,
+    params: &[FunctionParamContract],
+) -> fmt::Result {
+    let mut boundary_written = false;
+    for (index, param) in params.iter().enumerate() {
+        if index > 0 {
+            write!(f, ", ")?;
+        }
+        if param.keyword_only && !boundary_written {
+            write!(f, "*, ")?;
+            boundary_written = true;
+        }
+        if !param.name.is_empty() {
+            write!(f, "{}: ", param.name)?;
+        }
+        match param.passing {
+            ReceiverKind::Borrow => {}
+            ReceiverKind::BorrowMut => write!(f, "mut ")?,
+            ReceiverKind::Value => write!(f, "own ")?,
+        }
+        write!(f, "{}", param.ty)?;
+        if param.has_default {
+            write!(f, " = ...")?;
+        }
+    }
+    Ok(())
 }
 
 impl PartialEq for Type {
@@ -593,17 +622,7 @@ impl fmt::Display for Type {
                 return_type,
             } => {
                 write!(f, "def(")?;
-                for (index, param) in params.iter().enumerate() {
-                    if index > 0 {
-                        write!(f, ", ")?;
-                    }
-                    match param.passing {
-                        ReceiverKind::Borrow => {}
-                        ReceiverKind::BorrowMut => write!(f, "mut ")?,
-                        ReceiverKind::Value => write!(f, "own ")?,
-                    }
-                    write!(f, "{}", param.ty)?;
-                }
+                write_contract_params(f, params)?;
                 if matches!(return_type.as_ref(), Type::Union(_)) {
                     write!(f, ") -> ({return_type})")
                 } else {
@@ -622,17 +641,7 @@ impl fmt::Display for Type {
                     ClosureCallKind::Repeatable => {}
                 }
                 write!(f, "closure def(")?;
-                for (index, param) in params.iter().enumerate() {
-                    if index > 0 {
-                        write!(f, ", ")?;
-                    }
-                    match param.passing {
-                        ReceiverKind::Borrow => {}
-                        ReceiverKind::BorrowMut => write!(f, "mut ")?,
-                        ReceiverKind::Value => write!(f, "own ")?,
-                    }
-                    write!(f, "{}", param.ty)?;
-                }
+                write_contract_params(f, params)?;
                 if matches!(return_type.as_ref(), Type::Union(_)) {
                     write!(f, ") -> ({return_type})")
                 } else {
@@ -770,7 +779,6 @@ pub(super) fn lower_type_with_self(
                         ty,
                         passing: resolve_param_passing(param.mode),
                         has_default: param.has_default,
-                        default_erased: !param.has_default,
                     })
                 })
                 .collect::<Result<Vec<_>>>()?;
@@ -1191,7 +1199,6 @@ fn substitute_type_in_context(
                     ty: substitute_type_in_context(&param.ty, substitutions, context),
                     passing: param.passing,
                     has_default: param.has_default,
-                    default_erased: param.default_erased,
                 })
                 .collect(),
             return_type: Box::new(substitute_type_in_context(
@@ -1215,7 +1222,6 @@ fn substitute_type_in_context(
                         ty: substitute_type_in_context(&param.ty, substitutions, context),
                         passing: param.passing,
                         has_default: param.has_default,
-                        default_erased: param.default_erased,
                     })
                     .collect(),
             ),
@@ -1238,16 +1244,10 @@ fn substitute_type_in_context(
             call_kind: *call_kind,
         },
         Type::Named(name, args) => {
-            let mut substituted_args = args
+            let substituted_args = args
                 .iter()
                 .map(|arg| substitute_type_in_context(arg, substitutions, context))
                 .collect::<Vec<_>>();
-            if context.is_none() && matches!(name.as_str(), "list" | "dict" | "set") {
-                substituted_args = substituted_args
-                    .iter()
-                    .map(erase_type_callable_contracts)
-                    .collect();
-            }
             Type::Named(name.clone(), substituted_args)
         }
     }
@@ -1402,13 +1402,9 @@ pub(crate) fn type_pattern_matches(
         }
         Type::TypeParam(name) if type_params.contains(name) => {
             if let Some(existing) = substitutions.get(name) {
-                if existing != actual {
-                    false
-                } else {
-                    let merged = merge_type_callable_contracts(existing, actual);
-                    substitutions.insert(name.clone(), merged);
-                    true
-                }
+                // Later evidence must be admitted by the first observation's
+                // complete callable contract; no common contract is invented.
+                existing == actual && check_callable_positions(existing, actual).is_ok()
             } else {
                 substitutions.insert(name.clone(), actual.clone());
                 true
@@ -1659,7 +1655,14 @@ pub(super) fn unify_union_pattern(
                 "conflicting inferred types for `{name}`: `{existing}` and `{bound}`"
             )))
         }
-        Some(existing) => merge_type_callable_contracts(existing, &bound),
+        Some(existing) => {
+            check_callable_positions(existing, &bound).map_err(|reason| {
+                Diagnostic::new(format!(
+                    "conflicting inferred callable contracts for `{name}`: {reason}"
+                ))
+            })?;
+            existing.clone()
+        }
         None => bound,
     };
     substitutions.insert(name, bound);
@@ -1696,9 +1699,11 @@ pub(super) fn unify_type_pattern(
         Type::TypeParam(name) => {
             if let Some(existing) = substitutions.get(name) {
                 if existing == actual {
-                    let merged = merge_type_callable_contracts(existing, actual);
-                    substitutions.insert(name.clone(), merged);
-                    Ok(())
+                    check_callable_positions(existing, actual).map_err(|reason| {
+                        Diagnostic::new(format!(
+                            "conflicting inferred callable contracts for `{name}`: {reason}"
+                        ))
+                    })
                 } else {
                     Err(Diagnostic::new(format!(
                         "conflicting inferred types for `{}`: `{}` and `{}`",

@@ -2934,7 +2934,7 @@ The JSON result is an array of `{ "name": str, "kind": str, "detail": str }` obj
 `ast-json`, `analyze`, `complete`, and `lsp` emit JSON. The `analyze` and `complete` shapes described here are maintained tooling contracts for Aura 0.3. `ast`, `ast-json`, and `mir` expose compiler inspection data for people and tests; their exact formatting and internal node/block shape are not a stable cross-version serialization API.
 
 `aura lsp` is a persistent JSON-lines compiler service. Every request requires
-`semantic_interface_version: 11` plus string fields `method`, `path`, and
+`semantic_interface_version: 12` plus string fields `method`, `path`, and
 `source`; `id` is optional and is echoed in the response. Supported requests
 are:
 
@@ -2944,7 +2944,7 @@ are:
 ```
 
 Each response is one line containing the same `id`,
-`semantic_interface_version: 11`, and either `result` or an `error` string.
+`semantic_interface_version: 12`, and either `result` or an `error` string.
 Paths give the virtual source a package/import context; ranges and completion
 positions are zero-based. A missing or different semantic interface version is
 an incompatible request and returns a schema-mismatch error.
@@ -3150,7 +3150,7 @@ The parser, checker, package resolver, diagnostic model, analysis engine, and MI
 
 `aura run --backend auto` prefers the direct backend and degrades to the MIR runtime only when direct building or launching is unavailable. Once a direct child runs, an Aura trap, signal termination, wait failure, or diagnostic-protocol failure is a final program/execution outcome and never triggers MIR fallback. Human mode prints an actual fallback reason on standard error before the MIR program runs; JSON mode includes it in the final structured report after execution. A forced `direct` run never degrades, so a parity or benchmark caller cannot silently measure the other backend. Every backend observes the same program arguments, standard output, exit code, and complete runtime diagnostic, including typed call frames and task ancestry.
 
-The native path is content-addressed. A successful direct build atomically publishes its binary, that artifact's SHA-256, and a key-bound unique entry identity into a cache keyed by native cache format `v5`, compiler-owned semantic-interface schema version `11`, this compiler's version, the host target, the backend, the exact linked runtime archive content, its ordered native link arguments, and the complete lowered program, which already incorporates the entry source and every resolved dependency source. The format and semantic identities are independent key fields: changing compiler-owned type or ownership metadata invalidates artifacts even if the native container format remains readable. Cache artifacts above 512 MiB are simply not retained; the just-built program still runs. A later run with the same inputs requires a regular directory and bounded regular sidecars, verifies the entry identity, digest, artifact size, execute permission, and platform-native executable shape, and only then uses the entry. It launches a private copy of exactly those verified bytes through a no-shell-fallback native execution path, so replacement of the shared cache pathname after verification cannot substitute different bytes. Missing or mismatched metadata, truncation, a non-regular member, a lost execute permission, or an executable-format/architecture rejection makes the entry a cache miss: Aura quarantines and removes that exact entry, then rebuilds before running. A temporary-directory failure, process-resource failure, `noexec` mount, or other environmental launch failure is not evidence that verified cache bytes are corrupt; Aura preserves the entry and reports or falls back according to the selected backend.
+The native path is content-addressed. A successful direct build atomically publishes its binary, that artifact's SHA-256, and a key-bound unique entry identity into a cache keyed by native cache format `v5`, compiler-owned semantic-interface schema version `12`, this compiler's version, the host target, the backend, the exact linked runtime archive content, its ordered native link arguments, and the complete lowered program, which already incorporates the entry source and every resolved dependency source. The format and semantic identities are independent key fields: changing compiler-owned type or ownership metadata invalidates artifacts even if the native container format remains readable. Cache artifacts above 512 MiB are simply not retained; the just-built program still runs. A later run with the same inputs requires a regular directory and bounded regular sidecars, verifies the entry identity, digest, artifact size, execute permission, and platform-native executable shape, and only then uses the entry. It launches a private copy of exactly those verified bytes through a no-shell-fallback native execution path, so replacement of the shared cache pathname after verification cannot substitute different bytes. Missing or mismatched metadata, truncation, a non-regular member, a lost execute permission, or an executable-format/architecture rejection makes the entry a cache miss: Aura quarantines and removes that exact entry, then rebuilds before running. A temporary-directory failure, process-resource failure, `noexec` mount, or other environmental launch failure is not evidence that verified cache bytes are corrupt; Aura preserves the entry and reports or falls back according to the selected backend.
 
 On maintained Unix hosts, cache establishment is coordinated across processes. A short runtime-identity lock protects source-checkout runtime discovery, and a separate writer lock for each content key protects the miss/recheck/build/publish sequence. Therefore, N concurrent cold runs of the same program perform one build; after that publication, the other N-1 processes recheck and consume the verified entry. Existing verified hits take the optimistic read path and do not wait for a writer holding that key. Locks are released before linking output is executed, while atomic publication and invalidation continue to ensure that readers never observe a partial entry and a stale invalidator cannot delete a replacement published for the same key.
 
@@ -3173,7 +3173,7 @@ streaming contract is ratified.
 
 `AURA_CACHE_DIR` selects the cache directory; the default is `~/.cache/aura/native`. The directory is a trust boundary. Its colocated SHA-256 detects corruption but does not authenticate bytes written by a hostile account, so the root must be private to the current OS user and every writer with access to it must be trusted. On the maintained Unix hosts, Aura rejects a root that is owned by another user or writable by group/other and creates or tightens accepted cache directories to mode `0700`. Private launch copies are removed after the child exits. Each launch carries an inherited exclusive lease, so later cleanup preserves the directory while either the `aura` parent or native child is still using it. Interrupted cache-publication, memo, and quarantine stages are collected only after their encoded 24-hour grace period and confirmation that their owner process is gone. An installed immutable runtime can still perform a direct build when caching is disabled or unavailable; no cache lock is required merely to build, and the uncached artifact is not retained.
 
-ADR-0031 ratifies the command split: `aura run` defaults to `mir` for the interactive edit-run path, while `aura build` defaults to `auto` for artifact production. Maintained measurements put a cold miss at about 1.3 seconds; a direct hello-world executable is roughly 57 MB of statically linked runtime. Each cache hit reads, hashes, and privately materializes the artifact, and workloads dominated by programs seen once, including CI, still pay the cold path on every program. `aura build --backend direct` uses native direct emission, and `--backend auto` may select the checked MIR-launcher fallback. The language server delegates semantic analysis and completion to the persistent compiler service; every JSON-lines request and response identifies semantic-interface schema version `11`. A missing or different identity closes the incompatible service and invalidates all document analysis before the lexical recovery path is used, so cached function-type or ownership metadata cannot cross compiler versions. The lexical fallback is recovery-only and is not a second language implementation.
+ADR-0031 ratifies the command split: `aura run` defaults to `mir` for the interactive edit-run path, while `aura build` defaults to `auto` for artifact production. Maintained measurements put a cold miss at about 1.3 seconds; a direct hello-world executable is roughly 57 MB of statically linked runtime. Each cache hit reads, hashes, and privately materializes the artifact, and workloads dominated by programs seen once, including CI, still pay the cold path on every program. `aura build --backend direct` uses native direct emission, and `--backend auto` may select the checked MIR-launcher fallback. The language server delegates semantic analysis and completion to the persistent compiler service; every JSON-lines request and response identifies semantic-interface schema version `12`. A missing or different identity closes the incompatible service and invalidates all document analysis before the lexical recovery path is used, so cached function-type or ownership metadata cannot cross compiler versions. The lexical fallback is recovery-only and is not a second language implementation.
 
 Backend parity is a release gate. A construct accepted by one maintained
 execution backend must have the same observable result or complete diagnostic
@@ -3301,6 +3301,20 @@ owned parameter, and `mut name` matches a mutable parameter. Modes cannot be
 silently changed. The body must have exactly the expected result type.
 Parameters are in scope only in the body and follow the ordinary no-shadowing
 rules.
+
+The expected contract's names, keyword-only boundary, and default promises
+bind the lambda too (see [Function Values](/manual/functions#function-values)).
+Where the expected slot is named, the lambda parameter must use that name;
+the lambda's `*` boundary must sit where the expected contract's does; and a
+lambda cannot satisfy a slot written `= ...`, because only a named
+declaration supplies a default. Each mismatch reports `AU2015`. A
+compiler-known callback site such as `list.map` supplies positional parameter
+types only, so its lambda parameters may use any names.
+
+```aura
+combine: def(left: int64, *, right: int64) -> int64 = lambda left, *, right: left - right
+print(combine(10, right=3))
+```
 
 The compiler does not guess parameter types from body operations. Generic
 lambdas and lambda parameter type annotations are unavailable. A capture-free
@@ -5444,7 +5458,15 @@ nonmember union type arms. `AU2014` reports a member use through a place whose
 where the operation is `assignment`, `a mutable match`, `a call with mutable
 access`, or the mutating operation that exposed the place, and it carries two
 related labels: `narrowed by this test` at the test and `invalidated here` at
-the invalidation. `AU2015` is registered for callable contract mismatches.
+the invalidation. `AU2015` reports a callable contract mismatch: a value whose
+complete contract (exposed names, keyword-only boundary, default availability)
+is not admitted by the written destination, a rebinding, branch join,
+container literal, or generic observation that would need an invented common
+contract, a lambda that does not meet its expected contract, or an invalid
+thin-alias adaptation; its message names the differing slot. `AU2004` also
+reports a positional argument reaching a keyword-only parameter
+(`parameter `x` of function `f` is keyword-only`) and a named argument aimed
+at a positional-only slot of a written callable type.
 
 The registry is append-only. Once published, a code MUST NOT be reused,
 renumbered, or silently reassigned to a different diagnostic category. If a
@@ -5702,7 +5724,7 @@ imported module is never mislabeled with the entry module's path.
 
 The arrays are an additive schema-version-1 extension. Schema-version-1
 readers MUST ignore unrecognized object members while continuing to validate
-the fields they use. The compiler-service semantic-interface version is `11`.
+the fields they use. The compiler-service semantic-interface version is `12`.
 
 The process exits unsuccessfully after emitting a JSON error report. Tools MUST
 parse standard error as one JSON document in JSON mode and MUST NOT scrape the
@@ -8750,9 +8772,26 @@ render("Aura", 2)
 render(name="Aura", count=2)
 ```
 
-Every declared parameter is positionally bindable. Aura 0.3 structural
-callable types do not encode keyword-only callability, so a `*` marker in a
-parameter list is rejected with `AU1101`.
+A `*` boundary in a parameter list makes every parameter after it
+keyword-only: such a parameter binds by name only, a positional argument that
+would reach it is rejected with `AU2004` (`parameter `x` of function `f` is
+keyword-only`), and omitting a required keyword-only parameter reports the
+missing name. At most one `*` is allowed, it must be followed by at least one
+named parameter, and it adds no variadic parameters. The boundary belongs to
+the function's complete callable contract (see [Function
+Values](#function-values)); a trait implementation must place it exactly
+where the trait declaration does.
+
+```aura
+def configure(path: str, *, retries: int32 = 2, verbose: bool = false) -> int32:
+    if verbose:
+        print(path)
+    return retries
+
+configure("cfg")
+configure("cfg", retries=5)
+configure("cfg", verbose=true, retries=1)
+```
 
 Binding is deterministic:
 
@@ -8786,7 +8825,9 @@ The complete rules are:
 - a shared-borrow default is permitted; its default temporary lives until the
   call completes
 - an `own` default is permitted and its fresh temporary is consumed by the call
-- after the first defaulted parameter, every remaining parameter must also have a default
+- after the first defaulted positional parameter, every remaining positional
+  parameter must also have a default; keyword-only parameters bind by name,
+  so a required keyword-only parameter may follow a defaulted one
 - the default expression must have exactly the declared parameter type
 - a default expression cannot reference any parameter of the same declaration, including an earlier parameter
 - trait method declarations and trait implementation methods cannot declare defaults
@@ -8959,37 +9000,84 @@ Traits](/manual/generics-and-traits#inferred-clone-safety-obligations).
 ## Function Values
 
 A module-level named function is a value. Its type uses declaration-shaped
-syntax: `def(T1, mut T2, own T3) -> R`. The parameter list contains modes and
-types rather than parameter names, and `def() -> R` is the zero-parameter
+syntax: `def(T1, mut T2, own T3) -> R`, and `def() -> R` is the zero-parameter
 form. Bare parameters are shared. Function types may appear anywhere another
 complete type may appear, including variable and parameter annotations, class
-fields, return types, and collection element types.
+fields, return types, alias targets, and collection element types.
 
 This includes public user-module functions and maintained builtin-module
 functions such as `process.pipe`. Calling an imported builtin through a value
 uses the same builtin dispatch and result type as calling its qualified name.
 
-An inferred local binding retains the named function's exact declared
-parameter modes. An indirect call through a `mut` parameter requires a mutable
-place, and an `own` parameter moves a non-copy argument. Assignment and
-argument passing compare these modes as part of the function type:
-`def(mut Counter) -> None` does not match `def(Counter) -> None`.
+A callable type spells a *complete contract*. Each slot is either unnamed
+(`int64`, `mut Counter`, `own str`), which is positional-only, or named
+(`value: int64`), which may also be called by name. A `*` boundary makes the
+following named slots keyword-only, and `= ...` after a slot promises that
+the target supplies a default for it; the default expression itself belongs
+only to the target declaration and is never written in a type. Parameter
+names, modes, types, the keyword-only boundary, default availability, and the
+result type are all part of the contract. Two structurally identical
+signatures with different exposed names or default promises are different
+contracts.
+
+```aura
+type Unary = def(int64) -> int64
+type Renderer = def(value: int64, *, prefix: str = ...) -> str
+
+def render(value: int64, *, prefix: str = "value") -> str:
+    return f"{prefix}: {value}"
+
+def increment(value: int64) -> int64:
+    return value + 1
+
+renderer: Renderer = render
+print(renderer(4))
+print(renderer(4, prefix="n"))
+step: Unary = increment
+print(step(4))
+```
+
+An inferred local binding takes its target's complete contract: the
+declaration names, `*` boundary, capabilities, and default availability. A
+call through it accepts the same named arguments and omits the same
+parameters as a direct call, and an omitted argument evaluates the
+runtime-selected target's own default expression afresh. A written
+destination contract (an annotation, parameter, field, element type, alias,
+or return type) governs calls through that destination: an unnamed slot is
+called positionally, a named slot may be called by name, and an omitted slot
+must carry `= ...`.
+
+A value may be stored where a written contract *admits* it. A written
+contract may hide an exposed name (an unnamed slot accepts any named
+target), drop default availability (a slot without `= ...` accepts a target
+that declares a default), or restrict a named positional-or-keyword slot to
+keyword-only. It cannot make a keyword-only slot positional, rename a slot,
+promise a default the target does not declare, or change a parameter type,
+capability, or result type; parameter and result types are invariant, and
+there is no general callable subtyping. Passing `double(amount: int64)` to a
+`def(int64) -> int64` parameter is an admitted restriction; passing it where
+`def(value: int64) -> int64` is written is a rename and reports `AU2015`.
+
+Inference never invents a common contract. Rebinding a local must satisfy
+the contract the local already has, the arms of a conditional or `match`
+expression without an expected type must share one complete contract, a
+container literal's element contract is its annotation or its first
+element's contract and every later element and insertion must satisfy it,
+and repeated generic evidence must agree with its first observation. Each
+violation reports `AU2015` with the differing slot. Write the common contract
+as an annotation, or adapt a value explicitly: calling a non-generic alias of
+a thin `def` type with one function value or capture-free lambda, such as
+`Unary(increment)`, yields that alias contract when the alias admits the
+value and reports `AU2015` otherwise. No environment is added; a capturing
+closure needs an owned `Callable[...]` storage type, which is not yet
+available.
 
 Function values are code pointers. They are copy values, cloning is
 unnecessary, and copying or passing one as an `own def(...) -> R` parameter
 does not invalidate the source binding. They also satisfy `Transfer`.
 Ordinary indirect calls evaluate and bind arguments under the selected
-function's unchanged capability contract. A binding whose target declaration
-is statically known retains that declaration's call contract: named arguments
-are accepted and omitted arguments use its defaults. The structural
-`def(...) -> ...` type itself does not contain names or default expressions.
-A control-flow selection can retain names and default availability when every
-candidate agrees; an omitted argument then evaluates the runtime-selected
-target's own default expression. Reassignment between conflicting contracts,
-return through a structural function annotation, class-field storage, and
-mutable-collection storage erase those extras. Storage still retains the
-complete ABI type, including `mut` and `own`; a loaded value takes every
-argument positionally.
+function's unchanged capability contract; a stored value never takes an
+argument its contract does not admit.
 
 If an indirect-call default traps, diagnostics use the public target name and
 the precise default-expression span. Compiler-generated default helpers never
@@ -10042,11 +10130,21 @@ tuple-type
     | "(", type, ",", type, { ",", type }, ")" ;
 
 function-type
-    = "def", "(", [ function-type-parameter,
-      { ",", function-type-parameter } ], ")", "->", type ;
+    = "def", "(", [ function-type-parameters ], ")", "->", type ;
+
+function-type-parameters
+    = function-type-parameter, { ",", function-type-parameter },
+      [ ",", "*", ",", named-function-type-parameter,
+        { ",", named-function-type-parameter } ]
+    | "*", ",", named-function-type-parameter,
+      { ",", named-function-type-parameter } ;
 
 function-type-parameter
-    = [ "mut" | "own" ], type ;
+    = named-function-type-parameter
+    | [ "mut" | "own" ], type, [ "=", "..." ] ;
+
+named-function-type-parameter
+    = identifier, ":", [ "mut" | "own" ], type, [ "=", "..." ] ;
 
 plain-type-parameters
     = "[", identifier, { ",", identifier }, "]" ;
@@ -10059,11 +10157,16 @@ bounded-type-parameter
     = identifier, [ ":", type, { "+", type } ] ;
 ```
 
-A function type contains parameter modes and types, but no names or default
-expressions: `def(int32, mut Counter, own str) -> bool`. A bare parameter
-is shared, `mut` requires caller-visible mutable access, and `own` transfers
-the argument. Parameter names are not accepted inside the list. `indirect` is
-invalid on a function type because the value is already a code pointer.
+A function type spells a complete callable contract: `def(int32, label: str,
+*, retries: int32 = ...) -> bool`. A bare parameter is shared, `mut` requires
+caller-visible mutable access, and `own` transfers the argument. An unnamed
+slot is positional-only; `name: type` exposes a name; every slot after the
+single `*` boundary must be named and is keyword-only; and `= ...` promises
+that the target supplies a default, so a literal or expression after `=` in a
+type is rejected (`AU1101`). The same boundary rule applies to declaration
+and lambda parameter lists: at most one `*`, followed by at least one named
+parameter, adding no variadics. `indirect` is invalid on a function type
+because the value is already a code pointer.
 
 `T?` denotes `Option[T]`, including when `T` is a tuple type. Type and
 type-parameter lists are nonempty when brackets are present and do not accept
@@ -10131,10 +10234,15 @@ method-declaration
       ":", NEWLINE, suite ;
 
 parameter-list
-    = parameter, { ",", parameter } ;
+    = parameter, { ",", parameter },
+      [ ",", keyword-only-parameters ]
+    | keyword-only-parameters ;
+
+keyword-only-parameters
+    = "*", ",", parameter, { ",", parameter } ;
 
 method-parameter-list
-    = receiver, [ ",", parameter, { ",", parameter } ]
+    = receiver, [ ",", parameter-list ]
     | parameter-list ;
 
 receiver
@@ -10419,8 +10527,12 @@ non-tuple-expression = conditional-expression ;
 
 lambda-expression
     = "lambda", [ lambda-capture-list ],
-      [ lambda-parameter,
-      { ",", lambda-parameter } ], ":", expression ;
+      [ lambda-parameter-list ], ":", expression ;
+
+lambda-parameter-list
+    = lambda-parameter, { ",", lambda-parameter },
+      [ ",", "*", ",", lambda-parameter, { ",", lambda-parameter } ]
+    | "*", ",", lambda-parameter, { ",", lambda-parameter } ;
 
 lambda-capture-list
     = "[", lambda-capture,
@@ -16146,7 +16258,13 @@ consume it; tuple ordering remains rejected. See
 [Statements](/manual/statements#for-iteration) for the loop-form contract.
 
 Phase 6.1 capture-free function values make named functions Copy and Transfer
-values with structural `def(...) -> ...` types. Phase 6.2 uses that surface for
+values with structural `def(...) -> ...` types. Under the Batch 1 phase 1
+checkpoint those types are complete contracts: slots may be named, a `*`
+boundary makes slots keyword-only in declarations, lambdas, and types, and
+`= ...` promises default availability; a written contract may only hide names
+or default availability or restrict a slot to keyword-only, inference never
+invents a common contract (`AU2015`), and a thin alias call such as
+`Unary(function)` is the explicit adapter. Phase 6.2 uses that surface for
 the maintained eager natural/keyed `list.sort`, `map`, and `filter` algorithms and
 for `control.retry`. These are current technical-preview APIs. `control`
 resolves as a builtin module namespace, and the four List member names are
@@ -16319,7 +16437,7 @@ youngest-first task ancestry. Each public schema-version-1 frame span has its
 own required source `path`; the analysis/LSP editor shape permits an optional
 `file_path` for source-only analysis. The public diagnostic schema remains
 version `1` because the always-present arrays are an additive extension;
-compiler-service/editor transport uses semantic schema version `11`. This
+compiler-service/editor transport uses semantic schema version `12`. This
 version includes structural function values, import aliases, and the expanded
 numeric expression surface, and forwards the same diagnostic records.
 
@@ -21106,8 +21224,17 @@ print(subtract(left=10, right=3))
 print(subtract(10, right=3))
 ```
 
-Function parameters remain positionally bindable. A `*` keyword-only marker
-is not part of Aura 0.3's structural callable model and receives `AU1101`.
+A `*` in the parameter list makes the parameters after it keyword-only: they
+bind by name only, so a positional argument that would reach one is an
+`AU2004` error.
+
+```aura check-pass
+def scale(value: int32, *, factor: int32 = 2) -> int32:
+    return value * factor
+
+print(scale(4))
+print(scale(4, factor=3))
+```
 
 Rules:
 

@@ -341,12 +341,14 @@ fn adr0038_direct_cfg_join_rejects_branch_dependent_view_identity() {
                 passing: MirReceiverKind::Borrow,
                 ty: Type::named("int64"),
                 default_function: None,
+                keyword_only: false,
             },
             MirParam {
                 name: "right".to_string(),
                 passing: MirReceiverKind::Borrow,
                 ty: Type::named("int64"),
                 default_function: None,
+                keyword_only: false,
             },
         ],
         local_types: Vec::new(),
@@ -425,6 +427,7 @@ fn adr0038_direct_tuple_place_errors_reach_codegen_after_constructor_setup() {
             passing: MirReceiverKind::Value,
             ty: Type::Tuple(vec![Type::named("int64"), Type::named("bool")]),
             default_function: None,
+            keyword_only: false,
         }],
         local_types: vec![MirLocalType {
             name: "result".to_string(),
@@ -701,7 +704,6 @@ fn direct_runtime_type_substitutions_respect_callable_structure_and_capabilities
         ty,
         passing,
         has_default: false,
-        default_erased: false,
     };
     let pattern = Type::Closure {
         params: Box::new(vec![param(
@@ -1055,7 +1057,6 @@ fn test_function_operand(name: &str, params: Vec<Type>, return_type: Type) -> Op
                     ty,
                     passing: crate::ast::ReceiverKind::Value,
                     has_default: false,
-                    default_erased: false,
                 })
                 .collect(),
             return_type: Box::new(return_type),
@@ -1087,7 +1088,6 @@ fn declared_function_operand(module: &crate::mir::MirModule, name: &str) -> Oper
                         MirReceiverKind::BorrowMut => crate::ast::ReceiverKind::BorrowMut,
                     },
                     has_default: param.default_function.is_some(),
-                    default_erased: false,
                 })
                 .collect(),
             return_type: Box::new(declaration.return_type.clone()),
@@ -7116,6 +7116,7 @@ fn direct_backend_entry_thunk_handles_unit_parameters() {
                 passing: MirReceiverKind::Value,
                 ty: Type::Unit,
                 default_function: None,
+                keyword_only: false,
             }],
             local_types: vec![MirLocalType {
                 name: "marker".to_string(),
@@ -7773,7 +7774,6 @@ fn native_codegen_function_value_signature_errors_are_precise() {
             ty: Type::named("int32"),
             passing,
             has_default: false,
-            default_erased: false,
         }
     }
 
@@ -7801,6 +7801,7 @@ fn native_codegen_function_value_signature_errors_are_precise() {
                         passing: MirReceiverKind::Value,
                         ty: Type::named("int32"),
                         default_function: None,
+                        keyword_only: false,
                     }],
                     local_types: vec![MirLocalType {
                         name: "value".to_string(),
@@ -11998,6 +11999,7 @@ fn signature_helpers_flatten_plain_class_abi_types() {
             passing: MirReceiverKind::Value,
             ty: Type::named("Point"),
             default_function: None,
+            keyword_only: false,
         }],
         local_types: vec![crate::mir::MirLocalType {
             name: "self".to_string(),
@@ -12095,6 +12097,7 @@ fn cleanup_place_type_resolves_receivers_params_locals_and_inferred_values() {
             passing: MirReceiverKind::Borrow,
             ty: Type::named("Holder"),
             default_function: None,
+            keyword_only: false,
         }],
         local_types: vec![
             MirLocalType {
@@ -14127,6 +14130,7 @@ fn validate_function_rejects_unreachable_terminators_for_direct_backend() {
             passing: MirReceiverKind::Value,
             ty: Type::named("int32"),
             default_function: None,
+            keyword_only: false,
         }],
         local_types: vec![MirLocalType {
             name: "value".to_string(),
@@ -14854,6 +14858,7 @@ def main():
                 passing: MirReceiverKind::Borrow,
                 ty: Type::Tuple(vec![Type::named("int64"), Type::named("int64")]),
                 default_function: None,
+                keyword_only: false,
             }],
             local_types: vec![MirLocalType {
                 name: "target".to_string(),

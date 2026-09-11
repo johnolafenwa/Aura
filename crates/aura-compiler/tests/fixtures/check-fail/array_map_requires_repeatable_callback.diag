@@ -1,4 +1,4 @@
-error[AU2002]: `Array.map` callback must be repeatable, found `consuming closure def(int32) -> int32`
+error[AU2002]: `Array.map` callback must be repeatable, found `consuming closure def(value: int32) -> int32`
  --> crates/aura-compiler/tests/fixtures/check-fail/array_map_requires_repeatable_callback.au:7:32
   |
 7 |     mapped = values.map[int32](f=lambda value: value + take(token))

@@ -73,11 +73,10 @@ fn lower_type_ref_with_type_params(
                 .iter()
                 .map(|param| FunctionParamContract {
                     keyword_only: param.keyword_only,
-                    name: String::new(),
+                    name: param.name.clone().unwrap_or_default(),
                     ty: lower_type_ref_with_type_params(&param.ty, type_params),
                     passing: resolve_param_passing(param.mode),
-                    has_default: false,
-                    default_erased: true,
+                    has_default: param.has_default,
                 })
                 .collect(),
             return_type: Box::new(lower_type_ref_with_type_params(return_type, type_params)),

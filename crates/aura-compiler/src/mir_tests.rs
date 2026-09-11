@@ -90,6 +90,7 @@ fn add_test_returned_view_callee(
             },
             ty: origin_ty.clone(),
             default_function: None,
+            keyword_only: false,
         }],
         local_types: Vec::new(),
         return_type: origin_ty,
@@ -386,7 +387,6 @@ def main():
                 ty: Type::named("Pair"),
                 passing: crate::ast::ReceiverKind::Borrow,
                 has_default: false,
-                default_erased: false,
             }],
             return_type: Box::new(Type::named("int64")),
         }),
@@ -551,7 +551,6 @@ def main():
                     MirReceiverKind::BorrowMut => crate::ast::ReceiverKind::BorrowMut,
                 },
                 has_default: param.default_function.is_some(),
-                default_erased: false,
             })
             .collect(),
         return_type: Box::new(identity.return_type.clone()),
@@ -845,7 +844,6 @@ def main():
                     MirReceiverKind::BorrowMut => crate::ast::ReceiverKind::BorrowMut,
                 },
                 has_default: param.default_function.is_some(),
-                default_erased: false,
             })
             .collect(),
         return_type: Box::new(inspect.return_type.clone()),
@@ -2306,6 +2304,7 @@ fn adr0038_returned_contract_analysis_rejects_inconsistent_and_invalid_descripto
         passing,
         ty: Type::named("int64"),
         default_function: None,
+        keyword_only: false,
     };
 
     let owned_origin = make_function(
@@ -2667,6 +2666,7 @@ fn adr0038_malformed_mir_loan_instruction_diagnostics_are_specific() {
                     passing: MirReceiverKind::Borrow,
                     ty: Type::named("int64"),
                     default_function: None,
+                    keyword_only: false,
                 }],
                 local_types: ["parent", "child", "other", "target"]
                     .into_iter()
@@ -3581,7 +3581,6 @@ fn mir_projection_and_unknown_type_helpers_preserve_fallback_contracts() {
         ty,
         passing: ReceiverKind::Value,
         has_default: false,
-        default_erased: false,
     };
     let closure = |params, captures, return_type| Type::Closure {
         params: Box::new(params),
@@ -10984,7 +10983,6 @@ def main():
     assert_eq!(params.len(), 1);
     assert_eq!(params[0].name, "value");
     assert!(params[0].has_default);
-    assert!(!params[0].default_erased);
 
     let indirect_args = instructions
         .iter()
@@ -11057,7 +11055,6 @@ fn mir_function_value_helpers_preserve_nested_types_and_imported_specialization(
         ty,
         passing,
         has_default: false,
-        default_erased: true,
     };
     let nested = Type::Function {
         params: vec![contract(
@@ -11155,7 +11152,6 @@ fn mir_function_value_helpers_preserve_nested_types_and_imported_specialization(
             ty: Type::named("str"),
             passing: ReceiverKind::Value,
             has_default: false,
-            default_erased: false,
         }],
         return_type: Box::new(Type::named("str")),
     };

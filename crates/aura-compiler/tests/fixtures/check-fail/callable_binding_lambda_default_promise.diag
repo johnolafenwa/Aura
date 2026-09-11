@@ -1,0 +1,6 @@
+error[AU2015]: callable contract mismatch: a lambda cannot promise the default for parameter `value`; declare a named function
+ --> crates/aura-compiler/tests/fixtures/check-fail/callable_binding_lambda_default_promise.au:2:53
+  |
+2 |     step: def(value: int64 = ...) -> int64 = lambda value: value + 1
+  |                                                     ^
+  = help: annotate the destination with a contract every value satisfies, or adapt a value explicitly through a thin callable alias call such as `Alias(function)`

@@ -1,0 +1,21 @@
+render-default
+render-body
+value: 1
+render-body
+explicit: 2
+supplied-value
+wrapper-default
+wrapper-body
+render-body
+wrapped: 3
+supplied-value
+supplied-prefix
+wrapper-body
+render-body
+given: 4
+forwarder-body
+render-default
+render-body
+render-default
+render-body
+value: 5 / value: 6

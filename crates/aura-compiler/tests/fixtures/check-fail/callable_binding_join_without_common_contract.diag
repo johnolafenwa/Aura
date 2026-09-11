@@ -1,0 +1,6 @@
+error[AU2015]: callable contract mismatch: parameter `value` differs from parameter `amount` in its name, keyword-only boundary, or default availability
+ --> crates/aura-compiler/tests/fixtures/check-fail/callable_binding_join_without_common_contract.au:8:39
+  |
+8 |     selected = increment if true else double
+  |                                       ^
+  = help: annotate the destination with a contract every value satisfies, or adapt a value explicitly through a thin callable alias call such as `Alias(function)`

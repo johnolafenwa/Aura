@@ -266,11 +266,21 @@ tuple-type
     | "(", type, ",", type, { ",", type }, ")" ;
 
 function-type
-    = "def", "(", [ function-type-parameter,
-      { ",", function-type-parameter } ], ")", "->", type ;
+    = "def", "(", [ function-type-parameters ], ")", "->", type ;
+
+function-type-parameters
+    = function-type-parameter, { ",", function-type-parameter },
+      [ ",", "*", ",", named-function-type-parameter,
+        { ",", named-function-type-parameter } ]
+    | "*", ",", named-function-type-parameter,
+      { ",", named-function-type-parameter } ;
 
 function-type-parameter
-    = [ "mut" | "own" ], type ;
+    = named-function-type-parameter
+    | [ "mut" | "own" ], type, [ "=", "..." ] ;
+
+named-function-type-parameter
+    = identifier, ":", [ "mut" | "own" ], type, [ "=", "..." ] ;
 
 plain-type-parameters
     = "[", identifier, { ",", identifier }, "]" ;
@@ -283,11 +293,16 @@ bounded-type-parameter
     = identifier, [ ":", type, { "+", type } ] ;
 ```
 
-A function type contains parameter modes and types, but no names or default
-expressions: `def(int32, mut Counter, own str) -> bool`. A bare parameter
-is shared, `mut` requires caller-visible mutable access, and `own` transfers
-the argument. Parameter names are not accepted inside the list. `indirect` is
-invalid on a function type because the value is already a code pointer.
+A function type spells a complete callable contract: `def(int32, label: str,
+*, retries: int32 = ...) -> bool`. A bare parameter is shared, `mut` requires
+caller-visible mutable access, and `own` transfers the argument. An unnamed
+slot is positional-only; `name: type` exposes a name; every slot after the
+single `*` boundary must be named and is keyword-only; and `= ...` promises
+that the target supplies a default, so a literal or expression after `=` in a
+type is rejected (`AU1101`). The same boundary rule applies to declaration
+and lambda parameter lists: at most one `*`, followed by at least one named
+parameter, adding no variadics. `indirect` is invalid on a function type
+because the value is already a code pointer.
 
 `T?` denotes `Option[T]`, including when `T` is a tuple type. Type and
 type-parameter lists are nonempty when brackets are present and do not accept
@@ -355,10 +370,15 @@ method-declaration
       ":", NEWLINE, suite ;
 
 parameter-list
-    = parameter, { ",", parameter } ;
+    = parameter, { ",", parameter },
+      [ ",", keyword-only-parameters ]
+    | keyword-only-parameters ;
+
+keyword-only-parameters
+    = "*", ",", parameter, { ",", parameter } ;
 
 method-parameter-list
-    = receiver, [ ",", parameter, { ",", parameter } ]
+    = receiver, [ ",", parameter-list ]
     | parameter-list ;
 
 receiver
@@ -643,8 +663,12 @@ non-tuple-expression = conditional-expression ;
 
 lambda-expression
     = "lambda", [ lambda-capture-list ],
-      [ lambda-parameter,
-      { ",", lambda-parameter } ], ":", expression ;
+      [ lambda-parameter-list ], ":", expression ;
+
+lambda-parameter-list
+    = lambda-parameter, { ",", lambda-parameter },
+      [ ",", "*", ",", lambda-parameter, { ",", lambda-parameter } ]
+    | "*", ",", lambda-parameter, { ",", lambda-parameter } ;
 
 lambda-capture-list
     = "[", lambda-capture,

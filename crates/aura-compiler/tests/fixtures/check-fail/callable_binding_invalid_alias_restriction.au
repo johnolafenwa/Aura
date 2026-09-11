@@ -1,0 +1,8 @@
+type Named = def(other: int64) -> int64
+
+def increment(value: int64) -> int64:
+    return value + 1
+
+def main():
+    step = Named(increment)
+    print(step(other=1))

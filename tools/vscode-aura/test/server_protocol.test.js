@@ -192,7 +192,7 @@ test(
         `    ] },\n` +
         `    { ...base, code: "AU2001", message: "ordinary diagnostic" }\n` +
         `  ], symbols: [], occurrences: [] } : [];\n` +
-        `  process.stdout.write(JSON.stringify({ id: request.id, semantic_interface_version: 11, result }) + "\\n");\n` +
+        `  process.stdout.write(JSON.stringify({ id: request.id, semantic_interface_version: 12, result }) + "\\n");\n` +
         `});\n`
     );
     fs.chmodSync(fakeAura, 0o755);

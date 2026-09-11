@@ -2998,7 +2998,6 @@ impl<'a> AnalysisBuilder<'a> {
                                 ty: ty.clone(),
                                 passing: *passing,
                                 has_default: decl.default.is_some(),
-                                default_erased: false,
                             })
                             .collect(),
                         return_type: Box::new(function.signature.return_type.clone()),
@@ -3022,7 +3021,6 @@ impl<'a> AnalysisBuilder<'a> {
                                 ty: ty.clone(),
                                 passing: *passing,
                                 has_default: false,
-                                default_erased: false,
                             })
                             .collect(),
                         return_type: Box::new(function.signature.return_type.clone()),
@@ -3903,7 +3901,6 @@ impl<'a> AnalysisBuilder<'a> {
                         ty: self.lower_analysis_type_ref(&param.ty),
                         passing: resolve_param_passing(param.mode),
                         has_default: param.has_default,
-                        default_erased: !param.has_default,
                     })
                     .collect(),
                 return_type: Box::new(self.lower_analysis_type_ref(return_type)),
@@ -4126,7 +4123,6 @@ impl<'a> AnalysisBuilder<'a> {
                                 ty: ty.clone(),
                                 passing: *passing,
                                 has_default: decl.default.is_some(),
-                                default_erased: false,
                             })
                             .collect(),
                         return_type: Box::new(function.signature.return_type.clone()),
@@ -5365,11 +5361,10 @@ fn lower_type_ref(ty: &TypeRef) -> Type {
                 .iter()
                 .map(|param| FunctionParamContract {
                     keyword_only: param.keyword_only,
-                    name: String::new(),
+                    name: param.name.clone().unwrap_or_default(),
                     ty: lower_type_ref(&param.ty),
                     passing: resolve_param_passing(param.mode),
-                    has_default: false,
-                    default_erased: true,
+                    has_default: param.has_default,
                 })
                 .collect(),
             return_type: Box::new(lower_type_ref(return_type)),

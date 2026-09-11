@@ -5,8 +5,8 @@ use std::path::PathBuf;
 #[test]
 fn the_current_language_surface_has_a_compiler_owned_semantic_interface_schema() {
     assert_eq!(
-        SEMANTIC_INTERFACE_SCHEMA_VERSION, 11,
-        "encoded union layout and drop plans require schema 11 across compiler services and native cache keys"
+        SEMANTIC_INTERFACE_SCHEMA_VERSION, 12,
+        "complete callable contracts (names, keyword-only slots, default availability, no erased flag) require schema 12 across compiler services and native cache keys"
     );
 }
 

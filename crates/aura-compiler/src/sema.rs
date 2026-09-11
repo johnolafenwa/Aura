@@ -2,11 +2,13 @@ mod capabilities;
 use capabilities::resolve_param_passings;
 pub(crate) use capabilities::{assertion_dispatch_is_non_consuming, resolve_param_passing};
 mod callables;
+pub(crate) use callables::callable_slot_admission;
 use callables::{
-    capturing_closure_branch_diagnostic, capturing_closure_branch_mismatch,
+    callable_contract_mismatch, capturing_closure_branch_diagnostic,
+    capturing_closure_branch_mismatch, check_callable_positions,
     closure_signature_matches_function, default_argument_references_param,
-    erase_type_callable_contracts, function_type_mismatch_message, merge_type_callable_contracts,
-    required_ordered_arg, ClosureArgumentPolicy, LambdaTypingRequest,
+    function_type_mismatch_message, required_ordered_arg, same_callable_contracts,
+    ClosureArgumentPolicy, LambdaTypingRequest,
 };
 pub use callables::{
     ClosureCallKind, ClosureCapture, ClosureCaptureMode, ClosureId, ClosureInfo, ClosureOwner,
@@ -2484,7 +2486,7 @@ impl<'a> FunctionChecker<'a> {
                 .iter()
                 .filter_map(|state| state.get(&name))
                 .map(|binding| binding.ty.clone())
-                .reduce(|left, right| merge_type_callable_contracts(&left, &right));
+                .next();
             if let Some(binding) = locals.get_mut(&name) {
                 if let Some(merged_ty) = merged_ty {
                     binding.ty = merged_ty;
@@ -3197,7 +3199,7 @@ impl<'a> FunctionChecker<'a> {
                             format!("{label} has type `{actual}`, expected `{expected}`"),
                         ));
                     }
-                    Ok(merge_type_callable_contracts(expected, &actual))
+                    Ok(expected.clone())
                 } else {
                     Ok(actual)
                 }
@@ -3261,20 +3263,16 @@ impl<'a> FunctionChecker<'a> {
             &mut clause_infos,
         )?;
         let result_type = match output {
-            ComprehensionOutput::List(_) => Type::Named(
-                "list".to_string(),
-                vec![erase_type_callable_contracts(&output_types[0])],
-            ),
+            ComprehensionOutput::List(_) => {
+                Type::Named("list".to_string(), vec![output_types[0].clone()])
+            }
             ComprehensionOutput::Set(_) => {
                 self.require_array_equality_eligible(
                     &output_types[0],
                     format!("cannot use `{}` as a set element", output_types[0]),
                     span,
                 )?;
-                Type::Named(
-                    "set".to_string(),
-                    vec![erase_type_callable_contracts(&output_types[0])],
-                )
+                Type::Named("set".to_string(), vec![output_types[0].clone()])
             }
             ComprehensionOutput::Map { .. } => {
                 self.require_array_equality_eligible(
@@ -3284,10 +3282,7 @@ impl<'a> FunctionChecker<'a> {
                 )?;
                 Type::Named(
                     "dict".to_string(),
-                    vec![
-                        erase_type_callable_contracts(&output_types[0]),
-                        erase_type_callable_contracts(&output_types[1]),
-                    ],
+                    vec![output_types[0].clone(), output_types[1].clone()],
                 )
             }
         };
@@ -4888,14 +4883,8 @@ impl<'a> FunctionChecker<'a> {
                 );
             }
             if let Some(existing) = locals.get_mut(binding_name) {
-                if assign.op.is_none() {
-                    // Rebinding may widen the set of runtime call targets even
-                    // when their structural function type is unchanged. Keep
-                    // only callable metadata shared by both the old and new
-                    // values so a later indirect call cannot use a name or
-                    // default that some assigned target does not support.
-                    existing.ty = merge_type_callable_contracts(&existing.ty, &final_value_ty);
-                }
+                // Rebinding keeps the local's visible callable contract: the
+                // new value was admitted by it while typing the assignment.
                 existing.moved = false;
                 existing.moved_at = None;
                 existing.moved_fields.clear();
@@ -5216,9 +5205,7 @@ impl<'a> FunctionChecker<'a> {
                 }
                 Ok(Type::Named(
                     "list".to_string(),
-                    vec![erase_type_callable_contracts(
-                        &element_ty.unwrap_or(Type::Unit),
-                    )],
+                    vec![element_ty.unwrap_or(Type::Unit)],
                 ))
             }
             ExprKind::Set(elements) => {
@@ -5237,19 +5224,14 @@ impl<'a> FunctionChecker<'a> {
                 }
                 Ok(Type::Named(
                     "set".to_string(),
-                    vec![erase_type_callable_contracts(
-                        &element_ty.unwrap_or(Type::Unit),
-                    )],
+                    vec![element_ty.unwrap_or(Type::Unit)],
                 ))
             }
             ExprKind::Map(entries) => {
                 if entries.is_empty() {
                     if let Some(Type::Named(name, args)) = expected {
                         if name == "set" && args.len() == 1 {
-                            return Ok(Type::Named(
-                                "set".to_string(),
-                                vec![erase_type_callable_contracts(&args[0])],
-                            ));
+                            return Ok(Type::Named("set".to_string(), vec![args[0].clone()]));
                         }
                     }
                 }
@@ -5284,8 +5266,8 @@ impl<'a> FunctionChecker<'a> {
                 Ok(Type::Named(
                     "dict".to_string(),
                     vec![
-                        erase_type_callable_contracts(&key_ty.unwrap_or(Type::Unit)),
-                        erase_type_callable_contracts(&value_ty.unwrap_or(Type::Unit)),
+                        key_ty.clone().unwrap_or(Type::Unit),
+                        value_ty.clone().unwrap_or(Type::Unit),
                     ],
                 ))
             }
@@ -5683,7 +5665,9 @@ impl<'a> FunctionChecker<'a> {
         };
 
         if then_ty == else_ty {
-            return Ok(merge_type_callable_contracts(&then_ty, &else_ty));
+            same_callable_contracts(&then_ty, &else_ty)
+                .map_err(|reason| callable_contract_mismatch(else_expr.span, reason))?;
+            return Ok(then_ty);
         }
         let then_adopts_else = self
             .type_of_expr_without_move_state(then_expr, then_locals, Some(&else_ty))
@@ -5894,7 +5878,98 @@ impl<'a> FunctionChecker<'a> {
         }
     }
 
+    /// `Alias(value)` for a thin `def(...)` alias adapts one function value or
+    /// capture-free lambda to the alias's complete contract (C5): the value's
+    /// contract must be admitted by the alias, and no environment is added.
+    fn type_of_thin_alias_adapter(
+        &self,
+        alias: &AliasInfo,
+        args: &[Argument],
+        span: crate::diag::Span,
+        locals: &mut HashMap<String, LocalBinding>,
+    ) -> Result<Type> {
+        if !alias.decl.type_params.is_empty() {
+            return Err(Diagnostic::coded_at(
+                "AU2002",
+                span,
+                format!(
+                    "thin callable alias `{}` is generic; adapt through a concrete callable annotation instead",
+                    alias.decl.name
+                ),
+            ));
+        }
+        let [argument] = args else {
+            return Err(Diagnostic::coded_at(
+                "AU2004",
+                span,
+                format!(
+                    "`{}(...)` adapts exactly one callable value, found {} argument{}",
+                    alias.decl.name,
+                    args.len(),
+                    if args.len() == 1 { "" } else { "s" }
+                ),
+            ));
+        };
+        if argument.name.is_some() {
+            return Err(Diagnostic::coded_at(
+                "AU2004",
+                argument.span,
+                format!(
+                    "`{}(...)` takes its callable value positionally",
+                    alias.decl.name
+                ),
+            ));
+        }
+        let alias_ty = alias.target.clone();
+        let actual = self.type_of_expr_hint(&argument.value, locals, Some(&alias_ty))?;
+        if actual != alias_ty {
+            if let Type::Closure { captures, .. } = &actual {
+                if !captures.is_empty() {
+                    return Err(callable_contract_mismatch(
+                        argument.value.span,
+                        format!(
+                            "thin alias `{}` cannot hold a capturing closure; an owned environment needs `Callable[...]` storage",
+                            alias.decl.name
+                        ),
+                    ));
+                }
+            }
+            if !closure_signature_matches_function(&actual, &alias_ty) {
+                return Err(Diagnostic::coded_at(
+                    "AU2002",
+                    argument.value.span,
+                    function_type_mismatch_message(&alias_ty, &actual),
+                ));
+            }
+            check_callable_positions(&alias_ty, &actual)
+                .map_err(|reason| callable_contract_mismatch(argument.value.span, reason))?;
+        }
+        self.consume_value_expr(&argument.value, locals)?;
+        Ok(alias_ty)
+    }
+
+    /// Types an expression against an expected destination type. When the
+    /// value is ABI-equal to that destination, every callable position must
+    /// also be admitted by the destination's complete contract (Q17 A): a
+    /// written contract may hide names or default availability, never the
+    /// reverse.
     fn type_of_expr_hint(
+        &self,
+        expr: &Expr,
+        locals: &mut HashMap<String, LocalBinding>,
+        expected: Option<&Type>,
+    ) -> Result<Type> {
+        let actual = self.type_of_expr_hint_uncontracted(expr, locals, expected)?;
+        if let Some(expected) = expected {
+            if actual == *expected {
+                check_callable_positions(expected, &actual)
+                    .map_err(|reason| callable_contract_mismatch(expr.span, reason))?;
+            }
+        }
+        Ok(actual)
+    }
+
+    fn type_of_expr_hint_uncontracted(
         &self,
         expr: &Expr,
         locals: &mut HashMap<String, LocalBinding>,
@@ -6171,8 +6246,6 @@ impl<'a> FunctionChecker<'a> {
                                 ),
                             ));
                         }
-                        element_ty =
-                            Some(merge_type_callable_contracts(expected_element_ty, &actual));
                     } else {
                         element_ty = Some(actual);
                     }
@@ -6183,10 +6256,7 @@ impl<'a> FunctionChecker<'a> {
                         "empty list literals require an expected `list[T]` type annotation in the bootstrap compiler",
                     ));
                 };
-                Ok(Type::Named(
-                    "list".to_string(),
-                    vec![erase_type_callable_contracts(&element_ty)],
-                ))
+                Ok(Type::Named("list".to_string(), vec![element_ty.clone()]))
             }
             ExprKind::Set(elements) => {
                 let mut element_ty = expected.and_then(set_element_type).cloned();
@@ -6224,8 +6294,6 @@ impl<'a> FunctionChecker<'a> {
                                 ),
                             ));
                         }
-                        element_ty =
-                            Some(merge_type_callable_contracts(expected_element_ty, &actual));
                     } else {
                         element_ty = Some(actual);
                     }
@@ -6241,10 +6309,7 @@ impl<'a> FunctionChecker<'a> {
                     format!("cannot use `{element_ty}` as a set element"),
                     expr.span,
                 )?;
-                Ok(Type::Named(
-                    "set".to_string(),
-                    vec![erase_type_callable_contracts(&element_ty)],
-                ))
+                Ok(Type::Named("set".to_string(), vec![element_ty.clone()]))
             }
             ExprKind::Map(entries) => {
                 if entries.is_empty() {
@@ -6255,10 +6320,7 @@ impl<'a> FunctionChecker<'a> {
                                 format!("cannot use `{}` as a set element", args[0]),
                                 expr.span,
                             )?;
-                            return Ok(Type::Named(
-                                "set".to_string(),
-                                vec![erase_type_callable_contracts(&args[0])],
-                            ));
+                            return Ok(Type::Named("set".to_string(), vec![args[0].clone()]));
                         }
                     }
                 }
@@ -6302,7 +6364,6 @@ impl<'a> FunctionChecker<'a> {
                                 ),
                             ));
                         }
-                        key_ty = Some(merge_type_callable_contracts(expected_key_ty, &actual_key));
                     } else {
                         key_ty = Some(actual_key);
                     }
@@ -6340,10 +6401,6 @@ impl<'a> FunctionChecker<'a> {
                                 ),
                             ));
                         }
-                        value_ty = Some(merge_type_callable_contracts(
-                            expected_value_ty,
-                            &actual_value,
-                        ));
                     } else {
                         value_ty = Some(actual_value);
                     }
@@ -6361,10 +6418,7 @@ impl<'a> FunctionChecker<'a> {
                 )?;
                 Ok(Type::Named(
                     "dict".to_string(),
-                    vec![
-                        erase_type_callable_contracts(&key_ty),
-                        erase_type_callable_contracts(&value_ty),
-                    ],
+                    vec![key_ty.clone(), value_ty.clone()],
                 ))
             }
             ExprKind::Comprehension { output, clauses } => {
@@ -6440,10 +6494,7 @@ impl<'a> FunctionChecker<'a> {
                     ));
                 }
                 self.merge_control_flow_moves(locals, &[&then_locals, &else_locals]);
-                Ok(merge_type_callable_contracts(
-                    &merge_type_callable_contracts(&result_ty, &then_ty),
-                    &else_ty,
-                ))
+                Ok(result_ty)
             }
             ExprKind::Match {
                 scrutinee,
@@ -8645,6 +8696,16 @@ impl<'a> FunctionChecker<'a> {
             _ => None,
         };
         let inferred_alias = resolve_alias(grouped_expr(callee));
+        if let Some(alias) = inferred_alias {
+            if matches!(alias.target, Type::Function { .. })
+                && matches!(
+                    grouped_expr(callee).kind,
+                    ExprKind::Name(_) | ExprKind::Member { .. }
+                )
+            {
+                return self.type_of_thin_alias_adapter(alias, args, span, locals);
+            }
+        }
         if let Some(expanded) = expand_alias_callee(
             callee,
             &resolve_alias,
@@ -11857,7 +11918,6 @@ impl<'a> FunctionChecker<'a> {
                                                 ty: param.ty.clone(),
                                                 passing: ReceiverKind::Value,
                                                 has_default: param.has_default,
-                                                default_erased: param.default_erased,
                                             })
                                             .collect::<Vec<_>>();
                                         let checked_return = self.type_check_function_value_args(
@@ -13950,7 +14010,7 @@ impl<'a> FunctionChecker<'a> {
                 ));
             }
             let field_ty = substitute_type(&field_info.ty, &substitutions);
-            return Ok(erase_type_callable_contracts(&field_ty));
+            return Ok(field_ty.clone());
         }
         if let Some(method) = class_info.methods.get(field) {
             if self.is_external_module(&class_info.module_name) && !method.decl.public {

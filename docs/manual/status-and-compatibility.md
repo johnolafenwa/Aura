@@ -42,7 +42,13 @@ consume it; tuple ordering remains rejected. See
 [Statements](/manual/statements#for-iteration) for the loop-form contract.
 
 Phase 6.1 capture-free function values make named functions Copy and Transfer
-values with structural `def(...) -> ...` types. Phase 6.2 uses that surface for
+values with structural `def(...) -> ...` types. Under the Batch 1 phase 1
+checkpoint those types are complete contracts: slots may be named, a `*`
+boundary makes slots keyword-only in declarations, lambdas, and types, and
+`= ...` promises default availability; a written contract may only hide names
+or default availability or restrict a slot to keyword-only, inference never
+invents a common contract (`AU2015`), and a thin alias call such as
+`Unary(function)` is the explicit adapter. Phase 6.2 uses that surface for
 the maintained eager natural/keyed `list.sort`, `map`, and `filter` algorithms and
 for `control.retry`. These are current technical-preview APIs. `control`
 resolves as a builtin module namespace, and the four List member names are
@@ -215,7 +221,7 @@ youngest-first task ancestry. Each public schema-version-1 frame span has its
 own required source `path`; the analysis/LSP editor shape permits an optional
 `file_path` for source-only analysis. The public diagnostic schema remains
 version `1` because the always-present arrays are an additive extension;
-compiler-service/editor transport uses semantic schema version `11`. This
+compiler-service/editor transport uses semantic schema version `12`. This
 version includes structural function values, import aliases, and the expanded
 numeric expression surface, and forwards the same diagnostic records.
 

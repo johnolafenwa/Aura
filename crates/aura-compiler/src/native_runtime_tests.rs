@@ -739,7 +739,6 @@ fn direct_array_abi_uses_typed_storage_kernels_and_callback_thunks() {
             ty: Type::named("int32"),
             passing: ReceiverKind::Value,
             has_default: false,
-            default_erased: false,
         }],
         return_type: Box::new(Type::named("int32")),
     };
@@ -5329,7 +5328,6 @@ fn direct_runtime_type_tags_preserve_generic_identity_through_clone() {
                 ty: Type::named("str"),
                 passing: ReceiverKind::Borrow,
                 has_default: false,
-                default_erased: false,
             },
             FunctionParamContract {
                 keyword_only: false,
@@ -5337,7 +5335,6 @@ fn direct_runtime_type_tags_preserve_generic_identity_through_clone() {
                 ty: Type::Named("list".to_string(), vec![Type::named("int32")]),
                 passing: ReceiverKind::BorrowMut,
                 has_default: true,
-                default_erased: false,
             },
             FunctionParamContract {
                 keyword_only: false,
@@ -5345,7 +5342,6 @@ fn direct_runtime_type_tags_preserve_generic_identity_through_clone() {
                 ty: nested_callback,
                 passing: ReceiverKind::Value,
                 has_default: false,
-                default_erased: false,
             },
         ],
         return_type: Box::new(Type::named("int64")),
@@ -5360,7 +5356,6 @@ fn direct_runtime_type_tags_preserve_generic_identity_through_clone() {
                     ty: Type::TypeParam("A".to_string()),
                     passing: ReceiverKind::Borrow,
                     has_default: false,
-                    default_erased: false,
                 },
                 FunctionParamContract {
                     keyword_only: false,
@@ -5368,7 +5363,6 @@ fn direct_runtime_type_tags_preserve_generic_identity_through_clone() {
                     ty: Type::TypeParam("B".to_string()),
                     passing: ReceiverKind::BorrowMut,
                     has_default: true,
-                    default_erased: false,
                 },
                 FunctionParamContract {
                     keyword_only: false,
@@ -5376,7 +5370,6 @@ fn direct_runtime_type_tags_preserve_generic_identity_through_clone() {
                     ty: Type::TypeParam("C".to_string()),
                     passing: ReceiverKind::Value,
                     has_default: false,
-                    default_erased: false,
                 },
             ],
             return_type: Box::new(Type::TypeParam("R".to_string())),
@@ -5460,7 +5453,6 @@ fn direct_function_value_abi_preserves_signature_capabilities_defaults_and_metad
                 ty: Type::named("str"),
                 passing: ReceiverKind::Borrow,
                 has_default: false,
-                default_erased: false,
             },
             FunctionParamContract {
                 keyword_only: false,
@@ -5468,7 +5460,6 @@ fn direct_function_value_abi_preserves_signature_capabilities_defaults_and_metad
                 ty: Type::Named("list".to_string(), vec![Type::named("int32")]),
                 passing: ReceiverKind::BorrowMut,
                 has_default: true,
-                default_erased: false,
             },
             FunctionParamContract {
                 keyword_only: false,
@@ -5476,7 +5467,6 @@ fn direct_function_value_abi_preserves_signature_capabilities_defaults_and_metad
                 ty: Type::named("str"),
                 passing: ReceiverKind::Value,
                 has_default: false,
-                default_erased: false,
             },
         ],
         return_type: Box::new(Type::named("int64")),
@@ -5543,7 +5533,6 @@ fn direct_function_value_type_patterns_bind_nested_types_and_capabilities() {
             ty,
             passing,
             has_default: false,
-            default_erased: false,
         }
     }
 
@@ -5683,7 +5672,6 @@ fn direct_closure_type_matching_preserves_callable_and_capture_contracts() {
         ty,
         passing,
         has_default: false,
-        default_erased: false,
     };
     let capture = |ty, mode| ClosureCapture {
         name: "captured".to_string(),
@@ -17103,7 +17091,6 @@ fn native_runtime_closure_calls_preserve_results_writebacks_and_call_kind() {
                         ty: Type::named("int64"),
                         passing: ReceiverKind::BorrowMut,
                         has_default: false,
-                        default_erased: false,
                     }]),
                     return_type: Box::new(Type::named("int64")),
                     captures: Box::new(vec![crate::sema::ClosureCapture {
@@ -17232,7 +17219,6 @@ fn native_runtime_closure_call_moves_owned_args_and_copies_only_mutable_writebac
                             ty: Type::named("int64"),
                             passing: ReceiverKind::Value,
                             has_default: false,
-                            default_erased: false,
                         },
                         FunctionParamContract {
                             keyword_only: false,
@@ -17240,7 +17226,6 @@ fn native_runtime_closure_call_moves_owned_args_and_copies_only_mutable_writebac
                             ty: Type::named("int64"),
                             passing: ReceiverKind::BorrowMut,
                             has_default: false,
-                            default_erased: false,
                         },
                     ]),
                     return_type: Box::new(Type::named("int64")),
@@ -17402,7 +17387,6 @@ fn native_runtime_selected_default_callbacks_bind_functions_but_not_closures() {
                         ty: Type::named("int64"),
                         passing: ReceiverKind::Value,
                         has_default: true,
-                        default_erased: false,
                     }],
                     return_type: Box::new(Type::named("int64")),
                 },
@@ -17439,7 +17423,6 @@ fn native_runtime_selected_default_callbacks_bind_functions_but_not_closures() {
                         ty: Type::named("int64"),
                         passing: ReceiverKind::Value,
                         has_default: false,
-                        default_erased: false,
                     }]),
                     return_type: Box::new(Type::Unit),
                     captures: Box::new(Vec::new()),
@@ -17575,7 +17558,6 @@ fn native_runtime_trapping_closure_call_releases_combined_buffer_without_mut_wri
             ty: Type::named("str"),
             passing: ReceiverKind::BorrowMut,
             has_default: false,
-            default_erased: false,
         }]),
         return_type: Box::new(Type::Unit),
         captures: Box::new(vec![crate::sema::ClosureCapture {
@@ -20760,7 +20742,6 @@ fn coverage_native_runtime_decodes_closure_patterns_and_uses_type_fallbacks() {
             ty: Type::named("?Item"),
             passing: ReceiverKind::Borrow,
             has_default: false,
-            default_erased: false,
         }]),
         return_type: Box::new(Type::named("?Item")),
         captures: Box::new(vec![ClosureCapture {

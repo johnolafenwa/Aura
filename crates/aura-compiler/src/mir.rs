@@ -670,6 +670,10 @@ pub struct MirParam {
     /// parameter's declared default for runtime-selected function calls.
     #[serde(default)]
     pub default_function: Option<String>,
+    /// Declared after the `*` boundary: a call binds this slot by name only,
+    /// and no stored contract may expose it positionally.
+    #[serde(default)]
+    pub keyword_only: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1628,7 +1632,7 @@ impl<'a> MirLoanValidationContext<'a> {
             for (contract, declared) in actual_params.iter_mut().zip(&declaration.params) {
                 contract.name = declared.name.clone();
                 contract.has_default = declared.default_function.is_some();
-                contract.default_erased = false;
+                contract.keyword_only = declared.keyword_only;
             }
         }
         let kinds_match = match (actual_kind, expected_kind) {
@@ -1640,21 +1644,17 @@ impl<'a> MirLoanValidationContext<'a> {
         collect_type_params_from_type(expected, &mut type_params);
         let mut substitutions = HashMap::new();
         let params_match = actual_params.len() == expected_params.len()
-            && actual_params
-                .iter()
-                .zip(&expected_params)
-                .all(|(actual, expected)| {
+            && actual_params.iter().zip(&expected_params).enumerate().all(
+                |(index, (actual, expected))| {
                     crate::sema::type_pattern_matches(
                         &expected.ty,
                         &actual.ty,
                         &type_params,
                         &mut substitutions,
                     ) && actual.passing == expected.passing
-                        && actual.keyword_only == expected.keyword_only
-                        && (expected.default_erased
-                            || actual.name == expected.name
-                                && actual.has_default == expected.has_default)
-                });
+                        && crate::sema::callable_slot_admission(expected, actual, index).is_ok()
+                },
+            );
         let return_matches = crate::sema::type_pattern_matches(
             &expected_return,
             &actual_return,
@@ -2146,12 +2146,18 @@ impl<'a> MirLoanValidationContext<'a> {
                 &type_params,
                 &mut candidate_substitutions,
             );
-            let retains_named_default_contract = !actual.default_erased;
-            if (retains_named_default_contract && actual.name != expected.name)
-                || actual.passing != expected_passing
-                || (retains_named_default_contract
-                    && actual.has_default != expected.default_function.is_some())
+            // The operand's declared contract is the destination; the
+            // declaration is the source it must admit.
+            let declared = FunctionParamContract {
+                keyword_only: expected.keyword_only,
+                name: expected.name.clone(),
+                ty: expected.ty.clone(),
+                passing: expected_passing,
+                has_default: expected.default_function.is_some(),
+            };
+            if actual.passing != expected_passing
                 || !type_matches
+                || crate::sema::callable_slot_admission(actual, &declared, index).is_err()
             {
                 return Err(format!(
                     "invalid MIR function operand `{name}` in `{}` has parameter {} that does not match declaration",
@@ -2492,7 +2498,7 @@ impl<'a> MirLoanValidationContext<'a> {
         }
         for (index, (param, arg)) in params.iter().zip(bound).enumerate() {
             let Some(arg) = arg else {
-                if !param.has_default || param.default_erased {
+                if !param.has_default {
                     return Err(format!(
                         "invalid MIR indirect call from `{}` omits required parameter {} `{}`",
                         caller.name,
@@ -5561,9 +5567,9 @@ fn validate_loan_rvalue(
                     .any(|(param, contract)| {
                         param.ty != contract.ty
                             || lower_receiver_kind(contract.passing) != param.passing
-                            || !contract.default_erased
-                                && (contract.name != param.name
-                                    || contract.has_default != param.default_function.is_some())
+                            || contract.name != param.name
+                            || contract.keyword_only != param.keyword_only
+                            || contract.has_default != param.default_function.is_some()
                     })
             {
                 return Err(format!(
@@ -8055,6 +8061,7 @@ fn lower_function(
                 .default
                 .as_ref()
                 .map(|_| format!("{name}::__default_{index}_{}", param.name)),
+            keyword_only: param.keyword_only,
         })
         .collect::<Vec<_>>();
 
@@ -8361,7 +8368,6 @@ fn task_param_contracts(
             has_default: params
                 .get(index)
                 .is_some_and(|param| param.default.is_some()),
-            default_erased: false,
         })
         .collect()
 }
@@ -8629,7 +8635,6 @@ impl<'a> Lowerer<'a> {
                         .params
                         .get(index)
                         .is_some_and(|param| param.default.is_some()),
-                    default_erased: false,
                 })
                 .collect(),
             return_type: Box::new(substitute_type(
@@ -8752,6 +8757,7 @@ impl<'a> Lowerer<'a> {
                 },
                 ty: capture.ty.clone(),
                 default_function: None,
+                keyword_only: false,
             })
             .collect::<Vec<_>>();
         mir_params.extend(info.params.iter().map(|param| MirParam {
@@ -8759,6 +8765,7 @@ impl<'a> Lowerer<'a> {
             passing: lower_receiver_kind(param.passing),
             ty: param.ty.clone(),
             default_function: None,
+            keyword_only: param.keyword_only,
         }));
 
         let mut lowerer = Lowerer::new(
@@ -8927,7 +8934,6 @@ impl<'a> Lowerer<'a> {
                         ty: self.lower_type_ref_with_provenance(&param.ty),
                         passing: resolve_param_passing(param.mode),
                         has_default: param.has_default,
-                        default_erased: !param.has_default,
                     })
                     .collect(),
                 return_type: Box::new(self.lower_type_ref_with_provenance(return_type)),
@@ -16414,6 +16420,26 @@ impl<'a> Lowerer<'a> {
         .expect("checked alias callee")
     }
 
+    /// A non-generic alias of a thin `def(...)` type used as a callee is the
+    /// explicit contract adapter `Alias(value)`; it lowers to the adapted
+    /// value in a temporary carrying the alias contract.
+    fn thin_callable_alias_target(&self, callee: &Expr) -> Option<Type> {
+        let alias = match &callee.kind {
+            ExprKind::Name(name)
+                if !self.local_types.contains_key(&self.render_local_name(name)) =>
+            {
+                self.program.alias_info(name, self.module_name)
+            }
+            ExprKind::Member { object, field } => self
+                .infer_module_path(object)
+                .and_then(|module| self.module_namespace(&module))
+                .and_then(|namespace| namespace.aliases.get(field)),
+            _ => None,
+        }?;
+        (alias.decl.type_params.is_empty() && matches!(alias.target, Type::Function { .. }))
+            .then(|| alias.target.clone())
+    }
+
     fn lower_call(
         &mut self,
         expr: &Expr,
@@ -16421,6 +16447,18 @@ impl<'a> Lowerer<'a> {
         args: &[Argument],
         expected: Option<&Type>,
     ) -> Operand {
+        if let Some(alias_ty) = self.thin_callable_alias_target(callee) {
+            let [argument] = args else {
+                unreachable!("checked thin alias adapters take one callable value")
+            };
+            let value = self.lower_expr_with_expected(&argument.value, Some(&alias_ty));
+            let temp = self.new_typed_temp(alias_ty);
+            self.emit(Instruction::Assign {
+                target: temp.clone(),
+                value: Rvalue::Use(value),
+            });
+            return Operand::Place(temp);
+        }
         if let Some(expanded) = self.expanded_alias_callee(callee) {
             let expanded_expr = Expr {
                 kind: ExprKind::Call {
@@ -18112,6 +18150,7 @@ impl<'a> Lowerer<'a> {
             .map(|param| CallableParam {
                 name: &param.name,
                 required: !param.has_default,
+                keyword_only: param.keyword_only,
             })
             .collect::<Vec<_>>();
         let ordered = bind_call_arguments(
@@ -18187,6 +18226,9 @@ impl<'a> Lowerer<'a> {
             return Some(read.member_type);
         }
         if let ExprKind::Call { callee, args } = &expr.kind {
+            if let Some(alias_ty) = self.thin_callable_alias_target(callee) {
+                return Some(alias_ty);
+            }
             if let Some(expanded) = self.expanded_alias_callee(callee) {
                 return self.infer_expr_type(&Expr {
                     kind: ExprKind::Call {
@@ -20299,11 +20341,10 @@ fn lower_type_ref(type_ref: &crate::ast::TypeRef) -> Type {
                 .iter()
                 .map(|param| FunctionParamContract {
                     keyword_only: param.keyword_only,
-                    name: String::new(),
+                    name: param.name.clone().unwrap_or_default(),
                     ty: lower_type_ref(&param.ty),
                     passing: resolve_param_passing(param.mode),
-                    has_default: false,
-                    default_erased: true,
+                    has_default: param.has_default,
                 })
                 .collect(),
             return_type: Box::new(lower_type_ref(return_type)),

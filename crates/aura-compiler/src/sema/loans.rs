@@ -2171,6 +2171,7 @@ impl<'a> FunctionChecker<'a> {
                     .map(|param| crate::call::CallableParam {
                         name: &param.name,
                         required: !param.has_default,
+                        keyword_only: param.keyword_only,
                     })
                     .collect::<Vec<_>>();
                 let ordered = bind_call_arguments(

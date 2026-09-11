@@ -689,7 +689,7 @@ test("compiler bridge reuses one persistent compiler process", async () => {
 });
 
 test("persistent compiler service sends and accepts the current semantic schema", async () => {
-  assert.equal(SUPPORTED_SEMANTIC_INTERFACE_SCHEMA_VERSION, 11);
+  assert.equal(SUPPORTED_SEMANTIC_INTERFACE_SCHEMA_VERSION, 12);
   const script = [
     "const readline = require('node:readline');",
     "const lines = readline.createInterface({ input: process.stdin });",
@@ -742,7 +742,7 @@ test("persistent compiler service rejects and disposes a mismatched semantic sch
       path: "/virtual/main.au",
       source: "def main():\n    pass\n"
     }),
-    /semantic schema mismatch.*received `8`.*expected `11`/
+    /semantic schema mismatch.*received `8`.*expected `12`/
   );
   assert.equal(service.closed, true);
   assert.equal(invalidations, 1);
@@ -2421,12 +2421,12 @@ test("compiler bridge exposes capture-free function values and rejects method va
     assert.deepEqual(analysis.diagnostics, []);
     assert.ok(
       analysis.occurrences.some((occurrence) =>
-        occurrence.hover.includes("binding selected: def(int32) -> int32")
+        occurrence.hover.includes("binding selected: def(value: int32) -> int32")
       )
     );
     assert.ok(
       analysis.occurrences.some((occurrence) =>
-        occurrence.hover.includes("binding known_offset: def(int32) -> int32")
+        occurrence.hover.includes("binding known_offset: def(value: int32 = ...) -> int32")
       )
     );
     assert.ok(
@@ -2520,10 +2520,10 @@ test("compiler bridge exposes capture-free function values and rejects method va
     ].join("\n");
     const dynamicAnalysis = await analyzeWithCompiler(mainUri, dynamicNamedArgument);
     assert.equal(dynamicAnalysis.diagnostics.length, 1);
-    assert.equal(dynamicAnalysis.diagnostics[0].code, "AU2003");
+    assert.equal(dynamicAnalysis.diagnostics[0].code, "AU2004");
     assert.match(
       dynamicAnalysis.diagnostics[0].message,
-      /named argument contract was erased.*possible targets do not all agree/
+      /contract has no parameter named `value`/
     );
   } finally {
     fs.rmSync(tempRoot, { recursive: true, force: true });
@@ -5348,7 +5348,7 @@ test("compiler bridge exposes contextual lambda scope, hover, definitions, and c
       (occurrence) =>
         occurrence.line === 3 &&
         occurrence.hover.includes("add") &&
-        occurrence.hover.includes("def(int32) -> int32")
+        occurrence.hover.includes("def(value: int32) -> int32")
     );
     assert.ok(lambdaBinding, "the closure binding should expose its callable contract");
 

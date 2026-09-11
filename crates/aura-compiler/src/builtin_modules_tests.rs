@@ -48,7 +48,6 @@ fn builtin_type_lowering_preserves_nested_function_signatures() {
                     ty: Type::named("Duration"),
                     passing: ReceiverKind::Borrow,
                     has_default: false,
-                    default_erased: true,
                 },
                 FunctionParamContract {
                     keyword_only: false,
@@ -56,7 +55,6 @@ fn builtin_type_lowering_preserves_nested_function_signatures() {
                     ty: Type::named("str"),
                     passing: ReceiverKind::BorrowMut,
                     has_default: false,
-                    default_erased: true,
                 },
                 FunctionParamContract {
                     keyword_only: false,
@@ -64,7 +62,6 @@ fn builtin_type_lowering_preserves_nested_function_signatures() {
                     ty: Type::Tuple(vec![Type::named("int32")]),
                     passing: ReceiverKind::Value,
                     has_default: false,
-                    default_erased: true,
                 },
             ],
             return_type: Box::new(Type::Function {
@@ -74,7 +71,6 @@ fn builtin_type_lowering_preserves_nested_function_signatures() {
                     ty: Type::named("Duration"),
                     passing: ReceiverKind::Borrow,
                     has_default: false,
-                    default_erased: true,
                 }],
                 return_type: Box::new(Type::Unit),
             }),

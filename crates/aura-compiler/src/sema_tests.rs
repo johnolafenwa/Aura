@@ -614,7 +614,6 @@ fn s1_sema_type_pattern_unification_rejects_callable_kind_and_capture_mismatches
             ty: Type::named("int64"),
             passing: ReceiverKind::Borrow,
             has_default: false,
-            default_erased: false,
         }],
         return_type: Box::new(Type::named("int64")),
     };
@@ -8447,7 +8446,6 @@ fn checker_expression_helper_paths_cover_collection_specialization_and_control_e
                 ty: Type::named("int32"),
                 passing: ReceiverKind::Borrow,
                 has_default: false,
-                default_erased: false,
             }],
             return_type: Box::new(Type::named("int32")),
         }
@@ -23350,7 +23348,6 @@ fn capture_free_function_types_are_copy_values_with_declaration_spelling() {
                 ty: Type::named("int32"),
                 passing: ReceiverKind::Borrow,
                 has_default: false,
-                default_erased: false,
             },
             FunctionParamContract {
                 keyword_only: false,
@@ -23358,7 +23355,6 @@ fn capture_free_function_types_are_copy_values_with_declaration_spelling() {
                 ty: Type::named("str"),
                 passing: ReceiverKind::Value,
                 has_default: true,
-                default_erased: false,
             },
             FunctionParamContract {
                 keyword_only: false,
@@ -23366,7 +23362,6 @@ fn capture_free_function_types_are_copy_values_with_declaration_spelling() {
                 ty: Type::named("int64"),
                 passing: ReceiverKind::BorrowMut,
                 has_default: false,
-                default_erased: false,
             },
         ],
         return_type: Box::new(Type::named("bool")),
@@ -23374,8 +23369,8 @@ fn capture_free_function_types_are_copy_values_with_declaration_spelling() {
     assert!(function.is_copy(), "capture-free code pointers are Copy");
     assert_eq!(
         function.to_string(),
-        "def(int32, own str, mut int64) -> bool",
-        "written function types preserve parameter capability contracts"
+        "def(left: int32, right: own str = ..., counter: mut int64) -> bool",
+        "complete contracts render names, capabilities, and default availability"
     );
 }
 
@@ -23522,7 +23517,7 @@ def main():
 }
 
 #[test]
-fn dynamic_function_contracts_retain_only_names_and_defaults_that_agree() {
+fn dynamic_function_contracts_require_one_complete_contract() {
     crate::check_source(
         r#"
 def plus_one(value: int32 = 1) -> int32:
@@ -23537,7 +23532,7 @@ def main():
     named: int32 = selected(value=4)
 "#,
     )
-    .expect("different default values are supplied by the runtime-selected target");
+    .expect("targets with one complete contract keep names and defaults through a join");
 
     let names = crate::check_source(
         r#"
@@ -23549,13 +23544,13 @@ def second(number: int32 = 2) -> int32:
 
 def main():
     selected = first if true else second
-    defaulted: int32 = selected()
     selected(value=3)
 "#,
     )
-    .expect_err("different names erase named access without erasing shared defaults");
-    assert_eq!(names.code, "AU2003");
-    assert!(names.message.contains("contract was erased"));
+    .expect_err("an inferred join never invents a common contract from differing names");
+    assert_eq!(names.code, "AU2015");
+    assert!(names.message.contains("callable contract mismatch"));
+    assert!(names.message.contains("differs from"));
 
     let defaults = crate::check_source(
         r#"
@@ -23570,13 +23565,44 @@ def main():
     selected()
 "#,
     )
-    .expect_err("a join with different default masks requires all positional arguments");
-    assert_eq!(defaults.code, "AU2003");
-    assert!(defaults.message.contains("complete positional list"));
+    .expect_err("an inferred join never invents a common default availability");
+    assert_eq!(defaults.code, "AU2015");
+
+    crate::check_source(
+        r#"
+def first(value: int32 = 1) -> int32:
+    return value
+
+def second(number: int32 = 2) -> int32:
+    return number
+
+def main():
+    selected: def(int32) -> int32 = first if true else second
+    positional: int32 = selected(3)
+"#,
+    )
+    .expect("a written positional-only contract admits both branches");
+
+    let named = crate::check_source(
+        r#"
+def first(value: int32 = 1) -> int32:
+    return value
+
+def second(number: int32 = 2) -> int32:
+    return number
+
+def main():
+    selected: def(int32) -> int32 = first if true else second
+    selected(value=3)
+"#,
+    )
+    .expect_err("a written positional-only contract exposes no names");
+    assert_eq!(named.code, "AU2004");
+    assert!(named.message.contains("has no parameter named `value`"));
 }
 
 #[test]
-fn function_reassignment_intersects_named_and_default_contracts() {
+fn function_reassignment_must_satisfy_the_local_contract() {
     let names = crate::check_source(
         r#"
 def first(value: int32 = 1) -> int32:
@@ -23591,9 +23617,9 @@ def main():
     selected(value=3)
 "#,
     )
-    .expect_err("reassignment to a differently named target erases named arguments");
-    assert_eq!(names.code, "AU2003");
-    assert!(names.message.contains("contract was erased"));
+    .expect_err("rebinding cannot rename the local's exposed parameter");
+    assert_eq!(names.code, "AU2015");
+    assert!(names.message.contains("would be renamed"));
 
     let defaults = crate::check_source(
         r#"
@@ -23609,13 +23635,46 @@ def main():
     selected()
 "#,
     )
-    .expect_err("reassignment to a required target erases default availability");
-    assert_eq!(defaults.code, "AU2003");
-    assert!(defaults.message.contains("complete positional list"));
+    .expect_err("rebinding cannot drop the local's promised default");
+    assert_eq!(defaults.code, "AU2015");
+    assert!(defaults.message.contains("promises a default"));
+
+    crate::check_source(
+        r#"
+def first(value: int32 = 1) -> int32:
+    return value
+
+def second(number: int32 = 2) -> int32:
+    return number
+
+def main():
+    mut selected: def(int32) -> int32 = first
+    selected = second
+    positional: int32 = selected(3)
+"#,
+    )
+    .expect("a written positional-only local admits every ABI-equal target");
+
+    crate::check_source(
+        r#"
+def first(value: int32 = 1) -> int32:
+    return value
+
+def plus(value: int32 = 2) -> int32:
+    return value + 1
+
+def main():
+    mut selected = first
+    selected = plus
+    defaulted: int32 = selected()
+    named: int32 = selected(value=3)
+"#,
+    )
+    .expect("a target with the same complete contract rebinds and keeps names and defaults");
 }
 
 #[test]
-fn control_flow_reassignment_intersects_function_contracts() {
+fn control_flow_reassignment_must_satisfy_the_local_contract() {
     let error = crate::check_source(
         r#"
 def first(value: int32 = 1) -> int32:
@@ -23631,13 +23690,14 @@ def choose(use_second: bool) -> int32:
     return selected(value=3)
 "#,
     )
-    .expect_err("post-branch function contracts include every reachable assignment");
-    assert_eq!(error.code, "AU2003");
-    assert!(error.message.contains("contract was erased"));
+    .expect_err("a branch cannot rebind a local to a differently named contract");
+    assert_eq!(error.code, "AU2015");
+    assert!(error.message.contains("would be renamed"));
+    assert_eq!(error.span.map(|span| span.line), Some(11));
 }
 
 #[test]
-fn repeated_generic_evidence_intersects_callable_contract_metadata() {
+fn repeated_generic_evidence_requires_identical_callable_contracts() {
     let callback = |name: &str, has_default: bool| Type::Function {
         params: vec![FunctionParamContract {
             keyword_only: false,
@@ -23645,7 +23705,6 @@ fn repeated_generic_evidence_intersects_callable_contract_metadata() {
             ty: Type::named("int32"),
             passing: ReceiverKind::Borrow,
             has_default,
-            default_erased: false,
         }],
         return_type: Box::new(Type::named("int32")),
     };
@@ -23657,18 +23716,26 @@ fn repeated_generic_evidence_intersects_callable_contract_metadata() {
         &mut names,
     )
     .expect("first generic observation binds the function contract");
-    unify_type_pattern(
+    let conflict = unify_type_pattern(
         &Type::TypeParam("T".to_string()),
         &callback("number", true),
         &mut names,
     )
-    .expect("ABI-equal function evidence remains compatible");
+    .expect_err("ABI-equal evidence with another exposed name is not one contract");
+    assert!(conflict
+        .message
+        .contains("conflicting inferred callable contracts for `T`"));
+    unify_type_pattern(
+        &Type::TypeParam("T".to_string()),
+        &callback("value", true),
+        &mut names,
+    )
+    .expect("identical evidence agrees");
     let Type::Function { params, .. } = names.get("T").expect("T is inferred") else {
         panic!("T should remain a function type");
     };
-    assert_eq!(params[0].name, "");
+    assert_eq!(params[0].name, "value");
     assert!(params[0].has_default);
-    assert!(!params[0].default_erased);
 
     let nested = |contract| {
         Type::Tuple(vec![Type::Named(
@@ -23683,28 +23750,15 @@ fn repeated_generic_evidence_intersects_callable_contract_metadata() {
         &mut nested_defaults,
     )
     .expect("first nested generic observation binds T");
-    unify_type_pattern(
+    let nested_conflict = unify_type_pattern(
         &Type::TypeParam("T".to_string()),
         &nested(callback("value", false)),
         &mut nested_defaults,
     )
-    .expect("nested ABI-equal evidence remains compatible");
-    let nested_result = nested_defaults.get("T").expect("nested T is inferred");
-    let Type::Tuple(tuple) = nested_result else {
-        panic!("nested result should retain its tuple wrapper");
-    };
-    let Type::Named(_, vec_args) = &tuple[0] else {
-        panic!("nested result should retain its Vec wrapper");
-    };
-    let Type::Named(_, holder_args) = &vec_args[0] else {
-        panic!("nested result should retain its Holder wrapper");
-    };
-    let Type::Function { params, .. } = &holder_args[0] else {
-        panic!("nested result should retain its callback");
-    };
-    assert_eq!(params[0].name, "value");
-    assert!(!params[0].has_default);
-    assert!(params[0].default_erased);
+    .expect_err("nested evidence with another default availability is not one contract");
+    assert!(nested_conflict
+        .message
+        .contains("conflicting inferred callable contracts for `T`"));
 
     let type_params = BTreeSet::from(["T".to_string()]);
     let mut matcher_substitutions = HashMap::new();
@@ -23716,14 +23770,20 @@ fn repeated_generic_evidence_intersects_callable_contract_metadata() {
     ));
     assert!(type_pattern_matches(
         &Type::TypeParam("T".to_string()),
+        &nested(callback("value", true)),
+        &type_params,
+        &mut matcher_substitutions,
+    ));
+    assert!(!type_pattern_matches(
+        &Type::TypeParam("T".to_string()),
         &nested(callback("number", true)),
         &type_params,
         &mut matcher_substitutions,
     ));
-    let merged = matcher_substitutions
+    let bound = matcher_substitutions
         .get("T")
-        .expect("trait-style matching also retains the safe intersection");
-    let Type::Tuple(tuple) = merged else {
+        .expect("trait-style matching keeps the first complete contract");
+    let Type::Tuple(tuple) = bound else {
         panic!("matcher substitution should retain its tuple wrapper");
     };
     let Type::Named(_, vec_args) = &tuple[0] else {
@@ -23735,13 +23795,12 @@ fn repeated_generic_evidence_intersects_callable_contract_metadata() {
     let Type::Function { params, .. } = &holder_args[0] else {
         panic!("matcher substitution should retain its callback");
     };
-    assert_eq!(params[0].name, "");
+    assert_eq!(params[0].name, "value");
     assert!(params[0].has_default);
-    assert!(!params[0].default_erased);
 }
 
 #[test]
-fn generic_choose_returns_only_the_callable_contract_common_to_all_evidence() {
+fn generic_choose_requires_identical_callable_evidence() {
     let defaults = crate::check_source(
         r#"
 def choose[T](first: own T, second: own T, use_second: bool) -> T:
@@ -23758,9 +23817,9 @@ def main():
     selected()
 "#,
     )
-    .expect_err("generic inference must not retain a default absent from later evidence");
-    assert_eq!(defaults.code, "AU2003");
-    assert!(defaults.message.contains("complete positional list"));
+    .expect_err("generic evidence cannot drop a default the first observation promised");
+    assert_eq!(defaults.code, "AU2015");
+    assert!(defaults.message.contains("promises a default"));
 
     let names = crate::check_source(
         r#"
@@ -23778,9 +23837,9 @@ def main():
     selected(value=3)
 "#,
     )
-    .expect_err("generic inference must not retain a name absent from later evidence");
-    assert_eq!(names.code, "AU2003");
-    assert!(names.message.contains("contract was erased"));
+    .expect_err("generic evidence cannot rename the first observation's parameter");
+    assert_eq!(names.code, "AU2015");
+    assert!(names.message.contains("would be renamed"));
 
     for (surface, main_body) in [
         (
@@ -23814,13 +23873,13 @@ def main():
 {main_body}"#,
         );
         let nested = crate::check_source(&source)
-            .expect_err("nested generic results must recursively intersect callable contracts");
+            .expect_err("nested generic evidence must agree on every callable contract");
         assert_eq!(
-            nested.code, "AU2003",
-            "{surface} generic evidence should erase incompatible callable names: {}",
+            nested.code, "AU2015",
+            "{surface} generic evidence cannot rename a nested callable slot: {}",
             nested.message,
         );
-        assert!(nested.message.contains("contract was erased"));
+        assert!(nested.message.contains("would be renamed"));
     }
 }
 
@@ -23860,7 +23919,7 @@ def main():
 }
 
 #[test]
-fn mutable_function_storage_erases_names_and_defaults_but_keeps_exact_calls() {
+fn mutable_storage_keeps_the_written_or_inferred_contract() {
     crate::check_source(
         r#"
 class Holder[T]:
@@ -23873,21 +23932,39 @@ def second(number: int32 = 2) -> int32:
     return number
 
 def main():
-    mut callbacks = [first]
+    mut callbacks: list[def(int32) -> int32] = [first]
     callbacks.append(second)
     callbacks.set(0, second)
     from_vec: int32 = callbacks[0](3)
 
-    mut callbacks_by_name = {"first": first}
+    mut callbacks_by_name: dict[str, def(int32) -> int32] = {"first": first}
     callbacks_by_name["second"] = second
     from_map: int32 = callbacks_by_name["second"](4)
 
-    mut holder = Holder(callback=first)
+    mut holder: Holder[def(int32) -> int32] = Holder(callback=first)
     holder.callback = second
     from_field: int32 = holder.callback(5)
 "#,
     )
-    .expect("mutable storage preserves structural signatures for exact positional calls");
+    .expect("written positional-only storage contracts admit every ABI-equal target");
+
+    crate::check_source(
+        r#"
+def first(value: int32 = 1) -> int32:
+    return value
+
+def plus(value: int32 = 2) -> int32:
+    return value + 1
+
+def main():
+    mut callbacks = [first]
+    callbacks.append(plus)
+    callbacks.set(0, plus)
+    defaulted: int32 = callbacks[0]()
+    named: int32 = callbacks[1](value=3)
+"#,
+    )
+    .expect("an inferred element contract keeps names and defaults every stored target shares");
 
     let vec_names = crate::check_source(
         r#"
@@ -23900,13 +23977,11 @@ def second(number: int32 = 2) -> int32:
 def main():
     mut callbacks = [first]
     callbacks.append(second)
-    callbacks.set(0, second)
-    callbacks[0](value=3)
 "#,
     )
-    .expect_err("Vec mutation makes declaration names unavailable");
-    assert_eq!(vec_names.code, "AU2003");
-    assert!(vec_names.message.contains("contract was erased"));
+    .expect_err("an inferred element contract cannot be renamed by a later insertion");
+    assert_eq!(vec_names.code, "AU2015");
+    assert!(vec_names.message.contains("would be renamed"));
 
     let vec_defaults = crate::check_source(
         r#"
@@ -23918,14 +23993,12 @@ def required(value: int32) -> int32:
 
 def main():
     mut callbacks = [defaulted]
-    callbacks.append(required)
     callbacks.set(0, required)
-    callbacks[0]()
 "#,
     )
-    .expect_err("Vec mutation makes omitted arguments unavailable");
-    assert_eq!(vec_defaults.code, "AU2003");
-    assert!(vec_defaults.message.contains("complete positional list"));
+    .expect_err("an inferred element contract cannot drop its default through a replacement");
+    assert_eq!(vec_defaults.code, "AU2015");
+    assert!(vec_defaults.message.contains("promises a default"));
 
     let map_names = crate::check_source(
         r#"
@@ -23938,12 +24011,11 @@ def second(number: int32 = 2) -> int32:
 def main():
     mut callbacks = {"first": first}
     callbacks["second"] = second
-    callbacks["second"](number=3)
 "#,
     )
-    .expect_err("Map mutation makes declaration names unavailable");
-    assert_eq!(map_names.code, "AU2003");
-    assert!(map_names.message.contains("contract was erased"));
+    .expect_err("an inferred value contract cannot be renamed by a later insertion");
+    assert_eq!(map_names.code, "AU2015");
+    assert!(map_names.message.contains("would be renamed"));
 
     let field_defaults = crate::check_source(
         r#"
@@ -23959,12 +24031,11 @@ def required(value: int32) -> int32:
 def main():
     mut holder = Holder(callback=defaulted)
     holder.callback = required
-    holder.callback()
 "#,
     )
-    .expect_err("generic field mutation makes omitted arguments unavailable");
-    assert_eq!(field_defaults.code, "AU2003");
-    assert!(field_defaults.message.contains("complete positional list"));
+    .expect_err("an inferred field contract cannot drop its default through a replacement");
+    assert_eq!(field_defaults.code, "AU2015");
+    assert!(field_defaults.message.contains("promises a default"));
 }
 
 #[test]
@@ -24204,7 +24275,6 @@ fn function_type_helpers_preserve_nested_generic_shape_and_capability_diagnostic
             ty: Type::TypeParam("T".to_string()),
             passing: ReceiverKind::BorrowMut,
             has_default: false,
-            default_erased: true,
         }],
         return_type: Box::new(Type::Named(
             "list".to_string(),
@@ -24226,7 +24296,6 @@ fn function_type_helpers_preserve_nested_generic_shape_and_capability_diagnostic
                 ty: Type::named("int32"),
                 passing: ReceiverKind::Borrow,
                 has_default: false,
-                default_erased: true,
             }],
             return_type: Box::new(Type::TypeParam("U".to_string())),
         }),
@@ -24245,7 +24314,6 @@ fn function_type_helpers_preserve_nested_generic_shape_and_capability_diagnostic
             ty: Type::named("int32"),
             passing: ReceiverKind::BorrowMut,
             has_default: true,
-            default_erased: false,
         }],
         return_type: Box::new(Type::Named("list".to_string(), vec![Type::named("str")])),
     };
@@ -24283,7 +24351,6 @@ fn function_type_helpers_preserve_nested_generic_shape_and_capability_diagnostic
             ty: Type::named("int32"),
             passing: ReceiverKind::Value,
             has_default: false,
-            default_erased: false,
         }],
         return_type: Box::new(Type::Named("list".to_string(), vec![Type::named("str")])),
     };
@@ -25238,7 +25305,6 @@ fn closure_type_keeps_compact_runtime_layout_and_stable_serialization() {
             ty: Type::named("int32"),
             passing: ReceiverKind::Borrow,
             has_default: false,
-            default_erased: false,
         }]),
         return_type: Box::new(Type::named("str")),
         captures: Box::new(vec![ClosureCapture {
@@ -25265,10 +25331,6 @@ fn closure_type_keeps_compact_runtime_layout_and_stable_serialization() {
         &mut HashMap::new(),
     ));
     assert!(!has_unresolved_type_params(&closure));
-    assert!(matches!(
-        erase_type_callable_contracts(&closure),
-        Type::Closure { .. }
-    ));
 
     assert!(
         std::mem::size_of::<Type>() <= 48,
@@ -25291,8 +25353,7 @@ fn closure_type_keeps_compact_runtime_layout_and_stable_serialization() {
                     "name": "value",
                     "ty": {"Named": ["int32", []]},
                     "passing": "Borrow",
-                    "has_default": false,
-                    "default_erased": false
+                    "has_default": false
                 }],
                 "return_type": {"Named": ["str", []]},
                 "captures": [{
@@ -25592,7 +25653,7 @@ def main():
     assert_eq!(consuming.code, "AU2002");
     assert_eq!(
         consuming.message,
-        "`list.map` callback must be repeatable, found `consuming closure def(int64) -> int64`"
+        "`list.map` callback must be repeatable, found `consuming closure def(value: int64) -> int64`"
     );
 
     let non_callable = crate::check_source("def main():\n    values = [1]\n    values.map(1)\n")
@@ -26115,7 +26176,7 @@ def main():
         .next()
         .expect("default lambda metadata");
     assert!(closure.captures.is_empty());
-    assert_eq!(closure.ty().to_string(), "def(int64) -> int64");
+    assert_eq!(closure.ty().to_string(), "def(value: int64) -> int64");
 
     let diagnostic = crate::check_source(
         r#"
@@ -30582,7 +30643,6 @@ fn source_type_refs_round_trip_every_complete_type_shape() {
                 ty: Type::Tuple(vec![Type::TypeParam("T".to_string()), union.clone()]),
                 passing: ReceiverKind::Value,
                 has_default: false,
-                default_erased: false,
             },
             FunctionParamContract {
                 keyword_only: true,
@@ -30590,7 +30650,6 @@ fn source_type_refs_round_trip_every_complete_type_shape() {
                 ty: Type::Named("list".to_string(), vec![Type::named("int64")]),
                 passing: ReceiverKind::BorrowMut,
                 has_default: true,
-                default_erased: false,
             },
             FunctionParamContract {
                 keyword_only: false,
@@ -30598,7 +30657,6 @@ fn source_type_refs_round_trip_every_complete_type_shape() {
                 ty: Type::named("str"),
                 passing: ReceiverKind::Borrow,
                 has_default: false,
-                default_erased: false,
             },
         ],
         return_type: Box::new(Type::Unit),
@@ -30650,7 +30708,6 @@ fn closure_types_have_canonical_keys_and_empty_unions_are_rejected() {
             ty: Type::named("int64"),
             passing: ReceiverKind::Borrow,
             has_default: false,
-            default_erased: false,
         }]),
         return_type: Box::new(Type::named("str")),
         captures: Box::new(vec![ClosureCapture {

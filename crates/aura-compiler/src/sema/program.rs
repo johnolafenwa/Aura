@@ -1439,8 +1439,19 @@ pub(crate) fn check_with_context(module: Module, context: ModuleContext) -> Resu
                 substitute_type(&trait_method.signature.return_type, &trait_substitutions);
             let params_have_matching_passing =
                 param_passings == trait_method.signature.param_passings;
+            let keyword_boundaries_match =
+                method
+                    .params
+                    .iter()
+                    .map(|param| param.keyword_only)
+                    .eq(trait_method
+                        .decl
+                        .params
+                        .iter()
+                        .map(|param| param.keyword_only));
             if params != expected_params
                 || !params_have_matching_passing
+                || !keyword_boundaries_match
                 || return_type != expected_return_type
                 || view_return_contract_key(method) != view_return_contract_key(&trait_method.decl)
             {

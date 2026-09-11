@@ -111,8 +111,17 @@ print(subtract(left=10, right=3))
 print(subtract(10, right=3))
 ```
 
-Function parameters remain positionally bindable. A `*` keyword-only marker
-is not part of Aura 0.3's structural callable model and receives `AU1101`.
+A `*` in the parameter list makes the parameters after it keyword-only: they
+bind by name only, so a positional argument that would reach one is an
+`AU2004` error.
+
+```aura check-pass
+def scale(value: int32, *, factor: int32 = 2) -> int32:
+    return value * factor
+
+print(scale(4))
+print(scale(4, factor=3))
+```
 
 Rules:
 

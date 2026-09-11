@@ -1,0 +1,9 @@
+def increment(value: int64) -> int64:
+    return value + 1
+
+def double(amount: int64) -> int64:
+    return amount * 2
+
+def main():
+    selected = increment if true else double
+    print(selected(1))

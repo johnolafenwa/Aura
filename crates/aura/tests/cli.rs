@@ -752,12 +752,14 @@ fn adr0038_cfg_view_module(reverse_branch_storage: bool, include_dead_loan: bool
                 passing: MirReceiverKind::BorrowMut,
                 ty: pair_type.clone(),
                 default_function: None,
+                keyword_only: false,
             },
             MirParam {
                 name: "choose_left".to_string(),
                 passing: MirReceiverKind::Borrow,
                 ty: Type::named("bool"),
                 default_function: None,
+                keyword_only: false,
             },
         ],
         local_types: vec![
@@ -964,6 +966,7 @@ fn adr0038_set_capture_function() -> MirFunction {
             passing: MirReceiverKind::BorrowMut,
             ty: Type::named("int64"),
             default_function: None,
+            keyword_only: false,
         }],
         local_types: vec![MirLocalType {
             name: "captured".to_string(),
@@ -1154,12 +1157,14 @@ fn adr0038_choose_pair_field_function() -> MirFunction {
                 passing: MirReceiverKind::BorrowMut,
                 ty: Type::named("Pair"),
                 default_function: None,
+                keyword_only: false,
             },
             MirParam {
                 name: "left".to_string(),
                 passing: MirReceiverKind::Borrow,
                 ty: Type::named("bool"),
                 default_function: None,
+                keyword_only: false,
             },
         ],
         local_types: vec![

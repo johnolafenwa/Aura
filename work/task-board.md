@@ -108,8 +108,17 @@ Last updated: 2026-09-10
   writeback first); every other extern union is AU2010; the direct call spec
   is version 1; and the direct FFI helper now reports engine failures as
   AU4005 instead of aborting while unwinding through generated code.
-- Next: commit the nullable-handle FFI family, then the callable families,
-  editor/docs/reference-agent updates, full gates and integration.
+- Callable contracts family (2026-09-11): callable types, declarations, and
+  lambdas carry complete contracts (names, one `*` keyword-only boundary,
+  `= ...` default promises); a written destination admits only safe
+  restrictions, inference never invents a common contract (AU2015),
+  keyword-only binding is enforced (AU2004), a thin alias call adapts a
+  function value explicitly, trait conformance compares the boundary, and the
+  validator checks admission at every callable boundary; schema 12.
+- Next: commit the callable contracts family, then callable packing and call
+  kinds, TaskCallable targets, bound methods, stored argument-origin views,
+  Shared callback sites, editor/docs/reference-agent updates, full gates and
+  integration.
 - Option removal and all phase 2 signature changes remain excluded; protected
   user files and coverage floors remain unchanged.
 - Work and handoff ledger: [2026-09-09-batch-1-phase-1.md](2026-09-09-batch-1-phase-1.md).

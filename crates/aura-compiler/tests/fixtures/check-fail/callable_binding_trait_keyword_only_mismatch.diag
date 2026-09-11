@@ -1,0 +1,5 @@
+error[AU2999]: method `apply` in impl of `Scaler` does not match the trait signature
+ --> crates/aura-compiler/tests/fixtures/check-fail/callable_binding_trait_keyword_only_mismatch.au:8:5
+  |
+8 |     def apply(self, value: int64, factor: int64) -> int64:
+  |     ^

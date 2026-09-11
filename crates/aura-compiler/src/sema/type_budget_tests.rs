@@ -153,7 +153,6 @@ fn function_and_closure_metadata_are_part_of_the_budgeted_tree() {
         ty: Type::Unit,
         passing: ReceiverKind::Borrow,
         has_default: false,
-        default_erased: false,
         keyword_only: false,
     };
     let template = Type::Closure {
@@ -226,7 +225,6 @@ fn canonical_key_preflight_accepts_bounded_callable_metadata() {
             ty: Type::named("int64"),
             passing: ReceiverKind::BorrowMut,
             has_default: true,
-            default_erased: false,
             keyword_only: false,
         }],
         return_type: Box::new(Type::Unit),
@@ -451,7 +449,6 @@ fn canonical_key_shape_counts_closure_parameters_and_captures() {
             ty: Type::named("int64"),
             passing: ReceiverKind::BorrowMut,
             has_default: true,
-            default_erased: true,
         }]),
         return_type: Box::new(Type::Tuple(vec![Type::Unit, Type::named("str")])),
         captures: Box::new(vec![

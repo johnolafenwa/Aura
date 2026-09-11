@@ -1,0 +1,6 @@
+error[AU2015]: callable contract mismatch: parameter `value` would be renamed to `other`; renaming requires an explicit wrapper
+ --> crates/aura-compiler/tests/fixtures/check-fail/callable_binding_invalid_alias_restriction.au:7:18
+  |
+7 |     step = Named(increment)
+  |                  ^
+  = help: annotate the destination with a contract every value satisfies, or adapt a value explicitly through a thin callable alias call such as `Alias(function)`

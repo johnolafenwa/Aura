@@ -1,0 +1,5 @@
+error[AU2004]: parameter `factor` of function `scale` is keyword-only
+ --> crates/aura-compiler/tests/fixtures/check-fail/callable_binding_keyword_only_positional.au:5:20
+  |
+5 |     print(scale(2, 3))
+  |                    ^

@@ -439,7 +439,6 @@ fn check_key_shape(
                         &mut bytes,
                         receiver_kind_json_len(param.passing)
                             + bool_json_len(param.has_default)
-                            + bool_json_len(param.default_erased)
                             + bool_json_len(param.keyword_only),
                         byte_limit,
                         span,
@@ -483,7 +482,6 @@ fn check_key_shape(
                         &mut bytes,
                         receiver_kind_json_len(param.passing)
                             + bool_json_len(param.has_default)
-                            + bool_json_len(param.default_erased)
                             + bool_json_len(param.keyword_only),
                         byte_limit,
                         span,

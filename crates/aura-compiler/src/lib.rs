@@ -86,7 +86,7 @@ pub const MAX_INTERNAL_DIAGNOSTIC_BYTES: usize = 1024 * 1024;
 /// Every persisted artifact or long-lived tooling cache that can contain
 /// compiler semantic metadata must bind this value. Bump it whenever the
 /// meaning or representation of checked source changes incompatibly.
-pub const SEMANTIC_INTERFACE_SCHEMA_VERSION: u32 = 11;
+pub const SEMANTIC_INTERFACE_SCHEMA_VERSION: u32 = 12;
 
 /// Lowercase hexadecimal SHA-256 of `bytes`, for content-addressed identities.
 pub fn sha256_hex(bytes: &[u8]) -> String {
@@ -1078,7 +1078,6 @@ fn qualify_export_type(program: &Program, ty: &sema::Type) -> sema::Type {
                     ty: qualify_export_type(program, &param.ty),
                     passing: param.passing,
                     has_default: param.has_default,
-                    default_erased: param.default_erased,
                 })
                 .collect(),
             return_type: Box::new(qualify_export_type(program, return_type)),
@@ -1098,7 +1097,6 @@ fn qualify_export_type(program: &Program, ty: &sema::Type) -> sema::Type {
                         ty: qualify_export_type(program, &param.ty),
                         passing: param.passing,
                         has_default: param.has_default,
-                        default_erased: param.default_erased,
                     })
                     .collect(),
             ),
@@ -1621,7 +1619,6 @@ fn exported_namespace(path: &[String], program: &Program) -> ModuleNamespace {
                         ty: qualify_export_type(program, &param.ty),
                         passing: param.passing,
                         has_default: param.has_default,
-                        default_erased: param.default_erased,
                     })
                     .collect();
                 qualified.return_type = qualify_export_type(program, &qualified.return_type);

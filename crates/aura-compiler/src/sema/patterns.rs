@@ -1159,7 +1159,6 @@ impl FunctionChecker<'_> {
                             return Err(Diagnostic::at(arm.value.span,
                                 format!("match arm expression expects `{expected_ty}`, found `{arm_ty}`")));
                         }
-                        result_ty = Some(merge_type_callable_contracts(expected_ty, &arm_ty));
                     } else {
                         result_ty = Some(arm_ty);
                     }
@@ -1406,7 +1405,6 @@ impl FunctionChecker<'_> {
                                 ),
                             ));
                         }
-                        result_ty = Some(merge_type_callable_contracts(expected_ty, &arm_ty));
                     } else {
                         result_ty = Some(arm_ty);
                     }
@@ -1623,7 +1621,6 @@ impl FunctionChecker<'_> {
                             ),
                         ));
                     }
-                    result_ty = Some(merge_type_callable_contracts(expected_ty, &arm_ty));
                 } else {
                     result_ty = Some(arm_ty);
                 }

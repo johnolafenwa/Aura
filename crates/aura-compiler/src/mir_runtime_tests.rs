@@ -44,7 +44,6 @@ fn test_function_operand(name: &str, params: Vec<Type>, return_type: Type) -> Op
                     ty,
                     passing: crate::ast::ReceiverKind::Value,
                     has_default: false,
-                    default_erased: false,
                 })
                 .collect(),
             return_type: Box::new(return_type),
@@ -8901,12 +8900,14 @@ fn mir_runtime_argument_binding_helpers_cover_named_and_positional_cases() {
             passing: crate::mir::MirReceiverKind::Value,
             ty: Type::named("int32"),
             default_function: None,
+            keyword_only: false,
         },
         MirParam {
             name: "right".to_string(),
             passing: crate::mir::MirReceiverKind::Value,
             ty: Type::named("int32"),
             default_function: None,
+            keyword_only: false,
         },
     ];
     let rebound = bind_args(&params, bound.clone()).expect("mir params should bind");
@@ -9078,6 +9079,7 @@ fn mir_runtime_function_binding_reports_missing_and_invalid_writeback_arguments(
         passing: MirReceiverKind::BorrowMut,
         ty: Type::named("int64"),
         default_function: None,
+        keyword_only: false,
     }];
     assert!(bind_args(&params, Vec::new())
         .map(|_| ())
@@ -9664,12 +9666,14 @@ fn mir_runtime_writeback_and_spawn_helpers_cover_borrow_mut_edges() {
             passing: crate::mir::MirReceiverKind::Borrow,
             ty: Type::named("int32"),
             default_function: None,
+            keyword_only: false,
         },
         MirParam {
             name: "target".to_string(),
             passing: crate::mir::MirReceiverKind::BorrowMut,
             ty: Type::named("int32"),
             default_function: None,
+            keyword_only: false,
         },
     ];
     let writeback_places = vec![None, Some("target".to_string())];
@@ -9716,6 +9720,7 @@ fn mir_runtime_writeback_and_spawn_helpers_cover_borrow_mut_edges() {
                 passing: crate::mir::MirReceiverKind::BorrowMut,
                 ty: Type::named("str"),
                 default_function: None,
+                keyword_only: false,
             }],
             &[Some("text_target".to_string())],
             vec![(0, Value::String(text))],
@@ -9745,6 +9750,7 @@ fn mir_runtime_writeback_and_spawn_helpers_cover_borrow_mut_edges() {
             passing: crate::mir::MirReceiverKind::Value,
             ty: Type::named("int32"),
             default_function: None,
+            keyword_only: false,
         }],
         local_types: Vec::new(),
         return_type: Type::named("int32"),
@@ -9761,6 +9767,7 @@ fn mir_runtime_writeback_and_spawn_helpers_cover_borrow_mut_edges() {
                 passing: crate::mir::MirReceiverKind::Borrow,
                 ty: Type::named("str"),
                 default_function: None,
+                keyword_only: false,
             }],
             ..by_value.clone()
         })
@@ -9772,6 +9779,7 @@ fn mir_runtime_writeback_and_spawn_helpers_cover_borrow_mut_edges() {
                 passing: crate::mir::MirReceiverKind::BorrowMut,
                 ty: Type::named("int32"),
                 default_function: None,
+                keyword_only: false,
             }],
             ..by_value
         })
@@ -12861,6 +12869,7 @@ fn mir_runtime_mutating_member_calls_write_back_receivers_and_params() {
                 passing: crate::mir::MirReceiverKind::BorrowMut,
                 ty: Type::named("int32"),
                 default_function: None,
+                keyword_only: false,
             }],
             local_types: Vec::new(),
             return_type: Type::Unit,
@@ -12913,6 +12922,7 @@ fn mir_runtime_mutating_member_calls_write_back_receivers_and_params() {
                 passing: crate::mir::MirReceiverKind::BorrowMut,
                 ty: Type::named("bool"),
                 default_function: None,
+                keyword_only: false,
             }],
             local_types: Vec::new(),
             return_type: Type::Unit,
@@ -13435,6 +13445,7 @@ fn mir_runtime_try_error_conversion_helpers_cover_context_and_from_paths() {
             passing: crate::mir::MirReceiverKind::Value,
             ty: Type::named("int32"),
             default_function: None,
+            keyword_only: false,
         }],
         local_types: Vec::new(),
         return_type: Type::named("str"),
@@ -18026,6 +18037,7 @@ fn mir_runtime_entrypoint_call_and_type_helpers_cover_remaining_edges() {
             passing: crate::mir::MirReceiverKind::BorrowMut,
             ty: Type::named("int32"),
             default_function: None,
+            keyword_only: false,
         }],
         local_types: vec![MirLocalType {
             name: "temp".to_string(),
@@ -19378,7 +19390,6 @@ fn mir_function_value_runtime_moves_owned_args_writes_back_mut_args_and_traps_ba
             ty: string_type.clone(),
             passing: crate::ast::ReceiverKind::Value,
             has_default: false,
-            default_erased: false,
         }],
         return_type: Box::new(string_type.clone()),
     };
@@ -19393,6 +19404,7 @@ fn mir_function_value_runtime_moves_owned_args_writes_back_mut_args_and_traps_ba
             passing: crate::mir::MirReceiverKind::Value,
             ty: string_type.clone(),
             default_function: None,
+            keyword_only: false,
         }],
         local_types: Vec::new(),
         return_type: string_type.clone(),
@@ -19412,7 +19424,6 @@ fn mir_function_value_runtime_moves_owned_args_writes_back_mut_args_and_traps_ba
             ty: int_type.clone(),
             passing: crate::ast::ReceiverKind::BorrowMut,
             has_default: false,
-            default_erased: false,
         }],
         return_type: Box::new(Type::Unit),
     };
@@ -19427,6 +19438,7 @@ fn mir_function_value_runtime_moves_owned_args_writes_back_mut_args_and_traps_ba
             passing: crate::mir::MirReceiverKind::BorrowMut,
             ty: int_type.clone(),
             default_function: None,
+            keyword_only: false,
         }],
         local_types: vec![MirLocalType {
             name: "next".to_string(),
@@ -19569,6 +19581,7 @@ fn mir_function_value_runtime_rejects_missing_targets_defaults_and_malformed_tas
         passing: crate::mir::MirReceiverKind::Value,
         ty: int_type.clone(),
         default_function: default_function.map(str::to_string),
+        keyword_only: false,
     };
     let function = |name: &str, params: Vec<MirParam>| MirFunction {
         name: name.to_string(),
@@ -19750,7 +19763,6 @@ fn mir_function_value_runtime_type_parameter_discovery_descends_into_signatures(
         ty,
         passing: crate::ast::ReceiverKind::Value,
         has_default: false,
-        default_erased: true,
     };
     let signature = Type::Function {
         params: vec![contract(Type::TypeParam("CallbackInput".to_string()))],
@@ -19848,12 +19860,14 @@ fn mir_runtime_closure_environment_is_by_value_repeatable_and_one_shot_when_cons
         passing: crate::mir::MirReceiverKind::Borrow,
         ty: int_type.clone(),
         default_function: None,
+        keyword_only: false,
     };
     let owned_string_param = |name: &str| MirParam {
         name: name.to_string(),
         passing: crate::mir::MirReceiverKind::Value,
         ty: string_type.clone(),
         default_function: None,
+        keyword_only: false,
     };
     let repeatable_body = MirFunction {
         name: "main::__lambda_1".to_string(),
@@ -19933,7 +19947,6 @@ fn mir_runtime_closure_environment_is_by_value_repeatable_and_one_shot_when_cons
             ty: int_type.clone(),
             passing: crate::ast::ReceiverKind::Borrow,
             has_default: false,
-            default_erased: false,
         }]),
         return_type: Box::new(int_type.clone()),
         captures: Box::new(vec![crate::sema::ClosureCapture {

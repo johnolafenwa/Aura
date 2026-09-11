@@ -2009,8 +2009,7 @@ fn forged_untyped_indirect_borrowed_closure_call(with_unknown_type: bool) -> Mir
     let callable = json!({ "Function": { "params": [{
         "name": "job", "ty": { "Function": { "params": [],
             "return_type": { "Named": ["int64", []] }}},
-        "passing": "Value", "has_default": false, "default_erased": false,
-        "keyword_only": false
+        "passing": "Value", "has_default": false, "keyword_only": false
     }], "return_type": { "Named": ["unit", []] }}});
     consume["name"] = json!("consume");
     consume["params"] = json!([{ "name": "job", "ty": { "Function": {
@@ -2194,7 +2193,7 @@ fn tuple_wrapper_cannot_erase_an_authoritative_indirect_function_contract() {
         .unwrap();
     let forged = json!({ "Function": { "params": [{
         "name": "item", "ty": { "Named": ["int64", []] }, "passing": "Value",
-        "has_default": false, "default_erased": false, "keyword_only": false
+        "has_default": false, "keyword_only": false
     }], "return_type": { "Named": ["unit", []] }}});
     inspect["local_types"].as_array_mut().unwrap().push(json!({
         "name": "%t996", "ty": { "Tuple": [forged.clone()] }
@@ -2225,7 +2224,7 @@ fn construct_member_cannot_erase_an_authoritative_indirect_function_contract() {
         .unwrap();
     let forged = json!({ "Function": { "params": [{
         "name": "item", "ty": { "Named": ["int64", []] }, "passing": "Value",
-        "has_default": false, "default_erased": false, "keyword_only": false
+        "has_default": false, "keyword_only": false
     }], "return_type": { "Named": ["unit", []] }}});
     inspect["local_types"].as_array_mut().unwrap().extend([
         json!({ "name": "%t996", "ty": { "Named": ["Runner", []] }}),
@@ -2269,8 +2268,7 @@ fn enum_payload_wrapper_cannot_erase_an_authoritative_callable_subtree() {
     let weak = json!({ "Function": { "params": [{
         "name": "job", "ty": { "Function": { "params": [],
             "return_type": { "Named": ["int64", []] }}},
-        "passing": "Borrow", "has_default": false, "default_erased": false,
-        "keyword_only": false
+        "passing": "Borrow", "has_default": false, "keyword_only": false
     }], "return_type": { "Named": ["unit", []] }}});
     let tuple = json!({ "Tuple": [actual.clone()] });
     encoded["enums"].as_array_mut().unwrap().push(json!({
@@ -2364,8 +2362,7 @@ fn union_payload_wrapper_cannot_erase_an_authoritative_callable_subtree() {
     let weak = json!({ "Function": { "params": [{
         "name": "job", "ty": { "Function": { "params": [],
             "return_type": { "Named": ["int64", []] }}},
-        "passing": "Borrow", "has_default": false, "default_erased": false,
-        "keyword_only": false
+        "passing": "Borrow", "has_default": false, "keyword_only": false
     }], "return_type": { "Named": ["unit", []] }}});
     // The transplanted union brings its explicit-tag layout plan along, so
     // the forged module fails on the callable contract rather than on a
@@ -2532,17 +2529,17 @@ fn forged_higher_order_callable_downgrade(start_task: bool) -> MirModule {
     let holder = json!({ "Named": ["Holder", []] });
     let actual_signature = json!({ "Function": { "params": [{
         "name": "item", "ty": holder.clone(), "passing": "Value",
-        "has_default": false, "default_erased": false, "keyword_only": false
+        "has_default": false, "keyword_only": false
     }], "return_type": { "Named": ["unit", []] }}});
     let weakened_signature = json!({ "Function": { "params": [{
         "name": "item", "ty": holder.clone(), "passing": "Borrow",
-        "has_default": false, "default_erased": false, "keyword_only": false
+        "has_default": false, "keyword_only": false
     }], "return_type": { "Named": ["unit", []] }}});
     let invoke_signature = json!({ "Function": { "params": [
         { "name": "callback", "ty": weakened_signature.clone(), "passing": "Borrow",
-            "has_default": false, "default_erased": false, "keyword_only": false },
+            "has_default": false, "keyword_only": false },
         { "name": "value", "ty": holder.clone(), "passing": "Borrow",
-            "has_default": false, "default_erased": false, "keyword_only": false }
+            "has_default": false, "keyword_only": false }
     ], "return_type": { "Named": ["unit", []] }}});
     let mut consume = template.clone();
     consume["name"] = json!("consume");
@@ -2739,7 +2736,7 @@ fn forged_callable_loan_transfer(write: bool) -> MirModule {
             "name": "job", "ty": { "Function": { "params": [],
                 "return_type": { "Named": ["int64", []] }}},
             "passing": "Value", "has_default": false,
-            "default_erased": false, "keyword_only": false
+            "keyword_only": false
         }], "return_type": { "Named": ["unit", []] }}}
     }));
     let instructions = inspect["blocks"][0]["instructions"].as_array_mut().unwrap();
@@ -2791,8 +2788,7 @@ fn aggregate_write_loan_preserves_authoritative_callable_subtrees() {
     let weak = json!({ "Function": { "params": [{
         "name": "job", "ty": { "Function": { "params": [],
             "return_type": { "Named": ["int64", []] }}},
-        "passing": "Borrow", "has_default": false, "default_erased": false,
-        "keyword_only": false
+        "passing": "Borrow", "has_default": false, "keyword_only": false
     }], "return_type": { "Named": ["unit", []] }}});
     let tuple = json!({ "Tuple": [weak.clone()] });
     let _ = instructions;
@@ -2966,7 +2962,6 @@ fn forged_closure_named_parameter_metadata_is_rejected_by_common_validation() {
     };
     let contract = signature.get_mut(signature_kind).unwrap();
     contract["params"][0]["name"] = json!("forged");
-    contract["params"][0]["default_erased"] = json!(false);
     let mir: MirModule = serde_json::from_value(encoded).unwrap();
     let interpreted =
         run_mir(&mir).expect_err("common validation must reject forged parameter names");

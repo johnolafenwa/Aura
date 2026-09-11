@@ -1699,7 +1699,6 @@ fn module_loader_helper_functions_cover_namespace_and_export_paths() {
                     ty: crate::sema::Type::named("Box"),
                     passing: crate::ast::ReceiverKind::BorrowMut,
                     has_default: true,
-                    default_erased: false,
                 },
                 crate::sema::FunctionParamContract {
                     keyword_only: false,
@@ -1707,7 +1706,6 @@ fn module_loader_helper_functions_cover_namespace_and_export_paths() {
                     ty: crate::sema::Type::Tuple(vec![crate::sema::Type::named("Remote")]),
                     passing: crate::ast::ReceiverKind::Value,
                     has_default: false,
-                    default_erased: true,
                 },
             ],
             return_type: Box::new(crate::sema::Type::Function {
@@ -1726,7 +1724,6 @@ fn module_loader_helper_functions_cover_namespace_and_export_paths() {
                     ty: crate::sema::Type::named("pkg.user.Box"),
                     passing: crate::ast::ReceiverKind::BorrowMut,
                     has_default: true,
-                    default_erased: false,
                 },
                 crate::sema::FunctionParamContract {
                     keyword_only: false,
@@ -1736,7 +1733,6 @@ fn module_loader_helper_functions_cover_namespace_and_export_paths() {
                     )]),
                     passing: crate::ast::ReceiverKind::Value,
                     has_default: false,
-                    default_erased: true,
                 },
             ],
             return_type: Box::new(crate::sema::Type::Function {
@@ -1980,7 +1976,7 @@ fn exported_callable_types_are_qualified_in_imported_analysis_hovers() {
         .collect::<Vec<_>>();
     assert!(
         hovers.contains(
-            &"```aura\nbinding selected: def(def(own pkg.api.Token) -> pkg.api.Token) -> def(own pkg.api.Token) -> pkg.api.Token\n```"
+            &"```aura\nbinding selected: def(transform: def(own pkg.api.Token) -> pkg.api.Token) -> def(own pkg.api.Token) -> pkg.api.Token\n```"
         ),
         "the imported higher-order function value must expose qualified parameter and return types: {hovers:?}"
     );

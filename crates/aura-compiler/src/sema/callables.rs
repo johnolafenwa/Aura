@@ -36,18 +36,18 @@ pub(super) struct LambdaTypingRequest<'a> {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct FunctionParamContract {
     pub keyword_only: bool,
-    /// Empty for a written `def(T) -> R` type, which has no parameter-name
-    /// contract. Inferred values retain the declaration name.
+    /// Empty for an explicit positional-only slot of a written
+    /// `def(T) -> R` type; a named slot or an inferred value carries the
+    /// exposed name. Names, the keyword-only boundary, and default
+    /// availability are part of the complete callable contract (Q17 A,
+    /// Q19 A); ABI equality of `Type` ignores them.
     pub name: String,
     pub ty: Type,
     pub passing: ReceiverKind,
+    /// True when the contract promises a default for this slot (`= ...` in
+    /// a written type, or a declaration default). Only the selected target
+    /// supplies the default expression.
     pub has_default: bool,
-    /// True when a default may have existed before a type join or storage
-    /// boundary erased that promise. This distinguishes an unavailable
-    /// default contract (AU2003) from an originally required parameter
-    /// omitted at an ordinary call (AU2004).
-    #[serde(default)]
-    pub default_erased: bool,
 }
 
 /// The callable body that lexically owns a lambda expression.
@@ -350,16 +350,193 @@ pub(super) fn closure_signature_matches_function(closure: &Type, function: &Type
         && closure_return == function_return
 }
 
-/// Joins the non-structural callable contract carried alongside a type.
-///
-/// Function names and default availability are usable only when every
-/// possible runtime value agrees. Written function types carry empty names
-/// and no defaults, so joining through an erased annotation stays erased.
-pub(super) fn merge_type_callable_contracts(left: &Type, right: &Type) -> Type {
-    debug_assert!(
-        left == right,
-        "callable contract joins require one structural type"
-    );
+/// Synthetic name of a positional-only contract slot while binding a call
+/// through a function value; user arguments can never spell it.
+pub(crate) const POSITIONAL_ONLY_SLOT_PREFIX: &str = "__positional_slot_";
+
+/// Rewrites binder diagnostics that name a synthetic positional-only slot.
+pub(crate) fn describe_positional_only_slots(mut diagnostic: Diagnostic) -> Diagnostic {
+    if let Some(start) = diagnostic.message.find(POSITIONAL_ONLY_SLOT_PREFIX) {
+        let rest = &diagnostic.message[start + POSITIONAL_ONLY_SLOT_PREFIX.len()..];
+        let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+        if !digits.is_empty() {
+            let spelled = format!("`{POSITIONAL_ONLY_SLOT_PREFIX}{digits}`");
+            diagnostic.message = diagnostic
+                .message
+                .replace(
+                    &format!("argument {spelled}"),
+                    &format!("positional argument {digits}"),
+                )
+                .replace(&spelled, &format!("positional argument {digits}"));
+        }
+    }
+    diagnostic
+}
+
+/// Describes one contract slot for diagnostics.
+fn contract_slot_label(contract: &FunctionParamContract, index: usize) -> String {
+    if contract.name.is_empty() {
+        format!("positional parameter {}", index + 1)
+    } else {
+        format!("parameter `{}`", contract.name)
+    }
+}
+
+/// Explains why a value with the `actual` slot contract cannot stand where
+/// the `expected` slot contract is written (Q17 A). A written destination may
+/// hide an exposed name, drop default availability, or restrict a named
+/// positional-or-keyword slot to keyword-only. It cannot make a keyword-only
+/// slot positional, rename a slot, or promise a default the source lacks.
+/// Parameter types and capabilities are compared by the caller.
+pub(crate) fn callable_slot_admission(
+    expected: &FunctionParamContract,
+    actual: &FunctionParamContract,
+    index: usize,
+) -> std::result::Result<(), String> {
+    if expected.keyword_only {
+        if actual.name.is_empty() {
+            return Err(format!(
+                "{} is positional-only, but the destination makes it keyword-only `{}`",
+                contract_slot_label(actual, index),
+                expected.name
+            ));
+        }
+        if actual.name != expected.name {
+            return Err(format!(
+                "keyword-only parameter `{}` would be renamed to `{}`; renaming requires an explicit wrapper",
+                actual.name, expected.name
+            ));
+        }
+    } else {
+        if actual.keyword_only {
+            return Err(format!(
+                "parameter `{}` is keyword-only and cannot become positional",
+                actual.name
+            ));
+        }
+        if !expected.name.is_empty() {
+            if actual.name.is_empty() {
+                return Err(format!(
+                    "{} has no exposed name, but the destination names it `{}`",
+                    contract_slot_label(actual, index),
+                    expected.name
+                ));
+            }
+            if actual.name != expected.name {
+                return Err(format!(
+                    "parameter `{}` would be renamed to `{}`; renaming requires an explicit wrapper",
+                    actual.name, expected.name
+                ));
+            }
+        }
+    }
+    if expected.has_default && !actual.has_default {
+        return Err(format!(
+            "the destination promises a default for {}, which the source does not declare",
+            contract_slot_label(expected, index)
+        ));
+    }
+    Ok(())
+}
+
+/// Checks that every slot of `actual` may stand where `expected` is written,
+/// including parameter types and capabilities.
+pub(crate) fn callable_contract_admission(
+    expected: &[FunctionParamContract],
+    actual: &[FunctionParamContract],
+) -> std::result::Result<(), String> {
+    if expected.len() != actual.len() {
+        return Err(format!(
+            "expected {} parameter{}, found {}",
+            expected.len(),
+            if expected.len() == 1 { "" } else { "s" },
+            actual.len()
+        ));
+    }
+    for (index, (expected, actual)) in expected.iter().zip(actual).enumerate() {
+        if expected.ty != actual.ty || expected.passing != actual.passing {
+            return Err(format!(
+                "{} has a different type or capability",
+                contract_slot_label(expected, index)
+            ));
+        }
+        callable_slot_admission(expected, actual, index)?;
+    }
+    Ok(())
+}
+
+/// Walks two ABI-equal types and checks every callable position: the value's
+/// complete contract must be admitted by the written destination contract.
+pub(crate) fn check_callable_positions(
+    expected: &Type,
+    actual: &Type,
+) -> std::result::Result<(), String> {
+    match (expected, actual) {
+        (
+            Type::Function {
+                params: expected_params,
+                return_type: expected_return,
+            },
+            Type::Function {
+                params: actual_params,
+                return_type: actual_return,
+            },
+        ) => {
+            callable_contract_admission(expected_params, actual_params)?;
+            check_callable_positions(expected_return, actual_return)
+        }
+        (
+            Type::Function {
+                params: expected_params,
+                return_type: expected_return,
+            },
+            Type::Closure {
+                params: actual_params,
+                return_type: actual_return,
+                ..
+            },
+        ) => {
+            callable_contract_admission(expected_params, actual_params)?;
+            check_callable_positions(expected_return, actual_return)
+        }
+        (
+            Type::Closure {
+                params: expected_params,
+                return_type: expected_return,
+                ..
+            },
+            Type::Closure {
+                params: actual_params,
+                return_type: actual_return,
+                ..
+            },
+        ) => {
+            callable_contract_admission(expected_params, actual_params)?;
+            check_callable_positions(expected_return, actual_return)
+        }
+        (Type::Tuple(expected), Type::Tuple(actual)) => expected
+            .iter()
+            .zip(actual)
+            .try_for_each(|(expected, actual)| check_callable_positions(expected, actual)),
+        (Type::Named(_, expected), Type::Named(_, actual)) => expected
+            .iter()
+            .zip(actual)
+            .try_for_each(|(expected, actual)| check_callable_positions(expected, actual)),
+        (Type::Union(expected), Type::Union(actual)) => expected
+            .members
+            .iter()
+            .zip(&actual.members)
+            .try_for_each(|(expected, actual)| check_callable_positions(expected, actual)),
+        _ => Ok(()),
+    }
+}
+
+/// Requires identical complete contracts at every callable position of two
+/// ABI-equal types: an inferred join never invents a common contract.
+pub(crate) fn same_callable_contracts(
+    left: &Type,
+    right: &Type,
+) -> std::result::Result<(), String> {
     match (left, right) {
         (
             Type::Function {
@@ -370,106 +547,50 @@ pub(super) fn merge_type_callable_contracts(left: &Type, right: &Type) -> Type {
                 params: right_params,
                 return_type: right_return,
             },
-        ) => Type::Function {
-            params: left_params
+        ) => {
+            if let Some((index, (left_param, right_param))) = left_params
                 .iter()
                 .zip(right_params)
-                .map(|(left, right)| FunctionParamContract {
-                    keyword_only: left.keyword_only || right.keyword_only,
-                    name: if left.name == right.name {
-                        left.name.clone()
-                    } else {
-                        String::new()
-                    },
-                    ty: merge_type_callable_contracts(&left.ty, &right.ty),
-                    passing: left.passing,
-                    has_default: left.has_default && right.has_default,
-                    default_erased: left.default_erased
-                        || right.default_erased
-                        || left.has_default != right.has_default,
-                })
-                .collect(),
-            return_type: Box::new(merge_type_callable_contracts(left_return, right_return)),
-        },
-        (Type::Tuple(left_elements), Type::Tuple(right_elements)) => Type::Tuple(
-            left_elements
-                .iter()
-                .zip(right_elements)
-                .map(|(left, right)| merge_type_callable_contracts(left, right))
-                .collect(),
-        ),
-        (Type::Named(name, left_args), Type::Named(_, right_args)) => Type::Named(
-            name.clone(),
-            left_args
-                .iter()
-                .zip(right_args)
-                .map(|(left, right)| merge_type_callable_contracts(left, right))
-                .collect(),
-        ),
-        _ => left.clone(),
+                .enumerate()
+                .find(|(_, (left, right))| left != right)
+            {
+                return Err(format!(
+                    "{} differs from {} in its name, keyword-only boundary, or default availability",
+                    contract_slot_label(left_param, index),
+                    contract_slot_label(right_param, index)
+                ));
+            }
+            same_callable_contracts(left_return, right_return)
+        }
+        (Type::Tuple(left), Type::Tuple(right)) => left
+            .iter()
+            .zip(right)
+            .try_for_each(|(left, right)| same_callable_contracts(left, right)),
+        (Type::Named(_, left), Type::Named(_, right)) => left
+            .iter()
+            .zip(right)
+            .try_for_each(|(left, right)| same_callable_contracts(left, right)),
+        (Type::Union(left), Type::Union(right)) => left
+            .members
+            .iter()
+            .zip(&right.members)
+            .try_for_each(|(left, right)| same_callable_contracts(left, right)),
+        _ => Ok(()),
     }
 }
 
-/// Erases non-ABI callable metadata at a mutable storage boundary.
-///
-/// A collection element or class field can be replaced through an alias that
-/// is invisible to the local flow analysis. Its structural function type
-/// remains precise, but parameter names and omitted-argument availability are
-/// not sound. Exact positional calls remain available; code that needs a
-/// named/default contract must keep a separately inferred concrete function
-/// value outside mutable storage.
-pub(super) fn erase_type_callable_contracts(ty: &Type) -> Type {
-    match ty {
-        Type::Union(_) => ty.clone(),
-        Type::Function {
-            params,
-            return_type,
-        } => Type::Function {
-            params: params
-                .iter()
-                .map(|param| FunctionParamContract {
-                    keyword_only: param.keyword_only,
-                    name: String::new(),
-                    ty: erase_type_callable_contracts(&param.ty),
-                    passing: param.passing,
-                    has_default: false,
-                    default_erased: true,
-                })
-                .collect(),
-            return_type: Box::new(erase_type_callable_contracts(return_type)),
-        },
-        Type::Closure {
-            params,
-            return_type,
-            captures,
-            call_kind,
-        } => Type::Closure {
-            params: Box::new(
-                params
-                    .iter()
-                    .map(|param| FunctionParamContract {
-                        keyword_only: param.keyword_only,
-                        name: String::new(),
-                        ty: erase_type_callable_contracts(&param.ty),
-                        passing: param.passing,
-                        has_default: false,
-                        default_erased: true,
-                    })
-                    .collect(),
-            ),
-            return_type: Box::new(erase_type_callable_contracts(return_type)),
-            captures: captures.clone(),
-            call_kind: *call_kind,
-        },
-        Type::Tuple(elements) => {
-            Type::Tuple(elements.iter().map(erase_type_callable_contracts).collect())
-        }
-        Type::Named(name, args) => Type::Named(
-            name.clone(),
-            args.iter().map(erase_type_callable_contracts).collect(),
-        ),
-        Type::TypeParam(_) | Type::Module(_) | Type::Unit => ty.clone(),
-    }
+pub(crate) fn callable_contract_mismatch(
+    span: crate::diag::Span,
+    reason: impl std::fmt::Display,
+) -> Diagnostic {
+    Diagnostic::coded_at(
+        "AU2015",
+        span,
+        format!("callable contract mismatch: {reason}"),
+    )
+    .with_help(
+        "annotate the destination with a contract every value satisfies, or adapt a value explicitly through a thin callable alias call such as `Alias(function)`",
+    )
 }
 
 pub(super) fn required_ordered_arg<'a>(
@@ -528,7 +649,6 @@ impl<'a> FunctionChecker<'a> {
             ty: element_ty.clone(),
             passing: ReceiverKind::Borrow,
             has_default: false,
-            default_erased: false,
         }];
         let bool_ty = Type::named("bool");
         let callback_ty = match &callback.value.kind {
@@ -705,7 +825,10 @@ impl<'a> FunctionChecker<'a> {
                         ));
                     }
                 }
-                None if saw_default => {
+                // A required parameter may follow a defaulted one only across
+                // the `*` boundary or inside the keyword-only group, where
+                // binding is by name and order carries no meaning.
+                None if saw_default && !param.keyword_only => {
                     return Err(Diagnostic::at(
                         param.span,
                         "parameters with default arguments must come after required parameters",
@@ -938,7 +1061,47 @@ impl<'a> FunctionChecker<'a> {
                     ),
                 ));
             }
-            for (param, expected_param) in params.iter().zip(expected_params) {
+            // A written contract's exposed names, keyword-only boundary, and
+            // default promises are part of the contract a lambda must meet
+            // (Q19 A); a builtin callback context supplies only positional
+            // parameter types.
+            let contract_is_written = callable_context.is_none();
+            for (index, (param, expected_param)) in params.iter().zip(expected_params).enumerate() {
+                if contract_is_written {
+                    if expected_param.has_default {
+                        return Err(callable_contract_mismatch(
+                            param.span,
+                            format!(
+                                "a lambda cannot promise the default for {}; declare a named function",
+                                contract_slot_label(expected_param, index)
+                            ),
+                        ));
+                    }
+                    if param.keyword_only != expected_param.keyword_only {
+                        return Err(callable_contract_mismatch(
+                            param.span,
+                            format!(
+                                "lambda parameter `{}` {} the `*` keyword-only boundary, but the expected contract {}",
+                                param.name,
+                                if param.keyword_only { "follows" } else { "precedes" },
+                                if expected_param.keyword_only {
+                                    "makes it keyword-only"
+                                } else {
+                                    "keeps it positional"
+                                }
+                            ),
+                        ));
+                    }
+                    if !expected_param.name.is_empty() && param.name != expected_param.name {
+                        return Err(callable_contract_mismatch(
+                            param.span,
+                            format!(
+                                "lambda parameter `{}` must be named `{}` to meet the expected contract",
+                                param.name, expected_param.name
+                            ),
+                        ));
+                    }
+                }
                 let passing = resolve_param_passing(param.mode);
                 if passing != expected_param.passing {
                     return Err(Diagnostic::coded_at(
@@ -1181,7 +1344,6 @@ impl<'a> FunctionChecker<'a> {
                     .unwrap_or(Type::Unit),
                 passing: resolve_param_passing(param.mode),
                 has_default: false,
-                default_erased: false,
             })
             .collect::<Vec<_>>();
         for (param, contract) in params.iter().zip(&param_contracts) {
@@ -1350,7 +1512,6 @@ impl<'a> FunctionChecker<'a> {
                             ty: ty.clone(),
                             passing: *passing,
                             has_default: decl.default.is_some(),
-                            default_erased: false,
                         })
                         .collect(),
                     return_type: Box::new(function.signature.return_type.clone()),
@@ -1421,7 +1582,6 @@ impl<'a> FunctionChecker<'a> {
                     ty: substitute_type(ty, &substitutions),
                     passing: *passing,
                     has_default: decl.default.is_some(),
-                    default_erased: false,
                 })
                 .collect(),
             return_type: Box::new(substitute_type(
@@ -1441,42 +1601,33 @@ impl<'a> FunctionChecker<'a> {
         locals: &mut HashMap<String, LocalBinding>,
         expected_return: Option<&Type>,
     ) -> Result<Type> {
-        let erased_contract = params.iter().any(|param| param.name.is_empty());
-        if erased_contract && args.iter().any(|argument| argument.name.is_some()) {
-            return Err(Diagnostic::coded_at(
-                "AU2003",
-                span,
-                "this function value's named argument contract was erased at a written-type or mutable-storage boundary, or because its possible targets do not all agree",
-            )
-            .with_help(
-                "call it with the complete positional argument list, or keep one concrete named function value",
-            ));
-        }
-        let positional_omission_uses_erased_default = args.len() < params.len()
-            && params
-                .iter()
-                .skip(args.len())
-                .any(|param| param.default_erased);
-        if args.iter().all(|argument| argument.name.is_none())
-            && positional_omission_uses_erased_default
-        {
-            return Err(Diagnostic::coded_at(
-                "AU2003",
-                span,
-                format!(
-                    "this function value has an erased default contract and requires the complete positional list of {} argument{}",
-                    params.len(),
-                    if params.len() == 1 { "" } else { "s" },
-                ),
-            ));
+        if let Some((argument, name)) = args.iter().find_map(|argument| {
+            argument
+                .name
+                .as_deref()
+                .filter(|name| !params.iter().any(|param| param.name == *name))
+                .map(|name| (argument, name))
+        }) {
+            if params.iter().any(|param| param.name.is_empty()) {
+                return Err(Diagnostic::coded_at(
+                    "AU2004",
+                    argument.span,
+                    format!(
+                        "this function value's contract has no parameter named `{name}`"
+                    ),
+                )
+                .with_help(
+                    "a positional-only slot of a written `def(...)` type is called positionally; name the slot in the type to call it by name",
+                ));
+            }
         }
         let synthetic_params = params
             .iter()
             .enumerate()
             .map(|(index, param)| Param {
-                keyword_only: false,
+                keyword_only: param.keyword_only,
                 name: if param.name.is_empty() {
-                    format!("argument{}", index + 1)
+                    format!("{POSITIONAL_ONLY_SLOT_PREFIX}{}", index + 1)
                 } else {
                     param.name.clone()
                 },
@@ -1947,7 +2098,8 @@ impl<'a> FunctionChecker<'a> {
             args,
             span,
             CallConvention::PositionalOrNamed,
-        )?;
+        )
+        .map_err(describe_positional_only_slots)?;
 
         let mut substitutions = seed_substitutions;
         if let Some(expected_return) = expected_return {

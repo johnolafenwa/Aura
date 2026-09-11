@@ -82,6 +82,20 @@ silently changed. The body must have exactly the expected result type.
 Parameters are in scope only in the body and follow the ordinary no-shadowing
 rules.
 
+The expected contract's names, keyword-only boundary, and default promises
+bind the lambda too (see [Function Values](/manual/functions#function-values)).
+Where the expected slot is named, the lambda parameter must use that name;
+the lambda's `*` boundary must sit where the expected contract's does; and a
+lambda cannot satisfy a slot written `= ...`, because only a named
+declaration supplies a default. Each mismatch reports `AU2015`. A
+compiler-known callback site such as `list.map` supplies positional parameter
+types only, so its lambda parameters may use any names.
+
+```aura
+combine: def(left: int64, *, right: int64) -> int64 = lambda left, *, right: left - right
+print(combine(10, right=3))
+```
+
 The compiler does not guess parameter types from body operations. Generic
 lambdas and lambda parameter type annotations are unavailable. A capture-free
 lambda uses the ordinary function-value representation and is Copy and

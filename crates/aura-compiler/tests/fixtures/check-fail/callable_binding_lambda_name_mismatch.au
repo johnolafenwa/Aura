@@ -1,0 +1,3 @@
+def main():
+    step: def(value: int64) -> int64 = lambda other: other + 1
+    print(step(1))

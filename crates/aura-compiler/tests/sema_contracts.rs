@@ -12,14 +12,13 @@ fn exported_type_serialization_preserves_names_modes_defaults_and_nested_types()
             ty: Type::Named("Option".into(), vec![Type::TypeParam("T".into())]),
             passing: ReceiverKind::Value,
             has_default: false,
-            default_erased: true,
         }],
         return_type: Box::new(Type::Tuple(vec![Type::named("int32"), Type::Unit])),
     };
     let expected = concat!(
         "{\"Function\":{\"params\":[{\"keyword_only\":false,\"name\":\"input\",",
         "\"ty\":{\"Named\":[\"Option\",[{\"TypeParam\":\"T\"}]]},",
-        "\"passing\":\"Value\",\"has_default\":false,\"default_erased\":true}],",
+        "\"passing\":\"Value\",\"has_default\":false}],",
         "\"return_type\":{\"Tuple\":[{\"Named\":[\"int32\",[]]},\"Unit\"]}}}"
     );
     assert_eq!(serde_json::to_string(&ty).unwrap(), expected);

@@ -567,7 +567,7 @@ fn peek_function_operand(encoded: &Value) -> Value {
     json!({ "Function": { "name": "peek", "signature": { "Function": {
         "params": function["params"].as_array().unwrap().iter().map(|param| json!({
             "keyword_only": false, "name": param["name"], "ty": param["ty"], "passing": "Borrow",
-            "has_default": false, "default_erased": false })).collect::<Vec<_>>(),
+            "has_default": false })).collect::<Vec<_>>(),
         "return_type": "Unit" }}}})
 }
 

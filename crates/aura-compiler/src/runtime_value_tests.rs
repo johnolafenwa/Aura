@@ -2524,7 +2524,7 @@ fn assert_value_equals_clone(value: Value) {
     assert_eq!(value, value.clone());
 }
 
-fn function_signature(parameter_name: &str, has_default: bool, default_erased: bool) -> Type {
+fn function_signature(parameter_name: &str, has_default: bool) -> Type {
     Type::Function {
         params: vec![
             FunctionParamContract {
@@ -2533,7 +2533,6 @@ fn function_signature(parameter_name: &str, has_default: bool, default_erased: b
                 ty: Type::named("str"),
                 passing: ReceiverKind::Borrow,
                 has_default,
-                default_erased,
             },
             FunctionParamContract {
                 keyword_only: false,
@@ -2541,7 +2540,6 @@ fn function_signature(parameter_name: &str, has_default: bool, default_erased: b
                 ty: Type::Named("list".to_string(), vec![Type::named("int32")]),
                 passing: ReceiverKind::BorrowMut,
                 has_default: false,
-                default_erased: false,
             },
             FunctionParamContract {
                 keyword_only: false,
@@ -2553,13 +2551,11 @@ fn function_signature(parameter_name: &str, has_default: bool, default_erased: b
                         ty: Type::named("bool"),
                         passing: ReceiverKind::Value,
                         has_default: false,
-                        default_erased: false,
                     }],
                     return_type: Box::new(Type::Unit),
                 },
                 passing: ReceiverKind::Value,
                 has_default: false,
-                default_erased: false,
             },
         ],
         return_type: Box::new(Type::Tuple(vec![Type::named("int64")])),
@@ -2568,10 +2564,10 @@ fn function_signature(parameter_name: &str, has_default: bool, default_erased: b
 
 #[test]
 fn function_values_expose_structural_identity_rendering_cloning_and_cast_diagnostics() {
-    let signature = function_signature("label", true, false);
+    let signature = function_signature("label", true);
     assert_eq!(
         signature.to_string(),
-        "def(str, mut list[int32], own def(own bool) -> None) -> (int64,)"
+        "def(label: str = ..., items: mut list[int32], predicate: own def(own bool) -> None) -> (int64,)"
     );
 
     let function = Value::Function(Box::new(FunctionValue {
@@ -2608,7 +2604,7 @@ fn function_values_expose_structural_identity_rendering_cloning_and_cast_diagnos
     let same_callable_contract_with_different_execution_metadata =
         Value::Function(Box::new(FunctionValue {
             name: "support::transform".to_string(),
-            signature: function_signature("renamed", false, true),
+            signature: function_signature("renamed", false),
             source_path: Some("/installed/support.au".to_string()),
             entry_span: Span::new(70, 30),
             direct_thunk: Some(101),
@@ -2650,14 +2646,14 @@ fn function_values_expose_structural_identity_rendering_cloning_and_cast_diagnos
         .expect_err("function values are not numeric cast sources");
     assert_eq!(
         cast_error.message,
-        "casts are only supported between numeric types, found `def(str, mut list[int32], own def(own bool) -> None) -> (int64,)` and `int32`"
+        "casts are only supported between numeric types, found `def(label: str = ..., items: mut list[int32], predicate: own def(own bool) -> None) -> (int64,)` and `int32`"
     );
     assert_eq!(cast_error.span, Some(Span::new(19, 8)));
 }
 
 #[test]
 fn function_values_remain_observable_inside_structural_runtime_aggregates() {
-    let signature = function_signature("value", false, false);
+    let signature = function_signature("value", false);
     let callbacks = Value::Vec(VecValue {
         element_type: signature.clone(),
         elements: ["first", "second"]

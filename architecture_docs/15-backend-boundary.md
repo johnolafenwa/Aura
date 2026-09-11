@@ -343,3 +343,24 @@ like every other runtime helper, so an engine failure after the foreign
 call returns (a null non-optional handle, a missing symbol, an argument
 mismatch) is reported as an `AU4005` diagnostic instead of unwinding
 through generated code that carries no unwind tables.
+
+## Batch 1 phase 1: callable contracts
+
+A callable contract is complete (Q17 A, Q19 A): slot names or explicit
+positional-only slots, the keyword-only boundary, capabilities, types,
+default availability, and the result. `Type` equality stays ABI-only because
+both runtimes compare types at run time; `sema/callables.rs` owns the
+contract comparison (`callable_slot_admission`, `check_callable_positions`,
+`same_callable_contracts`), which the checker applies at every hinted
+destination and the shared validator applies at every callable boundary
+(`check_callable_contract`) and at every function operand, where the
+operand's declared contract is the destination the declaration must satisfy.
+A boundary may hide a name, drop default availability, or restrict a named
+slot to keyword-only; it may never rename, invent a default, or expose a
+keyword-only slot positionally. `MirParam.keyword_only` records the declared
+boundary so closure declarations and function operands can be checked, and
+the shared binder (`call.rs`) refuses a positional argument that reaches a
+keyword-only slot for direct calls, indirect calls, lowering, and both
+backends alike. The thin alias adapter `Alias(value)` lowers to the adapted
+operand in a temporary typed with the alias contract; no runtime
+representation changes. The semantic interface schema is 12.

@@ -1,0 +1,31 @@
+type Unary = def(int64) -> int64
+type Keyed = def(*, value: int64) -> int64
+type Named = def(value: int64) -> int64
+
+def increment(value: int64) -> int64:
+    return value + 1
+
+def double(value: int64) -> int64:
+    return value * 2
+
+def triple(amount: int64) -> int64:
+    return amount * 3
+
+def apply(step: Unary, value: int64) -> int64:
+    return step(value)
+
+def main():
+    unary = Unary(increment)
+    print(unary(3))
+    print(apply(Unary(triple), 3))
+    print(apply(triple, 4))
+    steps: list[Unary] = [Unary(increment), Unary(double), triple]
+    print(steps[0](1))
+    print(steps[1](1))
+    print(steps[2](1))
+    mixed = [Unary(increment), Unary(triple)]
+    print(mixed[1](2))
+    keyed = Keyed(double)
+    print(keyed(value=8))
+    chosen = Named(increment) if false else Named(double)
+    print(chosen(value=5))
