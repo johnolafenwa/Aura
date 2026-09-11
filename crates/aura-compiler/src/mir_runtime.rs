@@ -861,6 +861,9 @@ pub unsafe extern "C" fn aura_native_run(
 
 struct MirRuntime {
     module: Arc<MirModule>,
+    /// Explicit-tag layout plans keyed by canonical union identity
+    /// (ADR-0052 A9); an injection into an unplanned union is refused.
+    union_layouts: Arc<HashMap<String, crate::union_layout::MirUnionLayout>>,
     safepoints_enabled: bool,
     functions: HashMap<String, MirFunction>,
     classes: HashMap<String, MirClass>,
@@ -2293,8 +2296,21 @@ impl MirRuntime {
             classes.insert(class.name.clone(), class.clone());
         }
         let trait_impls = module.trait_impls.clone();
+        let union_layouts = Arc::new(
+            module
+                .unions
+                .iter()
+                .map(|plan| {
+                    (
+                        crate::union_layout::union_plan_key(&plan.union_type),
+                        plan.clone(),
+                    )
+                })
+                .collect::<HashMap<_, _>>(),
+        );
         Self {
             module: Arc::new(module),
+            union_layouts,
             safepoints_enabled,
             functions,
             classes,
@@ -4222,6 +4238,16 @@ impl MirRuntime {
                 let Type::Union(target) = union_type else {
                     return Err(Diagnostic::new("union injection requires a union type"));
                 };
+                // The plan both backends share must exist for every union a
+                // module builds (ADR-0052 A9).
+                if !self
+                    .union_layouts
+                    .contains_key(&crate::union_layout::union_plan_key(union_type))
+                {
+                    return Err(Diagnostic::new(format!(
+                        "union `{union_type}` has no layout plan in this module"
+                    )));
+                }
                 let payload = self.evaluate_owned_operand(value, env)?;
                 crate::union_runtime::inject_union_member(target, *member_index, payload)
                     .map(RvalueOutcome::Value)

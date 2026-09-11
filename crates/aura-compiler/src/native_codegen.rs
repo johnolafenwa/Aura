@@ -386,6 +386,7 @@ struct NativeCodegen<'a> {
     cleanup_thunks: HashMap<(String, String), FuncId>,
     classes: HashMap<String, MirClass>,
     enums: HashMap<String, MirEnum>,
+    union_layouts: HashMap<String, crate::union_layout::MirUnionLayout>,
     trait_impls: Vec<MirTraitImpl>,
     function_return_types: HashMap<String, DirectType>,
     function_param_types: HashMap<String, Vec<DirectType>>,
@@ -1373,6 +1374,16 @@ impl<'a> NativeCodegen<'a> {
                 .enums
                 .iter()
                 .map(|layout| (layout.name.clone(), layout.clone()))
+                .collect(),
+            union_layouts: module
+                .unions
+                .iter()
+                .map(|plan| {
+                    (
+                        crate::union_layout::union_plan_key(&plan.union_type),
+                        plan.clone(),
+                    )
+                })
                 .collect(),
             trait_impls,
             function_return_types,
@@ -3170,6 +3181,7 @@ impl<'a> NativeCodegen<'a> {
             mutable_param_indices,
             classes: self.classes.clone(),
             enums: self.enums.clone(),
+            union_layouts: self.union_layouts.clone(),
             trait_impls: self.trait_impls.clone(),
             return_type: function.return_type.clone(),
             owned_opaque_temporaries: HashSet::new(),
@@ -4441,6 +4453,7 @@ struct FunctionCompiler<'a> {
     mutable_param_indices: HashMap<String, usize>,
     classes: HashMap<String, MirClass>,
     enums: HashMap<String, MirEnum>,
+    union_layouts: HashMap<String, crate::union_layout::MirUnionLayout>,
     trait_impls: Vec<MirTraitImpl>,
     return_type: Type,
     owned_opaque_temporaries: HashSet<Value>,
@@ -5682,6 +5695,7 @@ impl<'a> FunctionCompiler<'a> {
                 union_type,
                 member_index,
             } => {
+                self.require_union_plan(union_type)?;
                 let value = self.load_operand(&Operand::Place(place.clone()))?;
                 let value = self.ensure_opaque(value)?;
                 let encoded = crate::native_runtime::canonical_runtime_type_name(union_type);
@@ -5702,6 +5716,7 @@ impl<'a> FunctionCompiler<'a> {
                 member_type,
                 member_index,
             } => {
+                self.require_union_plan(union_type)?;
                 let value = self.load_operand(&Operand::Place(place.clone()))?;
                 let value = self.ensure_opaque(value)?;
                 let encoded = crate::native_runtime::canonical_runtime_type_name(union_type);
@@ -5724,6 +5739,7 @@ impl<'a> FunctionCompiler<'a> {
                 member_type,
                 member_index,
             } => {
+                self.require_union_plan(union_type)?;
                 let member_target = ensure_direct_type(member_type, &self.classes, "union member")?;
                 let loaded = self.load_operand_for_target(value, &member_target)?;
                 let loaded = self.coerce_value(loaded, &member_target)?;
@@ -8413,6 +8429,21 @@ impl<'a> FunctionCompiler<'a> {
         self.builder.seal_block(next_block);
         let _ = binding_ty;
         Ok(())
+    }
+
+    /// The direct backend refuses a union operation whose module carries no
+    /// validated layout plan for that union (ADR-0052 A9).
+    fn require_union_plan(&self, union_type: &Type) -> std::result::Result<(), String> {
+        if self
+            .union_layouts
+            .contains_key(&crate::union_layout::union_plan_key(union_type))
+        {
+            Ok(())
+        } else {
+            Err(format!(
+                "direct backend has no layout plan for union `{union_type}`"
+            ))
+        }
     }
 
     fn compile_trait_member_call(

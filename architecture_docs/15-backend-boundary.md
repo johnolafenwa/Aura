@@ -295,6 +295,22 @@ writes a mutable receiver back through the active payload projection, and
 the direct backend takes or copies the payload with
 `aura_direct_union_active_payload` and writes back through its private
 `__union_payload_active` spelling, which never appears in MIR.
+
+## Batch 1 phase 1: union layout and drop plans
+
+`union_layout.rs` owns the explicit-tag plan (ADR-0052 A9): dense canonical
+tag ordinals, the smallest unsigned tag width, the widest member alignment
+and size, rounding to the aggregate alignment, a size model in which scalars
+use their width and every boxed aggregate is one pointer, and per-member
+`copy`/`needs_drop` flags. Lowering plans every union a module holds or
+operates on into `MirModule.unions`; the common validator recomputes and
+compares each plan, refuses duplicates, stale layout versions, foreign
+pointer widths, and Copy claims about definitely non-Copy members, and
+refuses any union operation whose type has no plan. Both backends ingest
+the table and refuse to build or execute an unplanned union. Runtime values
+stay tagged boxed values on both paths, so the plan is the shared ABI
+contract and identity input rather than a second physical representation;
+the semantic interface schema is version 11.
 No native emitter chooses a preferred member or decides exhaustiveness.
 
 Alternative arms lower separately where their payload sources differ. A failed

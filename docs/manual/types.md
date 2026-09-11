@@ -521,6 +521,19 @@ opaque handles are nominal non-Copy, non-cloneable, non-Transfer wrappers for
 one non-null foreign pointer. Extern functions are direct-call-only
 declarations rather than `def(...) -> ...` values.
 
+Every normalized union has one explicit-tag layout plan shared by both
+execution paths: logical tags are the dense canonical member ordinals, the
+tag is the smallest unsigned width that holds every member (one byte up to
+256 members), the payload is aligned to the widest member alignment and
+sized to the widest member, and the total size rounds up to the aggregate
+alignment. Scalars use their width, unit `None` is empty, and every boxed
+aggregate, handle, callable, or type parameter occupies one pointer. The
+plan is internal, target-dependent Aura ABI rather than a C ABI or a
+portable serialization. It is encoded in the lowered program together with
+each member's drop obligation, so importers and native caches rebuild
+rather than guess a tag from source order, and only the active payload owns
+cleanup and is destroyed once.
+
 ## Status
 
 The scalar, collection, enum, class, trait-bound, resource, optional, result,

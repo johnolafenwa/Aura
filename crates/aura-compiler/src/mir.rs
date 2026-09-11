@@ -573,6 +573,11 @@ pub struct MirModule {
     pub classes: Vec<MirClass>,
     #[serde(default)]
     pub enums: Vec<MirEnum>,
+    /// Explicit-tag layout and drop plans for every union the module uses
+    /// (ADR-0052 A9); the validator refuses a module whose union operations
+    /// lack a plan or whose plans disagree with the layout rule.
+    #[serde(default)]
+    pub unions: Vec<crate::union_layout::MirUnionLayout>,
     pub trait_impls: Vec<MirTraitImpl>,
     #[serde(default)]
     pub constants: Vec<MirConstant>,
@@ -1516,6 +1521,8 @@ struct MirLoanValidationContext<'a> {
     functions: BTreeMap<&'a str, &'a MirFunction>,
     trait_impls: &'a [MirTraitImpl],
     returned_views: BTreeMap<&'a str, ValidatedReturnedViewContract>,
+    /// Validated explicit-tag layout plans keyed by canonical union identity.
+    unions: BTreeMap<String, &'a crate::union_layout::MirUnionLayout>,
 }
 
 impl<'a> MirLoanValidationContext<'a> {
@@ -1741,6 +1748,20 @@ impl<'a> MirLoanValidationContext<'a> {
                 ));
             }
         }
+        let mut unions = BTreeMap::new();
+        for plan in &module.unions {
+            crate::union_layout::validate_union_layout(plan)
+                .map_err(|reason| format!("invalid MIR module {reason}"))?;
+            if unions
+                .insert(crate::union_layout::union_plan_key(&plan.union_type), plan)
+                .is_some()
+            {
+                return Err(format!(
+                    "invalid MIR module has duplicate union layout plan for `{}`",
+                    plan.union_type
+                ));
+            }
+        }
         let mut functions = BTreeMap::new();
         let mut enums = BTreeMap::new();
         for enum_decl in &module.enums {
@@ -1795,7 +1816,26 @@ impl<'a> MirLoanValidationContext<'a> {
             functions,
             trait_impls: &module.trait_impls,
             returned_views,
+            unions,
         })
+    }
+
+    /// The validated layout plan for a union operation's type; a module that
+    /// operates on a union without planning it is stale or forged.
+    fn union_plan(
+        &self,
+        function: &MirFunction,
+        union_type: &Type,
+    ) -> std::result::Result<&'a crate::union_layout::MirUnionLayout, String> {
+        self.unions
+            .get(&crate::union_layout::union_plan_key(union_type))
+            .copied()
+            .ok_or_else(|| {
+                format!(
+                    "invalid MIR union `{union_type}` in `{}` has no layout plan",
+                    function.name
+                )
+            })
     }
 
     fn root_type(&self, function: &MirFunction, root: &str) -> Option<Type> {
@@ -5256,6 +5296,7 @@ fn validate_loan_rvalue(
             if union.members.get(*member_index).is_none() {
                 return Err("invalid MIR union tag test member index is out of bounds".to_owned());
             }
+            context.union_plan(function, union_type)?;
             if context.place_type(function, place)?.as_ref() != Some(union_type) {
                 return Err(format!(
                     "invalid MIR union tag test in `{}` does not match place `{place}` type",
@@ -5285,6 +5326,7 @@ fn validate_loan_rvalue(
                     "invalid MIR union payload take member index and type disagree".to_owned(),
                 );
             }
+            context.union_plan(function, union_type)?;
             if context.place_type(function, place)?.as_ref() != Some(union_type) {
                 return Err(format!(
                     "invalid MIR union payload take in `{}` does not match place `{place}` type",
@@ -5330,6 +5372,7 @@ fn validate_loan_rvalue(
             if union.members.get(*member_index) != Some(member_type) {
                 return Err("invalid MIR union injection member index and type disagree".to_owned());
             }
+            context.union_plan(function, union_type)?;
             let actual = context.operand_type(function, value)?;
             let literal_matches = match value {
                 Operand::Int(magnitude) => match crate::sema::integer_type_bounds(member_type) {
@@ -7415,6 +7458,16 @@ fn validate_function_loan_flow(
 /// alike so public MIR cannot manufacture authority unavailable in Aura.
 pub(crate) fn validate_loan_flow(module: &MirModule) -> std::result::Result<(), String> {
     let context = MirLoanValidationContext::new(module)?;
+    for plan in &module.unions {
+        for member in &plan.members {
+            if member.copy && context.type_is_definitely_noncopy(&member.ty) {
+                return Err(format!(
+                    "invalid MIR module union layout plan for `{}` marks non-Copy member `{}` as Copy",
+                    plan.union_type, member.ty
+                ));
+            }
+        }
+    }
     for function in module.functions.iter().chain(module.top_level.iter()) {
         validate_function_loan_flow(function, &context)?;
     }
@@ -7569,14 +7622,21 @@ pub fn lower(program: &Program) -> MirModule {
         Some(top_level)
     };
 
-    MirModule {
+    let mut module = MirModule {
         constants,
         functions,
         classes,
         enums: lower_enum_layouts(program),
+        unions: Vec::new(),
         trait_impls,
         top_level,
-    }
+    };
+    // Every union the module holds or operates on gets one explicit-tag
+    // layout and drop plan (ADR-0052 A9).
+    crate::union_layout::plan_module_unions(&mut module, |member| {
+        type_is_copy_in_program(member, program)
+    });
+    module
 }
 
 fn lower_enum_layouts(program: &Program) -> Vec<MirEnum> {

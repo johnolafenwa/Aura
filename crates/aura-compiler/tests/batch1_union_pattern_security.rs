@@ -2367,6 +2367,13 @@ fn union_payload_wrapper_cannot_erase_an_authoritative_callable_subtree() {
         "passing": "Borrow", "has_default": false, "default_erased": false,
         "keyword_only": false
     }], "return_type": { "Named": ["unit", []] }}});
+    // The transplanted union brings its explicit-tag layout plan along, so
+    // the forged module fails on the callable contract rather than on a
+    // missing plan (ADR-0052 A9).
+    encoded["unions"]
+        .as_array_mut()
+        .unwrap()
+        .extend(union_mir["unions"].as_array().unwrap().iter().cloned());
     let inspect = &mut encoded["functions"][inspect_index];
     inspect["local_types"].as_array_mut().unwrap().extend([
         json!({ "name": "%t990", "ty": tuple.clone() }),

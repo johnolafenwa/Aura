@@ -2078,6 +2078,7 @@ def main():
 #[test]
 fn adr0038_loan_validator_rejects_alias_spelling_moves_and_use_after_end() {
     let make_module = |instructions: Vec<Instruction>| MirModule {
+        unions: Vec::new(),
         enums: Vec::new(),
         constants: Vec::new(),
         functions: vec![MirFunction {
@@ -2533,6 +2534,7 @@ fn adr0038_returned_contract_analysis_rejects_inconsistent_and_invalid_descripto
 #[test]
 fn adr0038_public_mir_rejects_suspended_locked_and_overlapping_loan_accesses() {
     let make_module = |instructions: Vec<Instruction>| MirModule {
+        unions: Vec::new(),
         enums: Vec::new(),
         constants: Vec::new(),
         functions: vec![MirFunction {
@@ -2651,6 +2653,7 @@ fn adr0038_public_mir_rejects_suspended_locked_and_overlapping_loan_accesses() {
 fn adr0038_malformed_mir_loan_instruction_diagnostics_are_specific() {
     let reject = |instructions: Vec<Instruction>, expected: &str| {
         let module = MirModule {
+            unions: Vec::new(),
             enums: Vec::new(),
             constants: Vec::new(),
             functions: vec![MirFunction {
@@ -2904,6 +2907,7 @@ fn adr0038_mir_reborrow_and_returned_projections_are_canonical_and_type_valid() 
                        child_ty: Type,
                        classes: Vec<MirClass>,
                        instructions: Vec<Instruction>| MirModule {
+        unions: Vec::new(),
         enums: Vec::new(),
         constants: Vec::new(),
         functions: vec![MirFunction {

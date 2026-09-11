@@ -95,9 +95,15 @@ Last updated: 2026-09-10
   member when every member shares one contract, including mutable and
   consuming receivers on both backends; ordering and arithmetic on unions
   are AU2003. Four run-pass and six check-fail fixtures plus Manual updates.
-- Next: commit the union-properties family, then layout/interfaces/drop
-  plans, nullable FFI results, the callable families,
-  editor/docs/reference-agent updates, full gates and integration.
+- Layout, interfaces, and drop plans family (2026-09-10): every union a
+  module uses carries one encoded explicit-tag plan (dense canonical tags,
+  smallest tag width, widest member alignment and size, rounded total, per-
+  member Copy and drop obligations) that the shared validator recomputes and
+  both backends ingest; unplanned, forged, stale, or duplicate plans fail
+  closed; schema 11. Runtime values stay tagged boxed values on both paths,
+  so the plan is the shared ABI contract rather than a second representation.
+- Next: commit the layout family, then nullable FFI results, the callable
+  families, editor/docs/reference-agent updates, full gates and integration.
 - Option removal and all phase 2 signature changes remain excluded; protected
   user files and coverage floors remain unchanged.
 - Work and handoff ledger: [2026-09-09-batch-1-phase-1.md](2026-09-09-batch-1-phase-1.md).
