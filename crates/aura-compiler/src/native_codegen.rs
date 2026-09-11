@@ -16446,6 +16446,19 @@ fn direct_ffi_type_for_source(
         if *ty == Type::Unit && passing.is_none() {
             return Ok(DirectFfiType::scalar(FfiType::Unit));
         }
+        // Semantic analysis admits exactly `Handle | None` as a result
+        // (ADR-0052 A10); it is one nullable C pointer.
+        if let (Type::Union(union), None) = (ty, passing) {
+            if union.members.len() == 2 && union.members.contains(&Type::Unit) {
+                if let Some(Type::Named(handle, handle_args)) =
+                    union.members.iter().find(|member| **member != Type::Unit)
+                {
+                    if handle_args.is_empty() {
+                        return Ok(DirectFfiType::nullable(handle.clone(), ty.clone()));
+                    }
+                }
+            }
+        }
         return Err(format!("direct backend cannot lower `{ty}` through FFI v0"));
     };
     if args.is_empty() {

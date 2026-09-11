@@ -116,8 +116,16 @@ layout. A bare handle parameter shares the pointer for that call and retains
 the Aura handle. An `own Handle` parameter consumes it, normally for a
 foreign close/free operation. `mut Handle` is reserved. Opaque handles are
 non-Copy, non-cloneable, and never `Transfer`, so they cannot cross a task or
-Queue boundary. A returned null pointer is an Aura runtime failure; nullable
-opaque handles are not part of FFI v0.
+Queue boundary. A `-> Handle` result that is null is an Aura runtime failure
+(`AU4005`). One nullable form exists: an extern result whose normalized type
+is exactly a declared opaque handle plus `None`, written `-> Handle | None`
+or through an alias of that shape, is marshalled as one C pointer. A null
+pointer constructs `None` and a non-null pointer constructs the owned handle;
+no union tag or aggregate crosses C. Optional scalars, strings, byte views,
+nullable parameters, several handle alternatives, and every other union
+shape are rejected with `AU2010` and need an explicit C adapter. Mutable
+byte-view writeback precedes result translation as before, and the
+resulting handle keeps every opaque-handle rule.
 
 This non-cloneability is structural through tuples, collections, user classes,
 enum payloads, and generic specializations. `.clone()` and clone-producing
@@ -231,8 +239,8 @@ must name the host's actual C symbol.
 
 FFI v0 does not load libraries, select symbols by link name, define C structs
 or unions, pass enums, allocate foreign memory, expose pointer arithmetic,
-return views, represent nullable handles, accept callbacks or variadics, or
-offer asynchronous foreign calls. C ABI layout outside the explicit table is
+return views, represent nullable handles beyond the `Handle | None` result
+form, accept callbacks or variadics, or offer asynchronous foreign calls. C ABI layout outside the explicit table is
 not inferred.
 
 Symbol availability and behavior are host-defined. `size_t`, pointer layout,
@@ -247,6 +255,8 @@ FFI v0, its package opt-in and root dependency report, bodyless
 `extern "C"` functions, opaque handles, fixed-width scalars, pointer-length
 views, and Unix process-global lookup are implemented in Aura 0.3.
 
-Callbacks, raw pointers, variadics, returned views, nullable handles, explicit
-library loading/link configuration, and foreign aggregate layout are reserved
-or unavailable. They are not inferred from current syntax.
+The `Handle | None` result form is implemented under the Batch 1 phase 1
+design checkpoint. Callbacks, raw pointers, variadics, returned views, other
+nullable shapes, explicit library loading/link configuration, and foreign
+aggregate layout are reserved or unavailable. They are not inferred from
+current syntax.

@@ -102,8 +102,14 @@ Last updated: 2026-09-10
   both backends ingest; unplanned, forged, stale, or duplicate plans fail
   closed; schema 11. Runtime values stay tagged boxed values on both paths,
   so the plan is the shared ABI contract rather than a second representation.
-- Next: commit the layout family, then nullable FFI results, the callable
-  families, editor/docs/reference-agent updates, full gates and integration.
+- Nullable handle FFI results family (2026-09-11): exactly a declared opaque
+  handle plus `None` as an extern result is marshalled as one nullable C
+  pointer on both backends (null is `None`, non-null the owned handle, byte
+  writeback first); every other extern union is AU2010; the direct call spec
+  is version 1; and the direct FFI helper now reports engine failures as
+  AU4005 instead of aborting while unwinding through generated code.
+- Next: commit the nullable-handle FFI family, then the callable families,
+  editor/docs/reference-agent updates, full gates and integration.
 - Option removal and all phase 2 signature changes remain excluded; protected
   user files and coverage floors remain unchanged.
 - Work and handoff ledger: [2026-09-09-batch-1-phase-1.md](2026-09-09-batch-1-phase-1.md).

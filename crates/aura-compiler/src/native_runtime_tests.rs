@@ -1595,10 +1595,13 @@ fn direct_ffi_call_spec_round_trips_and_rejects_corruption() {
         Vec::new(),
         super::DirectFfiType::scalar(crate::ffi::FfiType::Unit),
     );
-    wrong_version[4] = 1;
+    wrong_version[4] = super::DIRECT_FFI_SPEC_VERSION + 1;
     assert_eq!(
         super::decode_direct_ffi_call_spec(&wrong_version),
-        Err("unsupported metadata version 1".to_string())
+        Err(format!(
+            "unsupported metadata version {}",
+            super::DIRECT_FFI_SPEC_VERSION + 1
+        ))
     );
 
     let mut invalid_utf8 = direct_ffi_spec(
@@ -1659,11 +1662,104 @@ fn direct_ffi_call_spec_round_trips_and_rejects_corruption() {
         result: super::DirectFfiType {
             ffi_type: crate::ffi::FfiType::I32,
             opaque_name: Some("NotAHandle".to_string()),
+            union_type: None,
         },
     });
     assert_eq!(
         super::decode_direct_ffi_call_spec(&scalar_with_handle_name),
-        Err("non-handle FFI type `int32` carries an opaque nominal name".to_string())
+        Err("non-handle FFI type `int32` carries handle or union metadata".to_string())
+    );
+
+    let scalar_with_union = super::encode_direct_ffi_call_spec(&super::DirectFfiCallSpec {
+        symbol: "x".to_string(),
+        params: Vec::new(),
+        result: super::DirectFfiType {
+            ffi_type: crate::ffi::FfiType::I32,
+            opaque_name: None,
+            union_type: Some(nullable_handle_union("Handle")),
+        },
+    });
+    assert_eq!(
+        super::decode_direct_ffi_call_spec(&scalar_with_union),
+        Err("non-handle FFI type `int32` carries handle or union metadata".to_string())
+    );
+
+    let opaque_with_union = super::encode_direct_ffi_call_spec(&super::DirectFfiCallSpec {
+        symbol: "x".to_string(),
+        params: Vec::new(),
+        result: super::DirectFfiType {
+            ffi_type: crate::ffi::FfiType::OpaqueHandle,
+            opaque_name: Some("Handle".to_string()),
+            union_type: Some(nullable_handle_union("Handle")),
+        },
+    });
+    assert_eq!(
+        super::decode_direct_ffi_call_spec(&opaque_with_union),
+        Err("non-handle FFI type `opaque handle` carries handle or union metadata".to_string())
+    );
+
+    let nullable_without_union = super::encode_direct_ffi_call_spec(&super::DirectFfiCallSpec {
+        symbol: "x".to_string(),
+        params: Vec::new(),
+        result: super::DirectFfiType {
+            ffi_type: crate::ffi::FfiType::NullableOpaqueHandle,
+            opaque_name: Some("Handle".to_string()),
+            union_type: None,
+        },
+    });
+    assert_eq!(
+        super::decode_direct_ffi_call_spec(&nullable_without_union),
+        Err("nullable-handle metadata is missing its nominal type or union".to_string())
+    );
+
+    let nullable_without_name = super::encode_direct_ffi_call_spec(&super::DirectFfiCallSpec {
+        symbol: "x".to_string(),
+        params: Vec::new(),
+        result: super::DirectFfiType {
+            ffi_type: crate::ffi::FfiType::NullableOpaqueHandle,
+            opaque_name: None,
+            union_type: Some(nullable_handle_union("Handle")),
+        },
+    });
+    assert_eq!(
+        super::decode_direct_ffi_call_spec(&nullable_without_name),
+        Err("nullable-handle metadata is missing its nominal type or union".to_string())
+    );
+
+    let nullable_with_other_union = super::encode_direct_ffi_call_spec(&super::DirectFfiCallSpec {
+        symbol: "x".to_string(),
+        params: Vec::new(),
+        result: super::DirectFfiType {
+            ffi_type: crate::ffi::FfiType::NullableOpaqueHandle,
+            opaque_name: Some("Handle".to_string()),
+            union_type: Some(nullable_handle_union("Other")),
+        },
+    });
+    assert_eq!(
+        super::decode_direct_ffi_call_spec(&nullable_with_other_union),
+        Err("nullable-handle metadata for `Handle` does not describe `Handle | None`".to_string())
+    );
+
+    let nullable_with_scalar_union =
+        super::encode_direct_ffi_call_spec(&super::DirectFfiCallSpec {
+            symbol: "x".to_string(),
+            params: Vec::new(),
+            result: super::DirectFfiType {
+                ffi_type: crate::ffi::FfiType::NullableOpaqueHandle,
+                opaque_name: Some("Handle".to_string()),
+                union_type: Some(
+                    Type::normalize_union(
+                        vec![Type::named("Handle"), Type::named("int64")],
+                        "main",
+                        &BTreeMap::new(),
+                    )
+                    .expect("`Handle | int64` normalizes"),
+                ),
+            },
+        });
+    assert_eq!(
+        super::decode_direct_ffi_call_spec(&nullable_with_scalar_union),
+        Err("nullable-handle metadata for `Handle` does not describe `Handle | None`".to_string())
     );
 }
 
@@ -1688,9 +1784,12 @@ fn direct_ffi_metadata_pins_every_v0_type_code() {
         (FfiType::BytesView, 13),
         (FfiType::BytesViewMut, 14),
         (FfiType::OpaqueHandle, 15),
+        (FfiType::NullableOpaqueHandle, 16),
     ] {
         let result = if ffi_type == FfiType::OpaqueHandle {
             super::DirectFfiType::opaque("Handle")
+        } else if ffi_type == FfiType::NullableOpaqueHandle {
+            super::DirectFfiType::nullable("Handle", nullable_handle_union("Handle"))
         } else {
             super::DirectFfiType::scalar(ffi_type)
         };
@@ -1708,6 +1807,17 @@ fn direct_ffi_metadata_pins_every_v0_type_code() {
             "FFI v0 type-code round trip for {ffi_type}"
         );
     }
+}
+
+/// The one nullable FFI result shape, `Handle | None`, as semantic analysis
+/// normalizes it.
+fn nullable_handle_union(handle: &str) -> Type {
+    Type::normalize_union(
+        vec![Type::named(handle), Type::Unit],
+        "main",
+        &BTreeMap::new(),
+    )
+    .expect("`Handle | None` normalizes")
 }
 
 #[test]
@@ -1932,6 +2042,114 @@ fn direct_ffi_value_conversion_reports_range_type_and_nominal_mismatches() {
             &super::DirectFfiType::scalar(FfiType::Bool),
         ),
         Err("FFI engine returned a value incompatible with declared result `bool`".to_string())
+    );
+}
+
+#[test]
+fn ffi_nullable_handle_direct_conversion_builds_none_or_the_owned_handle() {
+    use crate::ffi::{FfiType, FfiValue, OpaqueHandle};
+
+    let nullable = super::DirectFfiType::nullable("Handle", nullable_handle_union("Handle"));
+    let Some(Type::Union(union)) = nullable.union_type.clone() else {
+        panic!("nullable metadata must describe a union");
+    };
+    let handle_index = union
+        .members
+        .iter()
+        .position(|member| *member == Type::named("Handle"))
+        .expect("the handle member");
+    let none_index = union
+        .members
+        .iter()
+        .position(|member| *member == Type::Unit)
+        .expect("the `None` member");
+    let pointer = std::ptr::without_provenance_mut::<std::ffi::c_void>(1);
+    let raw_handle =
+        || OpaqueHandle::new(pointer).expect("the non-null test address is an identity");
+
+    let present = super::direct_ffi_to_value(FfiValue::OpaqueHandle(raw_handle()), &nullable)
+        .expect("a non-null result constructs the owned handle member");
+    match &present {
+        Value::Union(value) => {
+            assert_eq!(value.union_type, Type::Union(union.clone()));
+            assert_eq!(value.member_index, handle_index);
+            match &value.payload {
+                Value::FfiHandle(handle) => {
+                    assert_eq!(handle.type_name(), "Handle");
+                    assert_eq!(handle.as_ptr(), pointer);
+                }
+                other => panic!("expected an owned opaque handle payload, found {other:?}"),
+            }
+        }
+        other => panic!("expected a union value, found {other:?}"),
+    }
+
+    let absent = super::direct_ffi_to_value(FfiValue::Unit, &nullable)
+        .expect("a null result constructs `None`");
+    match &absent {
+        Value::Union(value) => {
+            assert_eq!(value.union_type, Type::Union(union.clone()));
+            assert_eq!(value.member_index, none_index);
+            assert_eq!(value.payload, Value::Unit);
+        }
+        other => panic!("expected a union value, found {other:?}"),
+    }
+
+    assert_eq!(
+        super::direct_ffi_to_value(FfiValue::I32(1), &nullable),
+        Err(
+            "FFI engine returned a value incompatible with declared result `nullable opaque handle`"
+                .to_string()
+        )
+    );
+    let without_union = super::DirectFfiType {
+        ffi_type: FfiType::NullableOpaqueHandle,
+        opaque_name: Some("Handle".to_string()),
+        union_type: None,
+    };
+    assert_eq!(
+        super::direct_ffi_to_value(FfiValue::Unit, &without_union),
+        Err("nullable-handle FFI metadata is missing its union".to_string())
+    );
+    let without_name = super::DirectFfiType {
+        ffi_type: FfiType::NullableOpaqueHandle,
+        opaque_name: None,
+        union_type: Some(nullable_handle_union("Handle")),
+    };
+    assert_eq!(
+        super::direct_ffi_to_value(FfiValue::OpaqueHandle(raw_handle()), &without_name),
+        Err("nullable-handle FFI metadata is missing its nominal type".to_string())
+    );
+    let other_union = super::DirectFfiType {
+        ffi_type: FfiType::NullableOpaqueHandle,
+        opaque_name: Some("Handle".to_string()),
+        union_type: Some(nullable_handle_union("Other")),
+    };
+    assert_eq!(
+        super::direct_ffi_to_value(FfiValue::OpaqueHandle(raw_handle()), &other_union),
+        Err(
+            "FFI engine returned a value incompatible with declared result `nullable opaque handle`"
+                .to_string()
+        )
+    );
+    let scalar_union = super::DirectFfiType {
+        ffi_type: FfiType::NullableOpaqueHandle,
+        opaque_name: Some("Handle".to_string()),
+        union_type: Some(
+            Type::normalize_union(
+                vec![Type::named("Handle"), Type::named("int64")],
+                "main",
+                &BTreeMap::new(),
+            )
+            .expect("`Handle | int64` normalizes"),
+        ),
+    };
+    assert_eq!(
+        super::direct_ffi_to_value(FfiValue::Unit, &scalar_union),
+        Err(
+            "FFI engine returned a value incompatible with declared result `nullable opaque handle`"
+                .to_string()
+        )
     );
 }
 

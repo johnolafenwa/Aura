@@ -437,6 +437,17 @@ fn validate_ffi_parameter(
         };
     }
 
+    if let Type::Union(_) = ty {
+        return Err(Diagnostic::coded_at(
+            "AU2010",
+            span,
+            format!(
+                "union parameter `{param_name}` cannot cross the C boundary; only a `Handle | None` result is marshalled"
+            ),
+        )
+        .with_help("pass a declared opaque handle, or test the union in Aura and call the extern function with its member"));
+    }
+
     Err(Diagnostic::coded_at(
         "AU2002",
         span,
@@ -447,6 +458,27 @@ fn validate_ffi_parameter(
     ))
 }
 
+/// The one union an extern result may declare (ADR-0052 A10, Q10 A):
+/// exactly a declared opaque handle plus `None`, marshalled as one C pointer
+/// whose null value constructs `None`.
+pub(crate) fn ffi_nullable_handle_member(
+    ty: &Type,
+    opaque_handles: &BTreeMap<String, OpaqueHandleInfo>,
+) -> Option<Type> {
+    let Type::Union(union) = ty else {
+        return None;
+    };
+    if union.members.len() != 2 || !union.members.contains(&Type::Unit) {
+        return None;
+    }
+    union
+        .members
+        .iter()
+        .find(|member| **member != Type::Unit)
+        .filter(|member| ffi_opaque_handle(member, opaque_handles))
+        .cloned()
+}
+
 fn validate_ffi_return(
     ty: &Type,
     span: crate::diag::Span,
@@ -454,6 +486,21 @@ fn validate_ffi_return(
 ) -> Result<()> {
     if *ty == Type::Unit || ffi_scalar_type(ty) || ffi_opaque_handle(ty, opaque_handles) {
         return Ok(());
+    }
+    if let Type::Union(_) = ty {
+        if ffi_nullable_handle_member(ty, opaque_handles).is_some() {
+            return Ok(());
+        }
+        return Err(Diagnostic::coded_at(
+            "AU2010",
+            span,
+            format!(
+                "FFI v0 admits only `Handle | None` as a nullable result; `{ty}` cannot cross the C boundary"
+            ),
+        )
+        .with_help(
+            "return exactly one declared opaque handle or `None`; scalars, strings, byte views, and several handle alternatives need an explicit C adapter",
+        ));
     }
     if *ty == Type::named("str") {
         return Err(Diagnostic::coded_at(

@@ -74,9 +74,11 @@ Phase 6.4 adds explicitly authorized FFI v0 packages. Bodyless
 `extern "C"` functions call process-global symbols synchronously through
 fixed-width scalars, pointer-length str/byte views, or non-null opaque
 handles. FFI-enabled dependencies must be visible in the root manifest's exact
-`[ffi] dependencies` report. Externs are direct-call-only; callbacks, raw
-pointers, variadics, returned views, nullable handles, and explicit library
-loading remain unavailable. This is an unsafe native boundary, not a memory
+`[ffi] dependencies` report. Externs are direct-call-only. Under the Batch 1
+phase 1 checkpoint an extern result may be exactly `Handle | None`, marshalled
+as one nullable C pointer; callbacks, raw pointers, variadics, returned views,
+other nullable shapes, and explicit library loading remain unavailable. This
+is an unsafe native boundary, not a memory
 safety promise for a false declaration or misbehaving C implementation.
 
 Phase 7.1 adds eager owned list, set, and dictionary comprehensions under Accepted

@@ -260,6 +260,20 @@ The interpreter rechecks active tags before projecting, writing or taking a
 payload. Native view alternatives retain structural union base/type/index
 metadata, including through projected aliases, and compare it at CFG joins.
 Native runtime helpers also recheck the active member before payload access.
+No native emitter chooses a preferred member or decides exhaustiveness.
+
+Alternative arms lower separately where their payload sources differ. A failed
+guard skips the remaining alternatives of that source arm. Partial-pattern
+failure releases previously acquired payload views; successful owned arms end
+probe loans before moving into distinct owned slots. Mutable bindings update
+their selected storage. Typed nested nominal patterns project through recorded
+enum layouts into the original storage, so early returns, loop exits, and `try`
+need no payload reconstruction. Every enum/union prefix requires its own
+physical-source tag proof, including through generic payloads and nested views.
+Ancestor loans remain live until their arm-local descendants have ended.
+These changes preserve the existing ownership ABI and frame contract. The
+explicit-tag layout and drop plans are recorded below; final inline union
+storage remains A9 work.
 
 ## Batch 1 phase 1: generic union members
 
@@ -311,16 +325,21 @@ the table and refuse to build or execute an unplanned union. Runtime values
 stay tagged boxed values on both paths, so the plan is the shared ABI
 contract and identity input rather than a second physical representation;
 the semantic interface schema is version 11.
-No native emitter chooses a preferred member or decides exhaustiveness.
 
-Alternative arms lower separately where their payload sources differ. A failed
-guard skips the remaining alternatives of that source arm. Partial-pattern
-failure releases previously acquired payload views; successful owned arms end
-probe loans before moving into distinct owned slots. Mutable bindings update
-their selected storage. Typed nested nominal patterns project through recorded
-enum layouts into the original storage, so early returns, loop exits, and `try`
-need no payload reconstruction. Every enum/union prefix requires its own
-physical-source tag proof, including through generic payloads and nested views.
-Ancestor loans remain live until their arm-local descendants have ended.
-These changes preserve the existing ownership ABI and frame contract. Final
-inline union storage, generic tag remapping and drop plans remain A9 work.
+## Batch 1 phase 1: nullable handle FFI results
+
+The one union an extern signature may carry is exactly a declared opaque
+handle plus `None`, as a result (ADR-0052 A10, Q10 A). Semantic analysis
+admits that shape, through aliases too, and rejects every other extern union
+with `AU2010`. The engine's result-only `FfiType::NullableOpaqueHandle`
+marshals one C pointer after mutable byte views write back: null yields
+`None`, non-null yields the owned handle. Both runtimes construct the result
+through the structural union injection helper against the declared union,
+so it is the same tagged boxed union as any Aura-built value. The direct
+call spec is version 1: a nullable result carries its nominal handle name
+and the serialized `Handle | None` union, and decoding refuses any other
+combination. `aura_direct_ffi_call` runs inside `task_runtime_boundary`
+like every other runtime helper, so an engine failure after the foreign
+call returns (a null non-optional handle, a missing symbol, an argument
+mismatch) is reported as an `AU4005` diagnostic instead of unwinding
+through generated code that carries no unwind tables.

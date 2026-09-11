@@ -9581,6 +9581,12 @@ fn ffi_type_for_extern_param(param: &MirExternParam) -> Result<FfiType> {
         {
             Ok(FfiType::BytesViewMut)
         }
+        // Semantic analysis rejects every union parameter (AU2010); the
+        // nullable-handle form is result-only.
+        (ty @ Type::Union(_), _) => Err(Diagnostic::coded(
+            "AU4005",
+            format!("union FFI parameter type `{ty}` reached MIR execution"),
+        )),
         (ty, _) => ffi_type_for_extern_result(ty),
     }
 }
@@ -9607,6 +9613,17 @@ fn ffi_type_for_extern_result(ty: &Type) -> Result<FfiType> {
         },
         Type::Named(name, args) if name == "list" && args.as_slice() == [Type::named("uint8")] => {
             FfiType::BytesView
+        }
+        // Semantic analysis admits exactly `Handle | None` as a union result.
+        Type::Union(union)
+            if union.members.len() == 2
+                && union.members.contains(&Type::Unit)
+                && union
+                    .members
+                    .iter()
+                    .any(|member| matches!(member, Type::Named(_, args) if args.is_empty())) =>
+        {
+            FfiType::NullableOpaqueHandle
         }
         other => {
             return Err(Diagnostic::coded(
@@ -9808,6 +9825,35 @@ fn runtime_value_from_ffi(value: FfiValue, ty: &Type) -> Result<Value> {
                 .ok_or_else(|| {
                     Diagnostic::coded("AU4005", "FFI function returned a null opaque handle")
                 })
+        }
+        // A `Handle | None` result (ADR-0052 A10): non-null constructs the
+        // owned handle member, null constructs `None`.
+        (FfiValue::OpaqueHandle(handle), Type::Union(union)) => {
+            let (index, member) = union
+                .members
+                .iter()
+                .enumerate()
+                .find(|(_, member)| matches!(member, Type::Named(_, args) if args.is_empty()))
+                .ok_or_else(|| mismatch(FfiType::NullableOpaqueHandle))?;
+            let Type::Named(class_name, _) = member else {
+                unreachable!("checked handle member")
+            };
+            let payload = FfiHandleValue::new(class_name.clone(), handle.as_ptr())
+                .map(Value::FfiHandle)
+                .ok_or_else(|| {
+                    Diagnostic::coded("AU4005", "FFI function returned a null opaque handle")
+                })?;
+            crate::union_runtime::inject_union_member(union, index, payload)
+                .map_err(|message| Diagnostic::coded("AU4005", message))
+        }
+        (FfiValue::Unit, Type::Union(union)) => {
+            let index = union
+                .members
+                .iter()
+                .position(|member| *member == Type::Unit)
+                .ok_or_else(|| mismatch(FfiType::NullableOpaqueHandle))?;
+            crate::union_runtime::inject_union_member(union, index, Value::Unit)
+                .map_err(|message| Diagnostic::coded("AU4005", message))
         }
         (value, _) => Err(mismatch(value.ffi_type())),
     }

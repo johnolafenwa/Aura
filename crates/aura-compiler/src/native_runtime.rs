@@ -70,20 +70,25 @@ use crate::runtime_value::{
 use crate::sema::Type;
 
 const DIRECT_FFI_SPEC_MAGIC: &[u8; 4] = b"AUFI";
-const DIRECT_FFI_SPEC_VERSION: u8 = 0;
+const DIRECT_FFI_SPEC_VERSION: u8 = 1;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct DirectFfiType {
     pub ffi_type: FfiType,
     pub opaque_name: Option<String>,
+    /// The declared `Handle | None` result union of a nullable handle
+    /// result (ADR-0052 A10); absent for every other FFI type.
+    pub union_type: Option<Type>,
 }
 
 impl DirectFfiType {
     pub(crate) fn scalar(ffi_type: FfiType) -> Self {
         debug_assert_ne!(ffi_type, FfiType::OpaqueHandle);
+        debug_assert_ne!(ffi_type, FfiType::NullableOpaqueHandle);
         Self {
             ffi_type,
             opaque_name: None,
+            union_type: None,
         }
     }
 
@@ -91,6 +96,15 @@ impl DirectFfiType {
         Self {
             ffi_type: FfiType::OpaqueHandle,
             opaque_name: Some(name.into()),
+            union_type: None,
+        }
+    }
+
+    pub(crate) fn nullable(name: impl Into<String>, union_type: Type) -> Self {
+        Self {
+            ffi_type: FfiType::NullableOpaqueHandle,
+            opaque_name: Some(name.into()),
+            union_type: Some(union_type),
         }
     }
 }
@@ -2137,6 +2151,7 @@ fn direct_ffi_type_code(ffi_type: FfiType) -> u8 {
         FfiType::BytesView => 13,
         FfiType::BytesViewMut => 14,
         FfiType::OpaqueHandle => 15,
+        FfiType::NullableOpaqueHandle => 16,
     }
 }
 
@@ -2158,6 +2173,7 @@ fn direct_ffi_type_from_code(code: u8) -> Option<FfiType> {
         13 => FfiType::BytesView,
         14 => FfiType::BytesViewMut,
         15 => FfiType::OpaqueHandle,
+        16 => FfiType::NullableOpaqueHandle,
         _ => return None,
     })
 }
@@ -2188,6 +2204,14 @@ fn append_direct_ffi_text(encoded: &mut Vec<u8>, text: &str) {
 fn append_direct_ffi_type(encoded: &mut Vec<u8>, ty: &DirectFfiType) {
     encoded.push(direct_ffi_type_code(ty.ffi_type));
     append_direct_ffi_text(encoded, ty.opaque_name.as_deref().unwrap_or(""));
+    let union_text = ty
+        .union_type
+        .as_ref()
+        .map(|union_type| {
+            serde_json::to_string(union_type).expect("Aura semantic types must serialize")
+        })
+        .unwrap_or_default();
+    append_direct_ffi_text(encoded, &union_text);
 }
 
 pub(crate) fn encode_direct_ffi_call_spec(spec: &DirectFfiCallSpec) -> Vec<u8> {
@@ -2252,20 +2276,45 @@ impl<'a> DirectFfiSpecDecoder<'a> {
         let ffi_type = direct_ffi_type_from_code(code)
             .ok_or_else(|| format!("unknown FFI type code {code}"))?;
         let opaque_name = self.text()?;
-        match (ffi_type, opaque_name.is_empty()) {
-            (FfiType::OpaqueHandle, false) => Ok(DirectFfiType {
+        let union_text = self.text()?;
+        match (ffi_type, opaque_name.is_empty(), union_text.is_empty()) {
+            (FfiType::OpaqueHandle, false, true) => Ok(DirectFfiType {
                 ffi_type,
                 opaque_name: Some(opaque_name),
+                union_type: None,
             }),
-            (FfiType::OpaqueHandle, true) => {
+            (FfiType::OpaqueHandle, true, _) => {
                 Err("opaque-handle metadata is missing its nominal type".to_string())
             }
-            (_, true) => Ok(DirectFfiType {
+            (FfiType::NullableOpaqueHandle, false, false) => {
+                let union_type: Type = serde_json::from_str(&union_text).map_err(|error| {
+                    format!("nullable-handle metadata carries invalid union metadata: {error}")
+                })?;
+                let valid = matches!(&union_type, Type::Union(union)
+                    if union.members.len() == 2
+                        && union.members.contains(&Type::Unit)
+                        && union.members.iter().any(|member| matches!(member, Type::Named(name, args) if args.is_empty() && *name == opaque_name)));
+                if !valid {
+                    return Err(format!(
+                        "nullable-handle metadata for `{opaque_name}` does not describe `{opaque_name} | None`"
+                    ));
+                }
+                Ok(DirectFfiType {
+                    ffi_type,
+                    opaque_name: Some(opaque_name),
+                    union_type: Some(union_type),
+                })
+            }
+            (FfiType::NullableOpaqueHandle, _, _) => {
+                Err("nullable-handle metadata is missing its nominal type or union".to_string())
+            }
+            (_, true, true) => Ok(DirectFfiType {
                 ffi_type,
                 opaque_name: None,
+                union_type: None,
             }),
-            (_, false) => Err(format!(
-                "non-handle FFI type `{ffi_type}` carries an opaque nominal name"
+            (_, _, _) => Err(format!(
+                "non-handle FFI type `{ffi_type}` carries handle or union metadata"
             )),
         }
     }
@@ -2451,6 +2500,41 @@ fn direct_ffi_to_value(value: FfiValue, ty: &DirectFfiType) -> std::result::Resu
                     .ok_or_else(|| "FFI function returned a null opaque handle".to_string())?,
             )
         }
+        // A `Handle | None` result (ADR-0052 A10): non-null constructs the
+        // owned handle member, null constructs `None`.
+        (FfiType::NullableOpaqueHandle, value) => {
+            let Some(Type::Union(union)) = ty.union_type.as_ref() else {
+                return Err("nullable-handle FFI metadata is missing its union".to_string());
+            };
+            let (index, payload) = match value {
+                FfiValue::OpaqueHandle(handle) => {
+                    let type_name = ty.opaque_name.clone().ok_or_else(|| {
+                        "nullable-handle FFI metadata is missing its nominal type".to_string()
+                    })?;
+                    let index = union
+                        .members
+                        .iter()
+                        .position(|member| matches!(member, Type::Named(name, args) if args.is_empty() && *name == type_name))
+                        .ok_or_else(mismatch)?;
+                    let payload = Value::FfiHandle(
+                        FfiHandleValue::new(type_name, handle.as_ptr()).ok_or_else(|| {
+                            "FFI function returned a null opaque handle".to_string()
+                        })?,
+                    );
+                    (index, payload)
+                }
+                FfiValue::Unit => (
+                    union
+                        .members
+                        .iter()
+                        .position(|member| *member == Type::Unit)
+                        .ok_or_else(mismatch)?,
+                    Value::Unit,
+                ),
+                _ => return Err(mismatch()),
+            };
+            crate::union_runtime::inject_union_member(union, index, payload)?
+        }
         _ => return Err(mismatch()),
     })
 }
@@ -2511,63 +2595,71 @@ pub extern "C-unwind" fn aura_direct_ffi_call(
     args_ptr: *const i64,
     arg_count: i64,
 ) -> *mut OpaqueValue {
-    let spec_len = usize::try_from(spec_len)
-        .unwrap_or_else(|_| runtime_error("invalid direct FFI call-spec length"));
-    if spec_ptr.is_null() && spec_len != 0 {
-        runtime_error("direct FFI call received a null call-spec pointer");
-    }
-    let spec_bytes = unsafe { slice::from_raw_parts(spec_ptr, spec_len) };
-    let spec = decode_direct_ffi_call_spec(spec_bytes)
-        .unwrap_or_else(|error| runtime_error(format!("invalid direct FFI call spec: {error}")));
-    let arg_count = usize::try_from(arg_count)
-        .unwrap_or_else(|_| runtime_error("invalid direct FFI argument count"));
-    if args_ptr.is_null() && arg_count != 0 {
-        runtime_error("direct FFI call received a null argument buffer");
-    }
-    if arg_count != spec.params.len() {
-        runtime_error(format!(
-            "direct FFI call spec expected {} argument(s), but received {arg_count}",
-            spec.params.len()
-        ));
-    }
-    let handles = unsafe { slice::from_raw_parts(args_ptr, arg_count) };
-    let mut arguments = Vec::with_capacity(arg_count);
-    for (index, (handle, param)) in handles.iter().zip(&spec.params).enumerate() {
-        if *handle == 0 {
+    // Every trap raised here, including an engine failure after the foreign
+    // call returned, must stop at this helper's boundary like every other
+    // runtime helper: generated code carries no unwind tables to cross.
+    task_runtime_boundary(|| {
+        let spec_len = usize::try_from(spec_len)
+            .unwrap_or_else(|_| runtime_error("invalid direct FFI call-spec length"));
+        if spec_ptr.is_null() && spec_len != 0 {
+            runtime_error("direct FFI call received a null call-spec pointer");
+        }
+        let spec_bytes = unsafe { slice::from_raw_parts(spec_ptr, spec_len) };
+        let spec = decode_direct_ffi_call_spec(spec_bytes).unwrap_or_else(|error| {
+            runtime_error(format!("invalid direct FFI call spec: {error}"))
+        });
+        let arg_count = usize::try_from(arg_count)
+            .unwrap_or_else(|_| runtime_error("invalid direct FFI argument count"));
+        if args_ptr.is_null() && arg_count != 0 {
+            runtime_error("direct FFI call received a null argument buffer");
+        }
+        if arg_count != spec.params.len() {
             runtime_error(format!(
-                "direct FFI argument {} has a null runtime value",
-                index + 1
+                "direct FFI call spec expected {} argument(s), but received {arg_count}",
+                spec.params.len()
             ));
         }
-        let value = unsafe { value_ref(*handle as *mut OpaqueValue) };
-        arguments.push(
-            direct_value_to_ffi(&value, &param.ty).unwrap_or_else(|error| {
-                runtime_diagnostic_error(Diagnostic::coded(
-                    "AU4005",
-                    format!("FFI call to `{}` failed: {error}", spec.symbol),
-                ))
-            }),
-        );
-    }
-    let signature = FfiSignature::new(
-        spec.params.iter().map(|param| param.ty.ffi_type).collect(),
-        spec.result.ffi_type,
-    );
-    let result =
-        unsafe { crate::ffi::call_process_symbol(&spec.symbol, &signature, &mut arguments) };
-    let result =
-        finish_direct_ffi_call(&spec, handles, &arguments, result).unwrap_or_else(|error| {
-            match error {
-                DirectFfiCompletionError::Engine(error) => direct_ffi_error(&spec.symbol, error),
-                DirectFfiCompletionError::Runtime(error) => {
+        let handles = unsafe { slice::from_raw_parts(args_ptr, arg_count) };
+        let mut arguments = Vec::with_capacity(arg_count);
+        for (index, (handle, param)) in handles.iter().zip(&spec.params).enumerate() {
+            if *handle == 0 {
+                runtime_error(format!(
+                    "direct FFI argument {} has a null runtime value",
+                    index + 1
+                ));
+            }
+            let value = unsafe { value_ref(*handle as *mut OpaqueValue) };
+            arguments.push(
+                direct_value_to_ffi(&value, &param.ty).unwrap_or_else(|error| {
                     runtime_diagnostic_error(Diagnostic::coded(
                         "AU4005",
                         format!("FFI call to `{}` failed: {error}", spec.symbol),
                     ))
+                }),
+            );
+        }
+        let signature = FfiSignature::new(
+            spec.params.iter().map(|param| param.ty.ffi_type).collect(),
+            spec.result.ffi_type,
+        );
+        let result =
+            unsafe { crate::ffi::call_process_symbol(&spec.symbol, &signature, &mut arguments) };
+        let result =
+            finish_direct_ffi_call(&spec, handles, &arguments, result).unwrap_or_else(|error| {
+                match error {
+                    DirectFfiCompletionError::Engine(error) => {
+                        direct_ffi_error(&spec.symbol, error)
+                    }
+                    DirectFfiCompletionError::Runtime(error) => {
+                        runtime_diagnostic_error(Diagnostic::coded(
+                            "AU4005",
+                            format!("FFI call to `{}` failed: {error}", spec.symbol),
+                        ))
+                    }
                 }
-            }
-        });
-    boxed_value(result)
+            });
+        boxed_value(result)
+    })
 }
 
 fn headers_map_value(headers: Vec<(String, String)>) -> Value {

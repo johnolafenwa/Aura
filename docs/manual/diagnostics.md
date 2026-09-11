@@ -31,8 +31,10 @@ ordering or arithmetic operator on a union.
 
 `AU2010` through `AU2015` belong to the Batch 1 union, alias, narrowing, and
 callable surface. `AU2010` reports a value that is not a direct member of the
-expected union, a union spelling without enough context, or a type
-parameter that a union member argument cannot determine. `AU2011` reports a
+expected union, a union spelling without enough context, a type
+parameter that a union member argument cannot determine, or an extern
+signature whose union is not the one admitted `Handle | None` result (a union
+parameter, or any other union result). `AU2011` reports a
 literal that more than one member could accept. `AU2012` reports a cyclic
 transparent alias. `AU2013` reports missing, duplicate, unreachable, or
 nonmember union type arms. `AU2014` reports a member use through a place whose

@@ -222,3 +222,106 @@ def main() -> int32:
     assert!(stderr.contains("AU2999"), "{stderr}");
     assert!(stderr.contains("allow_ffi = true"), "{stderr}");
 }
+
+#[test]
+fn ffi_nullable_handle_results_construct_none_or_the_owned_handle_with_backend_parity() {
+    let package = TempPackage::new(true);
+    let source = package.source(
+        r#"extern "C" opaque class Block
+extern "C" def calloc(count: uint64, size: uint64) -> Block | None
+extern "C" def free(block: own Block) -> None
+
+def describe(block: own Block | None) -> str:
+    if block is None:
+        return "null"
+    free(block)
+    return "allocated"
+
+def main() -> int32:
+    print(describe(calloc(1, 8)))
+    print(describe(calloc(18446744073709551615, 18446744073709551615)))
+    return 0
+"#,
+    );
+
+    let mir = run_mir(&source);
+    assert_success(&mir, "forced MIR nullable-handle acceptance run");
+    assert_eq!(mir.stdout, b"allocated\nnull\n");
+
+    let binary = package.path.join("ffi-nullable-handle-direct");
+    let build = build_direct(&source, &binary);
+    assert_success(&build, "direct nullable-handle acceptance build");
+    let direct = Command::new(binary)
+        .output()
+        .expect("direct nullable-handle acceptance binary should start");
+    assert_success(&direct, "direct nullable-handle acceptance run");
+    assert_eq!(direct.stdout, mir.stdout);
+}
+
+#[test]
+fn ffi_nullable_handle_non_optional_null_results_still_trap_with_backend_parity() {
+    let package = TempPackage::new(true);
+    let source = package.source(
+        r#"extern "C" opaque class Block
+extern "C" def calloc(count: uint64, size: uint64) -> Block
+extern "C" def free(block: own Block) -> None
+
+def main() -> int32:
+    free(calloc(18446744073709551615, 18446744073709551615))
+    print("unreachable")
+    return 0
+"#,
+    );
+
+    let mir = run_mir(&source);
+    assert!(
+        !mir.status.success(),
+        "a null `-> Handle` result must still trap on the MIR backend"
+    );
+    let stderr = String::from_utf8_lossy(&mir.stderr);
+    assert!(stderr.contains("AU4005"), "{stderr}");
+    assert!(stderr.contains("null opaque handle"), "{stderr}");
+    assert!(!String::from_utf8_lossy(&mir.stdout).contains("unreachable"));
+
+    let binary = package.path.join("ffi-null-handle-direct");
+    let build = build_direct(&source, &binary);
+    assert_success(&build, "direct null-handle acceptance build");
+    let direct = Command::new(binary)
+        .output()
+        .expect("direct null-handle acceptance binary should start");
+    assert!(
+        !direct.status.success(),
+        "a null `-> Handle` result must still trap on the direct backend"
+    );
+    let stderr = String::from_utf8_lossy(&direct.stderr);
+    assert!(stderr.contains("AU4005"), "{stderr}");
+    assert!(stderr.contains("null opaque handle"), "{stderr}");
+    assert!(!String::from_utf8_lossy(&direct.stdout).contains("unreachable"));
+}
+
+#[test]
+fn ffi_nullable_handle_results_still_require_the_manifest_opt_in() {
+    let package = TempPackage::new(false);
+    let source = package.source(
+        r#"extern "C" opaque class Block
+extern "C" def find_block() -> Block | None
+
+def main() -> int32:
+    return 0
+"#,
+    );
+
+    let output = Command::new(aura_bin())
+        .arg("check")
+        .arg(&source)
+        .output()
+        .expect("nullable-handle manifest rejection check should start");
+    assert!(
+        !output.status.success(),
+        "a nullable-handle extern without opt-in must be rejected"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("AU2999"), "{stderr}");
+    assert!(stderr.contains("allow_ffi = true"), "{stderr}");
+    assert!(!stderr.contains("AU2010"), "{stderr}");
+}
