@@ -287,6 +287,7 @@ impl<'a> AliasValidator<'a> {
             TypeRefKind::Function {
                 params,
                 return_type,
+                ..
             } => {
                 for param in params {
                     self.ty(&param.ty, public)?;
@@ -534,6 +535,7 @@ fn private_type(program: &Program, ty: &Type) -> Option<String> {
                     .iter()
                     .find_map(|capture| private_type(program, &capture.ty))
             }),
+        Type::ReturnedView(view) => private_type(program, &view.pointee),
         Type::Callable(callable) => callable
             .params
             .iter()
@@ -561,6 +563,7 @@ fn find_type_span(ty: &TypeRef, name: &str) -> Option<crate::diag::Span> {
         TypeRefKind::Function {
             params,
             return_type,
+            ..
         } => params
             .iter()
             .find_map(|param| find_type_span(&param.ty, name))

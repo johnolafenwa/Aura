@@ -1555,7 +1555,14 @@ impl<'a> FunctionChecker<'a> {
         span: crate::diag::Span,
         display_name: &str,
     ) -> Result<Type> {
-        if function.decl.view_return.is_some() {
+        // A parameter-origin view result is part of the complete contract
+        // (C9, Q22 A); only a receiver origin has no place in a value type.
+        if function
+            .decl
+            .view_return
+            .as_ref()
+            .is_some_and(|view| view.origin == "self")
+        {
             return Err(Diagnostic::coded_at(
                 "AU3010",
                 span,
@@ -1565,7 +1572,7 @@ impl<'a> FunctionChecker<'a> {
                 ),
             )
             .with_help(
-                "call it directly and bind the result with `view`, because structural `def(...) -> R` types cannot encode a returned-view origin",
+                "call it directly and bind the result with `view`, because a structural `def(...)` type can name only a parameter as its view origin",
             ));
         }
         let mut substitutions = if let Some(explicit_type_args) = explicit_type_args {
@@ -1684,25 +1691,28 @@ impl<'a> FunctionChecker<'a> {
             span,
         )?;
 
+        let params = function
+            .decl
+            .params
+            .iter()
+            .zip(&function.signature.params)
+            .zip(&function.signature.param_passings)
+            .map(|((decl, ty), passing)| FunctionParamContract {
+                keyword_only: decl.keyword_only,
+                name: decl.name.clone(),
+                ty: substitute_type(ty, &substitutions),
+                passing: *passing,
+                has_default: decl.default.is_some(),
+            })
+            .collect::<Vec<_>>();
+        let return_type = super::wrap_returned_view(
+            &params,
+            substitute_type(&function.signature.return_type, &substitutions),
+            function.decl.view_return.as_ref(),
+        );
         Ok(Type::Function {
-            params: function
-                .decl
-                .params
-                .iter()
-                .zip(&function.signature.params)
-                .zip(&function.signature.param_passings)
-                .map(|((decl, ty), passing)| FunctionParamContract {
-                    keyword_only: decl.keyword_only,
-                    name: decl.name.clone(),
-                    ty: substitute_type(ty, &substitutions),
-                    passing: *passing,
-                    has_default: decl.default.is_some(),
-                })
-                .collect(),
-            return_type: Box::new(substitute_type(
-                &function.signature.return_type,
-                &substitutions,
-            )),
+            params,
+            return_type: Box::new(return_type),
         })
     }
 
@@ -1766,6 +1776,9 @@ impl<'a> FunctionChecker<'a> {
             .map(|param| param.ty.clone())
             .collect::<Vec<_>>();
         let param_passings = params.iter().map(|param| param.passing).collect::<Vec<_>>();
+        // A call through a view-returning contract has the pointee type; the
+        // returned-view binding rules see the contract through the callee.
+        let return_type = super::returned_view_pointee(return_type);
         self.type_check_callable_args(
             "function value",
             &[],
@@ -2933,7 +2946,14 @@ impl FunctionChecker<'_> {
         // no concrete callable type.
         let substitutions =
             self.bound_method_substitutions(&target, field, expected, explicit_type_args, span)?;
-        if target.decl.view_return.is_some() {
+        // A view of another explicit parameter stays in the bound contract
+        // (C9); only the receiver origin moves into hidden storage.
+        if target
+            .decl
+            .view_return
+            .as_ref()
+            .is_some_and(|view| view.origin == "self")
+        {
             return Err(Diagnostic::coded_at(
                 "AU3010",
                 span,
@@ -2943,7 +2963,7 @@ impl FunctionChecker<'_> {
                 ),
             )
             .with_help(
-                "call it directly and bind the result with `view`, because structural `def(...) -> R` types cannot encode a returned-view origin",
+                "call it directly and bind the result with `view`, because a bound method's contract cannot name its moved receiver as a view origin",
             ));
         }
         let params = target
@@ -2960,7 +2980,11 @@ impl FunctionChecker<'_> {
                 has_default: param.default.is_some(),
             })
             .collect::<Vec<_>>();
-        let return_type = substitute_type(&target.signature.return_type, &substitutions);
+        let return_type = super::wrap_returned_view(
+            &params,
+            substitute_type(&target.signature.return_type, &substitutions),
+            target.decl.view_return.as_ref(),
+        );
         // A Copy receiver is snapshotted into the closure; any other receiver
         // must be an owned place or a fresh temporary that moves in once.
         let mode = if self.is_copy_type(object_ty) {

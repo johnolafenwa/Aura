@@ -1,0 +1,23 @@
+class Cell:
+    count: int64
+
+class Pair:
+    first: Cell
+    second: Cell
+
+def second_of(pair: mut Pair) -> view mut Cell from pair:
+    return view mut pair.second
+
+type Slot = Callable[def(pair: mut Pair) -> view mut Cell from pair]
+
+def main():
+    mut pair = Pair(first=Cell(count=1), second=Cell(count=2))
+    picker = Slot(second_of)
+    view mut chosen = picker(pair)
+    chosen.count = chosen.count + 40
+    print(pair.second.count)
+    direct: def(pair: mut Pair) -> view mut Cell from pair = second_of
+    view mut other = direct(pair)
+    other.count = other.count + 8
+    print(pair.second.count)
+    print(pair.first.count)

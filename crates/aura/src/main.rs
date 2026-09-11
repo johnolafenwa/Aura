@@ -1136,7 +1136,7 @@ fn is_test_registration_type_ref(ty: &aura_compiler::ast::TypeRef) -> bool {
     );
     let case_is_function = matches!(
         &elements[1].kind,
-        TypeRefKind::Function { params, return_type }
+        TypeRefKind::Function { params, return_type, .. }
             if params.is_empty() && is_none_type_ref(return_type)
     );
     label_is_str && case_is_function

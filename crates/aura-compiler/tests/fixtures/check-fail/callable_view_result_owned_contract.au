@@ -1,0 +1,11 @@
+class Pair:
+    left: str
+    right: str
+
+def pick_left(pair: Pair) -> view str from pair:
+    return view pair.left
+
+def main():
+    pair = Pair(left="ada", right="linus")
+    chooser: def(pair: Pair) -> str = pick_left
+    print(chooser(pair))

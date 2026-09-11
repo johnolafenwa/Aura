@@ -1889,6 +1889,41 @@ impl Parser {
                 "expected `->` and a return type after function type parameters",
             ));
         }
+        // `-> view [mut] T from name` names a stored callable's argument
+        // origin (C9); the checker resolves `name` against the parameters.
+        if matches!(self.current_kind(), TokenKind::Identifier(name) if name == "view")
+            && matches!(
+                self.peek_kind(1),
+                Some(
+                    TokenKind::KwMut
+                        | TokenKind::KwIndirect
+                        | TokenKind::KwDef
+                        | TokenKind::Identifier(_)
+                        | TokenKind::LParen
+                )
+            )
+        {
+            let view_span = self.bump().span;
+            let mutable = self.eat_simple(&TokenKind::KwMut).is_some();
+            let return_type = self.parse_type_atom()?;
+            if self.eat_simple(&TokenKind::KwFrom).is_none() {
+                return Err(parse_error(
+                    self.current_span(),
+                    "a view return type requires `from` and one named parameter origin",
+                ));
+            }
+            let origin = self.expect_identifier()?;
+            return Ok(TypeRef::function_with_view_return(
+                params,
+                return_type,
+                Some(ViewReturn {
+                    mutable,
+                    origin,
+                    span: view_span,
+                }),
+                span,
+            ));
+        }
         let return_type = self.parse_type_atom()?;
         Ok(TypeRef::function_with_params(params, return_type, span))
     }
@@ -3359,7 +3394,36 @@ impl Parser {
             if !matches!(self.peek_kind_at(idx), Some(TokenKind::Arrow)) {
                 return idx;
             }
-            return self.skip_type_tokens(idx + 1);
+            idx += 1;
+            // `-> view [mut] T from name` (C9) spans the same annotation.
+            let view_result = matches!(
+                self.peek_kind_at(idx),
+                Some(TokenKind::Identifier(name)) if name == "view"
+            ) && matches!(
+                self.peek_kind_at(idx + 1),
+                Some(
+                    TokenKind::KwMut
+                        | TokenKind::KwIndirect
+                        | TokenKind::KwDef
+                        | TokenKind::Identifier(_)
+                        | TokenKind::LParen
+                )
+            );
+            if view_result {
+                idx += 1;
+                if matches!(self.peek_kind_at(idx), Some(TokenKind::KwMut)) {
+                    idx += 1;
+                }
+            }
+            let end = self.skip_type_tokens(idx);
+            if view_result
+                && end > idx
+                && matches!(self.peek_kind_at(end), Some(TokenKind::KwFrom))
+                && matches!(self.peek_kind_at(end + 1), Some(TokenKind::Identifier(_)))
+            {
+                return end + 2;
+            }
+            return end;
         }
 
         if matches!(self.peek_kind_at(idx), Some(TokenKind::LParen)) {
@@ -4139,6 +4203,7 @@ fn offset_type_ref_span(type_ref: &mut TypeRef, line: usize, column_offset: usiz
         TypeRefKind::Function {
             params,
             return_type,
+            view_return,
         } => {
             for param in params {
                 param.span.line = line;
@@ -4146,6 +4211,10 @@ fn offset_type_ref_span(type_ref: &mut TypeRef, line: usize, column_offset: usiz
                 offset_type_ref_span(&mut param.ty, line, column_offset);
             }
             offset_type_ref_span(return_type, line, column_offset);
+            if let Some(view_return) = view_return {
+                view_return.span.line = line;
+                view_return.span.column += column_offset;
+            }
         }
     }
 }

@@ -208,6 +208,7 @@ pub fn plan_module_unions(module: &mut crate::mir::MirModule, is_copy: impl Fn(&
                     .for_each(|capture| collect(&capture.ty, unions));
                 collect(return_type, unions);
             }
+            Type::ReturnedView(view) => collect(&view.pointee, unions),
             Type::Callable(callable) => {
                 callable
                     .params

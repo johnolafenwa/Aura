@@ -289,6 +289,10 @@ fn prospective_nodes(
                         .map(|param| (&param.ty, child_depth, substitute)),
                 );
             }
+            Type::ReturnedView(view) => {
+                reserve_stack(&mut stack, 1, span)?;
+                stack.push((&view.pointee, child_depth, substitute));
+            }
             Type::Callable(callable) => {
                 let children =
                     callable.params.len().checked_add(1).ok_or_else(|| {
@@ -379,6 +383,18 @@ fn check_key_shape(
 
         match ty {
             Type::Unit => add_key_bytes(&mut bytes, 9, byte_limit, span)?,
+            Type::ReturnedView(view) => {
+                add_key_bytes(&mut bytes, 15, byte_limit, span)?;
+                add_json_string(&mut bytes, &view.origin.to_string(), byte_limit, span)?;
+                reserve_key_stack(&mut stack, 1, span)?;
+                stack.push((
+                    &view.pointee,
+                    child_depth,
+                    module,
+                    resolve_names,
+                    substitute,
+                ));
+            }
             Type::Module(name) => {
                 add_key_bytes(&mut bytes, 11, byte_limit, span)?;
                 add_json_string(&mut bytes, name, byte_limit, span)?;

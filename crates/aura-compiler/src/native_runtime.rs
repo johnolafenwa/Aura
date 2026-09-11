@@ -1447,6 +1447,10 @@ fn runtime_type_pattern_from_name(name: &str) -> Type {
                     .collect(),
                 return_type: Box::new(decode_pattern(*return_type)),
             },
+            Type::ReturnedView(mut view) => {
+                view.pointee = decode_pattern(view.pointee);
+                Type::ReturnedView(view)
+            }
             Type::Callable(mut callable) => {
                 for param in callable.params.iter_mut() {
                     param.ty = decode_pattern(param.ty.clone());
@@ -1550,6 +1554,17 @@ fn runtime_type_pattern_matches(
         // A packed callable value carries its own function or closure
         // signature at run time; the declared erased type admits it when the
         // contract ABI matches and the value's kind is no stronger.
+        Type::ReturnedView(view) => matches!(
+            actual,
+            Type::ReturnedView(actual_view)
+                if actual_view.mutable == view.mutable
+                    && actual_view.origin == view.origin
+                    && runtime_type_pattern_matches(
+                        &view.pointee,
+                        &actual_view.pointee,
+                        substitutions
+                    )
+        ),
         Type::Callable(pattern_callable) => {
             let (actual_params, actual_return, actual_kind): (
                 &[crate::sema::FunctionParamContract],
@@ -7092,6 +7107,7 @@ pub extern "C-unwind" fn aura_direct_value_type_matches(
                 Type::Function { .. }
                 | Type::Closure { .. }
                 | Type::Callable(_)
+                | Type::ReturnedView(_)
                 | Type::Unit
                 | Type::Module(_)
                 | Type::TypeParam(_) => false,

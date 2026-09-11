@@ -72,7 +72,11 @@ captures are owned, and a body may mutate an owned capture, which makes the
 closure Mutable. `receiver.method` outside call position is a bound method:
 a compiler-synthesized closure over the receiver whose call kind follows the
 receiver capability (Q18 A), and `Class.method` on a non-generic class is a
-function value.
+function value. A stored callable's contract may return a view of one
+explicit parameter, `def(...) -> view [mut] T from name` (Q22 A); a call
+through it binds a `view` whose footprint is every fixed path of the origin
+with the result type. Captured-self origins and loan environments remain
+unstorable, and task callables cannot return views.
 
 Phase 6.5 implements ADR-0038 place-based loans and views. Local shared and
 mutable views cover roots, fixed class fields, and tuple positions; lifetimes
@@ -228,7 +232,7 @@ youngest-first task ancestry. Each public schema-version-1 frame span has its
 own required source `path`; the analysis/LSP editor shape permits an optional
 `file_path` for source-only analysis. The public diagnostic schema remains
 version `1` because the always-present arrays are an additive extension;
-compiler-service/editor transport uses semantic schema version `13`. This
+compiler-service/editor transport uses semantic schema version `14`. This
 version includes structural function values, import aliases, and the expanded
 numeric expression surface, and forwards the same diagnostic records.
 

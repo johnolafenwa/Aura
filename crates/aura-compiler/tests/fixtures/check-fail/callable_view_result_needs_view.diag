@@ -1,0 +1,6 @@
+error[AU3010]: a view must initialize an explicit `view` binding
+ --> crates/aura-compiler/tests/fixtures/check-fail/callable_view_result_needs_view.au:11:14
+   |
+11 |     chosen = chooser(pair)
+   |              ^
+  = help: write `view chosen = ...` with the returned view's declared capability

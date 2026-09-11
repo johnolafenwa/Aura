@@ -271,7 +271,11 @@ tuple-type
     | "(", type, ",", type, { ",", type }, ")" ;
 
 function-type
-    = "def", "(", [ function-type-parameters ], ")", "->", type ;
+    = "def", "(", [ function-type-parameters ], ")", "->", function-type-result ;
+
+function-type-result
+    = type
+    | "view", [ "mut" ], type, "from", identifier ;
 
 function-type-parameters
     = function-type-parameter, { ",", function-type-parameter },

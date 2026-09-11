@@ -1,0 +1,5 @@
+error[AU3008]: a task callable cannot return a view; the child's result must be an owned value
+ --> crates/aura-compiler/tests/fixtures/check-fail/callable_view_result_task_target.au:8:12
+  |
+8 | type Job = TaskCallable[def(pair: Pair) -> view str from pair]
+  |            ^

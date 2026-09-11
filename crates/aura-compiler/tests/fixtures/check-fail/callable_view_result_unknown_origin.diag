@@ -1,0 +1,5 @@
+error[AU3010]: returned-view origin `items` is not a named parameter of this function type
+ --> crates/aura-compiler/tests/fixtures/check-fail/callable_view_result_unknown_origin.au:10:33
+   |
+10 |     chooser: def(pair: Pair) -> view str from items = pick_left
+   |                                 ^

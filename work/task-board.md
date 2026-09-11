@@ -133,9 +133,14 @@ Last updated: 2026-09-10
   bind through the method's own helpers on both backends.
 - Bound methods family committed (`7a760ad4`); the generic type-argument
   follow-up (`method[T]` and expected-contract inference) is gated separately.
-- Next: commit the generic bound-method follow-up, then stored
-  argument-origin views, Shared callback sites, editor/docs/reference-agent
-  updates, full gates and integration.
+- Generic bound-method follow-up committed (`3108f3cd`).
+- Stored argument-origin views family (2026-09-11): a stored callable's
+  result may be `view [mut] T from name` for one named parameter; values,
+  packing, and calls through locals, fields, and container elements work on
+  both backends; owned and view contracts never admit each other; `from
+  self` origins and task callables are refused; schema 14.
+- Next: commit the stored-view family, then Shared callback sites,
+  editor/docs/reference-agent updates, full gates and integration.
 - Option removal and all phase 2 signature changes remain excluded; protected
   user files and coverage floors remain unchanged.
 - Work and handoff ledger: [2026-09-09-batch-1-phase-1.md](2026-09-09-batch-1-phase-1.md).

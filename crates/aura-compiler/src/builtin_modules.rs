@@ -91,8 +91,9 @@ fn lower_type_ref_with_type_params(
         crate::ast::TypeRefKind::Function {
             params,
             return_type,
-        } => Type::Function {
-            params: params
+            view_return,
+        } => {
+            let params = params
                 .iter()
                 .map(|param| FunctionParamContract {
                     keyword_only: param.keyword_only,
@@ -101,9 +102,17 @@ fn lower_type_ref_with_type_params(
                     passing: resolve_param_passing(param.mode),
                     has_default: param.has_default,
                 })
-                .collect(),
-            return_type: Box::new(lower_type_ref_with_type_params(return_type, type_params)),
-        },
+                .collect::<Vec<_>>();
+            let return_type = crate::sema::wrap_returned_view(
+                &params,
+                lower_type_ref_with_type_params(return_type, type_params),
+                view_return.as_ref(),
+            );
+            Type::Function {
+                params,
+                return_type: Box::new(return_type),
+            }
+        }
     }
 }
 

@@ -9014,3 +9014,43 @@ fn bound_and_associated_method_values_hover_with_their_callable_types() {
         );
     }
 }
+
+#[test]
+fn stored_view_contracts_hover_with_their_origin() {
+    let source = [
+        "class Pair:",
+        "    left: str",
+        "    right: str",
+        "def pick_left(pair: Pair) -> view str from pair:",
+        "    return view pair.left",
+        "def main():",
+        "    pair = Pair(left=\"ada\", right=\"linus\")",
+        "    chooser: def(pair: Pair) -> view str from pair = pick_left",
+        "    view head = chooser(pair)",
+        "    print(head)",
+        "",
+    ]
+    .join("\n");
+    let analysis = analyze_source(&source);
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "{:?}",
+        analysis.diagnostics
+    );
+    assert!(
+        analysis
+            .occurrences
+            .iter()
+            .any(|occurrence| occurrence.line == 7
+                && occurrence
+                    .hover
+                    .contains("chooser: def(pair: Pair) -> view str from pair")),
+        "the stored contract should hover with its view origin: {:?}",
+        analysis
+            .occurrences
+            .iter()
+            .filter(|occurrence| occurrence.line == 7)
+            .map(|occurrence| occurrence.hover.clone())
+            .collect::<Vec<_>>()
+    );
+}

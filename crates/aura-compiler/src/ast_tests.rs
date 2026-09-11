@@ -266,6 +266,7 @@ fn type_ref_json_preserves_named_tuple_and_function_shapes() {
                 "indirect": false,
                 "span": {"line": 3, "column": 5}
             },
+            "view_return": null,
             "indirect": false,
             "span": {"line": 3, "column": 5}
         })
@@ -362,6 +363,7 @@ fn function_type_pretty_json_preserves_the_public_wire_shape() {
                 "indirect": false,
                 "span": {"line": 8, "column": 25}
             },
+            "view_return": null,
             "indirect": false,
             "span": {"line": 8, "column": 4}
         })

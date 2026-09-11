@@ -1,0 +1,5 @@
+error[AU3010]: a function type cannot return a view from `self`; only one named parameter can be a stored callable's view origin
+ --> crates/aura-compiler/tests/fixtures/check-fail/callable_view_result_bound_self.au:7:33
+  |
+7 | type Peeker = Callable[def() -> view str from self]
+  |                                 ^

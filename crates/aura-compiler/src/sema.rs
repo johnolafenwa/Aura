@@ -15,6 +15,7 @@ pub use callables::{
     CallableType, ClosureCallKind, ClosureCapture, ClosureCaptureMode, ClosureId, ClosureInfo,
     ClosureOwner, FunctionParamContract,
 };
+pub(crate) use loans::{synthetic_returned_view_decl, SYNTHETIC_CALLABLE_DECL};
 pub(crate) use types::closure_call_kind_for;
 mod resolve;
 use resolve::{find_namespace_in_modules, reject_reserved_type_name, validate_type_params};
@@ -87,11 +88,11 @@ use types::{
     merged_type_param_scope, substitute_trait_bounds, type_param_scope, unify_type_pattern,
 };
 pub(crate) use types::{
-    has_unresolved_type_params, substitute_alias_type, substitute_trait_bound, substitute_type,
-    substitutions_from_decl_type_args, trait_impl_specificity, trait_impl_specificity_parts,
-    type_pattern_matches,
+    has_unresolved_type_params, returned_view_pointee, substitute_alias_type,
+    substitute_trait_bound, substitute_type, substitutions_from_decl_type_args,
+    trait_impl_specificity, trait_impl_specificity_parts, type_pattern_matches, wrap_returned_view,
 };
-pub use types::{TraitBound, Type, TypeDefinitions};
+pub use types::{ReturnedViewType, TraitBound, Type, TypeDefinitions};
 mod properties;
 pub(crate) use properties::integer_type_bounds;
 use properties::{
@@ -1312,6 +1313,7 @@ impl<'a> FunctionChecker<'a> {
             // retained inside a capture-free code pointer.
             Type::Closure { .. }
             | Type::Callable(_)
+            | Type::ReturnedView(_)
             | Type::Function { .. }
             | Type::TypeParam(_)
             | Type::Module(_)
@@ -14412,6 +14414,7 @@ impl<'a> FunctionChecker<'a> {
             Type::Function { .. }
             | Type::Closure { .. }
             | Type::Callable(_)
+            | Type::ReturnedView(_)
             | Type::Tuple(_)
             | Type::Unit => {
                 return Err(Diagnostic::at(

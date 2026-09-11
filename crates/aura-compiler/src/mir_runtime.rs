@@ -10812,6 +10812,15 @@ fn collect_runtime_type_substitutions(
             }
             collect_runtime_type_substitutions(pattern_return, actual_return, substitutions);
         }
+        Type::ReturnedView(view) => {
+            if let Type::ReturnedView(actual_view) = actual {
+                collect_runtime_type_substitutions(
+                    &view.pointee,
+                    &actual_view.pointee,
+                    substitutions,
+                );
+            }
+        }
         Type::Callable(pattern_callable) => {
             let Type::Callable(actual_callable) = actual else {
                 return;
@@ -10943,6 +10952,7 @@ fn collect_type_params_from_type(ty: &Type, collected: &mut std::collections::BT
             }
             collect_type_params_from_type(return_type, collected);
         }
+        Type::ReturnedView(view) => collect_type_params_from_type(&view.pointee, collected),
         Type::Callable(callable) => {
             for param in &callable.params {
                 collect_type_params_from_type(&param.ty, collected);

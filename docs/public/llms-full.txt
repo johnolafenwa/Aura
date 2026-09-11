@@ -2934,7 +2934,7 @@ The JSON result is an array of `{ "name": str, "kind": str, "detail": str }` obj
 `ast-json`, `analyze`, `complete`, and `lsp` emit JSON. The `analyze` and `complete` shapes described here are maintained tooling contracts for Aura 0.3. `ast`, `ast-json`, and `mir` expose compiler inspection data for people and tests; their exact formatting and internal node/block shape are not a stable cross-version serialization API.
 
 `aura lsp` is a persistent JSON-lines compiler service. Every request requires
-`semantic_interface_version: 13` plus string fields `method`, `path`, and
+`semantic_interface_version: 14` plus string fields `method`, `path`, and
 `source`; `id` is optional and is echoed in the response. Supported requests
 are:
 
@@ -2944,7 +2944,7 @@ are:
 ```
 
 Each response is one line containing the same `id`,
-`semantic_interface_version: 13`, and either `result` or an `error` string.
+`semantic_interface_version: 14`, and either `result` or an `error` string.
 Paths give the virtual source a package/import context; ranges and completion
 positions are zero-based. A missing or different semantic interface version is
 an incompatible request and returns a schema-mismatch error.
@@ -3150,7 +3150,7 @@ The parser, checker, package resolver, diagnostic model, analysis engine, and MI
 
 `aura run --backend auto` prefers the direct backend and degrades to the MIR runtime only when direct building or launching is unavailable. Once a direct child runs, an Aura trap, signal termination, wait failure, or diagnostic-protocol failure is a final program/execution outcome and never triggers MIR fallback. Human mode prints an actual fallback reason on standard error before the MIR program runs; JSON mode includes it in the final structured report after execution. A forced `direct` run never degrades, so a parity or benchmark caller cannot silently measure the other backend. Every backend observes the same program arguments, standard output, exit code, and complete runtime diagnostic, including typed call frames and task ancestry.
 
-The native path is content-addressed. A successful direct build atomically publishes its binary, that artifact's SHA-256, and a key-bound unique entry identity into a cache keyed by native cache format `v5`, compiler-owned semantic-interface schema version `13`, this compiler's version, the host target, the backend, the exact linked runtime archive content, its ordered native link arguments, and the complete lowered program, which already incorporates the entry source and every resolved dependency source. The format and semantic identities are independent key fields: changing compiler-owned type or ownership metadata invalidates artifacts even if the native container format remains readable. Cache artifacts above 512 MiB are simply not retained; the just-built program still runs. A later run with the same inputs requires a regular directory and bounded regular sidecars, verifies the entry identity, digest, artifact size, execute permission, and platform-native executable shape, and only then uses the entry. It launches a private copy of exactly those verified bytes through a no-shell-fallback native execution path, so replacement of the shared cache pathname after verification cannot substitute different bytes. Missing or mismatched metadata, truncation, a non-regular member, a lost execute permission, or an executable-format/architecture rejection makes the entry a cache miss: Aura quarantines and removes that exact entry, then rebuilds before running. A temporary-directory failure, process-resource failure, `noexec` mount, or other environmental launch failure is not evidence that verified cache bytes are corrupt; Aura preserves the entry and reports or falls back according to the selected backend.
+The native path is content-addressed. A successful direct build atomically publishes its binary, that artifact's SHA-256, and a key-bound unique entry identity into a cache keyed by native cache format `v5`, compiler-owned semantic-interface schema version `14`, this compiler's version, the host target, the backend, the exact linked runtime archive content, its ordered native link arguments, and the complete lowered program, which already incorporates the entry source and every resolved dependency source. The format and semantic identities are independent key fields: changing compiler-owned type or ownership metadata invalidates artifacts even if the native container format remains readable. Cache artifacts above 512 MiB are simply not retained; the just-built program still runs. A later run with the same inputs requires a regular directory and bounded regular sidecars, verifies the entry identity, digest, artifact size, execute permission, and platform-native executable shape, and only then uses the entry. It launches a private copy of exactly those verified bytes through a no-shell-fallback native execution path, so replacement of the shared cache pathname after verification cannot substitute different bytes. Missing or mismatched metadata, truncation, a non-regular member, a lost execute permission, or an executable-format/architecture rejection makes the entry a cache miss: Aura quarantines and removes that exact entry, then rebuilds before running. A temporary-directory failure, process-resource failure, `noexec` mount, or other environmental launch failure is not evidence that verified cache bytes are corrupt; Aura preserves the entry and reports or falls back according to the selected backend.
 
 On maintained Unix hosts, cache establishment is coordinated across processes. A short runtime-identity lock protects source-checkout runtime discovery, and a separate writer lock for each content key protects the miss/recheck/build/publish sequence. Therefore, N concurrent cold runs of the same program perform one build; after that publication, the other N-1 processes recheck and consume the verified entry. Existing verified hits take the optimistic read path and do not wait for a writer holding that key. Locks are released before linking output is executed, while atomic publication and invalidation continue to ensure that readers never observe a partial entry and a stale invalidator cannot delete a replacement published for the same key.
 
@@ -3173,7 +3173,7 @@ streaming contract is ratified.
 
 `AURA_CACHE_DIR` selects the cache directory; the default is `~/.cache/aura/native`. The directory is a trust boundary. Its colocated SHA-256 detects corruption but does not authenticate bytes written by a hostile account, so the root must be private to the current OS user and every writer with access to it must be trusted. On the maintained Unix hosts, Aura rejects a root that is owned by another user or writable by group/other and creates or tightens accepted cache directories to mode `0700`. Private launch copies are removed after the child exits. Each launch carries an inherited exclusive lease, so later cleanup preserves the directory while either the `aura` parent or native child is still using it. Interrupted cache-publication, memo, and quarantine stages are collected only after their encoded 24-hour grace period and confirmation that their owner process is gone. An installed immutable runtime can still perform a direct build when caching is disabled or unavailable; no cache lock is required merely to build, and the uncached artifact is not retained.
 
-ADR-0031 ratifies the command split: `aura run` defaults to `mir` for the interactive edit-run path, while `aura build` defaults to `auto` for artifact production. Maintained measurements put a cold miss at about 1.3 seconds; a direct hello-world executable is roughly 57 MB of statically linked runtime. Each cache hit reads, hashes, and privately materializes the artifact, and workloads dominated by programs seen once, including CI, still pay the cold path on every program. `aura build --backend direct` uses native direct emission, and `--backend auto` may select the checked MIR-launcher fallback. The language server delegates semantic analysis and completion to the persistent compiler service; every JSON-lines request and response identifies semantic-interface schema version `13`. A missing or different identity closes the incompatible service and invalidates all document analysis before the lexical recovery path is used, so cached function-type or ownership metadata cannot cross compiler versions. The lexical fallback is recovery-only and is not a second language implementation.
+ADR-0031 ratifies the command split: `aura run` defaults to `mir` for the interactive edit-run path, while `aura build` defaults to `auto` for artifact production. Maintained measurements put a cold miss at about 1.3 seconds; a direct hello-world executable is roughly 57 MB of statically linked runtime. Each cache hit reads, hashes, and privately materializes the artifact, and workloads dominated by programs seen once, including CI, still pay the cold path on every program. `aura build --backend direct` uses native direct emission, and `--backend auto` may select the checked MIR-launcher fallback. The language server delegates semantic analysis and completion to the persistent compiler service; every JSON-lines request and response identifies semantic-interface schema version `14`. A missing or different identity closes the incompatible service and invalidates all document analysis before the lexical recovery path is used, so cached function-type or ownership metadata cannot cross compiler versions. The lexical fallback is recovery-only and is not a second language implementation.
 
 Backend parity is a release gate. A construct accepted by one maintained
 execution backend must have the same observable result or complete diagnostic
@@ -3598,11 +3598,57 @@ let an expected callable contract supply them, such as the contract of a
 associated method. A bare generic method reference reports `AU2005`, a
 wrong type-argument count or an unsatisfiable bound reports `AU2002`, and an
 associated method of a generic class still needs a call (`AU2005`). A
-`view ... from self` method cannot be bound
-(`AU3010`). Binding a shared or mutable parameter reports `AU3002`, binding a
+`view ... from self` method cannot be bound (`AU3010`), while a method
+returning a view of one of its other parameters keeps that contract in the
+bound closure (see Stored View Contracts). Binding a shared or mutable
+parameter reports `AU3002`, binding a
 view reports `AU3004`, and a later use of the moved receiver reports `AU3001`
 pointing at the binding site. Calling a Mutable bound method through an
 immutable local reports `AU3003`.
+
+## Stored View Contracts
+
+A function whose result is `view [mut] T from name` for one of its ordinary
+parameters keeps that contract in its value type, written
+`def(pair: Pair) -> view str from pair`. The origin is one named parameter
+of the contract; a positional-only slot or an unknown name is rejected
+(`AU3010`), and a `view mut` result requires a `mut` origin parameter. Such
+a value stores, packs into `Callable[...]`, and passes like any other
+callable with an identical contract: an owned-result contract does not admit
+a view-returning function and a view contract does not admit an
+owned-result function (`AU2002`). A call through the value is a returned-view
+call: its result must initialize a `view` binding (`AU3010`), a `view mut`
+result needs a mutable origin argument, and because the callee behind a value
+is opaque the view's footprint is every fixed field path or tuple position of
+the origin argument whose type is the result type, so the whole origin stays
+borrowed for the binding's lifetime. A `from self` result has no value type,
+so a bound method returning a view of its receiver cannot be stored
+(`AU3010`); a bound method whose view originates in another parameter keeps
+that contract, and a `TaskCallable[...]` contract cannot return a view
+(`AU3008`).
+
+```aura
+class Pair:
+    left: str
+    right: str
+
+def pick_left(pair: Pair) -> view str from pair:
+    return view pair.left
+
+def pick_right(pair: Pair) -> view str from pair:
+    return view pair.right
+
+type Picker = Callable[def(pair: Pair) -> view str from pair]
+
+def main():
+    pair = Pair(left="ada", right="linus")
+    packed = Picker(pick_right)
+    view tail = packed(pair)
+    print(tail)
+    chooser: def(pair: Pair) -> view str from pair = pick_left
+    view head = chooser(pair)
+    print(head)
+```
 
 ## Limits And Implementation-Defined Behavior
 
@@ -3611,7 +3657,8 @@ statement bodies, inline parameter types, defaults, generics, implicit
 reference capture, trait objects, FFI callbacks, asynchronous
 syntax, returned loan closures, or lifetime-bearing structural callable types.
 Owned callable storage holds owned captures only; loan captures stay in
-local loan closures. A packed value keeps the closure's existing environment
+local loan closures. A stored callable may return a view of one explicit
+parameter but never of a captured receiver. A packed value keeps the closure's existing environment
 as its storage, so packing allocates no second environment on either
 backend; the checkpoint's inline-buffer plan is the native ABI target this
 representation stands in for. A `TaskCallable[...]` value is a stored task
@@ -4117,7 +4164,9 @@ proved every capture Transfer (see [Closures](/manual/closures#typing-rules)).
 A stored target is moved into the start for one child call, whether its call
 kind is Shared, Mutable, or Consuming; a Mutable target's captures are
 child-owned state with no parent writeback. An ordinary erased `Callable`
-target is rejected with `AU3008` because its environment is hidden. Existing
+target is rejected with `AU3008` because its environment is hidden, and a
+`TaskCallable[...]` contract cannot return a view (`AU3008`) because the
+child's result must be an owned value. Existing
 direct named-function and
 associated-method-without-`self` targets remain accepted, including explicit
 generic targets written as `function[Types]` or
@@ -5280,6 +5329,8 @@ This page documents known current limits of the Aura compiler and runtime.
   contract, and `Class.method` on a non-generic class is a function value;
   a generic method's type arguments come from `method[T]` or an expected
   contract, and an associated method of a generic class still needs a call.
+  A stored callable may return a view of one named parameter; a `from self`
+  view result and loan captures still cannot be stored.
 - Lambdas with parameters require complete expected parameter types; a
   zero-parameter lambda may infer `def() -> R` from its expression body.
   A lambda without a capture list captures by value. An explicit exhaustive
@@ -5741,6 +5792,10 @@ an invalid returned kind, or a call whose origin is not an addressable place.
 The diagnostic identifies the declared origin and the incompatible expression
 or destination. Return an owned clone/index/handle when the access must escape,
 or keep a local/closure loan synchronous and inside the owner's region.
+A function type whose `view` result names an origin that is not one of its
+named parameters, or a `view mut` result over a non-`mut` origin, also
+reports `AU3010`; a task callable contract that returns a view reports
+`AU3008`.
 
 For explicit views, `AU3002` labels both the view creation and the final use
 that keeps its inferred region live. Removing a later use can shorten the loan;
@@ -5877,7 +5932,7 @@ imported module is never mislabeled with the entry module's path.
 
 The arrays are an additive schema-version-1 extension. Schema-version-1
 readers MUST ignore unrecognized object members while continuing to validate
-the fields they use. The compiler-service semantic-interface version is `13`.
+the fields they use. The compiler-service semantic-interface version is `14`.
 
 The process exits unsuccessfully after emitting a JSON error report. Tools MUST
 parse standard error as one JSON document in JSON mode and MUST NOT scrape the
@@ -9254,6 +9309,12 @@ compiler-synthesized closure over the receiver, specified in
 [Closures](/manual/closures#bound-methods). Lambdas and closure capture are
 specified separately.
 
+A function returning `view [mut] T from name` for one of its parameters
+keeps that contract in its value type, `def(pair: Pair) -> view str from
+pair`; a `from self` method result has no value type. Storage, packing, and
+calls through such values are specified in
+[Closures](/manual/closures#stored-view-contracts).
+
 ## Function Values And Task Starts
 
 The ordinary and explicit-stack `TaskGroup` start methods accept a named
@@ -10297,7 +10358,11 @@ tuple-type
     | "(", type, ",", type, { ",", type }, ")" ;
 
 function-type
-    = "def", "(", [ function-type-parameters ], ")", "->", type ;
+    = "def", "(", [ function-type-parameters ], ")", "->", function-type-result ;
+
+function-type-result
+    = type
+    | "view", [ "mut" ], type, "from", identifier ;
 
 function-type-parameters
     = function-type-parameter, { ",", function-type-parameter },
@@ -16459,7 +16524,11 @@ captures are owned, and a body may mutate an owned capture, which makes the
 closure Mutable. `receiver.method` outside call position is a bound method:
 a compiler-synthesized closure over the receiver whose call kind follows the
 receiver capability (Q18 A), and `Class.method` on a non-generic class is a
-function value.
+function value. A stored callable's contract may return a view of one
+explicit parameter, `def(...) -> view [mut] T from name` (Q22 A); a call
+through it binds a `view` whose footprint is every fixed path of the origin
+with the result type. Captured-self origins and loan environments remain
+unstorable, and task callables cannot return views.
 
 Phase 6.5 implements ADR-0038 place-based loans and views. Local shared and
 mutable views cover roots, fixed class fields, and tuple positions; lifetimes
@@ -16615,7 +16684,7 @@ youngest-first task ancestry. Each public schema-version-1 frame span has its
 own required source `path`; the analysis/LSP editor shape permits an optional
 `file_path` for source-only analysis. The public diagnostic schema remains
 version `1` because the always-present arrays are an additive extension;
-compiler-service/editor transport uses semantic schema version `13`. This
+compiler-service/editor transport uses semantic schema version `14`. This
 version includes structural function values, import aliases, and the expanded
 numeric expression surface, and forwards the same diagnostic records.
 

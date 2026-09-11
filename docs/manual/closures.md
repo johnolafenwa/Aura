@@ -378,11 +378,57 @@ let an expected callable contract supply them, such as the contract of a
 associated method. A bare generic method reference reports `AU2005`, a
 wrong type-argument count or an unsatisfiable bound reports `AU2002`, and an
 associated method of a generic class still needs a call (`AU2005`). A
-`view ... from self` method cannot be bound
-(`AU3010`). Binding a shared or mutable parameter reports `AU3002`, binding a
+`view ... from self` method cannot be bound (`AU3010`), while a method
+returning a view of one of its other parameters keeps that contract in the
+bound closure (see Stored View Contracts). Binding a shared or mutable
+parameter reports `AU3002`, binding a
 view reports `AU3004`, and a later use of the moved receiver reports `AU3001`
 pointing at the binding site. Calling a Mutable bound method through an
 immutable local reports `AU3003`.
+
+## Stored View Contracts
+
+A function whose result is `view [mut] T from name` for one of its ordinary
+parameters keeps that contract in its value type, written
+`def(pair: Pair) -> view str from pair`. The origin is one named parameter
+of the contract; a positional-only slot or an unknown name is rejected
+(`AU3010`), and a `view mut` result requires a `mut` origin parameter. Such
+a value stores, packs into `Callable[...]`, and passes like any other
+callable with an identical contract: an owned-result contract does not admit
+a view-returning function and a view contract does not admit an
+owned-result function (`AU2002`). A call through the value is a returned-view
+call: its result must initialize a `view` binding (`AU3010`), a `view mut`
+result needs a mutable origin argument, and because the callee behind a value
+is opaque the view's footprint is every fixed field path or tuple position of
+the origin argument whose type is the result type, so the whole origin stays
+borrowed for the binding's lifetime. A `from self` result has no value type,
+so a bound method returning a view of its receiver cannot be stored
+(`AU3010`); a bound method whose view originates in another parameter keeps
+that contract, and a `TaskCallable[...]` contract cannot return a view
+(`AU3008`).
+
+```aura
+class Pair:
+    left: str
+    right: str
+
+def pick_left(pair: Pair) -> view str from pair:
+    return view pair.left
+
+def pick_right(pair: Pair) -> view str from pair:
+    return view pair.right
+
+type Picker = Callable[def(pair: Pair) -> view str from pair]
+
+def main():
+    pair = Pair(left="ada", right="linus")
+    packed = Picker(pick_right)
+    view tail = packed(pair)
+    print(tail)
+    chooser: def(pair: Pair) -> view str from pair = pick_left
+    view head = chooser(pair)
+    print(head)
+```
 
 ## Limits And Implementation-Defined Behavior
 
@@ -391,7 +437,8 @@ statement bodies, inline parameter types, defaults, generics, implicit
 reference capture, trait objects, FFI callbacks, asynchronous
 syntax, returned loan closures, or lifetime-bearing structural callable types.
 Owned callable storage holds owned captures only; loan captures stay in
-local loan closures. A packed value keeps the closure's existing environment
+local loan closures. A stored callable may return a view of one explicit
+parameter but never of a captured receiver. A packed value keeps the closure's existing environment
 as its storage, so packing allocates no second environment on either
 backend; the checkpoint's inline-buffer plan is the native ABI target this
 representation stands in for. A `TaskCallable[...]` value is a stored task

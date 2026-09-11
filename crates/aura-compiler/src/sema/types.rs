@@ -86,6 +86,7 @@ impl TypeDefinitions {
                     crate::ast::TypeRefKind::Function {
                         params,
                         return_type,
+                        ..
                     } => {
                         work.push(return_type);
                         work.extend(params.iter().rev().map(|param| &param.ty));
@@ -202,9 +203,24 @@ pub enum Type {
     /// `Callable[...]` / `TaskCallable[...]` owned storage with an erased
     /// environment; boxed so `Type` keeps its size budget.
     Callable(Box<CallableType>),
+    /// The result position of a callable value whose call returns a view of
+    /// one explicit ordinary argument (C9, Q22 A): `-> view [mut] T from
+    /// name`, encoded by the origin parameter's ordinal. It is legal only as
+    /// the `return_type` of `Function`, `Closure`, or `Callable`; a call
+    /// through such a value has the pointee type and binds a returned view.
+    ReturnedView(Box<ReturnedViewType>),
     TypeParam(String),
     Module(String),
     Unit,
+}
+
+/// A stored callable's argument-origin returned-view contract (C9).
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ReturnedViewType {
+    pub mutable: bool,
+    pub pointee: Type,
+    /// Ordinal of the origin parameter in the callable's parameter list.
+    pub origin: usize,
 }
 
 /// Normalized members and their defining-module structural identities.
@@ -274,6 +290,12 @@ impl Type {
                     .map(|arg| arg.source_type_ref(span))
                     .collect::<Result<Vec<_>>>()?,
             },
+            Type::ReturnedView(_) => {
+                return Err(Diagnostic::at(
+                    span,
+                    "a returned-view contract has no standalone type spelling",
+                ))
+            }
             Type::TypeParam(name) => TypeRefKind::Named {
                 name: name.clone(),
                 args: Vec::new(),
@@ -316,7 +338,8 @@ impl Type {
                         })
                     })
                     .collect::<Result<Vec<_>>>()?,
-                return_type: Box::new(return_type.source_type_ref(span)?),
+                return_type: Box::new(returned_view_pointee(return_type).source_type_ref(span)?),
+                view_return: returned_view_source(params, return_type, span),
             },
             Type::Callable(callable) => {
                 let signature = callable.contract().source_type_ref(span)?;
@@ -356,6 +379,12 @@ impl Type {
                 Type::Unit => json!(["~unit"]),
                 Type::Module(name) => json!(["module", name]),
                 Type::TypeParam(name) => json!(["parameter", name]),
+                Type::ReturnedView(view) => json!([
+                    "returned_view",
+                    view.mutable,
+                    view.origin,
+                    key(&view.pointee, module, names)
+                ]),
                 Type::Named(name, args) => {
                     let resolved = names.get(name).unwrap_or(name);
                     let nominal =
@@ -544,6 +573,86 @@ fn write_contract_params(
     Ok(())
 }
 
+/// Wraps a callable contract's result in its argument-origin view contract
+/// (C9) when the written type names one. The checker's type lowering has
+/// already rejected an origin that is not a named parameter, so a later
+/// lowering of the same reference falls back to the plain result only for
+/// source it never sees checked.
+pub(crate) fn wrap_returned_view(
+    params: &[FunctionParamContract],
+    return_type: Type,
+    view_return: Option<&crate::ast::ViewReturn>,
+) -> Type {
+    let Some(view_return) = view_return else {
+        return return_type;
+    };
+    let Some(origin) = params
+        .iter()
+        .position(|param| !param.name.is_empty() && param.name == view_return.origin)
+    else {
+        return return_type;
+    };
+    Type::ReturnedView(Box::new(ReturnedViewType {
+        mutable: view_return.mutable,
+        pointee: return_type,
+        origin,
+    }))
+}
+
+/// The value type a call through a callable contract produces: the pointee
+/// of a returned-view contract, or the result itself.
+pub(crate) fn returned_view_pointee(return_type: &Type) -> &Type {
+    match return_type {
+        Type::ReturnedView(view) => &view.pointee,
+        other => other,
+    }
+}
+
+/// The written `-> view [mut] T from name` form of a returned-view result.
+pub(crate) fn returned_view_source(
+    params: &[FunctionParamContract],
+    return_type: &Type,
+    span: crate::diag::Span,
+) -> Option<crate::ast::ViewReturn> {
+    let Type::ReturnedView(view) = return_type else {
+        return None;
+    };
+    Some(crate::ast::ViewReturn {
+        mutable: view.mutable,
+        origin: params
+            .get(view.origin)
+            .map(|param| param.name.clone())
+            .unwrap_or_default(),
+        span,
+    })
+}
+
+/// Writes `) -> R`, parenthesizing a union result, or `) -> view [mut] T
+/// from name` for a stored argument-origin view contract (C9).
+fn write_return_contract(
+    f: &mut fmt::Formatter<'_>,
+    params: &[FunctionParamContract],
+    return_type: &Type,
+) -> fmt::Result {
+    match return_type {
+        Type::ReturnedView(view) => {
+            let origin = params
+                .get(view.origin)
+                .map(|param| param.name.as_str())
+                .filter(|name| !name.is_empty())
+                .unwrap_or("?");
+            write!(
+                f,
+                ") -> view {}{} from {origin}",
+                if view.mutable { "mut " } else { "" },
+                view.pointee
+            )
+        }
+        Type::Union(_) => write!(f, ") -> ({return_type})"),
+        _ => write!(f, ") -> {return_type}"),
+    }
+}
+
 /// The call kind a written `Callable[...]` prefix denotes: bare `def` is
 /// Shared, `mut def` Mutable, `own def` Consuming (C1).
 pub(crate) fn closure_call_kind_for(call_kind: crate::ast::ReceiverKind) -> ClosureCallKind {
@@ -613,6 +722,11 @@ impl PartialEq for Type {
                         .all(|(left, right)| left.ty == right.ty && left.passing == right.passing)
                     && left.return_type == right.return_type
             }
+            (Self::ReturnedView(left), Self::ReturnedView(right)) => {
+                left.mutable == right.mutable
+                    && left.origin == right.origin
+                    && left.pointee == right.pointee
+            }
             (Self::TypeParam(left), Self::TypeParam(right))
             | (Self::Module(left), Self::Module(right)) => left == right,
             (Self::Unit, Self::Unit) => true,
@@ -633,6 +747,7 @@ impl Type {
             Type::Union(_) => false,
             Type::Unit => true,
             Type::Module(_) => false,
+            Type::ReturnedView(_) => false,
             Type::TypeParam(_) => false,
             Type::Tuple(elements) => elements.iter().all(Type::is_copy),
             Type::Function { .. } => true,
@@ -657,6 +772,13 @@ impl fmt::Display for Type {
             }
             Type::Unit => write!(f, "None"),
             Type::Module(name) => write!(f, "module {}", name),
+            Type::ReturnedView(view) => write!(
+                f,
+                "view {}{} from #{}",
+                if view.mutable { "mut " } else { "" },
+                view.pointee,
+                view.origin
+            ),
             Type::TypeParam(name) => write!(f, "{}", name),
             Type::Tuple(elements) => {
                 write!(f, "(")?;
@@ -677,11 +799,7 @@ impl fmt::Display for Type {
             } => {
                 write!(f, "def(")?;
                 write_contract_params(f, params)?;
-                if matches!(return_type.as_ref(), Type::Union(_)) {
-                    write!(f, ") -> ({return_type})")
-                } else {
-                    write!(f, ") -> {return_type}")
-                }
+                write_return_contract(f, params, return_type)
             }
             Type::Callable(callable) => {
                 write!(
@@ -691,11 +809,8 @@ impl fmt::Display for Type {
                     callable.call_kind.spelling()
                 )?;
                 write_contract_params(f, &callable.params)?;
-                if matches!(callable.return_type, Type::Union(_)) {
-                    write!(f, ") -> ({})]", callable.return_type)
-                } else {
-                    write!(f, ") -> {}]", callable.return_type)
-                }
+                write_return_contract(f, &callable.params, &callable.return_type)?;
+                write!(f, "]")
             }
             Type::Closure {
                 params,
@@ -710,11 +825,7 @@ impl fmt::Display for Type {
                 }
                 write!(f, "closure def(")?;
                 write_contract_params(f, params)?;
-                if matches!(return_type.as_ref(), Type::Union(_)) {
-                    write!(f, ") -> ({return_type})")
-                } else {
-                    write!(f, ") -> {return_type}")
-                }
+                write_return_contract(f, params, return_type)
             }
             Type::Named(name, args) if args.is_empty() => write!(f, "{}", name),
             Type::Named(name, args) => {
@@ -827,6 +938,13 @@ pub(super) fn lower_type_with_self(
                     "an owned callable type wraps a `def(...) -> ...` contract",
                 ));
             };
+            if *task && matches!(return_type.as_ref(), Type::ReturnedView(_)) {
+                return Err(Diagnostic::coded_at(
+                    "AU3008",
+                    type_ref.span,
+                    "a task callable cannot return a view; the child's result must be an owned value",
+                ));
+            }
             return Ok(Type::Callable(Box::new(CallableType {
                 task: *task,
                 call_kind: closure_call_kind_for(*call_kind),
@@ -853,7 +971,43 @@ pub(super) fn lower_type_with_self(
         crate::ast::TypeRefKind::Function {
             params,
             return_type,
+            view_return,
         } => {
+            if let Some(view_return) = view_return {
+                if view_return.origin == "self" {
+                    return Err(Diagnostic::coded_at(
+                        "AU3010",
+                        view_return.span,
+                        "a function type cannot return a view from `self`; only one named parameter can be a stored callable's view origin",
+                    ));
+                }
+                let origin_param = params
+                    .iter()
+                    .find(|param| param.name.as_deref() == Some(view_return.origin.as_str()));
+                match origin_param {
+                    None => {
+                        return Err(Diagnostic::coded_at(
+                            "AU3010",
+                            view_return.span,
+                            format!(
+                                "returned-view origin `{}` is not a named parameter of this function type",
+                                view_return.origin
+                            ),
+                        ))
+                    }
+                    Some(param) if view_return.mutable && param.mode != crate::ast::ParamMode::BorrowMut => {
+                        return Err(Diagnostic::coded_at(
+                            "AU3010",
+                            view_return.span,
+                            format!(
+                                "a `view mut` result requires its origin parameter `{}` to be `mut`",
+                                view_return.origin
+                            ),
+                        ))
+                    }
+                    Some(_) => {}
+                }
+            }
             let params = params
                 .iter()
                 .map(|param| {
@@ -882,6 +1036,7 @@ pub(super) fn lower_type_with_self(
                 type_params,
                 self_type,
             )?;
+            let return_type = wrap_returned_view(&params, return_type, view_return.as_ref());
             return Ok(Type::Function {
                 params,
                 return_type: Box::new(return_type),
@@ -1208,6 +1363,7 @@ pub(super) fn collect_type_ref_type_params(
         crate::ast::TypeRefKind::Function {
             params,
             return_type,
+            ..
         } => {
             for param in params {
                 collect_type_ref_type_params(&param.ty, type_names, collected, true);
@@ -1269,6 +1425,11 @@ fn substitute_type_in_context(
         }
         Type::Unit => Type::Unit,
         Type::Module(name) => Type::Module(name.clone()),
+        Type::ReturnedView(view) => Type::ReturnedView(Box::new(ReturnedViewType {
+            mutable: view.mutable,
+            pointee: substitute_type_in_context(&view.pointee, substitutions, context),
+            origin: view.origin,
+        })),
         Type::TypeParam(name) => substitutions
             .get(name)
             .cloned()
@@ -1445,6 +1606,7 @@ pub(super) fn collect_type_params_from_type(ty: &Type, collected: &mut BTreeSet<
             }
         }
         Type::Unit | Type::Module(_) => {}
+        Type::ReturnedView(view) => collect_type_params_from_type(&view.pointee, collected),
     }
 }
 
@@ -1491,6 +1653,7 @@ pub(crate) fn type_pattern_specificity(ty: &Type) -> usize {
                 + type_pattern_specificity(return_type)
         }
         Type::Module(_) | Type::Unit => 1,
+        Type::ReturnedView(view) => 1 + type_pattern_specificity(&view.pointee),
     }
 }
 
@@ -1534,6 +1697,13 @@ pub(crate) fn type_pattern_matches(
             }
         }
         Type::TypeParam(_) => pattern == actual,
+        Type::ReturnedView(view) => matches!(
+            actual,
+            Type::ReturnedView(other)
+                if other.mutable == view.mutable
+                    && other.origin == view.origin
+                    && type_pattern_matches(&view.pointee, &other.pointee, type_params, substitutions)
+        ),
         Type::Named(name, pattern_args) => {
             let Type::Named(actual_name, actual_args) = actual else {
                 return false;
@@ -1668,6 +1838,7 @@ pub(crate) fn has_unresolved_type_params(ty: &Type) -> bool {
         Type::Union(union) => union.members.iter().any(has_unresolved_type_params),
         Type::Unit => false,
         Type::Module(_) => false,
+        Type::ReturnedView(view) => has_unresolved_type_params(&view.pointee),
         Type::TypeParam(_) => true,
         Type::Tuple(elements) => elements.iter().any(has_unresolved_type_params),
         Type::Function {
@@ -1833,6 +2004,16 @@ pub(super) fn unify_type_pattern(
 ) -> Result<()> {
     match pattern {
         Type::Union(union) => unify_union_pattern(union, actual, substitutions, None),
+        Type::ReturnedView(view) => match actual {
+            Type::ReturnedView(other)
+                if other.mutable == view.mutable && other.origin == view.origin =>
+            {
+                unify_type_pattern(&view.pointee, &other.pointee, substitutions)
+            }
+            _ => Err(Diagnostic::new(format!(
+                "expected `{pattern}`, found `{actual}`"
+            ))),
+        },
         Type::Unit => {
             if actual == &Type::Unit {
                 Ok(())

@@ -6940,8 +6940,11 @@ impl<'a> FunctionCompiler<'a> {
         )?;
         let param_types =
             function_value_param_types(&params, &self.classes, "indirect-call parameter")?;
-        let return_direct =
-            ensure_direct_type(&return_type, &self.classes, "indirect-call return type")?;
+        let return_direct = ensure_direct_type(
+            crate::sema::returned_view_pointee(&return_type),
+            &self.classes,
+            "indirect-call return type",
+        )?;
 
         let closure_writebacks = match function {
             Operand::Place(place) | Operand::MovePlace(place) => self
@@ -15525,6 +15528,9 @@ impl<'a> FunctionCompiler<'a> {
                 self.value_matches_type(value, &pattern)
             }
             Type::TypeParam(_) => Ok(self.builder.ins().iconst(types::I64, 1)),
+            Type::ReturnedView(_) => Err(
+                "direct backend cannot test a value against a returned-view contract".to_string(),
+            ),
             Type::Unit => self.value_matches_type(value, "None"),
             Type::Module(path) => self.value_matches_type(value, &format!("module {}", path)),
             Type::Tuple(_) => {
@@ -16055,6 +16061,7 @@ fn direct_type_contains_unknown(ty: &DirectType) -> bool {
                     || type_contains_unknown(return_type.as_ref())
             }
             Type::TypeParam(_) | Type::Module(_) | Type::Unit => false,
+            Type::ReturnedView(view) => type_contains_unknown(&view.pointee),
         }
     }
 
@@ -16549,6 +16556,7 @@ fn direct_type_inner(
         }
         Type::Unit => Some(DirectType::Scalar(ScalarKind::Unit)),
         Type::TypeParam(name) => Some(DirectType::Opaque(Type::TypeParam(name.clone()))),
+        Type::ReturnedView(_) => None,
         Type::Module(path) => Some(DirectType::Opaque(Type::Module(path.clone()))),
         Type::Tuple(elements) => {
             for element in elements {
@@ -16644,6 +16652,7 @@ fn collect_type_params_from_type(ty: &Type, collected: &mut BTreeSet<String>) {
             }
             collect_type_params_from_type(return_type, collected);
         }
+        Type::ReturnedView(view) => collect_type_params_from_type(&view.pointee, collected),
         Type::Callable(callable) => {
             for param in &callable.params {
                 collect_type_params_from_type(&param.ty, collected);
@@ -18659,6 +18668,15 @@ fn collect_direct_runtime_type_substitutions(
             }
             collect_direct_runtime_type_substitutions(pattern_return, actual_return, substitutions);
         }
+        Type::ReturnedView(view) => {
+            if let Type::ReturnedView(actual_view) = actual {
+                collect_direct_runtime_type_substitutions(
+                    &view.pointee,
+                    &actual_view.pointee,
+                    substitutions,
+                );
+            }
+        }
         Type::Callable(pattern_callable) => {
             let Type::Callable(actual_callable) = actual else {
                 return;
@@ -18752,6 +18770,7 @@ fn runtime_type_is_wildcard(ty: &Type) -> bool {
                 .any(|param| runtime_type_is_wildcard(&param.ty))
                 || runtime_type_is_wildcard(return_type)
         }
+        Type::ReturnedView(view) => runtime_type_is_wildcard(&view.pointee),
         Type::Callable(callable) => {
             callable
                 .params

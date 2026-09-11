@@ -7518,6 +7518,7 @@ fn type_to_ref(ty: &Type) -> TypeRef {
             type_to_ref(return_type),
             Span::new(1, 1),
         ),
+        Type::ReturnedView(view) => type_to_ref(&view.pointee),
         Type::Callable(callable) => TypeRef::callable(
             callable.task,
             match callable.call_kind {
@@ -27473,10 +27474,13 @@ def main():
 def values_view(values: list[int64]) -> view list[int64] from values:
     return view values
 
+def sink(value: own list[int64]):
+    print(value)
+
 def main():
     borrower = values_view
     values = [1]
-    print(borrower(values))
+    sink(borrower(values))
 "#,
     ] {
         let error = crate::check_source(source)
@@ -30666,14 +30670,18 @@ def main():
     crate::check_path(&main_path)
         .expect("imported explicit and inferred calls must retain declaration-owner precision");
 
+    // A parameter-origin view result is part of a stored contract (C9).
+    std::fs::write(
+        &main_path,
+        "import api\n\ndef main():\n    value = api.LeftBox.associated\n    holder = api.LeftBox(left=1, right=2)\n    view result = value(holder)\n    print(result)\n",
+    )
+    .expect("temporary stored-view entry should be writable");
+    crate::check_path(&main_path)
+        .expect("an imported associated function returning a parameter view is storable");
     for (expression, expected) in [
         (
-            "api.LeftBox.associated",
-            "cannot be stored as a structural function value",
-        ),
-        (
             "api.forward",
-            "cannot be stored as a structural function value",
+            "requires explicit type arguments or an expected function type",
         ),
         ("api.LeftBox", "must be constructed with `(...)`"),
     ] {
@@ -30731,6 +30739,7 @@ fn source_type_refs_round_trip_every_complete_type_shape() {
     let TypeRefKind::Function {
         params,
         return_type,
+        ..
     } = type_ref.kind
     else {
         panic!("expected a function type reference");

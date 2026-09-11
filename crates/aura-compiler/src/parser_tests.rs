@@ -512,6 +512,7 @@ fn function_types_use_declaration_shaped_syntax_and_nest_structurally() {
     let TypeRefKind::Function {
         params,
         return_type,
+        ..
     } = &function.params[0].ty.kind
     else {
         panic!("expected callback function type");
@@ -549,12 +550,14 @@ fn function_types_use_declaration_shaped_syntax_and_nest_structurally() {
         TypeRefKind::Function {
             params,
             return_type,
+            ..
         } if params.is_empty()
             && matches!(
                 &return_type.kind,
                 TypeRefKind::Function {
                     params,
                     return_type,
+                    ..
                 } if matches!(
                     params.as_slice(),
                     [FunctionTypeParam {
@@ -576,6 +579,7 @@ fn function_types_use_declaration_shaped_syntax_and_nest_structurally() {
     let TypeRefKind::Function {
         params,
         return_type,
+        ..
     } = &function.return_type.kind
     else {
         panic!("expected function return type");
@@ -693,6 +697,7 @@ fn typed_binding_lookahead_recognizes_function_type_annotations() {
                     TypeRefKind::Function {
                         params,
                         return_type,
+                        ..
                     },
                 ..
             }),
@@ -3265,6 +3270,7 @@ fn fstring_map_comprehension_preserves_exact_nested_source_spans() {
     let TypeRefKind::Function {
         params,
         return_type,
+        ..
     } = &type_args[0].kind
     else {
         panic!("expected a structural function type argument");

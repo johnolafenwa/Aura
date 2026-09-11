@@ -143,7 +143,7 @@ pub struct FunctionDecl {
     pub span: Span,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct ViewReturn {
     pub mutable: bool,
     pub origin: String,
@@ -767,6 +767,9 @@ pub enum TypeRefKind {
     Function {
         params: Vec<FunctionTypeParam>,
         return_type: Box<TypeRef>,
+        /// `-> view [mut] T from name`: the call returns a view of one named
+        /// parameter of this contract (C9, Q22 A).
+        view_return: Option<ViewReturn>,
     },
 }
 
@@ -819,10 +822,12 @@ impl Serialize for TypeRef {
             TypeRefKind::Function {
                 params,
                 return_type,
+                view_return,
             } => {
-                let mut state = serializer.serialize_struct("FunctionTypeRef", 4)?;
+                let mut state = serializer.serialize_struct("FunctionTypeRef", 5)?;
                 state.serialize_field("params", params)?;
                 state.serialize_field("return_type", return_type)?;
+                state.serialize_field("view_return", view_return)?;
                 state.serialize_field("indirect", &self.indirect)?;
                 state.serialize_field("span", &self.span)?;
                 state.end()
@@ -886,10 +891,20 @@ impl TypeRef {
         return_type: TypeRef,
         span: Span,
     ) -> Self {
+        Self::function_with_view_return(params, return_type, None, span)
+    }
+
+    pub fn function_with_view_return(
+        params: Vec<FunctionTypeParam>,
+        return_type: TypeRef,
+        view_return: Option<ViewReturn>,
+        span: Span,
+    ) -> Self {
         Self {
             kind: TypeRefKind::Function {
                 params,
                 return_type: Box::new(return_type),
+                view_return,
             },
             indirect: false,
             span,
@@ -921,6 +936,7 @@ impl TypeRef {
             TypeRefKind::Function {
                 params,
                 return_type,
+                ..
             } => Some((params, return_type)),
             TypeRefKind::Named { .. }
             | TypeRefKind::Tuple(_)

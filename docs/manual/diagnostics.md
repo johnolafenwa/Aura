@@ -174,6 +174,10 @@ an invalid returned kind, or a call whose origin is not an addressable place.
 The diagnostic identifies the declared origin and the incompatible expression
 or destination. Return an owned clone/index/handle when the access must escape,
 or keep a local/closure loan synchronous and inside the owner's region.
+A function type whose `view` result names an origin that is not one of its
+named parameters, or a `view mut` result over a non-`mut` origin, also
+reports `AU3010`; a task callable contract that returns a view reports
+`AU3008`.
 
 For explicit views, `AU3002` labels both the view creation and the final use
 that keeps its inferred region live. Removing a later use can shorten the loan;
@@ -310,7 +314,7 @@ imported module is never mislabeled with the entry module's path.
 
 The arrays are an additive schema-version-1 extension. Schema-version-1
 readers MUST ignore unrecognized object members while continuing to validate
-the fields they use. The compiler-service semantic-interface version is `13`.
+the fields they use. The compiler-service semantic-interface version is `14`.
 
 The process exits unsuccessfully after emitting a JSON error report. Tools MUST
 parse standard error as one JSON document in JSON mode and MUST NOT scrape the

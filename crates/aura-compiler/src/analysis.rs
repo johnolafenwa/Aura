@@ -3898,8 +3898,9 @@ impl<'a> AnalysisBuilder<'a> {
             crate::ast::TypeRefKind::Function {
                 params,
                 return_type,
-            } => Type::Function {
-                params: params
+                view_return,
+            } => {
+                let params = params
                     .iter()
                     .map(|param| FunctionParamContract {
                         keyword_only: param.keyword_only,
@@ -3908,9 +3909,17 @@ impl<'a> AnalysisBuilder<'a> {
                         passing: resolve_param_passing(param.mode),
                         has_default: param.has_default,
                     })
-                    .collect(),
-                return_type: Box::new(self.lower_analysis_type_ref(return_type)),
-            },
+                    .collect::<Vec<_>>();
+                let return_type = crate::sema::wrap_returned_view(
+                    &params,
+                    self.lower_analysis_type_ref(return_type),
+                    view_return.as_ref(),
+                );
+                Type::Function {
+                    params,
+                    return_type: Box::new(return_type),
+                }
+            }
             crate::ast::TypeRefKind::Named { name, args } => {
                 if name == "None" {
                     return Type::Unit;
@@ -5431,8 +5440,9 @@ fn lower_type_ref(ty: &TypeRef) -> Type {
         crate::ast::TypeRefKind::Function {
             params,
             return_type,
-        } => Type::Function {
-            params: params
+            view_return,
+        } => {
+            let params = params
                 .iter()
                 .map(|param| FunctionParamContract {
                     keyword_only: param.keyword_only,
@@ -5441,9 +5451,17 @@ fn lower_type_ref(ty: &TypeRef) -> Type {
                     passing: resolve_param_passing(param.mode),
                     has_default: param.has_default,
                 })
-                .collect(),
-            return_type: Box::new(lower_type_ref(return_type)),
-        },
+                .collect::<Vec<_>>();
+            let return_type = crate::sema::wrap_returned_view(
+                &params,
+                lower_type_ref(return_type),
+                view_return.as_ref(),
+            );
+            Type::Function {
+                params,
+                return_type: Box::new(return_type),
+            }
+        }
         crate::ast::TypeRefKind::Named { name, args } if name == "None" => Type::Unit,
         crate::ast::TypeRefKind::Named { name, args } => {
             let name = match name.as_str() {
@@ -5460,6 +5478,7 @@ fn base_type_name(ty: &Type) -> &str {
     match ty {
         Type::Union(_) => "union",
         Type::Unit => "None",
+        Type::ReturnedView(_) => "view",
         Type::Module(name) => name.as_str(),
         Type::TypeParam(name) => name.as_str(),
         Type::Tuple(_) => "tuple",
@@ -5717,6 +5736,7 @@ impl TypeExt for Type {
         match self {
             Type::Union(_) => &[],
             Type::Unit => &[],
+            Type::ReturnedView(_) => &[],
             Type::Module(_) => &[],
             Type::TypeParam(_) => &[],
             Type::Tuple(elements) => elements.as_slice(),

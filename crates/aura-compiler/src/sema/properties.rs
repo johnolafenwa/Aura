@@ -152,9 +152,11 @@ pub(super) fn rng_clone_safety_in_context_inner(
                     })
             }
             Type::TypeParam(_) => RngCloneSafety::Unknown,
-            Type::Unit | Type::Module(_) | Type::Function { .. } | Type::Callable(_) => {
-                RngCloneSafety::Safe
-            }
+            Type::Unit
+            | Type::Module(_)
+            | Type::Function { .. }
+            | Type::Callable(_)
+            | Type::ReturnedView(_) => RngCloneSafety::Safe,
             Type::Closure { captures, .. } => {
                 captures
                     .iter()
@@ -362,7 +364,7 @@ pub(super) fn collect_rng_clone_obligation_params_in_context_inner(
         Type::TypeParam(name) => {
             params.insert(name.clone());
         }
-        Type::Unit | Type::Module(_) | Type::Function { .. } => {}
+        Type::Unit | Type::Module(_) | Type::Function { .. } | Type::ReturnedView(_) => {}
         Type::Callable(_) => {}
         Type::Closure { captures, .. } => {
             for capture in captures.iter() {
@@ -617,6 +619,7 @@ pub(super) fn type_is_copy_in_context_inner(
         }),
         Type::Unit => true,
         Type::Module(_) => false,
+        Type::ReturnedView(_) => false,
         Type::TypeParam(_) => false,
         Type::Tuple(elements) => elements.iter().all(|element| {
             type_is_copy_in_context_inner(
@@ -757,6 +760,7 @@ pub(super) fn type_contains_named(ty: &Type, target: &str) -> bool {
         // A function field stores only a code pointer, not values of its
         // parameter or return types, so it cannot create recursive storage.
         Type::Function { .. } | Type::TypeParam(_) | Type::Module(_) | Type::Unit => false,
+        Type::ReturnedView(view) => type_contains_named(&view.pointee, target),
         Type::Closure { captures, .. } => captures
             .iter()
             .any(|capture| type_contains_named(&capture.ty, target)),
@@ -780,7 +784,11 @@ pub(super) fn type_contains_closure_value(ty: &Type) -> bool {
         // Function parameter and return types describe calls; they are not
         // values stored inside the function pointer itself.
         Type::Callable(_) => false,
-        Type::Function { .. } | Type::TypeParam(_) | Type::Module(_) | Type::Unit => false,
+        Type::Function { .. }
+        | Type::ReturnedView(_)
+        | Type::TypeParam(_)
+        | Type::Module(_)
+        | Type::Unit => false,
     }
 }
 
@@ -797,7 +805,11 @@ pub(super) fn type_contains_loan_closure(ty: &Type) -> bool {
         Type::Tuple(elements) | Type::Named(_, elements) => {
             elements.iter().any(type_contains_loan_closure)
         }
-        Type::Function { .. } | Type::TypeParam(_) | Type::Module(_) | Type::Unit => false,
+        Type::Function { .. }
+        | Type::ReturnedView(_)
+        | Type::TypeParam(_)
+        | Type::Module(_)
+        | Type::Unit => false,
     }
 }
 
@@ -845,7 +857,11 @@ pub(super) fn type_reaches_class_through_non_indirect_fields(
             visiting.remove(name);
             reaches_target
         }
-        Type::Function { .. } | Type::TypeParam(_) | Type::Module(_) | Type::Unit => false,
+        Type::Function { .. }
+        | Type::ReturnedView(_)
+        | Type::TypeParam(_)
+        | Type::Module(_)
+        | Type::Unit => false,
         Type::Callable(_) => false,
         Type::Closure { captures, .. } => captures.iter().any(|capture| {
             type_reaches_class_through_non_indirect_fields(&capture.ty, target, classes, visiting)
@@ -1216,7 +1232,9 @@ impl<'a> FunctionChecker<'a> {
                 }
                 result
             }
-            Type::Unit | Type::Function { .. } => TransferSummary::default(),
+            Type::Unit | Type::Function { .. } | Type::ReturnedView(_) => {
+                TransferSummary::default()
+            }
             Type::Callable(callable) => {
                 if callable.task {
                     return TransferSummary::default();
@@ -1598,9 +1616,11 @@ impl<'a> FunctionChecker<'a> {
                 }
                 result
             }
-            Type::Unit | Type::Module(_) | Type::Function { .. } | Type::Callable(_) => {
-                TaskObservationSummary::default()
-            }
+            Type::Unit
+            | Type::Module(_)
+            | Type::Function { .. }
+            | Type::Callable(_)
+            | Type::ReturnedView(_) => TaskObservationSummary::default(),
             Type::Closure { captures, .. } => {
                 let mut result = TaskObservationSummary::default();
                 for capture in captures.iter() {
@@ -1761,7 +1781,9 @@ impl<'a> FunctionChecker<'a> {
             Type::Union(union) => {
                 self.combine_symbolic_copy_shapes(union.members.iter(), formals, visiting)
             }
-            Type::Unit | Type::Function { .. } => SymbolicCopyShape::default(),
+            Type::Unit | Type::Function { .. } | Type::ReturnedView(_) => {
+                SymbolicCopyShape::default()
+            }
             Type::Closure { .. } | Type::Callable(_) => SymbolicCopyShape {
                 intrinsic_noncopy: true,
                 noncopy_formals: Vec::new(),
@@ -1965,7 +1987,7 @@ impl<'a> FunctionChecker<'a> {
                 args.iter()
                     .find_map(|arg| self.callable_in_equality_type_inner(arg, visiting))
             }
-            Type::TypeParam(_) | Type::Module(_) | Type::Unit => None,
+            Type::ReturnedView(_) | Type::TypeParam(_) | Type::Module(_) | Type::Unit => None,
         }
     }
 
@@ -2035,6 +2057,7 @@ impl<'a> FunctionChecker<'a> {
             // when concrete substitutions are available.
             Type::Closure { .. }
             | Type::Callable(_)
+            | Type::ReturnedView(_)
             | Type::Function { .. }
             | Type::TypeParam(_)
             | Type::Module(_)
@@ -2114,6 +2137,7 @@ impl<'a> FunctionChecker<'a> {
             }
             Type::Closure { .. }
             | Type::Callable(_)
+            | Type::ReturnedView(_)
             | Type::Function { .. }
             | Type::Module(_)
             | Type::Unit => {}
@@ -2188,7 +2212,11 @@ impl<'a> FunctionChecker<'a> {
 
                 None
             }
-            Type::Function { .. } | Type::TypeParam(_) | Type::Module(_) | Type::Unit => None,
+            Type::Function { .. }
+            | Type::ReturnedView(_)
+            | Type::TypeParam(_)
+            | Type::Module(_)
+            | Type::Unit => None,
         }
     }
 }

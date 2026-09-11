@@ -67,6 +67,8 @@ This page documents known current limits of the Aura compiler and runtime.
   contract, and `Class.method` on a non-generic class is a function value;
   a generic method's type arguments come from `method[T]` or an expected
   contract, and an associated method of a generic class still needs a call.
+  A stored callable may return a view of one named parameter; a `from self`
+  view result and loan captures still cannot be stored.
 - Lambdas with parameters require complete expected parameter types; a
   zero-parameter lambda may infer `def() -> R` from its expression body.
   A lambda without a capture list captures by value. An explicit exhaustive

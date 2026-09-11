@@ -429,3 +429,21 @@ metadata (bound form) or by the lowering into the function operand's
 signature (associated form), and an expected contract resolves them by
 unification, so neither backend ever sees an unresolved method type
 parameter in a callable value.
+
+## Batch 1 phase 1: stored argument-origin views
+
+A stored callable's `-> view [mut] T from name` result is a
+`Type::ReturnedView` in the callable type's result position (C9, Q22 A),
+encoding the origin parameter by ordinal; it never types a runtime value.
+A call through such a value has the pointee type and binds a returned view
+exactly like a named call: the callee sets its projection before returning
+and the caller's `BeginReturnedLoan` takes it, on both backends, so neither
+runtime gained new code. The lowering enumerates the loan's alternatives as
+every fixed field path or tuple position of the origin with the pointee
+type, since the callee behind a value is opaque; the validator admits any
+pointee-typed projection set for an indirect call while still checking each
+projection's type, binds the origin argument by ordinal with its writeback
+for `view mut`, and refuses an `Operand::Function` whose signature drops,
+invents, or strengthens the declaration's view contract. The direct backend
+unwraps the pointee for its indirect-call result type. The semantic
+interface schema is 14.

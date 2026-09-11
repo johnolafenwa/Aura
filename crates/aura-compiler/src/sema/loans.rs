@@ -11,6 +11,76 @@ use super::{
     TraitBound, TraitInfo, Type,
 };
 
+/// Name of the synthesized declaration a view-returning callable value
+/// presents to the returned-view machinery (C9); no module defines it, so
+/// body-based footprint analysis falls back to the whole origin argument.
+pub(crate) const SYNTHETIC_CALLABLE_DECL: &str = "<callable>";
+
+/// A callable value whose contract returns a view of one parameter (C9)
+/// presents a synthesized declaration to the returned-view machinery: the
+/// contract's parameter names and its `view [mut] T from name` origin, with
+/// no body. Footprint analysis cannot find a body for it, so a call binds the
+/// whole origin argument conservatively.
+pub(crate) fn synthetic_returned_view_decl(
+    ty: &Type,
+    span: crate::diag::Span,
+) -> Option<crate::ast::FunctionDecl> {
+    let (params, return_type) = match ty {
+        Type::Function {
+            params,
+            return_type,
+        } => (params.as_slice(), return_type.as_ref()),
+        Type::Closure {
+            params,
+            return_type,
+            ..
+        } => (params.as_slice(), return_type.as_ref()),
+        Type::Callable(callable) => (callable.params.as_slice(), &callable.return_type),
+        _ => return None,
+    };
+    let Type::ReturnedView(view) = return_type else {
+        return None;
+    };
+    let origin = params.get(view.origin)?;
+    let type_ref = |ty: &Type| {
+        ty.source_type_ref(span)
+            .unwrap_or_else(|_| crate::ast::TypeRef::named("Unknown", Vec::new(), false, span))
+    };
+    Some(crate::ast::FunctionDecl {
+        public: false,
+        name: SYNTHETIC_CALLABLE_DECL.to_string(),
+        type_params: Vec::new(),
+        type_param_bounds: BTreeMap::new(),
+        receiver: None,
+        params: params
+            .iter()
+            .map(|param| crate::ast::Param {
+                name: param.name.clone(),
+                mode: match param.passing {
+                    ReceiverKind::Borrow => ParamMode::Default,
+                    ReceiverKind::BorrowMut => ParamMode::BorrowMut,
+                    ReceiverKind::Value => ParamMode::Own,
+                },
+                ty: type_ref(&param.ty),
+                default: param.has_default.then_some(Expr {
+                    kind: ExprKind::BuiltinOmitted,
+                    span,
+                }),
+                keyword_only: param.keyword_only,
+                span,
+            })
+            .collect(),
+        return_type: type_ref(&view.pointee),
+        view_return: Some(crate::ast::ViewReturn {
+            mutable: view.mutable,
+            origin: origin.name.clone(),
+            span,
+        }),
+        body: Vec::new(),
+        span,
+    })
+}
+
 pub(super) fn view_return_contract_key(decl: &FunctionDecl) -> Option<(bool, bool, usize)> {
     let contract = decl.view_return.as_ref()?;
     if contract.origin == "self" {
@@ -761,8 +831,9 @@ impl<'a> FunctionChecker<'a> {
         let base = grouped_specialized_expr(callee);
         match &base.kind {
             ExprKind::Name(name) => {
-                if locals.contains_key(name) {
-                    return Ok(None);
+                if let Some(binding) = locals.get(name) {
+                    return Ok(synthetic_returned_view_decl(&binding.ty, callee.span)
+                        .map(|decl| (decl, None, self.module_name.to_string())));
                 }
                 Ok(self
                     .resolve_function_info(name)
@@ -837,9 +908,39 @@ impl<'a> FunctionChecker<'a> {
                         trait_impl.module_name.clone(),
                     )));
                 }
+                // A callable field carrying a view-returning contract (C9).
+                if let Ok(member_ty) = self.resolve_member_type(&receiver_ty, field, callee.span) {
+                    return Ok(synthetic_returned_view_decl(&member_ty, callee.span)
+                        .map(|decl| (decl, None, self.module_name.to_string())));
+                }
                 Ok(None)
             }
-            ExprKind::Index { object, .. } => self.returned_view_callee(object, locals),
+            ExprKind::Index { object, .. } => {
+                // A callable list or dict element carrying a view-returning
+                // contract (C9); otherwise the index spells type arguments.
+                if let ExprKind::Name(name) = &grouped_expr(object).kind {
+                    if let Some(binding) = locals.get(name) {
+                        let element = match &binding.ty {
+                            Type::Named(collection, args)
+                                if collection == "list" && args.len() == 1 =>
+                            {
+                                Some(&args[0])
+                            }
+                            Type::Named(collection, args)
+                                if collection == "dict" && args.len() == 2 =>
+                            {
+                                Some(&args[1])
+                            }
+                            _ => None,
+                        };
+                        if let Some(element) = element {
+                            return Ok(synthetic_returned_view_decl(element, callee.span)
+                                .map(|decl| (decl, None, self.module_name.to_string())));
+                        }
+                    }
+                }
+                self.returned_view_callee(object, locals)
+            }
             _ => Ok(None),
         }
     }

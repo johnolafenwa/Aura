@@ -444,6 +444,12 @@ compiler-synthesized closure over the receiver, specified in
 [Closures](/manual/closures#bound-methods). Lambdas and closure capture are
 specified separately.
 
+A function returning `view [mut] T from name` for one of its parameters
+keeps that contract in its value type, `def(pair: Pair) -> view str from
+pair`; a `from self` method result has no value type. Storage, packing, and
+calls through such values are specified in
+[Closures](/manual/closures#stored-view-contracts).
+
 ## Function Values And Task Starts
 
 The ordinary and explicit-stack `TaskGroup` start methods accept a named

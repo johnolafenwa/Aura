@@ -1,0 +1,13 @@
+class Holder:
+    text: str
+
+    def peek(self) -> view str from self:
+        return view self.text
+
+type Peeker = Callable[def() -> view str from self]
+
+def main():
+    holder = Holder(text="kept")
+    peek = Peeker(holder.peek)
+    view seen = peek()
+    print(seen)

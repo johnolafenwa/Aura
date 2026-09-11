@@ -260,6 +260,7 @@ fn type_contains_unknown(ty: &Type) -> bool {
                 || type_contains_unknown(return_type.as_ref())
         }
         Type::TypeParam(_) | Type::Unit | Type::Module(_) => false,
+        Type::ReturnedView(view) => type_contains_unknown(&view.pointee),
     }
 }
 
@@ -312,6 +313,7 @@ fn collect_type_params_from_type(ty: &Type, collected: &mut BTreeSet<String>) {
             }
             collect_type_params_from_type(return_type, collected);
         }
+        Type::ReturnedView(view) => collect_type_params_from_type(&view.pointee, collected),
         Type::Callable(callable) => {
             for param in &callable.params {
                 collect_type_params_from_type(&param.ty, collected);
@@ -1960,7 +1962,9 @@ impl<'a> MirLoanValidationContext<'a> {
                     visiting.remove(&key);
                     result
                 }
-                Type::Unit | Type::TypeParam(_) | Type::Function { .. } => false,
+                Type::Unit | Type::TypeParam(_) | Type::Function { .. } | Type::ReturnedView(_) => {
+                    false
+                }
             }
         }
 
@@ -1980,6 +1984,11 @@ impl<'a> MirLoanValidationContext<'a> {
         };
         for segment in segments {
             ty = match ty {
+                Type::ReturnedView(_) => {
+                    return Err(format!(
+                        "invalid MIR place `{place}` projects through a returned-view contract"
+                    ));
+                }
                 Type::Tuple(elements) => {
                     let index = segment.parse::<usize>().map_err(|_| {
                         format!(
@@ -2205,17 +2214,38 @@ impl<'a> MirLoanValidationContext<'a> {
             }
             substitutions = candidate_substitutions;
         }
+        // A view-returning declaration exposes its contract in the operand's
+        // result position (C9); the operand may neither invent nor drop it.
+        let declared_view = self.returned_views.get(name);
+        let return_type: &Type = match (return_type.as_ref(), declared_view) {
+            (Type::ReturnedView(view), Some(contract)) => {
+                let origin_matches = matches!(
+                    contract.origin,
+                    ReturnedViewOriginSlot::Param(index) if index == view.origin
+                );
+                if !origin_matches || contract.mutable != view.mutable {
+                    return Err(format!(
+                        "invalid MIR function operand `{name}` in `{}` has a returned-view contract that does not match declaration",
+                        caller.name
+                    ));
+                }
+                &view.pointee
+            }
+            (Type::ReturnedView(_), None) | (_, Some(_)) => {
+                return Err(format!(
+                    "invalid MIR function operand `{name}` in `{}` has a returned-view contract that does not match declaration",
+                    caller.name
+                ));
+            }
+            (other, None) => other,
+        };
         let mut candidate_substitutions = substitutions;
         let return_matches = crate::sema::type_pattern_matches(
             &callee.return_type,
             return_type,
             &type_params,
             &mut candidate_substitutions,
-        ) || match (
-            &callee.return_type,
-            return_type.as_ref(),
-            name.split_once("::"),
-        ) {
+        ) || match (&callee.return_type, return_type, name.split_once("::")) {
             (
                 Type::Named(expected, expected_args),
                 Type::Named(actual, actual_args),
@@ -2223,7 +2253,7 @@ impl<'a> MirLoanValidationContext<'a> {
             ) => {
                 expected_args == actual_args
                     && !actual.contains('.')
-                    && expected == &format!("{owner}.{actual}")
+                    && *expected == format!("{owner}.{actual}")
             }
             _ => false,
         };
@@ -2691,6 +2721,7 @@ impl<'a> MirLoanValidationContext<'a> {
             origin: origin.to_string(),
             mutable: contract.mutable,
             projections: contract.projections.clone(),
+            pointee: None,
         }))
     }
 
@@ -3013,6 +3044,7 @@ impl<'a> MirLoanValidationContext<'a> {
                 origin: bound_origin,
                 mutable,
                 projections: projections.into(),
+                pointee: None,
             }),
         })
     }
@@ -3024,6 +3056,100 @@ struct BoundReturnedViewContract {
     origin: String,
     mutable: bool,
     projections: std::sync::Arc<[String]>,
+    /// Set for a call through a callable value (C9): the callee is opaque,
+    /// so any projection set is admitted as long as every projection has
+    /// this pointee type, which the loan type check enforces.
+    pointee: Option<Type>,
+}
+
+/// The returned-view contract of a call through a callable value (C9): the
+/// authoritative signature names the origin parameter by ordinal, the bound
+/// argument at that ordinal must be an addressable place (with its own
+/// writeback for a `view mut` result), and the footprint is the whole origin
+/// because the callee body is opaque at this site.
+fn indirect_returned_view_contract(
+    caller: &MirFunction,
+    callee: &CallTarget,
+    args: &[MirArg],
+    state: &ValidatedLoanState,
+) -> std::result::Result<Option<BoundReturnedViewContract>, String> {
+    let CallTarget::Value(Operand::Place(place) | Operand::MovePlace(place)) = callee else {
+        return Ok(None);
+    };
+    let Some(callable) = state.authoritative_callables.get(place) else {
+        return Ok(None);
+    };
+    let (params, return_type) = match &callable.signature {
+        Type::Function {
+            params,
+            return_type,
+        } => (params.as_slice(), return_type.as_ref()),
+        Type::Closure {
+            params,
+            return_type,
+            ..
+        } => (params.as_slice(), return_type.as_ref()),
+        Type::Callable(erased) => (erased.params.as_slice(), &erased.return_type),
+        _ => return Ok(None),
+    };
+    let Type::ReturnedView(view) = return_type else {
+        return Ok(None);
+    };
+    let origin_param = params.get(view.origin).ok_or_else(|| {
+        format!(
+            "invalid MIR indirect call in `{}` names returned-view origin {} beyond its contract",
+            caller.name, view.origin
+        )
+    })?;
+    // Bind positional arguments in order and named arguments by contract name.
+    let mut positional = 0usize;
+    let mut origin_arg = None;
+    for arg in args {
+        let slot = match &arg.name {
+            Some(name) => params.iter().position(|param| param.name == *name),
+            None => {
+                let slot = positional;
+                positional += 1;
+                Some(slot)
+            }
+        };
+        if slot == Some(view.origin) {
+            origin_arg = Some(arg);
+        }
+    }
+    let Some(origin_arg) = origin_arg else {
+        return Err(format!(
+            "invalid MIR indirect call in `{}` omits returned-view origin parameter `{}`",
+            caller.name, origin_param.name
+        ));
+    };
+    let Operand::Place(origin) = &origin_arg.value else {
+        return Err(format!(
+            "invalid MIR indirect call in `{}` binds its returned-view origin to a non-place operand",
+            caller.name
+        ));
+    };
+    if view.mutable
+        && (origin_param.passing != ReceiverKind::BorrowMut
+            || origin_arg.writeback_place.as_deref() != Some(origin.as_str()))
+    {
+        return Err(format!(
+            "invalid MIR indirect call in `{}` returns a mutable view of `{origin}` without a matching mutable writeback place",
+            caller.name
+        ));
+    }
+    validate_canonical_mir_place(caller, origin)?;
+    Ok(Some(BoundReturnedViewContract {
+        callees: vec![callable
+            .function
+            .clone()
+            .unwrap_or_else(|| "<indirect>".to_string())]
+        .into(),
+        origin: origin.clone(),
+        mutable: view.mutable,
+        projections: Vec::new().into(),
+        pointee: Some(view.pointee.clone()),
+    }))
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -5660,7 +5786,25 @@ fn validate_loan_rvalue(
                     ));
                 }
             };
-            if declaration.return_type != *return_type
+            // A closure whose contract returns a view of one exposed parameter
+            // (C9) must be backed by a declaration that returns exactly that
+            // view: same origin (offset by the hidden captures), mutability,
+            // and pointee.
+            let declared_view = context.returned_views.get(closure_function.as_str());
+            let return_contract_matches = match (return_type, declared_view) {
+                (Type::ReturnedView(view), Some(contract)) => {
+                    contract.mutable == view.mutable
+                        && matches!(
+                            contract.origin,
+                            ReturnedViewOriginSlot::Param(index)
+                                if index == captures.len() + view.origin
+                        )
+                        && declaration.return_type == view.pointee
+                }
+                (Type::ReturnedView(_), None) | (_, Some(_)) => false,
+                (other, None) => declaration.return_type == *other,
+            };
+            if !return_contract_matches
                 || declaration.params.len() != captures.len() + exposed_params.len()
                 || declaration
                     .params
@@ -6708,7 +6852,9 @@ fn validate_loan_instruction(
             // is reachable. Narrowing cannot grant access outside the
             // callee's authoritative projection set, while requiring exact
             // equality would reject those legitimate specialized descriptors.
-            if !unique_projections.is_subset(&authoritative_projections) {
+            if authoritative.pointee.is_none()
+                && !unique_projections.is_subset(&authoritative_projections)
+            {
                 return Err(format!(
                     "invalid returned MIR loan `{loan}` in `{}` does not match callee `{}` projection contract",
                     function.name,
@@ -7247,9 +7393,12 @@ fn validate_loan_instruction(
                 state.tag_tests.remove(target);
             }
             if let Rvalue::Call { callee, args } = value {
-                state.pending_handoff = Some(PendingLoanHandoff::IncomingCall(
-                    context.pending_call(function, callee, args)?,
-                ));
+                let mut pending = context.pending_call(function, callee, args)?;
+                if pending.returned_view.is_none() {
+                    pending.returned_view =
+                        indirect_returned_view_contract(function, callee, args, state)?;
+                }
+                state.pending_handoff = Some(PendingLoanHandoff::IncomingCall(pending));
             }
         }
         Instruction::Eval { value } => validate_loan_operand(function, value, context, state)?,
@@ -8716,22 +8865,25 @@ impl<'a> Lowerer<'a> {
             substitutions_from_decl_type_args(&method.decl.type_params, type_args)
         };
         let runtime_name = mir_class_method_name(self.program, class, field);
+        let params = task_param_contracts(
+            &method.decl.params,
+            &method.signature.params,
+            &method.signature.param_passings,
+        )
+        .into_iter()
+        .map(|mut param| {
+            param.ty = substitute_type(&param.ty, &substitutions);
+            param
+        })
+        .collect::<Vec<_>>();
+        let return_type = crate::sema::wrap_returned_view(
+            &params,
+            substitute_type(&method.signature.return_type, &substitutions),
+            method.decl.view_return.as_ref(),
+        );
         let signature = Type::Function {
-            params: task_param_contracts(
-                &method.decl.params,
-                &method.signature.params,
-                &method.signature.param_passings,
-            )
-            .into_iter()
-            .map(|mut param| {
-                param.ty = substitute_type(&param.ty, &substitutions);
-                param
-            })
-            .collect(),
-            return_type: Box::new(substitute_type(
-                &method.signature.return_type,
-                &substitutions,
-            )),
+            params,
+            return_type: Box::new(return_type),
         };
         Some(Operand::Function {
             name: runtime_name,
@@ -8854,11 +9006,22 @@ impl<'a> Lowerer<'a> {
             span: synthetic,
         };
 
+        // A method returning a view of one of its parameters keeps that
+        // contract in the bound closure (C9): the generated function returns
+        // the view it forwards, declaring the same parameter as its origin.
+        let pointee = crate::sema::returned_view_pointee(&info.return_type).clone();
+        let view_result = match &info.return_type {
+            Type::ReturnedView(view) => info
+                .params
+                .get(view.origin)
+                .map(|param| (param.name.clone(), view.mutable)),
+            _ => None,
+        };
         let mut lowerer = Lowerer::new(
             self.program,
             &name,
             self.module_name,
-            info.return_type.clone(),
+            pointee.clone(),
             self.type_param_bounds.clone(),
         );
         lowerer.metadata_module_name = self.metadata_module_name.clone();
@@ -8877,16 +9040,33 @@ impl<'a> Lowerer<'a> {
                 lowerer.non_owning_roots.insert(param.name.clone());
             }
         }
-        let result = lowerer.lower_expr_for_owned_value(&body, Some(&info.return_type));
-        lowerer.terminate(Terminator::Return(result));
+        match view_result {
+            Some((origin, mutable)) => {
+                lowerer.view_return_origin = Some(origin);
+                let stmt = Stmt::Return(crate::ast::ReturnStmt {
+                    value: Some(body),
+                    view: Some(if mutable {
+                        crate::ast::ViewKind::Mutable
+                    } else {
+                        crate::ast::ViewKind::Shared
+                    }),
+                    span: synthetic,
+                });
+                lowerer.lower_stmt(&stmt, &BTreeSet::new());
+            }
+            None => {
+                let result = lowerer.lower_expr_for_owned_value(&body, Some(&pointee));
+                lowerer.terminate(Terminator::Return(result));
+            }
+        }
         self.generated_functions
             .extend(lowerer.finish_with_generated(MirFunctionSpec {
                 name: name.clone(),
                 span: expr.span,
                 receiver: None,
                 params: mir_params,
-                return_type: info.return_type.clone(),
-                default_return: default_return_operand(&info.return_type),
+                return_type: pointee.clone(),
+                default_return: default_return_operand(&pointee),
             }));
 
         let receiver = self.lower_expr_for_owned_value(object, Some(&capture.ty));
@@ -9028,42 +9208,47 @@ impl<'a> Lowerer<'a> {
         function: &crate::sema::FunctionInfo,
         substitutions: &std::collections::HashMap<String, Type>,
     ) -> Type {
+        let params = function
+            .signature
+            .params
+            .iter()
+            .enumerate()
+            .map(|(index, param)| FunctionParamContract {
+                keyword_only: function
+                    .decl
+                    .params
+                    .get(index)
+                    .is_some_and(|decl| decl.keyword_only),
+                name: function
+                    .decl
+                    .params
+                    .get(index)
+                    .map(|param| param.name.clone())
+                    .unwrap_or_default(),
+                ty: substitute_type(param, substitutions),
+                passing: function
+                    .signature
+                    .param_passings
+                    .get(index)
+                    .copied()
+                    .unwrap_or(ReceiverKind::Borrow),
+                has_default: function
+                    .decl
+                    .params
+                    .get(index)
+                    .is_some_and(|param| param.default.is_some()),
+            })
+            .collect::<Vec<_>>();
+        // A parameter-origin view result is part of the value's contract
+        // (C9); the validator checks it against the declaration.
+        let return_type = crate::sema::wrap_returned_view(
+            &params,
+            substitute_type(&function.signature.return_type, substitutions),
+            function.decl.view_return.as_ref(),
+        );
         Type::Function {
-            params: function
-                .signature
-                .params
-                .iter()
-                .enumerate()
-                .map(|(index, param)| FunctionParamContract {
-                    keyword_only: function
-                        .decl
-                        .params
-                        .get(index)
-                        .is_some_and(|decl| decl.keyword_only),
-                    name: function
-                        .decl
-                        .params
-                        .get(index)
-                        .map(|param| param.name.clone())
-                        .unwrap_or_default(),
-                    ty: substitute_type(param, substitutions),
-                    passing: function
-                        .signature
-                        .param_passings
-                        .get(index)
-                        .copied()
-                        .unwrap_or(ReceiverKind::Borrow),
-                    has_default: function
-                        .decl
-                        .params
-                        .get(index)
-                        .is_some_and(|param| param.default.is_some()),
-                })
-                .collect(),
-            return_type: Box::new(substitute_type(
-                &function.signature.return_type,
-                substitutions,
-            )),
+            params,
+            return_type: Box::new(return_type),
         }
     }
 
@@ -9395,8 +9580,9 @@ impl<'a> Lowerer<'a> {
             TypeRefKind::Function {
                 params,
                 return_type,
-            } => Type::Function {
-                params: params
+                view_return,
+            } => {
+                let params = params
                     .iter()
                     .map(|param| FunctionParamContract {
                         keyword_only: param.keyword_only,
@@ -9405,9 +9591,17 @@ impl<'a> Lowerer<'a> {
                         passing: resolve_param_passing(param.mode),
                         has_default: param.has_default,
                     })
-                    .collect(),
-                return_type: Box::new(self.lower_type_ref_with_provenance(return_type)),
-            },
+                    .collect::<Vec<_>>();
+                let return_type = crate::sema::wrap_returned_view(
+                    &params,
+                    self.lower_type_ref_with_provenance(return_type),
+                    view_return.as_ref(),
+                );
+                Type::Function {
+                    params,
+                    return_type: Box::new(return_type),
+                }
+            }
             TypeRefKind::Named {
                 name: source_name,
                 args,
@@ -10959,13 +11153,49 @@ impl<'a> Lowerer<'a> {
     }
 
     fn returned_view_callee_decl(&self, callee: &Expr) -> Option<ReturnedViewCallee> {
+        if let Some(info) = self.named_returned_view_callee_decl(callee) {
+            return Some(info);
+        }
+        // A callable value with a view-returning contract (C9): a local,
+        // field, or container element whose type names its origin ordinal.
+        let ty = self.infer_expr_type(callee)?;
+        let (params, return_type) = match &ty {
+            Type::Function {
+                params,
+                return_type,
+            } => (params.as_slice(), return_type.as_ref()),
+            Type::Closure {
+                params,
+                return_type,
+                ..
+            } => (params.as_slice(), return_type.as_ref()),
+            Type::Callable(erased) => (erased.params.as_slice(), &erased.return_type),
+            _ => return None,
+        };
+        let Type::ReturnedView(view) = return_type else {
+            return None;
+        };
+        let decl = crate::sema::synthetic_returned_view_decl(&ty, callee.span)?;
+        Some(ReturnedViewCallee {
+            decl,
+            receiver: None,
+            module_name: self.module_name.to_string(),
+            type_param_bounds: BTreeMap::new(),
+            param_types: params.iter().map(|param| param.ty.clone()).collect(),
+            return_type: view.pointee.clone(),
+            receiver_type: None,
+            trait_name: None,
+        })
+    }
+
+    fn named_returned_view_callee_decl(&self, callee: &Expr) -> Option<ReturnedViewCallee> {
         let callee = match &callee.kind {
-            ExprKind::Group(inner) => return self.returned_view_callee_decl(inner),
+            ExprKind::Group(inner) => return self.named_returned_view_callee_decl(inner),
             ExprKind::Specialize {
                 expr: inner,
                 type_args,
             } => {
-                let info = self.returned_view_callee_decl(inner)?;
+                let info = self.named_returned_view_callee_decl(inner)?;
                 let type_args = type_args
                     .iter()
                     .map(|ty| self.lower_type_ref_with_provenance(ty))
@@ -10980,7 +11210,7 @@ impl<'a> Lowerer<'a> {
             // checking has already established that the indexed expression is
             // a callable; normalize that shape for returned-view analysis too.
             ExprKind::Index { object, index } => {
-                let info = self.returned_view_callee_decl(object)?;
+                let info = self.named_returned_view_callee_decl(object)?;
                 let type_args = self.task_type_args_from_index_expr(index)?;
                 if info.decl.type_params.is_empty()
                     || info.decl.type_params.len() != type_args.len()
@@ -11546,9 +11776,74 @@ impl<'a> Lowerer<'a> {
                     .map(|(origin, _)| origin)
             })?
         };
-        let projections =
-            self.returned_view_projections_for_decl(&callee_info, &mut BTreeSet::new());
+        let projections = if decl.name == crate::sema::SYNTHETIC_CALLABLE_DECL {
+            // The callee behind a callable value is opaque here: it may return
+            // any fixed path within the origin whose type is the pointee (C9).
+            let origin_index = decl
+                .params
+                .iter()
+                .position(|param| param.name == contract.origin)?;
+            let origin_ty = callee_info.param_types.get(origin_index)?;
+            self.projections_with_type(origin_ty, &callee_info.return_type)
+        } else {
+            self.returned_view_projections_for_decl(&callee_info, &mut BTreeSet::new())
+        };
         (!projections.is_empty()).then_some((origin, projections))
+    }
+
+    /// Every fixed class-field path or tuple position within `origin` whose
+    /// type is `target`, including the empty path when `origin` itself is
+    /// `target`. Indirect fields are not stable view identities and are
+    /// skipped; the walk is bounded in depth.
+    fn projections_with_type(&self, origin: &Type, target: &Type) -> Vec<String> {
+        const MAX_PROJECTION_DEPTH: usize = 8;
+        let join = |path: &str, segment: &str| {
+            if path.is_empty() {
+                segment.to_string()
+            } else {
+                format!("{path}.{segment}")
+            }
+        };
+        let mut found = Vec::new();
+        let mut stack = vec![(String::new(), origin.clone(), 0usize)];
+        while let Some((path, ty, depth)) = stack.pop() {
+            if &ty == target {
+                found.push(path.clone());
+            }
+            if depth >= MAX_PROJECTION_DEPTH {
+                continue;
+            }
+            match &ty {
+                Type::Tuple(elements) => {
+                    for (index, element) in elements.iter().enumerate() {
+                        stack.push((join(&path, &index.to_string()), element.clone(), depth + 1));
+                    }
+                }
+                Type::Named(name, args) => {
+                    if let Some(class) = self.resolve_class_info(name) {
+                        let substitutions =
+                            substitutions_from_decl_type_args(&class.decl.type_params, args);
+                        for field_decl in &class.decl.fields {
+                            if field_decl.ty.indirect {
+                                continue;
+                            }
+                            let Some(field) = class.fields.get(&field_decl.name) else {
+                                continue;
+                            };
+                            stack.push((
+                                join(&path, &field_decl.name),
+                                substitute_type(&field.ty, &substitutions),
+                                depth + 1,
+                            ));
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        found.sort();
+        found.dedup();
+        found
     }
 
     fn remember_lowered_returned_view_origin(&mut self, call: &Expr, loan: &str) {
@@ -18973,13 +19268,19 @@ impl<'a> Lowerer<'a> {
                     _ => false,
                 };
                 if !direct_decl_callee {
+                    // A call through a callable value has the contract's
+                    // pointee type when the contract returns a view (C9).
                     match self.infer_expr_type(callee) {
                         Some(
                             Type::Function { return_type, .. } | Type::Closure { return_type, .. },
                         ) => {
-                            return Some(*return_type);
+                            return Some(crate::sema::returned_view_pointee(&return_type).clone());
                         }
-                        Some(Type::Callable(callable)) => return Some(callable.return_type),
+                        Some(Type::Callable(callable)) => {
+                            return Some(
+                                crate::sema::returned_view_pointee(&callable.return_type).clone(),
+                            )
+                        }
                         _ => {}
                     }
                 }
@@ -20950,8 +21251,9 @@ fn lower_type_ref(type_ref: &crate::ast::TypeRef) -> Type {
         TypeRefKind::Function {
             params,
             return_type,
-        } => Type::Function {
-            params: params
+            view_return,
+        } => {
+            let params = params
                 .iter()
                 .map(|param| FunctionParamContract {
                     keyword_only: param.keyword_only,
@@ -20960,9 +21262,17 @@ fn lower_type_ref(type_ref: &crate::ast::TypeRef) -> Type {
                     passing: resolve_param_passing(param.mode),
                     has_default: param.has_default,
                 })
-                .collect(),
-            return_type: Box::new(lower_type_ref(return_type)),
-        },
+                .collect::<Vec<_>>();
+            let return_type = crate::sema::wrap_returned_view(
+                &params,
+                lower_type_ref(return_type),
+                view_return.as_ref(),
+            );
+            Type::Function {
+                params,
+                return_type: Box::new(return_type),
+            }
+        }
         TypeRefKind::Named { name, args } => {
             if name == "None" {
                 return Type::Unit;

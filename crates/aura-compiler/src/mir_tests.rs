@@ -553,7 +553,15 @@ def main():
                 has_default: param.default_function.is_some(),
             })
             .collect(),
-        return_type: Box::new(identity.return_type.clone()),
+        // `identity` returns `view int64 from origin`: the value's result
+        // position carries that contract by origin ordinal (C9).
+        return_type: Box::new(Type::ReturnedView(Box::new(
+            crate::sema::ReturnedViewType {
+                mutable: false,
+                pointee: identity.return_type.clone(),
+                origin: 0,
+            },
+        ))),
     };
 
     let mut unknown = baseline.clone();
@@ -604,12 +612,29 @@ def main():
         "{error}"
     );
 
+    let mut dropped_view = baseline.clone();
+    let mut signature = exact_signature.clone();
+    let Type::Function { return_type, .. } = &mut signature else {
+        unreachable!()
+    };
+    **return_type = Type::named("int64");
+    with_function_operand(&mut dropped_view, "identity", signature);
+    let error = validate_loan_flow(&dropped_view)
+        .expect_err("function operands cannot drop a declared returned-view contract");
+    assert!(
+        error.contains("returned-view contract that does not match declaration"),
+        "{error}"
+    );
+
     let mut wrong_return = baseline.clone();
     let mut signature = exact_signature;
     let Type::Function { return_type, .. } = &mut signature else {
         unreachable!()
     };
-    **return_type = Type::named("str");
+    let Type::ReturnedView(view) = &mut **return_type else {
+        unreachable!()
+    };
+    view.pointee = Type::named("str");
     with_function_operand(&mut wrong_return, "identity", signature);
     let error = validate_loan_flow(&wrong_return)
         .expect_err("function operand return contracts must match declarations");
@@ -846,7 +871,14 @@ def main():
                 has_default: param.default_function.is_some(),
             })
             .collect(),
-        return_type: Box::new(inspect.return_type.clone()),
+        // `inspect` returns `view int64 from origin` (C9).
+        return_type: Box::new(Type::ReturnedView(Box::new(
+            crate::sema::ReturnedViewType {
+                mutable: false,
+                pointee: inspect.return_type.clone(),
+                origin: 0,
+            },
+        ))),
     };
     let mut exact_function = baseline;
     mutate_call(&mut exact_function, &mut |callee, args| {
