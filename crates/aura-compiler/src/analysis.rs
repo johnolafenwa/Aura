@@ -4199,6 +4199,12 @@ impl<'a> AnalysisBuilder<'a> {
                     .and_then(|member| member.ty)
             }
             ExprKind::Index { object, index } => {
+                // `receiver.method[T]` binds the checker's closure (C6).
+                if matches!(object.kind, ExprKind::Member { .. }) {
+                    if let Some(info) = self.closure_info(object) {
+                        return Some(info.ty());
+                    }
+                }
                 self.infer_expr_type(object, scope)
                     .and_then(|ty| match &ty {
                         Type::Tuple(elements) => match &index.kind {

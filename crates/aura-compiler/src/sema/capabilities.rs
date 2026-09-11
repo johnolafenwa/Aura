@@ -556,6 +556,13 @@ impl<'a> FunctionChecker<'a> {
                     expr, object, field, &object_ty, &member_ty, locals,
                 )
             }
+            // `receiver.method[T]` moved its receiver while it was typed.
+            ExprKind::Index { object, .. }
+                if matches!(object.kind, ExprKind::Member { .. })
+                    && self.bound_method_closure_at(object.span).is_some() =>
+            {
+                Ok(())
+            }
             ExprKind::Index { .. } => {
                 if let Some(place) = self.borrow_call_place(expr) {
                     if self

@@ -65,7 +65,8 @@ This page documents known current limits of the Aura compiler and runtime.
   targets; bare function-type parameters are shared.
   `receiver.method` binds a closure over the receiver with the method's
   contract, and `Class.method` on a non-generic class is a function value;
-  generic method values still need a call.
+  a generic method's type arguments come from `method[T]` or an expected
+  contract, and an associated method of a generic class still needs a call.
 - Lambdas with parameters require complete expected parameter types; a
   zero-parameter lambda may infer `def() -> R` from its expression body.
   A lambda without a capture list captures by value. An explicit exhaustive

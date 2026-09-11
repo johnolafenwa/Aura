@@ -2001,6 +2001,23 @@ impl<'a> FunctionChecker<'a> {
         }
     }
 
+    /// The explicit type arguments spelled by an index expression such as
+    /// `f[T]` or `f[T, U]` outside call position.
+    fn explicit_type_args_from_index(&self, index: &Expr) -> Result<Vec<Type>> {
+        let type_arg_exprs = match &index.kind {
+            ExprKind::Tuple(elements) => elements.as_slice(),
+            _ => std::slice::from_ref(index),
+        };
+        let type_refs = type_arg_exprs
+            .iter()
+            .map(Self::spawn_type_ref_from_expr)
+            .collect::<Option<Vec<_>>>()
+            .ok_or_else(|| {
+                Diagnostic::at(index.span, "function specialization expects type arguments")
+            })?;
+        self.lower_explicit_type_args(&type_refs)
+    }
+
     fn lower_explicit_type_args(&self, type_args: &[TypeRef]) -> Result<Vec<Type>> {
         type_args
             .iter()
@@ -5935,10 +5952,14 @@ impl<'a> FunctionChecker<'a> {
             ));
         }
         let contract = callable.contract();
-        // Only a lambda needs the contract as its typing context; every other
-        // value carries its own callable type.
-        let lambda_context =
-            matches!(argument.value.kind, ExprKind::Lambda { .. }).then_some(&contract);
+        // A lambda needs the contract as its typing context, and a method
+        // value uses it to fix a generic method's type arguments (C6); every
+        // other value carries its own callable type.
+        let lambda_context = matches!(
+            argument.value.kind,
+            ExprKind::Lambda { .. } | ExprKind::Member { .. } | ExprKind::Specialize { .. }
+        )
+        .then_some(&contract);
         let actual = self.type_of_expr_hint(&argument.value, locals, lambda_context)?;
         let (source_kind, source_task_ready) = match &actual {
             Type::Callable(source) => {
@@ -6815,6 +6836,37 @@ impl<'a> FunctionChecker<'a> {
                             lowered,
                         ))
                     }
+                    ExprKind::Member { object, field } => {
+                        // `Class.method[T]` and `receiver.method[T]` fix a
+                        // generic method's type arguments for its value (C6).
+                        if let Some((class, method, owner)) =
+                            self.associated_method_target(object, field, locals)
+                        {
+                            return self.associated_method_value_type(
+                                class,
+                                method,
+                                &owner,
+                                field,
+                                object,
+                                expected,
+                                Some(&lowered),
+                                expr.span,
+                            );
+                        }
+                        let object_ty = self.type_of_member_object_expr(object, locals)?;
+                        if let Some(bound) = self.type_of_bound_method(
+                            base,
+                            object,
+                            field,
+                            &object_ty,
+                            locals,
+                            expected,
+                            Some(&lowered),
+                        )? {
+                            return Ok(bound);
+                        }
+                        self.type_of_expr_hint(base, locals, expected)
+                    }
                     _ => self.type_of_expr_hint(base, locals, expected),
                 }
             }
@@ -7296,7 +7348,7 @@ impl<'a> FunctionChecker<'a> {
                     self.associated_method_target(object, field, locals)
                 {
                     return self.associated_method_value_type(
-                        class, method, &owner, field, object, expected, expr.span,
+                        class, method, &owner, field, object, expected, None, expr.span,
                     );
                 }
                 if let Some(path) = self.member_access_path(expr) {
@@ -7525,8 +7577,8 @@ impl<'a> FunctionChecker<'a> {
                         self.reject_stale_narrowing(&path, expr.span, locals)?;
                     }
                 }
-                if let Some(bound) =
-                    self.type_of_bound_method(expr, object, field, &object_ty, locals)?
+                if let Some(bound) = self
+                    .type_of_bound_method(expr, object, field, &object_ty, locals, expected, None)?
                 {
                     return Ok(bound);
                 }
@@ -7586,6 +7638,48 @@ impl<'a> FunctionChecker<'a> {
                         expr.span,
                         &display_name,
                     );
+                }
+                // `Class.method[T]` and `receiver.method[T]` outside call
+                // position fix a generic method's type arguments (C6).
+                if let ExprKind::Member {
+                    object: receiver,
+                    field,
+                } = &object.kind
+                {
+                    if let Some((class, method, owner)) =
+                        self.associated_method_target(receiver, field, locals)
+                    {
+                        let lowered = self.explicit_type_args_from_index(index)?;
+                        return self.associated_method_value_type(
+                            class,
+                            method,
+                            &owner,
+                            field,
+                            receiver,
+                            expected,
+                            Some(&lowered),
+                            expr.span,
+                        );
+                    }
+                    if !self.qualified_module_item(receiver).is_some_and(|_| true)
+                        && !matches!(&receiver.kind, ExprKind::Name(name) if !locals.contains_key(name))
+                    {
+                        let receiver_ty = self.type_of_member_object_expr(receiver, locals)?;
+                        if self.member_names_receiver_method(&receiver_ty, field) {
+                            let lowered = self.explicit_type_args_from_index(index)?;
+                            if let Some(bound) = self.type_of_bound_method(
+                                object,
+                                receiver,
+                                field,
+                                &receiver_ty,
+                                locals,
+                                expected,
+                                Some(&lowered),
+                            )? {
+                                return Ok(bound);
+                            }
+                        }
+                    }
                 }
                 let object_ty = self.type_of_expr(object, locals)?;
                 let locals_before_index = locals.clone();

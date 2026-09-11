@@ -1,0 +1,13 @@
+trait Scale:
+    def factor(self) -> int64
+
+class Counter:
+    total: int64
+
+    def scaled[S: Scale](self, scale: S) -> int64:
+        return self.total * scale.factor()
+
+def main():
+    counter = Counter(total=3)
+    scaled = counter.scaled[int64]
+    print(scaled(2))

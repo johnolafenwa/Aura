@@ -8976,11 +8976,15 @@ fn bound_and_associated_method_values_hover_with_their_callable_types() {
         "        return self.value",
         "    def double(value: int32) -> int32:",
         "        return value * 2",
+        "    def scaled[T](self, factor: T) -> int32:",
+        "        return self.value",
         "def main() -> int32:",
         "    counter = Counter(value=1)",
         "    read = counter.read",
         "    callback = Counter.double",
-        "    return read() + callback(2)",
+        "    other = Counter(value=2)",
+        "    scaled = other.scaled[int64]",
+        "    return read() + callback(2) + scaled(3)",
         "",
     ]
     .join("\n");
@@ -8991,8 +8995,9 @@ fn bound_and_associated_method_values_hover_with_their_callable_types() {
         analysis.diagnostics
     );
     for (line, expected) in [
-        (8, "read: closure def() -> int32"),
-        (9, "callback: def(value: int32) -> int32"),
+        (10, "read: closure def() -> int32"),
+        (11, "callback: def(value: int32) -> int32"),
+        (13, "scaled: closure def(factor: int64) -> int32"),
     ] {
         assert!(
             analysis

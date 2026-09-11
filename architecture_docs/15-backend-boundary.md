@@ -423,3 +423,9 @@ so bound-method metadata never collides with a lambda's. The validator also
 ties the closure rvalue's kind bits to the declaration: a closure whose
 generated function takes any capture mutably cannot claim a Repeatable
 kind, which is what keeps a Mutable bound method out of shared storage.
+A generic method's value carries substituted contracts: explicit
+`method[T]` arguments are substituted by the checker into the closure
+metadata (bound form) or by the lowering into the function operand's
+signature (associated form), and an expected contract resolves them by
+unification, so neither backend ever sees an unresolved method type
+parameter in a callable value.

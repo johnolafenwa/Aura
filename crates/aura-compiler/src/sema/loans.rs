@@ -2620,6 +2620,37 @@ impl<'a> FunctionChecker<'a> {
                 if self.is_payload_free_variant_expr(expr) {
                     return Ok(None);
                 }
+                // A bound method (`receiver.method`, optionally specialized
+                // with `[T]`) is an owned closure whose receiver already moved
+                // in, and an associated method value is a Copy code pointer:
+                // neither carries borrow provenance, and retyping the member
+                // would report the receiver as moved.
+                let bound_member = match &expr.kind {
+                    ExprKind::Member { .. } => Some(expr),
+                    ExprKind::Index { object, .. }
+                        if matches!(object.kind, ExprKind::Member { .. }) =>
+                    {
+                        Some(object.as_ref())
+                    }
+                    _ => None,
+                };
+                if let Some(member) = bound_member {
+                    if self.bound_method_closure_at(member.span).is_some() {
+                        return Ok(None);
+                    }
+                    if let ExprKind::Member {
+                        object: receiver,
+                        field,
+                    } = &member.kind
+                    {
+                        if self
+                            .associated_method_target(receiver, field, locals)
+                            .is_some()
+                        {
+                            return Ok(None);
+                        }
+                    }
+                }
                 if let Some((module_path, function_name)) = self.qualified_module_item(expr) {
                     if self
                         .module_namespace(&module_path)

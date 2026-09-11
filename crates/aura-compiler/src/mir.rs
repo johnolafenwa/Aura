@@ -8689,6 +8689,17 @@ impl<'a> Lowerer<'a> {
     /// `Class.method` naming an associated method is a thin function value
     /// whose identity is the method's MIR function.
     fn associated_method_value_operand(&self, object: &Expr, field: &str) -> Option<Operand> {
+        self.associated_method_value_operand_with_args(object, field, &[])
+    }
+
+    /// `Class.method[T, ...]` with explicit method type arguments; an empty
+    /// list keeps the declaration's type parameters for contextual typing.
+    fn associated_method_value_operand_with_args(
+        &self,
+        object: &Expr,
+        field: &str,
+        type_args: &[Type],
+    ) -> Option<Operand> {
         if matches!(object.kind, ExprKind::Specialize { .. }) {
             return None;
         }
@@ -8696,14 +8707,31 @@ impl<'a> Lowerer<'a> {
         if !class.decl.type_params.is_empty() {
             return None;
         }
+        let substitutions = if type_args.is_empty() {
+            HashMap::new()
+        } else {
+            if type_args.len() != method.decl.type_params.len() {
+                return None;
+            }
+            substitutions_from_decl_type_args(&method.decl.type_params, type_args)
+        };
         let runtime_name = mir_class_method_name(self.program, class, field);
         let signature = Type::Function {
             params: task_param_contracts(
                 &method.decl.params,
                 &method.signature.params,
                 &method.signature.param_passings,
-            ),
-            return_type: Box::new(method.signature.return_type.clone()),
+            )
+            .into_iter()
+            .map(|mut param| {
+                param.ty = substitute_type(&param.ty, &substitutions);
+                param
+            })
+            .collect(),
+            return_type: Box::new(substitute_type(
+                &method.signature.return_type,
+                &substitutions,
+            )),
         };
         Some(Operand::Function {
             name: runtime_name,
@@ -9083,6 +9111,26 @@ impl<'a> Lowerer<'a> {
     fn lower_function_value(&self, expr: &Expr) -> Option<Operand> {
         match &expr.kind {
             ExprKind::Group(inner) => self.lower_function_value(inner),
+            ExprKind::Specialize {
+                expr: inner,
+                type_args,
+            } if matches!(&inner.kind, ExprKind::Member { .. })
+                && self.resolve_function_value_target(inner).is_none() =>
+            {
+                let ExprKind::Member { object, field } = &inner.kind else {
+                    unreachable!("guarded above");
+                };
+                let lowered = type_args
+                    .iter()
+                    .map(|ty| self.lower_type_ref_with_provenance(ty))
+                    .collect::<Vec<_>>();
+                self.associated_method_value_operand_with_args(object, field, &lowered)
+            }
+            ExprKind::Member { object, field }
+                if self.resolve_function_value_target(expr).is_none() =>
+            {
+                self.associated_method_value_operand(object, field)
+            }
             ExprKind::Specialize { expr, type_args } => {
                 let (runtime_name, function) = self.resolve_function_value_target(expr)?;
                 let substitutions = substitutions_from_decl_type_args(
@@ -9098,7 +9146,19 @@ impl<'a> Lowerer<'a> {
                 })
             }
             ExprKind::Index { object, index } => {
-                let (runtime_name, function) = self.resolve_function_value_target(object)?;
+                let Some((runtime_name, function)) = self.resolve_function_value_target(object)
+                else {
+                    let ExprKind::Member {
+                        object: receiver,
+                        field,
+                    } = &object.kind
+                    else {
+                        return None;
+                    };
+                    let type_args = self.task_type_args_from_index_expr(index)?;
+                    return self
+                        .associated_method_value_operand_with_args(receiver, field, &type_args);
+                };
                 let type_args = self.task_type_args_from_index_expr(index)?;
                 if function.decl.type_params.is_empty()
                     || function.decl.type_params.len() != type_args.len()
@@ -14357,6 +14417,12 @@ impl<'a> Lowerer<'a> {
                 Operand::Place(temp)
             }
             ExprKind::Index { object, index } => {
+                // `receiver.method[T]`: the checker registered the bound
+                // method's closure at the member; the index only fixed its
+                // type arguments.
+                if self.bound_method_info_at(object).is_some() {
+                    return self.lower_expr(object);
+                }
                 if let Some(Type::Tuple(element_types)) = self.infer_expr_type(object) {
                     let tuple_index = tuple_constant_index(index)
                         .expect("tuple indices are validated as constant integers by sema");
@@ -18828,6 +18894,17 @@ impl<'a> Lowerer<'a> {
                     );
                     return Some(self.function_type(function, &substitutions));
                 }
+                if let ExprKind::Member { object, field } = &expr.kind {
+                    let lowered = type_args
+                        .iter()
+                        .map(|ty| self.lower_type_ref_with_provenance(ty))
+                        .collect::<Vec<_>>();
+                    if let Some(Operand::Function { signature, .. }) =
+                        self.associated_method_value_operand_with_args(object, field, &lowered)
+                    {
+                        return Some(*signature);
+                    }
+                }
                 match &expr.kind {
                     ExprKind::Name(name)
                         if matches!(
@@ -19512,6 +19589,26 @@ impl<'a> Lowerer<'a> {
                     .map(|field| substitute_type(&field.ty, &substitutions))
             }
             ExprKind::Index { object, index } => {
+                if let Some(info) = self.bound_method_info_at(object) {
+                    return Some(info.ty());
+                }
+                if let ExprKind::Member {
+                    object: receiver,
+                    field,
+                } = &object.kind
+                {
+                    if self.resolve_function_value_target(object).is_none() {
+                        if let Some(type_args) = self.task_type_args_from_index_expr(index) {
+                            if let Some(Operand::Function { signature, .. }) = self
+                                .associated_method_value_operand_with_args(
+                                    receiver, field, &type_args,
+                                )
+                            {
+                                return Some(*signature);
+                            }
+                        }
+                    }
+                }
                 if let Some((_runtime_name, function)) = self.resolve_function_value_target(object)
                 {
                     if let Some(type_args) = self.task_type_args_from_index_expr(index) {

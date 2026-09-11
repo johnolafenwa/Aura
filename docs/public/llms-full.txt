@@ -2552,7 +2552,7 @@ such as `self: Counter` is not a receiver and is rejected with a diagnostic
 naming the valid forms. `Self` may be used in class method parameter and return
 type positions and denotes the enclosing class specialization.
 
-An associated method has no implicit `self` and is called as `Counter.zero()`. Instance syntax is reserved for methods with a compatible receiver and for trait methods selected for the instance type. Named without a call, `Counter.zero` is a function value with the method's contract (non-generic classes only), and `counter.read` is a bound method closure over the receiver; see [Closures](/manual/closures#bound-methods).
+An associated method has no implicit `self` and is called as `Counter.zero()`. Instance syntax is reserved for methods with a compatible receiver and for trait methods selected for the instance type. Named without a call, `Counter.zero` is a function value with the method's contract (non-generic classes only), `counter.read` is a bound method closure over the receiver, and a generic method spells its type arguments as `method[T]`; see [Closures](/manual/closures#bound-methods).
 
 ## Mutation
 
@@ -3591,8 +3591,14 @@ def main():
     print(bump(by=5))
 ```
 
-A generic method, or an associated method of a generic class, still needs a
-call and reports `AU2005`. A `view ... from self` method cannot be bound
+A generic method's type arguments must be concrete: write them explicitly
+as `receiver.method[T]` (or `Class.method[T]` for an associated method), or
+let an expected callable contract supply them, such as the contract of a
+`Callable[...]` constructor call or an annotated function-typed local for an
+associated method. A bare generic method reference reports `AU2005`, a
+wrong type-argument count or an unsatisfiable bound reports `AU2002`, and an
+associated method of a generic class still needs a call (`AU2005`). A
+`view ... from self` method cannot be bound
 (`AU3010`). Binding a shared or mutable parameter reports `AU3002`, binding a
 view reports `AU3004`, and a later use of the moved receiver reports `AU3001`
 pointing at the binding site. Calling a Mutable bound method through an
@@ -5272,7 +5278,8 @@ This page documents known current limits of the Aura compiler and runtime.
   targets; bare function-type parameters are shared.
   `receiver.method` binds a closure over the receiver with the method's
   contract, and `Class.method` on a non-generic class is a function value;
-  generic method values still need a call.
+  a generic method's type arguments come from `method[T]` or an expected
+  contract, and an associated method of a generic class still needs a call.
 - Lambdas with parameters require complete expected parameter types; a
   zero-parameter lambda may infer `def() -> R` from its expression body.
   A lambda without a capture list captures by value. An explicit exhaustive
@@ -9240,7 +9247,9 @@ type arguments does not have one concrete function-value type.
 
 An associated method without `self` named as `Class.method` is a thin
 function value carrying the method's complete contract when its class is not
-generic. `receiver.method` outside call position is a bound method: a
+generic; a generic method takes explicit type arguments as `Class.method[T]`
+or infers them from an expected function type. `receiver.method` outside
+call position is a bound method: a
 compiler-synthesized closure over the receiver, specified in
 [Closures](/manual/closures#bound-methods). Lambdas and closure capture are
 specified separately.
@@ -9332,7 +9341,8 @@ owned captures and then invokes the target under its declared ABI.
 `AU2002` means a signature, function-value capability, parameter, default,
 return, bound, or entrypoint type mismatch. `AU2004` means positional or named
 argument binding failed. `AU2005` means focused guidance for an unavailable
-callable spelling, including generic method values that still need a call. `AU2999` means another
+callable spelling, including a generic method value whose type arguments
+are neither written nor implied by an expected contract. `AU2999` means another
 callable rejection without a narrower compile-time code.
 `AU3001` means a moved argument was used; `AU3002` means a borrow or alias
 conflict; `AU3003` means a mutability violation; and `AU3004` means an invalid
@@ -21598,8 +21608,9 @@ element, or function-typed parameter default.
 
 `Class.method` names an associated method (no `self`) as a function value
 with the method's contract, and `receiver.method` outside a call binds a
-closure over the receiver; see the Closures tutorial and manual. Generic
-method values still need a call.
+closure over the receiver; see the Closures tutorial and manual. A generic
+method's type arguments are written as `method[T]` or come from an expected
+contract.
 
 See [examples/basics/function_values.au](../examples/basics/function_values.au).
 

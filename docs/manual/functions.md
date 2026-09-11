@@ -437,7 +437,9 @@ type arguments does not have one concrete function-value type.
 
 An associated method without `self` named as `Class.method` is a thin
 function value carrying the method's complete contract when its class is not
-generic. `receiver.method` outside call position is a bound method: a
+generic; a generic method takes explicit type arguments as `Class.method[T]`
+or infers them from an expected function type. `receiver.method` outside
+call position is a bound method: a
 compiler-synthesized closure over the receiver, specified in
 [Closures](/manual/closures#bound-methods). Lambdas and closure capture are
 specified separately.
@@ -529,7 +531,8 @@ owned captures and then invokes the target under its declared ABI.
 `AU2002` means a signature, function-value capability, parameter, default,
 return, bound, or entrypoint type mismatch. `AU2004` means positional or named
 argument binding failed. `AU2005` means focused guidance for an unavailable
-callable spelling, including generic method values that still need a call. `AU2999` means another
+callable spelling, including a generic method value whose type arguments
+are neither written nor implied by an expected contract. `AU2999` means another
 callable rejection without a narrower compile-time code.
 `AU3001` means a moved argument was used; `AU3002` means a borrow or alias
 conflict; `AU3003` means a mutability violation; and `AU3004` means an invalid

@@ -131,9 +131,11 @@ Last updated: 2026-09-10
   the receiver capability (Copy snapshot, owned move, borrowed receivers
   refused), `Class.method` is a thin function value, and omitted defaults
   bind through the method's own helpers on both backends.
-- Next: commit the bound-methods family, then stored argument-origin views,
-  Shared callback sites, editor/docs/reference-agent updates, full gates and
-  integration.
+- Bound methods family committed (`7a760ad4`); the generic type-argument
+  follow-up (`method[T]` and expected-contract inference) is gated separately.
+- Next: commit the generic bound-method follow-up, then stored
+  argument-origin views, Shared callback sites, editor/docs/reference-agent
+  updates, full gates and integration.
 - Option removal and all phase 2 signature changes remain excluded; protected
   user files and coverage floors remain unchanged.
 - Work and handoff ledger: [2026-09-09-batch-1-phase-1.md](2026-09-09-batch-1-phase-1.md).

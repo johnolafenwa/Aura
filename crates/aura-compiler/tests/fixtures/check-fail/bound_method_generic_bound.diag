@@ -1,0 +1,5 @@
+error[AU2002]: type `int64` does not implement trait `Scale`
+ --> crates/aura-compiler/tests/fixtures/check-fail/bound_method_generic_bound.au:12:22
+   |
+12 |     scaled = counter.scaled[int64]
+   |                      ^

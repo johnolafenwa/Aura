@@ -1,4 +1,4 @@
-error[AU2005]: generic method `Counter.scaled` cannot become a bound method value; call `.scaled(...)` directly or wrap it in a named function
+error[AU2005]: generic method `Counter.scaled` needs explicit type arguments or an expected callable contract to become a method value; write `.scaled[...]`, or call `.scaled(...)` directly
  --> crates/aura-compiler/tests/fixtures/check-fail/bound_method_generic_method.au:9:22
   |
 9 |     scaled = counter.scaled

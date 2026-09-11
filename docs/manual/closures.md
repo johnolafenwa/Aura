@@ -371,8 +371,14 @@ def main():
     print(bump(by=5))
 ```
 
-A generic method, or an associated method of a generic class, still needs a
-call and reports `AU2005`. A `view ... from self` method cannot be bound
+A generic method's type arguments must be concrete: write them explicitly
+as `receiver.method[T]` (or `Class.method[T]` for an associated method), or
+let an expected callable contract supply them, such as the contract of a
+`Callable[...]` constructor call or an annotated function-typed local for an
+associated method. A bare generic method reference reports `AU2005`, a
+wrong type-argument count or an unsatisfiable bound reports `AU2002`, and an
+associated method of a generic class still needs a call (`AU2005`). A
+`view ... from self` method cannot be bound
 (`AU3010`). Binding a shared or mutable parameter reports `AU3002`, binding a
 view reports `AU3004`, and a later use of the moved receiver reports `AU3001`
 pointing at the binding site. Calling a Mutable bound method through an

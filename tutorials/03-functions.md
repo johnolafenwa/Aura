@@ -313,8 +313,9 @@ element, or function-typed parameter default.
 
 `Class.method` names an associated method (no `self`) as a function value
 with the method's contract, and `receiver.method` outside a call binds a
-closure over the receiver; see the Closures tutorial and manual. Generic
-method values still need a call.
+closure over the receiver; see the Closures tutorial and manual. A generic
+method's type arguments are written as `method[T]` or come from an expected
+contract.
 
 See [examples/basics/function_values.au](../examples/basics/function_values.au).
 

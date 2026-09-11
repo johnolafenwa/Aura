@@ -1,0 +1,5 @@
+error[AU2002]: method `Counter.scaled` expects 1 type argument, found 2
+ --> crates/aura-compiler/tests/fixtures/check-fail/bound_method_generic_arity.au:19:22
+   |
+19 |     scaled = counter.scaled[Twice, Twice]
+   |                      ^

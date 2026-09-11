@@ -2769,6 +2769,7 @@ pub(crate) const BOUND_RECEIVER_CAPTURE: &str = "__receiver";
 struct BoundMethodTarget<'a> {
     decl: &'a FunctionDecl,
     signature: &'a FunctionSignature,
+    type_param_bounds: &'a BTreeMap<String, Vec<TraitBound>>,
     substitutions: HashMap<String, Type>,
     display: String,
 }
@@ -2829,6 +2830,7 @@ impl FunctionChecker<'_> {
         field: &str,
         object: &Expr,
         expected: Option<&Type>,
+        explicit_type_args: Option<&[Type]>,
         span: crate::diag::Span,
     ) -> Result<Type> {
         if self.is_external_module(&class.module_name) && !method.decl.public {
@@ -2856,7 +2858,7 @@ impl FunctionChecker<'_> {
         self.function_value_type(
             &function,
             expected,
-            None,
+            explicit_type_args,
             span,
             &format!("associated method `{owner}.{field}`"),
         )
@@ -2868,6 +2870,7 @@ impl FunctionChecker<'_> {
     /// receiver capability: `self` is Repeatable, `mut self` is Mutable, and
     /// `own self` is Consuming. Returns `None` when the member is not a
     /// receiver method so field reads and the ordinary member errors continue.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn type_of_bound_method(
         &self,
         expr: &Expr,
@@ -2875,6 +2878,8 @@ impl FunctionChecker<'_> {
         field: &str,
         object_ty: &Type,
         locals: &mut HashMap<String, LocalBinding>,
+        expected: Option<&Type>,
+        explicit_type_args: Option<&[Type]>,
     ) -> Result<Option<Type>> {
         let Type::Named(type_name, type_args) = object_ty else {
             return Ok(None);
@@ -2899,6 +2904,7 @@ impl FunctionChecker<'_> {
             Some(BoundMethodTarget {
                 decl: &method.decl,
                 signature: &method.signature,
+                type_param_bounds: &method.type_param_bounds,
                 substitutions: substitutions_from_decl_type_args(
                     &class.decl.type_params,
                     type_args,
@@ -2912,6 +2918,7 @@ impl FunctionChecker<'_> {
                 Some((trait_impl, method, substitutions)) => BoundMethodTarget {
                     decl: &method.decl,
                     signature: &method.signature,
+                    type_param_bounds: &method.type_param_bounds,
                     substitutions,
                     display: format!("{}.{}", trait_impl.trait_name, field),
                 },
@@ -2921,16 +2928,11 @@ impl FunctionChecker<'_> {
         let Some(receiver) = target.decl.receiver else {
             return Ok(None);
         };
-        if !target.decl.type_params.is_empty() {
-            return Err(Diagnostic::coded_at(
-                "AU2005",
-                span,
-                format!(
-                    "generic method `{}` cannot become a bound method value; call `.{field}(...)` directly or wrap it in a named function",
-                    target.display
-                ),
-            ));
-        }
+        // A generic method's type arguments must be concrete from explicit
+        // specialization or the expected contract (C6); a bare reference has
+        // no concrete callable type.
+        let substitutions =
+            self.bound_method_substitutions(&target, field, expected, explicit_type_args, span)?;
         if target.decl.view_return.is_some() {
             return Err(Diagnostic::coded_at(
                 "AU3010",
@@ -2953,12 +2955,12 @@ impl FunctionChecker<'_> {
             .map(|((param, ty), passing)| FunctionParamContract {
                 keyword_only: param.keyword_only,
                 name: param.name.clone(),
-                ty: substitute_type(ty, &target.substitutions),
+                ty: substitute_type(ty, &substitutions),
                 passing: *passing,
                 has_default: param.default.is_some(),
             })
             .collect::<Vec<_>>();
-        let return_type = substitute_type(&target.signature.return_type, &target.substitutions);
+        let return_type = substitute_type(&target.signature.return_type, &substitutions);
         // A Copy receiver is snapshotted into the closure; any other receiver
         // must be an owned place or a fresh temporary that moves in once.
         let mode = if self.is_copy_type(object_ty) {
@@ -2987,6 +2989,151 @@ impl FunctionChecker<'_> {
         let ty = info.ty();
         self.closure_infos.borrow_mut().insert(id, info);
         Ok(Some(ty))
+    }
+
+    /// True when `field` names a receiver method (inherent or trait) of
+    /// `object_ty`, so an index after it spells method type arguments rather
+    /// than a runtime index.
+    pub(super) fn member_names_receiver_method(&self, object_ty: &Type, field: &str) -> bool {
+        let Type::Named(type_name, _) = object_ty else {
+            return false;
+        };
+        if let Some(class) = self.resolve_class_info(type_name) {
+            if class.fields.contains_key(field) {
+                return false;
+            }
+            if let Some(method) = class.methods.get(field) {
+                return method.decl.receiver.is_some();
+            }
+        }
+        self.trait_method_for_concrete_type(object_ty, field, crate::diag::Span::new(0, 0))
+            .ok()
+            .flatten()
+            .is_some_and(|(_, method, _)| method.decl.receiver.is_some())
+    }
+
+    fn bound_method_substitutions(
+        &self,
+        target: &BoundMethodTarget<'_>,
+        field: &str,
+        expected: Option<&Type>,
+        explicit_type_args: Option<&[Type]>,
+        span: crate::diag::Span,
+    ) -> Result<HashMap<String, Type>> {
+        let mut substitutions = target.substitutions.clone();
+        if target.decl.type_params.is_empty() {
+            return Ok(substitutions);
+        }
+        let display = &target.display;
+        if let Some(explicit) = explicit_type_args {
+            if explicit.len() != target.decl.type_params.len() {
+                return Err(Diagnostic::at(
+                    span,
+                    format!(
+                        "method `{display}` expects {} type argument{}, found {}",
+                        target.decl.type_params.len(),
+                        if target.decl.type_params.len() == 1 {
+                            ""
+                        } else {
+                            "s"
+                        },
+                        explicit.len()
+                    ),
+                ));
+            }
+            substitutions.extend(substitutions_from_decl_type_args(
+                &target.decl.type_params,
+                explicit,
+            ));
+        } else {
+            let expected_contract = match expected {
+                Some(Type::Function {
+                    params,
+                    return_type,
+                }) => Some((params.as_slice(), return_type.as_ref())),
+                Some(Type::Closure {
+                    params,
+                    return_type,
+                    ..
+                }) => Some((params.as_slice(), return_type.as_ref())),
+                _ => None,
+            };
+            let Some((expected_params, expected_return)) = expected_contract else {
+                return Err(Diagnostic::coded_at(
+                    "AU2005",
+                    span,
+                    format!(
+                        "generic method `{display}` needs explicit type arguments or an expected callable contract to become a method value; write `.{field}[...]`, or call `.{field}(...)` directly"
+                    ),
+                ));
+            };
+            if expected_params.len() != target.signature.params.len() {
+                return Err(Diagnostic::coded_at(
+                    "AU2002",
+                    span,
+                    format!(
+                        "cannot specialize method `{display}`: expected {} parameter{}, found {}",
+                        target.signature.params.len(),
+                        if target.signature.params.len() == 1 {
+                            ""
+                        } else {
+                            "s"
+                        },
+                        expected_params.len()
+                    ),
+                ));
+            }
+            for (pattern, actual) in target.signature.params.iter().zip(expected_params) {
+                unify_type_pattern(
+                    &substitute_type(pattern, &target.substitutions),
+                    &actual.ty,
+                    &mut substitutions,
+                )
+                .map_err(|error| {
+                    Diagnostic::coded_at(
+                        "AU2002",
+                        span,
+                        format!("cannot specialize method `{display}`: {}", error.message),
+                    )
+                })?;
+            }
+            unify_type_pattern(
+                &substitute_type(&target.signature.return_type, &target.substitutions),
+                expected_return,
+                &mut substitutions,
+            )
+            .map_err(|error| {
+                Diagnostic::coded_at(
+                    "AU2002",
+                    span,
+                    format!("cannot specialize method `{display}`: {}", error.message),
+                )
+            })?;
+        }
+        for type_param in &target.decl.type_params {
+            let Some(resolved) = substitutions.get(type_param) else {
+                return Err(Diagnostic::at(
+                    span,
+                    format!("cannot infer type parameter `{type_param}` for method `{display}`"),
+                ));
+            };
+            let mut bounds = target
+                .type_param_bounds
+                .get(type_param)
+                .cloned()
+                .unwrap_or_default();
+            for bound in &mut bounds {
+                *bound = substitute_trait_bound(bound, &substitutions);
+            }
+            self.assert_type_satisfies_bounds(resolved, &bounds, span)?;
+        }
+        self.enforce_rng_clone_obligations(
+            display,
+            &target.signature.rng_clone_safe_type_params,
+            &substitutions,
+            span,
+        )?;
+        Ok(substitutions)
     }
 
     fn acquire_bound_receiver(
