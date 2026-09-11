@@ -1047,7 +1047,7 @@ fn adr0038_closure_branch_module(flag: bool, reverse_branch_storage: bool) -> Mi
                         mutated: false,
                     }],
                     consuming: false,
-                    mutable: false,
+                    mutable: true,
                 },
             },
             Instruction::EndLoan {
@@ -1278,7 +1278,7 @@ fn adr0038_selector_reuse_module() -> MirModule {
                     mutated: false,
                 }],
                 consuming: false,
-                mutable: false,
+                mutable: true,
             },
         },
         Instruction::EndLoan {

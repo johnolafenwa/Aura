@@ -435,10 +435,12 @@ parameter default such as a generic `empty` used where
 `def() -> Option[str]` is required. A generic name with neither source of
 type arguments does not have one concrete function-value type.
 
-This stage is deliberately capture-free. Instance-method, associated-method,
-and trait-method values are not first-class; an associated method without
-`self` remains accepted only in the existing direct `TaskGroup` target form.
-Lambdas and closure capture are specified separately.
+An associated method without `self` named as `Class.method` is a thin
+function value carrying the method's complete contract when its class is not
+generic. `receiver.method` outside call position is a bound method: a
+compiler-synthesized closure over the receiver, specified in
+[Closures](/manual/closures#bound-methods). Lambdas and closure capture are
+specified separately.
 
 ## Function Values And Task Starts
 
@@ -527,7 +529,7 @@ owned captures and then invokes the target under its declared ABI.
 `AU2002` means a signature, function-value capability, parameter, default,
 return, bound, or entrypoint type mismatch. `AU2004` means positional or named
 argument binding failed. `AU2005` means focused guidance for an unavailable
-callable spelling, including out-of-scope method values. `AU2999` means another
+callable spelling, including generic method values that still need a call. `AU2999` means another
 callable rejection without a narrower compile-time code.
 `AU3001` means a moved argument was used; `AU3002` means a borrow or alias
 conflict; `AU3003` means a mutability violation; and `AU3004` means an invalid
@@ -551,8 +553,7 @@ resolved signature metadata, including inferred clone-safety obligations.
 
 ## Limits And Implementation-Defined Behavior
 
-Aura has no method values, trait-object function interactions, Aura
-variadic functions,
+Aura has no trait-object function interactions, Aura variadic functions,
 overloads, nested functions, or mutable-parameter task targets. Expression
 lambdas are specified by [Closures](/manual/closures); they do not add nested
 item declarations. Written function types express bare shared, `mut`, and `own`

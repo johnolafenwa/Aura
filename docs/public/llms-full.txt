@@ -2552,7 +2552,7 @@ such as `self: Counter` is not a receiver and is rejected with a diagnostic
 naming the valid forms. `Self` may be used in class method parameter and return
 type positions and denotes the enclosing class specialization.
 
-An associated method has no implicit `self` and is called as `Counter.zero()`. Instance syntax is reserved for methods with a compatible receiver and for trait methods selected for the instance type.
+An associated method has no implicit `self` and is called as `Counter.zero()`. Instance syntax is reserved for methods with a compatible receiver and for trait methods selected for the instance type. Named without a call, `Counter.zero` is a function value with the method's contract (non-generic classes only), and `counter.read` is a bound method closure over the receiver; see [Closures](/manual/closures#bound-methods).
 
 ## Mutation
 
@@ -3550,11 +3550,59 @@ analysis and the language server expose lambda parameter scope,
 captured-name definitions, callable hover, completions, and the compiler-owned
 diagnostics.
 
+## Bound Methods
+
+`receiver.method` outside call position is a bound method: a
+compiler-synthesized closure whose single capture is the receiver and whose
+contract is the method's own parameter names, keyword-only boundary, default
+availability, passing modes, and result. The call kind follows the receiver
+capability: a `self` method binds a Repeatable closure, a `mut self` method
+binds a Mutable closure whose receiver is environment-owned state updated on
+every call, and an `own self` method binds a Consuming closure. The receiver
+is acquired exactly once when the bound method is created. A `copy class`
+receiver is snapshotted, so later calls never change the original. Any other
+receiver must be an owned local, which moves into the closure, or a fresh
+temporary. A shared or mutable parameter and a view cannot be bound by this
+spelling; clone the value into an owned local first. Trait methods selected
+for the concrete receiver type bind the same way and dispatch statically. An
+omitted argument with a declaration default is supplied by the method's own
+default expression, evaluated at the call. Bound methods store, pack, and
+start like any closure with the same call kind.
+
+```aura
+class Counter:
+    total: int64
+
+    def read(self) -> int64:
+        return self.total
+
+    def bump(mut self, by: int64 = 1) -> int64:
+        self.total = self.total + by
+        return self.total
+
+type Bumper = Callable[mut def(by: int64 = ...) -> int64]
+
+def main():
+    counter = Counter(total=1)
+    read = counter.read
+    print(read())
+    mut bump = Bumper(Counter(total=10).bump)
+    print(bump())
+    print(bump(by=5))
+```
+
+A generic method, or an associated method of a generic class, still needs a
+call and reports `AU2005`. A `view ... from self` method cannot be bound
+(`AU3010`). Binding a shared or mutable parameter reports `AU3002`, binding a
+view reports `AU3004`, and a later use of the moved receiver reports `AU3001`
+pointing at the binding site. Calling a Mutable bound method through an
+immutable local reports `AU3003`.
+
 ## Limits And Implementation-Defined Behavior
 
 Closures are expression-only and contextually typed. They do not support
 statement bodies, inline parameter types, defaults, generics, implicit
-reference capture, method values, trait objects, FFI callbacks, asynchronous
+reference capture, trait objects, FFI callbacks, asynchronous
 syntax, returned loan closures, or lifetime-bearing structural callable types.
 Owned callable storage holds owned captures only; loan captures stay in
 local loan closures. A packed value keeps the closure's existing environment
@@ -4067,8 +4115,9 @@ target is rejected with `AU3008` because its environment is hidden. Existing
 direct named-function and
 associated-method-without-`self` targets remain accepted, including explicit
 generic targets written as `function[Types]` or
-`Type.associated_method[Types]` in the callable slot. Associated methods do not
-thereby become general first-class method values. Every target argument is
+`Type.associated_method[Types]` in the callable slot. A bound method
+(`receiver.method`) is an ordinary closure target with its own call kind.
+Every target argument is
 copied or moved into task-owned capture storage. A bare shared target parameter
 borrows from that storage for the child call; an `own` parameter consumes it.
 `mut` targets are rejected because detached mutable capture has no
@@ -5221,8 +5270,9 @@ This page documents known current limits of the Aura compiler and runtime.
 - Capture-free named functions are copy, `Transfer` values. They may be stored
   and called through `def(T1, mut T2, own T3) -> R` types and used as task
   targets; bare function-type parameters are shared.
-  Instance, associated, and trait method values remain unavailable; the task
-  API retains its direct associated-method-without-`self` target carve-out.
+  `receiver.method` binds a closure over the receiver with the method's
+  contract, and `Class.method` on a non-generic class is a function value;
+  generic method values still need a call.
 - Lambdas with parameters require complete expected parameter types; a
   zero-parameter lambda may infer `def() -> R` from its expression body.
   A lambda without a capture list captures by value. An explicit exhaustive
@@ -8128,7 +8178,9 @@ positional argument list. Storage preserves each parameter's bare shared,
 `mut`, or `own` ABI capability. Contextually typed
 `lambda parameters: expression` values use the same callable contract and may
 capture owned outer locals by value. See [Closures](/manual/closures).
-Instance and associated method values and trait-object interactions remain
+`receiver.method` outside call position is a bound method closure and
+`Class.method` is an associated function value; see
+[Closures](/manual/closures#bound-methods). Trait-object interactions remain
 unavailable.
 
 ## Fixed-Width Numeric Example
@@ -8168,7 +8220,7 @@ one value per line.
 
 ## Forms Not Implemented
 
-Aura 0.3 expressions do not include generator expressions, method values,
+Aura 0.3 expressions do not include generator expressions,
 assignment expressions, call-site capability annotations, non-numeric casts, or
 ordinary trailing commas. Lambdas are expression-bodied and contextually
 typed; they do not add statement-bodied or implicitly reference-capturing
@@ -9186,10 +9238,12 @@ parameter default such as a generic `empty` used where
 `def() -> Option[str]` is required. A generic name with neither source of
 type arguments does not have one concrete function-value type.
 
-This stage is deliberately capture-free. Instance-method, associated-method,
-and trait-method values are not first-class; an associated method without
-`self` remains accepted only in the existing direct `TaskGroup` target form.
-Lambdas and closure capture are specified separately.
+An associated method without `self` named as `Class.method` is a thin
+function value carrying the method's complete contract when its class is not
+generic. `receiver.method` outside call position is a bound method: a
+compiler-synthesized closure over the receiver, specified in
+[Closures](/manual/closures#bound-methods). Lambdas and closure capture are
+specified separately.
 
 ## Function Values And Task Starts
 
@@ -9278,7 +9332,7 @@ owned captures and then invokes the target under its declared ABI.
 `AU2002` means a signature, function-value capability, parameter, default,
 return, bound, or entrypoint type mismatch. `AU2004` means positional or named
 argument binding failed. `AU2005` means focused guidance for an unavailable
-callable spelling, including out-of-scope method values. `AU2999` means another
+callable spelling, including generic method values that still need a call. `AU2999` means another
 callable rejection without a narrower compile-time code.
 `AU3001` means a moved argument was used; `AU3002` means a borrow or alias
 conflict; `AU3003` means a mutability violation; and `AU3004` means an invalid
@@ -9302,8 +9356,7 @@ resolved signature metadata, including inferred clone-safety obligations.
 
 ## Limits And Implementation-Defined Behavior
 
-Aura has no method values, trait-object function interactions, Aura
-variadic functions,
+Aura has no trait-object function interactions, Aura variadic functions,
 overloads, nested functions, or mutable-parameter task targets. Expression
 lambdas are specified by [Closures](/manual/closures); they do not add nested
 item declarations. Written function types express bare shared, `mut`, and `own`
@@ -16393,7 +16446,10 @@ collection, or annotated return boundaries; under the Batch 1 phase 1
 checkpoint they cross those boundaries as explicitly packed `Callable[...]`
 or `TaskCallable[...]` values whose call kind may only weaken and whose
 captures are owned, and a body may mutate an owned capture, which makes the
-closure Mutable.
+closure Mutable. `receiver.method` outside call position is a bound method:
+a compiler-synthesized closure over the receiver whose call kind follows the
+receiver capability (Q18 A), and `Class.method` on a non-generic class is a
+function value.
 
 Phase 6.5 implements ADR-0038 place-based loans and views. Local shared and
 mutable views cover roots, fixed class fields, and tuple positions; lifetimes
@@ -21540,9 +21596,10 @@ Function values are code pointers, so they are copy values and satisfy
 expected type may come from an annotation, argument, field, collection
 element, or function-typed parameter default.
 
-Bound instance methods, associated-method values, and trait-method values are
-unavailable. Task targets may be direct associated methods without `self`;
-that task-target form does not create a general associated-method value.
+`Class.method` names an associated method (no `self`) as a function value
+with the method's contract, and `receiver.method` outside a call binds a
+closure over the receiver; see the Closures tutorial and manual. Generic
+method values still need a call.
 
 See [examples/basics/function_values.au](../examples/basics/function_values.au).
 
@@ -21602,7 +21659,7 @@ normative [Closures](../docs/manual/closures.md) page.
 - ordinary `-> T` return values are owned; `-> view [mut] T from origin` is the
   explicit non-owning exception
 - clone-based non-copy returns require the returned type to be clone-safe
-- method values and multi-statement closure bodies are not part of this stage
+- multi-statement closure bodies are not part of this stage
 
 ## Source: tutorials/04-control-flow.md
 
@@ -25022,8 +25079,8 @@ Capture-free named function values use `def(T1, mut T2, own T3) -> R`. They are 
 values, satisfy `Transfer`, and may be stored in bindings, parameters, fields,
 and collections or used as `TaskGroup` targets. Bare function-type parameters
 are shared; written or inferred `mut`/`own` modes are part of the contract.
-Instance, associated, and trait method values remain
-outside the implemented surface.
+`receiver.method` binds a closure over the receiver with the method's
+contract, and `Class.method` on a non-generic class is a function value.
 
 Contextually typed expression lambdas use `lambda parameters: expression`.
 The expected `def(...) -> ...` type supplies parameter types and constrains
@@ -25906,7 +25963,7 @@ The current compiler does not support:
 
 - non-numeric casts
 - direct recursive fields without `indirect`
-- method values, statement-bodied closures, or implicit shared parameter
+- statement-bodied closures or implicit shared parameter
   captures; mutable captured state is supported through an explicit
   `lambda [mut place] ...` loan capture stored in a mutable local
 

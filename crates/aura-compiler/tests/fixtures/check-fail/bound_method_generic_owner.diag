@@ -1,0 +1,5 @@
+error[AU2005]: associated method values on generic classes are not supported in this language version; call `Box.make(...)` directly or wrap it in a named function
+ --> crates/aura-compiler/tests/fixtures/check-fail/bound_method_generic_owner.au:8:20
+  |
+8 |     callback = Box.make
+  |                    ^

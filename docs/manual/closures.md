@@ -330,11 +330,59 @@ analysis and the language server expose lambda parameter scope,
 captured-name definitions, callable hover, completions, and the compiler-owned
 diagnostics.
 
+## Bound Methods
+
+`receiver.method` outside call position is a bound method: a
+compiler-synthesized closure whose single capture is the receiver and whose
+contract is the method's own parameter names, keyword-only boundary, default
+availability, passing modes, and result. The call kind follows the receiver
+capability: a `self` method binds a Repeatable closure, a `mut self` method
+binds a Mutable closure whose receiver is environment-owned state updated on
+every call, and an `own self` method binds a Consuming closure. The receiver
+is acquired exactly once when the bound method is created. A `copy class`
+receiver is snapshotted, so later calls never change the original. Any other
+receiver must be an owned local, which moves into the closure, or a fresh
+temporary. A shared or mutable parameter and a view cannot be bound by this
+spelling; clone the value into an owned local first. Trait methods selected
+for the concrete receiver type bind the same way and dispatch statically. An
+omitted argument with a declaration default is supplied by the method's own
+default expression, evaluated at the call. Bound methods store, pack, and
+start like any closure with the same call kind.
+
+```aura
+class Counter:
+    total: int64
+
+    def read(self) -> int64:
+        return self.total
+
+    def bump(mut self, by: int64 = 1) -> int64:
+        self.total = self.total + by
+        return self.total
+
+type Bumper = Callable[mut def(by: int64 = ...) -> int64]
+
+def main():
+    counter = Counter(total=1)
+    read = counter.read
+    print(read())
+    mut bump = Bumper(Counter(total=10).bump)
+    print(bump())
+    print(bump(by=5))
+```
+
+A generic method, or an associated method of a generic class, still needs a
+call and reports `AU2005`. A `view ... from self` method cannot be bound
+(`AU3010`). Binding a shared or mutable parameter reports `AU3002`, binding a
+view reports `AU3004`, and a later use of the moved receiver reports `AU3001`
+pointing at the binding site. Calling a Mutable bound method through an
+immutable local reports `AU3003`.
+
 ## Limits And Implementation-Defined Behavior
 
 Closures are expression-only and contextually typed. They do not support
 statement bodies, inline parameter types, defaults, generics, implicit
-reference capture, method values, trait objects, FFI callbacks, asynchronous
+reference capture, trait objects, FFI callbacks, asynchronous
 syntax, returned loan closures, or lifetime-bearing structural callable types.
 Owned callable storage holds owned captures only; loan captures stay in
 local loan closures. A packed value keeps the closure's existing environment

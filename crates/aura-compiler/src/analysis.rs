@@ -3970,6 +3970,54 @@ impl<'a> AnalysisBuilder<'a> {
         Type::Named(name, args)
     }
 
+    /// The function type of `Class.method` or `module.Class.method` naming an
+    /// associated method of a non-generic class (C6); `None` for instance
+    /// receivers, generic owners, and receiver methods.
+    fn associated_method_value_type(
+        &self,
+        object: &Expr,
+        field: &str,
+        scope: &BTreeMap<String, BindingInfo>,
+    ) -> Option<Type> {
+        let class_info = match &object.kind {
+            ExprKind::Name(name) if !scope.contains_key(name) => self.program.classes.get(name)?,
+            ExprKind::Member {
+                object: module,
+                field: class_name,
+            } => {
+                let Type::Module(path) = self.infer_expr_type(module, scope)? else {
+                    return None;
+                };
+                self.module_namespace(&path)?.classes.get(class_name)?
+            }
+            _ => return None,
+        };
+        if !class_info.decl.type_params.is_empty() {
+            return None;
+        }
+        let method = class_info.methods.get(field)?;
+        if method.decl.receiver.is_some() {
+            return None;
+        }
+        Some(Type::Function {
+            params: method
+                .decl
+                .params
+                .iter()
+                .zip(&method.signature.params)
+                .zip(&method.signature.param_passings)
+                .map(|((decl, ty), passing)| FunctionParamContract {
+                    keyword_only: decl.keyword_only,
+                    name: decl.name.clone(),
+                    ty: ty.clone(),
+                    passing: *passing,
+                    has_default: decl.default.is_some(),
+                })
+                .collect(),
+            return_type: Box::new(method.signature.return_type.clone()),
+        })
+    }
+
     fn infer_expr_type(&self, expr: &Expr, scope: &BTreeMap<String, BindingInfo>) -> Option<Type> {
         match &expr.kind {
             ExprKind::IsNone { .. }
@@ -4136,9 +4184,20 @@ impl<'a> AnalysisBuilder<'a> {
                 }
                 builtin_function_return_type(name)
             }
-            ExprKind::Member { object, field } => self
-                .resolve_member_expr(object, field, scope)
-                .and_then(|member| member.ty),
+            ExprKind::Member { object, field } => {
+                // Batch 1 phase 1 (C6): outside call position a receiver
+                // method is the checker's closure over its receiver, and
+                // `Class.method` is a thin function value.
+                if let Some(info) = self.closure_info(expr) {
+                    return Some(info.ty());
+                }
+                if let Some(function_type) = self.associated_method_value_type(object, field, scope)
+                {
+                    return Some(function_type);
+                }
+                self.resolve_member_expr(object, field, scope)
+                    .and_then(|member| member.ty)
+            }
             ExprKind::Index { object, index } => {
                 self.infer_expr_type(object, scope)
                     .and_then(|ty| match &ty {

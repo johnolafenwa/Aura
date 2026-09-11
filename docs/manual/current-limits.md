@@ -63,8 +63,9 @@ This page documents known current limits of the Aura compiler and runtime.
 - Capture-free named functions are copy, `Transfer` values. They may be stored
   and called through `def(T1, mut T2, own T3) -> R` types and used as task
   targets; bare function-type parameters are shared.
-  Instance, associated, and trait method values remain unavailable; the task
-  API retains its direct associated-method-without-`self` target carve-out.
+  `receiver.method` binds a closure over the receiver with the method's
+  contract, and `Class.method` on a non-generic class is a function value;
+  generic method values still need a call.
 - Lambdas with parameters require complete expected parameter types; a
   zero-parameter lambda may infer `def() -> R` from its expression body.
   A lambda without a capture list captures by value. An explicit exhaustive

@@ -1,0 +1,50 @@
+class Counter:
+    total: int64
+
+    def read(self) -> int64:
+        return self.total
+
+    def bump(mut self, by: int64 = 1) -> int64:
+        self.total = self.total + by
+        return self.total
+
+    def finish(own self) -> int64:
+        return self.total * 100
+
+copy class Point:
+    x: int64
+
+    def shifted(self, dx: int64) -> int64:
+        return self.x + dx
+
+    def shift(mut self, dx: int64) -> int64:
+        self.x = self.x + dx
+        return self.x
+
+type Reader = Callable[def() -> int64]
+type Bumper = Callable[mut def(by: int64 = ...) -> int64]
+
+def main():
+    counter = Counter(total=1)
+    read = counter.read
+    print(read())
+    print(read())
+    other = Counter(total=10)
+    mut bump = other.bump
+    print(bump())
+    print(bump(by=5))
+    last = Counter(total=3)
+    finish = last.finish
+    print(finish())
+    point = Point(x=1)
+    shifted = point.shifted
+    print(shifted(2))
+    mut shift = point.shift
+    print(shift(4))
+    print(shift(4))
+    print(point.x)
+    packed = Reader(Counter(total=7).read)
+    print(packed())
+    mut packed_bump = Bumper(Counter(total=20).bump)
+    print(packed_bump())
+    print(packed_bump(by=2))

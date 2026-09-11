@@ -17383,7 +17383,7 @@ fn native_runtime_closure_construction_handles_zero_captures_and_reports_invalid
 }
 
 #[test]
-fn native_runtime_selected_default_callbacks_bind_functions_but_not_closures() {
+fn native_runtime_selected_default_callbacks_bind_functions_and_closures() {
     let result = run_lightweight_root_task(|| {
         super::with_direct_task_runtime_scope(|| {
             let ordinary = boxed_value(Value::Function(Box::new(FunctionValue {
@@ -17446,12 +17446,16 @@ fn native_runtime_selected_default_callbacks_bind_functions_but_not_closures() {
             })));
             let closure_args = super::aura_direct_arg_buffer_new(1);
             super::aura_direct_function_bind_defaults(closure, closure_args, 1, 0);
+            // A closure binds omitted defaults through its own binder over a
+            // capture-offset shadow buffer (bound methods forward declaration
+            // defaults); the public slot receives the bound value.
             assert_eq!(
-                unsafe { *closure_args },
-                0,
-                "lambda parameters have no declaration defaults and must bypass the binder callback"
+                unsafe { value_ref(*closure_args as *mut OpaqueValue) },
+                Value::Int(IntegerValue::from_signed(41)),
+                "a closure's native default binder must fill its missing public slot"
             );
             unsafe {
+                release_value(*closure_args as *mut OpaqueValue);
                 free_arg_buffer(closure_args, 1);
                 release_value(closure);
                 release_value(ordinary);

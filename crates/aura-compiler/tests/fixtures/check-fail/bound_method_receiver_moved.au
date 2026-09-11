@@ -1,0 +1,11 @@
+class Counter:
+    total: int64
+
+    def read(self) -> int64:
+        return self.total
+
+def main():
+    counter = Counter(total=1)
+    read = counter.read
+    print(counter.total)
+    print(read())

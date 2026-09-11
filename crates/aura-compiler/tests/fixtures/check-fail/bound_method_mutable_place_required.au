@@ -1,0 +1,11 @@
+class Counter:
+    total: int64
+
+    def bump(mut self) -> int64:
+        self.total = self.total + 1
+        return self.total
+
+def main():
+    counter = Counter(total=1)
+    bump = counter.bump
+    print(bump())

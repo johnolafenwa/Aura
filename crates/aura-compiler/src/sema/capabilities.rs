@@ -410,19 +410,26 @@ impl<'a> FunctionChecker<'a> {
     ) -> Diagnostic {
         let mut diagnostic = Diagnostic::at(span, format!("use of moved value `{}`", name));
         if let Some(origin) = binding.moved_at {
-            let moved_into_closure = self.closure_infos.borrow().values().any(|closure| {
-                closure.captures.iter().any(|capture| {
-                    capture.name == name
-                        && capture.mode == ClosureCaptureMode::Move
-                        && capture.span == origin
-                })
+            // A bound method's synthesized receiver capture records the move
+            // at the receiver expression, so the origin label names it.
+            let closure_move = self.closure_infos.borrow().values().find_map(|closure| {
+                closure
+                    .captures
+                    .iter()
+                    .find(|capture| {
+                        capture.mode == ClosureCaptureMode::Move
+                            && capture.span == origin
+                            && (capture.name == name
+                                || capture.name == super::BOUND_RECEIVER_CAPTURE)
+                    })
+                    .map(|capture| capture.name == super::BOUND_RECEIVER_CAPTURE)
             });
             diagnostic = diagnostic.with_secondary(
                 origin,
-                if moved_into_closure {
-                    "value moved into closure here"
-                } else {
-                    "value moved here"
+                match closure_move {
+                    Some(true) => "value moved into bound method here",
+                    Some(false) => "value moved into closure here",
+                    None => "value moved here",
                 },
             );
             if let Some(duplication_member) = self.builtin_duplication_member(&binding.ty) {
@@ -509,6 +516,15 @@ impl<'a> FunctionChecker<'a> {
             ExprKind::Specialize { expr, .. } => self.consume_value_expr_raw(expr, locals),
             ExprKind::Member { object, field } => {
                 if self.is_payload_free_variant_expr(expr) {
+                    return Ok(());
+                }
+                // A bound method moved its receiver while it was typed, and an
+                // associated method value is an immediate Copy code pointer.
+                if self.bound_method_closure_at(expr.span).is_some()
+                    || self
+                        .associated_method_target(object, field, locals)
+                        .is_some()
+                {
                     return Ok(());
                 }
                 if let Some((module_path, function_name)) = self.qualified_module_item(expr) {

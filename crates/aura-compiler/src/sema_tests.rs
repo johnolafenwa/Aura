@@ -423,13 +423,13 @@ fn s1_sema_fifth_contextual_literals_lambdas_and_variants_keep_exact_errors() {
 #[test]
 fn s1_sema_fifth_member_values_methods_and_missing_fields_stay_specific() {
     let associated = crate::check_source(
-        "class Box:\n    value: int32\n\n    def make(value: int32) -> Box:\n        return Box(value=value)\n\ndef main():\n    callback = Box.make\n    print(callback)\n",
+        "class Box[T]:\n    value: T\n\n    def make(value: T) -> Box[T]:\n        return Box(value=value)\n\ndef main():\n    callback = Box.make\n    print(callback(1).value)\n",
     )
-    .expect_err("associated methods are callable only through direct syntax");
+    .expect_err("associated methods of generic classes need a call to fix their type arguments");
     assert_eq!(associated.code, "AU2005");
     assert_eq!(
         associated.message,
-        "associated method values are not supported in this language version; call `Box.make(...)` directly or wrap it in a named function"
+        "associated method values on generic classes are not supported in this language version; call `Box.make(...)` directly or wrap it in a named function"
     );
 
     let integer = crate::check_source(
@@ -17743,11 +17743,11 @@ def main():
     );
     let trait_method_value = base_checker
         .resolve_member_type(&Type::named("User"), "name", span)
-        .expect_err("trait-dispatched method values are explicitly out of scope");
+        .expect_err("a trait method is not a field; binding it goes through the member arm");
     assert_eq!(trait_method_value.code, "AU2005");
     assert!(trait_method_value
         .message
-        .contains("trait-dispatched method values are not supported"));
+        .contains("trait method `name` on `User` cannot be used as a field"));
     base_checker
         .assert_type_satisfies_bounds(
             &Type::named("User"),
@@ -24214,8 +24214,8 @@ fn nested_imported_module_functions_are_first_class_values() {
 }
 
 #[test]
-fn method_values_and_function_trait_dispatch_are_explicitly_out_of_scope() {
-    let method = crate::check_source(
+fn method_values_bind_while_function_trait_dispatch_stays_out_of_scope() {
+    crate::check_source(
         r#"
 class Counter:
     value: int32
@@ -24226,11 +24226,28 @@ class Counter:
 def main():
     counter = Counter(value=1)
     callback = counter.read
+    print(callback())
 "#,
     )
-    .expect_err("instance method values remain out of scope");
-    assert_eq!(method.code, "AU2005");
-    assert!(method.message.contains("method values are not supported"));
+    .expect("an instance method binds as a closure over its receiver");
+    let field_use = crate::check_source(
+        r#"
+class Counter:
+    value: int32
+
+    def read(self) -> int32:
+        return self.value
+
+def main():
+    mut counter = Counter(value=1)
+    counter.read = 2
+"#,
+    )
+    .expect_err("a method is not an assignable field");
+    assert_eq!(field_use.code, "AU2005");
+    assert!(field_use
+        .message
+        .contains("method `read` on `Counter` cannot be used as a field"));
 
     let trait_dispatch = crate::check_source(
         r#"
@@ -30652,7 +30669,7 @@ def main():
     for (expression, expected) in [
         (
             "api.LeftBox.associated",
-            "associated method values are not supported",
+            "cannot be stored as a structural function value",
         ),
         (
             "api.forward",

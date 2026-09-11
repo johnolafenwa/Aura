@@ -88,8 +88,9 @@ target is rejected with `AU3008` because its environment is hidden. Existing
 direct named-function and
 associated-method-without-`self` targets remain accepted, including explicit
 generic targets written as `function[Types]` or
-`Type.associated_method[Types]` in the callable slot. Associated methods do not
-thereby become general first-class method values. Every target argument is
+`Type.associated_method[Types]` in the callable slot. A bound method
+(`receiver.method`) is an ordinary closure target with its own call kind.
+Every target argument is
 copied or moved into task-owned capture storage. A bare shared target parameter
 borrows from that storage for the child call; an `own` parameter consumes it.
 `mut` targets are rejected because detached mutable capture has no

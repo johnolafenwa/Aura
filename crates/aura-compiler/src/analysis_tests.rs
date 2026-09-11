@@ -8966,3 +8966,46 @@ fn narrowed_union_reads_carry_the_active_member_in_hover() {
         narrowed_field.hover
     );
 }
+
+#[test]
+fn bound_and_associated_method_values_hover_with_their_callable_types() {
+    let source = [
+        "class Counter:",
+        "    value: int32",
+        "    def read(self) -> int32:",
+        "        return self.value",
+        "    def double(value: int32) -> int32:",
+        "        return value * 2",
+        "def main() -> int32:",
+        "    counter = Counter(value=1)",
+        "    read = counter.read",
+        "    callback = Counter.double",
+        "    return read() + callback(2)",
+        "",
+    ]
+    .join("\n");
+    let analysis = analyze_source(&source);
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "{:?}",
+        analysis.diagnostics
+    );
+    for (line, expected) in [
+        (8, "read: closure def() -> int32"),
+        (9, "callback: def(value: int32) -> int32"),
+    ] {
+        assert!(
+            analysis
+                .occurrences
+                .iter()
+                .any(|occurrence| occurrence.line == line && occurrence.hover.contains(expected)),
+            "line {line} should hover with `{expected}`: {:?}",
+            analysis
+                .occurrences
+                .iter()
+                .filter(|occurrence| occurrence.line == line)
+                .map(|occurrence| occurrence.hover.clone())
+                .collect::<Vec<_>>()
+        );
+    }
+}

@@ -2761,3 +2761,290 @@ impl<'a> FunctionChecker<'a> {
         Ok(())
     }
 }
+
+/// Name of the synthesized receiver capture of a bound method closure (C6,
+/// Q18 A). Source locals cannot spell a `__` prefix, so it never collides.
+pub(crate) const BOUND_RECEIVER_CAPTURE: &str = "__receiver";
+
+struct BoundMethodTarget<'a> {
+    decl: &'a FunctionDecl,
+    signature: &'a FunctionSignature,
+    substitutions: HashMap<String, Type>,
+    display: String,
+}
+
+impl FunctionChecker<'_> {
+    /// The closure metadata registered for a bound method at `span` in the
+    /// current closure owner, if the member expression there bound one.
+    pub(super) fn bound_method_closure_at(&self, span: crate::diag::Span) -> Option<ClosureInfo> {
+        let id = ClosureId::new(self.module_name, self.closure_owner.clone(), span);
+        self.closure_infos
+            .borrow()
+            .get(&id)
+            .filter(|info| {
+                matches!(info.captures.as_slice(), [capture] if capture.name == BOUND_RECEIVER_CAPTURE)
+            })
+            .cloned()
+    }
+
+    /// Resolves `Class.method` / `module.Class.method` naming an associated
+    /// method (no receiver) together with its display owner.
+    pub(super) fn associated_method_target(
+        &self,
+        object: &Expr,
+        field: &str,
+        locals: &HashMap<String, LocalBinding>,
+    ) -> Option<(&super::ClassInfo, &super::MethodInfo, String)> {
+        let (base_object, _) = self.peel_specialization(object);
+        let (class, owner) = match &base_object.kind {
+            ExprKind::Name(class_name) if !locals.contains_key(class_name) => {
+                (self.resolve_class_info(class_name)?, class_name.clone())
+            }
+            _ => {
+                let (module_path, class_name) = self.qualified_module_item(base_object)?;
+                let class = self
+                    .module_namespace(&module_path)?
+                    .classes
+                    .get(&class_name)?;
+                (class, format!("{module_path}.{class_name}"))
+            }
+        };
+        let method = class.methods.get(field)?;
+        method
+            .decl
+            .receiver
+            .is_none()
+            .then_some((class, method, owner))
+    }
+
+    /// An associated method named without a call is a thin function value
+    /// carrying the method's complete contract (C6). Generic owners still
+    /// need a call because the value would have no type arguments.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn associated_method_value_type(
+        &self,
+        class: &super::ClassInfo,
+        method: &super::MethodInfo,
+        owner: &str,
+        field: &str,
+        object: &Expr,
+        expected: Option<&Type>,
+        span: crate::diag::Span,
+    ) -> Result<Type> {
+        if self.is_external_module(&class.module_name) && !method.decl.public {
+            return Err(Diagnostic::at(
+                span,
+                format!("method `{field}` is private on `{}`", class.decl.name),
+            ));
+        }
+        if !class.decl.type_params.is_empty() || matches!(object.kind, ExprKind::Specialize { .. })
+        {
+            return Err(Diagnostic::coded_at(
+                "AU2005",
+                span,
+                format!(
+                    "associated method values on generic classes are not supported in this language version; call `{owner}.{field}(...)` directly or wrap it in a named function"
+                ),
+            ));
+        }
+        let function = FunctionInfo {
+            module_name: class.module_name.clone(),
+            decl: method.decl.clone(),
+            signature: method.signature.clone(),
+            type_param_bounds: method.type_param_bounds.clone(),
+        };
+        self.function_value_type(
+            &function,
+            expected,
+            None,
+            span,
+            &format!("associated method `{owner}.{field}`"),
+        )
+    }
+
+    /// `receiver.method` outside call position is a compiler-synthesized
+    /// closure whose single capture is the receiver (C6, Q18 A). The closure
+    /// keeps the method's complete contract, and its call kind follows the
+    /// receiver capability: `self` is Repeatable, `mut self` is Mutable, and
+    /// `own self` is Consuming. Returns `None` when the member is not a
+    /// receiver method so field reads and the ordinary member errors continue.
+    pub(super) fn type_of_bound_method(
+        &self,
+        expr: &Expr,
+        object: &Expr,
+        field: &str,
+        object_ty: &Type,
+        locals: &mut HashMap<String, LocalBinding>,
+    ) -> Result<Option<Type>> {
+        let Type::Named(type_name, type_args) = object_ty else {
+            return Ok(None);
+        };
+        if self
+            .builtin_enum_variant_payload(object_ty, type_name, field)
+            .is_some()
+            || super::BuiltinMember::resolve(type_name, field).is_some()
+        {
+            return Ok(None);
+        }
+        let span = expr.span;
+        let class = self.resolve_class_info(type_name);
+        if class.is_some_and(|class| class.fields.contains_key(field)) {
+            return Ok(None);
+        }
+        let class_target = class.and_then(|class| {
+            let method = class.methods.get(field)?;
+            if self.is_external_module(&class.module_name) && !method.decl.public {
+                return None;
+            }
+            Some(BoundMethodTarget {
+                decl: &method.decl,
+                signature: &method.signature,
+                substitutions: substitutions_from_decl_type_args(
+                    &class.decl.type_params,
+                    type_args,
+                ),
+                display: format!("{}.{}", class.decl.name, field),
+            })
+        });
+        let target = match class_target {
+            Some(target) => target,
+            None => match self.trait_method_for_concrete_type(object_ty, field, span)? {
+                Some((trait_impl, method, substitutions)) => BoundMethodTarget {
+                    decl: &method.decl,
+                    signature: &method.signature,
+                    substitutions,
+                    display: format!("{}.{}", trait_impl.trait_name, field),
+                },
+                None => return Ok(None),
+            },
+        };
+        let Some(receiver) = target.decl.receiver else {
+            return Ok(None);
+        };
+        if !target.decl.type_params.is_empty() {
+            return Err(Diagnostic::coded_at(
+                "AU2005",
+                span,
+                format!(
+                    "generic method `{}` cannot become a bound method value; call `.{field}(...)` directly or wrap it in a named function",
+                    target.display
+                ),
+            ));
+        }
+        if target.decl.view_return.is_some() {
+            return Err(Diagnostic::coded_at(
+                "AU3010",
+                span,
+                format!(
+                    "view-returning method `{}` cannot become a bound method value",
+                    target.display
+                ),
+            )
+            .with_help(
+                "call it directly and bind the result with `view`, because structural `def(...) -> R` types cannot encode a returned-view origin",
+            ));
+        }
+        let params = target
+            .decl
+            .params
+            .iter()
+            .zip(&target.signature.params)
+            .zip(&target.signature.param_passings)
+            .map(|((param, ty), passing)| FunctionParamContract {
+                keyword_only: param.keyword_only,
+                name: param.name.clone(),
+                ty: substitute_type(ty, &target.substitutions),
+                passing: *passing,
+                has_default: param.default.is_some(),
+            })
+            .collect::<Vec<_>>();
+        let return_type = substitute_type(&target.signature.return_type, &target.substitutions);
+        // A Copy receiver is snapshotted into the closure; any other receiver
+        // must be an owned place or a fresh temporary that moves in once.
+        let mode = if self.is_copy_type(object_ty) {
+            ClosureCaptureMode::Copy
+        } else {
+            self.acquire_bound_receiver(object, &target.display, locals)?;
+            ClosureCaptureMode::Move
+        };
+        let mutated = receiver == ReceiverKind::BorrowMut;
+        let call_kind = super::closure_call_kind_for(receiver);
+        let id = ClosureId::new(self.module_name, self.closure_owner.clone(), span);
+        let info = ClosureInfo {
+            id: id.clone(),
+            span,
+            params,
+            return_type,
+            captures: vec![ClosureCapture {
+                name: BOUND_RECEIVER_CAPTURE.to_string(),
+                ty: object_ty.clone(),
+                mode,
+                span: object.span,
+                mutated,
+            }],
+            call_kind,
+        };
+        let ty = info.ty();
+        self.closure_infos.borrow_mut().insert(id, info);
+        Ok(Some(ty))
+    }
+
+    fn acquire_bound_receiver(
+        &self,
+        object: &Expr,
+        display: &str,
+        locals: &mut HashMap<String, LocalBinding>,
+    ) -> Result<()> {
+        match &object.kind {
+            ExprKind::Group(inner) => self.acquire_bound_receiver(inner, display, locals),
+            ExprKind::Name(name) => {
+                let Some(binding) = locals.get(name) else {
+                    return self.consume_value_expr(object, locals);
+                };
+                if binding.view.is_some() {
+                    return Err(Diagnostic::coded_at(
+                        "AU3004",
+                        object.span,
+                        format!(
+                            "bound method `{display}` cannot take ownership of the pointee of view `{name}`"
+                        ),
+                    )
+                    .with_help(format!(
+                        "clone `{name}` into an owned local first, then bind the method on that local"
+                    )));
+                }
+                if binding.passing != ReceiverKind::Value {
+                    let access = if binding.passing == ReceiverKind::BorrowMut {
+                        "mutable"
+                    } else {
+                        "shared"
+                    };
+                    let noun = if self.implicit_borrowed_params.contains_key(name) {
+                        "parameter"
+                    } else {
+                        "value"
+                    };
+                    let mut diagnostic = Diagnostic::coded_at(
+                        "AU3002",
+                        object.span,
+                        format!(
+                            "bound method `{display}` cannot take {access} {noun} `{name}` by value"
+                        ),
+                    );
+                    if let Some(origin) = binding.borrowed_at {
+                        diagnostic = diagnostic.with_secondary(
+                            origin,
+                            format!("{access} {noun} `{name}` is declared here"),
+                        );
+                    }
+                    return Err(diagnostic.with_help(format!(
+                        "clone `{name}` into an owned local before binding the method, or declare the enclosing parameter as `own {}`",
+                        binding.ty
+                    )));
+                }
+                self.consume_binding(name, object.span, locals)
+            }
+            _ => self.consume_value_expr(object, locals),
+        }
+    }
+}

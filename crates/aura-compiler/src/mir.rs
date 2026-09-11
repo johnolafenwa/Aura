@@ -5632,7 +5632,7 @@ fn validate_loan_rvalue(
             signature,
             captures,
             consuming,
-            mutable: _,
+            mutable,
         } => {
             let declaration = context
                 .functions
@@ -5830,6 +5830,22 @@ fn validate_loan_rvalue(
             {
                 return Err(format!(
                     "invalid MIR closure `{closure_function}` in `{}` changes its declared callable contract",
+                    function.name
+                ));
+            }
+            // The rvalue's kind bits are the validator's authoritative call
+            // kind. A closure whose declaration takes any capture mutably
+            // (a mutated environment-owned capture or a mutable loan) is at
+            // least Mutable; claiming Repeatable would let shared storage
+            // mutate the environment (C2, C6).
+            let takes_capture_mutably = declaration
+                .params
+                .iter()
+                .take(captures.len())
+                .any(|param| param.passing == MirReceiverKind::BorrowMut);
+            if takes_capture_mutably && !*mutable && !*consuming {
+                return Err(format!(
+                    "invalid MIR closure `{closure_function}` in `{}` hides its mutable captures behind a Repeatable kind",
                     function.name
                 ));
             }
@@ -8622,6 +8638,251 @@ impl<'a> Lowerer<'a> {
     fn with_view_return_origin(mut self, origin: Option<String>) -> Self {
         self.view_return_origin = origin;
         self
+    }
+
+    /// Closure metadata for a member expression that the checker turned into
+    /// a bound method (C6). Member spans point at the field token, so a lambda
+    /// can never share one; the synthesized single `__receiver` capture is the
+    /// discriminator against ordinary closures.
+    fn bound_method_info_at(&self, expr: &Expr) -> Option<&ClosureInfo> {
+        if !matches!(expr.kind, ExprKind::Member { .. }) {
+            return None;
+        }
+        self.closure_info_at(expr.span).filter(|info| {
+            matches!(
+                info.captures.as_slice(),
+                [capture] if capture.name == crate::sema::BOUND_RECEIVER_CAPTURE
+            )
+        })
+    }
+
+    /// The class and associated method (no receiver) named by
+    /// `Class.method` or `module.Class.method`, whether or not the class is
+    /// generic.
+    fn resolve_associated_method(
+        &self,
+        object: &Expr,
+        field: &str,
+    ) -> Option<(&crate::sema::ClassInfo, &crate::sema::MethodInfo)> {
+        let base_object = match &object.kind {
+            ExprKind::Specialize { expr, .. } => &**expr,
+            _ => object,
+        };
+        let class = match &base_object.kind {
+            ExprKind::Name(name)
+                if !self.local_types.contains_key(&self.render_local_name(name))
+                    && self.scoped_local_name(name).is_none() =>
+            {
+                self.resolve_class_info(name)?
+            }
+            _ => {
+                let (module_path, item_name) = self.qualified_module_item(base_object)?;
+                self.module_namespace(&module_path)?
+                    .classes
+                    .get(&item_name)?
+            }
+        };
+        let method = class.methods.get(field)?;
+        method.decl.receiver.is_none().then_some((class, method))
+    }
+
+    /// `Class.method` naming an associated method is a thin function value
+    /// whose identity is the method's MIR function.
+    fn associated_method_value_operand(&self, object: &Expr, field: &str) -> Option<Operand> {
+        if matches!(object.kind, ExprKind::Specialize { .. }) {
+            return None;
+        }
+        let (class, method) = self.resolve_associated_method(object, field)?;
+        if !class.decl.type_params.is_empty() {
+            return None;
+        }
+        let runtime_name = mir_class_method_name(self.program, class, field);
+        let signature = Type::Function {
+            params: task_param_contracts(
+                &method.decl.params,
+                &method.signature.params,
+                &method.signature.param_passings,
+            ),
+            return_type: Box::new(method.signature.return_type.clone()),
+        };
+        Some(Operand::Function {
+            name: runtime_name,
+            signature: Box::new(signature),
+        })
+    }
+
+    /// The MIR function that owns the default-argument helpers of the method
+    /// a bound method forwards to.
+    fn bound_method_function_name(&self, receiver_ty: &Type, field: &str) -> Option<String> {
+        let Type::Named(class_name, _) = receiver_ty else {
+            return None;
+        };
+        if let Some(class) = self.resolve_class_info(class_name) {
+            if class.methods.contains_key(field) {
+                return Some(mir_class_method_name(self.program, class, field));
+            }
+        }
+        let (_, trait_impl) = self
+            .trait_impls_in_scope()
+            .filter_map(|trait_impl| {
+                self.trait_impl_substitutions(trait_impl, receiver_ty)?;
+                trait_impl.methods.get(field)?;
+                Some((crate::sema::trait_impl_specificity(trait_impl), trait_impl))
+            })
+            .max_by_key(|(specificity, _)| *specificity)?;
+        Some(format!(
+            "{}{} for {}.{}",
+            trait_impl.trait_name,
+            format_trait_args(&trait_impl.trait_args),
+            trait_impl.for_type,
+            field
+        ))
+    }
+
+    /// Lowers `receiver.method` into a closure whose body forwards to the
+    /// method call (C6). The receiver is evaluated once into the single
+    /// `__receiver` capture; omitted defaults resolve through the method's own
+    /// default helpers so both backends bind them like a direct call.
+    fn lower_bound_method(
+        &mut self,
+        expr: &Expr,
+        object: &Expr,
+        field: &str,
+        info: ClosureInfo,
+    ) -> Operand {
+        let capture = info
+            .captures
+            .first()
+            .cloned()
+            .expect("bound method metadata keeps its receiver capture");
+        let name = format!(
+            "{}::__bound_{}_{}",
+            self.function_name, expr.span.line, expr.span.column
+        );
+        let default_owner = info
+            .params
+            .iter()
+            .any(|param| param.has_default)
+            .then(|| self.bound_method_function_name(&capture.ty, field))
+            .flatten();
+        let mut mir_params = vec![MirParam {
+            name: capture.name.clone(),
+            passing: if capture.mutated {
+                MirReceiverKind::BorrowMut
+            } else {
+                MirReceiverKind::Value
+            },
+            ty: capture.ty.clone(),
+            default_function: None,
+            keyword_only: false,
+        }];
+        mir_params.extend(info.params.iter().enumerate().map(|(index, param)| {
+            MirParam {
+                name: param.name.clone(),
+                passing: lower_receiver_kind(param.passing),
+                ty: param.ty.clone(),
+                default_function: param
+                    .has_default
+                    .then(|| {
+                        default_owner
+                            .as_ref()
+                            .map(|owner| format!("{owner}::__default_{index}_{}", param.name))
+                    })
+                    .flatten(),
+                keyword_only: param.keyword_only,
+            }
+        }));
+
+        // The forwarding body is synthesized AST at an empty span so no
+        // source-keyed fact (union injections, narrowing) can attach to it.
+        let synthetic = Span::new(0, 0);
+        let callee = Expr {
+            kind: ExprKind::Member {
+                object: Box::new(Expr {
+                    kind: ExprKind::Name(capture.name.clone()),
+                    span: synthetic,
+                }),
+                field: field.to_string(),
+            },
+            span: synthetic,
+        };
+        let args = info
+            .params
+            .iter()
+            .map(|param| crate::ast::Argument {
+                name: param.keyword_only.then(|| param.name.clone()),
+                value: Expr {
+                    kind: ExprKind::Name(param.name.clone()),
+                    span: synthetic,
+                },
+                span: synthetic,
+            })
+            .collect::<Vec<_>>();
+        let body = Expr {
+            kind: ExprKind::Call {
+                callee: Box::new(callee),
+                args,
+            },
+            span: synthetic,
+        };
+
+        let mut lowerer = Lowerer::new(
+            self.program,
+            &name,
+            self.module_name,
+            info.return_type.clone(),
+            self.type_param_bounds.clone(),
+        );
+        lowerer.metadata_module_name = self.metadata_module_name.clone();
+        lowerer.metadata_owner = self.metadata_owner.clone();
+        lowerer
+            .local_types
+            .insert(capture.name.clone(), capture.ty.clone());
+        if info.call_kind != ClosureCallKind::Consuming {
+            lowerer.non_owning_roots.insert(capture.name.clone());
+        }
+        for param in &info.params {
+            lowerer
+                .local_types
+                .insert(param.name.clone(), param.ty.clone());
+            if param.passing != ReceiverKind::Value {
+                lowerer.non_owning_roots.insert(param.name.clone());
+            }
+        }
+        let result = lowerer.lower_expr_for_owned_value(&body, Some(&info.return_type));
+        lowerer.terminate(Terminator::Return(result));
+        self.generated_functions
+            .extend(lowerer.finish_with_generated(MirFunctionSpec {
+                name: name.clone(),
+                span: expr.span,
+                receiver: None,
+                params: mir_params,
+                return_type: info.return_type.clone(),
+                default_return: default_return_operand(&info.return_type),
+            }));
+
+        let receiver = self.lower_expr_for_owned_value(object, Some(&capture.ty));
+        let signature = info.ty();
+        let temp = self.new_typed_temp(signature.clone());
+        self.emit(Instruction::Assign {
+            target: temp.clone(),
+            value: Rvalue::Closure {
+                function: name,
+                signature,
+                captures: vec![MirClosureCapture {
+                    name: capture.name,
+                    value: receiver,
+                    ty: capture.ty,
+                    passing: MirReceiverKind::Value,
+                    mutated: capture.mutated,
+                    source_place: None,
+                    resolve_source_at_capture: false,
+                }],
+                consuming: info.call_kind == ClosureCallKind::Consuming,
+                mutable: info.call_kind == ClosureCallKind::MutableRepeatable,
+            },
+        });
+        Operand::Place(temp)
     }
 
     fn closure_info_at(&self, span: Span) -> Option<&ClosureInfo> {
@@ -14021,6 +14282,12 @@ impl<'a> Lowerer<'a> {
                 Operand::Place(temp)
             }
             ExprKind::Member { object, field } => {
+                if let Some(info) = self.bound_method_info_at(expr).cloned() {
+                    return self.lower_bound_method(expr, object, field, info);
+                }
+                if let Some(function) = self.associated_method_value_operand(object, field) {
+                    return function;
+                }
                 if let Some(module_path) = self.infer_module_path(object) {
                     if let Some(constant) = self
                         .module_namespace(&module_path)
@@ -16704,14 +16971,16 @@ impl<'a> Lowerer<'a> {
                     && (self.resolve_function_info(name).is_some()
                         || self.resolve_extern_function_info(name).is_some())
             }
-            ExprKind::Member { object, field } => self
-                .infer_module_path(object)
-                .and_then(|module_path| self.module_namespace(&module_path))
-                .is_some_and(|namespace| {
-                    namespace.functions.contains_key(field)
-                        || namespace.all_functions.contains_key(field)
-                        || namespace.extern_functions.contains_key(field)
-                }),
+            ExprKind::Member { object, field } => {
+                self.infer_module_path(object)
+                    .and_then(|module_path| self.module_namespace(&module_path))
+                    .is_some_and(|namespace| {
+                        namespace.functions.contains_key(field)
+                            || namespace.all_functions.contains_key(field)
+                            || namespace.extern_functions.contains_key(field)
+                    })
+                    || self.resolve_associated_method(object, field).is_some()
+            }
             _ => false,
         };
         if !direct_decl_callee {
@@ -18615,13 +18884,15 @@ impl<'a> Lowerer<'a> {
                         !self.local_types.contains_key(&self.render_local_name(name))
                             && self.resolve_function_info(name).is_some()
                     }
-                    ExprKind::Member { object, field } => self
-                        .infer_module_path(object)
-                        .and_then(|module_path| self.module_namespace(&module_path))
-                        .is_some_and(|namespace| {
-                            namespace.functions.contains_key(field)
-                                || namespace.all_functions.contains_key(field)
-                        }),
+                    ExprKind::Member { object, field } => {
+                        self.infer_module_path(object)
+                            .and_then(|module_path| self.module_namespace(&module_path))
+                            .is_some_and(|namespace| {
+                                namespace.functions.contains_key(field)
+                                    || namespace.all_functions.contains_key(field)
+                            })
+                            || self.resolve_associated_method(object, field).is_some()
+                    }
                     _ => false,
                 };
                 if !direct_decl_callee {
@@ -19160,6 +19431,14 @@ impl<'a> Lowerer<'a> {
                 }
             }
             ExprKind::Member { object, field } => {
+                if let Some(info) = self.bound_method_info_at(expr) {
+                    return Some(info.ty());
+                }
+                if let Some(Operand::Function { signature, .. }) =
+                    self.associated_method_value_operand(object, field)
+                {
+                    return Some(*signature);
+                }
                 if let Some(module_path) = self.infer_module_path(object) {
                     if let Some(constant) = self
                         .module_namespace(&module_path)
@@ -20202,7 +20481,8 @@ impl<'a> Lowerer<'a> {
         match &expr.kind {
             ExprKind::Name(name) => Some(self.render_local_name(name)),
             ExprKind::Group(inner) => self.render_place_expr_option(inner),
-            ExprKind::Member { object, field } => self
+            // A bound method is a closure value, never a field place (C6).
+            ExprKind::Member { object, field } if self.bound_method_info_at(expr).is_none() => self
                 .render_place_expr_option(object)
                 .map(|object| format!("{object}.{field}")),
             ExprKind::Index { object, index } => {
@@ -20226,7 +20506,8 @@ impl<'a> Lowerer<'a> {
         match &expr.kind {
             ExprKind::Name(name) => Some(self.render_local_name(name)),
             ExprKind::Group(inner) => self.render_stable_place_expr_option(inner),
-            ExprKind::Member { object, field } => self
+            // A bound method is a closure value, never a field place (C6).
+            ExprKind::Member { object, field } if self.bound_method_info_at(expr).is_none() => self
                 .render_stable_place_expr_option(object)
                 .map(|object| format!("{object}.{field}")),
             ExprKind::Index { object, index }
@@ -20253,7 +20534,8 @@ impl<'a> Lowerer<'a> {
                 Some(self.render_local_name(name))
             }
             ExprKind::Group(inner) => self.render_addressable_place_expr_option(inner),
-            ExprKind::Member { object, field } => self
+            // A bound method is a closure value, never a field place (C6).
+            ExprKind::Member { object, field } if self.bound_method_info_at(expr).is_none() => self
                 .render_addressable_place_expr_option(object)
                 .map(|object| format!("{object}.{field}")),
             ExprKind::Index { object, index } => {

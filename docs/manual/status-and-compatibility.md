@@ -69,7 +69,10 @@ collection, or annotated return boundaries; under the Batch 1 phase 1
 checkpoint they cross those boundaries as explicitly packed `Callable[...]`
 or `TaskCallable[...]` values whose call kind may only weaken and whose
 captures are owned, and a body may mutate an owned capture, which makes the
-closure Mutable.
+closure Mutable. `receiver.method` outside call position is a bound method:
+a compiler-synthesized closure over the receiver whose call kind follows the
+receiver capability (Q18 A), and `Class.method` on a non-generic class is a
+function value.
 
 Phase 6.5 implements ADR-0038 place-based loans and views. Local shared and
 mutable views cover roots, fixed class fields, and tuple positions; lifetimes

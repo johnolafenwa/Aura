@@ -832,7 +832,9 @@ positional argument list. Storage preserves each parameter's bare shared,
 `mut`, or `own` ABI capability. Contextually typed
 `lambda parameters: expression` values use the same callable contract and may
 capture owned outer locals by value. See [Closures](/manual/closures).
-Instance and associated method values and trait-object interactions remain
+`receiver.method` outside call position is a bound method closure and
+`Class.method` is an associated function value; see
+[Closures](/manual/closures#bound-methods). Trait-object interactions remain
 unavailable.
 
 ## Fixed-Width Numeric Example
@@ -872,7 +874,7 @@ one value per line.
 
 ## Forms Not Implemented
 
-Aura 0.3 expressions do not include generator expressions, method values,
+Aura 0.3 expressions do not include generator expressions,
 assignment expressions, call-site capability annotations, non-numeric casts, or
 ordinary trailing commas. Lambdas are expression-bodied and contextually
 typed; they do not add statement-bodied or implicitly reference-capturing

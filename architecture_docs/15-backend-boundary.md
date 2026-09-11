@@ -399,3 +399,27 @@ environment-owned captures are child-owned: the interpreter's startable
 check skips them, and the direct runtime releases the child's claim on
 those handles after the single invocation, so a normally completed task
 retains nothing. Parent-evaluated defaults and task ancestry are unchanged.
+
+## Batch 1 phase 1: bound methods
+
+`receiver.method` outside call position is a compiler-synthesized closure
+(C6, Q18 A), not a new runtime value kind. The checker registers ordinary
+closure metadata for the member expression whose single capture is the
+receiver under the reserved name `__receiver`: the closure's parameters are
+the method's contracts, its call kind follows the receiver capability, and a
+`mut self` receiver is a mutated environment-owned capture. The lowering
+evaluates the receiver once into that capture and emits a generated function
+whose body forwards `__receiver.method(...)`; omitted defaults point at the
+method's own default helpers, so the interpreter binds them through the
+existing per-parameter default functions and the direct runtime binds them
+through the closure function's native binder over a capture-offset shadow
+buffer, never exposing the environment to the caller's argument buffer. Both
+backends therefore run bound methods with the closure machinery introduced
+for packing and stored targets, including Mutable receiver writeback and
+Consuming single use. `Class.method` on a non-generic class is a thin function
+value whose identity is the method's MIR function; the validator checks its
+contract like any function operand. Member spans point at the field token,
+so bound-method metadata never collides with a lambda's. The validator also
+ties the closure rvalue's kind bits to the declaration: a closure whose
+generated function takes any capture mutably cannot claim a Repeatable
+kind, which is what keeps a Mutable bound method out of shared storage.

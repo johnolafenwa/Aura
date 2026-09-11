@@ -1,0 +1,9 @@
+class Counter:
+    total: int64
+
+    def read(self) -> int64:
+        return self.total
+
+def inspect(counter: Counter) -> int64:
+    read = counter.read
+    return read()

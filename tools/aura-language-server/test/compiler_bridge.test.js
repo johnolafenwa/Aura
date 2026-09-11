@@ -2386,7 +2386,7 @@ test("compiler bridge preserves ordinary parameter ownership in hover and diagno
   }
 });
 
-test("compiler bridge exposes capture-free function values and rejects method values", async () => {
+test("compiler bridge exposes capture-free function values and bound method values", async () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aura-lsp-function-values-"));
   const source = [
     "def double(value: int32) -> int32:",
@@ -2451,7 +2451,9 @@ test("compiler bridge exposes capture-free function values and rejects method va
       )
     );
 
-    const invalidMethodValue = [
+    // Batch 1 phase 1 (C6): `receiver.method` binds a closure over the
+    // receiver, and `Class.method` is a thin function value.
+    const boundMethodValue = [
       "class Counter:",
       "    value: int32",
       "    def read(self) -> int32:",
@@ -2462,15 +2464,17 @@ test("compiler bridge exposes capture-free function values and rejects method va
       "    return read()",
       ""
     ].join("\n");
-    const invalidAnalysis = await analyzeWithCompiler(mainUri, invalidMethodValue);
-    assert.equal(invalidAnalysis.diagnostics.length, 1);
-    assert.equal(invalidAnalysis.diagnostics[0].code, "AU2005");
-    assert.match(
-      invalidAnalysis.diagnostics[0].message,
-      /method values are not supported/
+    const boundAnalysis = await analyzeWithCompiler(mainUri, boundMethodValue);
+    assert.deepEqual(boundAnalysis.diagnostics, []);
+    assert.ok(
+      boundAnalysis.occurrences.some(
+        (occurrence) =>
+          occurrence.line === 6 &&
+          occurrence.hover.includes("binding read: closure def() -> int32")
+      )
     );
 
-    const invalidAssociatedMethodValue = [
+    const associatedMethodValue = [
       "class Math:",
       "    def double(value: int32) -> int32:",
       "        return value * 2",
@@ -2481,13 +2485,36 @@ test("compiler bridge exposes capture-free function values and rejects method va
     ].join("\n");
     const associatedAnalysis = await analyzeWithCompiler(
       mainUri,
-      invalidAssociatedMethodValue
+      associatedMethodValue
     );
-    assert.equal(associatedAnalysis.diagnostics.length, 1);
-    assert.equal(associatedAnalysis.diagnostics[0].code, "AU2005");
+    assert.deepEqual(associatedAnalysis.diagnostics, []);
+    assert.ok(
+      associatedAnalysis.occurrences.some(
+        (occurrence) =>
+          occurrence.line === 4 &&
+          occurrence.hover.includes("binding callback: def(value: int32) -> int32")
+      )
+    );
+
+    const genericAssociatedMethodValue = [
+      "class Box[T]:",
+      "    value: T",
+      "    def make(value: T) -> Box[T]:",
+      "        return Box(value=value)",
+      "def main() -> int32:",
+      "    callback = Box.make",
+      "    return callback(21).value",
+      ""
+    ].join("\n");
+    const genericAnalysis = await analyzeWithCompiler(
+      mainUri,
+      genericAssociatedMethodValue
+    );
+    assert.equal(genericAnalysis.diagnostics.length, 1);
+    assert.equal(genericAnalysis.diagnostics[0].code, "AU2005");
     assert.match(
-      associatedAnalysis.diagnostics[0].message,
-      /method values are not supported/
+      genericAnalysis.diagnostics[0].message,
+      /associated method values on generic classes are not supported/
     );
 
     const invalidCapability = [

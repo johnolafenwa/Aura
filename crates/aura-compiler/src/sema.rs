@@ -3,6 +3,7 @@ use capabilities::resolve_param_passings;
 pub(crate) use capabilities::{assertion_dispatch_is_non_consuming, resolve_param_passing};
 mod callables;
 pub(crate) use callables::callable_slot_admission;
+pub(crate) use callables::BOUND_RECEIVER_CAPTURE;
 use callables::{
     callable_contract_mismatch, capturing_closure_branch_diagnostic,
     capturing_closure_branch_mismatch, check_callable_positions,
@@ -7291,31 +7292,12 @@ impl<'a> FunctionChecker<'a> {
                 self.type_of_binary(expr.span, *op, left_ty, right_ty)
             }
             ExprKind::Member { object, field } => {
-                let (base_object, _) = self.peel_specialization(object);
-                let associated_owner = match &base_object.kind {
-                    ExprKind::Name(class_name) if !locals.contains_key(class_name) => self
-                        .resolve_class_info(class_name)
-                        .and_then(|class| class.methods.get(field))
-                        .filter(|method| method.decl.receiver.is_none())
-                        .map(|_| class_name.clone()),
-                    _ => self.qualified_module_item(base_object).and_then(
-                        |(module_path, class_name)| {
-                            self.module_namespace(&module_path)
-                                .and_then(|namespace| namespace.classes.get(&class_name))
-                                .and_then(|class| class.methods.get(field))
-                                .filter(|method| method.decl.receiver.is_none())
-                                .map(|_| format!("{module_path}.{class_name}"))
-                        },
-                    ),
-                };
-                if let Some(owner) = associated_owner {
-                    return Err(Diagnostic::coded_at(
-                        "AU2005",
-                        expr.span,
-                        format!(
-                            "associated method values are not supported in this language version; call `{owner}.{field}(...)` directly or wrap it in a named function"
-                        ),
-                    ));
+                if let Some((class, method, owner)) =
+                    self.associated_method_target(object, field, locals)
+                {
+                    return self.associated_method_value_type(
+                        class, method, &owner, field, object, expected, expr.span,
+                    );
                 }
                 if let Some(path) = self.member_access_path(expr) {
                     if let Some(binding) = locals.get(&path.root) {
@@ -7542,6 +7524,11 @@ impl<'a> FunctionChecker<'a> {
                     if let Some(path) = self.member_access_path(object) {
                         self.reject_stale_narrowing(&path, expr.span, locals)?;
                     }
+                }
+                if let Some(bound) =
+                    self.type_of_bound_method(expr, object, field, &object_ty, locals)?
+                {
+                    return Ok(bound);
                 }
                 let member_ty = self.resolve_member_type(&object_ty, field, expr.span)?;
                 if let Some(path) = self.member_access_path(expr) {
@@ -14391,7 +14378,7 @@ impl<'a> FunctionChecker<'a> {
                 "AU2005",
                 span,
                 format!(
-                    "method values are not supported in this language version; call `.{field}(...)` directly or wrap it in a named function"
+                    "method `{field}` on `{object_ty}` cannot be used as a field; call `.{field}(...)` or bind it as a method value"
                 ),
             ));
         }
@@ -14403,7 +14390,7 @@ impl<'a> FunctionChecker<'a> {
                 "AU2005",
                 span,
                 format!(
-                    "trait-dispatched method values are not supported in this language version; call `.{field}(...)` directly or wrap it in a named function"
+                    "trait method `{field}` on `{object_ty}` cannot be used as a field; call `.{field}(...)` or bind it as a method value"
                 ),
             ));
         }

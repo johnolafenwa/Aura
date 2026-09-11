@@ -1,0 +1,7 @@
+error[AU3002]: bound method `Counter.read` cannot take shared parameter `counter` by value
+ --> crates/aura-compiler/tests/fixtures/check-fail/bound_method_shared_receiver.au:8:12
+  |
+8 |     read = counter.read
+  |            ^
+  = related crates/aura-compiler/tests/fixtures/check-fail/bound_method_shared_receiver.au:7:13: shared parameter `counter` is declared here
+  = help: clone `counter` into an owned local before binding the method, or declare the enclosing parameter as `own Counter`

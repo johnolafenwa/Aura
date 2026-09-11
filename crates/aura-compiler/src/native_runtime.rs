@@ -4108,12 +4108,6 @@ pub extern "C-unwind" fn aura_direct_function_bind_defaults(
                 value_type_name(&other)
             )),
         };
-        // Lambda parameters cannot declare defaults. Hidden captures belong to
-        // the closure environment and must never be exposed to the ordinary
-        // declaration binder.
-        if function.closure_environment.is_some() {
-            return;
-        }
         let binder_ptr = function
             .direct_default_binder
             .unwrap_or_else(|| runtime_error("direct function value has no native default binder"));
@@ -4121,7 +4115,22 @@ pub extern "C-unwind" fn aura_direct_function_bind_defaults(
             unsafe { std::mem::transmute(binder_ptr as usize) };
         let arg_count = usize::try_from(arg_count)
             .unwrap_or_else(|_| runtime_error("invalid indirect-call arg count"));
-        unsafe { binder(args, arg_count, transfer_defaults) };
+        let Some(environment) = &function.closure_environment else {
+            unsafe { binder(args, arg_count, transfer_defaults) };
+            return;
+        };
+        // A closure's binder indexes its declaration buffer, whose leading
+        // slots are the hidden captures. Lambdas declare no defaults, but a
+        // bound method forwards the method's defaults (C6). Bind through a
+        // capture-offset shadow buffer so the environment is never exposed
+        // to the caller's public argument buffer.
+        let capture_count = environment.capture_count();
+        let mut shadow = vec![0i64; capture_count + arg_count];
+        unsafe {
+            std::ptr::copy_nonoverlapping(args, shadow.as_mut_ptr().add(capture_count), arg_count);
+            binder(shadow.as_mut_ptr(), shadow.len(), transfer_defaults);
+            std::ptr::copy_nonoverlapping(shadow.as_ptr().add(capture_count), args, arg_count);
+        }
     })
 }
 

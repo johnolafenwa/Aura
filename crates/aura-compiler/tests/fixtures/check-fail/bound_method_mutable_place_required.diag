@@ -1,0 +1,6 @@
+error[AU3003]: a mutable-repeatable closure must be called through a mutable closure place
+ --> crates/aura-compiler/tests/fixtures/check-fail/bound_method_mutable_place_required.au:11:11
+   |
+11 |     print(bump())
+   |           ^
+  = help: store the closure in a `mut` local before calling it

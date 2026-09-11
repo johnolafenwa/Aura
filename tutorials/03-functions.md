@@ -311,9 +311,10 @@ Function values are code pointers, so they are copy values and satisfy
 expected type may come from an annotation, argument, field, collection
 element, or function-typed parameter default.
 
-Bound instance methods, associated-method values, and trait-method values are
-unavailable. Task targets may be direct associated methods without `self`;
-that task-target form does not create a general associated-method value.
+`Class.method` names an associated method (no `self`) as a function value
+with the method's contract, and `receiver.method` outside a call binds a
+closure over the receiver; see the Closures tutorial and manual. Generic
+method values still need a call.
 
 See [examples/basics/function_values.au](../examples/basics/function_values.au).
 
@@ -373,4 +374,4 @@ normative [Closures](../docs/manual/closures.md) page.
 - ordinary `-> T` return values are owned; `-> view [mut] T from origin` is the
   explicit non-owning exception
 - clone-based non-copy returns require the returned type to be clone-safe
-- method values and multi-statement closure bodies are not part of this stage
+- multi-statement closure bodies are not part of this stage

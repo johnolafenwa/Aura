@@ -155,7 +155,7 @@
     "docs/manual/bytes.md#aura-1": {
       "sha256": "7372253544a5893db4dcfd2bcf97218842aa6362a19b0815596ea4e25a357f89",
       "mode": "run",
-      "stdout": "4175726120f09f8c8c\nAura \ud83c\udf0c\nAAH+/w==\nba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad\n4175726120f09f8c8c\n",
+      "stdout": "4175726120f09f8c8c\nAura 🌌\nAAH+/w==\nba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad\n4175726120f09f8c8c\n",
       "stderr": ""
     },
     "docs/manual/classes.md#aura-1": {
@@ -344,6 +344,12 @@
       "sha256": "a114f89b8c82ea558ed71a568e035ba0158511b9d3b82596cfdb3b11cd32c396",
       "mode": "run",
       "stdout": "Aura\n4\n",
+      "stderr": ""
+    },
+    "docs/manual/closures.md#aura-6": {
+      "sha256": "350ec660a86c8ff43503fef958a44895e718888034d291ded069705d6c4d989f",
+      "mode": "run",
+      "stdout": "1\n11\n16\n",
       "stderr": ""
     },
     "docs/manual/closures.md#ebnf-1": {
@@ -1131,7 +1137,7 @@
     "docs/manual/lexical-structure.md#aura-10": {
       "sha256": "9c2610b6a412d0510f9e6cb83ff87cd0ec63863cf5f087feb2b70feeb48a8286",
       "mode": "run",
-      "stdout": "   1,234,567\n+87.50%\n\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7Aura\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\n",
+      "stdout": "   1,234,567\n+87.50%\n······Aura······\n",
       "stderr": ""
     },
     "docs/manual/lexical-structure.md#aura-2": {

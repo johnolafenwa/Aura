@@ -1,0 +1,10 @@
+class Holder:
+    text: str
+
+    def peek(self) -> view str from self:
+        return self.text
+
+def main():
+    holder = Holder(text="kept")
+    peek = holder.peek
+    print(peek())

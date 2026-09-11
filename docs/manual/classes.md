@@ -137,7 +137,7 @@ such as `self: Counter` is not a receiver and is rejected with a diagnostic
 naming the valid forms. `Self` may be used in class method parameter and return
 type positions and denotes the enclosing class specialization.
 
-An associated method has no implicit `self` and is called as `Counter.zero()`. Instance syntax is reserved for methods with a compatible receiver and for trait methods selected for the instance type.
+An associated method has no implicit `self` and is called as `Counter.zero()`. Instance syntax is reserved for methods with a compatible receiver and for trait methods selected for the instance type. Named without a call, `Counter.zero` is a function value with the method's contract (non-generic classes only), and `counter.read` is a bound method closure over the receiver; see [Closures](/manual/closures#bound-methods).
 
 ## Mutation
 
