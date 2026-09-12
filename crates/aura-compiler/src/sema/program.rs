@@ -1369,7 +1369,10 @@ pub(crate) fn check_with_context(module: Module, context: ModuleContext) -> Resu
             &canonical_type_names,
             &impl_type_param_scope,
         )?;
-        if matches!(for_type, Type::TypeParam(_)) {
+        // The target must be a named outer type (`Box[T]`): a bare type
+        // parameter has no nominal identity, and a bare tuple has no nominal
+        // dispatch table on the direct backend.
+        if matches!(for_type, Type::TypeParam(_) | Type::Tuple(_)) {
             return Err(Diagnostic::at(
                 impl_decl.span,
                 "trait impl target must name a concrete or generic outer type",

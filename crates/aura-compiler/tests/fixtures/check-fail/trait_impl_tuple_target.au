@@ -1,0 +1,10 @@
+trait Show:
+    def show(self) -> str
+
+impl Show for (int64, str):
+    def show(self) -> str:
+        return "pair"
+
+def main():
+    pair = (1, "a")
+    print(pair.show())
