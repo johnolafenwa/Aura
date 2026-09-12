@@ -1,0 +1,6 @@
+def main():
+    values = Array[int64].full([2], 7)
+    print(values.len())
+    print(values.get([1]))
+    floats = Array[float64].full([3], 1.5)
+    print(floats.len())

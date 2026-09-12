@@ -9671,3 +9671,35 @@ fn associated_method_values_skip_generic_owners_and_receiver_methods() {
         None
     );
 }
+
+#[test]
+fn bounded_generic_alias_hover_renders_its_type_parameter_bounds() {
+    let source = [
+        "trait Named:",
+        "    def name(self) -> str",
+        "class Box[T]:",
+        "    value: T",
+        "type Wrapped[T: Named] = Box[T]",
+        "class Dog:",
+        "    tag: str",
+        "impl Named for Dog:",
+        "    def name(self) -> str:",
+        "        return self.tag.clone()",
+        "def main():",
+        "    boxed = Wrapped[Dog](value=Dog(tag=\"rex\"))",
+        "    print(boxed.value.name())",
+        "",
+    ]
+    .join("\n");
+    let analysis = analyze_source(&source);
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "{:?}",
+        analysis.diagnostics
+    );
+    let alias_use = occurrence_at(&analysis, 11, 12);
+    assert_eq!(
+        alias_use.hover,
+        "```aura\ntype Wrapped[T: Named] = Box[T]\n```"
+    );
+}

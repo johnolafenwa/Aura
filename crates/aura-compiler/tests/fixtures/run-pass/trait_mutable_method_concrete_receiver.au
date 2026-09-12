@@ -1,0 +1,30 @@
+trait Counter:
+    def bump(mut self)
+    def total(self) -> int64
+
+class Dog:
+    count: int64
+
+class Cat:
+    count: int64
+
+impl Counter for Dog:
+    def bump(mut self):
+        self.count = self.count + 1
+    def total(self) -> int64:
+        return self.count
+
+impl Counter for Cat:
+    def bump(mut self):
+        self.count = self.count + 10
+    def total(self) -> int64:
+        return self.count
+
+def main():
+    mut dog = Dog(count=1)
+    dog.bump()
+    dog.bump()
+    print(dog.total())
+    mut pet: Dog | Cat = Cat(count=2)
+    pet.bump()
+    print(pet.total())

@@ -1,0 +1,10 @@
+def scale(value: int64) -> int64:
+    return value * 10
+
+def make_scaler(base: int64) -> def(value: int64) -> int64:
+    return scale
+
+def main():
+    scalers = [1, 2].map(make_scaler)
+    print(scalers[1](4))
+    print(scalers.len())

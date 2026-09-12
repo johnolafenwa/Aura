@@ -324,3 +324,31 @@ fn merged_candidates_that_differ_only_in_identity_keep_their_complete_contract()
     let source = "def first(*, value: int64 = 1) -> int64:\n    return value + 1\ndef second(*, value: int64 = 1) -> int64:\n    return value + 2\ndef pick(index: int64) -> int64:\n    return index\ndef main():\n    tools = [first, second]\n    tool = tools[pick(0)]\n    print(tool(value=7))\n    print(tool())\n";
     assert_accepted_on_both_boundaries(source, "8\n2\n");
 }
+
+#[test]
+fn merged_candidates_keep_a_keyword_only_restriction_from_either_side() {
+    // The restriction may sit on either candidate; the merge keeps it as the
+    // common contract regardless of element order.
+    for (elements, restricted) in [("[first, second]", "first"), ("[second, first]", "first")] {
+        let source = format!(
+            "def first(value: int64) -> int64:\n    return value + 1\ndef second(value: int64) -> int64:\n    return value + 2\ndef pick(index: int64) -> int64:\n    return index\ndef main():\n    tools = {elements}\n    tool = tools[pick(1)]\n    print(tool(7))\n"
+        );
+        let mut encoded = encode(&source);
+        forge_declaration_and_operands(
+            &mut encoded,
+            restricted,
+            &|param| param["keyword_only"] = json!(true),
+            &|slot| slot["keyword_only"] = json!(true),
+        );
+        assert_rejected_on_both_boundaries(
+            encoded,
+            "invalid MIR indirect call from `main` has too many positional arguments",
+        );
+    }
+}
+
+#[test]
+fn merged_candidates_with_identical_tuple_contracts_call_on_both_boundaries() {
+    let source = "def first(pair: (int64, str)) -> int64:\n    return pair[0] + 1\ndef second(pair: (int64, str)) -> int64:\n    return pair[0] + 2\ndef pick(index: int64) -> int64:\n    return index\ndef main():\n    tools = [first, second]\n    tool = tools[pick(1)]\n    print(tool((7, \"a\")))\n";
+    assert_accepted_on_both_boundaries(source, "9\n");
+}

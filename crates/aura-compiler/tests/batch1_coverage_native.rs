@@ -811,3 +811,21 @@ fn unresolvable_goto_labels_are_rejected_by_the_shared_validator() {
         "invalid MIR function `describe` branches to unknown block `nowhere`",
     );
 }
+
+#[test]
+fn native_backend_compiles_array_arithmetic_with_a_scalar_receiver() {
+    // Source lowers `values * 2` to a binary rvalue; a forged member call with
+    // the scalar as the receiver reaches the backend's scalar-receiver Array
+    // kernel path, which must emit exactly like the array-receiver form.
+    let source = "def main():\n    values = Array[int64].from_list([1, 2, 3], [3])\n    doubled = values * 2\n    print(doubled.len())\n";
+    let mut encoded = encode(source);
+    let main = function_mut(&mut encoded, "main");
+    let binary = instructions_mut(main)
+        .find(|instruction| instruction.pointer("/Assign/value/Binary").is_some())
+        .expect("the Array product should lower to a binary rvalue");
+    binary["Assign"]["value"] = json!({ "Call": {
+        "callee": { "Member": { "object": { "Int": 2 }, "field": "mul", "receiver_place": null } },
+        "args": [{ "name": null, "value": { "Place": "values" }, "writeback_place": null }]
+    }});
+    assert_native_emits(encoded);
+}

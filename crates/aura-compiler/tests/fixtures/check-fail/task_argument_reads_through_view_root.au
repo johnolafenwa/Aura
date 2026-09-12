@@ -1,0 +1,13 @@
+class Data:
+    count: int64
+    values: list[int64]
+
+def total(count: int64, base: int64) -> int64:
+    return count + base
+
+def main():
+    data = Data(count=4, values=[1, 2, 3])
+    view holder = data
+    with TaskGroup() as group:
+        task = group.start(total, 1, base=holder.count)
+        print(task.result_or(-1, timeout=1s))

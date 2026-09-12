@@ -1022,3 +1022,23 @@ fn bound_method_dispatch_maps_trait_level_array_equality_obligations() {
     );
     assert_eq!(error.code, "AU2003");
 }
+
+#[test]
+fn union_arguments_satisfy_bounds_on_imported_traits_with_imported_implementations() {
+    // The bound, the trait, the implementations, and the bounded function all
+    // live in the imported module, so the caller's checker resolves the bound
+    // and the implementations' traits through the module registry, and a
+    // method value bound from an imported implementation exposes the imported
+    // trait's contract.
+    let temp = TempDir::new("aura-sema-imported-union-bound");
+    temp.write(
+        "api.au",
+        "public trait Named:\n    def name(self) -> str\n\npublic class Dog:\n    public tag: str\n\npublic class Cat:\n    public tag: str\n\nimpl Named for Dog:\n    def name(self) -> str:\n        return self.tag.clone()\n\nimpl Named for Cat:\n    def name(self) -> str:\n        return self.tag.clone()\n\npublic def show[T: Named](value: T):\n    print(value.name())\n",
+    );
+    let main_path = temp.write(
+        "main.au",
+        "import api\n\ndef main():\n    pet: api.Dog | api.Cat = api.Dog(tag=\"rex\")\n    api.show(pet)\n    other: api.Dog | api.Cat = api.Cat(tag=\"tom\")\n    api.show(other)\n    dog = api.Dog(tag=\"bound\")\n    named = dog.name\n    print(named())\n",
+    );
+    let output = run_path(&main_path).expect("an imported all-member union satisfies the bound");
+    assert_eq!(output.stdout, "rex\ntom\nbound\n");
+}

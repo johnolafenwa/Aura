@@ -23078,3 +23078,43 @@ fn direct_process_pipe_reads_report_end_of_stream_as_none() {
         release_value(child_ptr);
     }
 }
+
+#[test]
+fn direct_value_is_union_distinguishes_unions_from_plain_values() {
+    let target = coverage_union(vec![Type::named("int64"), Type::Unit]);
+    let int_index = coverage_union_member_index(&target, &Type::named("int64"));
+    let union_name = super::canonical_runtime_type_name(&Type::Union(Box::new(target.clone())));
+    let payload = int_value(4);
+    let union =
+        super::aura_direct_union_inject(union_name.as_ptr(), union_name.len(), int_index, payload);
+    let plain = int_value(4);
+    let text = string_value("plain");
+    assert_eq!(super::aura_direct_value_is_union(union), 1);
+    assert_eq!(super::aura_direct_value_is_union(plain), 0);
+    assert_eq!(super::aura_direct_value_is_union(text), 0);
+    unsafe {
+        release_value(union);
+        release_value(plain);
+        release_value(text);
+    }
+}
+
+#[test]
+fn direct_erased_union_mutable_receiver_failure_reports_the_documented_diagnostic() {
+    let message = capture_direct_boundary_error_message(|| {
+        super::aura_direct_fail_erased_union_mutable_receiver(0, 0);
+    });
+    assert!(
+        message.contains(
+            "cannot call a mutable trait method through a generic receiver holding a union"
+        ),
+        "{message}"
+    );
+    let located = capture_direct_boundary_error_message(|| {
+        super::aura_direct_fail_erased_union_mutable_receiver(3, 5);
+    });
+    assert!(
+        located.contains("narrow the union to its member before the call"),
+        "{located}"
+    );
+}

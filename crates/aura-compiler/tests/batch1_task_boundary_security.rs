@@ -188,3 +188,181 @@ fn closure_target_capturing_a_host_resource_is_rejected_on_both_boundaries() {
         "starts a target whose environment is not Transfer: capture `base`: `TaskGroup` is a host resource",
     );
 }
+
+fn tuple_of_task_group_type() -> Value {
+    json!({ "Tuple": [task_group_type()] })
+}
+
+#[test]
+fn named_target_result_typed_as_a_host_resource_is_rejected_on_both_boundaries() {
+    let mut encoded = encode(NAMED_TARGET);
+    function_mut(&mut encoded, "worker")["return_type"] = task_group_type();
+    let main = function_mut(&mut encoded, "main");
+    start_task_mut(main)["function"]["Function"]["signature"]["Function"]["return_type"] =
+        task_group_type();
+    assert_rejected(
+        encoded,
+        "returns a result whose type is not Transfer: `TaskGroup` is a host resource",
+    );
+}
+
+#[test]
+fn named_target_parameter_typed_as_a_module_capability_is_rejected_on_both_boundaries() {
+    let mut encoded = encode(NAMED_TARGET);
+    let module = json!({ "Module": "api" });
+    function_mut(&mut encoded, "worker")["params"][0]["ty"] = module.clone();
+    let main = function_mut(&mut encoded, "main");
+    let argument = start_task_mut(main)["args"][0]["value"]["Place"]
+        .as_str()
+        .expect("the task argument should be a place")
+        .to_owned();
+    start_task_mut(main)["function"]["Function"]["signature"]["Function"]["params"][0]["ty"] =
+        module.clone();
+    set_local_type(main, &argument, module.clone());
+    set_local_type(main, "value", module);
+    assert_rejected(
+        encoded,
+        "passes parameter 1 whose type is not Transfer: `module api` is a module capability",
+    );
+}
+
+#[test]
+fn named_target_parameter_carrying_a_host_resource_in_a_tuple_is_rejected_on_both_boundaries() {
+    let mut encoded = encode(NAMED_TARGET);
+    function_mut(&mut encoded, "worker")["params"][0]["ty"] = tuple_of_task_group_type();
+    let main = function_mut(&mut encoded, "main");
+    let argument = start_task_mut(main)["args"][0]["value"]["Place"]
+        .as_str()
+        .expect("the task argument should be a place")
+        .to_owned();
+    start_task_mut(main)["function"]["Function"]["signature"]["Function"]["params"][0]["ty"] =
+        tuple_of_task_group_type();
+    set_local_type(main, &argument, tuple_of_task_group_type());
+    set_local_type(main, "value", tuple_of_task_group_type());
+    assert_rejected(
+        encoded,
+        "passes parameter 1 whose type is not Transfer: `TaskGroup` is a host resource",
+    );
+}
+
+const ENUM_ARGUMENT: &str = "enum Slot:\n    Filled(int64)\n    Empty\n\ndef worker(slot: Slot) -> int64:\n    match slot:\n        case Slot.Filled(value):\n            return value\n        case Slot.Empty:\n            return 0\n\ndef main():\n    slot = Slot.Filled(1)\n    with TaskGroup() as group:\n        task = group.start(worker, slot)\n        print(task.result_or(-1, timeout=1s))\n";
+
+#[test]
+fn named_target_parameter_whose_enum_payload_is_a_host_resource_is_rejected_on_both_boundaries() {
+    let mut encoded = encode(ENUM_ARGUMENT);
+    // The enum itself stays the parameter type; its `Filled` payload is
+    // forged into a host resource, so only the recursive Transfer proof over
+    // the module's enum metadata can refuse the start.
+    let slot = encoded["enums"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|enum_decl| enum_decl["name"] == "Slot")
+        .expect("enum `Slot` should be lowered");
+    let filled = slot["variants"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|variant| variant["name"] == "Filled")
+        .expect("variant `Filled` should be lowered");
+    filled["payloads"][0] = task_group_type();
+    assert_rejected(
+        encoded,
+        "payload of `Slot.Filled`: `TaskGroup` is a host resource",
+    );
+}
+
+const CLASS_ARGUMENT: &str = "class Holder:\n    count: int64\n\ndef worker(holder: Holder) -> int64:\n    return holder.count\n\ndef main():\n    holder = Holder(count=1)\n    with TaskGroup() as group:\n        task = group.start(worker, holder)\n        print(task.result_or(-1, timeout=1s))\n";
+
+#[test]
+fn named_target_parameter_whose_class_field_is_a_host_resource_is_rejected_on_both_boundaries() {
+    let mut encoded = encode(CLASS_ARGUMENT);
+    let holder = encoded["classes"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|class| class["name"] == "Holder")
+        .expect("class `Holder` should be lowered");
+    holder["fields"][0]["ty"] = task_group_type();
+    assert_rejected(
+        encoded,
+        "field `count` of `Holder`: `TaskGroup` is a host resource",
+    );
+}
+
+#[test]
+fn closure_target_capturing_a_live_view_is_rejected_on_both_boundaries() {
+    let mut encoded = encode(CLOSURE_TARGET);
+    let main = function_mut(&mut encoded, "main");
+    let closure = find_instruction(main, |instruction| {
+        instruction.pointer("/Assign/value/Closure").is_some()
+    });
+    let target = closure["Assign"]["target"].as_str().unwrap().to_owned();
+    closure["Assign"]["value"]["Closure"]["signature"]["Closure"]["captures"][0]["mode"] =
+        json!("SharedView");
+    set_local_type(
+        main,
+        &target,
+        json!({ "Closure": {
+            "params": [],
+            "return_type": { "Named": ["int64", []] },
+            "captures": [{ "name": "base", "ty": { "Named": ["int64", []] }, "mode": "SharedView", "span": { "line": 4, "column": 36 }, "mutated": false }],
+            "call_kind": "Repeatable"
+        }}),
+    );
+    assert_rejected(
+        encoded,
+        "starts a target whose environment is not Transfer: capture `base` is a live loan",
+    );
+}
+
+#[test]
+fn stored_target_parameter_typed_as_a_returned_view_is_rejected_on_both_boundaries() {
+    let mut encoded = encode(STORED_TARGET);
+    let view = json!({
+        "ReturnedView": { "mutable": false, "pointee": { "Named": ["int64", []] }, "origin": 0 }
+    });
+    function_mut(&mut encoded, "worker")["params"][0]["ty"] = view.clone();
+    let default_function = function_mut(&mut encoded, "worker")["params"][0]["default_function"]
+        .as_str()
+        .map(str::to_owned);
+    if let Some(default_function) = default_function {
+        function_mut(&mut encoded, &default_function)["return_type"] = view.clone();
+    }
+    let main = function_mut(&mut encoded, "main");
+    for block in main["blocks"].as_array_mut().unwrap() {
+        for instruction in block["instructions"].as_array_mut().unwrap() {
+            if let Some(signature) = instruction.pointer_mut("/Assign/value/Use/Function/signature")
+            {
+                signature["Function"]["params"][0]["ty"] = view.clone();
+            }
+        }
+    }
+    for entry in main["local_types"].as_array_mut().unwrap() {
+        if let Some(params) = entry.pointer_mut("/ty/Callable/params") {
+            params[0]["ty"] = view.clone();
+        }
+    }
+    assert_rejected(
+        encoded,
+        "passes parameter 1 whose type is not Transfer: a returned view borrows the parent's data",
+    );
+}
+
+#[test]
+fn named_target_result_typed_as_an_erased_callable_is_rejected_on_both_boundaries() {
+    let mut encoded = encode(NAMED_TARGET);
+    let erased = json!({ "Callable": {
+        "task": false,
+        "call_kind": "Repeatable",
+        "params": [],
+        "return_type": { "Named": ["int64", []] }
+    }});
+    function_mut(&mut encoded, "worker")["return_type"] = erased.clone();
+    let main = function_mut(&mut encoded, "main");
+    start_task_mut(main)["function"]["Function"]["signature"]["Function"]["return_type"] = erased;
+    assert_rejected(
+        encoded,
+        "returns a result whose type is not Transfer: an erased `Callable` hides its environment",
+    );
+}

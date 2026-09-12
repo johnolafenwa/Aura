@@ -1,0 +1,8 @@
+class Holder:
+    values: Array[int64]
+
+def main():
+    mut holder = Holder(values=Array[int64].zeros([1]))
+    view mut cell = holder.values
+    cell = Array[int64].zeros([3])
+    print(holder.values.len())

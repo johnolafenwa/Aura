@@ -292,3 +292,58 @@ fn zeros_with_an_extra_argument_is_rejected_on_both_boundaries() {
         "invalid MIR call to builtin `Array.zeros` in `main` has too many arguments",
     );
 }
+
+fn assert_forged_accepted_on_both_boundaries(encoded: Value, expected_stdout: &str) {
+    let mir: MirModule = serde_json::from_value(encoded).expect("forged MIR should deserialize");
+    let output = run_mir(&mir).expect("interpreter should accept the module");
+    assert_eq!(output.stdout, expected_stdout);
+    let object = emit_host_native_object(&mir).expect("native emission should accept the module");
+    assert!(!object.is_empty());
+}
+
+#[test]
+fn named_builtin_binder_fills_a_named_slot_then_skips_it_for_the_positional_argument() {
+    // `values=` binds the first slot by name, so the following positional
+    // argument must skip that slot and land on `shape`, exactly as both
+    // backends' binders resolve it.
+    let mut encoded = encode(FROM_LIST);
+    let args = call_args_mut(function_mut(&mut encoded, "main"), "Array.from_list");
+    args[0]["name"] = json!("values");
+    assert_forged_accepted_on_both_boundaries(encoded, "2\n");
+}
+
+#[test]
+fn named_builtin_contracts_accept_a_literal_fill_operand_on_both_boundaries() {
+    // Lowering hands `Array.full` its fill value through a temporary; a
+    // module that spells the literal operand directly is still a valid call
+    // for both backends.
+    let mut encoded = encode(FULL);
+    let args = call_args_mut(function_mut(&mut encoded, "main"), "Array.full");
+    args[1]["value"] = json!({ "Int": 5 });
+    assert_forged_accepted_on_both_boundaries(encoded, "2\n");
+}
+
+const VIEW_WRITE: &str = "class Holder:\n    values: Array[int64]\n\ndef main():\n    mut holder = Holder(values=Array[int64].zeros([1]))\n    view mut cell = holder.values\n    cell = Array[int64].zeros([3])\n    print(holder.values.len())\n";
+
+#[test]
+fn named_builtin_contracts_apply_to_a_call_written_straight_through_a_loan() {
+    // Lowering stages a builtin result in a temporary before writing through
+    // the loan; a module that writes the call itself through the loan is held
+    // to the same contract on both boundaries.
+    let mut encoded = encode(VIEW_WRITE);
+    let main = function_mut(&mut encoded, "main");
+    let mut call = named_call_instruction_mut(main, "Array.zeros")["Assign"]["value"].clone();
+    call["Call"]["args"][0]["value"] = json!({ "Int": 3 });
+    let write = main["blocks"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .flat_map(|block| block["instructions"].as_array_mut().unwrap().iter_mut())
+        .find(|instruction| instruction["WriteLoan"]["loan"] == json!("cell"))
+        .expect("the view assignment should write through the loan");
+    write["WriteLoan"]["value"] = call;
+    assert_rejected_on_both_boundaries(
+        encoded,
+        "invalid MIR call to builtin `Array.zeros` in `main` binds argument `shape` to an operand that is not `list[int64]`",
+    );
+}
