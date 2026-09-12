@@ -1,4 +1,4 @@
-tool-runner version 0
+tool-runner version 1
 request {"tool":"double","value":21}
 result {"tool":"double","value":42}
 result {"tool":"increment","value":43}

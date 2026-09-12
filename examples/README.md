@@ -298,7 +298,9 @@ printed-output order unless they explicitly coordinate that order.
 ### `agents/`
 
 - `tool_runner/`
-  - version-0 reference agent package: named-function dictionary registry, typed
+  - version-1 reference agent package (Batch 1 phase 1): a `Callable[...]`
+    registry contract holding a factory-owned closure and a packed bound
+    method, remove/call/reinsert dispatch through a `mut` dictionary, typed
     JSON request/result methods, Result errors, `control.retry`, Queue events
     produced by a TaskGroup child and consumed with `for`, and user-resource cleanup
   - no network, filesystem, or process access; both backends match `tool_runner/stdout.txt`

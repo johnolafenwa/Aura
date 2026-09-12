@@ -144,8 +144,14 @@ Last updated: 2026-09-10
   and `control.retry` borrow packed Shared callable values with ABI-equal,
   positionally callable contracts; Mutable/Consuming packed values and
   keyword-only element parameters are refused.
-- Next: commit the callback-sites family, then editor/docs/reference-agent
-  updates, full gates and integration.
+- Callback-sites family committed (`13824c3c`) with the interpreter
+  root-task stack fix and the task stack headroom diagnostic.
+- Reference agent version 1 installed (144 lines, pinned stdout on both
+  backends); extension grammar tokenizes stored view contracts; LSP coverage
+  at 100%.
+- Next: commit the reference-agent and editor updates, then the maintained
+  documentation pass, full local verification with the coverage ratchet,
+  and hosted integration.
 - Option removal and all phase 2 signature changes remain excluded; protected
   user files and coverage floors remain unchanged.
 - Work and handoff ledger: [2026-09-09-batch-1-phase-1.md](2026-09-09-batch-1-phase-1.md).

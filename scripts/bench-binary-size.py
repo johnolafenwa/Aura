@@ -139,7 +139,7 @@ def measure(ref, default_profile=False, *, allow_missing_reference_agent=False):
                 'toolchain': run(['rustc', '+1.95.0', '-Vv']).stdout,
                 'linker': run(['cc', '--version']).stdout,
                 'hello_before_input_policy': 'identical single-print bytes staged outside the before source tree',
-                'reference_agent': 'maintained tool_runner package, reference agent version 0',
+                'reference_agent': 'maintained tool_runner package, reference agent version 1',
                 'omitted_subjects': omitted_subjects}
 
 
