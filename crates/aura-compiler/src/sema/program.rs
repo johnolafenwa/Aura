@@ -154,6 +154,28 @@ impl Program {
                 .and_then(|namespace| namespace.all_aliases.get(name))
         }
     }
+    /// The nominal constructor an `Alias(...)` or `Alias[T](...)` call expands
+    /// to, for tooling that mirrors the checker's call resolution. A fresh
+    /// default budget applies; capacity failures and non-constructor targets
+    /// yield `None`.
+    pub(crate) fn expand_alias_constructor(
+        &self,
+        alias: &AliasInfo,
+        type_args: Option<&[Type]>,
+        span: crate::diag::Span,
+    ) -> Option<Expr> {
+        alias
+            .constructor_callee(
+                type_args,
+                span,
+                &self.module_name,
+                &self.canonical_type_names,
+                &super::type_budget::ExpansionBudget::default(),
+            )
+            .ok()
+            .flatten()
+    }
+
     pub(crate) fn resolve_alias_type(
         &self,
         name: &str,

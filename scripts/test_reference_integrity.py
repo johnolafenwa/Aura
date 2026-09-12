@@ -40,15 +40,28 @@ class ReferenceIntegrityTests(unittest.TestCase):
             json.loads(line) for line in request_block.splitlines() if line.strip()
         ]
 
+        # The examples must send the compiler's current identity; pin it to the
+        # source constant so a schema bump cannot leave the documented request
+        # behind (Batch 1 review finding 25).
+        compiler_lib = (root / "crates/aura-compiler/src/lib.rs").read_text(
+            encoding="utf-8"
+        )
+        match = re.search(
+            r"pub const SEMANTIC_INTERFACE_SCHEMA_VERSION: u32 = (\d+);", compiler_lib
+        )
+        self.assertIsNotNone(match, "compiler schema constant should be declared")
+        schema_version = int(match.group(1))
         self.assertEqual(len(requests), 2)
         self.assertEqual(
             [request["semantic_interface_version"] for request in requests],
-            [6, 6],
+            [schema_version, schema_version],
         )
+        self.assertIn(f"`semantic_interface_version: {schema_version}`", cli)
         lsp_readme = (root / "tools/aura-language-server/README.md").read_text(
             encoding="utf-8"
         )
-        self.assertIn('"semantic_interface_version":6', lsp_readme)
+        self.assertIn(f'"semantic_interface_version":{schema_version}', lsp_readme)
+        self.assertIn(f"`semantic_interface_version: {schema_version}`", lsp_readme)
 
     def test_cli_tooling_registry_matches_the_complete_diagnostic_code_table(
         self,

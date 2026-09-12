@@ -252,12 +252,16 @@ entry requires a mutable outer capability. When an independent snapshot is
 needed, make the outer parameter `own` and use an `own` capture, or pass the
 value to a named helper that creates the owned closure.
 
-An ordinary by-value closure environment is read-only. A body may mutate only
-a `mut` entry from an explicit capture list. Such a closure is
-mutable-repeatable: it must be stored in a `mut` local and called sequentially
-through that mutable place. A shared-loan closure is shared-repeatable. A body
-that consumes a non-Copy `own` capture remains a consuming, single-use closure,
-even when the environment also contains loans.
+A by-value closure environment is read-only unless the body mutates one of
+its captures: a `mut` operation on an owned capture, whether it moved or
+copied into the environment implicitly or through `own name`, or a write
+through a `mut` entry from an explicit capture list. Such a closure is
+Mutable (mutable-repeatable): it must be held in a `mut` local or called
+through a mutable place, and calls run sequentially through that place. A
+closure whose body only reads its captures, including a shared-loan closure,
+is Shared (shared-repeatable). A body that consumes a non-Copy `own` capture
+remains a consuming, single-use closure, even when the environment also
+contains loans.
 
 A by-value closure is Transfer exactly when all of its captures are Transfer. Moving a
 qualifying closure into `TaskGroup.start`, `start_soon`, or an explicit-stack
@@ -468,8 +472,10 @@ Mutable callbacks. Task start accepts a qualifying closure by move for one
 invocation.
 
 Conditional and `match` expressions cannot merge capturing closures from
-multiple branches. This is an explicit closure-union boundary, not an
-implementation-defined coercion.
+multiple branches unless the destination carries an explicit common
+`Callable` contract, in which case each reached branch packs its own value
+(see the merge rule above). This is an explicit closure-union boundary, not
+an implementation-defined coercion.
 
 The capture, callability, ownership, and Transfer rules are language-defined;
 the implementation does not choose a reference-versus-value capture mode.

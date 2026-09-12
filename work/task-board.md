@@ -32,7 +32,8 @@ Last updated: 2026-09-12
   nine fixture suites, 378 CLI tests, native acceptance, and 424 forced parity
   cases. Borrowed storage and named/method/indirect call-layout regressions
   are closed. Clippy and formatting pass; frozen source hashes are unchanged.
-- Injection committed as `3f9f95a`. Type patterns/exhaustiveness is in progress:
+- Injection committed as `3f9f95a`. Type patterns/exhaustiveness is complete
+  (committed as `9ab3176b`, semantic interface schema 9):
   the checker pattern module is extracted; 51 focused pattern cases and
   167 common MIR security regressions pass after the container callable
   identity closure and the independent review's ten findings (see the work
@@ -172,7 +173,8 @@ Last updated: 2026-09-12
 - Phase 1 is complete. Phase 2 (Option removal, H2) starts from the work
   note's handoff section; this completion commit changes work records only.
 - Option removal and all phase 2 signature changes remain excluded; protected
-  user files and coverage floors remain unchanged.
+  user files remain unchanged, and the coverage floors were raised to
+  96.46 / 97.33 / 95.23 in the phase-end ratchet.
 - Work and handoff ledger: [2026-09-09-batch-1-phase-1.md](2026-09-09-batch-1-phase-1.md).
 
 ## Batch 1 design checkpoint (ratified; phase 1 complete)

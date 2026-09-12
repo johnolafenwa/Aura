@@ -2939,8 +2939,8 @@ The JSON result is an array of `{ "name": str, "kind": str, "detail": str }` obj
 are:
 
 ```json
-{"id":1,"semantic_interface_version":6,"method":"analyze","path":"/absolute/app.au","source":"print(1)\n"}
-{"id":2,"semantic_interface_version":6,"method":"complete","path":"/absolute/app.au","source":"value.\n","line":0,"character":6,"trigger":"."}
+{"id":1,"semantic_interface_version":14,"method":"analyze","path":"/absolute/app.au","source":"print(1)\n"}
+{"id":2,"semantic_interface_version":14,"method":"complete","path":"/absolute/app.au","source":"value.\n","line":0,"character":6,"trigger":"."}
 ```
 
 Each response is one line containing the same `id`,
@@ -3472,12 +3472,16 @@ entry requires a mutable outer capability. When an independent snapshot is
 needed, make the outer parameter `own` and use an `own` capture, or pass the
 value to a named helper that creates the owned closure.
 
-An ordinary by-value closure environment is read-only. A body may mutate only
-a `mut` entry from an explicit capture list. Such a closure is
-mutable-repeatable: it must be stored in a `mut` local and called sequentially
-through that mutable place. A shared-loan closure is shared-repeatable. A body
-that consumes a non-Copy `own` capture remains a consuming, single-use closure,
-even when the environment also contains loans.
+A by-value closure environment is read-only unless the body mutates one of
+its captures: a `mut` operation on an owned capture, whether it moved or
+copied into the environment implicitly or through `own name`, or a write
+through a `mut` entry from an explicit capture list. Such a closure is
+Mutable (mutable-repeatable): it must be held in a `mut` local or called
+through a mutable place, and calls run sequentially through that place. A
+closure whose body only reads its captures, including a shared-loan closure,
+is Shared (shared-repeatable). A body that consumes a non-Copy `own` capture
+remains a consuming, single-use closure, even when the environment also
+contains loans.
 
 A by-value closure is Transfer exactly when all of its captures are Transfer. Moving a
 qualifying closure into `TaskGroup.start`, `start_soon`, or an explicit-stack
@@ -3688,8 +3692,10 @@ Mutable callbacks. Task start accepts a qualifying closure by move for one
 invocation.
 
 Conditional and `match` expressions cannot merge capturing closures from
-multiple branches. This is an explicit closure-union boundary, not an
-implementation-defined coercion.
+multiple branches unless the destination carries an explicit common
+`Callable` contract, in which case each reached branch packs its own value
+(see the merge rule above). This is an explicit closure-union boundary, not
+an implementation-defined coercion.
 
 The capture, callability, ownership, and Transfer rules are language-defined;
 the implementation does not choose a reference-versus-value capture mode.
@@ -5128,9 +5134,13 @@ uses twice the preceding delay. A zero delay skips sleeping. Once the final perm
 attempt returns `Err`, that exact error is returned without another sleep or
 delay multiplication.
 
-The worker may be a capture-free function value or a repeatable
-value-capturing closure. A consuming closure is rejected because retry may
-invoke the worker more than once. Traps from the worker, delay overflow, and
+The worker may be a capture-free function value, a repeatable (Shared)
+value-capturing closure, or a packed Shared `Callable[def() -> Result[T, E]]`
+or `TaskCallable[def() -> Result[T, E]]` value, which the helper borrows for
+the operation with its ABI-equal contract. A consuming closure or `own def`
+value is rejected because retry may invoke the worker more than once, and a
+Mutable closure or `mut def` value is rejected because the helper holds the
+worker through a shared read; both report `AU2002`. Traps from the worker, delay overflow, and
 invalid runtime operations are not converted to `E`. Current-task
 cancellation propagates through the retry operation instead of returning the
 most recent `Err`.
@@ -5209,10 +5219,12 @@ Call arguments are evaluated left to right. Inputs to these host helpers are sha
 
 Telemetry emission and metric updates are observable side effects and occur at the call's position in source evaluation order. Concurrent tasks share standard error and the metric dictionary. Each individual metric operation is synchronized, but a sequence such as `get` followed by `increment` is not one atomic transaction.
 
-The retry helper reads a capture-free function value or repeatable capturing
-closure and invokes it under ordinary call rules.
-The helper can therefore reuse one repeatable capturing closure across all
-attempts without consuming its environment. Each `Result.Ok` or `Result.Err`
+The retry helper reads a capture-free function value, a repeatable
+capturing closure, or a packed Shared callable value and invokes it under
+ordinary call rules; a packed value is borrowed for the operation and is
+never cloned, moved, or erased.
+The helper can therefore reuse one repeatable worker across all attempts
+without consuming its environment. Each `Result.Ok` or `Result.Err`
 owns its payload.
 Intermediate errors are consumed by the retry decision; the final error is
 returned without cloning. Attempt calls and delay waits occur in the stated
@@ -5575,7 +5587,9 @@ This page documents known current limits of the Aura compiler and runtime.
 - Metrics are process-global counters within one running program; log and trace APIs emit structured stderr records and do not yet include exporters or scoped spans.
 - `control.retry` is a sequential eager helper for a repeatable
   `def() -> Result[T, E]` worker. The worker may be a capture-free function
-  value or a repeatable capturing closure. Every `Err` is retryable. It has no
+  value, a repeatable capturing closure, or a packed Shared `Callable` or
+  `TaskCallable` value; Mutable and Consuming workers are rejected
+  (`AU2002`). Every `Err` is retryable. It has no
   error classifier, jitter, attempt hook, shared retry budget, or
   detached/parallel mode. Attempt budgets below one and negative or
   host-unrepresentable backoffs trap before the worker runs. Backoff overflow
@@ -10216,7 +10230,11 @@ continue pass try with as true false
 `from` is contextual: it introduces a from-import at module level, completes a
 returned-view annotation, and may also be used as an identifier where the
 grammar expects one. `view` is contextual in complete local-view,
-returned-view, and `return view` forms. `lambda` is lexed as
+returned-view, and `return view` forms. `type` is contextual: at module
+level, `type` followed by an identifier, optional type parameters, and `=`
+declares a type alias, and elsewhere it is an ordinary identifier. `is` is
+contextual: after a comparison operand it forms the `is [not] None` test,
+and elsewhere it is an ordinary identifier. `lambda` is lexed as
 an identifier but introduces a lambda at the start of an expression; member
 and named-argument positions may still use that spelling. `copy`, `self`,
 `None`, `set`, `Self`, and `_` are lexed as identifiers and acquire special
@@ -10368,11 +10386,15 @@ trailing import commas are not part of the grammar.
 item
     = [ "public" ], class-declaration
     | [ "public" ], enum-declaration
+    | [ "public" ], type-alias-declaration
     | [ "public" ], function-declaration
     | [ "public" ], extern-function-declaration
     | [ "public" ], extern-opaque-declaration
     | [ "public" ], trait-declaration
     | impl-declaration ;
+
+type-alias-declaration
+    = "type", identifier, [ bounded-type-parameters ], "=", type, NEWLINE ;
 
 extern-function-declaration
     = "extern", STRING, "def", identifier,
@@ -10383,6 +10405,11 @@ extern-opaque-declaration
 ```
 
 `public` is not allowed on an implementation block. Item declarations are module-level; they are not statements and cannot appear inside function/control-flow suites.
+A type alias is recognized contextually: a module-level line that reads
+`type`, an identifier, optional bounded type parameters, and `=` declares a
+transparent alias for the written target type, which may use the alias's own
+type parameters. Anywhere else `type` is an ordinary identifier. Alias
+expansion cycles are rejected statically (`AU2012`).
 Parsing requires the extern ABI string to be exactly `"C"`.
 Extern declarations are bodyless and non-generic. Their parameter modes and
 types are restricted by [FFI v0](/manual/ffi).
@@ -10391,14 +10418,20 @@ types are restricted by [FFI v0](/manual/ffi).
 
 ```ebnf
 type
+    = type-atom, { "|", type-atom } ;
+
+type-atom
     = [ "indirect" ], type-primary,
       [ "?" ] ;
 
 type-primary
     = identifier-path, [ "[", type-list, "]" ]
+    | grouped-type
     | tuple-type
     | function-type
     | owned-callable-type ;
+
+grouped-type = "(", type, ")" ;
 
 owned-callable-type
     = ( "Callable" | "TaskCallable" ), "[",
@@ -10414,8 +10447,8 @@ function-type
     = "def", "(", [ function-type-parameters ], ")", "->", function-type-result ;
 
 function-type-result
-    = type
-    | "view", [ "mut" ], type, "from", identifier ;
+    = type-atom
+    | "view", [ "mut" ], type-atom, "from", identifier ;
 
 function-type-parameters
     = function-type-parameter, { ",", function-type-parameter },
@@ -10459,11 +10492,25 @@ Consuming, and `mut def`/`own def` are not valid outside those brackets.
 
 `T?` denotes `Option[T]`, including when `T` is a tuple type. Type and
 type-parameter lists are nonempty when brackets are present and do not accept
-trailing commas. `(T,)` is a singleton tuple type; `(T)` is not a type. `()`
-and a trailing comma on a multi-element tuple type are rejected. Although the
-grammar places `indirect` before any type primary, it is statically valid only
-on the complete named type reference where recursive-field rules permit it;
-an `indirect` tuple type is rejected.
+trailing commas. `(T,)` is a singleton tuple type; `(T)` is a grouped type
+that denotes `T` itself and exists for precedence. `()` and a trailing comma
+on a multi-element tuple type are rejected. Although the grammar places
+`indirect` before any type primary, it is statically valid only on the
+complete named type reference where recursive-field rules permit it; an
+`indirect` tuple type is rejected.
+
+`A | B` is an anonymous closed union of its written members (ADR-0052). `|`
+binds more loosely than `?` and `indirect`, so `int64 | str?` has the members
+`int64` and `Option[str]`, while `(int64 | str)?` is an optional union. A
+union may appear wherever `type` appears, including type-argument lists,
+tuple elements, and function-type parameters. A function-type result is one
+type atom, so a union result is grouped, as in `def() -> (int64 | str)`, and
+a function type that is itself a union member is grouped, as in
+`(def() -> int64) | None`. A missing member before or after `|` is a parse
+error. Written members normalize statically: nested unions flatten,
+duplicate and reordered spellings name the same type, and a union with one
+distinct member is that member; `None` is the unit member. The member rules
+are in [Types](/manual/types).
 
 ## Classes
 
@@ -16171,8 +16218,12 @@ not apply general truthiness conversion to strings, collections, resources, or
 user types.
 
 `place is None` and `place is not None` on a stable place of a union type
-establish narrowing facts: the place has the effective type `None` where the
-test holds and the union of its remaining members where it fails. Facts
+establish complementary narrowing facts. Where `place is None` holds, the
+place has the effective type `None`; where it fails, the place has the union
+of its remaining members. `place is not None` selects the same two facts in
+the opposite branches: its true branch removes `None`, so the place has the
+union of its remaining members there, and its false branch has the effective
+type `None`. Facts
 compose through `not`, parentheses, and short-circuit `and`/`or`, and a
 right operand of `and`/`or` is checked under the left operand's fact. An
 `if` branch, `while` body, or conditional-expression arm is checked under the
@@ -17518,9 +17569,14 @@ contains a backend surface that cannot preserve the same behavior.
 
 ## Limits And Implementation-Defined Behavior
 
-`int` is an alias for `int64`; method-value types, user-defined numeric casts,
-and non-numeric casts are unavailable, and recursive value fields require
-`indirect`. Capture-free named function values use
+`int` is an alias for `int64`; user-defined numeric casts and non-numeric
+casts are unavailable, and recursive value fields require `indirect`. Method
+values have no separate type: `receiver.method` is a bound method, a closure
+over the receiver with the method's complete contract, and `Class.method` on
+a non-generic class is a capture-free function value; a generic method's
+type arguments must be explicit or supplied by an expected contract, and a
+`view ... from self` result cannot be bound (see
+[Closures](/manual/closures#bound-methods)). Capture-free named function values use
 `def(T1, mut T2, own T3) -> R`; bare parameters are shared and the written
 `mut`/`own` modes are part of the type. Contextually typed lambdas use that
 same source-level callable signature; a capturing closure additionally owns
@@ -17561,7 +17617,8 @@ but a view descriptor is not an owned or structural `def(...) -> R` type and
 cannot be stored in fields or collections. Capture-free function types and
 by-value expression closures are implemented. FFI v0 fixed-width declarations, byte/string views,
 and opaque handle types are implemented; extern functions do not become
-first-class function values. Method-value types are unavailable.
+first-class function values. Bound and associated method values are closure
+and function values rather than a distinct method-value type.
 Structural tuple types
 and their Batch 3 B3.0-c equality amendment are Accepted under ADR-0026.
 `str` is the owned UTF-8 text type. A distinct borrowed text-view type is

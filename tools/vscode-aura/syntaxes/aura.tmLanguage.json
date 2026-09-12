@@ -307,6 +307,21 @@
           }
         },
         {
+          "name": "meta.definition.type-alias.aura",
+          "match": "^\\s*(?:(public)\\s+)?(type)\\s+([A-Za-z_][A-Za-z0-9_]*)(?=\\s*(?:\\[|=))",
+          "captures": {
+            "1": {
+              "name": "storage.modifier.aura"
+            },
+            "2": {
+              "name": "keyword.declaration.aura"
+            },
+            "3": {
+              "name": "entity.name.type.aura"
+            }
+          }
+        },
+        {
           "name": "meta.definition.function.aura",
           "match": "\\bdef\\s+([a-zA-Z_][A-Za-z0-9_]*)",
           "captures": {
@@ -409,6 +424,14 @@
               "name": "keyword.control.aura"
             }
           }
+        },
+        {
+          "match": "\\b(is)\\b(?=\\s+(?:not\\s+)?None\\b)",
+          "captures": {
+            "1": {
+              "name": "keyword.control.aura"
+            }
+          }
         }
       ]
     },
@@ -445,6 +468,10 @@
         {
           "name": "support.type.primitive.aura",
           "match": "\\b(bool|int|int8|int16|int32|int64|int128|intsize|uint8|uint16|uint32|uint64|uint128|uintsize|float32|float64|str|list|dict|set|Duration|Option|Result|SendError|Queue|QueueReceive|Task|TaskResult|TaskGroup|SelectOutcome|WaitAny|WaitAll|Array|process\\.Child|fs\\.File|net\\.TcpStream)\\b"
+        },
+        {
+          "name": "support.type.primitive.aura",
+          "match": "\\b(Callable|TaskCallable)\\b"
         }
       ]
     },
@@ -452,7 +479,7 @@
       "patterns": [
         {
           "name": "keyword.operator.aura",
-          "match": "->|//=|\\+=|-=|\\*=|/=|%=|==|!=|<=|>=|//|\\+|-|\\*|/|%|=|<|>|\\."
+          "match": "->|//=|\\+=|-=|\\*=|/=|%=|\\|=|==|!=|<=|>=|//|\\+|-|\\*|/|%|=|<|>|\\||\\."
         }
       ]
     }

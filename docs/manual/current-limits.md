@@ -290,7 +290,9 @@ This page documents known current limits of the Aura compiler and runtime.
 - Metrics are process-global counters within one running program; log and trace APIs emit structured stderr records and do not yet include exporters or scoped spans.
 - `control.retry` is a sequential eager helper for a repeatable
   `def() -> Result[T, E]` worker. The worker may be a capture-free function
-  value or a repeatable capturing closure. Every `Err` is retryable. It has no
+  value, a repeatable capturing closure, or a packed Shared `Callable` or
+  `TaskCallable` value; Mutable and Consuming workers are rejected
+  (`AU2002`). Every `Err` is retryable. It has no
   error classifier, jitter, attempt hook, shared retry budget, or
   detached/parallel mode. Attempt budgets below one and negative or
   host-unrepresentable backoffs trap before the worker runs. Backoff overflow

@@ -236,8 +236,12 @@ not apply general truthiness conversion to strings, collections, resources, or
 user types.
 
 `place is None` and `place is not None` on a stable place of a union type
-establish narrowing facts: the place has the effective type `None` where the
-test holds and the union of its remaining members where it fails. Facts
+establish complementary narrowing facts. Where `place is None` holds, the
+place has the effective type `None`; where it fails, the place has the union
+of its remaining members. `place is not None` selects the same two facts in
+the opposite branches: its true branch removes `None`, so the place has the
+union of its remaining members there, and its false branch has the effective
+type `None`. Facts
 compose through `not`, parentheses, and short-circuit `and`/`or`, and a
 right operand of `and`/`or` is checked under the left operand's fact. An
 `if` branch, `while` body, or conditional-expression arm is checked under the

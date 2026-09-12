@@ -9055,6 +9055,272 @@ fn stored_view_contracts_hover_with_their_origin() {
     );
 }
 
+fn occurrence_at(
+    analysis: &super::AnalysisOutput,
+    line: usize,
+    start_character: usize,
+) -> &super::AnalysisOccurrence {
+    analysis
+        .occurrences
+        .iter()
+        .find(|occurrence| occurrence.line == line && occurrence.start_character == start_character)
+        .unwrap_or_else(|| {
+            panic!(
+                "line {line} column {start_character} should have an occurrence: {:?}",
+                analysis
+                    .occurrences
+                    .iter()
+                    .filter(|occurrence| occurrence.line == line)
+                    .map(|occurrence| (occurrence.start_character, occurrence.hover.clone()))
+                    .collect::<Vec<_>>()
+            )
+        })
+}
+
+// Batch 1 review finding 12: alias uses resolve like the checker (Q11/Q12).
+#[test]
+fn type_alias_calls_resolve_targets_hover_definitions_and_completions() {
+    let source = [
+        "class Box:",
+        "    value: int64",
+        "type Wrapped = Box",
+        "def main():",
+        "    box = Wrapped(value=1)",
+        "    print(box.value)",
+        "",
+    ]
+    .join("\n");
+    let analysis = analyze_source(&source);
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "{:?}",
+        analysis.diagnostics
+    );
+
+    let alias_use = occurrence_at(&analysis, 4, 10);
+    assert_eq!(alias_use.end_character, 17);
+    assert_eq!(alias_use.hover, "```aura\ntype Wrapped = Box\n```");
+    assert_eq!(
+        alias_use
+            .definition
+            .as_ref()
+            .map(|definition| (definition.line, definition.start_character)),
+        Some((2, 0)),
+        "the alias use should navigate to its declaration"
+    );
+    assert_eq!(
+        occurrence_at(&analysis, 4, 4).hover,
+        "```aura\nbinding box: Box\n```"
+    );
+    assert_eq!(
+        occurrence_at(&analysis, 5, 10).hover,
+        "```aura\nbinding box: Box\n```"
+    );
+    let member_use = occurrence_at(&analysis, 5, 14);
+    assert!(
+        member_use.hover.contains("field value: int64"),
+        "{}",
+        member_use.hover
+    );
+    assert_eq!(
+        member_use
+            .definition
+            .as_ref()
+            .map(|definition| definition.line),
+        Some(1)
+    );
+
+    let top_level = complete_source(&source, 4, 10, None).expect("completion should work");
+    assert!(
+        top_level.iter().any(|item| {
+            item.name == "Wrapped" && item.kind == "type" && item.detail == "type Wrapped = Box"
+        }),
+        "{:?}",
+        top_level
+            .iter()
+            .filter(|item| item.kind != "keyword")
+            .map(|item| (item.name.clone(), item.kind.clone()))
+            .collect::<Vec<_>>()
+    );
+    let member_source = [
+        "class Box:",
+        "    value: int64",
+        "type Wrapped = Box",
+        "def main():",
+        "    box = Wrapped(value=1)",
+        "    box.",
+        "",
+    ]
+    .join("\n");
+    let members =
+        complete_source(&member_source, 5, 8, Some('.')).expect("member completion should work");
+    assert!(
+        members
+            .iter()
+            .any(|item| item.name == "value" && item.kind == "field" && item.detail == "int64"),
+        "{:?}",
+        members
+    );
+
+    // An annotated alias binding expands the same way as an inferred one.
+    let annotated = [
+        "class Box:",
+        "    value: int64",
+        "type Wrapped = Box",
+        "def main():",
+        "    box: Wrapped = Box(value=1)",
+        "    print(box.value)",
+        "",
+    ]
+    .join("\n");
+    let annotated_analysis = analyze_source(&annotated);
+    assert!(
+        annotated_analysis.diagnostics.is_empty(),
+        "{:?}",
+        annotated_analysis.diagnostics
+    );
+    assert_eq!(
+        occurrence_at(&annotated_analysis, 4, 4).hover,
+        "```aura\nbinding box: Box\n```"
+    );
+    assert!(occurrence_at(&annotated_analysis, 5, 14)
+        .hover
+        .contains("field value: int64"));
+}
+
+#[test]
+fn packed_callable_calls_and_alias_constructors_infer_their_result_types() {
+    let source = [
+        "class Box[T]:",
+        "    value: T",
+        "type Pair[T] = Box[T]",
+        "type Doubler = Callable[def(value: int64) -> int64]",
+        "def double(value: int64) -> int64:",
+        "    return value * 2",
+        "def main():",
+        "    callback: Callable[def(value: int64) -> int64] = Doubler(double)",
+        "    result = callback(21)",
+        "    packed = Doubler(double)",
+        "    explicit = Pair[int64](value=1)",
+        "    print(result + packed(3) + explicit.value)",
+        "",
+    ]
+    .join("\n");
+    let analysis = analyze_source(&source);
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "{:?}",
+        analysis.diagnostics
+    );
+    for (line, start, expected) in [
+        (
+            7,
+            53,
+            "```aura\ntype Doubler = Callable[def(value: int64) -> int64]\n```",
+        ),
+        (8, 4, "```aura\nbinding result: int64\n```"),
+        (
+            9,
+            4,
+            "```aura\nbinding packed: Callable[def(value: int64) -> int64]\n```",
+        ),
+        (10, 15, "```aura\ntype Pair[T] = Box[T]\n```"),
+        (10, 4, "```aura\nbinding explicit: Box[int64]\n```"),
+        (11, 10, "```aura\nbinding result: int64\n```"),
+    ] {
+        assert_eq!(occurrence_at(&analysis, line, start).hover, expected);
+    }
+    assert!(occurrence_at(&analysis, 11, 40)
+        .hover
+        .contains("field value: int64"));
+}
+
+#[test]
+fn module_qualified_and_imported_alias_calls_resolve_in_analysis() {
+    let temp_dir = TempDir::new("aura-analysis-alias-calls");
+    let source_dir = temp_dir.path().join("src");
+    let package_dir = source_dir.join("pkg");
+    fs::create_dir_all(&package_dir).expect("failed to create package source directories");
+    fs::write(
+        temp_dir.path().join("Aura.toml"),
+        concat!(
+            "[package]\n",
+            "name = \"alias_calls\"\n",
+            "version = \"0.1.0\"\n",
+            "edition = \"2026\"\n",
+        ),
+    )
+    .expect("failed to write package manifest");
+    let shapes_path = package_dir.join("shapes.au");
+    fs::write(
+        &shapes_path,
+        concat!(
+            "public class Box:\n",
+            "    public value: int64\n",
+            "public type Wrapped = Box\n",
+            "public type Doubler = Callable[def(value: int64) -> int64]\n",
+        ),
+    )
+    .expect("failed to write imported module");
+    let canonical_shapes_path = fs::canonicalize(&shapes_path)
+        .expect("imported module path should canonicalize")
+        .display()
+        .to_string();
+    let main_path = source_dir.join("main.au");
+    let source = concat!(
+        "import pkg.shapes\n",
+        "from pkg.shapes import Wrapped as Local\n",
+        "\n",
+        "def double(value: int64) -> int64:\n",
+        "    return value * 2\n",
+        "\n",
+        "def main():\n",
+        "    qualified = pkg.shapes.Wrapped(value=1)\n",
+        "    imported = Local(value=2)\n",
+        "    packed = pkg.shapes.Doubler(double)\n",
+        "    print(qualified.value + imported.value + packed(3))\n",
+    );
+    fs::write(&main_path, source).expect("failed to write alias-call source");
+
+    let analysis = analyze_path_source(&main_path, source);
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "unexpected diagnostics: {:?}",
+        analysis.diagnostics
+    );
+    assert_eq!(
+        occurrence_at(&analysis, 7, 4).hover,
+        "```aura\nbinding qualified: pkg.shapes.Box\n```"
+    );
+    assert_eq!(
+        occurrence_at(&analysis, 8, 4).hover,
+        "```aura\nbinding imported: pkg.shapes.Box\n```"
+    );
+    assert_eq!(
+        occurrence_at(&analysis, 9, 4).hover,
+        "```aura\nbinding packed: Callable[def(value: int64) -> int64]\n```"
+    );
+    let imported_alias = occurrence_at(&analysis, 8, 15);
+    assert_eq!(
+        imported_alias.hover,
+        "```aura\ntype Wrapped = pkg.shapes.Box\n```\n\nAlias `Local` for `pkg.shapes.Wrapped`."
+    );
+    let definition = imported_alias
+        .definition
+        .as_ref()
+        .expect("the imported alias should navigate to its declaration");
+    assert_eq!(
+        definition.file_path.as_deref(),
+        Some(canonical_shapes_path.as_str())
+    );
+    assert_eq!(definition.line, 2);
+    for start in [20, 37] {
+        assert!(occurrence_at(&analysis, 10, start)
+            .hover
+            .contains("field value: int64"));
+    }
+}
+
 // Batch 1 coverage: analysis helper branches that only hand-built inputs reach.
 use super::{
     expression_start_span, find_matching_open_delimiter, lower_callable_type_ref,

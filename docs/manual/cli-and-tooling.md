@@ -176,8 +176,8 @@ The JSON result is an array of `{ "name": str, "kind": str, "detail": str }` obj
 are:
 
 ```json
-{"id":1,"semantic_interface_version":6,"method":"analyze","path":"/absolute/app.au","source":"print(1)\n"}
-{"id":2,"semantic_interface_version":6,"method":"complete","path":"/absolute/app.au","source":"value.\n","line":0,"character":6,"trigger":"."}
+{"id":1,"semantic_interface_version":14,"method":"analyze","path":"/absolute/app.au","source":"print(1)\n"}
+{"id":2,"semantic_interface_version":14,"method":"complete","path":"/absolute/app.au","source":"value.\n","line":0,"character":6,"trigger":"."}
 ```
 
 Each response is one line containing the same `id`,

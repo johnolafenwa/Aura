@@ -16,8 +16,8 @@ use crate::call::{
 use crate::diag::{Diagnostic, Result, RuntimeSourceSpan, Span};
 use crate::parser;
 use crate::sema::{
-    builtin_duration_binary_result, resolve_param_passing, substitute_trait_bound, ClassInfo,
-    ClosureInfo, ComprehensionInfo, EnumInfo, ExternFunctionInfo, FunctionInfo,
+    builtin_duration_binary_result, resolve_param_passing, substitute_trait_bound, AliasInfo,
+    ClassInfo, ClosureInfo, ComprehensionInfo, EnumInfo, ExternFunctionInfo, FunctionInfo,
     FunctionParamContract, FunctionSignature, MethodInfo, OpaqueHandleInfo, Program, TraitBound,
     Type,
 };
@@ -1361,6 +1361,13 @@ impl<'a> AnalysisBuilder<'a> {
                 detail: "Aura trait".to_string(),
             });
         }
+        for (visible_name, alias) in &self.program.aliases {
+            completions.push(AnalysisCompletion {
+                name: visible_name.clone(),
+                kind: "type".to_string(),
+                detail: format_alias_detail(alias),
+            });
+        }
         for builtin_enum in BUILTIN_ENUM_COMPLETIONS {
             completions.push(AnalysisCompletion {
                 name: builtin_enum.name.to_string(),
@@ -1770,6 +1777,10 @@ impl<'a> AnalysisBuilder<'a> {
         )
     }
 
+    fn alias_definition(&self, alias: &AliasInfo) -> AnalysisRange {
+        self.definition_range(&alias.module_name, alias.decl.span, alias.decl.name.len())
+    }
+
     fn trait_definition(&self, trait_info: &crate::sema::TraitInfo) -> AnalysisRange {
         self.definition_range(
             &trait_info.module_name,
@@ -2100,7 +2111,7 @@ impl<'a> AnalysisBuilder<'a> {
                     inferred_ty => assign
                         .annotation
                         .as_ref()
-                        .map(lower_type_ref)
+                        .map(|ty| self.lower_analysis_type_ref(ty))
                         .or(inferred_ty)
                         .unwrap_or(Type::Unit),
                 };
@@ -2788,6 +2799,18 @@ impl<'a> AnalysisBuilder<'a> {
                     &trait_info.decl.name,
                 ),
                 definition: Some(self.trait_definition(trait_info)),
+            });
+        }
+
+        if let Some(alias) = self.program.alias_info(name, &self.program.module_name) {
+            return Some(ResolvedSymbol {
+                hover: append_alias_target(
+                    format_alias_hover(alias),
+                    name,
+                    &alias.module_name,
+                    &alias.decl.name,
+                ),
+                definition: Some(self.alias_definition(alias)),
             });
         }
 
@@ -4364,6 +4387,11 @@ impl<'a> AnalysisBuilder<'a> {
                         Type::Function { return_type, .. } | Type::Closure { return_type, .. } => {
                             return Some((**return_type).clone());
                         }
+                        // A call through packed `Callable[...]` storage has the
+                        // stored contract's result (Q13).
+                        Type::Callable(callable) => {
+                            return Some(callable.return_type.clone());
+                        }
                         _ => {}
                     }
                 }
@@ -4376,8 +4404,13 @@ impl<'a> AnalysisBuilder<'a> {
                 if name == "TaskGroup" {
                     return Some(Type::named("TaskGroup"));
                 }
-                if let Some(class_info) = self.program.classes.get(name) {
+                // An expanded alias constructor names its class canonically
+                // (`pkg.shapes.Box`), so dotted names resolve here too.
+                if let Some(class_info) = self.class_info_for_type_name(name) {
                     return Some(self.analysis_class_type(name, class_info, Vec::new()));
+                }
+                if let Some(alias) = self.analysis_alias_for_callee(callee, scope) {
+                    return self.infer_alias_call_type(alias, None, callee.span, args, scope);
                 }
                 match BuiltinFunction::from_name(name)? {
                     BuiltinFunction::Abs | BuiltinFunction::Min | BuiltinFunction::Max => args
@@ -4524,6 +4557,11 @@ impl<'a> AnalysisBuilder<'a> {
                     }
                 }
                 let receiver_type = self.infer_expr_type(object, scope)?;
+                if matches!(receiver_type, Type::Module(_)) {
+                    if let Some(alias) = self.analysis_alias_for_callee(callee, scope) {
+                        return self.infer_alias_call_type(alias, None, callee.span, args, scope);
+                    }
+                }
                 if BuiltinMember::resolve(base_type_name(&receiver_type), field)
                     == Some(BuiltinMember::VecMap)
                 {
@@ -4554,39 +4592,103 @@ impl<'a> AnalysisBuilder<'a> {
                 }
                 self.infer_member_call_return_type(object, &receiver_type, field, args, None, scope)
             }
-            ExprKind::Specialize { expr, type_args } => match &expr.kind {
-                ExprKind::Name(name)
-                    if self.program.classes.contains_key(name)
-                        || matches!(
-                            name.as_str(),
-                            "Queue" | "Array" | "list" | "set" | "dict" | "Task"
-                        ) =>
-                {
-                    let args = type_args
-                        .iter()
-                        .map(|ty| self.lower_analysis_type_ref(ty))
-                        .collect::<Vec<_>>();
-                    Some(
-                        self.program
-                            .classes
-                            .get(name)
-                            .map(|class_info| {
-                                self.analysis_class_type(name, class_info, args.clone())
-                            })
-                            .unwrap_or_else(|| Type::Named(name.clone(), args)),
-                    )
-                }
-                _ => {
+            ExprKind::Specialize { expr, type_args } => {
+                if let Some(alias) = self.analysis_alias_for_callee(expr, scope) {
                     let concrete_args = type_args
                         .iter()
                         .map(|ty| self.lower_analysis_type_ref(ty))
                         .collect::<Vec<_>>();
-                    self.infer_specialized_callable_return_type(expr, &concrete_args, args, scope)
-                        .or_else(|| self.infer_call_type(expr, args, scope))
+                    return self.infer_alias_call_type(
+                        alias,
+                        Some(&concrete_args),
+                        callee.span,
+                        args,
+                        scope,
+                    );
                 }
-            },
+                match &expr.kind {
+                    ExprKind::Name(name)
+                        if self.class_info_for_type_name(name).is_some()
+                            || matches!(
+                                name.as_str(),
+                                "Queue" | "Array" | "list" | "set" | "dict" | "Task"
+                            ) =>
+                    {
+                        let args = type_args
+                            .iter()
+                            .map(|ty| self.lower_analysis_type_ref(ty))
+                            .collect::<Vec<_>>();
+                        Some(
+                            self.class_info_for_type_name(name)
+                                .map(|class_info| {
+                                    self.analysis_class_type(name, class_info, args.clone())
+                                })
+                                .unwrap_or_else(|| Type::Named(name.clone(), args)),
+                        )
+                    }
+                    _ => {
+                        let concrete_args = type_args
+                            .iter()
+                            .map(|ty| self.lower_analysis_type_ref(ty))
+                            .collect::<Vec<_>>();
+                        self.infer_specialized_callable_return_type(
+                            expr,
+                            &concrete_args,
+                            args,
+                            scope,
+                        )
+                        .or_else(|| self.infer_call_type(expr, args, scope))
+                    }
+                }
+            }
             _ => None,
         }
+    }
+
+    /// The alias named by a bare `Alias` or `module.Alias` callee (Q11). A
+    /// local binding shadows the alias name exactly as it does in the checker.
+    fn analysis_alias_for_callee(
+        &self,
+        callee: &Expr,
+        scope: &BTreeMap<String, BindingInfo>,
+    ) -> Option<&AliasInfo> {
+        match &callee.kind {
+            ExprKind::Name(name) if !scope.contains_key(name) => {
+                self.program.alias_info(name, &self.program.module_name)
+            }
+            ExprKind::Member { object, field } => {
+                let Type::Module(path) = self.infer_expr_type(object, scope)? else {
+                    return None;
+                };
+                self.module_namespace(&path)?.aliases.get(field)
+            }
+            _ => None,
+        }
+    }
+
+    /// The type of `Alias(...)`: a non-generic callable alias packs or adapts
+    /// its operand into the alias type (C5, Q14), and a constructor alias
+    /// expands to the checker's nominal constructor before ordinary call
+    /// inference, so explicit type arguments and `module.Alias` spellings
+    /// follow the same path as a direct class call.
+    fn infer_alias_call_type(
+        &self,
+        alias: &AliasInfo,
+        explicit_type_args: Option<&[Type]>,
+        span: Span,
+        args: &[crate::ast::Argument],
+        scope: &BTreeMap<String, BindingInfo>,
+    ) -> Option<Type> {
+        if explicit_type_args.is_none()
+            && alias.decl.type_params.is_empty()
+            && matches!(alias.target, Type::Function { .. } | Type::Callable(_))
+        {
+            return Some(alias.target.clone());
+        }
+        let expanded = self
+            .program
+            .expand_alias_constructor(alias, explicit_type_args, span)?;
+        self.infer_call_type(&expanded, args, scope)
     }
 
     fn infer_function_call_return_type(
@@ -5895,6 +5997,42 @@ fn format_method_hover(method_decl: &FunctionDecl) -> String {
         params,
         format_decl_return(method_decl)
     )
+}
+
+/// `Name[T: Bound, U] = target` for an alias declaration; the target is the
+/// checker's expanded type rather than the written spelling (Q12).
+fn format_alias_signature(alias: &AliasInfo) -> String {
+    let mut signature = alias.decl.name.clone();
+    if !alias.decl.type_params.is_empty() {
+        let params = alias
+            .decl
+            .type_params
+            .iter()
+            .map(|param| match alias.decl.type_param_bounds.get(param) {
+                Some(bounds) if !bounds.is_empty() => format!(
+                    "{param}: {}",
+                    bounds
+                        .iter()
+                        .map(|bound| lower_type_ref(bound).to_string())
+                        .collect::<Vec<_>>()
+                        .join(" + ")
+                ),
+                _ => param.clone(),
+            })
+            .collect::<Vec<_>>();
+        signature.push('[');
+        signature.push_str(&params.join(", "));
+        signature.push(']');
+    }
+    format!("{signature} = {}", alias.target)
+}
+
+fn format_alias_hover(alias: &AliasInfo) -> String {
+    format!("```aura\ntype {}\n```", format_alias_signature(alias))
+}
+
+fn format_alias_detail(alias: &AliasInfo) -> String {
+    format!("type {}", format_alias_signature(alias))
 }
 
 fn format_class_hover(class_info: &ClassInfo) -> String {

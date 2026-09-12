@@ -76,7 +76,11 @@ continue pass try with as true false
 `from` is contextual: it introduces a from-import at module level, completes a
 returned-view annotation, and may also be used as an identifier where the
 grammar expects one. `view` is contextual in complete local-view,
-returned-view, and `return view` forms. `lambda` is lexed as
+returned-view, and `return view` forms. `type` is contextual: at module
+level, `type` followed by an identifier, optional type parameters, and `=`
+declares a type alias, and elsewhere it is an ordinary identifier. `is` is
+contextual: after a comparison operand it forms the `is [not] None` test,
+and elsewhere it is an ordinary identifier. `lambda` is lexed as
 an identifier but introduces a lambda at the start of an expression; member
 and named-argument positions may still use that spelling. `copy`, `self`,
 `None`, `set`, `Self`, and `_` are lexed as identifiers and acquire special
@@ -228,11 +232,15 @@ trailing import commas are not part of the grammar.
 item
     = [ "public" ], class-declaration
     | [ "public" ], enum-declaration
+    | [ "public" ], type-alias-declaration
     | [ "public" ], function-declaration
     | [ "public" ], extern-function-declaration
     | [ "public" ], extern-opaque-declaration
     | [ "public" ], trait-declaration
     | impl-declaration ;
+
+type-alias-declaration
+    = "type", identifier, [ bounded-type-parameters ], "=", type, NEWLINE ;
 
 extern-function-declaration
     = "extern", STRING, "def", identifier,
@@ -243,6 +251,11 @@ extern-opaque-declaration
 ```
 
 `public` is not allowed on an implementation block. Item declarations are module-level; they are not statements and cannot appear inside function/control-flow suites.
+A type alias is recognized contextually: a module-level line that reads
+`type`, an identifier, optional bounded type parameters, and `=` declares a
+transparent alias for the written target type, which may use the alias's own
+type parameters. Anywhere else `type` is an ordinary identifier. Alias
+expansion cycles are rejected statically (`AU2012`).
 Parsing requires the extern ABI string to be exactly `"C"`.
 Extern declarations are bodyless and non-generic. Their parameter modes and
 types are restricted by [FFI v0](/manual/ffi).
@@ -251,14 +264,20 @@ types are restricted by [FFI v0](/manual/ffi).
 
 ```ebnf
 type
+    = type-atom, { "|", type-atom } ;
+
+type-atom
     = [ "indirect" ], type-primary,
       [ "?" ] ;
 
 type-primary
     = identifier-path, [ "[", type-list, "]" ]
+    | grouped-type
     | tuple-type
     | function-type
     | owned-callable-type ;
+
+grouped-type = "(", type, ")" ;
 
 owned-callable-type
     = ( "Callable" | "TaskCallable" ), "[",
@@ -274,8 +293,8 @@ function-type
     = "def", "(", [ function-type-parameters ], ")", "->", function-type-result ;
 
 function-type-result
-    = type
-    | "view", [ "mut" ], type, "from", identifier ;
+    = type-atom
+    | "view", [ "mut" ], type-atom, "from", identifier ;
 
 function-type-parameters
     = function-type-parameter, { ",", function-type-parameter },
@@ -319,11 +338,25 @@ Consuming, and `mut def`/`own def` are not valid outside those brackets.
 
 `T?` denotes `Option[T]`, including when `T` is a tuple type. Type and
 type-parameter lists are nonempty when brackets are present and do not accept
-trailing commas. `(T,)` is a singleton tuple type; `(T)` is not a type. `()`
-and a trailing comma on a multi-element tuple type are rejected. Although the
-grammar places `indirect` before any type primary, it is statically valid only
-on the complete named type reference where recursive-field rules permit it;
-an `indirect` tuple type is rejected.
+trailing commas. `(T,)` is a singleton tuple type; `(T)` is a grouped type
+that denotes `T` itself and exists for precedence. `()` and a trailing comma
+on a multi-element tuple type are rejected. Although the grammar places
+`indirect` before any type primary, it is statically valid only on the
+complete named type reference where recursive-field rules permit it; an
+`indirect` tuple type is rejected.
+
+`A | B` is an anonymous closed union of its written members (ADR-0052). `|`
+binds more loosely than `?` and `indirect`, so `int64 | str?` has the members
+`int64` and `Option[str]`, while `(int64 | str)?` is an optional union. A
+union may appear wherever `type` appears, including type-argument lists,
+tuple elements, and function-type parameters. A function-type result is one
+type atom, so a union result is grouped, as in `def() -> (int64 | str)`, and
+a function type that is itself a union member is grouped, as in
+`(def() -> int64) | None`. A missing member before or after `|` is a parse
+error. Written members normalize statically: nested unions flatten,
+duplicate and reordered spellings name the same type, and a union with one
+distinct member is that member; `None` is the unit member. The member rules
+are in [Types](/manual/types).
 
 ## Classes
 

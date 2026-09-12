@@ -43,7 +43,7 @@ Requests and responses are newline-delimited JSON and carry compiler-owned
 `semantic_interface_version: 14`. Every request must include the exact field:
 
 ```json
-{"id":1,"semantic_interface_version":6,"method":"analyze","path":"/absolute/app.au","source":"print(1)\n"}
+{"id":1,"semantic_interface_version":14,"method":"analyze","path":"/absolute/app.au","source":"print(1)\n"}
 ```
 
 This identity is distinct from the public diagnostic document's numeric schema
