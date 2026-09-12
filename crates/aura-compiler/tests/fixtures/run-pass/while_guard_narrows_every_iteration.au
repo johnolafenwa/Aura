@@ -1,0 +1,12 @@
+def main():
+    mut value: int64 | None = 1
+    while value is not None:
+        print(value + 1)
+        value = None
+    mut count: int64 | None = 0
+    if count is not None:
+        for step in [1, 2]:
+            if count is None:
+                continue
+            print(count + step)
+            count = None

@@ -384,8 +384,17 @@ fn check_key_shape(
         match ty {
             Type::Unit => add_key_bytes(&mut bytes, 9, byte_limit, span)?,
             Type::ReturnedView(view) => {
-                add_key_bytes(&mut bytes, 15, byte_limit, span)?;
-                add_json_string(&mut bytes, &view.origin.to_string(), byte_limit, span)?;
+                // `["returned_view",` followed by the mutability boolean,
+                // the unquoted origin ordinal, and the pointee, each of the
+                // last two preceded by `,`, then `]`: exactly the shape
+                // `Type::canonical_key` renders for the node.
+                add_key_bytes(&mut bytes, 20, byte_limit, span)?;
+                add_key_bytes(
+                    &mut bytes,
+                    bool_json_len(view.mutable) + decimal_digit_count(view.origin),
+                    byte_limit,
+                    span,
+                )?;
                 reserve_key_stack(&mut stack, 1, span)?;
                 stack.push((
                     &view.pointee,
@@ -690,6 +699,18 @@ fn bool_json_len(value: bool) -> usize {
     } else {
         5
     }
+}
+
+/// The rendered width of an unquoted JSON integer such as a returned-view
+/// origin ordinal.
+fn decimal_digit_count(value: usize) -> usize {
+    let mut digits = 1;
+    let mut remaining = value / 10;
+    while remaining > 0 {
+        digits += 1;
+        remaining /= 10;
+    }
+    digits
 }
 
 fn key_limit_error(span: Span, kind: &str, limit: usize) -> Diagnostic {

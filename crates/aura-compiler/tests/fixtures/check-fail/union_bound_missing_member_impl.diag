@@ -1,0 +1,6 @@
+error[AU2002]: type `Cat | Dog` does not implement trait `Named`
+ --> crates/aura-compiler/tests/fixtures/check-fail/union_bound_missing_member_impl.au:19:5
+   |
+19 |     show(pet)
+   |     ^
+  = help: a union satisfies a trait bound only when every member implements the same specialization with one coherent contract

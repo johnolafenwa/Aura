@@ -756,3 +756,12 @@ fn member_calls_on_untyped_locals_are_tolerated() {
     assert_eq!(output.stdout, "1\n");
     emit_host_native_object(&mir).expect("the direct backend accepts the untyped receiver");
 }
+
+#[test]
+fn union_argument_satisfies_a_generic_bound_and_dispatches_on_its_active_member() {
+    // A coherent all-member union satisfies `T: Named` (ADR-0052 A8); the
+    // erased generic body dispatches the trait call through the union's
+    // active member exactly as a direct call on the union does.
+    let source = include_str!("fixtures/check-pass/union_member_bound_dispatch.au");
+    assert_runs(source, "rex\nrex\ntom\n");
+}

@@ -152,14 +152,140 @@ fn union_clone_rejects_arguments_and_non_cloneable_members() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn while_body_that_invalidates_its_entry_fact_is_rechecked_without_it() {
+fn while_guard_narrowing_is_reestablished_on_every_iteration() {
+    // The guard runs before every iteration, so its fact holds in the body
+    // even when the body itself invalidates it before the backedge.
     accepts(
         "def main():\n    mut value: int64 | None = 3\n    while value is not None:\n        print(value)\n        value = None\n",
     );
+    accepts(
+        "def main():\n    mut value: int64 | None = 1\n    while value is not None:\n        print(value + 1)\n        value = None\n",
+    );
+    // A fact the body invalidates before the use is genuinely gone.
     rejects_with_code(
-        "def main():\n    mut value: int64 | None = 3\n    while value is not None:\n        print(value + 1)\n        value = None\n",
+        "def main():\n    mut value: int64 | None = 3\n    while value is not None:\n        value = None\n        print(value + 1)\n",
         "AU2003",
         "operator `+` is not supported for union `int64 | None`",
+    );
+}
+
+#[test]
+fn loop_header_facts_killed_by_the_body_do_not_hold_on_later_iterations() {
+    // A fact established before the loop survives into the guard and the
+    // body only when no iteration can invalidate it: the header is a fixed
+    // point over the entry and every backedge.
+    rejects_with_code(
+        "def main():\n    mut value: int64 | None = 1\n    if value is not None:\n        while value + 1 > 0:\n            value = None\n",
+        "AU2003",
+        "operator `+` is not supported for union `int64 | None`",
+    );
+    rejects_with_code(
+        "def main():\n    mut value: int64 | None = 1\n    if value is not None:\n        for step in [1, 2]:\n            print(value + step)\n            value = None\n",
+        "AU2003",
+        "operator `+` is not supported for union `int64 | None`",
+    );
+    accepts(
+        "def main():\n    mut value: int64 | None = 1\n    if value is not None:\n        for step in [1, 2]:\n            if value is None:\n                continue\n            print(value + step)\n            value = None\n",
+    );
+    accepts(
+        "def main():\n    mut value: int64 | None = 1\n    if value is not None:\n        while true:\n            print(value + 1)\n            break\n",
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Union trait bounds and bound-method contracts
+// ---------------------------------------------------------------------------
+
+const NAMED_MEMBERS: &str = "trait Named:\n    def name(self) -> str\nclass Dog:\n    tag: str\nclass Cat:\n    tag: str\nimpl Named for Dog:\n    def name(self) -> str:\n        return self.tag.clone()\n";
+
+#[test]
+fn coherent_all_member_union_satisfies_a_generic_trait_bound() {
+    let cat_impl =
+        "impl Named for Cat:\n    def name(self) -> str:\n        return self.tag.clone()\n";
+    accepts(&format!(
+        "{NAMED_MEMBERS}{cat_impl}def show[T: Named](value: T):\n    print(value.name())\ndef main():\n    pet: Dog | Cat = Dog(tag=\"rex\")\n    print(pet.name())\n    show(pet)\n"
+    ));
+    rejects_with_code(
+        &format!(
+            "{NAMED_MEMBERS}def show[T: Named](value: T):\n    print(value.name())\ndef main():\n    pet: Dog | Cat = Dog(tag=\"rex\")\n    show(pet)\n"
+        ),
+        "AU2002",
+        "type `Cat | Dog` does not implement trait `Named`",
+    );
+}
+
+#[test]
+fn union_bound_requires_one_coherent_contract_across_members() {
+    let shared = "trait Twin:\n    def twin(self) -> Self\nclass A:\n    value: int64\nclass B:\n    value: int64\nimpl Twin for A:\n    def twin(self) -> A:\n        return A(value=self.value)\nimpl Twin for B:\n    def twin(self) -> B:\n        return B(value=self.value)\n";
+    rejects_with_code(
+        &format!(
+            "{shared}def dup[T: Twin](item: T) -> T:\n    return item.twin()\ndef main():\n    item: A | B = A(value=1)\n    copied = dup(item)\n    print(1)\n"
+        ),
+        "AU2999",
+        "method `twin` on `A | B` has different contracts for `A` and `B`",
+    );
+}
+
+const APPLY_WORKER: &str = "trait Apply:\n    def apply(self, value: int64) -> int64\nclass Worker:\n    pass\nimpl Apply for Worker:\n    def apply(self, local: int64) -> int64:\n        return local\n";
+
+#[test]
+fn trait_method_values_expose_the_trait_contract_not_implementation_names() {
+    accepts(&format!(
+        "{APPLY_WORKER}def main():\n    worker = Worker()\n    f = worker.apply\n    print(f(value=7))\n"
+    ));
+    rejects_with_code(
+        &format!(
+            "{APPLY_WORKER}def main():\n    worker = Worker()\n    f = worker.apply\n    print(f(local=7))\n"
+        ),
+        "AU2004",
+        "no parameter named `local`",
+    );
+    // A keyword-only slot forwards to the implementation by name in the
+    // lowered closure; a differing implementation-local name is refused
+    // rather than lowered to an unresolvable forward.
+    rejects_with_code(
+        "trait Apply:\n    def apply(self, base: int64, *, value: int64) -> int64\nclass Worker:\n    pass\nimpl Apply for Worker:\n    def apply(self, start: int64, *, local: int64) -> int64:\n        return start + local\ndef main():\n    f = Worker().apply\n    print(f(1, value=7))\n",
+        "AU2005",
+        "cannot forward keyword-only parameter `value` to the implementation's parameter `local`",
+    );
+    accepts(
+        "trait Apply:\n    def apply(self, base: int64, *, value: int64) -> int64\nclass Worker:\n    pass\nimpl Apply for Worker:\n    def apply(self, start: int64, *, value: int64) -> int64:\n        return start + value\ndef main():\n    f = Worker().apply\n    print(f(base=1, value=7))\n",
+    );
+}
+
+#[test]
+fn trait_method_values_keep_returned_view_origins_by_ordinal() {
+    let shared = "class Pair:\n    left: str\n    right: str\ntrait Pick:\n    def pick(self, pair: Pair) -> view str from pair\nclass Left:\n    pass\nimpl Pick for Left:\n    def pick(self, source: Pair) -> view str from source:\n        return view source.left\n";
+    accepts(&format!(
+        "{shared}def main():\n    pair = Pair(left=\"ada\", right=\"linus\")\n    picker = Left().pick\n    view head = picker(pair=pair)\n    print(head)\n"
+    ));
+    rejects_with_code(
+        &format!(
+            "{shared}def main():\n    pair = Pair(left=\"ada\", right=\"linus\")\n    picker = Left().pick\n    head = picker(pair=pair)\n    print(head)\n"
+        ),
+        "AU3010",
+        "a view must initialize an explicit `view` binding",
+    );
+}
+
+#[test]
+fn bound_methods_through_copy_views_and_borrowed_parameters_snapshot_the_receiver() {
+    let counter = "copy class Counter:\n    value: int64\n    def read(self) -> int64:\n        return self.value\n";
+    accepts(&format!(
+        "{counter}def main():\n    original = Counter(value=4)\n    view snapshot = original\n    selected = snapshot.read\n    print(selected())\n"
+    ));
+    accepts(&format!(
+        "{counter}def through(counter: mut Counter) -> int64:\n    selected = counter.read\n    counter.value = 9\n    return selected()\ndef main():\n    mut original = Counter(value=4)\n    print(through(original))\n"
+    ));
+    // The snapshot closure is an owned value: it stores and packs.
+    accepts(&format!(
+        "{counter}type Reader = Callable[def() -> int64]\ndef main():\n    original = Counter(value=4)\n    view snapshot = original\n    packed = Reader(snapshot.read)\n    print(packed())\n"
+    ));
+    // A non-Copy receiver reached through a view still cannot be bound.
+    rejects_with_code(
+        "class Box:\n    value: int64\n    def read(self) -> int64:\n        return self.value\ndef main():\n    boxed = Box(value=5)\n    view boxed_view = boxed\n    picked = boxed_view.read\n    print(picked())\n",
+        "AU3004",
+        "bound method `Box.read` cannot take ownership of the pointee of view `boxed_view`",
     );
 }
 

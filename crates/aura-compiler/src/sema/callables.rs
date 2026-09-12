@@ -2824,7 +2824,13 @@ impl<'a> FunctionChecker<'a> {
 pub(crate) const BOUND_RECEIVER_CAPTURE: &str = "__receiver";
 
 struct BoundMethodTarget<'a> {
+    /// The selected implementation: its slots and body run the call.
     decl: &'a FunctionDecl,
+    /// The public contract a trait method exposes (parameter names, the
+    /// keyword-only boundary, default availability): the trait's own
+    /// declaration (Q19 A). `None` for an inherent method, whose own
+    /// declaration is its contract.
+    contract: Option<&'a FunctionDecl>,
     signature: &'a FunctionSignature,
     type_param_bounds: &'a BTreeMap<String, Vec<TraitBound>>,
     substitutions: HashMap<String, Type>,
@@ -2960,6 +2966,7 @@ impl FunctionChecker<'_> {
             }
             Some(BoundMethodTarget {
                 decl: &method.decl,
+                contract: None,
                 signature: &method.signature,
                 type_param_bounds: &method.type_param_bounds,
                 substitutions: substitutions_from_decl_type_args(
@@ -2974,6 +2981,7 @@ impl FunctionChecker<'_> {
             None => match self.trait_method_for_concrete_type(object_ty, field, span)? {
                 Some((trait_impl, method, substitutions)) => BoundMethodTarget {
                     decl: &method.decl,
+                    contract: self.trait_method_contract(trait_impl, field),
                     signature: &method.signature,
                     type_param_bounds: &method.type_param_bounds,
                     substitutions,
@@ -3010,9 +3018,16 @@ impl FunctionChecker<'_> {
                 "call it directly and bind the result with `view`, because a bound method's contract cannot name its moved receiver as a view origin",
             ));
         }
-        let params = target
-            .decl
-            .params
+        // A trait method selected for a concrete receiver exposes the
+        // trait's public contract — its parameter names, keyword-only
+        // boundary, and default availability — not the implementation's
+        // local names (Q19 A); every slot forwards to the implementation by
+        // ordinal, and so does a returned-view origin.
+        let public_params = target
+            .contract
+            .map(|contract| contract.params.as_slice())
+            .unwrap_or(target.decl.params.as_slice());
+        let params = public_params
             .iter()
             .zip(&target.signature.params)
             .zip(&target.signature.param_passings)
@@ -3024,10 +3039,47 @@ impl FunctionChecker<'_> {
                 has_default: param.default.is_some(),
             })
             .collect::<Vec<_>>();
+        // The lowered closure body forwards a keyword-only slot to the
+        // implementation by name. Until that forwarding is by ordinal, an
+        // implementation-local keyword-only name that differs from the
+        // trait's cannot be reached through the public contract, so the
+        // binding is refused rather than lowered to an unresolvable call.
+        if let Some((public, local)) = public_params
+            .iter()
+            .zip(&target.decl.params)
+            .find(|(public, local)| public.keyword_only && public.name != local.name)
+        {
+            return Err(Diagnostic::coded_at(
+                "AU2005",
+                span,
+                format!(
+                    "bound method `{}` cannot forward keyword-only parameter `{}` to the implementation's parameter `{}` in this language version",
+                    target.display, public.name, local.name
+                ),
+            )
+            .with_help(format!(
+                "name the implementation's keyword-only parameter `{}` as the trait declares it, or call the method directly",
+                public.name
+            )));
+        }
+        let view_return = target.decl.view_return.as_ref().map(|view| {
+            let origin = target
+                .decl
+                .params
+                .iter()
+                .position(|param| param.name == view.origin)
+                .and_then(|ordinal| params.get(ordinal))
+                .map_or_else(|| view.origin.clone(), |param| param.name.clone());
+            crate::ast::ViewReturn {
+                mutable: view.mutable,
+                origin,
+                span: view.span,
+            }
+        });
         let return_type = super::wrap_returned_view(
             &params,
             substitute_type(&target.signature.return_type, &substitutions),
-            target.decl.view_return.as_ref(),
+            view_return.as_ref(),
         );
         // A Copy receiver is snapshotted into the closure; any other receiver
         // must be an owned place or a fresh temporary that moves in once.

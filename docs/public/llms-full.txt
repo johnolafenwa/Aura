@@ -3561,14 +3561,23 @@ capability: a `self` method binds a Repeatable closure, a `mut self` method
 binds a Mutable closure whose receiver is environment-owned state updated on
 every call, and an `own self` method binds a Consuming closure. The receiver
 is acquired exactly once when the bound method is created. A `copy class`
-receiver is snapshotted, so later calls never change the original. Any other
-receiver must be an owned local, which moves into the closure, or a fresh
-temporary. A shared or mutable parameter and a view cannot be bound by this
-spelling; clone the value into an owned local first. Trait methods selected
-for the concrete receiver type bind the same way and dispatch statically. An
-omitted argument with a declaration default is supplied by the method's own
-default expression, evaluated at the call. Bound methods store, pack, and
-start like any closure with the same call kind.
+receiver is snapshotted wherever it is reached — an owned local, a shared or
+mutable parameter, or a `view` — so the closure is an independent owned
+value and later calls never change the original. Any other receiver must be
+an owned local, which moves into the closure, or a fresh temporary. A
+non-Copy shared or mutable parameter and a view of a non-Copy value cannot be
+bound by this spelling; clone the value into an owned local first. Trait
+methods selected for the concrete receiver type bind the same way and
+dispatch statically, but their contract is the trait's public one: the
+trait's parameter names, keyword-only boundary, and default availability,
+never the implementation's local parameter names. Each slot, including a
+returned-view origin, forwards to the implementation by ordinal. In the
+current compiler an implementation whose keyword-only parameter is named
+differently from the trait's cannot be bound (`AU2005`); name it as the trait
+does, or call the method directly. An omitted argument with a declaration
+default is supplied by the method's own default expression, evaluated at the
+call. Bound methods store, pack, and start like any closure with the same
+call kind.
 
 ```aura
 class Counter:
@@ -3601,9 +3610,9 @@ wrong type-argument count or an unsatisfiable bound reports `AU2002`, and an
 associated method of a generic class still needs a call (`AU2005`). A
 `view ... from self` method cannot be bound (`AU3010`), while a method
 returning a view of one of its other parameters keeps that contract in the
-bound closure (see Stored View Contracts). Binding a shared or mutable
-parameter reports `AU3002`, binding a
-view reports `AU3004`, and a later use of the moved receiver reports `AU3001`
+bound closure (see Stored View Contracts). Binding a non-Copy shared or
+mutable parameter reports `AU3002`, binding a view of a non-Copy value
+reports `AU3004`, and a later use of the moved receiver reports `AU3001`
 pointing at the binding site. Calling a Mutable bound method through an
 immutable local reports `AU3003`.
 
@@ -5300,6 +5309,11 @@ This page documents known current limits of the Aura compiler and runtime.
   parameter place.
 - Empty list, dictionary, and set literals need an expected collection type.
 - Class field defaults cannot call user-defined functions in the current compiler. Compute the value before construction and pass it as an explicit field argument.
+- A bound trait-method value exposes the trait's parameter names. The
+  lowered closure forwards keyword-only slots to the implementation by name,
+  so an implementation whose keyword-only parameter is named differently
+  from the trait's cannot be bound yet (`AU2005`); positional slots forward by
+  ordinal and may differ freely.
 - `str(...)` is not a constructor; use string literals and string methods.
 - Ordinary and triple-quoted strings may use single or double quotes. Raw
   strings are single-line. Raw triple strings, raw f-strings, and byte-string
@@ -5824,6 +5838,15 @@ mutable-repeatable closure through an immutable place. `AU3004` covers
 non-place sources, immutable mutable-view targets, and unsupported projections
 such as collection indexes.
 
+For bound methods, `AU3002` rejects binding a non-Copy shared or mutable
+parameter and `AU3004` rejects binding a view of a non-Copy value; a Copy
+receiver reached either way is snapshotted and reports nothing. Binding a
+trait method whose implementation names a keyword-only parameter differently
+from the trait reports `AU2005`, because the bound closure exposes the trait's
+names and cannot yet forward such a slot. A union type argument that does not
+satisfy a trait bound reports `AU2002` when a member lacks the
+implementation and `AU2999` when the members' contracts are not coherent.
+
 For `select(...)`, `AU3009` also rejects the same statically visible
 non-repeatable Task source appearing twice in one call. `AU3002` explains that
 each non-repeatable Task must arrive through owned access because `select`
@@ -6300,8 +6323,9 @@ fact. A branch that ends with `return`, `break`, or `continue` leaves its
 complement on the continuing path, so `if value is None: return` narrows the
 rest of the function, and `if value is None: continue` narrows the rest of
 the loop iteration. Where paths join, only facts present on every reachable
-path survive. A fact established before a `while` loop survives into the body
-only when no iteration can invalidate it.
+path survive. A fact established before a `while` or `for` loop survives into
+the loop only when no iteration can invalidate it; a `while` condition's own
+fact is re-established before every iteration.
 
 A fact ends when the place or an enclosing place is assigned, matched with
 `match mut`, or passed to a call with `mut` access. A later member use
@@ -9715,6 +9739,14 @@ method mutates the payload in place while the tag stays fixed, and an
 differ per member is not one contract; match the member and declare the
 result union explicitly. There is no duck typing over common method names,
 no `impl` for an anonymous union, and no inferred trait intersection.
+
+The same all-member rule decides whether a union satisfies a trait bound: a
+union type argument satisfies `T: Named` when every member implements that
+specialization and every method the bound exposes, supertraits included,
+has one coherent contract across the members. A member without the
+implementation reports `AU2002`; members whose contracts differ report the
+same `AU2999` as a direct call on the union. A bounded callee then dispatches
+each trait call on the active member, exactly as the direct call would.
 
 ## Implementation Method Conformance
 
@@ -15498,8 +15530,13 @@ The condition must have type `bool`. A false first condition executes the body z
 
 A `while` condition that tests a union place with `is None` or
 `is not None` narrows the place inside the body, and a body `continue` after
-such a test narrows the rest of that iteration. A fact established before the
-loop survives into the body only when no iteration can invalidate it.
+such a test narrows the rest of that iteration. Because the condition runs
+before every iteration, its narrowing holds in the body on every pass, even
+when the body itself assigns the place later. A fact established before the
+loop survives into the condition and the body only when no iteration can
+invalidate it: the loop header is a fixed point over the entry and every
+backedge, so a body that assigns such a place is checked again without the
+entry fact.
 
 Moving a non-copy outer value for the first time inside a repeatable loop is rejected when it could make a later iteration invalid. Reinitialize the place on every continuing path or restructure ownership explicitly.
 
@@ -15524,7 +15561,9 @@ the body does not switch or truncate that active iteration.
 
 Every target leaf is local to the body, does not escape, and cannot shadow a
 name already visible in the same scope. A tuple target must match the yielded
-tuple shape exactly.
+tuple shape exactly. As for `while`, a narrowing fact established before the
+loop survives into the body only when no iteration can invalidate it; test
+the place again inside the body when the body assigns it.
 
 Maintained iterable forms include:
 

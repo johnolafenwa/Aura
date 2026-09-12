@@ -1,0 +1,23 @@
+copy class Counter:
+    value: int64
+
+    def read(self) -> int64:
+        return self.value
+
+def through_mutable(counter: mut Counter) -> int64:
+    selected = counter.read
+    counter.value = 9
+    return selected()
+
+def through_shared(counter: Counter) -> int64:
+    selected = counter.read
+    return selected()
+
+def main():
+    mut original = Counter(value=4)
+    view snapshot = original
+    selected = snapshot.read
+    print(selected())
+    print(through_mutable(original))
+    print(original.value)
+    print(through_shared(original))

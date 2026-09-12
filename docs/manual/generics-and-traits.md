@@ -241,6 +241,14 @@ differ per member is not one contract; match the member and declare the
 result union explicitly. There is no duck typing over common method names,
 no `impl` for an anonymous union, and no inferred trait intersection.
 
+The same all-member rule decides whether a union satisfies a trait bound: a
+union type argument satisfies `T: Named` when every member implements that
+specialization and every method the bound exposes, supertraits included,
+has one coherent contract across the members. A member without the
+implementation reports `AU2002`; members whose contracts differ report the
+same `AU2999` as a direct call on the union. A bounded callee then dispatches
+each trait call on the active member, exactly as the direct call would.
+
 ## Implementation Method Conformance
 
 An implementation may define only methods belonging to the trait. It must provide every signature-only required method; a trait method with a default body is inherited when omitted. An implementation may override a default method.

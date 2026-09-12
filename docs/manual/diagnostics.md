@@ -187,6 +187,15 @@ mutable-repeatable closure through an immutable place. `AU3004` covers
 non-place sources, immutable mutable-view targets, and unsupported projections
 such as collection indexes.
 
+For bound methods, `AU3002` rejects binding a non-Copy shared or mutable
+parameter and `AU3004` rejects binding a view of a non-Copy value; a Copy
+receiver reached either way is snapshotted and reports nothing. Binding a
+trait method whose implementation names a keyword-only parameter differently
+from the trait reports `AU2005`, because the bound closure exposes the trait's
+names and cannot yet forward such a slot. A union type argument that does not
+satisfy a trait bound reports `AU2002` when a member lacks the
+implementation and `AU2999` when the members' contracts are not coherent.
+
 For `select(...)`, `AU3009` also rejects the same statically visible
 non-repeatable Task source appearing twice in one call. `AU3002` explains that
 each non-repeatable Task must arrive through owned access because `select`

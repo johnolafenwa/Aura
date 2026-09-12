@@ -105,8 +105,9 @@ fact. A branch that ends with `return`, `break`, or `continue` leaves its
 complement on the continuing path, so `if value is None: return` narrows the
 rest of the function, and `if value is None: continue` narrows the rest of
 the loop iteration. Where paths join, only facts present on every reachable
-path survive. A fact established before a `while` loop survives into the body
-only when no iteration can invalidate it.
+path survive. A fact established before a `while` or `for` loop survives into
+the loop only when no iteration can invalidate it; a `while` condition's own
+fact is re-established before every iteration.
 
 A fact ends when the place or an enclosing place is assigned, matched with
 `match mut`, or passed to a call with `mut` access. A later member use

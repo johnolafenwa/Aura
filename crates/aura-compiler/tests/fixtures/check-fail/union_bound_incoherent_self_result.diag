@@ -1,0 +1,6 @@
+error[AU2999]: method `twin` on `A | B` has different contracts for `A` and `B`; select the member with a type pattern first
+ --> crates/aura-compiler/tests/fixtures/check-fail/union_bound_incoherent_self_result.au:23:14
+   |
+23 |     copied = dup(item)
+   |              ^
+  = help: a union dispatches a trait method only when every member shares one trait specialization, receiver mode, parameter contract, and result type

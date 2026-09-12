@@ -24,6 +24,11 @@ This page documents known current limits of the Aura compiler and runtime.
   parameter place.
 - Empty list, dictionary, and set literals need an expected collection type.
 - Class field defaults cannot call user-defined functions in the current compiler. Compute the value before construction and pass it as an explicit field argument.
+- A bound trait-method value exposes the trait's parameter names. The
+  lowered closure forwards keyword-only slots to the implementation by name,
+  so an implementation whose keyword-only parameter is named differently
+  from the trait's cannot be bound yet (`AU2005`); positional slots forward by
+  ordinal and may differ freely.
 - `str(...)` is not a constructor; use string literals and string methods.
 - Ordinary and triple-quoted strings may use single or double quotes. Raw
   strings are single-line. Raw triple strings, raw f-strings, and byte-string

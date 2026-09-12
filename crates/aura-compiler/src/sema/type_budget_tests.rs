@@ -640,7 +640,34 @@ fn byte_limit_sweep_rejects_every_prefix_of_each_key_shape() {
             Type::Named("list".to_string(), vec![Type::named("str")]),
         ],
     );
-    for ty in [named, function, sample_callable(), sample_closure()] {
+    let callable_with = |params: Vec<super::FunctionParamContract>| {
+        Type::Callable(Box::new(super::callables::CallableType {
+            task: false,
+            call_kind: super::ClosureCallKind::Repeatable,
+            params,
+            return_type: Type::named("int64"),
+        }))
+    };
+    let shapes = [
+        named,
+        function,
+        sample_callable(),
+        callable_with(Vec::new()),
+        callable_with(vec![contract_param(
+            "only",
+            Type::named("str"),
+            false,
+            false,
+        )]),
+        sample_closure(),
+        sample_returned_view(),
+        Type::ReturnedView(Box::new(super::types::ReturnedViewType {
+            mutable: false,
+            pointee: Type::Tuple(vec![Type::named("int64"), Type::Unit]),
+            origin: 12,
+        })),
+    ];
+    for ty in shapes {
         let exact = ty.canonical_key("main", &names).len();
         let threshold = (0..=exact + 64)
             .find(|limit| {
@@ -649,24 +676,87 @@ fn byte_limit_sweep_rejects_every_prefix_of_each_key_shape() {
                     .is_ok()
             })
             .unwrap_or_else(|| panic!("`{ty}` must fit a generous byte budget"));
-        // Nominal keys are estimated exactly (see the neighbouring test); the
-        // function and callable arms currently land within a couple of bytes
-        // of the allocated key, which this sweep only needs to be close to.
+        // The estimator may reserve a few bytes more than the rendered key
+        // (the callable header is charged conservatively), but it must
+        // never accept a limit the allocated key would exceed: every limit
+        // below the exact serialized length has to be refused.
         assert!(
-            threshold.abs_diff(exact) <= 4,
+            threshold >= exact,
+            "the estimator for `{ty}` accepts {threshold} bytes but renders {exact}"
+        );
+        assert!(
+            threshold - exact <= 4,
             "the estimator for `{ty}` must track the exact key length {exact}, found {threshold}"
         );
-        for limit in 0..threshold {
+        for limit in 0..exact {
             let Err(error) = ExpansionBudget::with_key_limits(1_000, 1_000, limit)
                 .check_canonical_key(&ty, "main", &names, TEST_SPAN)
             else {
-                panic!("`{ty}` must exceed a byte limit of {limit}");
+                panic!("`{ty}` renders {exact} bytes and must exceed a byte limit of {limit}");
             };
             assert_eq!(error.code, "AU2999");
             assert_eq!(
                 error.message,
                 format!("canonical type key exceeds byte limit of {limit}")
             );
+        }
+    }
+}
+
+#[test]
+fn key_estimator_matches_the_exact_returned_view_key_length() {
+    use std::collections::BTreeMap;
+
+    let names = BTreeMap::new();
+    let pointees = [
+        Type::named("str"),
+        Type::Tuple(vec![Type::named("int64"), Type::Unit]),
+        sample_callable(),
+    ];
+    for mutable in [true, false] {
+        for origin in [0usize, 1, 9, 10, 255, 65_535] {
+            for pointee in &pointees {
+                let view = Type::ReturnedView(Box::new(super::types::ReturnedViewType {
+                    mutable,
+                    pointee: pointee.clone(),
+                    origin,
+                }));
+                let rendered = view.canonical_key("main", &names);
+                let expected_prefix =
+                    format!("aura-type-key-v1:[\"returned_view\",{mutable},{origin},");
+                assert!(
+                    rendered.starts_with(&expected_prefix),
+                    "`{view}` renders `{rendered}`"
+                );
+                let exact = rendered.len();
+                // The pointee's own estimate may be conservative; the view
+                // node itself must add exactly its rendered bytes, so the
+                // exact length fits whenever the pointee alone fits exactly.
+                let pointee_exact = pointee.canonical_key("main", &names).len();
+                let pointee_fits_exactly =
+                    ExpansionBudget::with_key_limits(1_000, 1_000, pointee_exact)
+                        .check_canonical_key(pointee, "main", &names, TEST_SPAN)
+                        .is_ok();
+                if pointee_fits_exactly {
+                    ExpansionBudget::with_key_limits(1_000, 1_000, exact)
+                        .check_canonical_key(&view, "main", &names, TEST_SPAN)
+                        .unwrap_or_else(|error| {
+                            panic!(
+                                "`{view}` must fit its exact {exact} bytes: {}",
+                                error.message
+                            )
+                        });
+                }
+                let error = ExpansionBudget::with_key_limits(1_000, 1_000, exact - 1)
+                    .check_canonical_key(&view, "main", &names, TEST_SPAN)
+                    .expect_err(
+                        "one byte less than the exact returned-view key length is rejected",
+                    );
+                assert_eq!(
+                    error.message,
+                    format!("canonical type key exceeds byte limit of {}", exact - 1)
+                );
+            }
         }
     }
 }

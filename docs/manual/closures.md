@@ -341,14 +341,23 @@ capability: a `self` method binds a Repeatable closure, a `mut self` method
 binds a Mutable closure whose receiver is environment-owned state updated on
 every call, and an `own self` method binds a Consuming closure. The receiver
 is acquired exactly once when the bound method is created. A `copy class`
-receiver is snapshotted, so later calls never change the original. Any other
-receiver must be an owned local, which moves into the closure, or a fresh
-temporary. A shared or mutable parameter and a view cannot be bound by this
-spelling; clone the value into an owned local first. Trait methods selected
-for the concrete receiver type bind the same way and dispatch statically. An
-omitted argument with a declaration default is supplied by the method's own
-default expression, evaluated at the call. Bound methods store, pack, and
-start like any closure with the same call kind.
+receiver is snapshotted wherever it is reached — an owned local, a shared or
+mutable parameter, or a `view` — so the closure is an independent owned
+value and later calls never change the original. Any other receiver must be
+an owned local, which moves into the closure, or a fresh temporary. A
+non-Copy shared or mutable parameter and a view of a non-Copy value cannot be
+bound by this spelling; clone the value into an owned local first. Trait
+methods selected for the concrete receiver type bind the same way and
+dispatch statically, but their contract is the trait's public one: the
+trait's parameter names, keyword-only boundary, and default availability,
+never the implementation's local parameter names. Each slot, including a
+returned-view origin, forwards to the implementation by ordinal. In the
+current compiler an implementation whose keyword-only parameter is named
+differently from the trait's cannot be bound (`AU2005`); name it as the trait
+does, or call the method directly. An omitted argument with a declaration
+default is supplied by the method's own default expression, evaluated at the
+call. Bound methods store, pack, and start like any closure with the same
+call kind.
 
 ```aura
 class Counter:
@@ -381,9 +390,9 @@ wrong type-argument count or an unsatisfiable bound reports `AU2002`, and an
 associated method of a generic class still needs a call (`AU2005`). A
 `view ... from self` method cannot be bound (`AU3010`), while a method
 returning a view of one of its other parameters keeps that contract in the
-bound closure (see Stored View Contracts). Binding a shared or mutable
-parameter reports `AU3002`, binding a
-view reports `AU3004`, and a later use of the moved receiver reports `AU3001`
+bound closure (see Stored View Contracts). Binding a non-Copy shared or
+mutable parameter reports `AU3002`, binding a view of a non-Copy value
+reports `AU3004`, and a later use of the moved receiver reports `AU3001`
 pointing at the binding site. Calling a Mutable bound method through an
 immutable local reports `AU3003`.
 

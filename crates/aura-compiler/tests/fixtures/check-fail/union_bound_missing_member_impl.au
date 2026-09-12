@@ -1,0 +1,19 @@
+trait Named:
+    def name(self) -> str
+
+class Dog:
+    tag: str
+
+class Cat:
+    tag: str
+
+impl Named for Dog:
+    def name(self) -> str:
+        return self.tag.clone()
+
+def show[T: Named](value: T):
+    print(value.name())
+
+def main():
+    pet: Dog | Cat = Dog(tag="rex")
+    show(pet)
