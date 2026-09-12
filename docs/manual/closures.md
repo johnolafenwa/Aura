@@ -106,7 +106,8 @@ A capturing closure retains semantic environment and call-kind metadata that
 an arbitrary written `def(...) -> R` storage type does not describe. It may be
 held in an immutable inferred or contextually typed local, called directly,
 passed directly to compiler-known repeatable callback sites such as the list
-algorithms and `control.retry`, moved into a qualifying task start, or packed
+algorithms and `control.retry` (which also borrow a packed Shared value with
+the same contract), moved into a qualifying task start, or packed
 into an owned callable storage type. It cannot be coerced through a thin
 `def` parameter, field, element, or annotated result; those boundaries
 report `AU2002`.
@@ -451,9 +452,11 @@ before capturing it.
 
 Arbitrary structural `def` parameters and stored `def` fields, collection
 elements, and annotated returns currently carry only capture-free code
-pointers. Compiler-known callback sites preserve repeatable closure metadata;
-`control.retry` and the list callbacks reject consuming closures. Task start
-accepts a qualifying closure by move for one invocation.
+pointers. Compiler-known callback sites preserve repeatable closure metadata
+and borrow packed Shared values with an ABI-equal, positionally callable
+contract; `control.retry` and the list callbacks reject consuming and
+Mutable callbacks. Task start accepts a qualifying closure by move for one
+invocation.
 
 Conditional and `match` expressions cannot merge capturing closures from
 multiple branches. This is an explicit closure-union boundary, not an

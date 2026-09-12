@@ -447,3 +447,22 @@ for `view mut`, and refuses an `Operand::Function` whose signature drops,
 invents, or strengthens the declaration's view contract. The direct backend
 unwraps the pointee for its indirect-call result type. The semantic
 interface schema is 14.
+
+## Batch 1 phase 1: Shared callback sites
+
+Compiler-known repeatable callback sites borrow a packed Shared value
+(C10) exactly as they borrow a closure: the checker admits an ABI-equal,
+positionally callable contract, the lowering reads the argument as a place,
+and both runtimes call the boxed function value through the generic
+indirect-call path, so the packing family's environment representation is
+the only runtime surface involved. Mutable and Consuming packed values,
+keyword-only element parameters, and view-returning callback contracts are
+refused at the checker; the validator needs no new rule because builtin
+member callees have no MIR candidates to bind.
+The interpreter's root task, which executes the program entry, reserves a
+lazily mapped 16 MiB coroutine stack; child tasks keep the 768 KiB default.
+A debug build's interpreter frames for packed-closure calls are large enough
+that the old shared default overflowed at call depth five before the
+call-depth diagnostic could fire. Every task now publishes its coroutine
+stack limit while it runs, and the interpreter converts low headroom at a
+call into an `AU4005` diagnostic naming the callee.

@@ -3,4 +3,4 @@ error[AU2002]: `Array.map` callback must be repeatable, found `consuming closure
   |
 7 |     mapped = values.map[int32](f=lambda value: value + take(token))
   |                                ^
-  = help: clone or precompute the consumed capture outside the lambda, or use a named function that does not consume closure state
+  = help: clone or precompute the consumed capture outside the lambda, or use a named function that does not consume or mutate closure state

@@ -3326,7 +3326,8 @@ A capturing closure retains semantic environment and call-kind metadata that
 an arbitrary written `def(...) -> R` storage type does not describe. It may be
 held in an immutable inferred or contextually typed local, called directly,
 passed directly to compiler-known repeatable callback sites such as the list
-algorithms and `control.retry`, moved into a qualifying task start, or packed
+algorithms and `control.retry` (which also borrow a packed Shared value with
+the same contract), moved into a qualifying task start, or packed
 into an owned callable storage type. It cannot be coerced through a thin
 `def` parameter, field, element, or annotated result; those boundaries
 report `AU2002`.
@@ -3671,9 +3672,11 @@ before capturing it.
 
 Arbitrary structural `def` parameters and stored `def` fields, collection
 elements, and annotated returns currently carry only capture-free code
-pointers. Compiler-known callback sites preserve repeatable closure metadata;
-`control.retry` and the list callbacks reject consuming closures. Task start
-accepts a qualifying closure by move for one invocation.
+pointers. Compiler-known callback sites preserve repeatable closure metadata
+and borrow packed Shared values with an ABI-equal, positionally callable
+contract; `control.retry` and the list callbacks reject consuming and
+Mutable callbacks. Task start accepts a qualifying closure by move for one
+invocation.
 
 Conditional and `match` expressions cannot merge capturing closures from
 multiple branches. This is an explicit closure-union boundary, not an
@@ -4030,7 +4033,12 @@ transfers any stored `V`.
 
 List callbacks use exact shared function types. `map` requires
 `def(T) -> U`, `filter` requires `def(T) -> bool`, and keyed sorting requires
-`def(T) -> K` with `K: Ord`. The callback must be repeatable.
+`def(T) -> K` with `K: Ord`. The callback must be repeatable. It may be a
+named function, a repeatable closure, or a packed Shared `Callable[...]` or
+`TaskCallable[...]` value with that contract, which the site borrows for the
+operation without cloning it or erasing its contract. A Mutable or Consuming
+packed value is rejected (`AU2002`), and because the site calls its callback
+positionally a keyword-only element parameter is rejected (`AU2004`).
 
 ## Runtime Semantics
 
@@ -4153,7 +4161,7 @@ with group = TaskGroup():
 | constructor | `TaskGroup()` | Creates a task group resource. |
 | `start` | `start(function, own ...) -> Task[T]` | Requires every capture and result to be `Transfer`, starts the specialized target, and returns its handle. |
 | `start_soon` | `start_soon(function, own ...) -> None` | Requires every capture and result to be `Transfer` and starts the specialized target without returning a handle. |
-| `start_with_stack` | `start_with_stack(bytes: int64, function, own ...) -> Task[T]` | Applies the same Transfer rules with an explicit guarded stack-capacity request and returns the handle. |
+| `start_with_stack` | `start_with_stack(bytes: int64, function, own ...) -> Task[T]` | Applies the same Transfer rules with an explicit guarded stack-capacity request and returns the handle. A task whose stack would be exhausted by its next call reports `AU4005` naming the callee instead of faulting. |
 | `start_soon_with_stack` | `start_soon_with_stack(bytes: int64, function, own ...) -> None` | Applies the same Transfer rules with an explicit guarded stack-capacity request and no returned handle. |
 | `cancel` | `cancel() -> None` | Signals cancellation to child tasks. |
 
@@ -5393,8 +5401,10 @@ This page documents known current limits of the Aura compiler and runtime.
   nominal type with an application-specific `Ord` implementation when text
   records require ordering.
   Keyed `sort`, `map`, and `filter` accept only their exact bare/shared callback
-  parameter capabilities. There is no comparator-form sort, lazy map/filter,
-  parallel traversal, or algorithm callback with mutable/owned element access.
+  parameter capabilities, from a named function, a repeatable closure, or a
+  packed Shared callable value. There is no comparator-form sort, lazy
+  map/filter, parallel traversal, mutable standard-library algorithm callback
+  contract, or algorithm callback with mutable/owned element access.
 - `TaskGroup.start(...)` and `start_soon(...)` support bare shared and `own`
   target parameters; `mut` targets are rejected because child tasks cannot
   write back through the starting call frame.
@@ -16506,7 +16516,9 @@ for `control.retry`. These are current technical-preview APIs. `control`
 resolves as a builtin module namespace, and the four List member names are
 part of the builtin no-shadowing surface. Callback
 capabilities are exact: code must pass bare/shared element callbacks rather
-than relying on adaptation from `mut` or `own`.
+than relying on adaptation from `mut` or `own`; a packed Shared
+`Callable[...]` or `TaskCallable[...]` value with that contract is borrowed
+at these sites and at `control.retry` (C10).
 
 Contextually typed `lambda parameters: expression` closures follow Accepted
 ADR-0037. Without a capture list, Copy values copy and owned non-Copy values

@@ -73,7 +73,7 @@ with group = TaskGroup():
 | constructor | `TaskGroup()` | Creates a task group resource. |
 | `start` | `start(function, own ...) -> Task[T]` | Requires every capture and result to be `Transfer`, starts the specialized target, and returns its handle. |
 | `start_soon` | `start_soon(function, own ...) -> None` | Requires every capture and result to be `Transfer` and starts the specialized target without returning a handle. |
-| `start_with_stack` | `start_with_stack(bytes: int64, function, own ...) -> Task[T]` | Applies the same Transfer rules with an explicit guarded stack-capacity request and returns the handle. |
+| `start_with_stack` | `start_with_stack(bytes: int64, function, own ...) -> Task[T]` | Applies the same Transfer rules with an explicit guarded stack-capacity request and returns the handle. A task whose stack would be exhausted by its next call reports `AU4005` naming the callee instead of faulting. |
 | `start_soon_with_stack` | `start_soon_with_stack(bytes: int64, function, own ...) -> None` | Applies the same Transfer rules with an explicit guarded stack-capacity request and no returned handle. |
 | `cancel` | `cancel() -> None` | Signals cancellation to child tasks. |
 

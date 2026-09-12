@@ -1,0 +1,9 @@
+type Named = Callable[def(*, value: int64) -> int64]
+
+def bump(*, value: int64) -> int64:
+    return value + 1
+
+def main():
+    named = Named(bump)
+    numbers: list[int64] = [1, 2]
+    print(numbers.map(named))

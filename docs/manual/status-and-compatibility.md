@@ -54,7 +54,9 @@ for `control.retry`. These are current technical-preview APIs. `control`
 resolves as a builtin module namespace, and the four List member names are
 part of the builtin no-shadowing surface. Callback
 capabilities are exact: code must pass bare/shared element callbacks rather
-than relying on adaptation from `mut` or `own`.
+than relying on adaptation from `mut` or `own`; a packed Shared
+`Callable[...]` or `TaskCallable[...]` value with that contract is borrowed
+at these sites and at `control.retry` (C10).
 
 Contextually typed `lambda parameters: expression` closures follow Accepted
 ADR-0037. Without a capture list, Copy values copy and owned non-Copy values

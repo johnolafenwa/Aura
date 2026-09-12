@@ -139,8 +139,13 @@ Last updated: 2026-09-10
   packing, and calls through locals, fields, and container elements work on
   both backends; owned and view contracts never admit each other; `from
   self` origins and task callables are refused; schema 14.
-- Next: commit the stored-view family, then Shared callback sites,
-  editor/docs/reference-agent updates, full gates and integration.
+- Stored-view family committed (`a39bb312`).
+- Shared callback sites family (2026-09-11): list algorithms, `Array.map`,
+  and `control.retry` borrow packed Shared callable values with ABI-equal,
+  positionally callable contracts; Mutable/Consuming packed values and
+  keyword-only element parameters are refused.
+- Next: commit the callback-sites family, then editor/docs/reference-agent
+  updates, full gates and integration.
 - Option removal and all phase 2 signature changes remain excluded; protected
   user files and coverage floors remain unchanged.
 - Work and handoff ledger: [2026-09-09-batch-1-phase-1.md](2026-09-09-batch-1-phase-1.md).

@@ -1,0 +1,7 @@
+type Counter = Callable[mut def(value: int64) -> int64]
+
+def main():
+    total = 0
+    mut counting = Counter(lambda [own total] value: total + value)
+    numbers: list[int64] = [1, 2]
+    print(numbers.map(counting))

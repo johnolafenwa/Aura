@@ -1,0 +1,6 @@
+error[AU2002]: `list.map` callback must be repeatable, found `Callable[mut def(value: int64) -> int64]`
+ --> crates/aura-compiler/tests/fixtures/check-fail/callable_shared_callback_mutable.au:7:23
+  |
+7 |     print(numbers.map(counting))
+  |                       ^
+  = help: clone or precompute the consumed capture outside the lambda, or use a named function that does not consume or mutate closure state

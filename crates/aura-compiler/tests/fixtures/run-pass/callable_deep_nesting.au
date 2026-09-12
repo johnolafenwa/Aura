@@ -1,0 +1,41 @@
+type Step = Callable[def(value: int64) -> int64]
+
+def scaled(value: int64, factor: int64) -> int64:
+    return value * factor
+
+def make_scaler(factor: int64) -> Step:
+    owned = factor
+    return Step(lambda value: scaled(value, owned))
+
+def apply_twice(step: Step, value: int64) -> int64:
+    return step(step(value))
+
+def layer_three(value: int64) -> int64:
+    tripler = make_scaler(3)
+    return apply_twice(tripler, value)
+
+def layer_two(value: int64) -> int64:
+    return layer_three(value) + 1
+
+def layer_one(value: int64) -> int64:
+    mut registry: dict[str, Step] = {"double": make_scaler(2)}
+    match own registry.remove("double"):
+        case Option.Some(step):
+            outcome = step(value=layer_two(value))
+            registry["double"] = step
+            return outcome
+        case Option.None:
+            return -1
+
+def main():
+    print(layer_one(1))
+    events = Queue[int64]()
+    with TaskGroup() as group:
+        group.start(lambda_free_producer, events)
+        for event in events:
+            print(event)
+
+def lambda_free_producer(events: Queue[int64]) -> None:
+    tripler = make_scaler(3)
+    events.put(tripler(2))
+    events.close()

@@ -131,8 +131,10 @@ This page documents known current limits of the Aura compiler and runtime.
   nominal type with an application-specific `Ord` implementation when text
   records require ordering.
   Keyed `sort`, `map`, and `filter` accept only their exact bare/shared callback
-  parameter capabilities. There is no comparator-form sort, lazy map/filter,
-  parallel traversal, or algorithm callback with mutable/owned element access.
+  parameter capabilities, from a named function, a repeatable closure, or a
+  packed Shared callable value. There is no comparator-form sort, lazy
+  map/filter, parallel traversal, mutable standard-library algorithm callback
+  contract, or algorithm callback with mutable/owned element access.
 - `TaskGroup.start(...)` and `start_soon(...)` support bare shared and `own`
   target parameters; `mut` targets are rejected because child tasks cannot
   write back through the starting call frame.

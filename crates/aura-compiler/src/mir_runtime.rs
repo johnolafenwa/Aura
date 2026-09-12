@@ -411,6 +411,10 @@ fn deserialize_runtime_module(mir_json: &[u8]) -> Result<MirModule> {
 // stack ceiling. Recursive Aura programs should fail with a diagnostic before
 // the runtime thread can overflow its Rust stack.
 const MAX_CALL_DEPTH: usize = 256;
+/// Coroutine stack the interpreter keeps free before entering another Aura
+/// call, so an exhausted task stack becomes a diagnostic instead of a guard
+/// page fault.
+const TASK_STACK_HEADROOM_RESERVE: usize = 128 * 1024;
 const MIR_RUNTIME_STACK_SIZE: usize = 64 * 1024 * 1024;
 const MAX_EMBEDDED_RUNTIME_BYTES: usize = 1 << 30;
 const MAX_RUNTIME_BLOCKS: usize = 1_000_000;
@@ -3039,6 +3043,17 @@ impl MirRuntime {
         concrete_function_type: Option<&Type>,
         receiver_type: Option<&Type>,
     ) -> Result<CallOutcome> {
+        if let Some(headroom) = crate::runtime_value::task_stack_headroom() {
+            if headroom < TASK_STACK_HEADROOM_RESERVE {
+                return Err(Diagnostic::coded(
+                    "AU4005",
+                    format!(
+                        "task stack exhausted while calling `{}`: {} bytes remain; start the task with `start_with_stack` and a larger size",
+                        function.name, headroom
+                    ),
+                ));
+            }
+        }
         if self.call_depth >= MAX_CALL_DEPTH {
             return Err(Diagnostic::at(
                 function.span,

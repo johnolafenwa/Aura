@@ -775,10 +775,16 @@ impl<'a> FunctionChecker<'a> {
                 call_kind: ClosureCallKind::Repeatable,
                 ..
             } => (params.as_ref().clone(), return_type.clone()),
+            // A packed Shared value is borrowed for the operation with its
+            // own contract (C10); Mutable and Consuming values stay out.
+            Type::Callable(callable) if callable.call_kind == ClosureCallKind::Repeatable => {
+                (callable.params.clone(), Box::new(callable.return_type.clone()))
+            }
             Type::Closure {
-                call_kind: ClosureCallKind::Consuming,
+                call_kind: ClosureCallKind::Consuming | ClosureCallKind::MutableRepeatable,
                 ..
-            } => {
+            }
+            | Type::Callable(_) => {
                 return Err(Diagnostic::coded_at(
                     "AU2002",
                     callback.span,
@@ -787,7 +793,7 @@ impl<'a> FunctionChecker<'a> {
                     ),
                 )
                 .with_help(
-                    "clone or precompute the consumed capture outside the lambda, or use a named function that does not consume closure state",
+                    "clone or precompute the consumed capture outside the lambda, or use a named function that does not consume or mutate closure state",
                 ))
             }
             _ => {
@@ -800,6 +806,28 @@ impl<'a> FunctionChecker<'a> {
                 ))
             }
         };
+        // The site calls its callback positionally, so a keyword-only element
+        // parameter cannot masquerade as a positional callback (C10), and a
+        // view result would escape the element.
+        if params.first().is_some_and(|param| param.keyword_only) {
+            return Err(Diagnostic::coded_at(
+                "AU2004",
+                callback.span,
+                format!(
+                    "`{collection}.{method_name}` calls its callback positionally, but parameter `{}` of `{callback_ty}` is keyword-only",
+                    params[0].name
+                ),
+            ));
+        }
+        if matches!(return_type.as_ref(), Type::ReturnedView(_)) {
+            return Err(Diagnostic::coded_at(
+                "AU3010",
+                callback.span,
+                format!(
+                    "`{collection}.{method_name}` callback cannot return a view, found `{callback_ty}`"
+                ),
+            ));
+        }
         if params.len() != 1 || params[0].passing != ReceiverKind::Borrow {
             return Err(Diagnostic::coded_at(
                 "AU2002",
@@ -2589,11 +2617,14 @@ impl<'a> FunctionChecker<'a> {
             .zip(param_passings.iter().copied())
         {
             let expected = substitute_type(expected, &substitutions);
+            // A repeatable callback parameter admits a Repeatable closure or a
+            // packed Shared value with an ABI-equal contract that the site can
+            // call positionally (C10); the value is borrowed, never cloned or
+            // erased.
             let repeatable_closure_compatible = matches!(
                 closure_argument_policy,
                 ClosureArgumentPolicy::RepeatableParameter(name) if name == param_decl.name
-            ) && matches!(
-                (&actual, &expected),
+            ) && match (&actual, &expected) {
                 (
                     Type::Closure {
                         params: actual_params,
@@ -2604,9 +2635,22 @@ impl<'a> FunctionChecker<'a> {
                     Type::Function {
                         params: expected_params,
                         return_type: expected_return,
-                    }
-                ) if actual_params.as_ref() == expected_params && actual_return == expected_return
-            );
+                    },
+                ) => actual_params.as_ref() == expected_params && actual_return == expected_return,
+                (
+                    Type::Callable(callable),
+                    Type::Function {
+                        params: expected_params,
+                        return_type: expected_return,
+                    },
+                ) => {
+                    callable.call_kind == ClosureCallKind::Repeatable
+                        && callable.params == *expected_params
+                        && callable.return_type == **expected_return
+                        && !callable.params.iter().any(|param| param.keyword_only)
+                }
+                _ => false,
+            };
             if actual != expected && !repeatable_closure_compatible {
                 let span = argument
                     .map(|argument| argument.span)

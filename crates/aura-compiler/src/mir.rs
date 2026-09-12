@@ -14930,18 +14930,9 @@ impl<'a> Lowerer<'a> {
                         .expect("checked list.sort key should have a function type");
                     let callback =
                         self.lower_expr_at_sequence_point(&argument.value, Some(&callback_ty));
-                    let (Type::Function {
-                        return_type: key_ty,
-                        ..
-                    }
-                    | Type::Closure {
-                        return_type: key_ty,
-                        ..
-                    }) = callback_ty
-                    else {
-                        unreachable!("checked list.sort key should have a function type");
-                    };
-                    (callback, *key_ty)
+                    let key_ty = callback_result_type(callback_ty)
+                        .expect("checked list.sort key should have a callable type");
+                    (callback, key_ty)
                 });
                 let reverse = ordered[1]
                     .map(|argument| {
@@ -19761,15 +19752,15 @@ impl<'a> Lowerer<'a> {
                                             .bind_args(args, callee.span)
                                             .ok()
                                             .and_then(|ordered| ordered[0]);
-                                        if let Some(
-                                            Type::Function { return_type, .. }
-                                            | Type::Closure { return_type, .. },
-                                        ) = callback.and_then(|argument| {
-                                            self.infer_expr_type(&argument.value)
-                                        }) {
+                                        if let Some(output) = callback
+                                            .and_then(|argument| {
+                                                self.infer_expr_type(&argument.value)
+                                            })
+                                            .and_then(callback_result_type)
+                                        {
                                             return Some(Type::Named(
                                                 "list".to_string(),
-                                                vec![*return_type],
+                                                vec![output],
                                             ));
                                         }
                                     }
@@ -19781,16 +19772,11 @@ impl<'a> Lowerer<'a> {
                                     .bind_args(args, callee.span)
                                     .ok()
                                     .and_then(|ordered| ordered[0]);
-                                if let Some(
-                                    Type::Function { return_type, .. }
-                                    | Type::Closure { return_type, .. },
-                                ) = callback
+                                if let Some(output) = callback
                                     .and_then(|argument| self.infer_expr_type(&argument.value))
+                                    .and_then(callback_result_type)
                                 {
-                                    return Some(Type::Named(
-                                        "Array".to_string(),
-                                        vec![*return_type],
-                                    ));
+                                    return Some(Type::Named("Array".to_string(), vec![output]));
                                 }
                             }
                         }
@@ -21423,5 +21409,17 @@ fn lower_callable_type_ref(
             return_type: *return_type,
         })),
         _ => Type::named("Unknown"),
+    }
+}
+
+/// The result type a compiler-known callback site sees for a callback of
+/// `ty`: a function, a closure, or a packed Shared value (C10).
+fn callback_result_type(ty: Type) -> Option<Type> {
+    match ty {
+        Type::Function { return_type, .. } | Type::Closure { return_type, .. } => {
+            Some(*return_type)
+        }
+        Type::Callable(callable) => Some(callable.return_type),
+        _ => None,
     }
 }
