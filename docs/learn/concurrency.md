@@ -68,7 +68,7 @@ with group = TaskGroup():
 
 ## Choosing A Custom Task Stack
 
-Ordinary tasks use a guarded 512 KiB stack. That is the safe default for
+Ordinary tasks use a guarded 768 KiB stack. That is the safe default for
 application code and keeps large task populations economical. If measurement
 shows that one child has a different task-local stack requirement, use a
 collision-free stack override:
@@ -89,8 +89,9 @@ guard-protected.
 
 Treat 256 KiB as an opt-in minimum only for a measured shallow task. It is not
 the ordinary default: Aura's complete compiled HTTP example faulted when
-256 KiB was the global task default during integration and succeeds with the
-512 KiB default. The lower-level runtime round trip that succeeds with
+256 KiB was the global task default during integration and succeeded with the
+then-current 512 KiB default; the maintained default is now 768 KiB. The
+lower-level runtime round trip that succeeds with
 256 KiB protocol callers intentionally omits compiled Aura execution
 frames; it proves that deep protocol frames run on service workers, not that
 every complete Aura task is safe at 256 KiB.
@@ -325,7 +326,7 @@ and `continue` take the check; `break` and `return` leave without it. This
 keeps a tight loop from freezing timers, queues, and sockets assigned to the
 same worker indefinitely, but one long loop body or long straight-line
 computation can still delay same-worker siblings. Ordinary tasks request a
-guarded 512 KiB coroutine stack, with an explicit per-child override available
+guarded 768 KiB coroutine stack, with an explicit per-child override available
 through the two `_with_stack` methods. Scheduler waits are event-driven:
 descriptors stay registered, deadlines are kept in a timer heap, and Queue,
 task-completion, and blocking-pool events notify the responsible worker
@@ -344,7 +345,7 @@ Deep HTTP, TLS, and maintained Unix WebSocket library frames run on a bounded
 protocol-step service with deep native worker stacks. Each step is bounded and
 nonblocking; the child gets ownership of its protocol state back before
 observing cancellation or returning to reactor readiness waiting. Ordinary
-application tasks use the guarded 512 KiB default stack; protocol workers
+application tasks use the guarded 768 KiB default stack; protocol workers
 carry the deepest maintained third-party library frames.
 
 The protocol-step pool starts lazily and lives until the Aura process exits;

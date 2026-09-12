@@ -451,7 +451,7 @@ loop fuel. Direct native code uses 4,096 units and replenishes the fuel after
 yielding. A program proven to have no possible sibling Aura task elides the
 runtime check entirely. These backend strategies may produce different valid
 interleavings; scheduling order is not observable language order. An ordinary
-lightweight task requests 512 KiB of writable coroutine stack. The
+lightweight task requests 768 KiB of writable coroutine stack. The
 `TaskGroup.start_with_stack` and `start_soon_with_stack` methods accept an
 exact `int64` request from 256 KiB through 64 MiB inclusive. Accepted requests
 are rounded upward to the host page size and guard-protected; out-of-range
@@ -459,7 +459,8 @@ requests are rejected rather than clamped. This surface is Provisional under
 ADR-0032. The 256 KiB lower bound is an explicit minimum for measured shallow
 tasks, not the general default. The complete compiled Aura HTTP example,
 including its MIR/direct language-execution frames, proved unsafe when
-256 KiB was the global task default and succeeds with the 512 KiB default.
+256 KiB was the global task default and succeeded with the then-current
+512 KiB default; the maintained default has since been raised to 768 KiB.
 The separate isolated runtime round trip that forces protocol callers to
 256 KiB proves that service workers own the deep host protocol frames; it
 does not measure the full compiled task stack.

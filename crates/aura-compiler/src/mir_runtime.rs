@@ -410,12 +410,23 @@ fn deserialize_runtime_module(mir_json: &[u8]) -> Result<MirModule> {
 // Keep the MIR runtime call-depth budget comfortably below the host thread's
 // stack ceiling. Recursive Aura programs should fail with a diagnostic before
 // the runtime thread can overflow its Rust stack.
-const MAX_CALL_DEPTH: usize = 256;
-/// Coroutine stack the interpreter keeps free before entering another Aura
-/// call, so an exhausted task stack becomes a diagnostic instead of a guard
-/// page fault.
-const TASK_STACK_HEADROOM_RESERVE: usize = 128 * 1024;
-const MIR_RUNTIME_STACK_SIZE: usize = 64 * 1024 * 1024;
+pub(crate) const MAX_CALL_DEPTH: usize = 256;
+/// Writable coroutine stack the interpreter requires before entering another
+/// Aura call, so an exhausted task stack becomes a diagnostic instead of a
+/// guard-page fault. It must exceed the stack one call transition consumes
+/// between two consecutive probes, which is a property of the interpreter's
+/// own frames and therefore of the build profile: an unoptimized build gives
+/// every local its own slot and measures 172-187 KiB per transition, an
+/// optimized build far less. The reserve must also stay below the first-call
+/// headroom of the 256 KiB opt-in minimum stack, or that stack could never
+/// run a single call. `runtime_value_task_stack_tests` measures both bounds
+/// under whichever profile runs the suite.
+pub(crate) const TASK_STACK_HEADROOM_RESERVE: usize = if cfg!(debug_assertions) {
+    224 * 1024
+} else {
+    128 * 1024
+};
+pub(crate) const MIR_RUNTIME_STACK_SIZE: usize = 64 * 1024 * 1024;
 const MAX_EMBEDDED_RUNTIME_BYTES: usize = 1 << 30;
 const MAX_RUNTIME_BLOCKS: usize = 1_000_000;
 const MAX_RUNTIME_INSTRUCTIONS: usize = 1_000_000;
@@ -3043,13 +3054,16 @@ impl MirRuntime {
         concrete_function_type: Option<&Type>,
         receiver_type: Option<&Type>,
     ) -> Result<CallOutcome> {
+        // The headroom excludes the allocator's guard layout, so a probe that
+        // passes leaves at least the reserve of writable stack for the frames
+        // this call pushes before its own callees probe again.
         if let Some(headroom) = crate::runtime_value::task_stack_headroom() {
             if headroom < TASK_STACK_HEADROOM_RESERVE {
                 return Err(Diagnostic::coded(
                     "AU4005",
                     format!(
-                        "task stack exhausted while calling `{}`: {} bytes remain; start the task with `start_with_stack` and a larger size",
-                        function.name, headroom
+                        "task stack exhausted while calling `{}`: {} bytes remain but the interpreter keeps {} in reserve; start the task with `start_with_stack` and a larger size",
+                        function.name, headroom, TASK_STACK_HEADROOM_RESERVE
                     ),
                 ));
             }

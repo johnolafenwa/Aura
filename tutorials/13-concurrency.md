@@ -182,7 +182,7 @@ unresolved type parameter at the task boundary.
 
 ### Per-task Stack Overrides
 
-`TaskGroup.start(...)` and `start_soon(...)` use Aura's guarded 512 KiB
+`TaskGroup.start(...)` and `start_soon(...)` use Aura's guarded 768 KiB
 default task stack. A child with a measured task-local stack requirement can
 request a custom capacity without changing its target arguments:
 
@@ -202,7 +202,8 @@ need for a custom capacity.
 The lower 256 KiB bound is also available for an explicitly measured shallow
 task, but it is not the generally safe default. Aura's complete compiled
 HTTP example faulted when 256 KiB was used as the global task default during
-integration and succeeds with the 512 KiB default. A separate runtime-only
+integration and succeeded with the then-current 512 KiB default (the
+maintained default is now 768 KiB). A separate runtime-only
 round trip succeeds with forced 256 KiB protocol callers because the deep
 host frames execute on service workers; that narrower check does not include
 the compiled program's MIR/direct execution frames.
@@ -384,7 +385,7 @@ timers, Queue operations, or socket work assigned to the same worker to
 proceed. `break` and `return` leave the loop without taking that check.
 One long loop body or straight-line computation can still delay same-worker
 siblings, and the check does not inspect cancellation. Each ordinary
-lightweight task requests a guarded 512 KiB coroutine stack; the explicit
+lightweight task requests a guarded 768 KiB coroutine stack; the explicit
 stack-start methods accept requests through 64 MiB. Descriptor registrations
 persist across waits, deadlines use a timer heap, and Queue, task-completion,
 and blocking-pool events notify the responsible worker directly. With nothing

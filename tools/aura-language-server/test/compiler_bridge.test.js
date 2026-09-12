@@ -1351,7 +1351,7 @@ test("compiler bridge exposes guarded TaskGroup stack override completion and ho
       );
       assert.ok(
         hover.value.includes(
-          "The 256 KiB minimum is opt-in for a measured shallow task; ordinary starts use the safe 512 KiB default."
+          "The 256 KiB minimum is opt-in for a measured shallow task; ordinary starts use the safe 768 KiB default."
         ),
         `${name} hover should distinguish the opt-in minimum from the safe default`
       );

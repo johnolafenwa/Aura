@@ -2827,35 +2827,166 @@ struct LightweightTaskRecord {
     context: Rc<LightweightTaskContext>,
     coroutine: Coroutine<RuntimeSchedulerWakeReason, TaskYield, TaskExecutionResult>,
     forced_exit_cleanup: Option<Box<dyn FnOnce() + Send>>,
-    /// Lowest usable address of the task's coroutine stack, published while
-    /// the task runs so the interpreter can refuse a call that would hit the
-    /// guard page.
-    stack_limit: usize,
+    /// Writable extent of the task's coroutine stack, published while the
+    /// task runs so the interpreter can refuse a call that would hit the
+    /// allocator's guard region.
+    stack_bounds: TaskStackBounds,
 }
 
-thread_local! {
-    static CURRENT_TASK_STACK_LIMIT: Cell<Option<usize>> = const { Cell::new(None) };
+/// The writable extent of one lightweight task's coroutine stack.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct TaskStackBounds {
+    /// Lowest address a frame may occupy. The platform allocator's guard
+    /// layout below it is excluded, so `stack pointer - usable_limit` is
+    /// writable headroom rather than mapped address space.
+    pub(crate) usable_limit: usize,
+    /// Highest address of the stack (the initial stack pointer).
+    pub(crate) base: usize,
 }
 
-struct TaskStackLimitGuard(Option<usize>);
-
-impl Drop for TaskStackLimitGuard {
-    fn drop(&mut self) {
-        CURRENT_TASK_STACK_LIMIT.with(|limit| limit.set(self.0));
+impl TaskStackBounds {
+    /// Writable capacity in bytes, `base - usable_limit`; tests use it to
+    /// attribute headroom probes to the task whose capacity they requested.
+    #[cfg(test)]
+    pub(crate) fn usable_capacity(self) -> usize {
+        self.base.saturating_sub(self.usable_limit)
     }
 }
 
-fn enter_task_stack_limit(limit: usize) -> TaskStackLimitGuard {
-    TaskStackLimitGuard(CURRENT_TASK_STACK_LIMIT.with(|current| current.replace(Some(limit))))
+/// Size of a host memory page, cached after the first query.
+#[cfg(unix)]
+fn host_page_size() -> usize {
+    static PAGE_SIZE: OnceLock<usize> = OnceLock::new();
+    *PAGE_SIZE.get_or_init(|| {
+        // SAFETY: `sysconf` reads a process-wide constant and has no
+        // preconditions.
+        let queried = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
+        usize::try_from(queried)
+            .ok()
+            .filter(|size| *size > 0 && size.is_power_of_two())
+            // A failed query cannot happen on a maintained host; if it did,
+            // over-reserving with the largest common page size keeps the
+            // probe conservative.
+            .unwrap_or(64 * 1024)
+    })
 }
 
-/// Bytes of the running lightweight task's coroutine stack that remain below
-/// the caller's frame, or `None` outside a task.
+/// Bytes at the low end of a `DefaultStack` mapping that a frame must never
+/// touch. `Stack::limit` is documented to include the guard pages, so it
+/// names the start of the mapping rather than the first writable byte;
+/// treating it as writable would overstate headroom by the guard layout and
+/// let a call pass the interpreter's probe with only guard pages "remaining".
+#[cfg(unix)]
+fn task_stack_guard_bytes(_stack: &DefaultStack) -> usize {
+    // corosensei maps exactly one `PROT_NONE` page below the page-rounded
+    // writable capacity on every Unix target.
+    host_page_size()
+}
+
+#[cfg(windows)]
+fn task_stack_guard_bytes(stack: &DefaultStack) -> usize {
+    // corosensei's Windows layout, from the low end of the reservation: one
+    // hard guard page, the thread stack guarantee, and a soft guard region of
+    // one page (two on 64-bit targets) that the kernel shifts downward as the
+    // stack commits. The overflow exception fires once the soft guard and the
+    // guarantee can no longer move, so writable space ends above all three.
+    // Windows uses 4 KiB pages on every architecture the platform allocator
+    // supports; the extra page keeps the estimate conservative if that
+    // assumption is ever wrong by one page.
+    const WINDOWS_PAGE_SIZE: usize = 4096;
+    let soft_guard = if cfg!(target_pointer_width = "64") {
+        2 * WINDOWS_PAGE_SIZE
+    } else {
+        WINDOWS_PAGE_SIZE
+    };
+    let guarantee = stack.teb_fields().GuaranteedStackBytes;
+    WINDOWS_PAGE_SIZE
+        .saturating_add(soft_guard)
+        .saturating_add(guarantee)
+        .saturating_add(WINDOWS_PAGE_SIZE)
+}
+
+/// The writable extent of a freshly allocated coroutine stack.
+pub(crate) fn task_stack_bounds(stack: &DefaultStack) -> TaskStackBounds {
+    let base = stack.base().get();
+    let mapping_start = stack.limit().get();
+    let usable_limit = mapping_start
+        .saturating_add(task_stack_guard_bytes(stack))
+        .min(base);
+    TaskStackBounds { usable_limit, base }
+}
+
+thread_local! {
+    static CURRENT_TASK_STACK_BOUNDS: Cell<Option<TaskStackBounds>> = const { Cell::new(None) };
+}
+
+struct TaskStackBoundsGuard(Option<TaskStackBounds>);
+
+impl Drop for TaskStackBoundsGuard {
+    fn drop(&mut self) {
+        CURRENT_TASK_STACK_BOUNDS.with(|bounds| bounds.set(self.0));
+    }
+}
+
+fn enter_task_stack_bounds(bounds: TaskStackBounds) -> TaskStackBoundsGuard {
+    TaskStackBoundsGuard(CURRENT_TASK_STACK_BOUNDS.with(|current| current.replace(Some(bounds))))
+}
+
+/// Writable bytes of the running lightweight task's coroutine stack that
+/// remain below the caller's frame, or `None` outside a task.
 pub(crate) fn task_stack_headroom() -> Option<usize> {
-    let limit = CURRENT_TASK_STACK_LIMIT.with(|limit| limit.get())?;
+    let bounds = CURRENT_TASK_STACK_BOUNDS.with(|bounds| bounds.get())?;
     let marker = 0u8;
     let stack_pointer = std::ptr::addr_of!(marker) as usize;
-    Some(stack_pointer.saturating_sub(limit))
+    let headroom = stack_pointer.saturating_sub(bounds.usable_limit);
+    #[cfg(test)]
+    task_stack_observation::record(bounds, headroom);
+    Some(headroom)
+}
+
+/// Test-only capture of every headroom probe, so a test can measure how much
+/// stack the interpreter consumes between consecutive Aura calls on a task
+/// whose stack it can identify by writable capacity.
+#[cfg(test)]
+pub(crate) mod task_stack_observation {
+    use super::{lock_mutex, TaskStackBounds};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Mutex;
+
+    #[derive(Clone, Copy, Debug)]
+    pub(crate) struct TaskStackHeadroomObservation {
+        pub(crate) usable_capacity: usize,
+        pub(crate) headroom: usize,
+    }
+
+    static RECORDING: AtomicBool = AtomicBool::new(false);
+    static OBSERVATIONS: Mutex<Vec<TaskStackHeadroomObservation>> = Mutex::new(Vec::new());
+
+    pub(super) fn record(bounds: TaskStackBounds, headroom: usize) {
+        if !RECORDING.load(Ordering::Relaxed) {
+            return;
+        }
+        lock_mutex(&OBSERVATIONS).push(TaskStackHeadroomObservation {
+            usable_capacity: bounds.usable_capacity(),
+            headroom,
+        });
+    }
+
+    pub(crate) fn start_recording() {
+        lock_mutex(&OBSERVATIONS).clear();
+        RECORDING.store(true, Ordering::SeqCst);
+    }
+
+    /// Stops recording and returns the probes seen on tasks whose writable
+    /// capacity is exactly `usable_capacity`, in probe order.
+    pub(crate) fn stop_recording(usable_capacity: usize) -> Vec<usize> {
+        RECORDING.store(false, Ordering::SeqCst);
+        lock_mutex(&OBSERVATIONS)
+            .drain(..)
+            .filter(|observation| observation.usable_capacity == usable_capacity)
+            .map(|observation| observation.headroom)
+            .collect()
+    }
 }
 
 type LightweightTaskEntry =
@@ -5568,7 +5699,7 @@ impl LightweightTaskScheduler {
             cancellation: request.cancellation,
             task_state: Arc::downgrade(&request.state),
         });
-        let stack_limit = request.stack.limit().get();
+        let stack_bounds = task_stack_bounds(&request.stack);
         let coroutine = Coroutine::with_stack(request.stack, move |yielder, _| {
             let context_was_installed = with_current_lightweight_task_context(|context| {
                 context.yielder.set(yielder as *const _);
@@ -5588,7 +5719,7 @@ impl LightweightTaskScheduler {
                 context,
                 coroutine,
                 forced_exit_cleanup: request.forced_exit_cleanup,
-                stack_limit,
+                stack_bounds,
             },
         );
         self.ready
@@ -5641,7 +5772,7 @@ impl LightweightTaskScheduler {
             .store(false, Ordering::SeqCst);
         *lock_mutex(&record.state.current_wait) = None;
         let _guard = enter_lightweight_task_context(&record.context);
-        let _stack_guard = enter_task_stack_limit(record.stack_limit);
+        let _stack_guard = enter_task_stack_bounds(record.stack_bounds);
         let outcome = record.coroutine.resume(reason);
         // A running coroutine may prepare children, but it never aliases the
         // scheduler itself. Admit those owned requests before deciding what
@@ -16523,3 +16654,7 @@ pub(crate) fn io_error(error: io::Error) -> Value {
 #[cfg(test)]
 #[path = "runtime_value_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "runtime_value_task_stack_tests.rs"]
+mod task_stack_tests;

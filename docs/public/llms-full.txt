@@ -1758,7 +1758,7 @@ See [Concurrency](/manual/concurrency) for structured-concurrency semantics.
 | `Task.result_or_none` | `result_or_none(timeout: Duration = ...) -> Option[T]` | `Some(value)` or `None` for failure, timeout, cancellation, or immediate absence; consumes the observation right when `T` is non-repeatable, including on `None`. |
 | `Task.result_or` | `result_or(default: own T, timeout: Duration = ...) -> T` | Value or fallback; consumes the observation right when `T` is non-repeatable. |
 | `TaskGroup()` | `TaskGroup()` | Task group resource constructor. |
-| `TaskGroup.start` | `start(function, own ...) -> Task[T]` | Requires every capture and result to be `Transfer`; accepts inferred or explicit `function[Types]` / `Type.associated_method[Types]` targets; starts the child on the guarded 512 KiB default stack. |
+| `TaskGroup.start` | `start(function, own ...) -> Task[T]` | Requires every capture and result to be `Transfer`; accepts inferred or explicit `function[Types]` / `Type.associated_method[Types]` targets; starts the child on the guarded 768 KiB default stack. |
 | `TaskGroup.start_soon` | `start_soon(function, own ...) -> None` | Applies the same Transfer and target-specialization rules without returning a handle. |
 | `TaskGroup.start_with_stack` | `start_with_stack(bytes: int64, function, own ...) -> Task[T]` | Applies the same Transfer and target-specialization rules with an explicit guarded 256 KiB..64 MiB request; 256 KiB is for measured shallow tasks, not the default; Provisional under ADR-0032. |
 | `TaskGroup.start_soon_with_stack` | `start_soon_with_stack(bytes: int64, function, own ...) -> None` | Applies the same rules and explicit guarded range without retaining a handle; 256 KiB is for measured shallow tasks, not the default; Provisional under ADR-0032. |
@@ -4211,7 +4211,7 @@ arguments evaluate the runtime-selected target's own default expression. Task
 start therefore follows the same default-binding rule as an ordinary indirect
 call.
 
-Ordinary `start` and `start_soon` request the 524,288-byte (512 KiB) default.
+Ordinary `start` and `start_soon` request the 786,432-byte (768 KiB) default.
 The two `_with_stack` methods take an exact `int64` byte count before the
 callable target. Accepted requests are 262,144 through 67,108,864 bytes
 inclusive (256 KiB through 64 MiB). Values outside that range are rejected,
@@ -4224,12 +4224,35 @@ surface is Provisional under ADR-0032.
 The 256 KiB lower bound is an opt-in minimum for a task whose shallow stack use
 has been measured; it is not the generally safe default. During integration,
 the complete compiled Aura HTTP example faulted when 256 KiB was used as the
-global task default and succeeded with the 512 KiB default. An isolated
+global task default and succeeded with the then-current 512 KiB default;
+the maintained default has since been raised to 768 KiB. An isolated
 runtime-level HTTP regression does succeed when only its protocol-calling
 children are forced to 256 KiB: that test proves deep host protocol frames
 stay on the service workers, but it excludes the compiled program's
 MIR/direct language-execution frames. Keep the ordinary default unless
 measurement of the complete task justifies a custom size.
+
+The MIR interpreter probes the running task's writable coroutine stack before
+every Aura call. Headroom is measured from the first writable byte above the
+allocator's guard page, not from the start of the mapping, so the guard page
+is never counted as usable space. A call that would leave less than the
+interpreter's headroom reserve traps with `AU4005` ("task stack exhausted
+while calling ..."), naming the callee and the writable bytes that remain,
+before any frame can reach the guard page. The reserve exceeds the stack one
+interpreter call transition consumes, which depends on how the interpreter
+itself was compiled: an optimized build keeps 128 KiB in reserve and a
+debug-assertion build keeps 224 KiB, because an unoptimized interpreter spends
+roughly 170-190 KiB of stack per Aura call. Both values stay below the
+first-call headroom of the 256 KiB opt-in minimum, so that minimum can always
+run one call; how many nested calls a given capacity holds beyond that is
+likewise profile dependent. The root task that executes the program entry
+reserves a lazily mapped 16 MiB coroutine stack and is probed the same way;
+whether deep root recursion reports `AU4005` or the 256-call depth diagnostic
+first depends on that per-call cost, and both are diagnostics rather than
+faults. A program that starts no task runs its entry on the 64 MiB runtime
+thread, where only the depth limit applies. The direct backend has only its
+256-call depth guard: it performs no headroom probe and never reports the
+`AU4005` stack-exhaustion diagnostic.
 
 ```aura
 with group = TaskGroup():
@@ -4474,7 +4497,7 @@ leave the loop without taking that check. A single long loop body or long
 straight-line CPU work can still delay siblings pinned to that worker. The
 inserted check does not inspect cancellation; tasks that must stop on request
 still call `cancelled()`. Each ordinary lightweight task requests a guarded
-512 KiB coroutine stack; the two explicit stack-start methods may request up
+768 KiB coroutine stack; the two explicit stack-start methods may request up
 to 64 MiB. When a worker has no ready task, its event reactor blocks until a
 notification, descriptor event, or deadline; it does not wake on a periodic
 scheduler tick.
@@ -4714,7 +4737,7 @@ defaults to the available parallelism reported by the host and may be selected
 provisionally with a positive `AURA_WORKERS` value. Assignments never migrate
 and work is not stolen.
 Aura exposes no worker-index or affinity-introspection API. Ordinary
-lightweight tasks request 512 KiB of writable coroutine stack; an explicit
+lightweight tasks request 768 KiB of writable coroutine stack; an explicit
 request is limited to 64 MiB. Requests are page-rounded and guard-protected.
 The MIR/direct entry thread reserves
 64 MiB. The scheduler
@@ -4749,7 +4772,8 @@ deadlines, and direct Queue, task-completion, and blocking-pool wakeups; Phase
 5.3 adds the automatic loop checks. Phase 5.4 moves deep HTTP, TLS, and
 maintained Unix WebSocket library steps to a distinct bounded protocol service
 with two named 2 MiB-stack workers and a 64-job queue, then makes ordinary
-coroutine stacks guarded 512 KiB requests and adds the Accepted ADR-0032
+coroutine stacks guarded 512 KiB requests (raised to 768 KiB on 2 August
+2026) and adds the Accepted ADR-0032
 override methods. HTTP URL/request/response construction, head parsing, and
 chunk decoding; rustls construction, handshake, I/O, and close notification;
 and Unix WebSocket construction, handshake, framing, and close run there.
@@ -4852,7 +4876,7 @@ Exact diagnostic prose is normative only where a fixture or this Manual explicit
 | persistent descriptor registrations, heap-ordered deadlines, direct Queue/task-completion/blocking-pool wakeups, wait-epoch race containment, one-winner cleanup, and event-or-deadline idle blocking without a periodic tick | `runtime_reactor` unit tests including `timers_fire_at_the_earliest_deadline_and_preserve_equal_deadline_order`, `one_persistent_fd_registration_aggregates_waiters_and_narrows_interest`, and `waker_coalescing_does_not_lose_inbox_entries_and_ready_is_deduplicated`; runtime-value direct-wakeup and cleanup tests; `scheduler_model` lost-wake/stale-epoch/one-winner state-space tests; `scheduler_mixed_wakeups_complete_in_mir_and_direct_backends`; `scripts/stress-scheduler.sh`; the contractual `scripts/bench-scalable-runtime.py` after-reactor run; and the MIR/direct parity matrix |
 | `yield_now` cooperative scheduling, zero-argument typing, explicit ready-set requeue, unit result, and backend parity | focused call-surface, semantic, MIR-runtime, native-codegen, analysis, language-server, and extension tests; the `yield_now` check/run fixtures; `examples/concurrency/yield_now.au`; and the forced MIR/direct parity matrix |
 | compiler-inserted scheduling checks on every ordinary and `continue` loop backedge; exit-path bypass; no implicit cancellation check; amortized function-local MIR/native fuel; sequential-program elision; and timer/Queue/socket progress on both backends | focused MIR lowering, MIR-runtime, native-codegen, and validation tests; `loop_backedge_safepoints_prevent_timer_and_queue_starvation`; the loopback-socket safepoint regression; the `sleeper_vs_hot_loop.au` scalable-runtime workload; the contractual starvation benchmark; and the forced MIR/direct parity matrix |
-| Accepted ADR-0032 guarded 512 KiB default task stacks, exact `int64` 256 KiB..64 MiB collision-free overrides with 256 KiB reserved for measured shallow tasks, page rounding without clamping, and off-coroutine HTTP/TLS/WebSocket protocol steps | focused call-surface, semantic, MIR, native-codegen, scheduler-allocation, protocol-service, recursion, language-server, and both-backend CLI tests; maintained loopback HTTP, TLS, and WebSocket round trips; the scalable-runtime same-process baseline/parked-task measurements; and the MIR/direct parity matrix |
+| Accepted ADR-0032 guarded default task stacks (768 KiB since 2 August 2026), exact `int64` 256 KiB..64 MiB collision-free overrides with 256 KiB reserved for measured shallow tasks, page rounding without clamping, and off-coroutine HTTP/TLS/WebSocket protocol steps | focused call-surface, semantic, MIR, native-codegen, scheduler-allocation, protocol-service, recursion, language-server, and both-backend CLI tests; maintained loopback HTTP, TLS, and WebSocket round trips; the scalable-runtime same-process baseline/parked-task measurements; and the MIR/direct parity matrix |
 | unique mutable scheduler ownership; owned nested-start admission with synchronous preparation failure and safe immediate waits; internal FIFO admission without a public scheduling-order promise; teardown cancellation and observer wakeup; MIR/Rust unwind; and exact-once direct child/root stack-reset containment | `nested_spawns_are_fifo_and_an_immediate_child_wait_is_safe`, `nested_stack_allocation_failure_is_synchronous_and_does_not_enqueue_a_task`, `lightweight_scheduler_teardown_cancels_abandoned_tasks_and_runs_cleanup_once`, `pure_rust_abandoned_task_unwinds_owned_values_once_at_teardown`, `direct_cleanup_can_spawn_a_child_before_the_parent_is_retired`, and `generated_root_cleanup_runs_once_on_forced_exit_and_not_on_normal_return` in `runtime_value_tests`; the direct-root, unstarted-task, started-task, and normal-completion ownership tests in `native_runtime_tests`; the event-multiset oracle in `scheduler_nested_spawns.au`; `nested_scheduler_spawns_preserve_outcomes_cleanup_and_backend_parity`; and the raw-scheduler-alias rejection in `scripts/check-hygiene.sh` |
 | Accepted ADR-0033 structural Transfer, owned Copy snapshots, explicit/concrete generic task targets, Queue constructor/send payload enforcement, conditional Task Copy, static single-consumer observation, `AU3008` boundary diagnostics, `AU3009` duplication diagnostics, and atomic one-winner runtime defense | `task_boundaries_accept_structurally_transferable_values_and_results`, `task_boundary_diagnostics_explain_the_exact_nested_non_transfer_reason`, `task_transfer_checks_use_the_concrete_generic_specialization`, `queue_transport_requires_transfer_payloads_but_handle_only_methods_do_not`, `owned_builtin_snapshots_are_transfer_but_live_authority_is_not`, `task_target_explicit_specialization_and_contextual_defaults_are_concrete`, `task_capture_materializes_copy_snapshots_but_not_noncopy_shared_views`, `task_result_observation_rights_follow_repeatability`, and `clone_producing_operations_cannot_duplicate_task_observation_rights`; runtime-value, MIR-runtime, and native-runtime claim tests; the `task_transfer_*`, `queue_transfer_*`, and `task_result_*` check fixtures; `task_transfer_runtime_matrix.au`; its MIR/direct CLI parity test; compiler-service/LSP evidence; and the forced backend parity matrix |
 | Pinned-worker multicore task execution, available-core default, provisional positive `AURA_WORKERS` override and exact `AU4006` rejection, stable spawn-time affinity across yield/timer/Queue waits, no migration or work stealing, cross-worker Queue/Task wakeups, per-task cancellation/diagnostic isolation, and MIR/direct parity with unspecified scheduling/output order | `lightweight_worker_count_defaults_and_rejects_invalid_overrides`, `lightweight_tasks_are_pinned_across_yield_timer_and_queue_waits`, `lightweight_workers_make_cpu_progress_concurrently`, task-context isolation tests, the `multicore_queue_task_matrix` run fixture, its MIR/direct CLI parity test, and the forced backend parity matrix |
@@ -5487,17 +5511,23 @@ This page documents known current limits of the Aura compiler and runtime.
   Work stealing, preemption, and detached tasks are unavailable. Parallel
   speedup depends on the workload, and automatic parallelism applies only to
   task execution.
-- Ordinary lightweight tasks request 512 KiB of writable coroutine stack.
+- Ordinary lightweight tasks request 768 KiB of writable coroutine stack.
   `TaskGroup.start_with_stack` and `start_soon_with_stack` accept exact
   `int64` requests from 256 KiB through 64 MiB inclusive. Accepted requests
   are rounded upward to the host page size and guard-protected; smaller and
   larger requests are rejected rather than clamped. The MIR/direct runtime
   entry thread reserves 64 MiB, and maintained execution paths stop with a
-  friendly recursion-depth diagnostic after 256 nested Aura calls. The
+  friendly recursion-depth diagnostic after 256 nested Aura calls. On the
+  MIR backend a call that would leave less than the interpreter's headroom
+  reserve on the task's writable stack (128 KiB in optimized builds,
+  224 KiB in debug-assertion builds, measured above the guard page) traps
+  with `AU4005` first; the direct backend has only the depth limit. The
   override API is Provisional under ADR-0032. The 256 KiB lower bound is an
   opt-in minimum for measured shallow tasks, not the generally safe default;
   the complete compiled Aura HTTP example faulted when 256 KiB was the
-  global default and succeeds at 512 KiB. An isolated runtime protocol
+  global default and succeeded at the then-current 512 KiB default; the
+  maintained default has since been raised to 768 KiB. An isolated runtime
+  protocol
   round trip succeeds with 256 KiB callers because it excludes compiled
   language-execution frames; it proves the service offload boundary, not a
   256 KiB whole-program default.
@@ -6176,6 +6206,14 @@ An explicit task-stack request has exact type `int64` and an inclusive
 checking. A dynamic value outside that range and a stack-allocation or
 platform-size failure trap with `AU4005`; Aura never clamps the request or
 silently substitutes the default.
+
+On the MIR backend, an Aura call that would leave less than the interpreter's
+headroom reserve on the running task's writable coroutine stack also traps
+with `AU4005` ("task stack exhausted while calling ..."), naming the callee
+and the writable bytes that remain; the guard page below the requested
+capacity is excluded from that headroom. The reserve is 128 KiB in an
+optimized interpreter build and 224 KiB in a debug-assertion build. The direct
+backend performs no headroom probe and has only its 256-call depth limit.
 
 `AU4006` reports invalid process runtime configuration.
 `AURA_WORKERS`, `AURA_BLOCKING_WORKERS`, and
@@ -7232,7 +7270,7 @@ loop fuel. Direct native code uses 4,096 units and replenishes the fuel after
 yielding. A program proven to have no possible sibling Aura task elides the
 runtime check entirely. These backend strategies may produce different valid
 interleavings; scheduling order is not observable language order. An ordinary
-lightweight task requests 512 KiB of writable coroutine stack. The
+lightweight task requests 768 KiB of writable coroutine stack. The
 `TaskGroup.start_with_stack` and `start_soon_with_stack` methods accept an
 exact `int64` request from 256 KiB through 64 MiB inclusive. Accepted requests
 are rounded upward to the host page size and guard-protected; out-of-range
@@ -7240,7 +7278,8 @@ requests are rejected rather than clamped. This surface is Provisional under
 ADR-0032. The 256 KiB lower bound is an explicit minimum for measured shallow
 tasks, not the general default. The complete compiled Aura HTTP example,
 including its MIR/direct language-execution frames, proved unsafe when
-256 KiB was the global task default and succeeds with the 512 KiB default.
+256 KiB was the global task default and succeeded with the then-current
+512 KiB default; the maintained default has since been raised to 768 KiB.
 The separate isolated runtime round trip that forces protocol callers to
 256 KiB proves that service workers own the deep host protocol frames; it
 does not measure the full compiled task stack.
@@ -16737,7 +16776,8 @@ Aura 0.3 uses structured concurrency:
 - `TaskGroup()` owns child tasks inside `with`
 - `TaskGroup.start(...)` returns a `Task[T]`
 - `TaskGroup.start_soon(...)` starts a child whose result is not retained
-- Accepted ADR-0032 adds guarded 512 KiB default task stacks plus
+- Accepted ADR-0032 adds guarded default task stacks (512 KiB at acceptance,
+  768 KiB since 2 August 2026) plus
   `TaskGroup.start_with_stack(...)` and `start_soon_with_stack(...)` overrides
   from the measured-shallow-task 256 KiB minimum through 64 MiB
 - `Queue[T]` provides bounded or unbounded task-aware communication
@@ -16762,7 +16802,7 @@ starving ready timers, Queue operations, and sockets assigned to the same
 worker indefinitely. Ordinary loop tails and `continue` participate; `break`
 and `return` bypass the backedge. The checks do not inspect cancellation, and
 one long loop body can still delay same-worker siblings. Ordinary tasks request
-a guarded 512 KiB coroutine stack; explicit requests may range through 64 MiB.
+a guarded 768 KiB coroutine stack; explicit requests may range through 64 MiB.
 Waits
 use persistent descriptor registrations, heap-managed deadlines, and direct
 Queue, task-completion, and blocking-pool notifications; an idle worker blocks
@@ -18160,7 +18200,7 @@ with group = TaskGroup():
 
 ## Choosing A Custom Task Stack
 
-Ordinary tasks use a guarded 512 KiB stack. That is the safe default for
+Ordinary tasks use a guarded 768 KiB stack. That is the safe default for
 application code and keeps large task populations economical. If measurement
 shows that one child has a different task-local stack requirement, use a
 collision-free stack override:
@@ -18181,8 +18221,9 @@ guard-protected.
 
 Treat 256 KiB as an opt-in minimum only for a measured shallow task. It is not
 the ordinary default: Aura's complete compiled HTTP example faulted when
-256 KiB was the global task default during integration and succeeds with the
-512 KiB default. The lower-level runtime round trip that succeeds with
+256 KiB was the global task default during integration and succeeded with the
+then-current 512 KiB default; the maintained default is now 768 KiB. The
+lower-level runtime round trip that succeeds with
 256 KiB protocol callers intentionally omits compiled Aura execution
 frames; it proves that deep protocol frames run on service workers, not that
 every complete Aura task is safe at 256 KiB.
@@ -18417,7 +18458,7 @@ and `continue` take the check; `break` and `return` leave without it. This
 keeps a tight loop from freezing timers, queues, and sockets assigned to the
 same worker indefinitely, but one long loop body or long straight-line
 computation can still delay same-worker siblings. Ordinary tasks request a
-guarded 512 KiB coroutine stack, with an explicit per-child override available
+guarded 768 KiB coroutine stack, with an explicit per-child override available
 through the two `_with_stack` methods. Scheduler waits are event-driven:
 descriptors stay registered, deadlines are kept in a timer heap, and Queue,
 task-completion, and blocking-pool events notify the responsible worker
@@ -18436,7 +18477,7 @@ Deep HTTP, TLS, and maintained Unix WebSocket library frames run on a bounded
 protocol-step service with deep native worker stacks. Each step is bounded and
 nonblocking; the child gets ownership of its protocol state back before
 observing cancellation or returning to reactor readiness waiting. Ordinary
-application tasks use the guarded 512 KiB default stack; protocol workers
+application tasks use the guarded 768 KiB default stack; protocol workers
 carry the deepest maintained third-party library frames.
 
 The protocol-step pool starts lazily and lives until the Aura process exits;
@@ -24781,7 +24822,7 @@ unresolved type parameter at the task boundary.
 
 ### Per-task Stack Overrides
 
-`TaskGroup.start(...)` and `start_soon(...)` use Aura's guarded 512 KiB
+`TaskGroup.start(...)` and `start_soon(...)` use Aura's guarded 768 KiB
 default task stack. A child with a measured task-local stack requirement can
 request a custom capacity without changing its target arguments:
 
@@ -24801,7 +24842,8 @@ need for a custom capacity.
 The lower 256 KiB bound is also available for an explicitly measured shallow
 task, but it is not the generally safe default. Aura's complete compiled
 HTTP example faulted when 256 KiB was used as the global task default during
-integration and succeeds with the 512 KiB default. A separate runtime-only
+integration and succeeded with the then-current 512 KiB default (the
+maintained default is now 768 KiB). A separate runtime-only
 round trip succeeds with forced 256 KiB protocol callers because the deep
 host frames execute on service workers; that narrower check does not include
 the compiled program's MIR/direct execution frames.
@@ -24983,7 +25025,7 @@ timers, Queue operations, or socket work assigned to the same worker to
 proceed. `break` and `return` leave the loop without taking that check.
 One long loop body or straight-line computation can still delay same-worker
 siblings, and the check does not inspect cancellation. Each ordinary
-lightweight task requests a guarded 512 KiB coroutine stack; the explicit
+lightweight task requests a guarded 768 KiB coroutine stack; the explicit
 stack-start methods accept requests through 64 MiB. Descriptor registrations
 persist across waits, deadlines use a timer heap, and Queue, task-completion,
 and blocking-pool events notify the responsible worker directly. With nothing
@@ -25970,12 +26012,12 @@ ordinary body tail and `continue`; `break` and `return` bypass it. Tight loops
 therefore allow ready timers, queues, or sockets assigned to the same worker
 to proceed, although a single long loop body can still delay
 same-worker siblings. The check does not inspect cancellation. Ordinary tasks
-request a guarded 512 KiB coroutine stack. The two explicit stack-start
+request a guarded 768 KiB coroutine stack. The two explicit stack-start
 methods accept an exact `int64` byte request from 256 KiB through 64 MiB
 inclusive, reject out-of-range values without clamping, and page-round
 accepted requests. The 256 KiB lower bound is for measured shallow tasks, not
-the generally safe default. The complete compiled Aura HTTP example requires
-the 512 KiB default; an isolated runtime round trip can use 256 KiB protocol
+the generally safe default. The complete compiled Aura HTTP example faulted at
+256 KiB and succeeds with the 768 KiB default; an isolated runtime round trip can use 256 KiB protocol
 callers because it excludes the compiled program's language-execution frames
 and keeps deep host protocol frames on service workers.
 Scheduler waits use persistent descriptor

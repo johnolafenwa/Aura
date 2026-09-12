@@ -190,17 +190,23 @@ This page documents known current limits of the Aura compiler and runtime.
   Work stealing, preemption, and detached tasks are unavailable. Parallel
   speedup depends on the workload, and automatic parallelism applies only to
   task execution.
-- Ordinary lightweight tasks request 512 KiB of writable coroutine stack.
+- Ordinary lightweight tasks request 768 KiB of writable coroutine stack.
   `TaskGroup.start_with_stack` and `start_soon_with_stack` accept exact
   `int64` requests from 256 KiB through 64 MiB inclusive. Accepted requests
   are rounded upward to the host page size and guard-protected; smaller and
   larger requests are rejected rather than clamped. The MIR/direct runtime
   entry thread reserves 64 MiB, and maintained execution paths stop with a
-  friendly recursion-depth diagnostic after 256 nested Aura calls. The
+  friendly recursion-depth diagnostic after 256 nested Aura calls. On the
+  MIR backend a call that would leave less than the interpreter's headroom
+  reserve on the task's writable stack (128 KiB in optimized builds,
+  224 KiB in debug-assertion builds, measured above the guard page) traps
+  with `AU4005` first; the direct backend has only the depth limit. The
   override API is Provisional under ADR-0032. The 256 KiB lower bound is an
   opt-in minimum for measured shallow tasks, not the generally safe default;
   the complete compiled Aura HTTP example faulted when 256 KiB was the
-  global default and succeeds at 512 KiB. An isolated runtime protocol
+  global default and succeeded at the then-current 512 KiB default; the
+  maintained default has since been raised to 768 KiB. An isolated runtime
+  protocol
   round trip succeeds with 256 KiB callers because it excludes compiled
   language-execution frames; it proves the service offload boundary, not a
   256 KiB whole-program default.

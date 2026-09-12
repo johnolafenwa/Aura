@@ -2117,16 +2117,16 @@ impl BuiltinMember {
                 "Waits for the task result or returns `default` when the task fails, the timeout expires, or cancellation interrupts the wait. Observing non-repeatable `T` consumes the unique `Task[T]` observation right. Copy data, `Queue` handles, and recursively repeatable `Task` handles remain repeatable; `Task[T]` is copyable only when `T` is repeatable."
             }
             Self::TaskGroupStart => {
-                "Starts a child task on the guarded 512 KiB default stack and returns its handle."
+                "Starts a child task on the guarded 768 KiB default stack and returns its handle."
             }
             Self::TaskGroupStartSoon => {
-                "Starts a child task on the guarded 512 KiB default stack without returning a task handle."
+                "Starts a child task on the guarded 768 KiB default stack without returning a task handle."
             }
             Self::TaskGroupStartWithStack => {
-                "Starts a child task with a guarded 256 KiB..64 MiB stack request and returns its handle. The 256 KiB minimum is opt-in for a measured shallow task; ordinary starts use the safe 512 KiB default."
+                "Starts a child task with a guarded 256 KiB..64 MiB stack request and returns its handle. The 256 KiB minimum is opt-in for a measured shallow task; ordinary starts use the safe 768 KiB default."
             }
             Self::TaskGroupStartSoonWithStack => {
-                "Starts a child task with a guarded 256 KiB..64 MiB stack request without returning a task handle. The 256 KiB minimum is opt-in for a measured shallow task; ordinary starts use the safe 512 KiB default."
+                "Starts a child task with a guarded 256 KiB..64 MiB stack request without returning a task handle. The 256 KiB minimum is opt-in for a measured shallow task; ordinary starts use the safe 768 KiB default."
             }
             Self::TaskGroupCancel => {
                 "Signals cancellation to child tasks in the current task group."

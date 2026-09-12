@@ -509,8 +509,8 @@ grep -Fq 'A dynamic value outside that range and a stack-allocation or' docs/man
 grep -Fq '## Choosing A Custom Task Stack' docs/learn/concurrency.md
 grep -Fq '### Per-task Stack Overrides' tutorials/13-concurrency.md
 grep -Fq 'compiler bridge exposes guarded TaskGroup stack override completion and hover' tools/aura-language-server/test/compiler_bridge.test.js
-grep -Fq 'ordinary starts use the safe 512 KiB default' crates/aura-compiler/src/call.rs
-grep -Fq 'Accepted ADR-0032 guarded 512 KiB default task stacks' docs/manual/conformance.md
+grep -Fq 'ordinary starts use the safe 768 KiB default' crates/aura-compiler/src/call.rs
+grep -Fq 'Accepted ADR-0032 guarded default task stacks (768 KiB since 2 August 2026)' docs/manual/conformance.md
 grep -Fq 'consuming a bare shared parameter reports that parameter `x` is' docs/manual/diagnostics.md
 grep -Fq 'the current compiler emits at most one' docs/manual/diagnostics.md
 grep -Fq 'constant tuple indexing that selects a non-copy element' docs/manual/diagnostics.md

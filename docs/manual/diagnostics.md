@@ -512,6 +512,14 @@ checking. A dynamic value outside that range and a stack-allocation or
 platform-size failure trap with `AU4005`; Aura never clamps the request or
 silently substitutes the default.
 
+On the MIR backend, an Aura call that would leave less than the interpreter's
+headroom reserve on the running task's writable coroutine stack also traps
+with `AU4005` ("task stack exhausted while calling ..."), naming the callee
+and the writable bytes that remain; the guard page below the requested
+capacity is excluded from that headroom. The reserve is 128 KiB in an
+optimized interpreter build and 224 KiB in a debug-assertion build. The direct
+backend performs no headroom probe and has only its 256-call depth limit.
+
 `AU4006` reports invalid process runtime configuration.
 `AURA_WORKERS`, `AURA_BLOCKING_WORKERS`, and
 `AURA_BLOCKING_QUEUE_CAPACITY` each require a positive decimal integer.

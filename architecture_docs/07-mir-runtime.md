@@ -69,7 +69,7 @@ This dedicated entry thread reserves a 64 MiB host stack. Aura task bodies
 execute as stackful coroutines on the pinned-worker scheduler. The worker
 count defaults to the available parallelism reported by the host, and a child
 remains on its
-spawn-time worker. Lightweight tasks use a guarded 512 KiB default stack.
+spawn-time worker. Lightweight tasks use a guarded 768 KiB default stack.
 `TaskGroup.start_with_stack` and `start_soon_with_stack` can select a guarded
 stack from 256 KiB through 64 MiB for an individual child.
 

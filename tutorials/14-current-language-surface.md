@@ -795,12 +795,12 @@ ordinary body tail and `continue`; `break` and `return` bypass it. Tight loops
 therefore allow ready timers, queues, or sockets assigned to the same worker
 to proceed, although a single long loop body can still delay
 same-worker siblings. The check does not inspect cancellation. Ordinary tasks
-request a guarded 512 KiB coroutine stack. The two explicit stack-start
+request a guarded 768 KiB coroutine stack. The two explicit stack-start
 methods accept an exact `int64` byte request from 256 KiB through 64 MiB
 inclusive, reject out-of-range values without clamping, and page-round
 accepted requests. The 256 KiB lower bound is for measured shallow tasks, not
-the generally safe default. The complete compiled Aura HTTP example requires
-the 512 KiB default; an isolated runtime round trip can use 256 KiB protocol
+the generally safe default. The complete compiled Aura HTTP example faulted at
+256 KiB and succeeds with the 768 KiB default; an isolated runtime round trip can use 256 KiB protocol
 callers because it excludes the compiled program's language-execution frames
 and keeps deep host protocol frames on service workers.
 Scheduler waits use persistent descriptor

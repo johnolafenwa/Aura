@@ -4,6 +4,24 @@
 - Date: 2026-07-27
 - Accepted: 2026-07-29 (Batch 4 checkpoint)
 - Roadmap decision: Batch 4, Phase 5.4
+- Amended: 2026-09-12 (maintained default recorded as 768 KiB; see below)
+
+## Amendment (2026-09-12): the maintained default is 768 KiB
+
+The implemented default requested capacity has been 786,432 bytes (768 KiB)
+since commit `a6b873f1` (2 August 2026), which raised
+`LIGHTWEIGHT_TASK_STACK_SIZE` because the MIR interpreter can nest several
+large checked-dispatch frames before a task reaches a blocking host call. The
+decision text below keeps the 512 KiB value accepted at the Batch 4 checkpoint
+as history; it is not rewritten. The maintained surface (Manual, hover text,
+API index, tutorials, and the LLM export) was reconciled to 768 KiB on
+12 September 2026 after the Batch 1 phase 1 review found the drift. The
+override methods, their 256 KiB..64 MiB range, page rounding, guard-page
+behavior, and the 256 KiB opt-in minimum are unchanged. The same follow-up
+made the interpreter's headroom probe exclude the allocator's guard layout
+from the published writable limit and sized its reserve from measured call
+transitions; `docs/manual/concurrency.md` describes the resulting `AU4005`
+behavior.
 
 ## Context
 
