@@ -847,3 +847,13 @@ fn integer_value_helpers_cover_division_remainder_comparisons_and_bounds() {
         None
     );
 }
+
+#[test]
+fn returned_view_types_have_no_integer_bounds() {
+    let view = Type::ReturnedView(Box::new(crate::sema::ReturnedViewType {
+        mutable: false,
+        pointee: Type::named("int64"),
+        origin: 0,
+    }));
+    assert_eq!(integer_type_bounds(&view), None);
+}

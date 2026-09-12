@@ -4661,7 +4661,7 @@ fn container_mutation_callables(
             args.get(1)
         }
         "pop" | "popitem" | "remove" | "discard" | "clear" | "reverse" | "sort" | "swap"
-        | "sort_by" | "shuffle" | "truncate" | "retain" | "drain" => None,
+        | "shuffle" | "truncate" | "retain" | "drain" => None,
         _ => return Ok(None),
     };
     let inserts_operand = matches!(
@@ -11259,6 +11259,39 @@ impl<'a> Lowerer<'a> {
                         trait_name: None,
                     });
                 }
+                // `module.Class.associated(...)`: an associated method of an
+                // imported class is a declared callee with its own returned
+                // view contract, exactly like the local `Class.associated`.
+                if let Some((module_path, class_name)) = self.qualified_module_item(object) {
+                    if let Some(namespace) = self.module_namespace(&module_path) {
+                        if let Some(class) = namespace
+                            .classes
+                            .get(&class_name)
+                            .or_else(|| namespace.all_classes.get(&class_name))
+                        {
+                            if let Some(method) = class
+                                .methods
+                                .get(field)
+                                .filter(|method| method.decl.receiver.is_none())
+                            {
+                                if class.decl.type_params.is_empty() {
+                                    let mut type_param_bounds = class.type_param_bounds.clone();
+                                    type_param_bounds.extend(method.type_param_bounds.clone());
+                                    return Some(ReturnedViewCallee {
+                                        decl: method.decl.clone(),
+                                        receiver: None,
+                                        module_name: class.module_name.clone(),
+                                        type_param_bounds,
+                                        param_types: method.signature.params.clone(),
+                                        return_type: method.signature.return_type.clone(),
+                                        receiver_type: None,
+                                        trait_name: None,
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
                 let receiver_ty = self.infer_expr_type(object)?;
                 let authoritative_trait_name = self.bounded_trait_member_identity(object, field);
                 if authoritative_trait_name.is_none() {
@@ -17308,6 +17341,21 @@ impl<'a> Lowerer<'a> {
             };
             return self.lower_call(&expanded_expr, &expanded, args, expected);
         }
+        // A grouped explicit specialization such as `(Wrapped[int64])(...)`
+        // keeps its parentheses through alias expansion; the checker already
+        // looked through the group, so lowering does the same.
+        if let ExprKind::Group(inner) = &callee.kind {
+            if matches!(inner.kind, ExprKind::Specialize { .. }) {
+                let ungrouped = Expr {
+                    kind: ExprKind::Call {
+                        callee: inner.clone(),
+                        args: args.to_vec(),
+                    },
+                    span: expr.span,
+                };
+                return self.lower_call(&ungrouped, inner, args, expected);
+            }
+        }
         let temp = expected
             .cloned()
             .map(|ty| self.new_typed_temp(ty))
@@ -19038,6 +19086,63 @@ impl<'a> Lowerer<'a> {
         }
     }
 
+    /// Infers a generic enum's type arguments for a variant constructor call
+    /// from the lowered types of its payload arguments, mirroring the
+    /// checker's payload-driven inference for `Enum.Variant(...)` calls that
+    /// spell no explicit type arguments.
+    fn infer_enum_variant_type_args(
+        &self,
+        enum_info: &crate::sema::EnumInfo,
+        variant_name: &str,
+        args: &[Argument],
+    ) -> Option<Vec<Type>> {
+        if enum_info.decl.type_params.is_empty() {
+            return Some(Vec::new());
+        }
+        let variant = enum_info.variants.get(variant_name)?;
+        let type_params = enum_info
+            .decl
+            .type_params
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        let mut substitutions = std::collections::HashMap::new();
+        for (index, argument) in args.iter().enumerate() {
+            let slot = if variant.named_payloads {
+                argument
+                    .name
+                    .as_ref()
+                    .and_then(|name| {
+                        variant
+                            .payloads
+                            .iter()
+                            .position(|payload| payload.name.as_deref() == Some(name.as_str()))
+                    })
+                    .unwrap_or(index)
+            } else {
+                index
+            };
+            let Some(payload) = variant.payloads.get(slot) else {
+                continue;
+            };
+            let Some(actual) = self.infer_expr_type(&argument.value) else {
+                continue;
+            };
+            let _ = crate::sema::type_pattern_matches(
+                &payload.ty,
+                &actual,
+                &type_params,
+                &mut substitutions,
+            );
+        }
+        enum_info
+            .decl
+            .type_params
+            .iter()
+            .map(|type_param| substitutions.get(type_param).cloned())
+            .collect()
+    }
+
     fn builtin_enum_variant_type(&self, receiver_type: &Type, field: &str) -> Option<Type> {
         match receiver_type {
             Type::Named(name, args) if name == "Option" && args.len() == 1 => {
@@ -19082,6 +19187,17 @@ impl<'a> Lowerer<'a> {
                     },
                     span: expr.span,
                 });
+            }
+            if let ExprKind::Group(inner) = &callee.kind {
+                if matches!(inner.kind, ExprKind::Specialize { .. }) {
+                    return self.infer_expr_type(&Expr {
+                        kind: ExprKind::Call {
+                            callee: inner.clone(),
+                            args: args.clone(),
+                        },
+                        span: expr.span,
+                    });
+                }
             }
         }
         match &expr.kind {
@@ -19550,10 +19666,13 @@ impl<'a> Lowerer<'a> {
                                 }
                                 if let Some(enum_info) = namespace.enums.get(&item_name) {
                                     if enum_info.variants.contains_key(field) {
-                                        return Some(Type::named(mir_runtime_enum_name(
-                                            self.program,
-                                            enum_info,
-                                        )));
+                                        let type_args = self
+                                            .infer_enum_variant_type_args(enum_info, field, args)
+                                            .unwrap_or_default();
+                                        return Some(Type::Named(
+                                            mir_runtime_enum_name(self.program, enum_info),
+                                            type_args,
+                                        ));
                                     }
                                 }
                             }
@@ -19687,9 +19806,21 @@ impl<'a> Lowerer<'a> {
                         if let Type::Named(class_name, class_args) = &receiver_type {
                             if let Some(enum_info) = self.resolve_enum_info(class_name) {
                                 if enum_info.variants.contains_key(field) {
+                                    // A bare generic enum name carries no type
+                                    // arguments; the checker inferred them from
+                                    // the payload arguments, so the lowered
+                                    // local type must carry the same arity.
+                                    let type_args = if class_args.is_empty()
+                                        && !enum_info.decl.type_params.is_empty()
+                                    {
+                                        self.infer_enum_variant_type_args(enum_info, field, args)
+                                            .unwrap_or_default()
+                                    } else {
+                                        class_args.clone()
+                                    };
                                     return Some(Type::Named(
                                         mir_runtime_enum_name(self.program, enum_info),
-                                        class_args.clone(),
+                                        type_args,
                                     ));
                                 }
                             }

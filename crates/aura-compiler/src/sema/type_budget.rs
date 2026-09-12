@@ -488,7 +488,9 @@ fn check_key_shape(
                 );
             }
             Type::Callable(callable) => {
-                add_key_bytes(&mut bytes, 12, byte_limit, span)?;
+                // `["callable",` plus the separators around the task flag,
+                // call kind, parameter list, and result.
+                add_key_bytes(&mut bytes, 16, byte_limit, span)?;
                 add_key_bytes(
                     &mut bytes,
                     bool_json_len(callable.task) + closure_call_kind_json_len(callable.call_kind),

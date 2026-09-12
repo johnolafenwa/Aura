@@ -1013,3 +1013,24 @@ fn lexer_covers_extended_escape_brace_float_and_identifier_edges() {
         );
     }
 }
+
+#[test]
+fn delimited_match_layout_islands_reject_inconsistent_dedents() {
+    let error = lex([
+        "consume(",
+        "    match value:",
+        "            case 1:",
+        "                    1",
+        "              case 2: 2",
+        ")",
+    ]
+    .join("\n")
+    .as_str())
+    .expect_err("a dedent that matches no island level must fail");
+    assert_eq!(error.code, "AU1001");
+    assert!(
+        error.message.contains("inconsistent indentation"),
+        "unexpected message {:?}",
+        error.message
+    );
+}

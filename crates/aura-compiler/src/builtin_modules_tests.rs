@@ -740,3 +740,39 @@ fn union_annotation_helpers_preserve_normalized_members() {
     );
     assert_eq!(super::lower_type_ref(&ty).to_string(), "int64 | None");
 }
+
+#[test]
+fn builtin_callable_type_refs_lower_to_callable_storage_types() {
+    let span = Span::new(1, 1);
+    let signature = TypeRef::function(
+        vec![TypeRef::named("int64", Vec::new(), false, span)],
+        TypeRef::named("str", Vec::new(), false, span),
+        span,
+    );
+    let lowered = lower_type_ref(&TypeRef::callable(
+        true,
+        ReceiverKind::BorrowMut,
+        signature,
+        span,
+    ));
+    let Type::Callable(callable) = lowered else {
+        panic!("expected a callable, found {lowered}");
+    };
+    assert!(callable.task);
+    assert_eq!(
+        callable.call_kind,
+        crate::sema::closure_call_kind_for(ReceiverKind::BorrowMut)
+    );
+    assert_eq!(callable.params.len(), 1);
+    assert_eq!(callable.params[0].ty, Type::named("int64"));
+    assert_eq!(callable.return_type, Type::named("str"));
+    assert_eq!(
+        lower_type_ref(&TypeRef::callable(
+            false,
+            ReceiverKind::Borrow,
+            TypeRef::named("int64", Vec::new(), false, span),
+            span,
+        )),
+        Type::named("Unknown")
+    );
+}

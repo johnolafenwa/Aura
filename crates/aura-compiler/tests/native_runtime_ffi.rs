@@ -62,11 +62,14 @@ fn append_direct_ffi_text(encoded: &mut Vec<u8>, text: &str) {
 fn append_direct_ffi_type(encoded: &mut Vec<u8>, code: u8, nominal_name: &str) {
     encoded.push(code);
     append_direct_ffi_text(encoded, nominal_name);
+    // Version 1 carries the nullable-handle union metadata after the nominal
+    // name; every boundary kind exercised here is a plain type.
+    append_direct_ffi_text(encoded, "");
 }
 
 fn direct_ffi_spec(symbol: &str, params: &[(u8, u8, &str)], result: (u8, &str)) -> Vec<u8> {
     let mut encoded = b"AUFI".to_vec();
-    encoded.push(0);
+    encoded.push(DIRECT_FFI_SPEC_VERSION);
     append_direct_ffi_text(&mut encoded, symbol);
     encoded.extend_from_slice(&(params.len() as u32).to_le_bytes());
     for (passing, ty, nominal_name) in params {
@@ -436,7 +439,7 @@ fn unique_temp_path(name: &str) -> String {
 }
 
 #[test]
-fn direct_ffi_adapter_executes_every_v0_boundary_kind_through_the_library_copy() {
+fn direct_ffi_adapter_executes_every_boundary_kind_through_the_library_copy() {
     let _runtime_guard = direct_runtime_ffi_test_guard();
     // Keep every test-owned C symbol in the executable's process-global symbol
     // table. The adapter still resolves by name, exactly as generated Aura

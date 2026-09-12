@@ -9054,3 +9054,353 @@ fn stored_view_contracts_hover_with_their_origin() {
             .collect::<Vec<_>>()
     );
 }
+
+// Batch 1 coverage: analysis helper branches that only hand-built inputs reach.
+use super::{
+    expression_start_span, find_matching_open_delimiter, lower_callable_type_ref,
+    LambdaCaptureOpener,
+};
+use crate::ast::{
+    BindingPattern, BindingTarget, CompareLink, CompareOp, Pattern, TuplePattern, UnaryOp,
+};
+use crate::sema::{closure_call_kind_for, CallableType, ReturnedViewType};
+
+fn spanned(kind: ExprKind, line: usize, column: usize) -> Expr {
+    Expr {
+        kind,
+        span: Span::new(line, column),
+    }
+}
+
+#[test]
+fn base_type_names_and_type_arguments_cover_views_unions_and_callables() {
+    let view = Type::ReturnedView(Box::new(ReturnedViewType {
+        mutable: false,
+        pointee: Type::named("int64"),
+        origin: 0,
+    }));
+    assert_eq!(base_type_name(&view), "view");
+    assert_eq!(view.type_arguments(), &[]);
+    let callable = |task: bool| {
+        Type::Callable(Box::new(CallableType {
+            task,
+            call_kind: closure_call_kind_for(ReceiverKind::Borrow),
+            params: Vec::new(),
+            return_type: Type::Unit,
+        }))
+    };
+    assert_eq!(base_type_name(&callable(true)), "TaskCallable");
+    assert_eq!(base_type_name(&callable(false)), "Callable");
+    let union = Type::normalize_union(
+        vec![Type::named("int64"), Type::named("str")],
+        "<main>",
+        &BTreeMap::new(),
+    )
+    .expect("two-member unions normalize");
+    assert_eq!(union.type_arguments(), &[]);
+}
+
+#[test]
+fn builtin_function_return_types_stay_unknown_for_select_round_and_divmod() {
+    for name in ["select", "round", "divmod"] {
+        assert_eq!(builtin_function_return_type(name), None, "{name}");
+    }
+}
+
+#[test]
+fn callable_type_refs_lower_only_around_function_signatures() {
+    let lowered = lower_callable_type_ref(
+        true,
+        ReceiverKind::Value,
+        Type::Function {
+            params: Vec::new(),
+            return_type: Box::new(Type::named("int64")),
+        },
+    );
+    let Type::Callable(callable) = lowered else {
+        panic!("expected a callable, found {lowered}");
+    };
+    assert!(callable.task);
+    assert_eq!(
+        callable.call_kind,
+        closure_call_kind_for(ReceiverKind::Value)
+    );
+    assert_eq!(callable.return_type, Type::named("int64"));
+    assert_eq!(
+        lower_callable_type_ref(false, ReceiverKind::Borrow, Type::named("int64")),
+        Type::named("Unknown")
+    );
+}
+
+#[test]
+fn expression_start_spans_follow_the_leftmost_child() {
+    let leaf = || Box::new(spanned(ExprKind::Name("value".to_string()), 3, 2));
+    let operator = Span::new(3, 8);
+    let cases = vec![
+        ExprKind::Membership {
+            value: leaf(),
+            container: leaf(),
+            negated: false,
+            operator_span: operator,
+        },
+        ExprKind::CompareChain {
+            first: leaf(),
+            links: vec![CompareLink {
+                op: CompareOp::Less,
+                op_span: operator,
+                operand: spanned(ExprKind::Int(1), 3, 9),
+            }],
+        },
+        ExprKind::Member {
+            object: leaf(),
+            field: "field".to_string(),
+        },
+        ExprKind::Specialize {
+            expr: leaf(),
+            type_args: Vec::new(),
+        },
+        ExprKind::Cast {
+            expr: leaf(),
+            ty: type_ref("int64"),
+        },
+        ExprKind::Try(leaf()),
+        ExprKind::Group(leaf()),
+        ExprKind::Unary {
+            op: UnaryOp::Neg,
+            expr: leaf(),
+        },
+        ExprKind::IsNone {
+            value: leaf(),
+            negated: false,
+            operator_span: operator,
+        },
+        ExprKind::Conditional {
+            then_expr: leaf(),
+            condition: leaf(),
+            else_expr: leaf(),
+        },
+        ExprKind::Index {
+            object: leaf(),
+            index: leaf(),
+        },
+        ExprKind::Slice {
+            object: leaf(),
+            start: None,
+            end: None,
+            colon_span: operator,
+        },
+    ];
+    for kind in cases {
+        let outer = spanned(kind, 3, 6);
+        let start = expression_start_span(&outer);
+        assert_eq!((start.line, start.column), (3, 2));
+    }
+    let literal = spanned(ExprKind::Int(1), 4, 4);
+    let start = expression_start_span(&literal);
+    assert_eq!((start.line, start.column), (4, 4));
+}
+
+#[test]
+fn matching_open_delimiters_reject_braces_mismatches_and_string_closers() {
+    assert_eq!(find_matching_open_delimiter("{}", 1), None);
+    assert_eq!(find_matching_open_delimiter("f(a]", 3), None);
+    assert_eq!(find_matching_open_delimiter("\"(a)\"", 3), None);
+    assert_eq!(find_matching_open_delimiter("f(\"a\\\"b\")", 8), Some(1));
+    let line = "    x = (a + b).";
+    assert_eq!(
+        extract_receiver_before_dot(line, line.len()),
+        Some("(a + b)".to_string())
+    );
+}
+
+#[test]
+fn dangling_member_recovery_handles_dict_literals_and_out_of_range_lines() {
+    let unmatched = "def main():\n    foo(\n";
+    assert_eq!(
+        replace_dangling_member_stmt_with_recovery_stmt(unmatched, 10),
+        unmatched
+    );
+    let braces = "def main():\n    table = {\"a\": 1}\n    table.\n";
+    let recovered = replace_dangling_member_stmt_with_recovery_stmt(braces, 2);
+    assert_eq!(recovered.lines().nth(1), Some("    table = {\"a\": 1}"));
+    assert_ne!(recovered.lines().nth(2), Some("    table."));
+}
+
+#[test]
+fn lambda_capture_recovery_handles_out_of_range_openers_and_nested_brackets() {
+    let source = "def main():\n    pass\n";
+    assert_eq!(
+        replace_lambda_capture_statement_with_recovery_stmt(
+            source,
+            LambdaCaptureOpener {
+                line: 9,
+                character: 0,
+            },
+        ),
+        source
+    );
+    let nested = "def main():\n    f = lambda [xs[0]]: 1\n";
+    let recovered = replace_lambda_capture_statement_with_recovery_stmt(
+        nested,
+        LambdaCaptureOpener {
+            line: 1,
+            character: 15,
+        },
+    );
+    assert_eq!(recovered.lines().nth(1), Some("    pass"));
+}
+
+#[test]
+fn member_error_recovery_stops_when_replacements_leave_errors_in_place() {
+    fn keep(source: &str, _line: usize) -> String {
+        source.to_string()
+    }
+
+    let mut check_program = crate::check_source;
+    let type_error = "def main() -> int64:\n    return \"text\"\n";
+    assert!(
+        recover_checked_program_after_member_errors_with(type_error, &mut check_program, keep)
+            .is_none()
+    );
+    let member_error = "def main():\n    print(value.)\n";
+    assert!(recover_checked_program_after_member_errors_with(
+        member_error,
+        &mut check_program,
+        keep
+    )
+    .is_none());
+}
+
+#[test]
+fn match_binding_types_are_empty_without_an_enum_or_variant() {
+    let program = checked_program("enum Shape:\n    Circle(float64)\n\ndef main():\n    pass\n");
+    let builder = AnalysisBuilder::new("", &program, Vec::new());
+    assert_eq!(builder.match_binding_type(None, None, "Circle"), None);
+    assert_eq!(
+        builder.match_binding_type(None, Some("Shape"), "Missing"),
+        None
+    );
+}
+
+#[test]
+fn tuple_targets_and_patterns_tolerate_non_tuple_types() {
+    let program = checked_program("def main():\n    pass\n");
+    let mut builder = AnalysisBuilder::new("", &program, Vec::new());
+    let span = Span::new(1, 1);
+    let target = BindingTarget::Tuple {
+        elements: vec![
+            BindingTarget::Name {
+                name: "a".to_string(),
+                span,
+            },
+            BindingTarget::Name {
+                name: "b".to_string(),
+                span,
+            },
+        ],
+        span,
+    };
+    let mut scope = BTreeMap::new();
+    builder.bind_target_value(&target, &Type::named("int64"), 1, "local", &mut scope);
+    builder.bind_target_value_exact(&target, &Type::named("int64"), "local", &mut scope);
+    builder.insert_scope_target(&target, &Type::named("int64"), 1, "local", &mut scope);
+    builder.insert_scope_target_exact(&target, &Type::named("int64"), "local", &mut scope);
+    assert!(scope.is_empty());
+
+    let pattern = Pattern::Tuple(TuplePattern {
+        elements: vec![
+            Pattern::Binding(BindingPattern {
+                name: "a".to_string(),
+                span,
+            }),
+            Pattern::Binding(BindingPattern {
+                name: "b".to_string(),
+                span,
+            }),
+        ],
+        span,
+    });
+    let mut bindings = Vec::new();
+    builder.collect_match_pattern_bindings(&pattern, None, &mut bindings);
+    assert_eq!(
+        bindings
+            .iter()
+            .map(|(name, ty, _)| (name.as_str(), ty.clone()))
+            .collect::<Vec<_>>(),
+        vec![("a", Type::Unit), ("b", Type::Unit)]
+    );
+    builder.visit_match_pattern_occurrences(&pattern, None);
+}
+
+#[test]
+fn analysis_class_types_fall_back_to_module_qualified_identities() {
+    let mut program = checked_program("class Local:\n    value: int64\n\ndef main():\n    pass\n");
+    program.canonical_type_names.remove("Local");
+    let mut class_info = program.classes["Local"].clone();
+    let builder = AnalysisBuilder::new("", &program, Vec::new());
+    assert_eq!(
+        builder.analysis_class_type("Local", &class_info, Vec::new()),
+        Type::named("Local")
+    );
+    assert_eq!(
+        builder.analysis_class_type("pkg.Local", &class_info, Vec::new()),
+        Type::named("pkg.Local")
+    );
+    class_info.module_name = "remote".to_string();
+    assert_eq!(
+        builder.analysis_class_type("Local", &class_info, Vec::new()),
+        Type::named("remote.Local")
+    );
+}
+
+#[test]
+fn canonical_enum_identities_fall_back_to_the_defining_module() {
+    let mut program = checked_program("enum Value:\n    Null\n\ndef main():\n    pass\n");
+    program.canonical_type_names.remove("Value");
+    let mut enum_info = program.enums["Value"].clone();
+    enum_info.module_name = "remote".to_string();
+    let builder = AnalysisBuilder::new("", &program, Vec::new());
+    assert_eq!(
+        builder.canonical_enum_identity("Value", &enum_info),
+        "remote.Value"
+    );
+    assert_eq!(
+        builder.canonical_enum_identity("remote.Value", &enum_info),
+        "remote.Value"
+    );
+}
+
+#[test]
+fn associated_method_values_skip_generic_owners_and_receiver_methods() {
+    let program = checked_program(concat!(
+        "class Box[T]:\n",
+        "    value: T\n",
+        "\n",
+        "class Point:\n",
+        "    x: int64\n",
+        "\n",
+        "    def norm(self) -> int64:\n",
+        "        return self.x\n",
+        "\n",
+        "def main():\n",
+        "    pass\n",
+    ));
+    let builder = AnalysisBuilder::new("", &program, Vec::new());
+    let scope = BTreeMap::new();
+    assert_eq!(
+        builder.associated_method_value_type(
+            &expr(ExprKind::Name("Box".to_string())),
+            "make",
+            &scope
+        ),
+        None
+    );
+    assert_eq!(
+        builder.associated_method_value_type(
+            &expr(ExprKind::Name("Point".to_string())),
+            "norm",
+            &scope
+        ),
+        None
+    );
+}

@@ -4232,3 +4232,184 @@ fn declaration_parser_reports_the_exact_stage_that_rejected_incomplete_syntax() 
         );
     }
 }
+
+// Batch 1 coverage: lookahead helpers on hand-built token streams and
+// annotation spellings the lexer alone cannot reach.
+fn token(kind: crate::lexer::TokenKind) -> crate::lexer::Token {
+    crate::lexer::Token {
+        kind,
+        span: Span::new(1, 1),
+    }
+}
+
+fn parser_over(kinds: Vec<crate::lexer::TokenKind>) -> Parser {
+    Parser::new(kinds.into_iter().map(token).collect())
+}
+
+fn ident(name: &str) -> crate::lexer::TokenKind {
+    crate::lexer::TokenKind::Identifier(name.to_string())
+}
+
+#[test]
+fn type_alias_lookahead_handles_nested_brackets_and_missing_closers() {
+    let nested = Parser::new(lex("type Alias[dict[str, T]] = int64\n").expect("tokens"));
+    assert!(nested.at_type_alias_start());
+    let truncated = parser_over(vec![
+        ident("type"),
+        ident("Alias"),
+        TokenKind::LBracket,
+        ident("T"),
+        TokenKind::Eof,
+    ]);
+    assert!(!truncated.at_type_alias_start());
+}
+
+#[test]
+fn view_return_lookahead_requires_a_following_type_token() {
+    let module = parse("def f() -> view:\n    pass\n").expect("bare `view` parses as a named type");
+    let Item::Function(function) = &module.items[0] else {
+        panic!("expected a function item");
+    };
+    assert_eq!(
+        function.return_type.named_parts().map(|(name, _)| name),
+        Some("view")
+    );
+
+    let Stmt::Assign(assign) =
+        parse_stmt_from("f: def() -> view = g\n").expect("function annotation parses")
+    else {
+        panic!("expected an assignment");
+    };
+    let annotation = assign.annotation.expect("annotated assignment");
+    let (_, return_type) = annotation
+        .function_parts()
+        .expect("function annotation stays structural");
+    assert_eq!(
+        return_type.named_parts().map(|(name, _)| name),
+        Some("view")
+    );
+
+    let error = parse_stmt_from("f: def(a: int64) -> view int64 = g\n")
+        .expect_err("view returns need a `from` origin");
+    assert!(
+        error.message.contains("requires `from`"),
+        "unexpected message {:?}",
+        error.message
+    );
+}
+
+#[test]
+fn type_token_lookaheads_stop_at_malformed_annotations() {
+    use crate::lexer::TokenKind::{
+        Colon, Comma, Eof, Equal, IntLiteral, KwDef, LBracket, LParen, RBrace, RBracket, RParen,
+    };
+
+    assert!(parse_stmt_from("x: int64 | = 5\n").is_err());
+    assert!(parse_stmt_from("x: def = 1\n").is_err());
+    assert_eq!(
+        parser_over(vec![KwDef, LParen, Equal, RParen, Eof]).skip_type_atom_tokens(0),
+        2
+    );
+    assert_eq!(
+        parser_over(vec![KwDef, LParen, ident("a"), Colon, Equal, Eof]).skip_type_atom_tokens(0),
+        3
+    );
+    assert_eq!(
+        parser_over(vec![
+            KwDef,
+            LParen,
+            ident("a"),
+            Colon,
+            ident("int64"),
+            Equal,
+            IntLiteral(1),
+            Eof,
+        ])
+        .skip_type_atom_tokens(0),
+        7
+    );
+    assert_eq!(
+        parser_over(vec![KwDef, LParen, ident("a"), ident("b"), Eof]).skip_type_atom_tokens(0),
+        3
+    );
+    assert_eq!(
+        parser_over(vec![KwDef, LParen, RParen, Equal, Eof]).skip_type_atom_tokens(0),
+        3
+    );
+    assert_eq!(
+        parser_over(vec![LParen, ident("int64"), Comma, Eof]).skip_type_atom_tokens(0),
+        3
+    );
+    assert_eq!(
+        parser_over(vec![ident("list"), LBracket, ident("int64")]).skip_type_atom_tokens(0),
+        3
+    );
+    assert_eq!(
+        parser_over(vec![LBracket, ident("x")]).skip_bracketed_tokens(0),
+        None
+    );
+    assert!(!parser_over(vec![ident("x")]).at_type_pattern());
+    assert!(!parser_over(vec![ident("x"), LBracket, ident("i")]).is_assignment_stmt());
+    for closer in [RParen, RBracket, RBrace] {
+        assert!(!parser_over(vec![closer, Eof]).is_destructure_assignment_stmt());
+    }
+}
+
+#[test]
+fn index_assignment_targets_accept_multi_element_tuples() {
+    let Stmt::Assign(assign) =
+        parse_stmt_from("grid[1, 2, 3] = 4\n").expect("tuple index targets parse")
+    else {
+        panic!("expected an assignment");
+    };
+    let AssignTarget::Index { index, .. } = &assign.target else {
+        panic!("expected an index target");
+    };
+    assert!(matches!(&index.kind, ExprKind::Tuple(elements) if elements.len() == 3));
+}
+
+#[test]
+fn fstring_format_specs_fall_back_to_earlier_top_level_colons() {
+    let expr = parse_expression("f\"{a:b:c}\"").expect("format spec fallback parses");
+    let ExprKind::FString(parts) = &expr.kind else {
+        panic!("expected an f-string");
+    };
+    assert!(
+        matches!(&parts[0], FormatPart::Formatted { spec, .. } if spec == "b:c"),
+        "unexpected parts {parts:?}"
+    );
+    assert_eq!(top_level_format_colons("'a\\'b':5"), vec![6]);
+}
+
+#[test]
+fn type_ref_span_offsets_cover_callables_and_view_returns() {
+    let span = Span::new(1, 1);
+    let signature = TypeRef::function_with_view_return(
+        vec![crate::ast::FunctionTypeParam::new(
+            crate::ast::ParamMode::Default,
+            TypeRef::named("int64", Vec::new(), false, span),
+            span,
+        )],
+        TypeRef::named("int64", Vec::new(), false, span),
+        Some(crate::ast::ViewReturn {
+            mutable: false,
+            origin: "a".to_string(),
+            span,
+        }),
+        span,
+    );
+    let mut callable = TypeRef::callable(false, crate::ast::ReceiverKind::Borrow, signature, span);
+    offset_type_ref_span(&mut callable, 4, 2);
+    assert_eq!((callable.span.line, callable.span.column), (4, 3));
+    let crate::ast::TypeRefKind::Callable { signature, .. } = &callable.kind else {
+        panic!("expected a callable type ref");
+    };
+    assert_eq!((signature.span.line, signature.span.column), (4, 3));
+    let crate::ast::TypeRefKind::Function { view_return, .. } = &signature.kind else {
+        panic!("expected a function signature");
+    };
+    let view_return = view_return
+        .as_ref()
+        .expect("view return survives offsetting");
+    assert_eq!((view_return.span.line, view_return.span.column), (4, 3));
+}

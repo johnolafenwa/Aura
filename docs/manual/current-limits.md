@@ -85,6 +85,9 @@ This page documents known current limits of the Aura compiler and runtime.
   invoke the closure within each branch or use capture-free lambdas or named
   functions. Owned callable storage (`Callable[...]`, `TaskCallable[...]`)
   holds owned captures only and is packed explicitly through an alias call.
+  Callable identities are tracked through at most eight levels of class
+  field nesting; a call through a callable stored deeper than that is
+  refused by the MIR validator.
 - List, set, and dictionary comprehensions are eager and always return fresh owned
   collections. Their clauses use bare-loop iteration only; there is no
   comprehension `mut`/`own` source form, early `break`/`continue`, or lazy

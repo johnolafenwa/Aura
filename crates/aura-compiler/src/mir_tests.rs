@@ -12634,3 +12634,373 @@ def main():
         assert!(!function_body_moves_root(function, "never_used"));
     }
 }
+
+// ---------------------------------------------------------------------------
+// Batch 1 coverage: private helpers no program or forged module can reach.
+// ---------------------------------------------------------------------------
+
+fn batch1_test_function(name: &str) -> MirFunction {
+    MirFunction {
+        name: name.to_string(),
+        module_name: "<test>".to_string(),
+        source_path: None,
+        span: Span::new(1, 1),
+        receiver: None,
+        params: Vec::new(),
+        local_types: Vec::new(),
+        return_type: Type::Unit,
+        entry: "entry".to_string(),
+        blocks: vec![BasicBlock {
+            label: "entry".to_string(),
+            instructions: Vec::new(),
+            terminator: Terminator::Return(Operand::Unit),
+        }],
+    }
+}
+
+fn batch1_param(ty: Type) -> FunctionParamContract {
+    FunctionParamContract {
+        keyword_only: false,
+        name: "value".to_string(),
+        ty,
+        passing: ReceiverKind::Borrow,
+        has_default: false,
+    }
+}
+
+fn batch1_callable(
+    call_kind: ClosureCallKind,
+    params: Vec<FunctionParamContract>,
+    return_type: Type,
+) -> Type {
+    Type::Callable(Box::new(crate::sema::CallableType {
+        task: false,
+        call_kind,
+        params,
+        return_type,
+    }))
+}
+
+fn batch1_closure(call_kind: ClosureCallKind, return_type: Type) -> Type {
+    Type::Closure {
+        params: Box::new(Vec::new()),
+        return_type: Box::new(return_type),
+        captures: Box::new(Vec::new()),
+        call_kind,
+    }
+}
+
+fn batch1_returned_view(pointee: Type) -> Type {
+    Type::ReturnedView(Box::new(crate::sema::ReturnedViewType {
+        mutable: false,
+        pointee,
+        origin: 0,
+    }))
+}
+
+#[test]
+fn batch1_type_contains_unknown_walks_callable_and_returned_view_types() {
+    let unknown = Type::named("Unknown");
+    assert!(type_contains_unknown(&batch1_callable(
+        ClosureCallKind::Repeatable,
+        vec![batch1_param(unknown.clone())],
+        Type::Unit,
+    )));
+    assert!(type_contains_unknown(&batch1_callable(
+        ClosureCallKind::Repeatable,
+        Vec::new(),
+        unknown.clone(),
+    )));
+    assert!(!type_contains_unknown(&batch1_callable(
+        ClosureCallKind::Repeatable,
+        vec![batch1_param(Type::named("int64"))],
+        Type::named("str"),
+    )));
+    assert!(type_contains_unknown(&batch1_returned_view(unknown)));
+    assert!(!type_contains_unknown(&batch1_returned_view(Type::named(
+        "str"
+    ))));
+}
+
+#[test]
+fn batch1_lower_type_ref_lowers_written_callable_and_union_references() {
+    let span = Span::new(1, 1);
+    let signature = TypeRef::function(vec![type_ref("int64")], type_ref("str"), span);
+    let callable = TypeRef {
+        kind: crate::ast::TypeRefKind::Callable {
+            task: true,
+            call_kind: ReceiverKind::BorrowMut,
+            signature: Box::new(signature),
+        },
+        indirect: false,
+        span,
+    };
+    let Type::Callable(lowered) = lower_type_ref(&callable) else {
+        panic!("a written callable lowers to erased storage");
+    };
+    assert!(lowered.task);
+    assert_eq!(lowered.call_kind, ClosureCallKind::MutableRepeatable);
+    assert_eq!(lowered.params.len(), 1);
+    assert_eq!(lowered.params[0].ty, Type::named("int64"));
+    assert_eq!(lowered.return_type, Type::named("str"));
+
+    let malformed = TypeRef {
+        kind: crate::ast::TypeRefKind::Callable {
+            task: false,
+            call_kind: ReceiverKind::Borrow,
+            signature: Box::new(type_ref("int64")),
+        },
+        indirect: false,
+        span,
+    };
+    assert_eq!(lower_type_ref(&malformed), Type::named("Unknown"));
+    let union = TypeRef {
+        kind: crate::ast::TypeRefKind::Union(vec![type_ref("int64"), type_ref("str")]),
+        indirect: false,
+        span,
+    };
+    assert_eq!(lower_type_ref(&union), Type::named("Unknown"));
+    assert_eq!(
+        lower_callable_type_ref(false, ReceiverKind::Value, Type::Unit),
+        Type::named("Unknown")
+    );
+}
+
+#[test]
+fn batch1_payload_projection_parsers_reject_malformed_segments() {
+    assert_eq!(union_payload_projection_index("__union_payload_"), None);
+    assert_eq!(union_payload_projection_index("__union_payload_1x"), None);
+    assert_eq!(union_payload_projection_index("__union_payload_2"), Some(2));
+    assert_eq!(enum_payload_projection("__variant_payload__1"), None);
+    assert_eq!(enum_payload_projection("__variant_payload_Some_"), None);
+    assert_eq!(enum_payload_projection("__variant_payload_Some_x"), None);
+    assert_eq!(
+        enum_payload_projection("__variant_payload_Some_1"),
+        Some(("Some", 1))
+    );
+}
+
+#[test]
+fn batch1_erased_callable_admission_checks_kind_and_shape() {
+    let contract = |call_kind| batch1_callable(call_kind, Vec::new(), Type::Unit);
+    assert!(!callable_admitted_by_erased(
+        &Type::named("int64"),
+        &batch1_closure(ClosureCallKind::Repeatable, Type::Unit),
+    ));
+    assert!(callable_admitted_by_erased(
+        &contract(ClosureCallKind::Consuming),
+        &batch1_closure(ClosureCallKind::MutableRepeatable, Type::Unit),
+    ));
+    assert!(!callable_admitted_by_erased(
+        &contract(ClosureCallKind::Repeatable),
+        &batch1_closure(ClosureCallKind::Consuming, Type::Unit),
+    ));
+    assert!(!callable_admitted_by_erased(
+        &contract(ClosureCallKind::Repeatable),
+        &Type::named("int64"),
+    ));
+    assert!(callable_admitted_by_erased(
+        &contract(ClosureCallKind::Repeatable),
+        &Type::Function {
+            params: Vec::new(),
+            return_type: Box::new(Type::Unit),
+        },
+    ));
+}
+
+#[test]
+fn batch1_merging_callable_identities_without_contracts() {
+    let marker = ValidatedCallable {
+        function: None,
+        signature: Type::named(EMPTY_CONTAINER_MARKER),
+    };
+    let merged = merge_validated_callables([&marker, &marker].into_iter());
+    assert!(callable_container_is_empty_marker(&merged));
+    assert!(merged.function.is_none());
+    assert_eq!(
+        merge_validated_callables(std::iter::empty()),
+        unknown_validated_callable()
+    );
+}
+
+#[test]
+fn batch1_container_element_keys_include_map_and_set_projections() {
+    assert!(callable_segment_is_element_key("__map_key_3"));
+    assert!(callable_segment_is_element_key("__set_element_0"));
+    assert!(callable_segment_is_element_key("__map_value_1"));
+    assert!(callable_segment_is_element_key("7"));
+    assert!(!callable_segment_is_element_key("field"));
+}
+
+#[test]
+fn batch1_index_helpers_follow_groups_and_reject_non_constants() {
+    let name = expr(ExprKind::Name("index".to_string()));
+    assert_eq!(tuple_constant_index(&name), None);
+    let grouped = expr(ExprKind::Group(Box::new(expr(ExprKind::Int(2)))));
+    assert_eq!(tuple_constant_index(&grouped), Some(2));
+    assert_eq!(array_coordinate_type(&grouped), Type::named("int64"));
+    let pair = expr(ExprKind::Group(Box::new(expr(ExprKind::Tuple(vec![
+        expr(ExprKind::Int(1)),
+        expr(ExprKind::Int(2)),
+    ])))));
+    assert_eq!(
+        array_coordinate_type(&pair),
+        Type::Tuple(vec![Type::named("int64"); 2])
+    );
+    assert_eq!(callback_result_type(Type::named("int64")), None);
+    assert_eq!(
+        callback_result_type(batch1_callable(
+            ClosureCallKind::Repeatable,
+            Vec::new(),
+            Type::named("str"),
+        )),
+        Some(Type::named("str"))
+    );
+}
+
+#[test]
+fn batch1_loan_ancestor_walks_stop_on_cycles() {
+    let loan = |parent: Option<&str>, returned: bool| ValidatedLoan {
+        sources: Vec::<String>::new().into(),
+        mutable: false,
+        parent: parent.map(str::to_owned),
+        returned_descriptor: returned,
+        active_children: 0,
+    };
+    let mut loans = ValidatedLoans::new();
+    loans.insert("a".to_string(), loan(Some("b"), false));
+    loans.insert("b".to_string(), loan(Some("a"), false));
+    assert_eq!(
+        validated_loan_ancestors("a", &loans),
+        BTreeSet::from(["a".to_string(), "b".to_string()])
+    );
+    assert!(!validated_loan_has_returned_ancestor("a", &loans));
+    loans.insert("c".to_string(), loan(Some("a"), true));
+    assert!(validated_loan_has_returned_ancestor("c", &loans));
+    assert!(!validated_loan_has_returned_ancestor("missing", &loans));
+}
+
+#[test]
+fn batch1_loan_path_budgets_reject_oversized_expansions() {
+    let function = batch1_test_function("budget");
+    let mut state = ValidatedLoanState::default();
+    state.active_path_bytes = MAX_VALIDATED_EXPANDED_LOAN_PATH_BYTES;
+    let error = validate_active_loan_path_budget(&function, "loan", &state, 1)
+        .expect_err("a full path budget admits no new loan");
+    assert!(
+        error.contains(
+            "invalid MIR loan `loan` in `budget` exceeds the active loan-path byte limit"
+        ),
+        "{error}"
+    );
+
+    let huge = "x".repeat(MAX_VALIDATED_EXPANDED_LOAN_PATH_BYTES / 2 + 1);
+    let mut loans = ValidatedLoans::new();
+    loans.insert(
+        "big".to_string(),
+        ValidatedLoan {
+            sources: vec![format!("{huge}a"), format!("{huge}b")].into(),
+            mutable: false,
+            parent: None,
+            returned_descriptor: false,
+            active_children: 0,
+        },
+    );
+    let error = validated_loan_sources("big.field", &loans)
+        .expect_err("expanding every alternative must stay within the byte limit");
+    assert!(
+        error.contains("expanded MIR loan place `big.field` exceeds the loan-path byte limit"),
+        "{error}"
+    );
+}
+
+#[test]
+fn batch1_union_argument_specialization_edge_cases() {
+    let names = BTreeMap::new();
+    let union = |members: Vec<Type>| {
+        Type::normalize_union(members, "<main>", &names).expect("union normalizes")
+    };
+    let int = Type::named("int64");
+    let text = Type::named("str");
+    let flag = Type::named("bool");
+    let params = BTreeSet::from(["T".to_string()]);
+
+    // A non-union parameter never specializes through this path.
+    let mut substitutions = HashMap::new();
+    assert!(!union_argument_specializes(
+        &int,
+        &text,
+        &params,
+        &mut substitutions
+    ));
+    // A union without unresolved type parameters must match exactly.
+    let mut substitutions = HashMap::new();
+    assert!(!union_argument_specializes(
+        &union(vec![int.clone(), text.clone()]),
+        &union(vec![int.clone(), flag.clone()]),
+        &params,
+        &mut substitutions,
+    ));
+
+    let pattern = union(vec![Type::TypeParam("T".to_string()), int.clone()]);
+    // The concrete member must be present in the argument.
+    let mut substitutions = HashMap::new();
+    assert!(!union_argument_specializes(
+        &pattern,
+        &text,
+        &params,
+        &mut substitutions
+    ));
+    // Nothing remains for the type parameter.
+    let mut substitutions = HashMap::new();
+    assert!(!union_argument_specializes(
+        &pattern,
+        &int,
+        &params,
+        &mut substitutions
+    ));
+    // One remaining member binds the parameter.
+    let mut substitutions = HashMap::new();
+    assert!(union_argument_specializes(
+        &pattern,
+        &union(vec![int.clone(), text.clone()]),
+        &params,
+        &mut substitutions,
+    ));
+    assert_eq!(substitutions.get("T"), Some(&text));
+    // Several remaining members bind the parameter to their union.
+    let mut substitutions = HashMap::new();
+    assert!(union_argument_specializes(
+        &pattern,
+        &union(vec![int.clone(), text.clone(), flag.clone()]),
+        &params,
+        &mut substitutions,
+    ));
+    assert!(matches!(substitutions.get("T"), Some(Type::Union(_))));
+
+    // An already-bound parameter whose substitution is itself a union
+    // contributes every member as concrete evidence.
+    let two_params = BTreeSet::from(["T".to_string(), "U".to_string()]);
+    let pattern = union(vec![
+        Type::TypeParam("T".to_string()),
+        Type::TypeParam("U".to_string()),
+    ]);
+    let mut substitutions =
+        HashMap::from([("U".to_string(), union(vec![int.clone(), text.clone()]))]);
+    assert!(union_argument_specializes(
+        &pattern,
+        &union(vec![int.clone(), text.clone(), flag.clone()]),
+        &two_params,
+        &mut substitutions,
+    ));
+    assert_eq!(substitutions.get("T"), Some(&flag));
+    // Two unresolved parameters cannot be told apart here.
+    let mut substitutions = HashMap::new();
+    assert!(union_argument_specializes(
+        &pattern,
+        &union(vec![int, text]),
+        &two_params,
+        &mut substitutions,
+    ));
+    assert!(substitutions.is_empty());
+}

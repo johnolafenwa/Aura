@@ -2285,3 +2285,37 @@ fn package_unix_cache_helpers_reject_symlinked_manifest_and_missing_dirs() {
         marker_error.message
     );
 }
+
+#[test]
+fn dependency_paths_skip_revisited_packages_and_backtrack_dead_ends() {
+    let source = |name: &str, dependencies: &[&str]| PackageSource {
+        name: name.to_string(),
+        version: "0.1.0".to_string(),
+        allow_ffi: false,
+        manifest_dir: PathBuf::from(name),
+        source_root: PathBuf::from(name).join("src"),
+        canonical_source_root: PathBuf::from(name).join("src"),
+        external_prefix: None,
+        dependencies: dependencies
+            .iter()
+            .map(|dependency| (dependency.to_string(), dependency.to_string()))
+            .collect(),
+        ffi_dependencies: BTreeSet::new(),
+        origin: PackageOrigin::Path,
+    };
+    let packages = BTreeMap::from([
+        ("root".to_string(), source("root", &["alpha", "beta"])),
+        ("alpha".to_string(), source("alpha", &["root"])),
+        ("beta".to_string(), source("beta", &["target"])),
+        ("target".to_string(), source("target", &[])),
+    ]);
+    assert_eq!(
+        dependency_path(&packages, "root", "target"),
+        Some(vec![
+            "root".to_string(),
+            "beta".to_string(),
+            "target".to_string()
+        ])
+    );
+    assert_eq!(dependency_path(&packages, "alpha", "missing"), None);
+}

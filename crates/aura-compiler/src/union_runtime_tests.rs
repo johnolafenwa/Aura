@@ -266,3 +266,161 @@ fn union_equality_is_active_member_equality() {
     assert_eq!(one, another_one, "the shared PartialEq routes unions here");
     assert_ne!(one, text);
 }
+
+#[test]
+fn runtime_member_type_identifies_every_backend_independent_payload_kind() {
+    use crate::runtime_value::{
+        ArrayStorage, ArrayValue, EnumVariantValue, FfiHandleValue, FunctionValue, MapValue,
+        ModuleNamespaceValue, RangeValue, RngValue, SetValue, TupleValue, VecValue,
+    };
+
+    let concrete = union(vec![Type::named("int64"), Type::Unit]);
+    let nested = union_value(&concrete, &Type::named("int64"), int(3));
+    assert_eq!(runtime_member_type(&nested), Some(Type::named("int64")));
+    assert_eq!(
+        runtime_member_type(&Value::Float(1.5)),
+        Some(Type::named("float64"))
+    );
+    assert_eq!(
+        runtime_member_type(&Value::Bool(true)),
+        Some(Type::named("bool"))
+    );
+    assert_eq!(
+        runtime_member_type(&Value::Tuple(TupleValue {
+            element_types: vec![Type::named("int64"), Type::named("str")],
+            elements: vec![int(1), Value::String("a".to_string())],
+        })),
+        Some(Type::Tuple(vec![Type::named("int64"), Type::named("str")]))
+    );
+    assert_eq!(
+        runtime_member_type(&Value::Vec(VecValue {
+            element_type: Type::named("str"),
+            elements: Vec::new(),
+        })),
+        Some(Type::Named("list".to_string(), vec![Type::named("str")]))
+    );
+    assert_eq!(
+        runtime_member_type(&Value::Array(ArrayValue {
+            shape: Box::new([2]),
+            storage: ArrayStorage::Int64(Box::new([1, 2])),
+        })),
+        Some(Type::Named("Array".to_string(), vec![Type::named("int64")]))
+    );
+    assert_eq!(
+        runtime_member_type(&Value::Set(SetValue {
+            element_type: Type::named("int64"),
+            elements: Vec::new(),
+        })),
+        Some(Type::Named("set".to_string(), vec![Type::named("int64")]))
+    );
+    assert_eq!(
+        runtime_member_type(&Value::Map(MapValue {
+            key_type: Type::named("str"),
+            value_type: Type::named("bool"),
+            entries: Vec::new(),
+        })),
+        Some(Type::Named(
+            "dict".to_string(),
+            vec![Type::named("str"), Type::named("bool")]
+        ))
+    );
+    assert_eq!(
+        runtime_member_type(&Value::Duration(7)),
+        Some(Type::named("Duration"))
+    );
+    assert_eq!(
+        runtime_member_type(&Value::Rng(RngValue::from_seed(1))),
+        Some(Type::named("random.Rng"))
+    );
+    assert_eq!(
+        runtime_member_type(&Value::Range(RangeValue { start: 0, end: 2 })),
+        Some(Type::named("Range"))
+    );
+    let signature = Type::Function {
+        params: Vec::new(),
+        return_type: Box::new(Type::Unit),
+    };
+    assert_eq!(
+        runtime_member_type(&Value::Function(Box::new(FunctionValue {
+            name: "f".to_string(),
+            signature: signature.clone(),
+            source_path: None,
+            entry_span: crate::diag::Span::new(1, 1),
+            direct_thunk: None,
+            direct_default_binder: None,
+            closure_environment: None,
+        }))),
+        Some(signature)
+    );
+    assert_eq!(runtime_member_type(&Value::Unit), Some(Type::Unit));
+    let mut backing = 0u8;
+    let handle = FfiHandleValue::new(
+        "Handle".to_string(),
+        (&mut backing as *mut u8).cast::<std::ffi::c_void>(),
+    )
+    .expect("non-null handle");
+    assert_eq!(
+        runtime_member_type(&Value::FfiHandle(handle)),
+        Some(Type::named("Handle"))
+    );
+    assert_eq!(
+        runtime_member_type(&Value::Instance(InstanceValue {
+            class_name: "Dog".to_string(),
+            fields: BTreeMap::new(),
+        })),
+        Some(Type::named("Dog"))
+    );
+    assert_eq!(
+        runtime_member_type(&Value::EnumVariant(EnumVariantValue {
+            enum_name: "Shape".to_string(),
+            variant_name: "Circle".to_string(),
+            payloads: Vec::new(),
+        })),
+        Some(Type::named("Shape"))
+    );
+    assert_eq!(
+        runtime_member_type(&Value::ModuleNamespace(ModuleNamespaceValue {
+            path: "m".to_string(),
+        })),
+        None
+    );
+}
+
+#[test]
+fn values_without_a_member_identity_never_compare_equal_or_align() {
+    use crate::runtime_value::ModuleNamespaceValue;
+
+    let concrete = union(vec![Type::named("int64"), Type::Unit]);
+    let namespace = Value::ModuleNamespace(ModuleNamespaceValue {
+        path: "m".to_string(),
+    });
+    let one = union_value(&concrete, &Type::named("int64"), int(1));
+    assert!(!union_values_equal(&namespace, &one));
+    assert!(!union_values_equal(&one, &namespace));
+    assert_eq!(
+        plan_union_alignment(&namespace, &concrete, "union test"),
+        Err("union test cannot identify the active union member".to_string())
+    );
+    assert_eq!(
+        aligned_member_index(&namespace, &concrete, "union take"),
+        Err("union take cannot identify the active union member".to_string())
+    );
+    assert!(!is_none_value(&namespace));
+}
+
+#[test]
+fn forged_union_values_without_a_union_type_have_no_identity() {
+    let forged = Value::Union(Box::new(UnionValue {
+        union_type: Type::named("int64"),
+        member_index: 0,
+        payload: int(1),
+    }));
+    assert_eq!(member_identity(&forged), None);
+    assert_eq!(runtime_member_type(&forged), None);
+    let concrete = union(vec![Type::named("int64"), Type::Unit]);
+    assert_eq!(
+        plan_union_alignment(&forged, &concrete, "union tag test"),
+        Err("union tag test cannot identify the active union member".to_string())
+    );
+    assert!(!union_values_equal(&forged, &int(1)));
+}

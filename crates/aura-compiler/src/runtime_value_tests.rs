@@ -17747,3 +17747,401 @@ fn runtime_value_helpers_report_backoff_capture_and_array_bounds_errors() {
     let dtype = array_dtype_error(ArrayDType::Float64, &Value::Unit, 3);
     assert!(dtype.message.contains("flat index 3"), "{}", dtype.message);
 }
+
+// ---------------------------------------------------------------------------
+// Batch 1 coverage: shared runtime value edges that whole programs never reach.
+// ---------------------------------------------------------------------------
+
+fn coverage_union_type(members: Vec<Type>) -> Type {
+    Type::normalize_union(members, "main", &BTreeMap::new()).expect("normalized union")
+}
+
+fn coverage_json(variant: &str, payloads: Vec<Value>) -> Value {
+    Value::EnumVariant(EnumVariantValue {
+        enum_name: "json.Value".to_string(),
+        variant_name: variant.to_string(),
+        payloads,
+    })
+}
+
+#[test]
+fn numeric_cast_source_types_render_unions_and_ffi_handles() {
+    let union_type = coverage_union_type(vec![Type::named("int64"), Type::Unit]);
+    let Type::Union(target) = &union_type else {
+        panic!("expected a union");
+    };
+    let unit_index = target
+        .members
+        .iter()
+        .position(|member| *member == Type::Unit)
+        .expect("None member");
+    let union = Value::Union(Box::new(super::UnionValue {
+        union_type: union_type.clone(),
+        member_index: unit_index,
+        payload: Value::Unit,
+    }));
+    assert_cast_source_type(union, &union_type.to_string());
+
+    let mut marker = 0u8;
+    let handle = FfiHandleValue::new("Handle".to_string(), &mut marker as *mut u8 as *mut c_void)
+        .expect("non-null handles construct");
+    assert_cast_source_type(Value::FfiHandle(handle), "Handle");
+}
+
+#[test]
+fn format_runtime_value_covers_signed_magnitudes_zero_exponents_and_oversized_output() {
+    let int64 = Type::named("int64");
+    let signed = Value::Int(IntegerValue::from_representation(
+        crate::integer::IntegerRepresentation::Signed(5),
+    ));
+    assert_eq!(format_runtime_value(&signed, &int64, "d").unwrap(), "5");
+    assert_eq!(format_runtime_value(&signed, &int64, "+x").unwrap(), "+5");
+    let zero = Value::Int(IntegerValue::from_literal(0));
+    assert_eq!(
+        format_runtime_value(&zero, &int64, ".2e").unwrap(),
+        "0.00e+00"
+    );
+    assert_eq!(format_runtime_value(&zero, &int64, ".0e").unwrap(), "0e+00");
+
+    let oversized = Value::String("x".repeat(super::MAX_STRING_BYTES + 1));
+    let str_type = Type::named("str");
+    let error = format_runtime_value(&oversized, &str_type, "s")
+        .expect_err("oversized string output is rejected before allocation");
+    assert_eq!(error.code, "AU4005");
+    assert!(
+        error.message.contains("allocation limit"),
+        "{}",
+        error.message
+    );
+    let error = format_runtime_value(&oversized, &str_type, "<4")
+        .expect_err("oversized padded output is rejected before allocation");
+    assert_eq!(error.code, "AU4005");
+}
+
+#[test]
+fn divmod_without_a_named_operand_type_keeps_untagged_results() {
+    let result = divmod_numeric_values(
+        &Value::Int(IntegerValue::from_literal(7)),
+        &Value::Int(IntegerValue::from_literal(2)),
+        &Type::Unit,
+    )
+    .expect("untagged divmod evaluates");
+    let Value::Tuple(tuple) = result else {
+        panic!("divmod returns a tuple");
+    };
+    assert!(matches!(
+        tuple.elements.as_slice(),
+        [Value::Int(quotient), Value::Int(remainder)]
+            if quotient.as_i128() == Some(3)
+                && remainder.as_i128() == Some(1)
+                && quotient.runtime_kind().is_none()
+    ));
+}
+
+#[test]
+fn queue_collection_looks_through_union_payloads() {
+    let union_type = coverage_union_type(vec![Type::named("Queue"), Type::Unit]);
+    let value = Value::Union(Box::new(super::UnionValue {
+        union_type,
+        member_index: 0,
+        payload: Value::Channel(ChannelValue::new()),
+    }));
+    let mut queues = Vec::new();
+    super::collect_queue_values(&value, &mut queues);
+    assert_eq!(queues.len(), 1);
+}
+
+#[test]
+fn malformed_json_runtime_trees_fall_back_to_structural_clones() {
+    let array = |elements: Vec<Value>| {
+        coverage_json(
+            "Array",
+            vec![Value::Vec(VecValue {
+                element_type: Type::named("json.Value"),
+                elements,
+            })],
+        )
+    };
+    let object = |entries: Vec<(Value, Value)>| {
+        coverage_json(
+            "Object",
+            vec![Value::Map(MapValue {
+                key_type: Type::named("str"),
+                value_type: Type::named("json.Value"),
+                entries,
+            })],
+        )
+    };
+    let null = || coverage_json("Null", Vec::new());
+    let malformed = vec![
+        array(vec![Value::Int(IntegerValue::from_literal(1))]),
+        array(vec![option_none()]),
+        object(vec![(Value::Int(IntegerValue::from_literal(1)), null())]),
+        coverage_json("Bogus", Vec::new()),
+        object(vec![
+            (Value::String("a".to_string()), null()),
+            (Value::Int(IntegerValue::from_literal(2)), null()),
+        ]),
+    ];
+    for value in malformed {
+        assert_eq!(value.clone(), value);
+    }
+    let well_formed = array(vec![
+        null(),
+        object(vec![(
+            Value::String("k".to_string()),
+            coverage_json("Int", vec![Value::Int(IntegerValue::from_literal(3))]),
+        )]),
+        array(Vec::new()),
+        object(Vec::new()),
+    ]);
+    assert_eq!(well_formed.clone(), well_formed);
+}
+
+#[test]
+fn host_builtins_cover_retry_cancellation_probes_and_malformed_string_maps() {
+    assert_eq!(
+        super::evaluate_host_builtin("control::__retry_cancel_if_requested", Vec::new())
+            .expect("no task means no cancellation"),
+        Value::Unit
+    );
+    assert!(super::evaluate_host_builtin("json::is_valid", vec![Value::Unit]).is_err());
+    let mixed = Value::Map(MapValue {
+        key_type: Type::named("str"),
+        value_type: Type::named("int64"),
+        entries: vec![(
+            Value::String("a".to_string()),
+            Value::Int(IntegerValue::from_literal(1)),
+        )],
+    });
+    for name in ["json::stringify_map", "toml::stringify_map"] {
+        let error = super::evaluate_host_builtin(name, vec![mixed.clone()])
+            .expect_err("mixed maps are rejected");
+        assert_eq!(error.message, format!("`{name}` expects `dict[str, str]`"));
+    }
+}
+
+#[test]
+fn bytes_host_builtins_route_resource_only_codecs() {
+    let source = super::runtime_bytes_from_host(&[0xab]).expect("host bytes materialize");
+    let encoded = super::evaluate_bytes_host_builtin_ref("bytes::hex_encode", &source)
+        .expect("bytes builtins are recognized")
+        .expect("hex encoding succeeds");
+    assert_eq!(encoded, Value::String("ab".to_string()));
+    assert_eq!(
+        super::evaluate_string_to_bytes_host_ref("hi").expect("str.to_bytes succeeds"),
+        super::runtime_bytes_from_host(b"hi").expect("host bytes materialize")
+    );
+    let digest = super::evaluate_bytes_host_builtin_ref(
+        "bytes::sha256_string",
+        &Value::String("hi".to_string()),
+    )
+    .expect("bytes builtins are recognized")
+    .expect("hashing succeeds");
+    assert!(matches!(digest, Value::Vec(vector) if vector.elements.len() == 32));
+}
+
+#[cfg(unix)]
+#[test]
+fn closing_a_process_group_child_that_ignores_sigterm_escalates_to_sigkill() {
+    let child = ProcessChildValue::spawn(
+        vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            "trap '' TERM; echo ready; sleep 30".to_string(),
+        ],
+        None,
+        Vec::new(),
+        ProcessStdioConfig::Null,
+        ProcessStdioConfig::Pipe,
+        ProcessStdioConfig::Null,
+        true,
+    )
+    .expect("group child should spawn");
+    let stdout = child.stdout().expect("stdout should be piped");
+    assert_eq!(
+        stdout
+            .read_line(Some(StdDuration::from_secs(5)), None)
+            .expect("readiness line reads")
+            .as_deref(),
+        Some("ready")
+    );
+    child.close();
+    assert!(matches!(
+        child.wait(Some(StdDuration::from_secs(5)), None),
+        ProcessChildWaitStatus::Exited(_)
+    ));
+    assert!(child.kill().is_ok());
+}
+
+#[test]
+fn tls_listeners_skip_failed_handshakes_and_serialize_concurrent_stream_operations() {
+    let suffix = format!(
+        "{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time after the epoch")
+            .as_nanos()
+    );
+    let certificate =
+        generate_simple_self_signed(vec!["localhost".to_string()]).expect("cert generation");
+    let cert_path = std::env::temp_dir().join(format!("aura-cov-tlsx-{suffix}-cert.pem"));
+    let key_path = std::env::temp_dir().join(format!("aura-cov-tlsx-{suffix}-key.pem"));
+    fs::write(&cert_path, certificate.cert.pem()).expect("cert should be written");
+    fs::write(&key_path, certificate.key_pair.serialize_pem()).expect("key should be written");
+    let cert_text = cert_path
+        .to_str()
+        .expect("cert path should be utf-8")
+        .to_string();
+    let key_text = key_path
+        .to_str()
+        .expect("key path should be utf-8")
+        .to_string();
+    let missing = cert_path.with_extension("missing.pem");
+    assert!(super::TlsListenerValue::bind(
+        "127.0.0.1:0",
+        missing.to_str().expect("utf-8 path"),
+        &key_text
+    )
+    .is_err());
+
+    let listener = super::TlsListenerValue::bind("127.0.0.1:0", &cert_text, &key_text)
+        .expect("tls listener should bind");
+    let address = listener.local_addr().expect("tls listener address");
+    let (release_sender, release_receiver) = std::sync::mpsc::channel::<()>();
+    let server = {
+        let listener = listener.clone();
+        thread::spawn(move || {
+            let cancellation = CancellationContext::default();
+            let stream = listener
+                .accept(Some(StdDuration::from_secs(10)), Some(&cancellation))
+                .expect("the listener should skip the failed handshake and accept the TLS client");
+            let _ = release_receiver.recv();
+            stream.close();
+            listener.close();
+        })
+    };
+
+    // A plain TCP peer that never speaks TLS makes the server-side handshake
+    // fail; the listener must drop it and keep accepting.
+    {
+        let mut plain = std::net::TcpStream::connect(&address).expect("plain client connects");
+        plain
+            .write_all(b"this is not a TLS client hello\r\n")
+            .expect("plain client writes");
+        plain.flush().expect("plain client flushes");
+    }
+
+    let client = super::TlsStreamValue::connect(
+        &address,
+        "localhost",
+        Some(&cert_text),
+        Some(StdDuration::from_secs(10)),
+        Some(&CancellationContext::default()),
+    )
+    .expect("tls client should connect");
+
+    // Two reads race for the stream's single protocol slot: whichever loses
+    // spins on the host thread until its own deadline passes. The server
+    // never writes, so both reads time out.
+    let contender = {
+        let client = client.clone();
+        thread::spawn(move || {
+            client.read_line(
+                Some(StdDuration::from_millis(400)),
+                Some(&CancellationContext::default()),
+            )
+        })
+    };
+    thread::sleep(StdDuration::from_millis(50));
+    let main_read = client.read_line(
+        Some(StdDuration::from_millis(200)),
+        Some(&CancellationContext::default()),
+    );
+    assert_eq!(
+        main_read.expect_err("no data arrives").kind(),
+        io::ErrorKind::TimedOut
+    );
+    assert_eq!(
+        contender
+            .join()
+            .expect("contending read joins")
+            .expect_err("no data arrives")
+            .kind(),
+        io::ErrorKind::TimedOut
+    );
+    let _ = release_sender.send(());
+    server.join().expect("tls server should join");
+    client.close();
+    let _ = fs::remove_file(&cert_path);
+    let _ = fs::remove_file(&key_path);
+}
+
+#[test]
+fn http_listener_accept_reports_request_read_timeouts_as_errors() {
+    let listener = HttpListenerValue::bind("127.0.0.1:0").expect("http listener should bind");
+    let address = listener.local_addr().expect("http listener address");
+    let silent = std::net::TcpStream::connect(&address).expect("silent client connects");
+    let error = listener
+        .accept(
+            Some(StdDuration::from_millis(200)),
+            Some(&CancellationContext::default()),
+        )
+        .expect_err("a client that never sends a request times the accept out");
+    assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+    drop(silent);
+    listener.close();
+}
+
+#[test]
+fn supervisor_restart_scheduling_fails_when_the_backoff_deadline_overflows() {
+    let supervisor = ProcessSupervisorValue::new();
+    supervisor
+        .start(
+            "flaky".to_string(),
+            vec!["true".to_string()],
+            None,
+            Vec::new(),
+            ProcessStdioConfig::Null,
+            ProcessStdioConfig::Null,
+            ProcessStdioConfig::Null,
+            ProcessRestartPolicy::Always,
+            StdDuration::MAX,
+            None,
+            false,
+        )
+        .expect("the supervised child should start");
+    match supervisor.wait(Some(StdDuration::from_secs(10)), None) {
+        ProcessSupervisorWaitStatus::Event(Value::EnumVariant(event)) => {
+            assert_eq!(event.variant_name, "Failed", "{event:?}");
+        }
+        _ => panic!("expected a failed restart event"),
+    }
+    assert!(supervisor.is_empty());
+    supervisor.close();
+}
+
+#[test]
+fn process_child_waits_report_unrepresentable_deadlines_as_failures() {
+    let child = ProcessChildValue::spawn(
+        vec!["true".to_string()],
+        None,
+        Vec::new(),
+        ProcessStdioConfig::Null,
+        ProcessStdioConfig::Null,
+        ProcessStdioConfig::Null,
+        false,
+    )
+    .expect("child should spawn");
+    assert!(matches!(
+        child.wait(Some(StdDuration::MAX), None),
+        ProcessChildWaitStatus::Failed(_)
+    ));
+    assert!(child.wait_or_none(Some(StdDuration::MAX), None).is_err());
+    assert!(child.wait_ok(Some(StdDuration::MAX), None).is_err());
+    assert!(matches!(
+        child.wait(Some(StdDuration::from_secs(5)), None),
+        ProcessChildWaitStatus::Exited(status) if status.success()
+    ));
+}

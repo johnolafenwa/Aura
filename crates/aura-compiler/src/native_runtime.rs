@@ -70,7 +70,8 @@ use crate::runtime_value::{
 use crate::sema::Type;
 
 const DIRECT_FFI_SPEC_MAGIC: &[u8; 4] = b"AUFI";
-const DIRECT_FFI_SPEC_VERSION: u8 = 1;
+#[doc(hidden)]
+pub const DIRECT_FFI_SPEC_VERSION: u8 = 1;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct DirectFfiType {

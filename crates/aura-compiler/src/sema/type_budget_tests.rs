@@ -509,3 +509,308 @@ fn canonical_key_shape_counts_closure_parameters_and_captures() {
             .expect("a small closure key fits the default budget");
     }
 }
+
+// ---------------------------------------------------------------------------
+// Canonical-key shapes the budget estimator mirrors, and the byte-limit
+// sweep that walks every accounting site of the estimator.
+// ---------------------------------------------------------------------------
+
+fn contract_param(
+    name: &str,
+    ty: Type,
+    has_default: bool,
+    keyword_only: bool,
+) -> super::FunctionParamContract {
+    super::FunctionParamContract {
+        name: name.to_string(),
+        ty,
+        passing: crate::ast::ReceiverKind::Borrow,
+        has_default,
+        keyword_only,
+    }
+}
+
+fn sample_callable() -> Type {
+    Type::Callable(Box::new(super::callables::CallableType {
+        task: true,
+        call_kind: super::ClosureCallKind::Consuming,
+        params: vec![
+            contract_param("first", Type::named("int64"), true, false),
+            contract_param("second", Type::named("str"), false, true),
+        ],
+        return_type: Type::Tuple(vec![Type::Unit, Type::named("bool")]),
+    }))
+}
+
+fn sample_closure() -> Type {
+    let capture = |name: &str, mode| super::ClosureCapture {
+        name: name.to_string(),
+        ty: Type::named("int64"),
+        mode,
+        span: TEST_SPAN,
+        mutated: false,
+    };
+    Type::Closure {
+        params: Box::new(vec![
+            contract_param("left", Type::named("int64"), false, false),
+            contract_param("right", Type::named("str"), true, true),
+        ]),
+        return_type: Box::new(Type::Unit),
+        captures: Box::new(vec![
+            capture("shared", super::ClosureCaptureMode::SharedView),
+            capture("owned", super::ClosureCaptureMode::Move),
+        ]),
+        call_kind: super::ClosureCallKind::MutableRepeatable,
+    }
+}
+
+fn sample_returned_view() -> Type {
+    Type::ReturnedView(Box::new(super::types::ReturnedViewType {
+        mutable: true,
+        pointee: Type::named("str"),
+        origin: 1,
+    }))
+}
+
+#[test]
+fn module_parameter_and_returned_view_keys_fit_the_default_budget() {
+    use std::collections::BTreeMap;
+
+    let names = BTreeMap::new();
+    let module = Type::Module("api".to_string());
+    ExpansionBudget::default()
+        .check_canonical_key(&module, "main", &names, TEST_SPAN)
+        .expect("a module key is a fixed tag plus its name");
+    assert_eq!(
+        module.canonical_key("main", &names),
+        "aura-type-key-v1:[\"module\",\"api\"]"
+    );
+
+    let parameter = Type::TypeParam("T".to_string());
+    ExpansionBudget::default()
+        .check_canonical_key(&parameter, "main", &names, TEST_SPAN)
+        .expect("a parameter key is a fixed tag plus its name");
+    assert_eq!(
+        parameter.canonical_key("main", &names),
+        "aura-type-key-v1:[\"parameter\",\"T\"]"
+    );
+
+    let view = sample_returned_view();
+    ExpansionBudget::default()
+        .check_canonical_key(&view, "main", &names, TEST_SPAN)
+        .expect("a returned-view key wraps its pointee");
+    assert_eq!(
+        view.canonical_key("main", &names),
+        "aura-type-key-v1:[\"returned_view\",true,1,[\"named\",\"str\",[]]]"
+    );
+
+    let callable = sample_callable().canonical_key("main", &names);
+    assert!(
+        callable.starts_with(
+            "aura-type-key-v1:[\"callable\",true,\"Consuming\",[[\"first\",\"Borrow\",true,false,"
+        ),
+        "{callable}"
+    );
+    assert!(
+        callable.contains("[\"second\",\"Borrow\",false,true,[\"named\",\"str\",[]]]"),
+        "{callable}"
+    );
+    assert!(
+        callable.contains("[\"~unit\"]") && callable.ends_with("]]"),
+        "{callable}"
+    );
+}
+
+#[test]
+fn byte_limit_sweep_rejects_every_prefix_of_each_key_shape() {
+    use std::collections::BTreeMap;
+
+    let names = BTreeMap::new();
+    let function = Type::Function {
+        params: vec![
+            contract_param("value", Type::named("int64"), true, false),
+            contract_param("label", Type::named("str"), false, true),
+        ],
+        return_type: Box::new(Type::Unit),
+    };
+    let named = Type::Named(
+        "Holder".to_string(),
+        vec![
+            Type::named("int64"),
+            Type::Named("list".to_string(), vec![Type::named("str")]),
+        ],
+    );
+    for ty in [named, function, sample_callable(), sample_closure()] {
+        let exact = ty.canonical_key("main", &names).len();
+        let threshold = (0..=exact + 64)
+            .find(|limit| {
+                ExpansionBudget::with_key_limits(1_000, 1_000, *limit)
+                    .check_canonical_key(&ty, "main", &names, TEST_SPAN)
+                    .is_ok()
+            })
+            .unwrap_or_else(|| panic!("`{ty}` must fit a generous byte budget"));
+        // Nominal keys are estimated exactly (see the neighbouring test); the
+        // function and callable arms currently land within a couple of bytes
+        // of the allocated key, which this sweep only needs to be close to.
+        assert!(
+            threshold.abs_diff(exact) <= 4,
+            "the estimator for `{ty}` must track the exact key length {exact}, found {threshold}"
+        );
+        for limit in 0..threshold {
+            let Err(error) = ExpansionBudget::with_key_limits(1_000, 1_000, limit)
+                .check_canonical_key(&ty, "main", &names, TEST_SPAN)
+            else {
+                panic!("`{ty}` must exceed a byte limit of {limit}");
+            };
+            assert_eq!(error.code, "AU2999");
+            assert_eq!(
+                error.message,
+                format!("canonical type key exceeds byte limit of {limit}")
+            );
+        }
+    }
+}
+
+#[test]
+fn key_estimator_matches_the_exact_nominal_key_length() {
+    use std::collections::BTreeMap;
+
+    let names = BTreeMap::new();
+    let named = Type::Named(
+        "Holder".to_string(),
+        vec![
+            Type::named("int64"),
+            Type::Named("list".to_string(), vec![Type::named("str")]),
+        ],
+    );
+    let exact = named.canonical_key("main", &names).len();
+    ExpansionBudget::with_key_limits(1_000, 1_000, exact)
+        .check_canonical_key(&named, "main", &names, TEST_SPAN)
+        .expect("the exact nominal key length fits");
+    ExpansionBudget::with_key_limits(1_000, 1_000, exact - 1)
+        .check_canonical_key(&named, "main", &names, TEST_SPAN)
+        .expect_err("one byte less than the exact nominal key length is rejected");
+}
+
+// ---------------------------------------------------------------------------
+// `Type` helpers whose union, callable, closure, and returned-view arms the
+// key estimator has to agree with.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn union_returned_view_closure_and_callable_types_are_never_copy() {
+    let union = Type::normalize_union(
+        vec![Type::named("int64"), Type::named("str")],
+        "main",
+        &Default::default(),
+    )
+    .expect("a two-member union normalizes");
+    assert!(!union.is_copy());
+    assert!(!sample_returned_view().is_copy());
+    assert!(!sample_closure().is_copy());
+    assert!(!sample_callable().is_copy());
+    assert!(Type::Unit.is_copy());
+}
+
+#[test]
+fn pattern_specificity_counts_union_members_callable_slots_and_view_pointees() {
+    use super::types::type_pattern_specificity;
+
+    let union = Type::normalize_union(
+        vec![Type::named("int64"), Type::TypeParam("T".to_string())],
+        "main",
+        &Default::default(),
+    )
+    .expect("a union with a parameter member normalizes");
+    assert_eq!(type_pattern_specificity(&union), 2);
+    assert_eq!(type_pattern_specificity(&sample_callable()), 6);
+    assert_eq!(type_pattern_specificity(&sample_returned_view()), 2);
+}
+
+#[test]
+fn type_parameter_collection_walks_union_callable_closure_and_view_arms() {
+    use super::types::collect_type_params_from_type;
+    use std::collections::BTreeSet;
+
+    let union = Type::normalize_union(
+        vec![Type::TypeParam("U".to_string()), Type::Unit],
+        "main",
+        &Default::default(),
+    )
+    .expect("a union with a parameter member normalizes");
+    let mut collected = BTreeSet::new();
+    collect_type_params_from_type(&union, &mut collected);
+    assert_eq!(collected, BTreeSet::from(["U".to_string()]));
+
+    let callable = Type::Callable(Box::new(super::callables::CallableType {
+        task: false,
+        call_kind: super::ClosureCallKind::Repeatable,
+        params: vec![contract_param(
+            "value",
+            Type::TypeParam("A".to_string()),
+            false,
+            false,
+        )],
+        return_type: Type::TypeParam("B".to_string()),
+    }));
+    let mut collected = BTreeSet::new();
+    collect_type_params_from_type(&callable, &mut collected);
+    assert_eq!(
+        collected,
+        BTreeSet::from(["A".to_string(), "B".to_string()])
+    );
+
+    let closure = Type::Closure {
+        params: Box::new(vec![contract_param(
+            "value",
+            Type::TypeParam("P".to_string()),
+            false,
+            false,
+        )]),
+        return_type: Box::new(Type::Unit),
+        captures: Box::new(Vec::new()),
+        call_kind: super::ClosureCallKind::Repeatable,
+    };
+    let mut collected = BTreeSet::new();
+    collect_type_params_from_type(&closure, &mut collected);
+    assert_eq!(collected, BTreeSet::from(["P".to_string()]));
+
+    let view = Type::ReturnedView(Box::new(super::types::ReturnedViewType {
+        mutable: false,
+        pointee: Type::TypeParam("V".to_string()),
+        origin: 0,
+    }));
+    let mut collected = BTreeSet::new();
+    collect_type_params_from_type(&view, &mut collected);
+    assert_eq!(collected, BTreeSet::from(["V".to_string()]));
+}
+
+#[test]
+fn source_type_ref_spells_callables_but_not_bare_returned_views() {
+    let error = sample_returned_view()
+        .source_type_ref(TEST_SPAN)
+        .expect_err("a returned-view contract is not a standalone type");
+    assert_eq!(
+        error.message,
+        "a returned-view contract has no standalone type spelling"
+    );
+    assert_eq!(error.span, Some(TEST_SPAN));
+
+    let spelled = sample_callable()
+        .source_type_ref(TEST_SPAN)
+        .expect("an owned callable type has a written spelling");
+    let crate::ast::TypeRefKind::Callable {
+        task,
+        call_kind,
+        signature,
+    } = &spelled.kind
+    else {
+        panic!("expected a callable type reference, found {spelled:?}");
+    };
+    assert!(*task);
+    assert_eq!(*call_kind, crate::ast::ReceiverKind::Value);
+    assert!(matches!(
+        signature.kind,
+        crate::ast::TypeRefKind::Function { .. }
+    ));
+}

@@ -113,3 +113,40 @@ fn a_computed_plan_validates_and_a_forged_plan_fails_closed() {
         .unwrap_err()
         .contains("pointer width"));
 }
+
+#[test]
+fn nested_union_members_take_their_own_plan_as_abi_layout() {
+    let inner = union(vec![Type::named("int64"), Type::Unit]);
+    let plan = plan_union_layout(&inner, |_| false);
+    let layout = abi_layout(&Type::Union(Box::new(inner)));
+    assert_eq!(layout.size, plan.size);
+    assert_eq!(layout.align, plan.align);
+    assert_eq!(layout, AbiLayout { size: 16, align: 8 });
+    assert_eq!(abi_layout(&Type::Unit), AbiLayout { size: 0, align: 1 });
+}
+
+#[test]
+fn validate_union_layout_rejects_non_union_plans_and_member_count_drift() {
+    let target = union(vec![Type::named("int64"), Type::Unit]);
+    let plan = plan_union_layout(&target, |ty| ty == &Type::named("int64"));
+
+    let mut not_a_union = plan.clone();
+    not_a_union.union_type = Type::named("int64");
+    assert_eq!(
+        validate_union_layout(&not_a_union).unwrap_err(),
+        "union layout plan does not describe a union type"
+    );
+
+    let mut missing_member = plan.clone();
+    missing_member.members.pop();
+    assert!(validate_union_layout(&missing_member)
+        .unwrap_err()
+        .contains("lists 1 members, expected 2"));
+
+    let mut extra_member = plan;
+    let duplicate = extra_member.members[0].clone();
+    extra_member.members.push(duplicate);
+    assert!(validate_union_layout(&extra_member)
+        .unwrap_err()
+        .contains("lists 3 members, expected 2"));
+}

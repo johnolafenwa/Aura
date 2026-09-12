@@ -3742,3 +3742,77 @@ fn maintained_hello_world_example_runs() {
     let source = include_str!("../../../examples/basics/hello_world.au");
     assert_eq!(crate::run_source(source).unwrap().stdout, "Hello, world!\n");
 }
+
+#[test]
+fn absolutize_joins_relative_paths_onto_the_canonical_current_directory() {
+    let relative = Path::new("aura-lib-relative-probe").join("leaf.au");
+    let current = std::env::current_dir().expect("current directory");
+    let canonical_current = fs::canonicalize(&current).expect("current directory canonicalizes");
+    assert_eq!(absolutize(&relative), canonical_current.join(&relative));
+}
+
+#[test]
+fn canonicalize_if_exists_resolves_missing_leaves_under_existing_directories() {
+    let temp = TempDir::new("aura-lib-canonicalize-leaf");
+    let canonical_root = fs::canonicalize(temp.path()).expect("temp root canonicalizes");
+    let missing = temp.path().join("missing").join("leaf.au");
+    assert_eq!(
+        canonicalize_if_exists(&missing).expect("missing leaves resolve against the root"),
+        canonical_root.join("missing").join("leaf.au")
+    );
+}
+
+#[test]
+fn qualify_namespace_paths_recurse_into_nested_modules() {
+    let program = check_source("def main():\n    pass\n").expect("program checks");
+    let leaf = exported_namespace(&["user".to_string()], &program);
+    let leaf_path = leaf.path.clone();
+    let mut parent = exported_namespace(&["pkg".to_string()], &program);
+    let parent_path = parent.path.clone();
+    parent.modules.insert("user".to_string(), leaf);
+    let mut modules = BTreeMap::from([("pkg".to_string(), parent)]);
+    qualify_imported_module_namespaces(&mut modules, "dep", &BTreeSet::new());
+    let parent = modules.get("pkg").expect("parent namespace");
+    assert_eq!(parent.path, format!("dep.{parent_path}"));
+    assert_eq!(
+        parent.modules.get("user").expect("nested namespace").path,
+        format!("dep.{leaf_path}")
+    );
+}
+
+#[test]
+fn export_qualification_covers_returned_views_and_callable_type_refs() {
+    let program =
+        check_source("class Box:\n    value: int64\n\ndef main():\n    pass\n").expect("checks");
+    let qualified_box = format!("{}.Box", program.module_name);
+    let view = crate::sema::Type::ReturnedView(Box::new(crate::sema::ReturnedViewType {
+        mutable: true,
+        pointee: crate::sema::Type::named("Box"),
+        origin: 1,
+    }));
+    let crate::sema::Type::ReturnedView(qualified) = qualify_export_type(&program, &view) else {
+        panic!("returned views stay returned views");
+    };
+    assert!(qualified.mutable);
+    assert_eq!(qualified.origin, 1);
+    assert_eq!(
+        qualified.pointee,
+        crate::sema::Type::named(qualified_box.as_str())
+    );
+
+    let callable_ref = TypeRef::callable(
+        false,
+        crate::ast::ReceiverKind::Borrow,
+        TypeRef::function(vec![type_ref("Box")], type_ref("Box"), Span::new(1, 1)),
+        Span::new(1, 1),
+    );
+    let qualified_ref = qualify_export_type_ref(&program, &callable_ref);
+    let crate::ast::TypeRefKind::Callable { signature, .. } = &qualified_ref.kind else {
+        panic!("callable refs stay callable refs");
+    };
+    let (params, return_type) = signature
+        .function_parts()
+        .expect("callable signature stays structural");
+    assert_eq!(named_ref_name(&params[0].ty), qualified_box);
+    assert_eq!(named_ref_name(return_type), qualified_box);
+}

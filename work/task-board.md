@@ -153,8 +153,14 @@ Last updated: 2026-09-12
   documentation pass complete: generics and ownership pages cross-link bound
   methods and stored view contracts, the unreleased changelog records the
   phase, LLM export regenerated; reference, tutorial, and hygiene gates green.
-- Next: full local verification with the coverage ratchet, then hosted
-  integration.
+- Full local verification and ratchet complete: the coverage-only FFI test
+  was repaired (spec version 1), 350 coverage tests and three run-pass
+  fixtures were added, four lowering/estimator defects and a dead identity
+  spelling were fixed, and the complete `npm run ci` chain is green. Coverage
+  measured 96.4664% lines / 97.3304% functions / 95.2373% regions; floors
+  raised to 96.46 / 97.33 / 95.23. LSP coverage 100%.
+- Next: hosted integration (push, PR to `main`, green branch CI, merge, green
+  main CI).
 - Option removal and all phase 2 signature changes remain excluded; protected
   user files and coverage floors remain unchanged.
 - Work and handoff ledger: [2026-09-09-batch-1-phase-1.md](2026-09-09-batch-1-phase-1.md).

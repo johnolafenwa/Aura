@@ -30810,3 +30810,193 @@ fn closure_types_have_canonical_keys_and_empty_unions_are_rejected() {
         .expect_err("a union needs at least one member");
     assert_eq!(error.code, "AU2010");
 }
+
+#[test]
+fn ffi_signature_validation_reserves_function_typed_parameters_and_returns() {
+    let span = Span::new(1, 1);
+    let callback_type = || TypeRef::function(vec![type_ref("int32")], type_ref("int32"), span);
+    let decl =
+        |params: Vec<crate::ast::Param>, return_type: TypeRef| crate::ast::ExternFunctionDecl {
+            public: false,
+            abi: "C".to_string(),
+            name: "visit".to_string(),
+            name_span: span,
+            params,
+            return_type,
+            span,
+        };
+    let opaque_handles = BTreeMap::new();
+    let type_names = TypeDefinitions::default();
+    let type_arities = BTreeMap::new();
+    let canonical_type_names = BTreeMap::new();
+
+    let parameter = validate_ffi_signature(
+        &decl(
+            vec![crate::ast::Param {
+                name: "callback".to_string(),
+                mode: crate::ast::ParamMode::Default,
+                ty: callback_type(),
+                default: None,
+                keyword_only: false,
+                span,
+            }],
+            type_ref("int32"),
+        ),
+        &opaque_handles,
+        &type_names,
+        &type_arities,
+        &canonical_type_names,
+    )
+    .expect_err("callback parameters are reserved in FFI v0");
+    assert_eq!(parameter.code, "AU2005");
+    assert_eq!(
+        parameter.message,
+        "FFI callbacks are reserved; parameter `callback` cannot use a function type"
+    );
+    assert!(!parameter.help.is_empty());
+
+    let returned = validate_ffi_signature(
+        &decl(Vec::new(), callback_type()),
+        &opaque_handles,
+        &type_names,
+        &type_arities,
+        &canonical_type_names,
+    )
+    .expect_err("callback returns are reserved in FFI v0");
+    assert_eq!(returned.code, "AU2005");
+    assert_eq!(
+        returned.message,
+        "FFI callbacks are reserved; an extern declaration cannot return a function value"
+    );
+}
+
+#[test]
+fn rng_clone_obligations_with_unresolved_type_parameters_are_rejected_before_inference() {
+    let type_names = TypeDefinitions::default();
+    let type_arities = BTreeMap::new();
+    let classes = BTreeMap::new();
+    let enums = BTreeMap::new();
+    let functions = BTreeMap::new();
+    let traits = BTreeMap::new();
+    let imported_modules = BTreeMap::new();
+    let module_registry = BTreeMap::new();
+    let checker = checker(
+        "<main>",
+        &type_names,
+        &type_arities,
+        &classes,
+        &enums,
+        &functions,
+        &traits,
+        &[],
+        &imported_modules,
+        &module_registry,
+    );
+    let span = Span::new(3, 7);
+    let obligations = BTreeSet::from(["T".to_string(), "U".to_string()]);
+
+    // A method-level type parameter without a substitution is deferred.
+    checker
+        .enforce_rng_clone_obligations_before_method_inference(
+            "method `probe`",
+            &obligations,
+            &HashMap::new(),
+            &["T".to_string(), "U".to_string()],
+            span,
+        )
+        .expect("method type parameters are inferred later");
+
+    // A foreign type parameter has no substitution and is not in scope, so
+    // the obligation cannot be discharged.
+    let error = checker
+        .enforce_rng_clone_obligations_before_method_inference(
+            "method `probe`",
+            &obligations,
+            &HashMap::new(),
+            &[],
+            span,
+        )
+        .expect_err("unresolved foreign type parameters cannot prove clone safety");
+    assert_eq!(error.code, "AU3007");
+    assert_eq!(error.span, Some(span));
+    assert_eq!(
+        error.message,
+        "cannot prove clone safety for unresolved type parameter `T` while checking method `probe`"
+    );
+
+    let substituted = checker
+        .enforce_rng_clone_obligations_before_method_inference(
+            "method `probe`",
+            &BTreeSet::from(["T".to_string()]),
+            &HashMap::from([("T".to_string(), Type::named("random.Rng"))]),
+            &[],
+            span,
+        )
+        .expect_err("a substituted Rng obligation is rejected");
+    assert_eq!(substituted.code, "AU3007");
+    assert!(
+        substituted.message.contains("random.Rng"),
+        "{}",
+        substituted.message
+    );
+}
+
+#[test]
+fn opaque_handle_operands_reach_the_binary_operator_equality_gate() {
+    let namespace = public_ffi_handle_namespace("ffi_types");
+    let module_registry = BTreeMap::from([("ffi_types".to_string(), namespace)]);
+    let type_names = TypeDefinitions::default();
+    let type_arities = BTreeMap::new();
+    let classes = BTreeMap::new();
+    let enums = BTreeMap::new();
+    let functions = BTreeMap::new();
+    let traits = BTreeMap::new();
+    let imported_modules = BTreeMap::new();
+    let checker = checker(
+        "app",
+        &type_names,
+        &type_arities,
+        &classes,
+        &enums,
+        &functions,
+        &traits,
+        &[],
+        &imported_modules,
+        &module_registry,
+    );
+    let span = Span::new(2, 5);
+    let handle = Type::named("ffi_types.Handle");
+    assert!(checker.is_opaque_handle_type(&handle));
+
+    for (left, right) in [
+        (handle.clone(), Type::named("int64")),
+        (Type::named("int64"), handle.clone()),
+    ] {
+        for op in [BinaryOp::Eq, BinaryOp::NotEq] {
+            // The equality-eligibility gate runs before the operator-specific
+            // opaque-handle comparison branch, so that later branch is never
+            // the reporting site for either operand position.
+            let error = checker
+                .type_of_binary(span, op, left.clone(), right.clone())
+                .expect_err("opaque handles have no foreign identity equality");
+            assert_eq!(error.code, "AU2008", "{}", error.message);
+            assert_eq!(
+                error.message,
+                "cannot compare `ffi_types.Handle` because opaque FFI handle `ffi_types.Handle` does not define equality"
+            );
+            assert!(!error.help.is_empty());
+        }
+    }
+
+    let bitwise = checker
+        .type_of_binary(span, BinaryOp::BitAnd, handle.clone(), handle)
+        .expect_err("opaque handles are not integers");
+    assert_eq!(bitwise.code, "AU2003", "{}", bitwise.message);
+    assert!(
+        bitwise
+            .message
+            .contains("bitwise and shift operators require integer operands"),
+        "{}",
+        bitwise.message
+    );
+}

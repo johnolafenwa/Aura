@@ -654,3 +654,16 @@ fn conditional_expression_json_shape_names_all_three_operands() {
         })
     );
 }
+
+#[test]
+fn type_alias_items_report_their_alias_name() {
+    let alias = Item::TypeAlias(super::TypeAliasDecl {
+        public: false,
+        name: "Pair".to_string(),
+        type_params: vec![],
+        type_param_bounds: BTreeMap::new(),
+        target: dummy_type("int32"),
+        span: Span::new(1, 1),
+    });
+    assert_eq!(alias.name(), "Pair");
+}

@@ -1,0 +1,30 @@
+enum Slot[T]:
+    Filled(T)
+    Empty
+
+class Counter:
+    total: int64
+
+def describe(slot: Slot[str]) -> str:
+    match slot:
+        case Slot.Filled(text):
+            return text.clone()
+        case Slot.Empty:
+            return "empty"
+
+def main():
+    counted = Slot.Filled(Counter(total=7))
+    match counted:
+        case Slot.Filled(counter):
+            print(counter.total)
+        case Slot.Empty:
+            print(0)
+    number = Slot.Filled(1)
+    match own number:
+        case Slot.Filled(value):
+            print(value + 1)
+        case Slot.Empty:
+            print(0)
+    text = Slot.Filled("named")
+    print(describe(text))
+    print(Slot.Filled(2.5))

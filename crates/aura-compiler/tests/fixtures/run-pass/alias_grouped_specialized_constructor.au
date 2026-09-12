@@ -1,0 +1,10 @@
+class Box[T]:
+    value: T
+
+type Wrapped[T] = Box[T]
+
+def main():
+    grouped = (Wrapped[int64])(value=1)
+    print(grouped.value)
+    direct = Wrapped[str](value="two")
+    print(direct.value)
