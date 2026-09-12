@@ -1,0 +1,11 @@
+import control
+
+type Worker = TaskCallable[def() -> Result[int64, str]]
+
+def main():
+    worker = Worker(lambda: Result.Ok(41))
+    match control.retry(worker, max_attempts=1):
+        case Result.Ok(value):
+            print(value + 1)
+        case Result.Err(message):
+            print(message)

@@ -355,10 +355,9 @@ methods selected for the concrete receiver type bind the same way and
 dispatch statically, but their contract is the trait's public one: the
 trait's parameter names, keyword-only boundary, and default availability,
 never the implementation's local parameter names. Each slot, including a
-returned-view origin, forwards to the implementation by ordinal. In the
-current compiler an implementation whose keyword-only parameter is named
-differently from the trait's cannot be bound (`AU2005`); name it as the trait
-does, or call the method directly. An omitted argument with a declaration
+returned-view origin, forwards to the implementation by ordinal, so an
+implementation may name its parameters, keyword-only ones included, as it
+likes. An omitted argument with a declaration
 default is supplied by the method's own default expression, evaluated at the
 call. Bound methods store, pack, and start like any closure with the same
 call kind.

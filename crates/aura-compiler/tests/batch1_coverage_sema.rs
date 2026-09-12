@@ -240,13 +240,11 @@ fn trait_method_values_expose_the_trait_contract_not_implementation_names() {
         "AU2004",
         "no parameter named `local`",
     );
-    // A keyword-only slot forwards to the implementation by name in the
-    // lowered closure; a differing implementation-local name is refused
-    // rather than lowered to an unresolvable forward.
-    rejects_with_code(
+    // A keyword-only slot forwards to the implementation under its own
+    // local name at the same ordinal, so the public contract's name is the
+    // only one a caller sees.
+    accepts(
         "trait Apply:\n    def apply(self, base: int64, *, value: int64) -> int64\nclass Worker:\n    pass\nimpl Apply for Worker:\n    def apply(self, start: int64, *, local: int64) -> int64:\n        return start + local\ndef main():\n    f = Worker().apply\n    print(f(1, value=7))\n",
-        "AU2005",
-        "cannot forward keyword-only parameter `value` to the implementation's parameter `local`",
     );
     accepts(
         "trait Apply:\n    def apply(self, base: int64, *, value: int64) -> int64\nclass Worker:\n    pass\nimpl Apply for Worker:\n    def apply(self, start: int64, *, value: int64) -> int64:\n        return start + value\ndef main():\n    f = Worker().apply\n    print(f(base=1, value=7))\n",

@@ -1,6 +1,0 @@
-error[AU2005]: bound method `Apply.apply` cannot forward keyword-only parameter `value` to the implementation's parameter `local` in this language version
- --> crates/aura-compiler/tests/fixtures/check-fail/bound_method_trait_keyword_local_name.au:13:16
-   |
-13 |     f = worker.apply
-   |                ^
-  = help: name the implementation's keyword-only parameter `value` as the trait declares it, or call the method directly

@@ -256,7 +256,7 @@ fn module_uses_lightweight_tasks(module: &MirModule) -> bool {
         // first-class builtin values dispatch through the same implementation
         // as direct calls. Those wrappers are not source reachability: in
         // particular, the always-present `process::run` wrapper must not force
-        // every otherwise-synchronous program onto a 512 KiB task stack.
+        // every otherwise-synchronous program onto a 768 KiB task stack.
         .filter(|function| !crate::mir::has_runtime_named_function(&function.name))
         .any(function_uses_lightweight_tasks)
 }

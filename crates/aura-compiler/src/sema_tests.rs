@@ -24783,9 +24783,7 @@ def launch():
     )
     .expect_err("a function-value task argument must be Transfer");
     assert_eq!(argument.code, "AU3008");
-    assert!(argument
-        .message
-        .contains("task argument 1 for function value"));
+    assert!(argument.message.contains("task argument `value`"));
     assert!(argument
         .message
         .contains("`random.Rng` is a stateful generator and is not Transfer"));

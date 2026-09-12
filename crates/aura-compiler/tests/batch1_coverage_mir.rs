@@ -762,6 +762,16 @@ fn union_argument_satisfies_a_generic_bound_and_dispatches_on_its_active_member(
     // A coherent all-member union satisfies `T: Named` (ADR-0052 A8); the
     // erased generic body dispatches the trait call through the union's
     // active member exactly as a direct call on the union does.
-    let source = include_str!("fixtures/check-pass/union_member_bound_dispatch.au");
+    let source = include_str!("fixtures/run-pass/union_member_bound_dispatch.au");
     assert_runs(source, "rex\nrex\ntom\n");
+}
+
+#[test]
+fn union_argument_through_a_generic_bound_writes_a_mutable_method_back_on_the_interpreter() {
+    // The interpreter writes a `mut self` trait method back through the
+    // union's active payload; the direct backend refuses the same call with a
+    // diagnostic (see Current Limits), so this is pinned per backend rather
+    // than as a parity fixture.
+    let source = include_str!("fixtures/check-pass/union_member_bound_mutable_dispatch.au");
+    assert_runs(source, "2\n12\n");
 }

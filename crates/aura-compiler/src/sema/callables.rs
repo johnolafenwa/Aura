@@ -3039,29 +3039,6 @@ impl FunctionChecker<'_> {
                 has_default: param.default.is_some(),
             })
             .collect::<Vec<_>>();
-        // The lowered closure body forwards a keyword-only slot to the
-        // implementation by name. Until that forwarding is by ordinal, an
-        // implementation-local keyword-only name that differs from the
-        // trait's cannot be reached through the public contract, so the
-        // binding is refused rather than lowered to an unresolvable call.
-        if let Some((public, local)) = public_params
-            .iter()
-            .zip(&target.decl.params)
-            .find(|(public, local)| public.keyword_only && public.name != local.name)
-        {
-            return Err(Diagnostic::coded_at(
-                "AU2005",
-                span,
-                format!(
-                    "bound method `{}` cannot forward keyword-only parameter `{}` to the implementation's parameter `{}` in this language version",
-                    target.display, public.name, local.name
-                ),
-            )
-            .with_help(format!(
-                "name the implementation's keyword-only parameter `{}` as the trait declares it, or call the method directly",
-                public.name
-            )));
-        }
         let view_return = target.decl.view_return.as_ref().map(|view| {
             let origin = target
                 .decl

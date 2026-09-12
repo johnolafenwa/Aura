@@ -408,6 +408,7 @@ struct NativeCodegen<'a> {
     assert_fail: FuncId,
     assert_fail_detailed: FuncId,
     fail_division_by_zero: FuncId,
+    fail_erased_union_mutable_receiver: FuncId,
     fail_int32_overflow: FuncId,
     fail_integer_overflow: FuncId,
     register_cleanup: FuncId,
@@ -556,6 +557,7 @@ struct NativeCodegen<'a> {
     union_inject: FuncId,
     union_tag_test: FuncId,
     none_test: FuncId,
+    value_is_union: FuncId,
     union_active_payload: FuncId,
     union_take_payload: FuncId,
     enum_variant: FuncId,
@@ -930,6 +932,7 @@ impl<'a> NativeCodegen<'a> {
             assert_fail => ("aura_direct_assert_fail", [types::I64, types::I64, types::I64], None),
             assert_fail_detailed => ("aura_direct_assert_fail_detailed", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], None),
             fail_division_by_zero => ("aura_direct_fail_division_by_zero", [types::I64, types::I64], None),
+            fail_erased_union_mutable_receiver => ("aura_direct_fail_erased_union_mutable_receiver", [types::I64, types::I64], None),
             fail_int32_overflow => ("aura_direct_fail_int32_overflow", [types::I64, types::I64, types::I64], None),
             fail_integer_overflow => ("aura_direct_fail_integer_overflow", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], None),
             register_cleanup => ("aura_direct_register_cleanup", [types::I64, types::I64, types::I64], Some(types::I64)),
@@ -1078,6 +1081,7 @@ impl<'a> NativeCodegen<'a> {
             union_inject => ("aura_direct_union_inject", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             union_tag_test => ("aura_direct_union_tag_test", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             none_test => ("aura_direct_none_test", [types::I64], Some(types::I64)),
+            value_is_union => ("aura_direct_value_is_union", [types::I64], Some(types::I64)),
             union_active_payload => ("aura_direct_union_active_payload", [types::I64, types::I64], Some(types::I64)),
             union_take_payload => ("aura_direct_union_take_payload", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             enum_variant => ("aura_direct_enum_variant", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
@@ -1406,6 +1410,7 @@ impl<'a> NativeCodegen<'a> {
             assert_fail,
             assert_fail_detailed,
             fail_division_by_zero,
+            fail_erased_union_mutable_receiver,
             fail_int32_overflow,
             fail_integer_overflow,
             register_cleanup,
@@ -1554,6 +1559,7 @@ impl<'a> NativeCodegen<'a> {
             union_inject,
             union_tag_test,
             none_test,
+            value_is_union,
             union_active_payload,
             union_take_payload,
             enum_variant,
@@ -2165,6 +2171,9 @@ impl<'a> NativeCodegen<'a> {
         let fail_division_by_zero = self
             .object
             .declare_func_in_func(self.fail_division_by_zero, builder.func);
+        let fail_erased_union_mutable_receiver = self
+            .object
+            .declare_func_in_func(self.fail_erased_union_mutable_receiver, builder.func);
         let fail_int32_overflow = self
             .object
             .declare_func_in_func(self.fail_int32_overflow, builder.func);
@@ -2586,6 +2595,9 @@ impl<'a> NativeCodegen<'a> {
         let none_test = self
             .object
             .declare_func_in_func(self.none_test, builder.func);
+        let value_is_union = self
+            .object
+            .declare_func_in_func(self.value_is_union, builder.func);
         let union_active_payload = self
             .object
             .declare_func_in_func(self.union_active_payload, builder.func);
@@ -3210,6 +3222,7 @@ impl<'a> NativeCodegen<'a> {
             assert_fail,
             assert_fail_detailed,
             fail_division_by_zero,
+            fail_erased_union_mutable_receiver,
             fail_int32_overflow,
             fail_integer_overflow,
             register_cleanup,
@@ -3357,6 +3370,7 @@ impl<'a> NativeCodegen<'a> {
             union_inject,
             union_tag_test,
             none_test,
+            value_is_union,
             union_active_payload,
             union_take_payload,
             enum_variant,
@@ -4482,6 +4496,7 @@ struct FunctionCompiler<'a> {
     assert_fail: cranelift_codegen::ir::FuncRef,
     assert_fail_detailed: cranelift_codegen::ir::FuncRef,
     fail_division_by_zero: cranelift_codegen::ir::FuncRef,
+    fail_erased_union_mutable_receiver: cranelift_codegen::ir::FuncRef,
     fail_int32_overflow: cranelift_codegen::ir::FuncRef,
     fail_integer_overflow: cranelift_codegen::ir::FuncRef,
     register_cleanup: cranelift_codegen::ir::FuncRef,
@@ -4632,6 +4647,7 @@ struct FunctionCompiler<'a> {
     union_inject: cranelift_codegen::ir::FuncRef,
     union_tag_test: cranelift_codegen::ir::FuncRef,
     none_test: cranelift_codegen::ir::FuncRef,
+    value_is_union: cranelift_codegen::ir::FuncRef,
     union_active_payload: cranelift_codegen::ir::FuncRef,
     union_take_payload: cranelift_codegen::ir::FuncRef,
     enum_variant: cranelift_codegen::ir::FuncRef,
@@ -15171,6 +15187,19 @@ impl<'a> FunctionCompiler<'a> {
                 field, object_ty
             ));
         }
+        // An erased receiver (a generic body's `T`) may hold a union whose
+        // active member carries the method (ADR-0052 A8). The interpreter
+        // inspects the runtime value; the direct backend branches on it.
+        if matches!(object_ty, Type::TypeParam(_)) {
+            return self.compile_erased_receiver_dispatch(
+                object,
+                field,
+                receiver_place,
+                args,
+                trait_name,
+                &candidates,
+            );
+        }
         // A union receiver dispatches on its active member (ADR-0052 A8):
         // the payload is the receiver, and a mutable method writes back
         // through the active payload projection so the tag cannot change.
@@ -15215,21 +15244,161 @@ impl<'a> FunctionCompiler<'a> {
             );
         }
 
-        let result_ty = if candidates
+        let result_ty = self.dynamic_result_type(&candidates)?;
+        let join_block = self.builder.create_block();
+        let result_vars = self.declare_temporary_result_storage(&result_ty)?;
+        self.emit_candidate_chain(
+            object,
+            receiver_place,
+            &candidates,
+            field,
+            args,
+            trait_name,
+            &result_ty,
+            &result_vars,
+            join_block,
+        )?;
+        self.builder.switch_to_block(join_block);
+        self.builder.seal_block(join_block);
+        // Every successful candidate released its branch-local temporaries
+        // before jumping here. The restored fallthrough ledger belongs only to
+        // the trapping no-match edge and must not be released a second time at
+        // the join.
+        self.owned_opaque_temporaries.clear();
+        self.load_result_vars(&result_vars, result_ty)
+    }
+
+    /// The common result type of every runtime candidate, or an opaque
+    /// unknown when the candidates disagree.
+    fn dynamic_result_type(
+        &self,
+        candidates: &[(Type, MirMethod)],
+    ) -> std::result::Result<DirectType, String> {
+        let result_types = candidates
             .iter()
             .map(|(_, method)| self.call_result_type(&method.function_name))
-            .collect::<std::result::Result<Vec<_>, _>>()?
-            .windows(2)
-            .all(|window| window[0] == window[1])
-        {
-            self.call_result_type(&candidates[0].1.function_name)?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        if result_types.windows(2).all(|window| window[0] == window[1]) {
+            self.call_result_type(&candidates[0].1.function_name)
         } else {
-            DirectType::Opaque(Type::named("Unknown"))
-        };
+            Ok(DirectType::Opaque(Type::named("Unknown")))
+        }
+    }
 
+    /// Dispatches an erased receiver on its runtime value: a union routes
+    /// through its active payload (with the active-payload write-back
+    /// projection for the receiver place), any other value dispatches
+    /// directly. Both paths join on the same result storage.
+    fn compile_erased_receiver_dispatch(
+        &mut self,
+        object: ValueRef,
+        field: &str,
+        receiver_place: Option<&str>,
+        args: &[MirArg],
+        trait_name: Option<&str>,
+        candidates: &[(Type, MirMethod)],
+    ) -> std::result::Result<ValueRef, String> {
+        let raw = self.ensure_opaque(object)?;
+        let result_ty = self.dynamic_result_type(candidates)?;
         let join_block = self.builder.create_block();
-        let mut current_fallthrough = None;
         let result_vars = self.declare_temporary_result_storage(&result_ty)?;
+        let probe = self
+            .builder
+            .ins()
+            .call(self.value_is_union, &[raw.values[0]]);
+        let is_union = self.builder.inst_results(probe)[0];
+        let union_block = self.builder.create_block();
+        let plain_block = self.builder.create_block();
+        self.builder
+            .ins()
+            .brif(is_union, union_block, &[], plain_block, &[]);
+        let caller_owned = self.owned_opaque_temporaries.clone();
+
+        self.builder.switch_to_block(union_block);
+        self.builder.seal_block(union_block);
+        self.owned_opaque_temporaries = caller_owned.clone();
+        let mutates_receiver = candidates
+            .iter()
+            .any(|(_, method)| method.receiver == Some(MirReceiverKind::BorrowMut));
+        if mutates_receiver {
+            // No static write-back path exists for the payload of a union
+            // behind an erased place; refuse at run time rather than mutate
+            // a detached copy.
+            self.emit_pending_cleanups(true)?;
+            let line = self.builder.ins().iconst(types::I64, 0);
+            let column = self.builder.ins().iconst(types::I64, 0);
+            self.builder
+                .ins()
+                .call(self.fail_erased_union_mutable_receiver, &[line, column]);
+            self.builder.ins().trap(TrapCode::unwrap_user(1));
+        } else {
+            let consumes = candidates[0].1.receiver == Some(MirReceiverKind::Value);
+            let consume_flag = self.builder.ins().iconst(types::I64, i64::from(consumes));
+            let inst = self
+                .builder
+                .ins()
+                .call(self.union_active_payload, &[raw.values[0], consume_flag]);
+            let payload = self.owned_opaque_result(
+                self.builder.inst_results(inst).to_vec(),
+                Type::named("Unknown"),
+            );
+            let union_receiver_place = receiver_place.map(|place| {
+                format!(
+                    "{place}.{}",
+                    crate::native_runtime::DIRECT_UNION_ACTIVE_PAYLOAD_PROJECTION
+                )
+            });
+            self.emit_candidate_chain(
+                payload,
+                union_receiver_place.as_deref(),
+                candidates,
+                field,
+                args,
+                trait_name,
+                &result_ty,
+                &result_vars,
+                join_block,
+            )?;
+        }
+
+        self.builder.switch_to_block(plain_block);
+        self.builder.seal_block(plain_block);
+        self.owned_opaque_temporaries = caller_owned;
+        self.emit_candidate_chain(
+            raw,
+            receiver_place,
+            candidates,
+            field,
+            args,
+            trait_name,
+            &result_ty,
+            &result_vars,
+            join_block,
+        )?;
+
+        self.builder.switch_to_block(join_block);
+        self.builder.seal_block(join_block);
+        self.owned_opaque_temporaries.clear();
+        self.load_result_vars(&result_vars, result_ty)
+    }
+
+    /// Emits the runtime-type candidate chain: each candidate tests the
+    /// receiver's runtime type, calls its method on a match, stores the
+    /// coerced result, and jumps to `join_block`; the final fallthrough traps.
+    #[allow(clippy::too_many_arguments)]
+    fn emit_candidate_chain(
+        &mut self,
+        object: ValueRef,
+        receiver_place: Option<&str>,
+        candidates: &[(Type, MirMethod)],
+        field: &str,
+        args: &[MirArg],
+        trait_name: Option<&str>,
+        result_ty: &DirectType,
+        result_vars: &[Variable],
+        join_block: cranelift_codegen::ir::Block,
+    ) -> std::result::Result<(), String> {
+        let mut current_fallthrough = None;
         // Every runtime candidate starts from the same ownership state. Emitting
         // one candidate's taken edge can consume or release an owned projected
         // receiver, but that edge is skipped when control falls through to the
@@ -15237,8 +15406,13 @@ impl<'a> FunctionCompiler<'a> {
         // candidate still emits the release owed by its runtime path.
         let caller_owned = self.owned_opaque_temporaries.clone();
         for (candidate_ty, _method) in candidates.iter() {
+            // Every implementation target is a named type; anything else is
+            // forged metadata, refused before a block is left unterminated.
             let Type::Named(candidate_name, _) = candidate_ty else {
-                continue;
+                return Err(format!(
+                    "direct backend does not know how to call dynamic method `.{}` for `{}`",
+                    field, candidate_ty
+                ));
             };
             self.owned_opaque_temporaries = caller_owned.clone();
             let matched = self.value_matches_runtime_type(object.values[0], candidate_ty)?;
@@ -15258,8 +15432,8 @@ impl<'a> FunctionCompiler<'a> {
                 args,
                 trait_name,
             )?;
-            let coerced_result = self.coerce_value(call_result, &result_ty)?;
-            self.store_result_vars(&result_vars, &coerced_result)?;
+            let coerced_result = self.coerce_value(call_result, result_ty)?;
+            self.store_result_vars(result_vars, &coerced_result)?;
             self.release_all_temporary_owned();
             self.builder.ins().jump(join_block, &[]);
             self.builder.seal_block(then_block);
@@ -15273,14 +15447,7 @@ impl<'a> FunctionCompiler<'a> {
             self.builder.ins().trap(TrapCode::unwrap_user(1));
             self.builder.seal_block(else_block);
         }
-        self.builder.switch_to_block(join_block);
-        self.builder.seal_block(join_block);
-        // Every successful candidate released its branch-local temporaries
-        // before jumping here. The restored fallthrough ledger belongs only to
-        // the trapping no-match edge and must not be released a second time at
-        // the join.
-        self.owned_opaque_temporaries.clear();
-        self.load_result_vars(&result_vars, result_ty)
+        Ok(())
     }
 
     fn compile_opaque_construct(

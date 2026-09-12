@@ -5321,6 +5321,20 @@ fn validated_transfer_failure(
     }
 }
 
+/// A packed `Callable`/`TaskCallable` admitted where a function contract is
+/// expected (C10) unifies through its contract, exactly as the checker
+/// unified it, so the callee's type parameters resolve from the packed
+/// value's result type.
+fn inference_shape(actual: Type, pattern: &Type) -> Type {
+    match (actual, pattern) {
+        (Type::Callable(callable), Type::Function { .. }) => Type::Function {
+            params: callable.params.clone(),
+            return_type: Box::new(callable.return_type.clone()),
+        },
+        (actual, _) => actual,
+    }
+}
+
 fn validated_enum_variant_fact(
     place: &str,
     enum_type: &Type,
@@ -9361,6 +9375,48 @@ impl<'a> Lowerer<'a> {
         ))
     }
 
+    /// The implementation's own parameter names, by ordinal, for the method
+    /// a bound-method closure forwards to: a trait method's public contract
+    /// may name its slots differently from the selected implementation, and
+    /// the forwarding call binds keyword-only slots by the callee's names.
+    fn bound_method_local_param_names(
+        &self,
+        receiver_ty: &Type,
+        field: &str,
+    ) -> Option<Vec<String>> {
+        let Type::Named(class_name, _) = receiver_ty else {
+            return None;
+        };
+        if let Some(class) = self.resolve_class_info(class_name) {
+            if let Some(method) = class.methods.get(field) {
+                return Some(
+                    method
+                        .decl
+                        .params
+                        .iter()
+                        .map(|param| param.name.clone())
+                        .collect(),
+                );
+            }
+        }
+        let (_, method) = self
+            .trait_impls_in_scope()
+            .filter_map(|trait_impl| {
+                self.trait_impl_substitutions(trait_impl, receiver_ty)?;
+                let method = trait_impl.methods.get(field)?;
+                Some((crate::sema::trait_impl_specificity(trait_impl), method))
+            })
+            .max_by_key(|(specificity, _)| *specificity)?;
+        Some(
+            method
+                .decl
+                .params
+                .iter()
+                .map(|param| param.name.clone())
+                .collect(),
+        )
+    }
+
     /// Lowers `receiver.method` into a closure whose body forwards to the
     /// method call (C6). The receiver is evaluated once into the single
     /// `__receiver` capture; omitted defaults resolve through the method's own
@@ -9428,11 +9484,21 @@ impl<'a> Lowerer<'a> {
             },
             span: synthetic,
         };
+        // A keyword-only slot forwards under the implementation's local name
+        // at the same ordinal: the closure's parameters carry the public
+        // (trait) contract names, which the implementation may not share.
+        let local_names = self.bound_method_local_param_names(&capture.ty, field);
         let args = info
             .params
             .iter()
-            .map(|param| crate::ast::Argument {
-                name: param.keyword_only.then(|| param.name.clone()),
+            .enumerate()
+            .map(|(index, param)| crate::ast::Argument {
+                name: param.keyword_only.then(|| {
+                    local_names
+                        .as_ref()
+                        .and_then(|names| names.get(index).cloned())
+                        .unwrap_or_else(|| param.name.clone())
+                }),
                 value: Expr {
                     kind: ExprKind::Name(param.name.clone()),
                     span: synthetic,
@@ -15563,6 +15629,7 @@ impl<'a> Lowerer<'a> {
                 let Some(actual) = self.infer_expr_type(&argument.value) else {
                     continue;
                 };
+                let actual = inference_shape(actual, param);
                 let _ = crate::sema::type_pattern_matches(
                     param,
                     &actual,
@@ -17658,6 +17725,7 @@ impl<'a> Lowerer<'a> {
                 let Some(actual) = self.infer_expr_type(value) else {
                     continue;
                 };
+                let actual = inference_shape(actual, param_type);
                 let _ = crate::sema::type_pattern_matches(
                     param_type,
                     &actual,
@@ -18901,6 +18969,7 @@ impl<'a> Lowerer<'a> {
                                     let Some(actual) = self.infer_expr_type(&argument.value) else {
                                         continue;
                                     };
+                                    let actual = inference_shape(actual, param);
                                     let _ = crate::sema::type_pattern_matches(
                                         param,
                                         &actual,
@@ -19685,6 +19754,7 @@ impl<'a> Lowerer<'a> {
                 let Some(actual) = self.infer_expr_type(&argument.value) else {
                     continue;
                 };
+                let actual = inference_shape(actual, pattern);
                 let _ = crate::sema::type_pattern_matches(
                     pattern,
                     &actual,
@@ -20190,6 +20260,7 @@ impl<'a> Lowerer<'a> {
                                         else {
                                             continue;
                                         };
+                                        let actual_ty = inference_shape(actual_ty, expected);
                                         let _ = crate::sema::type_pattern_matches(
                                             expected,
                                             &actual_ty,
@@ -20317,6 +20388,7 @@ impl<'a> Lowerer<'a> {
                                                 else {
                                                     continue;
                                                 };
+                                                let actual = inference_shape(actual, param);
                                                 let _ = crate::sema::type_pattern_matches(
                                                     param,
                                                     &actual,
