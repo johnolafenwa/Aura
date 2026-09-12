@@ -1,0 +1,38 @@
+enum Duo[T]:
+    Pair(first: T, second: T)
+
+enum Slot[T]:
+    Filled(T)
+    Empty
+
+def show(pair: Duo[float64]):
+    match pair:
+        case Duo.Pair(first, second):
+            print(first)
+            print(second)
+
+def main():
+    small: int32 = 4
+    pair = Duo.Pair(second=1, first=small)
+    wrapped: Duo[int32] | str = pair
+    match wrapped:
+        case Duo[int32] as values:
+            match values:
+                case Duo.Pair(first, second):
+                    print(first)
+                    print(second)
+        case str as text:
+            print(text)
+    floats = Duo.Pair(second=1, first=2.5)
+    show(floats)
+    filled = Slot.Filled(small)
+    slotted: Slot[int32] | None = filled
+    match slotted:
+        case Slot[int32] as inner:
+            match inner:
+                case Slot.Filled(value):
+                    print(value)
+                case Slot.Empty:
+                    print("empty")
+        case None:
+            print("none")

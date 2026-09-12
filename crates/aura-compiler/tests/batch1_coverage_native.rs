@@ -172,17 +172,22 @@ const ARRAYS: &str = "def main():\n    values = Array[float64].from_list([1.0, 2
 fn native_backend_rejects_unsupported_array_dtypes_and_operators() {
     assert_source_emits(ARRAYS);
 
+    // The shared validator's named-builtin contract table refuses a forged
+    // constructor result type before the backend's own dtype check runs.
     let mut encoded = encode(ARRAYS);
     let main = function_mut(&mut encoded, "main");
     *local_type_mut(main, "%t0") = json!({ "Named": ["Array", [{ "Named": ["str", []] }]] });
-    assert_native_rejects(encoded, "does not support Array dtype `str`");
+    assert_native_rejects(
+        encoded,
+        "invalid MIR call to builtin `Array.from_list` in `main` requires an `Array` result type with a numeric dtype",
+    );
 
     let mut encoded = encode(ARRAYS);
     let main = function_mut(&mut encoded, "main");
     *local_type_mut(main, "%t0") = json!({ "Named": ["int64", []] });
     assert_native_rejects(
         encoded,
-        "requires an Array result type for `Array.from_list`",
+        "invalid MIR call to builtin `Array.from_list` in `main` requires an `Array` result type with a numeric dtype",
     );
 
     let mut encoded = encode(ARRAYS);

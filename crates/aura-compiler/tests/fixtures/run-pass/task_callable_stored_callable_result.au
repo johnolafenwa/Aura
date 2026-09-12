@@ -1,0 +1,36 @@
+type Reader = def() -> int64
+type Factory = TaskCallable[def() -> Reader]
+
+def answer() -> int64:
+    return 42
+
+def make_reader() -> Reader:
+    return answer
+
+def run(factory: own Factory):
+    with TaskGroup() as group:
+        task = group.start(factory)
+        match task.result(timeout=10s):
+            case TaskResult.Ready(callback):
+                print(callback())
+            case TaskResult.Error(message):
+                print(message)
+            case TaskResult.Cancelled:
+                print("cancelled")
+            case TaskResult.TimedOut:
+                print("timed out")
+
+def main():
+    factory = Factory(make_reader)
+    run(factory)
+    with TaskGroup() as group:
+        task = group.start(Factory(make_reader))
+        match task.result(timeout=10s):
+            case TaskResult.Ready(callback):
+                print(callback())
+            case TaskResult.Error(message):
+                print(message)
+            case TaskResult.Cancelled:
+                print("cancelled")
+            case TaskResult.TimedOut:
+                print("timed out")

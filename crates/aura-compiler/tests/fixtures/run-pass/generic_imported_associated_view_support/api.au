@@ -1,0 +1,6 @@
+public class Box[T]:
+    public left: T
+    public right: int64
+
+    public def associated(value: Box[T]) -> view T from value:
+        return view value.left
