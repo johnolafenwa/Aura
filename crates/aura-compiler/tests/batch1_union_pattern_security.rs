@@ -32,6 +32,44 @@ fn main_union_type(encoded: &Value) -> Value {
         .clone()
 }
 
+/// Both public boundaries must refuse a forged module for the same shared
+/// validator reason: the interpreter reports it as `invalid MIR loan flow: …`
+/// and the direct backend reports the bare validator message. Returns the
+/// shared message so callers can pin further details.
+fn assert_rejected_on_both_boundaries(mir: &MirModule, expected: &str) -> String {
+    let interpreted = run_mir(mir).expect_err("the interpreter must reject the forged module");
+    let native =
+        emit_host_native_object(mir).expect_err("native emission must reject the forged module");
+    let shared = interpreted
+        .message
+        .strip_prefix("invalid MIR loan flow: ")
+        .unwrap_or_else(|| {
+            panic!(
+                "interpreter rejection `{}` should come from the shared validator",
+                interpreted.message
+            )
+        });
+    assert_eq!(
+        shared, native,
+        "both boundaries must report the same shared validator reason"
+    );
+    assert!(
+        native.contains(expected),
+        "shared rejection `{native}` should mention `{expected}`"
+    );
+    native
+}
+
+/// A forged-but-valid module must pass validation on both public boundaries;
+/// the interpreter's output is returned so callers can pin observable results.
+fn assert_accepted_on_both_boundaries(mir: &MirModule, label: &str) -> aura_compiler::RunOutput {
+    let output =
+        run_mir(mir).unwrap_or_else(|error| panic!("{label}: interpreter rejected: {error}"));
+    emit_host_native_object(mir)
+        .unwrap_or_else(|error| panic!("{label}: native emission rejected: {error}"));
+    output
+}
+
 fn forged_pattern_mir(then_instructions: Vec<Value>) -> MirModule {
     let source = "def main():\n    value: int64 | str = 1\n    other: int64 | str = 1\n    flag = false\n    payload = 0\n";
     let mir = lower_source_to_mir(source).expect("baseline union locals must lower");
@@ -94,8 +132,7 @@ fn inactive_union_member_projection_requires_matching_true_edge_tag() {
         "source": "value.__union_payload_1",
         "mutable": false
     }})]);
-    let error = run_mir(&mir).expect_err("member 0 proof must not authorize member 1 payload");
-    assert!(error.message.contains("matching tag proof"), "{error}");
+    assert_rejected_on_both_boundaries(&mir, "matching tag proof");
 }
 
 #[test]
@@ -122,8 +159,7 @@ fn union_payload_cannot_be_taken_while_guard_loan_is_live() {
         }}}}
     ]);
     let mir: MirModule = serde_json::from_value(encoded).unwrap();
-    let error = run_mir(&mir).expect_err("guard loan must end before owned payload take");
-    assert!(error.message.contains("locked place"), "{error}");
+    assert_rejected_on_both_boundaries(&mir, "locked place");
 }
 
 #[test]
@@ -133,8 +169,7 @@ fn false_tag_edge_cannot_project_the_tested_payload() {
         "loan": "payload_loan", "source": "value.__union_payload_0", "mutable": false
     }}]);
     let mir: MirModule = serde_json::from_value(encoded).unwrap();
-    let error = run_mir(&mir).expect_err("false tag edge must not authorize payload access");
-    assert!(error.message.contains("matching tag proof"), "{error}");
+    assert_rejected_on_both_boundaries(&mir, "matching tag proof");
 }
 
 #[test]
@@ -148,8 +183,7 @@ fn shared_payload_loan_cannot_escalate_to_mutable_reborrow() {
             "projection": "", "mutable": true
         }}),
     ]);
-    let error = run_mir(&mir).expect_err("shared payload must not grant mutable authority");
-    assert!(error.message.contains("escalates shared parent"), "{error}");
+    assert_rejected_on_both_boundaries(&mir, "escalates shared parent");
 }
 
 #[test]
@@ -165,8 +199,7 @@ fn union_payload_cannot_be_taken_twice_on_one_path() {
     main_block_mut(&mut encoded, "matched")["instructions"] =
         Value::Array(vec![take.clone(), take]);
     let mir: MirModule = serde_json::from_value(encoded).unwrap();
-    let error = run_mir(&mir).expect_err("one union storage generation can be taken once");
-    assert!(error.message.contains("already-taken"), "{error}");
+    assert_rejected_on_both_boundaries(&mir, "already-taken");
 }
 
 #[test]
@@ -188,8 +221,7 @@ fn union_tag_fact_does_not_survive_a_control_flow_join() {
         "terminator": { "Return": "Unit" }
     }));
     let mir: MirModule = serde_json::from_value(encoded).unwrap();
-    let error = run_mir(&mir).expect_err("join must retain only facts true on every predecessor");
-    assert!(error.message.contains("matching tag proof"), "{error}");
+    assert_rejected_on_both_boundaries(&mir, "matching tag proof");
 }
 
 #[test]
@@ -206,8 +238,7 @@ fn retagging_invalidates_the_previous_member_proof() {
         }}
     ]);
     let mir: MirModule = serde_json::from_value(encoded).unwrap();
-    let error = run_mir(&mir).expect_err("retagging must invalidate the prior tag fact");
-    assert!(error.message.contains("matching tag proof"), "{error}");
+    assert_rejected_on_both_boundaries(&mir, "matching tag proof");
 }
 
 #[test]
@@ -224,8 +255,7 @@ fn retagging_is_rejected_while_a_payload_loan_is_live() {
         }}}}
     ]);
     let mir: MirModule = serde_json::from_value(encoded).unwrap();
-    let error = run_mir(&mir).expect_err("active payload loan must lock the union root");
-    assert!(error.message.contains("mutates locked place"), "{error}");
+    assert_rejected_on_both_boundaries(&mir, "mutates locked place");
 }
 
 #[test]
@@ -233,13 +263,7 @@ fn malformed_payload_projection_index_is_rejected() {
     let mir = forged_pattern_mir(vec![json!({ "BeginLoan": {
         "loan": "payload_loan", "source": "value.__union_payload_00", "mutable": false
     }})]);
-    let error = run_mir(&mir).expect_err("payload indices use canonical decimal spelling");
-    assert!(
-        error
-            .message
-            .contains("non-canonical MIR union payload projection"),
-        "{error}"
-    );
+    assert_rejected_on_both_boundaries(&mir, "non-canonical MIR union payload projection");
 }
 
 #[test]
@@ -253,8 +277,7 @@ fn payload_take_member_metadata_must_match_the_union_index() {
         }}
     }}]);
     let mir: MirModule = serde_json::from_value(encoded).unwrap();
-    let error = run_mir(&mir).expect_err("take metadata must identify the indexed member");
-    assert!(error.message.contains("index and type disagree"), "{error}");
+    assert_rejected_on_both_boundaries(&mir, "index and type disagree");
 }
 
 #[test]
@@ -267,8 +290,7 @@ fn arm_local_payload_loan_cannot_be_returned() {
         { "ReturnLoan": { "loan": "payload_loan", "origin": "value" }}
     ]);
     let mir: MirModule = serde_json::from_value(encoded).unwrap();
-    let error = run_mir(&mir).expect_err("returned views cannot originate in an arm local");
-    assert!(error.message.contains("non-parameter origin"), "{error}");
+    assert_rejected_on_both_boundaries(&mir, "non-parameter origin");
 }
 
 #[test]
@@ -304,7 +326,10 @@ fn whole_union_reinitialization_resets_taken_state() {
         "label": "retaken", "instructions": [take], "terminator": { "Return": "Unit" }
     }));
     let mir: MirModule = serde_json::from_value(encoded).unwrap();
-    run_mir(&mir).expect("a validated whole-union write creates a fresh take generation");
+    assert_accepted_on_both_boundaries(
+        &mir,
+        "a validated whole-union write creates a fresh take generation",
+    );
 }
 
 #[test]
@@ -317,8 +342,7 @@ fn moving_the_union_invalidates_its_tag_fact() {
         }}
     ]);
     let mir: MirModule = serde_json::from_value(encoded).unwrap();
-    let error = run_mir(&mir).expect_err("moving a union must invalidate its tag authority");
-    assert!(error.message.contains("matching tag proof"), "{error}");
+    assert_rejected_on_both_boundaries(&mir, "matching tag proof");
 }
 
 fn forged_enum_pattern_mir(source: &str, matched_instructions: Vec<Value>) -> MirModule {
@@ -364,8 +388,7 @@ fn enum_payload_projection_requires_the_matching_variant_successor() {
             "loan": "payload", "source": "boxed.__variant_payload_Other_0", "mutable": false
         }})],
     );
-    let error = run_mir(&mir).expect_err("Item successor must not authorize Other payload");
-    assert!(error.message.contains("matching variant proof"), "{error}");
+    assert_rejected_on_both_boundaries(&mir, "matching variant proof");
 }
 
 #[test]
@@ -376,13 +399,7 @@ fn enum_payload_projection_index_must_be_canonical() {
             "loan": "payload", "source": "boxed.__variant_payload_Item_00", "mutable": false
         }})],
     );
-    let error = run_mir(&mir).expect_err("enum payload index must be canonical decimal");
-    assert!(
-        error
-            .message
-            .contains("non-canonical MIR enum payload projection"),
-        "{error}"
-    );
+    assert_rejected_on_both_boundaries(&mir, "non-canonical MIR enum payload projection");
 }
 
 #[test]
@@ -397,8 +414,7 @@ fn proven_enum_projection_still_requires_an_in_bounds_payload_index() {
             json!({ "EndLoan": { "loan": "source_loan" }}),
         ],
     );
-    let error = run_mir(&mir).expect_err("a matching variant fact cannot authorize bad layout");
-    assert!(error.message.contains("out of bounds"), "{error}");
+    assert_rejected_on_both_boundaries(&mir, "out of bounds");
 }
 
 #[test]
@@ -410,11 +426,8 @@ fn generic_enum_payload_projection_uses_substituted_type() {
             "loan": "payload", "source": "boxed.__variant_payload_Item_0", "mutable": false
         }})],
     );
-    let error = run_mir(&mir).expect_err("Boxed[str] payload cannot back an int64 loan");
-    assert!(
-        error.message.contains("projects") && error.message.contains("expected"),
-        "{error}"
-    );
+    let error = assert_rejected_on_both_boundaries(&mir, "projects");
+    assert!(error.contains("expected"), "{error}");
 }
 
 #[test]
@@ -430,8 +443,7 @@ fn enum_variant_fact_is_invalidated_by_reconstruction() {
         }}
     ]);
     let mir: MirModule = serde_json::from_value(encoded).unwrap();
-    let error = run_mir(&mir).expect_err("enum reconstruction invalidates prior variant proof");
-    assert!(error.message.contains("matching variant proof"), "{error}");
+    assert_rejected_on_both_boundaries(&mir, "matching variant proof");
 }
 
 #[test]
@@ -442,8 +454,7 @@ fn enum_payload_projection_on_otherwise_edge_is_rejected() {
         "loan": "payload", "source": "boxed.__variant_payload_Item_0", "mutable": false
     }}]);
     let mir: MirModule = serde_json::from_value(encoded).unwrap();
-    let error = run_mir(&mir).expect_err("otherwise edge has no positive variant proof");
-    assert!(error.message.contains("matching variant proof"), "{error}");
+    assert_rejected_on_both_boundaries(&mir, "matching variant proof");
 }
 
 #[test]
@@ -460,8 +471,7 @@ fn shared_enum_payload_loan_cannot_escalate_to_mutable() {
             }}),
         ],
     );
-    let error = run_mir(&mir).expect_err("enum payload view cannot increase capability");
-    assert!(error.message.contains("escalates shared parent"), "{error}");
+    assert_rejected_on_both_boundaries(&mir, "escalates shared parent");
 }
 
 #[test]
@@ -478,11 +488,7 @@ fn duplicate_enum_variant_metadata_is_rejected_before_projection() {
         "name": "Item", "payloads": [{ "Named": ["str", []] }]
     }));
     let mir: MirModule = serde_json::from_value(encoded).unwrap();
-    let error = run_mir(&mir).expect_err("duplicate variants make payload layout ambiguous");
-    assert!(
-        error.message.contains("duplicate variant `Item`"),
-        "{error}"
-    );
+    assert_rejected_on_both_boundaries(&mir, "duplicate variant `Item`");
 }
 
 #[test]
@@ -496,15 +502,17 @@ fn enum_payload_projection_requires_embedded_layout_metadata() {
     let mut encoded = serde_json::to_value(mir).unwrap();
     encoded["enums"] = json!([]);
     let mir: MirModule = serde_json::from_value(encoded).unwrap();
-    let error = run_mir(&mir).expect_err("payload projections require authoritative enum layout");
-    assert!(error.message.contains("concrete payload layout"), "{error}");
+    assert_rejected_on_both_boundaries(&mir, "concrete payload layout");
 }
 
 #[test]
 fn nested_enum_and_union_payload_proofs_compose() {
     let source = "enum Inner:\n    Data(int64 | str)\nenum Outer:\n    Nested(Inner)\ndef main():\n    value = Outer.Nested(Inner.Data(42))\n    match value:\n        case Outer.Nested(Inner.Data(int64 as number)):\n            print(number)\n        case Outer.Nested(Inner.Data(str as text)):\n            print(text)\n";
     let mir = lower_source_to_mir(source).expect("nested enum-union pattern must lower");
-    let output = run_mir(&mir).expect("every nested projection has its own dominating proof");
+    let output = assert_accepted_on_both_boundaries(
+        &mir,
+        "every nested projection has its own dominating proof",
+    );
     assert_eq!(output.stdout, "42\n");
 }
 
@@ -548,23 +556,22 @@ fn forged_nested_enum_mir(with_wrong_inner_proof: bool) -> MirModule {
 
 #[test]
 fn nested_enum_projection_rejects_missing_inner_proof() {
-    let error = run_mir(&forged_nested_enum_mir(false))
-        .expect_err("outer proof alone cannot authorize an inner enum payload");
-    assert!(error.message.contains("matching variant proof"), "{error}");
+    assert_rejected_on_both_boundaries(&forged_nested_enum_mir(false), "matching variant proof");
 }
 
 #[test]
 fn nested_enum_projection_rejects_wrong_inner_proof() {
-    let error = run_mir(&forged_nested_enum_mir(true))
-        .expect_err("Other proof cannot authorize the Data payload");
-    assert!(error.message.contains("matching variant proof"), "{error}");
+    assert_rejected_on_both_boundaries(&forged_nested_enum_mir(true), "matching variant proof");
 }
 
 #[test]
 fn union_member_enum_and_nested_union_proofs_compose() {
     let source = "enum Inner:\n    Data(int64 | str)\ndef main():\n    value: Inner | None = Inner.Data(42)\n    match value:\n        case Inner as inner:\n            match inner:\n                case Inner.Data(int64 as number):\n                    print(number)\n                case Inner.Data(str as text):\n                    print(text)\n        case None:\n            pass\n";
     let mir = lower_source_to_mir(source).expect("union-enum-union pattern must lower");
-    let output = run_mir(&mir).expect("nested proofs must follow the resolved union member place");
+    let output = assert_accepted_on_both_boundaries(
+        &mir,
+        "nested proofs must follow the resolved union member place",
+    );
     assert_eq!(output.stdout, "42\n");
 }
 
@@ -601,8 +608,7 @@ fn union_tag_test_rejects_an_unproven_enum_payload_ancestor() {
         { "label": "done", "instructions": [], "terminator": { "Return": "Unit" }}
     ]);
     let mir: MirModule = serde_json::from_value(encoded).unwrap();
-    let error = run_mir(&mir).expect_err("tag test cannot bypass an unproven enum ancestor");
-    assert!(error.message.contains("matching variant proof"), "{error}");
+    assert_rejected_on_both_boundaries(&mir, "matching variant proof");
 }
 
 #[test]
@@ -612,9 +618,10 @@ fn projected_assignment_requires_a_dominating_enum_proof() {
     main_block_mut(&mut encoded, "entry")["instructions"] = json!([{ "Assign": {
         "target": "boxed.__variant_payload_Item_0", "value": { "Use": { "Int": 2 }}
     }}]);
-    let error = run_mir(&serde_json::from_value(encoded).unwrap())
-        .expect_err("a projected write needs the matching variant proof");
-    assert!(error.message.contains("matching variant proof"), "{error}");
+    assert_rejected_on_both_boundaries(
+        &serde_json::from_value(encoded).unwrap(),
+        "matching variant proof",
+    );
 }
 
 #[test]
@@ -629,9 +636,10 @@ fn read_loan_target_requires_a_dominating_enum_proof() {
             json!({ "ReadLoan": { "target": "boxed.__variant_payload_Item_0", "loan": "source_loan" }}),
             json!({ "EndLoan": { "loan": "source_loan" }})
         ]);
-    let error = run_mir(&serde_json::from_value(encoded).unwrap())
-        .expect_err("ReadLoan cannot write an unproven payload projection");
-    assert!(error.message.contains("matching variant proof"), "{error}");
+    assert_rejected_on_both_boundaries(
+        &serde_json::from_value(encoded).unwrap(),
+        "matching variant proof",
+    );
 }
 
 fn forged_dotted_loan_access(instruction: Value, mutable: bool) -> MirModule {
@@ -656,8 +664,7 @@ fn dotted_read_loan_requires_a_dominating_enum_proof() {
         }}),
         false,
     );
-    let error = run_mir(&mir).expect_err("a dotted loan read cannot bypass variant proof");
-    assert!(error.message.contains("matching variant proof"), "{error}");
+    assert_rejected_on_both_boundaries(&mir, "matching variant proof");
 }
 
 #[test]
@@ -668,8 +675,7 @@ fn dotted_write_loan_requires_a_dominating_enum_proof() {
         }}),
         true,
     );
-    let error = run_mir(&mir).expect_err("a dotted loan write cannot bypass variant proof");
-    assert!(error.message.contains("matching variant proof"), "{error}");
+    assert_rejected_on_both_boundaries(&mir, "matching variant proof");
 }
 
 #[test]
@@ -684,14 +690,20 @@ fn variant_payload_requires_a_dominating_enum_fact() {
                 "scrutinee": { "Place": "boxed" }, "variant_name": "Item", "index": 0
             }}}}),
         );
-    let error = run_mir(&serde_json::from_value(encoded).unwrap())
-        .expect_err("direct payload extraction requires the matching successor fact");
-    assert!(error.message.contains("matching variant proof"), "{error}");
+    assert_rejected_on_both_boundaries(
+        &serde_json::from_value(encoded).unwrap(),
+        "matching variant proof",
+    );
 }
 
 #[test]
 fn variant_payload_metadata_must_match_the_proven_variant_and_layout() {
-    for (variant_name, index) in [("Other", 0), ("Item", 1)] {
+    // The successor proves `Item`: naming another variant lacks a proof, and
+    // an index past `Item`'s single payload slot is a layout violation.
+    for (variant_name, index, expected) in [
+        ("Other", 0, "matching variant proof"),
+        ("Item", 1, "out of bounds"),
+    ] {
         let mir = forged_enum_pattern_mir(
             ENUM_PATTERN_SOURCE,
             vec![
@@ -700,12 +712,8 @@ fn variant_payload_metadata_must_match_the_proven_variant_and_layout() {
                 }}}}),
             ],
         );
-        let error = run_mir(&mir).expect_err("payload metadata must match enum layout and proof");
-        assert!(
-            error.message.contains("matching variant proof")
-                || error.message.contains("out of bounds"),
-            "{variant_name}[{index}]: {error}"
-        );
+        eprintln!("variant payload metadata case: {variant_name}[{index}]");
+        assert_rejected_on_both_boundaries(&mir, expected);
     }
 }
 
@@ -735,9 +743,10 @@ fn for_range_binding_requires_a_dominating_enum_proof() {
         { "label": "body", "instructions": [], "terminator": { "Goto": "done" }},
         { "label": "done", "instructions": [], "terminator": { "Return": "Unit" }}
     ]);
-    let error = run_mir(&serde_json::from_value(encoded).unwrap())
-        .expect_err("a loop binding cannot write an unproven payload projection");
-    assert!(error.message.contains("matching variant proof"), "{error}");
+    assert_rejected_on_both_boundaries(
+        &serde_json::from_value(encoded).unwrap(),
+        "matching variant proof",
+    );
 }
 
 #[test]
@@ -747,9 +756,10 @@ fn projected_assignment_requires_a_dominating_union_proof() {
     main_block_mut(&mut encoded, "entry")["instructions"] = json!([{ "Assign": {
         "target": "value.__union_payload_0", "value": { "Use": { "Int": 2 }}
     }}]);
-    let error = run_mir(&serde_json::from_value(encoded).unwrap())
-        .expect_err("a projected write needs the matching union proof");
-    assert!(error.message.contains("matching tag proof"), "{error}");
+    assert_rejected_on_both_boundaries(
+        &serde_json::from_value(encoded).unwrap(),
+        "matching tag proof",
+    );
 }
 
 fn forged_enum_parameter_projection(passing: &str, instruction: Value) -> MirModule {
@@ -781,8 +791,7 @@ fn projected_assignment_cannot_mutate_a_shared_parameter() {
             "target": "value.__variant_payload_Item_0", "value": { "Use": { "Int": 2 }}
         }}),
     );
-    let error = run_mir(&mir).expect_err("shared authority cannot mutate an enum payload");
-    assert!(error.message.contains("mutable authority"), "{error}");
+    assert_rejected_on_both_boundaries(&mir, "mutable authority");
 }
 
 #[test]
@@ -794,11 +803,8 @@ fn projected_move_requires_owned_authority() {
                 "value": { "MovePlace": "value.__variant_payload_Item_0" }
             }}),
         );
-        let error = run_mir(&mir).expect_err("borrowed authority cannot move an enum payload");
-        assert!(
-            error.message.contains("owned authority"),
-            "{passing}: {error}"
-        );
+        eprintln!("passing mode: {passing}");
+        assert_rejected_on_both_boundaries(&mir, "owned authority");
     }
 }
 
@@ -811,11 +817,8 @@ fn destructive_variant_payload_requires_owned_parameter_authority() {
                 "scrutinee": { "MovePlace": "value" }, "variant_name": "Item", "index": 0
             }}}}),
         );
-        let error = run_mir(&mir).expect_err("borrowed roots cannot be destructively extracted");
-        assert!(
-            error.message.contains("owned authority"),
-            "{passing}: {error}"
-        );
+        eprintln!("passing mode: {passing}");
+        assert_rejected_on_both_boundaries(&mir, "owned authority");
     }
 }
 
@@ -838,11 +841,10 @@ fn consuming_match_requires_owned_parameter_authority() {
             .find(|block| block["label"] == entry)
             .unwrap();
         block["terminator"]["Match"]["scrutinee"] = json!({ "MovePlace": "value" });
-        let error = run_mir(&serde_json::from_value(encoded).unwrap())
-            .expect_err("a consuming match requires owned parameter authority");
-        assert!(
-            error.message.contains("owned authority"),
-            "{passing}: {error}"
+        eprintln!("passing mode: {passing}");
+        assert_rejected_on_both_boundaries(
+            &serde_json::from_value(encoded).unwrap(),
+            "owned authority",
         );
     }
 }
@@ -871,9 +873,10 @@ fn tuple_take_requires_owned_parameter_authority() {
             "TupleTakeElement": { "place": "value", "index": 0,
                 "element_type": { "Named": ["int64", []] } }
         }}}));
-    let error = run_mir(&serde_json::from_value(encoded).unwrap())
-        .expect_err("a tuple take cannot consume a borrowed parameter");
-    assert!(error.message.contains("owned authority"), "{error}");
+    assert_rejected_on_both_boundaries(
+        &serde_json::from_value(encoded).unwrap(),
+        "owned authority",
+    );
 }
 
 #[test]
@@ -882,7 +885,10 @@ fn consuming_nested_noncopy_match_can_backtrack_before_payload_moves() {
         "fixtures/run-pass/consuming_nested_noncopy_match_backtracks_before_moving.au"
     );
     let mir = lower_source_to_mir(source).expect("maintained consuming match must lower");
-    let output = run_mir(&mir).expect("failed alternatives must preserve later variant proofs");
+    let output = assert_accepted_on_both_boundaries(
+        &mir,
+        "failed alternatives must preserve later variant proofs",
+    );
     assert_eq!(output.stdout, "pair\n7\nsolo\n1\n0\n");
 }
 
@@ -893,11 +899,7 @@ fn destructive_variant_payload_cannot_take_the_same_noncopy_slot_twice() {
         "scrutinee": { "MovePlace": "boxed" }, "variant_name": "Item", "index": 0
     }}}});
     let mir = forged_enum_pattern_mir(source, vec![take.clone(), take]);
-    let error = run_mir(&mir).expect_err("one nominal payload slot can be moved only once");
-    assert!(
-        error.message.contains("already-taken enum payload"),
-        "{error}"
-    );
+    assert_rejected_on_both_boundaries(&mir, "already-taken enum payload");
 }
 
 #[test]
@@ -908,7 +910,10 @@ fn projected_mutation_and_move_accept_sufficient_authority() {
             "target": "value.__variant_payload_Item_0", "value": { "Use": { "Int": 2 }}
         }}),
     );
-    run_mir(&mutable).expect("a matching proof plus mutable parameter authority is sufficient");
+    assert_accepted_on_both_boundaries(
+        &mutable,
+        "a matching proof plus mutable parameter authority is sufficient",
+    );
 
     let owned = forged_enum_parameter_projection(
         "Value",
@@ -916,7 +921,10 @@ fn projected_mutation_and_move_accept_sufficient_authority() {
             "value": { "MovePlace": "value.__variant_payload_Item_0" }
         }}),
     );
-    run_mir(&owned).expect("a matching proof plus owned parameter authority is sufficient");
+    assert_accepted_on_both_boundaries(
+        &owned,
+        "a matching proof plus owned parameter authority is sufficient",
+    );
 }
 
 fn forged_borrowed_noncopy_laundering(extraction: Value) -> MirModule {
@@ -951,15 +959,13 @@ fn borrowed_variant_payload_temporary_cannot_be_laundered_into_owned_value() {
     let mir = forged_borrowed_noncopy_laundering(json!({ "VariantPayload": {
         "scrutinee": { "Place": "value" }, "variant_name": "Item", "index": 0
     }}));
-    let error = run_mir(&mir).expect_err("a borrowed non-Copy payload temp must stay borrowed");
-    assert!(error.message.contains("owned authority"), "{error}");
+    assert_rejected_on_both_boundaries(&mir, "owned authority");
 }
 
 #[test]
 fn borrowed_whole_value_temporary_cannot_be_laundered_into_owned_value() {
     let mir = forged_borrowed_noncopy_laundering(json!({ "Use": { "Place": "value" } }));
-    let error = run_mir(&mir).expect_err("a borrowed non-Copy value temp must stay borrowed");
-    assert!(error.message.contains("owned authority"), "{error}");
+    assert_rejected_on_both_boundaries(&mir, "owned authority");
 }
 
 #[test]
@@ -980,8 +986,10 @@ fn borrowed_copy_value_may_be_copied_then_moved_from_its_temporary() {
         { "Assign": { "target": "%t999", "value": { "Use": { "Place": "value" } }}},
         { "Eval": { "value": { "MovePlace": "%t999" }}}
     ], "terminator": { "Return": "Unit" }}]);
-    run_mir(&serde_json::from_value(encoded).unwrap())
-        .expect("Copy values materialize independent owned temporaries");
+    assert_accepted_on_both_boundaries(
+        &serde_json::from_value(encoded).unwrap(),
+        "Copy values materialize independent owned temporaries",
+    );
 }
 
 fn assert_interpreter_and_native_reject_owned_laundering(mir: &MirModule) {
@@ -989,12 +997,13 @@ fn assert_interpreter_and_native_reject_owned_laundering(mir: &MirModule) {
     let native = emit_host_native_object(mir);
     let interpreted = interpreted.expect_err("interpreter boundary must reject laundering");
     eprintln!("interpreter rejection: {interpreted}");
-    assert!(
-        interpreted.message.contains("owned authority") || interpreted.message.contains("contract"),
-        "{interpreted}"
-    );
     let native = native.expect_err("native boundary must reject laundering");
     eprintln!("native rejection: {native}");
+    assert_eq!(
+        interpreted.message.strip_prefix("invalid MIR loan flow: "),
+        Some(native.as_str()),
+        "both boundaries must report the same shared validator reason"
+    );
     assert!(
         native.contains("owned authority") || native.contains("contract"),
         "{native}"
@@ -1244,8 +1253,10 @@ fn borrowed_copy_variant_payload_may_be_moved_from_its_temporary() {
         .as_array_mut()
         .unwrap()
         .push(json!({ "Eval": { "value": { "MovePlace": "payload" }}}));
-    run_mir(&serde_json::from_value(encoded).unwrap())
-        .expect("Copy enum payloads materialize independent temporaries");
+    assert_accepted_on_both_boundaries(
+        &serde_json::from_value(encoded).unwrap(),
+        "Copy enum payloads materialize independent temporaries",
+    );
 }
 
 fn forged_boxed_borrow_function(extra_source: &str) -> (Value, Value) {
@@ -1517,8 +1528,10 @@ fn fully_overwriting_tainted_tuple_element_clears_only_that_origin() {
         }}}},
         { "Eval": { "value": { "MovePlace": "%t999" }}}
     ], "terminator": { "Return": "Unit" }}]);
-    run_mir(&serde_json::from_value(encoded).unwrap())
-        .expect("overwriting the tainted element replaces its borrowed provenance");
+    assert_accepted_on_both_boundaries(
+        &serde_json::from_value(encoded).unwrap(),
+        "overwriting the tainted element replaces its borrowed provenance",
+    );
 }
 
 #[test]
@@ -1538,8 +1551,10 @@ fn borrowed_copy_value_may_call_an_owned_receiver_method() {
                 "receiver_place": null }}, "args": []
         }}
     }}], "terminator": { "Return": "Unit" }}]);
-    run_mir(&serde_json::from_value(encoded).unwrap())
-        .expect("Copy receivers may materialize an owned method value from a shared input");
+    assert_accepted_on_both_boundaries(
+        &serde_json::from_value(encoded).unwrap(),
+        "Copy receivers may materialize an owned method value from a shared input",
+    );
 }
 
 #[test]
@@ -1652,8 +1667,10 @@ fn mutable_parameter_may_write_back_an_owned_noncopy_value() {
     function["blocks"] = json!([{ "label": "entry", "instructions": [{ "Assign": {
         "target": "target", "value": { "Use": { "MovePlace": "source" }}
     }}], "terminator": { "Return": "Unit" }}]);
-    run_mir(&serde_json::from_value(encoded).unwrap())
-        .expect("owned values may flow through a mutable writeback");
+    assert_accepted_on_both_boundaries(
+        &serde_json::from_value(encoded).unwrap(),
+        "owned values may flow through a mutable writeback",
+    );
 }
 
 #[test]
@@ -3008,9 +3025,10 @@ fn projected_cleanup_requires_a_dominating_variant_proof() {
         json!({ "PushCleanup": { "place": "boxed.__variant_payload_Item_0" }}),
         json!({ "PopCleanup": { "place": "boxed.__variant_payload_Item_0", "cancel_before_cleanup": false }})
     ]);
-    let error = run_mir(&serde_json::from_value(encoded).unwrap())
-        .expect_err("cleanup cannot access an unproven payload");
-    assert!(error.message.contains("matching variant proof"), "{error}");
+    assert_rejected_on_both_boundaries(
+        &serde_json::from_value(encoded).unwrap(),
+        "matching variant proof",
+    );
 }
 
 #[test]
@@ -3041,8 +3059,20 @@ fn projected_cleanup_accepts_a_proven_owned_local_payload() {
         ], "terminator": { "Return": "Unit" }},
         { "label": "done", "instructions": [], "terminator": { "Return": "Unit" }}
     ]);
-    run_mir(&serde_json::from_value(encoded).unwrap())
-        .expect("a proven owned local payload can be closed");
+    // The shared validator accepts the proven owned payload cleanup and the
+    // interpreter runs it, but the direct backend has no lowering for a
+    // cleanup of a projected variant payload and refuses the module at
+    // codegen. The boundaries diverge here; this pins both sides (recorded
+    // as a backend divergence in the coverage report) rather than pairing
+    // an acceptance the direct backend does not give.
+    let mir: MirModule = serde_json::from_value(encoded).unwrap();
+    run_mir(&mir).expect("a proven owned local payload can be closed");
+    let native = emit_host_native_object(&mir)
+        .expect_err("the direct backend has no lowering for a projected payload cleanup");
+    assert!(
+        native.contains("does not know cleanup field `__variant_payload_Item_0` on `Boxed`"),
+        "{native}"
+    );
 }
 
 #[test]
@@ -3078,11 +3108,9 @@ fn enum_payload_view_cannot_be_returned_through_its_argument_origin() {
         ], "terminator": { "Return": { "Place": "result" }}},
         { "label": "dead", "instructions": [], "terminator": "Unreachable" }
     ]);
-    let error = run_mir(&serde_json::from_value(encoded).unwrap())
-        .expect_err("match payload views stay arm-local even through an argument origin");
-    assert!(
-        error.message.contains("arm-local payload projection"),
-        "{error}"
+    assert_rejected_on_both_boundaries(
+        &serde_json::from_value(encoded).unwrap(),
+        "arm-local payload projection",
     );
 }
 
@@ -3093,12 +3121,9 @@ fn class_and_enum_metadata_names_cannot_collide() {
     encoded["classes"].as_array_mut().unwrap().push(json!({
         "name": "Boxed", "type_params": [], "fields": [], "methods": []
     }));
-    let error = run_mir(&serde_json::from_value(encoded).unwrap())
-        .expect_err("a nominal metadata name must identify one declaration kind");
-    assert!(
-        error.message.contains("class") && error.message.contains("enum"),
-        "{error}"
-    );
+    let error =
+        assert_rejected_on_both_boundaries(&serde_json::from_value(encoded).unwrap(), "class");
+    assert!(error.contains("enum"), "{error}");
 }
 
 fn weaken_function_callable_metadata(encoded: &mut Value, function_name: &str) {

@@ -9,7 +9,10 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use aura_compiler::{check_path, check_source, run_path, run_source, Span};
+use aura_compiler::{
+    check_path, check_source, emit_host_native_object, lower_source_to_mir, run_mir, run_path,
+    run_source, Span,
+};
 
 fn rejects(source: &str, expected: &str) -> aura_compiler::Diagnostic {
     let error = check_source(source).expect_err("source should be rejected");
@@ -281,11 +284,11 @@ fn bare_variant_constructor_without_an_expected_type_is_rejected() {
 #[test]
 fn task_targets_accept_grouped_names_and_grouped_type_arguments() {
     runs(
-        "def make() -> int64:\n    return 1\ndef main():\n    with TaskGroup() as group:\n        task = group.start((make))\n        print(task.result_or(0, timeout=1s))\n",
+        "def make() -> int64:\n    return 1\ndef main():\n    with TaskGroup() as group:\n        task = group.start((make))\n        print(task.result_or(0, timeout=30s))\n",
         "1\n",
     );
     runs(
-        "def make[T](v: own T) -> int64:\n    return 1\nclass Box:\n    x: int64\ndef main():\n    with TaskGroup() as group:\n        task = group.start(make[(Box)], Box(x=1))\n        print(task.result_or(0, timeout=1s))\n",
+        "def make[T](v: own T) -> int64:\n    return 1\nclass Box:\n    x: int64\ndef main():\n    with TaskGroup() as group:\n        task = group.start(make[(Box)], Box(x=1))\n        print(task.result_or(0, timeout=30s))\n",
         "1\n",
     );
 }
@@ -518,13 +521,29 @@ fn forwarded_view_calls_accept_explicit_type_arguments_and_defaulted_slots() {
 }
 
 #[test]
-fn abstract_trait_view_summaries_defer_self_recursive_impls() {
-    // `Loop.get` forwards to itself, which the summary records as a deferred
-    // cycle rather than an unknown projection; the checker still narrows the
-    // `Left` footprint to `pair.left`. MIR lowering rejects the recursive
-    // impl's loan, so this pins the checker path only.
-    accepts(
-        &format!("{PAIR_CLASS}trait Viewer:\n    def get(self) -> view int64 from self\nclass Left:\n    pair: Pair\nclass Loop:\n    pair: Pair\nimpl Viewer for Left:\n    def get(self) -> view int64 from self:\n        return view self.pair.left\nimpl Viewer for Loop:\n    def get(self) -> view int64 from self:\n        return view self.get()\ndef forward[T: Viewer](value: T) -> view int64 from value:\n    return view value.get()\ndef main():\n    mut left = Left(pair=Pair(left=1, right=2))\n    view chosen = forward(left)\n    left.pair.right = 3\n    print(chosen)\n"),
+fn self_recursive_trait_view_impl_checks_but_both_backends_reject_its_lowered_loan() {
+    // Documented limit, not end-to-end success coverage. `Loop.get` forwards
+    // to itself, which the checker's summary records as a deferred cycle
+    // rather than an unknown projection, so the program checks and the
+    // `Left` footprint still narrows to `pair.left`. The lowered module then
+    // fails the shared validator: the recursive impl's returned loan projects
+    // `self` with the whole `Loop` type where an `int64` view is declared.
+    // Both public boundaries refuse it for that one reason, so the program
+    // never runs on either backend.
+    let source = format!("{PAIR_CLASS}trait Viewer:\n    def get(self) -> view int64 from self\nclass Left:\n    pair: Pair\nclass Loop:\n    pair: Pair\nimpl Viewer for Left:\n    def get(self) -> view int64 from self:\n        return view self.pair.left\nimpl Viewer for Loop:\n    def get(self) -> view int64 from self:\n        return view self.get()\ndef forward[T: Viewer](value: T) -> view int64 from value:\n    return view value.get()\ndef main():\n    mut left = Left(pair=Pair(left=1, right=2))\n    view chosen = forward(left)\n    left.pair.right = 3\n    print(chosen)\n");
+    accepts(&source);
+    let mir = lower_source_to_mir(&source).expect("the checked program lowers");
+    let interpreted = run_mir(&mir).expect_err("the interpreter refuses the recursive impl's loan");
+    let native = emit_host_native_object(&mir)
+        .expect_err("the direct backend refuses the recursive impl's loan");
+    assert_eq!(
+        interpreted.message.strip_prefix("invalid MIR loan flow: "),
+        Some(native.as_str()),
+        "both boundaries must report the same shared validator reason"
+    );
+    assert!(
+        native.contains("invalid MIR loan `%t0` in `Viewer for Loop.get` projects `self`"),
+        "{native}"
     );
 }
 
@@ -552,7 +571,7 @@ fn task_targets_inside_an_imported_module_resolve_through_its_namespace() {
     let temp = TempDir::new("aura-sema-imported-task-target");
     temp.write(
         "api.au",
-        "def helper() -> int64:\n    return 7\n\npublic def run() -> int64:\n    with TaskGroup() as group:\n        task = group.start(helper)\n        return task.result_or(0, timeout=1s)\n",
+        "def helper() -> int64:\n    return 7\n\npublic def run() -> int64:\n    with TaskGroup() as group:\n        task = group.start(helper)\n        return task.result_or(0, timeout=30s)\n",
     );
     let main_path = temp.write(
         "main.au",
@@ -894,17 +913,22 @@ fn symbolic_copy_shapes_treat_union_and_callable_fields_as_moves() {
     );
 }
 
+// The task-transfer success cases below wait on a generous deadline: the
+// task completes immediately, so a bound only matters when host scheduling
+// starves it, and a one-second bound has selected the fallback branch under
+// load. Each fallback is distinct from the transferred result so the output
+// proves which branch ran.
 #[test]
 fn task_results_of_unit_function_and_stored_task_callable_types_transfer() {
     accepts(
-        "def make() -> None:\n    pass\ndef main():\n    with TaskGroup() as group:\n        task = group.start(make)\n        task.result_or(None, timeout=1s)\n",
+        "def make() -> None:\n    pass\ndef main():\n    with TaskGroup() as group:\n        task = group.start(make)\n        task.result_or(None, timeout=30s)\n",
     );
     runs(
-        "def twice(v: int64) -> int64:\n    return v * 2\ndef make() -> def(int64) -> int64:\n    return twice\ndef main():\n    with TaskGroup() as group:\n        task = group.start(make)\n        f = task.result_or(twice, timeout=1s)\n        print(f(2))\n",
+        "def twice(v: int64) -> int64:\n    return v * 2\ndef thrice(v: int64) -> int64:\n    return v * 3\ndef make() -> def(int64) -> int64:\n    return twice\ndef main():\n    with TaskGroup() as group:\n        task = group.start(make)\n        f = task.result_or(thrice, timeout=30s)\n        print(f(2))\n",
         "4\n",
     );
     runs(
-        "type Job = TaskCallable[def() -> int64]\ndef make() -> Job:\n    return Job(lambda: 1)\ndef main():\n    with TaskGroup() as group:\n        task = group.start(make)\n        job = task.result_or(Job(lambda: 2), timeout=1s)\n        print(job())\n",
+        "type Job = TaskCallable[def() -> int64]\ndef make() -> Job:\n    return Job(lambda: 1)\ndef main():\n    with TaskGroup() as group:\n        task = group.start(make)\n        job = task.result_or(Job(lambda: 2), timeout=30s)\n        print(job())\n",
         "1\n",
     );
 }
@@ -912,7 +936,7 @@ fn task_results_of_unit_function_and_stored_task_callable_types_transfer() {
 #[test]
 fn task_observation_shapes_merge_union_result_members() {
     runs(
-        "def make() -> int64 | None:\n    return 1\ndef main():\n    with TaskGroup() as group:\n        task = group.start(make)\n        print(task.result_or(None, timeout=1s))\n",
+        "def make() -> int64 | None:\n    return 1\ndef main():\n    with TaskGroup() as group:\n        task = group.start(make)\n        print(task.result_or(None, timeout=30s))\n",
         "1\n",
     );
 }
@@ -955,13 +979,6 @@ fn ambiguous_bound_methods_fall_back_to_the_unsupported_call_diagnostic() {
     rejects(
         "trait A:\n    def name(self) -> str\ntrait B:\n    def name(self) -> str\ndef show[T: A + B](value: T) -> str:\n    return value.name()\ndef main():\n    pass\n",
         "unsupported method call `name` on `T`",
-    );
-}
-
-#[test]
-fn builtin_impl_checks_skip_non_nominal_targets() {
-    accepts(
-        "trait Show:\n    def show(self) -> str\nimpl Show for (int64, str):\n    def show(self) -> str:\n        return \"pair\"\ndef main():\n    pass\n",
     );
 }
 

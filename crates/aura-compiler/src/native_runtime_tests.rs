@@ -17870,11 +17870,48 @@ fn native_runtime_internal_diagnostic_channels_are_hidden_cloexec_and_one_shot()
     );
 }
 
+/// The internal diagnostic channels are one process-global transaction
+/// (install, emit, take). Cargo runs tests concurrently and the runtime's own
+/// mutex only serializes individual operations, so every in-process test that
+/// installs or drains the channels holds this guard for its whole sequence.
+#[cfg(unix)]
+static INTERNAL_DIAGNOSTIC_CHANNEL_TEST_GUARD: Mutex<()> = Mutex::new(());
+
+/// Serializes a channel-owning test and starts it from the documented
+/// precondition (no channel installed), even if an earlier test panicked
+/// part-way through its own transaction.
+#[cfg(unix)]
+fn hold_internal_diagnostic_channels() -> std::sync::MutexGuard<'static, ()> {
+    let guard = INTERNAL_DIAGNOSTIC_CHANNEL_TEST_GUARD
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    *super::lock_internal_diagnostic_channels() = None;
+    guard
+}
+
+/// A descriptor number no open file can hold: open descriptors are always
+/// below the soft `RLIMIT_NOFILE` limit, so the limit itself (or `i32::MAX`
+/// when it is unrepresentable) is never open and cannot be recycled by a
+/// concurrent test the way a freshly closed number can.
+#[cfg(unix)]
+fn never_open_descriptor() -> i32 {
+    let mut limit = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    assert_eq!(
+        unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) },
+        0
+    );
+    i32::try_from(limit.rlim_cur).unwrap_or(i32::MAX)
+}
+
 #[cfg(unix)]
 #[test]
 fn native_runtime_internal_diagnostic_signal_precedes_failed_record_encoding() {
     use std::os::fd::FromRawFd;
 
+    let _channels = hold_internal_diagnostic_channels();
     let mut diagnostic_descriptors = [0; 2];
     let mut signal_descriptors = [0; 2];
     assert_eq!(
@@ -22362,6 +22399,7 @@ fn wide_integer_overflow_messages_cover_division_and_unsigned_products() {
 #[cfg(unix)]
 #[test]
 fn internal_diagnostic_channels_reject_shared_descriptors_and_recover_from_poison() {
+    let _channels = hold_internal_diagnostic_channels();
     let mut fds = [0i32; 2];
     assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
     super::install_internal_diagnostic_channels(fds[0], fds[0]);
@@ -22371,9 +22409,11 @@ fn internal_diagnostic_channels_reject_shared_descriptors_and_recover_from_poiso
     );
     assert!(super::inherited_internal_diagnostic_file(-1).is_none());
     assert_eq!(unsafe { libc::close(fds[1]) }, 0);
+    // Another thread may reuse `fds[1]` the moment it is closed, so probe a
+    // number no open file can hold rather than the recycled one.
     assert!(
-        super::inherited_internal_diagnostic_file(fds[1]).is_none(),
-        "a closed descriptor number is rejected before ownership is assumed"
+        super::inherited_internal_diagnostic_file(never_open_descriptor()).is_none(),
+        "an unopened descriptor number is rejected before ownership is assumed"
     );
 
     let mut signal_pipe = [0i32; 2];

@@ -1,8 +1,10 @@
 //! Direct-backend (Cranelift) coverage: codegen paths reached through
 //! `emit_host_native_object`, and the backend's defensive rejections of
-//! forged MIR that the shared validator does not refuse.
+//! forged MIR that the shared validator does not refuse. Mutations the
+//! shared validator does refuse are asserted on both public boundaries so
+//! the file never records a backend-only containment as the whole story.
 
-use aura_compiler::{emit_host_native_object, lower_source_to_mir, MirModule};
+use aura_compiler::{emit_host_native_object, lower_source_to_mir, run_mir, MirModule};
 use serde_json::{json, Value};
 
 fn encode(source: &str) -> Value {
@@ -126,6 +128,36 @@ fn assert_native_emits(encoded: Value) {
     assert!(!object.is_empty());
 }
 
+/// Rejections owned by the shared validator surface identically on both
+/// public boundaries: the interpreter prefixes the validator's message with
+/// `invalid MIR loan flow: ` and the direct backend reports it bare.
+fn assert_rejected_on_both_boundaries(encoded: Value, expected: &str) {
+    let mir = decode(encoded);
+    let interpreted = run_mir(&mir).expect_err("the interpreter must reject the forged module");
+    let native =
+        emit_host_native_object(&mir).expect_err("native emission must reject the forged module");
+    assert_eq!(
+        interpreted.message.strip_prefix("invalid MIR loan flow: "),
+        Some(native.as_str()),
+        "both boundaries must report the same shared validator reason"
+    );
+    assert!(
+        native.contains(expected),
+        "shared rejection `{native}` should mention `{expected}`"
+    );
+}
+
+/// A mutation both boundaries accept: the interpreter's stdout is pinned and
+/// the direct backend must emit an object for the same module.
+fn assert_accepted_on_both_boundaries(encoded: Value, expected_stdout: &str) {
+    let mir = decode(encoded);
+    let output = run_mir(&mir).expect("the interpreter should accept this module");
+    assert_eq!(output.stdout, expected_stdout);
+    let object = emit_host_native_object(&mir)
+        .expect("the direct backend should emit an object for this module");
+    assert!(!object.is_empty());
+}
+
 fn assert_source_emits(source: &str) {
     assert_native_emits(encode(source));
 }
@@ -186,7 +218,25 @@ fn native_backend_lowers_indirect_calls_through_function_values() {
         .map(|instruction| &mut instruction["Assign"]["value"]["Call"])
         .expect("apply should call its function value");
     call["args"][0]["value"] = json!({ "Place": "missing_operand" });
-    let _ = emit_host_native_object(&decode(encoded));
+    // The shared validator does not resolve indirect-call operand places, so
+    // each boundary refuses the unknown place on its own: the direct backend
+    // when it lowers the call, the interpreter when the call executes. Neither
+    // may lower or run the module as if the operand existed.
+    let mir = decode(encoded);
+    let native = emit_host_native_object(&mir)
+        .expect_err("the direct backend must not lower a call through an unknown operand place");
+    assert!(
+        native.contains("does not know local `missing_operand`"),
+        "{native}"
+    );
+    let interpreted = run_mir(&mir)
+        .expect_err("the interpreter must not execute a call through an unknown operand place");
+    assert!(
+        interpreted
+            .message
+            .contains("unknown MIR place `missing_operand`"),
+        "{interpreted}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -382,7 +432,11 @@ fn native_backend_rejects_malformed_select_sources() {
         })
         .expect("select result temporary");
     *local_type_mut(main, &target) = json!({ "Named": ["int64", []] });
-    let _ = emit_host_native_object(&decode(encoded));
+    // The `select` result type is inferred from the call itself, not from the
+    // temporary's declared local type: the forged `int64` annotation is
+    // ignored on both boundaries and the program still observes the queue
+    // outcome (index 0).
+    assert_accepted_on_both_boundaries(encoded, "0\n");
 }
 
 // ---------------------------------------------------------------------------
@@ -391,8 +445,18 @@ fn native_backend_rejects_malformed_select_sources() {
 
 const COLLECTIONS: &str = "import random\ndef main():\n    mut values = [3, 1, 2]\n    values.append(4)\n    values.pop()\n    values.insert(0, 9)\n    values.remove(9)\n    values.reverse()\n    values.extend([5])\n    values.reserve(2)\n    values.swap(0, 1)\n    values.sort()\n    values.clear()\n    mut names: set[str] = {\"a\"}\n    names.add(\"b\")\n    names.remove(\"b\")\n    names.discard(\"c\")\n    names.reserve(2)\n    names.clear()\n    mut table: dict[str, int64] = {\"a\": 1}\n    table.remove(\"a\")\n    table.reserve(2)\n    table.clear()\n    mut rng = random.Rng(seed=1)\n    rng.shuffle(values)\n    value = 3\n    print(value.to_float())\n    print(Duration.seconds(1).to_ms())\n    print(values.index(1))\n    print(values.count(1))\n    print(values.len())\n";
 
+/// Member calls whose receiver place carries a mutation back to the caller's
+/// storage; dropping the place would strand the mutation on a temporary.
+const MUTATING_RECEIVER_FIELDS: &[&str] = &[
+    "append", "pop", "insert", "remove", "reverse", "extend", "reserve", "swap", "clear", "add",
+    "discard", "shuffle",
+];
+
+/// Member calls that only read through their receiver place.
+const READ_ONLY_RECEIVER_FIELDS: &[&str] = &["to_float", "to_ms", "index", "count", "len"];
+
 #[test]
-fn native_backend_lowers_collection_mutations_without_receiver_places() {
+fn member_calls_without_receiver_places_are_refused_or_lowered_by_field_kind() {
     assert_source_emits(COLLECTIONS);
     let mut fields = Vec::new();
     {
@@ -419,14 +483,26 @@ fn native_backend_lowers_collection_mutations_without_receiver_places() {
                 seen += 1;
             }
         }
-        // Without a receiver place the mutation lands on a temporary; the
-        // backend either lowers it or refuses it, but must not panic.
-        let _ = emit_host_native_object(&decode(encoded)).map_err(|error| {
-            assert!(
-                !error.is_empty(),
-                "`{field}` rejection should carry a message"
+        let field = field.as_str();
+        if MUTATING_RECEIVER_FIELDS.contains(&field) {
+            // A mutation without a receiver writeback place is a shared
+            // validator rejection, reported identically on both boundaries.
+            assert_rejected_on_both_boundaries(
+                encoded,
+                &format!(
+                    "invalid MIR member call `{field}` in `main` requires a mutable receiver writeback place"
+                ),
             );
-        });
+        } else if READ_ONLY_RECEIVER_FIELDS.contains(&field) {
+            // A read-only member call needs no writeback: the direct backend
+            // lowers it from the object operand alone. (The interpreter still
+            // resolves the receiver through its place and fails at execution
+            // with `collection value was not found`; that divergence is
+            // recorded in the coverage report, not pinned here.)
+            assert_native_emits(encoded);
+        } else {
+            panic!("member call `{field}` must be classified as mutating or read-only");
+        }
     }
 }
 
@@ -541,7 +617,23 @@ fn native_backend_dispatches_union_receivers_across_trait_candidates() {
         "field": member["field"],
         "receiver_place": member["receiver_place"],
     } });
-    let _ = emit_host_native_object(&decode(encoded));
+    // Rewriting the trait callee to a plain member call is not a shared
+    // validator rejection. The direct backend resolves `speak` on the union
+    // receiver through the same dynamic candidate search it uses for
+    // `TraitMember`, so it emits; the interpreter only refuses the call when
+    // it executes (a backend divergence recorded in the coverage report).
+    let mir = decode(encoded);
+    let object = emit_host_native_object(&mir)
+        .expect("the direct backend dispatches the rewritten member call dynamically");
+    assert!(!object.is_empty());
+    let interpreted = run_mir(&mir)
+        .expect_err("the interpreter has no dynamic dispatch for a plain member call on a union");
+    assert!(
+        interpreted
+            .message
+            .contains("unsupported MIR member call `speak`"),
+        "{interpreted}"
+    );
 
     let mut encoded = encode(UNION_DISPATCH);
     let duplicate = encoded["trait_impls"][0].clone();
@@ -620,9 +712,12 @@ fn native_backend_infers_temporary_types_from_rvalues() {
     );
     assert_native_emits(encoded);
 
+    // Inference is intentional here as well: the `select` result temporary
+    // is typed from the call, so stripping its declared type changes nothing
+    // on either boundary.
     let mut encoded = encode(SELECT);
     strip_temporary_local_types(function_mut(&mut encoded, "main"), &["NamedCall"]);
-    let _ = emit_host_native_object(&decode(encoded));
+    assert_accepted_on_both_boundaries(encoded, "0\n");
 }
 
 // ---------------------------------------------------------------------------
@@ -653,12 +748,20 @@ fn native_backend_rejects_malformed_task_starts_and_waits() {
 
     let mut encoded = encode(TASKS);
     let main = function_mut(&mut encoded, "main");
+    let mut forged = false;
     for instruction in instructions_mut(main) {
         if instruction["Assign"]["value"]["StartTask"].is_object() {
             instruction["Assign"]["value"]["StartTask"]["function"] = json!({ "Place": "%t2" });
+            forged = true;
         }
     }
-    let _ = emit_host_native_object(&decode(encoded));
+    assert!(forged, "the task start should lower to a StartTask rvalue");
+    // A task function operand without a recorded callable identity is a
+    // shared validator rejection on both boundaries.
+    assert_rejected_on_both_boundaries(
+        encoded,
+        "invalid MIR task call in `main` has no authoritative callable contract",
+    );
 }
 
 #[test]
@@ -685,13 +788,21 @@ fn native_backend_rejects_try_conversions_without_from_implementations() {
 const UNION_MATCH: &str = "def describe(value: int64 | None) -> int64:\n    match value:\n        case int64 as number:\n            return number\n        case None:\n            return 0\ndef main():\n    print(describe(3))\n    print(describe(None))\n";
 
 #[test]
-fn native_backend_tolerates_unresolvable_goto_labels_after_validation() {
+fn unresolvable_goto_labels_are_rejected_by_the_shared_validator() {
     let mut encoded = encode(UNION_MATCH);
     let describe = function_mut(&mut encoded, "describe");
+    let mut forged = false;
     for block in describe["blocks"].as_array_mut().unwrap() {
         if block["terminator"]["Goto"].is_string() {
             block["terminator"]["Goto"] = json!("nowhere");
+            forged = true;
         }
     }
-    let _ = emit_host_native_object(&decode(encoded));
+    assert!(forged, "the union match should lower at least one Goto");
+    // The validator's control-flow walk refuses the dangling label before
+    // either backend sees the function, so both report the same reason.
+    assert_rejected_on_both_boundaries(
+        encoded,
+        "invalid MIR function `describe` branches to unknown block `nowhere`",
+    );
 }
