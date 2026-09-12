@@ -5021,6 +5021,187 @@ fn validate_active_union_payload_projection(
     Ok(())
 }
 
+/// Rejects a task start whose target contract carries a value the shared
+/// validator can prove is not Transfer (C8): every parameter slot, supplied or
+/// defaulted, the result, and a closure target's captured environment. The
+/// checker keeps the positive Transfer proof; this mirrors its compiler-known
+/// non-Transfer shapes on MIR metadata so a forged module cannot smuggle a
+/// host resource across the boundary.
+fn validate_task_boundary_contract(
+    function: &MirFunction,
+    task_function: &Operand,
+    context: &MirLoanValidationContext<'_>,
+    state: &ValidatedLoanState,
+) -> std::result::Result<(), String> {
+    let signature = match task_function {
+        Operand::Function { signature, .. } => Some(signature.as_ref()),
+        Operand::Place(place) | Operand::MovePlace(place) => state
+            .authoritative_callables
+            .get(place)
+            .map(|callable| &callable.signature),
+        _ => None,
+    };
+    let Some(signature) = signature else {
+        return Ok(());
+    };
+    let (param_types, return_type): (Vec<&Type>, &Type) = match signature {
+        Type::Function {
+            params,
+            return_type,
+        } => (params.iter().map(|param| &param.ty).collect(), return_type),
+        Type::Closure {
+            params,
+            return_type,
+            ..
+        } => (params.iter().map(|param| &param.ty).collect(), return_type),
+        Type::Callable(callable) => (
+            callable.params.iter().map(|param| &param.ty).collect(),
+            &callable.return_type,
+        ),
+        _ => return Ok(()),
+    };
+    if let Some(reason) = validated_transfer_failure(signature, context, &mut Vec::new()) {
+        return Err(format!(
+            "invalid MIR task call in `{}` starts a target whose environment is not Transfer: {reason}",
+            function.name
+        ));
+    }
+    for (index, ty) in param_types.iter().enumerate() {
+        if let Some(reason) = validated_transfer_failure(ty, context, &mut Vec::new()) {
+            return Err(format!(
+                "invalid MIR task call in `{}` passes parameter {} whose type is not Transfer: {reason}",
+                function.name,
+                index + 1
+            ));
+        }
+    }
+    if matches!(return_type, Type::ReturnedView(_)) {
+        return Err(format!(
+            "invalid MIR task call in `{}` starts a target that returns a view of its arguments",
+            function.name
+        ));
+    }
+    if let Some(reason) = validated_transfer_failure(return_type, context, &mut Vec::new()) {
+        return Err(format!(
+            "invalid MIR task call in `{}` returns a result whose type is not Transfer: {reason}",
+            function.name
+        ));
+    }
+    Ok(())
+}
+
+/// The first compiler-known reason a MIR type cannot cross a task boundary,
+/// or `None` when the validator cannot refute Transfer. Type parameters and
+/// nominals absent from the module are left to the checker's proof; opaque
+/// FFI handles carry no MIR metadata and are likewise the checker's.
+fn validated_transfer_failure(
+    ty: &Type,
+    context: &MirLoanValidationContext<'_>,
+    visiting: &mut Vec<String>,
+) -> Option<String> {
+    match ty {
+        Type::Unit | Type::Function { .. } | Type::TypeParam(_) => None,
+        Type::ReturnedView(_) => Some("a returned view borrows the parent's data".to_string()),
+        Type::Module(name) => Some(format!("`module {name}` is a module capability")),
+        Type::Callable(callable) => {
+            (!callable.task).then(|| "an erased `Callable` hides its environment".to_string())
+        }
+        Type::Closure { captures, .. } => captures.iter().find_map(|capture| {
+            if matches!(
+                capture.mode,
+                ClosureCaptureMode::SharedView | ClosureCaptureMode::MutableView
+            ) {
+                return Some(format!("capture `{}` is a live loan", capture.name));
+            }
+            validated_transfer_failure(&capture.ty, context, visiting)
+                .map(|reason| format!("capture `{}`: {reason}", capture.name))
+        }),
+        Type::Tuple(elements) => elements
+            .iter()
+            .find_map(|element| validated_transfer_failure(element, context, visiting)),
+        Type::Union(union) => union
+            .members
+            .iter()
+            .find_map(|member| validated_transfer_failure(member, context, visiting)),
+        Type::Named(name, args) => {
+            if args.is_empty()
+                && matches!(
+                    name.as_str(),
+                    "process.Completed" | "net.HttpResponse" | "net.UdpDatagram"
+                )
+            {
+                return None;
+            }
+            if crate::sema::is_builtin_io_resource_type(name, args)
+                || (name == "random.Rng" && args.is_empty())
+            {
+                return Some(format!("`{ty}` is a host resource"));
+            }
+            if matches!(name.as_str(), "Queue" | "Task") && args.len() == 1 {
+                return None;
+            }
+            if matches!(
+                name.as_str(),
+                "list"
+                    | "set"
+                    | "Array"
+                    | "dict"
+                    | "Option"
+                    | "SendError"
+                    | "QueueReceive"
+                    | "TaskResult"
+                    | "WaitAny"
+                    | "WaitAll"
+                    | "Result"
+                    | "SelectOutcome"
+            ) {
+                return args
+                    .iter()
+                    .find_map(|arg| validated_transfer_failure(arg, context, visiting));
+            }
+            if let Some(class) = context.classes.get(name.as_str()) {
+                let key = format!("class:{name}");
+                if visiting.contains(&key) {
+                    return None;
+                }
+                visiting.push(key);
+                let substitutions = substitutions_from_decl_type_args(&class.type_params, args);
+                let failure = class.fields.iter().find_map(|field| {
+                    validated_transfer_failure(
+                        &substitute_type(&field.ty, &substitutions),
+                        context,
+                        visiting,
+                    )
+                    .map(|reason| format!("field `{}` of `{ty}`: {reason}", field.name))
+                });
+                visiting.pop();
+                return failure;
+            }
+            if let Some(enum_decl) = context.enums.get(name.as_str()) {
+                let key = format!("enum:{name}");
+                if visiting.contains(&key) {
+                    return None;
+                }
+                visiting.push(key);
+                let substitutions = substitutions_from_decl_type_args(&enum_decl.type_params, args);
+                let failure = enum_decl.variants.iter().find_map(|variant| {
+                    variant.payloads.iter().find_map(|payload| {
+                        validated_transfer_failure(
+                            &substitute_type(payload, &substitutions),
+                            context,
+                            visiting,
+                        )
+                        .map(|reason| format!("payload of `{}.{}`: {reason}", name, variant.name))
+                    })
+                });
+                visiting.pop();
+                return failure;
+            }
+            None
+        }
+    }
+}
+
 fn validated_enum_variant_fact(
     place: &str,
     enum_type: &Type,
@@ -6125,7 +6306,7 @@ fn validate_loan_rvalue(
                     ));
                 }
             }
-            Ok(())
+            validate_task_boundary_contract(function, task_function, context, state)
         }
         Rvalue::Binary { left, right, .. } => operands(&[left.clone(), right.clone()]),
         Rvalue::Call { callee, args } => {

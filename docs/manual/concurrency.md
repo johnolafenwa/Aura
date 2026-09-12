@@ -86,7 +86,13 @@ kind is Shared, Mutable, or Consuming; a Mutable target's captures are
 child-owned state with no parent writeback. An ordinary erased `Callable`
 target is rejected with `AU3008` because its environment is hidden, and a
 `TaskCallable[...]` contract cannot return a view (`AU3008`) because the
-child's result must be an owned value. Existing
+child's result must be an owned value; a named function or function value
+whose result is `view ... from` a parameter is refused for the same reason.
+Every argument slot crosses the boundary with its declared type, so a slot
+bound by name or filled by an omitted default must be Transfer exactly like a
+positional one (`AU3008`), and the shared MIR validator independently refuses
+a start whose contract carries a host resource, a returned view, or a
+non-Transfer capture. Existing
 direct named-function and
 associated-method-without-`self` targets remain accepted, including explicit
 generic targets written as `function[Types]` or

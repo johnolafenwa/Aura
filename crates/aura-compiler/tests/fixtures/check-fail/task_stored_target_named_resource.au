@@ -1,0 +1,10 @@
+type Job = TaskCallable[def(first: int64 = ..., *, resource: own TaskGroup) -> int64]
+
+def worker(first: int64 = 1, *, resource: own TaskGroup) -> int64:
+    return first
+
+def main():
+    target = Job(worker)
+    with TaskGroup() as group:
+        task = group.start(target, resource=TaskGroup())
+        print(task.result_or(-1, timeout=1s))
