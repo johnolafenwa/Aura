@@ -2106,16 +2106,32 @@ impl<'a> AnalysisBuilder<'a> {
                 }
 
                 let inferred_ty = self.infer_expr_type(&assign.value, scope);
-                let binding_ty = match inferred_ty {
-                    Some(ty @ Type::Closure { .. }) => ty,
-                    inferred_ty => assign
-                        .annotation
-                        .as_ref()
-                        .map(|ty| self.lower_analysis_type_ref(ty))
-                        .or(inferred_ty)
-                        .unwrap_or(Type::Unit),
+                // The scope binding carries the expanded annotation so member
+                // lookup sees through an alias; the hover keeps the alias the
+                // author wrote, exactly as the checker's diagnostics do.
+                let annotation_written = assign.annotation.as_ref().map(lower_type_ref);
+                let annotation_expanded = assign
+                    .annotation
+                    .as_ref()
+                    .map(|ty| self.lower_analysis_type_ref(ty));
+                let (binding_ty, display_ty) = match inferred_ty {
+                    Some(ty @ Type::Closure { .. }) => (ty, None),
+                    inferred_ty => match (annotation_expanded, annotation_written) {
+                        (Some(expanded), Some(written)) => {
+                            let display = (written != expanded).then_some(written);
+                            (expanded, display)
+                        }
+                        _ => (inferred_ty.unwrap_or(Type::Unit), None),
+                    },
                 };
-                self.bind_named_value(name, binding_ty, assign.span.line, "binding", scope);
+                self.bind_named_value_displayed(
+                    name,
+                    binding_ty,
+                    display_ty,
+                    assign.span.line,
+                    "binding",
+                    scope,
+                );
             }
             AssignTarget::Member { object, field } => {
                 self.visit_expr(object, scope);
@@ -2278,6 +2294,21 @@ impl<'a> AnalysisBuilder<'a> {
         kind: &str,
         scope: &mut BTreeMap<String, BindingInfo>,
     ) {
+        self.bind_named_value_displayed(name, ty, None, line, kind, scope);
+    }
+
+    /// Binds a value whose hover shows `display_ty` (the type as written, for
+    /// example an alias name) while the scope entry carries `ty` (its
+    /// expansion) for member and call resolution.
+    fn bind_named_value_displayed(
+        &mut self,
+        name: &str,
+        ty: Type,
+        display_ty: Option<Type>,
+        line: usize,
+        kind: &str,
+        scope: &mut BTreeMap<String, BindingInfo>,
+    ) {
         let definition = self
             .find_identifier_range(line, name)
             .unwrap_or(AnalysisRange {
@@ -2286,7 +2317,7 @@ impl<'a> AnalysisBuilder<'a> {
                 start_character: 0,
                 end_character: name.len(),
             });
-        let hover = format_value_hover(kind, name, &ty);
+        let hover = format_value_hover(kind, name, display_ty.as_ref().unwrap_or(&ty));
         scope.insert(
             name.to_string(),
             BindingInfo {

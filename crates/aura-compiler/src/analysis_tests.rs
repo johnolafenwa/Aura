@@ -9162,7 +9162,8 @@ fn type_alias_calls_resolve_targets_hover_definitions_and_completions() {
         members
     );
 
-    // An annotated alias binding expands the same way as an inferred one.
+    // An annotated alias binding resolves members through the expansion
+    // while its hover keeps the alias the author wrote.
     let annotated = [
         "class Box:",
         "    value: int64",
@@ -9181,7 +9182,7 @@ fn type_alias_calls_resolve_targets_hover_definitions_and_completions() {
     );
     assert_eq!(
         occurrence_at(&annotated_analysis, 4, 4).hover,
-        "```aura\nbinding box: Box\n```"
+        "```aura\nbinding box: Wrapped\n```"
     );
     assert!(occurrence_at(&annotated_analysis, 5, 14)
         .hover
