@@ -2,7 +2,7 @@
 
 Last updated: 2026-09-12
 
-## Batch 1 phase 1 (in progress)
+## Batch 1 phase 1 (complete)
 
 - Target: implement the ratified foundations and owned callables, complete
   extraction and feature commits in the prescribed order, and merge after
@@ -159,13 +159,23 @@ Last updated: 2026-09-12
   spelling were fixed, and the complete `npm run ci` chain is green. Coverage
   measured 96.4664% lines / 97.3304% functions / 95.2373% regions; floors
   raised to 96.46 / 97.33 / 95.23. LSP coverage 100%.
-- Next: hosted integration (push, PR to `main`, green branch CI, merge, green
-  main CI).
+- [PR #9](https://github.com/johnolafenwa/Aura/pull/9) merged final head
+  `110a35b8` as `1b130a03` after branch CI `34676571772` passed on Ubuntu
+  24.04 and macOS 15 with Tutorial Examples `34676571746` and Docs
+  `34676571773`; hosted coverage 96.46/96.47% lines, 97.33% functions,
+  95.24% regions above the raised floors. Main CI `34681069434` passed on
+  macOS; its Ubuntu job was cancelled twice at the 120-minute job limit with
+  no gate failure. [PR #10](https://github.com/johnolafenwa/Aura/pull/10)
+  raised the limit to 180 minutes and merged as `d38381c4`; main CI
+  `34698888164` is green on both platforms. Tutorial Examples `34681069450`
+  and Docs `34681069559` passed at the phase merge commit.
+- Phase 1 is complete. Phase 2 (Option removal, H2) starts from the work
+  note's handoff section; this completion commit changes work records only.
 - Option removal and all phase 2 signature changes remain excluded; protected
   user files and coverage floors remain unchanged.
 - Work and handoff ledger: [2026-09-09-batch-1-phase-1.md](2026-09-09-batch-1-phase-1.md).
 
-## Batch 1 design checkpoint (ratified; phase 1 in progress)
+## Batch 1 design checkpoint (ratified; phase 1 complete)
 
 - Authorized target: the detailed design and ratification, roadmap/index links, a work
   note and this board entry; no compiler, runtime, example, Manual or ADR-body changes.
