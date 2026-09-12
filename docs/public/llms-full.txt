@@ -9747,6 +9747,8 @@ This rule is applied after default trait methods are inherited.
 
 For a concrete value, member lookup considers inherent class methods and applicable visible trait implementations. The selected method keeps its declared receiver and argument ownership behavior.
 
+A trait method selected for a concrete value also binds as a method value: `value.method` outside a call is a closure over the receiver with the method's complete contract, subject to the receiver rules in [Closures](/manual/closures#bound-methods).
+
 For a type parameter, only methods justified by declared bounds are available:
 
 ```aura
@@ -13413,6 +13415,7 @@ the source usable.
 | `view mut name = place` | Exclusive mutable write-through view. |
 | `-> view T from source` | Shared returned view tied to one receiver or parameter. |
 | `-> view mut T from source` | Mutable returned view tied to one mutable receiver or parameter. |
+| `def(...) -> view [mut] T from name` | Stored callable contract whose result is a view of the named parameter; see [Closures](/manual/closures#stored-view-contracts). |
 
 The spelling asymmetry is intentional: parameter ownership occupies the type position as `value: own T`, parallel to `value: T`, while loop ownership prefixes the iterable as `for value in own values` because loops have no type position.
 

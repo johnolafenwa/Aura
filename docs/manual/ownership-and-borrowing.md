@@ -111,6 +111,7 @@ the source usable.
 | `view mut name = place` | Exclusive mutable write-through view. |
 | `-> view T from source` | Shared returned view tied to one receiver or parameter. |
 | `-> view mut T from source` | Mutable returned view tied to one mutable receiver or parameter. |
+| `def(...) -> view [mut] T from name` | Stored callable contract whose result is a view of the named parameter; see [Closures](/manual/closures#stored-view-contracts). |
 
 The spelling asymmetry is intentional: parameter ownership occupies the type position as `value: own T`, parallel to `value: T`, while loop ownership prefixes the iterable as `for value in own values` because loops have no type position.
 

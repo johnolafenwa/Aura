@@ -7,6 +7,34 @@ in this file.
 
 ## 0.3.4 — Unreleased (technical preview)
 
+- Add first-class union types under the ratified Batch 1 phase 1 checkpoint
+  (ADR-0052): `A | B` annotations normalize and deduplicate their members,
+  transparent `type` aliases expand at every use, values inject into a union
+  with a checked shared layout, `match` accepts type patterns with
+  exhaustiveness checking, and conditional tests narrow a stable union place
+  for the guarded flow. Generic functions and classes accept union type
+  arguments with union-aware inference. A union is Copy, clone-safe, and
+  Transfer exactly when every member is; equality, hashing, and trait dispatch
+  go through the active member; one declared handle type plus `None` may be an
+  extern C result as a single nullable pointer.
+- Make callable contracts complete (ADR-0058): parameter names, keyword-only
+  markers, and default promises belong to every function, lambda, and callable
+  type, and a written destination admits only safe restrictions of a value's
+  contract. `Callable[...]` and `TaskCallable[...]` store owned callables
+  through explicit packing, Mutable closures may mutate their owned captures,
+  and every `TaskGroup` start method accepts a stored `TaskCallable` target.
+- Bind `receiver.method` as a closure over the receiver, use `Class.method` as
+  a function value, and spell a generic method value's type arguments as
+  `method[T]`. A stored callable contract may return a view of one named
+  parameter (`def(pair: Pair) -> view str from pair`), and `list.map`,
+  `list.filter`, keyed `list.sort`, `Array.map`, and `control.retry` borrow a
+  packed Shared callable whose contract matches the site.
+- Run the program entry on a 16 MiB root task stack and report `AU4005` when a
+  task's stack cannot hold another call instead of faulting. The semantic
+  interface schema is 14, so older caches are rejected and rebuilt.
+- Upgrade `examples/agents/tool_runner/` to version 1 with a `Callable`
+  registry contract, a factory-owned closure, and a packed bound receiver; the
+  VS Code grammar tokenizes stored view contracts in type positions.
 - Add the maintained `examples/agents/tool_runner/` reference package with a
   named-function tool registry, explicit typed JSON request/result methods,
   typed errors, retry, child Queue streaming, and structured resource cleanup.

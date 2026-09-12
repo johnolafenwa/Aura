@@ -281,6 +281,8 @@ This rule is applied after default trait methods are inherited.
 
 For a concrete value, member lookup considers inherent class methods and applicable visible trait implementations. The selected method keeps its declared receiver and argument ownership behavior.
 
+A trait method selected for a concrete value also binds as a method value: `value.method` outside a call is a closure over the receiver with the method's complete contract, subject to the receiver rules in [Closures](/manual/closures#bound-methods).
+
 For a type parameter, only methods justified by declared bounds are available:
 
 ```aura
