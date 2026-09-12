@@ -73,17 +73,26 @@ with group = TaskGroup():
 | constructor | `TaskGroup()` | Creates a task group resource. |
 | `start` | `start(function, own ...) -> Task[T]` | Requires every capture and result to be `Transfer`, starts the specialized target, and returns its handle. |
 | `start_soon` | `start_soon(function, own ...) -> None` | Requires every capture and result to be `Transfer` and starts the specialized target without returning a handle. |
-| `start_with_stack` | `start_with_stack(bytes: int64, function, own ...) -> Task[T]` | Applies the same Transfer rules with an explicit guarded stack-capacity request and returns the handle. |
+| `start_with_stack` | `start_with_stack(bytes: int64, function, own ...) -> Task[T]` | Applies the same Transfer rules with an explicit guarded stack-capacity request and returns the handle. A task whose stack would be exhausted by its next call reports `AU4005` naming the callee instead of faulting. |
 | `start_soon_with_stack` | `start_soon_with_stack(bytes: int64, function, own ...) -> None` | Applies the same Transfer rules with an explicit guarded stack-capacity request and no returned handle. |
 | `cancel` | `cancel() -> None` | Signals cancellation to child tasks. |
 
 All four start methods accept capture-free function values, which are copy
-values and satisfy `Transfer`, plus closure values whose complete captured
-environment is Transfer. Existing direct named-function and
+values and satisfy `Transfer`, closure values whose complete captured
+environment is Transfer, and stored `TaskCallable[...]` values, whose packing
+proved every capture Transfer (see [Closures](/manual/closures#typing-rules)).
+A stored target is moved into the start for one child call, whether its call
+kind is Shared, Mutable, or Consuming; a Mutable target's captures are
+child-owned state with no parent writeback. An ordinary erased `Callable`
+target is rejected with `AU3008` because its environment is hidden, and a
+`TaskCallable[...]` contract cannot return a view (`AU3008`) because the
+child's result must be an owned value. Existing
+direct named-function and
 associated-method-without-`self` targets remain accepted, including explicit
 generic targets written as `function[Types]` or
-`Type.associated_method[Types]` in the callable slot. Associated methods do not
-thereby become general first-class method values. Every target argument is
+`Type.associated_method[Types]` in the callable slot. A bound method
+(`receiver.method`) is an ordinary closure target with its own call kind.
+Every target argument is
 copied or moved into task-owned capture storage. A bare shared target parameter
 borrows from that storage for the child call; an `own` parameter consumes it.
 `mut` targets are rejected because detached mutable capture has no

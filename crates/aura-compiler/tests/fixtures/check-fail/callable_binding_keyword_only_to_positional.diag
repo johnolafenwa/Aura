@@ -1,0 +1,6 @@
+error[AU2015]: callable contract mismatch: parameter `value` is keyword-only and cannot become positional
+ --> crates/aura-compiler/tests/fixtures/check-fail/callable_binding_keyword_only_to_positional.au:5:40
+  |
+5 |     step: def(value: int64) -> int64 = keyed
+  |                                        ^
+  = help: annotate the destination with a contract every value satisfies, or adapt a value explicitly through a thin callable alias call such as `Alias(function)`

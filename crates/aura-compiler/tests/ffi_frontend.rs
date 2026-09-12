@@ -91,6 +91,32 @@ unsafe extern "C" fn return_null_handle() -> *mut c_void {
     std::ptr::null_mut()
 }
 
+static NULLABLE_SHIM_TARGET: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn nullable_shim_target_address() -> *mut c_void {
+    (&NULLABLE_SHIM_TARGET as *const std::sync::atomic::AtomicU64)
+        .cast_mut()
+        .cast::<c_void>()
+}
+
+/// The linked C test shim for nullable results: it writes through the
+/// mutable byte view first, then returns null or one stable non-null address.
+unsafe extern "C" fn nullable_handle_shim(
+    bytes: *mut u8,
+    bytes_len: usize,
+    present: u8,
+) -> *mut c_void {
+    let bytes = unsafe { std::slice::from_raw_parts_mut(bytes, bytes_len) };
+    for byte in bytes {
+        *byte = byte.wrapping_add(1);
+    }
+    if present == 1 {
+        nullable_shim_target_address()
+    } else {
+        std::ptr::null_mut()
+    }
+}
+
 fn host_function(function: *const ()) -> HostFunction {
     HostFunction::new(function.cast_mut().cast()).expect("test function pointer should be non-null")
 }
@@ -824,5 +850,156 @@ public def sum_pair(pair: (int32, int32)) -> int32:
     assert_eq!(
         helpers.functions["sum_pair"].signature.params[0].to_string(),
         "(int32, int32)"
+    );
+}
+
+#[test]
+fn ffi_nullable_handle_check_admits_exactly_one_result_shape() {
+    let temp = TempDir::new("aura-ffi-nullable-handle");
+    let main_path = write_checked_ffi_package(
+        &temp,
+        r#"
+extern "C" opaque class Device
+type MaybeDevice = Device | None
+extern "C" def find_device() -> Device | None
+extern "C" def find_alias() -> MaybeDevice
+extern "C" def close_device(device: own Device) -> None
+
+def main():
+    found = find_device()
+    if found is not None:
+        close_device(found)
+    aliased: Device | None = find_alias()
+    print(aliased is None)
+"#,
+        true,
+    );
+    let program = aura_compiler::check_path(&main_path)
+        .expect("a `Handle | None` extern result is the one admitted nullable shape");
+    assert_eq!(
+        program.extern_functions["find_device"]
+            .signature
+            .return_type
+            .to_string(),
+        "Device | None"
+    );
+    assert_eq!(
+        program.extern_functions["find_alias"]
+            .signature
+            .return_type
+            .to_string(),
+        "Device | None"
+    );
+}
+
+#[test]
+fn ffi_nullable_handle_check_rejects_every_other_union_shape_at_the_c_boundary() {
+    for (case, source, expected) in [
+        (
+            "scalar union result",
+            "extern \"C\" def find() -> int64 | None\n\ndef main():\n    pass\n",
+            "FFI v0 admits only `Handle | None` as a nullable result",
+        ),
+        (
+            "several handle alternatives",
+            "extern \"C\" opaque class A\nextern \"C\" opaque class B\nextern \"C\" def find() -> A | B | None\n\ndef main():\n    pass\n",
+            "FFI v0 admits only `Handle | None` as a nullable result",
+        ),
+        (
+            "nullable parameter",
+            "extern \"C\" opaque class A\nextern \"C\" def take(value: A | None) -> None\n\ndef main():\n    pass\n",
+            "union parameter `value` cannot cross the C boundary",
+        ),
+    ] {
+        let temp = TempDir::new("aura-ffi-union-shape");
+        let main_path = write_checked_ffi_package(&temp, source, true);
+        let error = aura_compiler::check_path(&main_path)
+            .expect_err(&format!("{case} must be rejected"));
+        assert_eq!(error.code, "AU2010", "{case}: {}", error.message);
+        assert!(
+            error.message.contains(expected),
+            "{case}: unexpected message {}",
+            error.message
+        );
+    }
+}
+
+#[test]
+fn ffi_nullable_handle_engine_marshals_null_and_non_null_shim_results_after_writeback() {
+    let signature = FfiSignature::new(
+        vec![FfiType::BytesViewMut, FfiType::U8],
+        FfiType::NullableOpaqueHandle,
+    );
+    assert_eq!(signature.result(), FfiType::NullableOpaqueHandle);
+    assert_eq!(
+        FfiType::NullableOpaqueHandle.to_string(),
+        "nullable opaque handle"
+    );
+
+    let mut arguments = [FfiValue::Bytes(vec![1, 2, 3]), FfiValue::U8(0)];
+    // SAFETY: the shim has exactly the declared `(uint8_t *, size_t, uint8_t)
+    // -> void *` signature and returns normally.
+    let absent = unsafe {
+        call_host_function(
+            host_function(nullable_handle_shim as *const ()),
+            &signature,
+            &mut arguments,
+        )
+    }
+    .expect("a null nullable-handle result is `None`, not a failure");
+    assert_eq!(absent, FfiValue::Unit);
+    assert_eq!(
+        arguments[0],
+        FfiValue::Bytes(vec![2, 3, 4]),
+        "mutable bytes must write back before the null result is translated"
+    );
+
+    let mut arguments = [FfiValue::Bytes(vec![1, 2, 3]), FfiValue::U8(1)];
+    // SAFETY: as above.
+    let present = unsafe {
+        call_host_function(
+            host_function(nullable_handle_shim as *const ()),
+            &signature,
+            &mut arguments,
+        )
+    }
+    .expect("a non-null nullable-handle result is the opaque handle");
+    match present {
+        FfiValue::OpaqueHandle(handle) => {
+            assert_eq!(handle.as_ptr(), nullable_shim_target_address());
+        }
+        other => panic!("expected an opaque handle, found {other:?}"),
+    }
+    assert_eq!(
+        arguments[0],
+        FfiValue::Bytes(vec![2, 3, 4]),
+        "mutable bytes must write back before the non-null result is translated"
+    );
+
+    // The nullable form is result-only: no argument value has that type, so a
+    // signature that declares it as a parameter is rejected before any call.
+    let mut arguments = [FfiValue::OpaqueHandle(
+        OpaqueHandle::new(nullable_shim_target_address()).expect("non-null test address"),
+    )];
+    // SAFETY: the engine rejects the arguments before calling the shim.
+    let rejected = unsafe {
+        call_host_function(
+            host_function(return_null_handle as *const ()),
+            &FfiSignature::new(vec![FfiType::NullableOpaqueHandle], FfiType::Unit),
+            &mut arguments,
+        )
+    }
+    .expect_err("a nullable-handle parameter cannot be marshalled");
+    assert_eq!(
+        rejected,
+        FfiError::ArgumentTypeMismatch {
+            index: 0,
+            expected: FfiType::NullableOpaqueHandle,
+            actual: FfiType::OpaqueHandle,
+        }
+    );
+    assert_eq!(
+        rejected.to_string(),
+        "FFI argument 1 expected nullable opaque handle, but received opaque handle"
     );
 }

@@ -1,0 +1,18 @@
+type Job = TaskCallable[def() -> int64]
+
+def make_job(seed: int64) -> Job:
+    base = seed
+    return Job(lambda: base + 1)
+
+def run(job: own Job) -> int64:
+    with TaskGroup() as group:
+        task = group.start(job)
+        return task.result_or(-1, timeout=1s)
+
+def main():
+    first = make_job(1)
+    print(run(first))
+    second = make_job(2)
+    with TaskGroup() as group:
+        task = group.start(second)
+        print(task.result_or(-1, timeout=1s))

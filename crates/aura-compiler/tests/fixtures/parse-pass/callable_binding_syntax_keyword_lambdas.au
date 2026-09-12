@@ -1,0 +1,3 @@
+def main():
+    apply: def(value: int64, *, extra: int64) -> int64 = lambda value, *, extra: value + extra
+    print(apply(1, extra=2))

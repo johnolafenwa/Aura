@@ -1,0 +1,6 @@
+error[AU2012]: cyclic type alias: Loop -> Loop
+ --> crates/aura-compiler/tests/fixtures/check-fail/alias_cycle_direct.au:1:13
+  |
+1 | type Loop = Loop
+  |             ^
+  = related crates/aura-compiler/tests/fixtures/check-fail/alias_cycle_direct.au:1:1: alias `Loop` declared here

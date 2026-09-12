@@ -1,0 +1,5 @@
+class Secret:
+    pass
+type Hidden = Secret
+public def accept(value: Hidden):
+    pass

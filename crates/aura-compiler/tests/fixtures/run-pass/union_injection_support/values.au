@@ -1,0 +1,11 @@
+type Choice = int64 | str
+
+public def make() -> int64 | str:
+    value: Choice = 42
+    return value
+
+public class Packet:
+    public value: int64
+
+public def make_packet() -> Packet | None:
+    return Packet(value=43)

@@ -689,7 +689,7 @@ test("compiler bridge reuses one persistent compiler process", async () => {
 });
 
 test("persistent compiler service sends and accepts the current semantic schema", async () => {
-  assert.equal(SUPPORTED_SEMANTIC_INTERFACE_SCHEMA_VERSION, 6);
+  assert.equal(SUPPORTED_SEMANTIC_INTERFACE_SCHEMA_VERSION, 14);
   const script = [
     "const readline = require('node:readline');",
     "const lines = readline.createInterface({ input: process.stdin });",
@@ -726,7 +726,7 @@ test("persistent compiler service rejects and disposes a mismatched semantic sch
     "  const request = JSON.parse(line);",
     "  process.stdout.write(JSON.stringify({",
     "    id: request.id,",
-    "    semantic_interface_version: 1,",
+    "    semantic_interface_version: 8,",
     "    result: { diagnostics: [], symbols: [], occurrences: [] }",
     "  }) + '\\n');",
     "});"
@@ -742,14 +742,14 @@ test("persistent compiler service rejects and disposes a mismatched semantic sch
       path: "/virtual/main.au",
       source: "def main():\n    pass\n"
     }),
-    /semantic schema mismatch.*received `1`.*expected `6`/
+    /semantic schema mismatch.*received `8`.*expected `14`/
   );
   assert.equal(service.closed, true);
   assert.equal(invalidations, 1);
   service.handleStdout(
     `${JSON.stringify({
       id: 99,
-      semantic_interface_version: 1,
+      semantic_interface_version: 8,
       result: {}
     })}\n`
   );
@@ -2386,7 +2386,7 @@ test("compiler bridge preserves ordinary parameter ownership in hover and diagno
   }
 });
 
-test("compiler bridge exposes capture-free function values and rejects method values", async () => {
+test("compiler bridge exposes capture-free function values and bound method values", async () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aura-lsp-function-values-"));
   const source = [
     "def double(value: int32) -> int32:",
@@ -2421,12 +2421,12 @@ test("compiler bridge exposes capture-free function values and rejects method va
     assert.deepEqual(analysis.diagnostics, []);
     assert.ok(
       analysis.occurrences.some((occurrence) =>
-        occurrence.hover.includes("binding selected: def(int32) -> int32")
+        occurrence.hover.includes("binding selected: def(value: int32) -> int32")
       )
     );
     assert.ok(
       analysis.occurrences.some((occurrence) =>
-        occurrence.hover.includes("binding known_offset: def(int32) -> int32")
+        occurrence.hover.includes("binding known_offset: def(value: int32 = ...) -> int32")
       )
     );
     assert.ok(
@@ -2451,7 +2451,9 @@ test("compiler bridge exposes capture-free function values and rejects method va
       )
     );
 
-    const invalidMethodValue = [
+    // Batch 1 phase 1 (C6): `receiver.method` binds a closure over the
+    // receiver, and `Class.method` is a thin function value.
+    const boundMethodValue = [
       "class Counter:",
       "    value: int32",
       "    def read(self) -> int32:",
@@ -2462,15 +2464,17 @@ test("compiler bridge exposes capture-free function values and rejects method va
       "    return read()",
       ""
     ].join("\n");
-    const invalidAnalysis = await analyzeWithCompiler(mainUri, invalidMethodValue);
-    assert.equal(invalidAnalysis.diagnostics.length, 1);
-    assert.equal(invalidAnalysis.diagnostics[0].code, "AU2005");
-    assert.match(
-      invalidAnalysis.diagnostics[0].message,
-      /method values are not supported/
+    const boundAnalysis = await analyzeWithCompiler(mainUri, boundMethodValue);
+    assert.deepEqual(boundAnalysis.diagnostics, []);
+    assert.ok(
+      boundAnalysis.occurrences.some(
+        (occurrence) =>
+          occurrence.line === 6 &&
+          occurrence.hover.includes("binding read: closure def() -> int32")
+      )
     );
 
-    const invalidAssociatedMethodValue = [
+    const associatedMethodValue = [
       "class Math:",
       "    def double(value: int32) -> int32:",
       "        return value * 2",
@@ -2481,13 +2485,36 @@ test("compiler bridge exposes capture-free function values and rejects method va
     ].join("\n");
     const associatedAnalysis = await analyzeWithCompiler(
       mainUri,
-      invalidAssociatedMethodValue
+      associatedMethodValue
     );
-    assert.equal(associatedAnalysis.diagnostics.length, 1);
-    assert.equal(associatedAnalysis.diagnostics[0].code, "AU2005");
+    assert.deepEqual(associatedAnalysis.diagnostics, []);
+    assert.ok(
+      associatedAnalysis.occurrences.some(
+        (occurrence) =>
+          occurrence.line === 4 &&
+          occurrence.hover.includes("binding callback: def(value: int32) -> int32")
+      )
+    );
+
+    const genericAssociatedMethodValue = [
+      "class Box[T]:",
+      "    value: T",
+      "    def make(value: T) -> Box[T]:",
+      "        return Box(value=value)",
+      "def main() -> int32:",
+      "    callback = Box.make",
+      "    return callback(21).value",
+      ""
+    ].join("\n");
+    const genericAnalysis = await analyzeWithCompiler(
+      mainUri,
+      genericAssociatedMethodValue
+    );
+    assert.equal(genericAnalysis.diagnostics.length, 1);
+    assert.equal(genericAnalysis.diagnostics[0].code, "AU2005");
     assert.match(
-      associatedAnalysis.diagnostics[0].message,
-      /method values are not supported/
+      genericAnalysis.diagnostics[0].message,
+      /associated method values on generic classes are not supported/
     );
 
     const invalidCapability = [
@@ -2520,10 +2547,10 @@ test("compiler bridge exposes capture-free function values and rejects method va
     ].join("\n");
     const dynamicAnalysis = await analyzeWithCompiler(mainUri, dynamicNamedArgument);
     assert.equal(dynamicAnalysis.diagnostics.length, 1);
-    assert.equal(dynamicAnalysis.diagnostics[0].code, "AU2003");
+    assert.equal(dynamicAnalysis.diagnostics[0].code, "AU2004");
     assert.match(
       dynamicAnalysis.diagnostics[0].message,
-      /named argument contract was erased.*possible targets do not all agree/
+      /contract has no parameter named `value`/
     );
   } finally {
     fs.rmSync(tempRoot, { recursive: true, force: true });
@@ -5348,7 +5375,7 @@ test("compiler bridge exposes contextual lambda scope, hover, definitions, and c
       (occurrence) =>
         occurrence.line === 3 &&
         occurrence.hover.includes("add") &&
-        occurrence.hover.includes("def(int32) -> int32")
+        occurrence.hover.includes("def(value: int32) -> int32")
     );
     assert.ok(lambdaBinding, "the closure binding should expose its callable contract");
 

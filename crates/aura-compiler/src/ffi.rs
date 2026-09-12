@@ -42,6 +42,9 @@ pub enum FfiType {
     BytesViewMut,
     /// A non-null, foreign-owned opaque pointer.
     OpaqueHandle,
+    /// A result-only opaque pointer that may be null; null yields `None`
+    /// (ADR-0052 A10).
+    NullableOpaqueHandle,
 }
 
 impl fmt::Display for FfiType {
@@ -63,6 +66,7 @@ impl fmt::Display for FfiType {
             Self::BytesView => "list[uint8] view",
             Self::BytesViewMut => "mut list[uint8] view",
             Self::OpaqueHandle => "opaque handle",
+            Self::NullableOpaqueHandle => "nullable opaque handle",
         })
     }
 }
@@ -403,7 +407,7 @@ fn result_type(ffi_type: FfiType) -> Result<Type, FfiError> {
         FfiType::I64 => Type::i64(),
         FfiType::F32 => Type::f32(),
         FfiType::F64 => Type::f64(),
-        FfiType::OpaqueHandle => Type::pointer(),
+        FfiType::OpaqueHandle | FfiType::NullableOpaqueHandle => Type::pointer(),
         FfiType::StringView | FfiType::BytesView | FfiType::BytesViewMut => {
             return Err(FfiError::UnsupportedReturnType(ffi_type));
         }
@@ -448,6 +452,13 @@ unsafe fn invoke(
             FfiValue::OpaqueHandle(
                 OpaqueHandle::new(pointer).ok_or(FfiError::NullOpaqueHandleReturn)?,
             )
+        }
+        FfiType::NullableOpaqueHandle => {
+            let pointer: *mut c_void = unsafe { cif.call(function, arguments) };
+            match OpaqueHandle::new(pointer) {
+                Some(handle) => FfiValue::OpaqueHandle(handle),
+                None => FfiValue::Unit,
+            }
         }
         FfiType::StringView | FfiType::BytesView | FfiType::BytesViewMut => {
             return Err(FfiError::UnsupportedReturnType(result));
@@ -757,6 +768,7 @@ mod tests {
             (FfiType::BytesView, "list[uint8] view"),
             (FfiType::BytesViewMut, "mut list[uint8] view"),
             (FfiType::OpaqueHandle, "opaque handle"),
+            (FfiType::NullableOpaqueHandle, "nullable opaque handle"),
         ];
         for (ffi_type, source_name) in cases {
             let error = call(

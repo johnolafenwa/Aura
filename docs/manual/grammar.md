@@ -257,7 +257,12 @@ type
 type-primary
     = identifier-path, [ "[", type-list, "]" ]
     | tuple-type
-    | function-type ;
+    | function-type
+    | owned-callable-type ;
+
+owned-callable-type
+    = ( "Callable" | "TaskCallable" ), "[",
+      [ "mut" | "own" ], function-type, "]" ;
 
 type-list = type, { ",", type } ;
 
@@ -266,11 +271,25 @@ tuple-type
     | "(", type, ",", type, { ",", type }, ")" ;
 
 function-type
-    = "def", "(", [ function-type-parameter,
-      { ",", function-type-parameter } ], ")", "->", type ;
+    = "def", "(", [ function-type-parameters ], ")", "->", function-type-result ;
+
+function-type-result
+    = type
+    | "view", [ "mut" ], type, "from", identifier ;
+
+function-type-parameters
+    = function-type-parameter, { ",", function-type-parameter },
+      [ ",", "*", ",", named-function-type-parameter,
+        { ",", named-function-type-parameter } ]
+    | "*", ",", named-function-type-parameter,
+      { ",", named-function-type-parameter } ;
 
 function-type-parameter
-    = [ "mut" | "own" ], type ;
+    = named-function-type-parameter
+    | [ "mut" | "own" ], type, [ "=", "..." ] ;
+
+named-function-type-parameter
+    = identifier, ":", [ "mut" | "own" ], type, [ "=", "..." ] ;
 
 plain-type-parameters
     = "[", identifier, { ",", identifier }, "]" ;
@@ -283,11 +302,20 @@ bounded-type-parameter
     = identifier, [ ":", type, { "+", type } ] ;
 ```
 
-A function type contains parameter modes and types, but no names or default
-expressions: `def(int32, mut Counter, own str) -> bool`. A bare parameter
-is shared, `mut` requires caller-visible mutable access, and `own` transfers
-the argument. Parameter names are not accepted inside the list. `indirect` is
-invalid on a function type because the value is already a code pointer.
+A function type spells a complete callable contract: `def(int32, label: str,
+*, retries: int32 = ...) -> bool`. A bare parameter is shared, `mut` requires
+caller-visible mutable access, and `own` transfers the argument. An unnamed
+slot is positional-only; `name: type` exposes a name; every slot after the
+single `*` boundary must be named and is keyword-only; and `= ...` promises
+that the target supplies a default, so a literal or expression after `=` in a
+type is rejected (`AU1101`). The same boundary rule applies to declaration
+and lambda parameter lists: at most one `*`, followed by at least one named
+parameter, adding no variadics. `indirect` is invalid on a function type
+because the value is already a code pointer. `Callable[...]` and
+`TaskCallable[...]` wrap one function type as owned callable storage; a bare
+`def` inside the brackets is Shared, `mut def` Mutable, and `own def`
+Consuming, and `mut def`/`own def` are not valid outside those brackets.
+`indirect` is invalid on owned callable types.
 
 `T?` denotes `Option[T]`, including when `T` is a tuple type. Type and
 type-parameter lists are nonempty when brackets are present and do not accept
@@ -355,10 +383,15 @@ method-declaration
       ":", NEWLINE, suite ;
 
 parameter-list
-    = parameter, { ",", parameter } ;
+    = parameter, { ",", parameter },
+      [ ",", keyword-only-parameters ]
+    | keyword-only-parameters ;
+
+keyword-only-parameters
+    = "*", ",", parameter, { ",", parameter } ;
 
 method-parameter-list
-    = receiver, [ ",", parameter, { ",", parameter } ]
+    = receiver, [ ",", parameter-list ]
     | parameter-list ;
 
 receiver
@@ -572,10 +605,13 @@ closed-pattern
     | INTEGER
     | "-", (INTEGER | FLOAT)
     | tuple-pattern
+    | type-pattern
     | binding-pattern
     | variant-pattern ;
 
 binding-pattern = IDENT ;
+
+type-pattern = type, "as", IDENT ;
 
 variant-pattern
     = identifier-path,
@@ -589,6 +625,9 @@ tuple-pattern
 ```
 
 Pattern parsing uses these contextual rules:
+
+- `Type as name` selects a direct union member or the same singleton type;
+  a type alias must expand to one member, and `None` selects the unit member
 
 - exact `_` is the wildcard
 - one unparenthesized, unqualified name beginning with lowercase ASCII or `_` is a binding
@@ -637,8 +676,12 @@ non-tuple-expression = conditional-expression ;
 
 lambda-expression
     = "lambda", [ lambda-capture-list ],
-      [ lambda-parameter,
-      { ",", lambda-parameter } ], ":", expression ;
+      [ lambda-parameter-list ], ":", expression ;
+
+lambda-parameter-list
+    = lambda-parameter, { ",", lambda-parameter },
+      [ ",", "*", ",", lambda-parameter, { ",", lambda-parameter } ]
+    | "*", ",", lambda-parameter, { ",", lambda-parameter } ;
 
 lambda-capture-list
     = "[", lambda-capture,
@@ -665,7 +708,10 @@ not-expression
 
 comparison-expression
     = bitwise-or-expression,
-      { comparison-operator, bitwise-or-expression } ;
+      ( { comparison-operator, bitwise-or-expression } | none-test ) ;
+
+none-test
+    = "is", [ "not" ], "None" ;
 
 comparison-operator
     = "==" | "!=" | "<" | "<=" | ">" | ">=" | "in" | "not", "in" ;
@@ -735,7 +781,10 @@ one comparison level and chain the Python way rather than left-folding, so
 operators means the conjunction of its `n` adjacent comparisons, with each
 operand evaluated at most once. `not a == b` means `not (a == b)`, because
 prefix `not` binds looser than the comparison level, while `a not in b` is one
-comparison operator. Casts bind more tightly than power and arithmetic.
+comparison operator. `is` is a contextual word: `value is None` and
+`value is not None` are complete comparison-level forms that take no further
+comparison operator on either side, so `a is None == b` and `a < b is None`
+are syntax errors rather than chains. Casts bind more tightly than power and arithmetic.
 
 Comma-separated index expressions are accepted only for `Array[T]`, where
 one `int64` coordinate is required per runtime axis. Other indexable

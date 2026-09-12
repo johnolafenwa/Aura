@@ -1,0 +1,8 @@
+def main():
+    value: str | None = "aura"
+    flag = true
+    if value is None or flag:
+        print("skip")
+    else:
+        print(value.len())
+    print(value.len())

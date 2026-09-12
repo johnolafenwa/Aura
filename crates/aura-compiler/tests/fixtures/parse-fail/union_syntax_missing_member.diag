@@ -1,0 +1,5 @@
+error[AU1101]: expected a type after '|'
+ --> crates/aura-compiler/tests/fixtures/parse-fail/union_syntax_missing_member.au:1:18
+  |
+1 | type U = int64 | | str
+  |                  ^

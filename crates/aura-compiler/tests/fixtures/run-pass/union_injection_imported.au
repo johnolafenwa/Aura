@@ -1,0 +1,5 @@
+from union_injection_support.values import make
+
+def main():
+    value = make()
+    print(value)

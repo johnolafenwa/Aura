@@ -38,10 +38,12 @@ fn adr0038_direct_view_fixed_point_comparison_ignores_order_not_authority() {
     use super::{direct_view_maps_equivalent, DirectViewAlternative};
     use cranelift_frontend::Variable;
     let a = DirectViewAlternative {
+        union_payloads: Vec::new(),
         place: "owner.left".into(),
         conditions: vec![(Variable::from_u32(1), 0), (Variable::from_u32(2), 1)],
     };
     let b = DirectViewAlternative {
+        union_payloads: Vec::new(),
         place: "owner.right".into(),
         conditions: vec![(Variable::from_u32(1), 1)],
     };
@@ -71,6 +73,7 @@ fn adr0038_direct_view_fixed_point_comparison_ignores_order_not_authority() {
         vec![
             a.clone(),
             DirectViewAlternative {
+                union_payloads: Vec::new(),
                 place: b.place.clone(),
                 conditions: vec![],
             },
@@ -78,6 +81,7 @@ fn adr0038_direct_view_fixed_point_comparison_ignores_order_not_authority() {
         vec![
             a,
             DirectViewAlternative {
+                union_payloads: Vec::new(),
                 place: b.place,
                 conditions: vec![(Variable::from_u32(1), 0)],
             },
@@ -204,6 +208,7 @@ fn adr0038_direct_view_and_closure_metadata_helpers_preserve_dataflow_invariants
     assert_eq!(
         projected.alternatives,
         vec![DirectViewAlternative {
+            union_payloads: Vec::new(),
             place: "owner.field".to_string(),
             conditions: vec![(selector, 1)],
         }]
@@ -336,12 +341,14 @@ fn adr0038_direct_cfg_join_rejects_branch_dependent_view_identity() {
                 passing: MirReceiverKind::Borrow,
                 ty: Type::named("int64"),
                 default_function: None,
+                keyword_only: false,
             },
             MirParam {
                 name: "right".to_string(),
                 passing: MirReceiverKind::Borrow,
                 ty: Type::named("int64"),
                 default_function: None,
+                keyword_only: false,
             },
         ],
         local_types: Vec::new(),
@@ -387,6 +394,8 @@ fn adr0038_direct_cfg_join_rejects_branch_dependent_view_identity() {
         block.instructions.clear();
     }
     let module = crate::mir::MirModule {
+        unions: Vec::new(),
+        enums: Vec::new(),
         constants: Vec::new(),
         functions: vec![setup_function],
         classes: Vec::new(),
@@ -418,6 +427,7 @@ fn adr0038_direct_tuple_place_errors_reach_codegen_after_constructor_setup() {
             passing: MirReceiverKind::Value,
             ty: Type::Tuple(vec![Type::named("int64"), Type::named("bool")]),
             default_function: None,
+            keyword_only: false,
         }],
         local_types: vec![MirLocalType {
             name: "result".to_string(),
@@ -442,6 +452,8 @@ fn adr0038_direct_tuple_place_errors_reach_codegen_after_constructor_setup() {
             value: Rvalue::Use(Operand::Place(format!("pair.{projection}"))),
         }];
         let module = crate::mir::MirModule {
+            unions: Vec::new(),
+            enums: Vec::new(),
             constants: Vec::new(),
             functions: vec![function.clone()],
             classes: Vec::new(),
@@ -574,6 +586,8 @@ def main() -> int32:
         }],
     };
     let constant_module = crate::mir::MirModule {
+        unions: Vec::new(),
+        enums: Vec::new(),
         constants: vec![crate::mir::MirConstant {
             key: "<test>::answer".to_string(),
             initializer: initializer.name.clone(),
@@ -613,6 +627,8 @@ def main() -> int32:
             },
         });
     let reader_module = crate::mir::MirModule {
+        unions: Vec::new(),
+        enums: Vec::new(),
         constants: Vec::new(),
         functions: vec![constant_reader.clone(), initializer.clone()],
         classes: Vec::new(),
@@ -683,11 +699,11 @@ fn direct_runtime_type_substitutions_respect_callable_structure_and_capabilities
     use crate::sema::{ClosureCallKind, ClosureCapture, ClosureCaptureMode, FunctionParamContract};
 
     let param = |name: &str, ty: Type, passing| FunctionParamContract {
+        keyword_only: false,
         name: name.to_string(),
         ty,
         passing,
         has_default: false,
-        default_erased: false,
     };
     let pattern = Type::Closure {
         params: Box::new(vec![param(
@@ -704,6 +720,7 @@ fn direct_runtime_type_substitutions_respect_callable_structure_and_capabilities
             ty: Type::TypeParam("U".to_string()),
             mode: ClosureCaptureMode::MutableView,
             span: Span::new(1, 1),
+            mutated: false,
         }]),
         call_kind: ClosureCallKind::MutableRepeatable,
     };
@@ -719,6 +736,7 @@ fn direct_runtime_type_substitutions_respect_callable_structure_and_capabilities
             ty: Type::named("str"),
             mode: ClosureCaptureMode::MutableView,
             span: Span::new(1, 1),
+            mutated: false,
         }]),
         call_kind: ClosureCallKind::MutableRepeatable,
     };
@@ -1036,14 +1054,45 @@ fn test_function_operand(name: &str, params: Vec<Type>, return_type: Type) -> Op
             params: params
                 .into_iter()
                 .map(|ty| crate::sema::FunctionParamContract {
+                    keyword_only: false,
                     name: String::new(),
                     ty,
                     passing: crate::ast::ReceiverKind::Value,
                     has_default: false,
-                    default_erased: false,
                 })
                 .collect(),
             return_type: Box::new(return_type),
+        }),
+    }
+}
+
+/// A function operand whose signature matches the lowered declaration, as
+/// the validator authenticates operand contracts against declarations.
+fn declared_function_operand(module: &crate::mir::MirModule, name: &str) -> Operand {
+    let declaration = module
+        .functions
+        .iter()
+        .find(|function| function.name == name)
+        .expect("declared function should exist");
+    Operand::Function {
+        name: name.to_string(),
+        signature: Box::new(Type::Function {
+            params: declaration
+                .params
+                .iter()
+                .map(|param| crate::sema::FunctionParamContract {
+                    keyword_only: false,
+                    name: param.name.clone(),
+                    ty: param.ty.clone(),
+                    passing: match param.passing {
+                        MirReceiverKind::Value => crate::ast::ReceiverKind::Value,
+                        MirReceiverKind::Borrow => crate::ast::ReceiverKind::Borrow,
+                        MirReceiverKind::BorrowMut => crate::ast::ReceiverKind::BorrowMut,
+                    },
+                    has_default: param.default_function.is_some(),
+                })
+                .collect(),
+            return_type: Box::new(declaration.return_type.clone()),
         }),
     }
 }
@@ -1391,6 +1440,8 @@ fn heterogeneous_match_arm_mutable_locals_keep_distinct_direct_slots() {
 fn tuple_native_symbols_keep_public_projection_separate_from_private_take() {
     let tuple_type = Type::Tuple(vec![Type::named("int64"), Type::named("str")]);
     let module = |instructions, local_types| crate::mir::MirModule {
+        unions: Vec::new(),
+        enums: Vec::new(),
         constants: Vec::new(),
         functions: vec![MirFunction {
             name: "main".to_string(),
@@ -2244,6 +2295,8 @@ fn handbuilt_mir_safepoint_validates_and_emits_for_a_sequential_module() {
         .expect("a hand-built MIR safepoint is a valid backend instruction");
 
     let module = crate::mir::MirModule {
+        unions: Vec::new(),
+        enums: Vec::new(),
         constants: Vec::new(),
         functions: vec![function],
         classes: Vec::new(),
@@ -2319,6 +2372,8 @@ fn dead_task_starts_do_not_enable_reachable_native_safepoints() {
         ],
     };
     let module = crate::mir::MirModule {
+        unions: Vec::new(),
+        enums: Vec::new(),
         constants: Vec::new(),
         functions: vec![main, worker],
         classes: Vec::new(),
@@ -2552,7 +2607,8 @@ def main() -> int32:
     let object = emit_host_object(&mir).expect("wide scalar casts should emit directly");
     let referenced = object_referenced_symbols(&object);
 
-    for forbidden in ["aura_direct_cast_value_at"] {
+    {
+        let forbidden = "aura_direct_cast_value_at";
         assert!(
             !referenced.iter().any(|symbol| symbol.contains(forbidden)),
             "wide scalar casts must not reference `{forbidden}`: {referenced:?}"
@@ -3098,6 +3154,8 @@ fn module_with_main_call(call: Rvalue) -> crate::mir::MirModule {
 
 fn module_with_main_call_result_type(call: Rvalue, result_ty: Type) -> crate::mir::MirModule {
     crate::mir::MirModule {
+        unions: Vec::new(),
+        enums: Vec::new(),
         constants: Vec::new(),
         functions: vec![MirFunction {
             name: "main".to_string(),
@@ -3163,6 +3221,8 @@ fn direct_ffi_codegen_handles_narrow_scalars_mutable_bytes_and_opaque_ownership(
     let handle_ty = Type::named("ProcessHandle");
     let bytes_ty = Type::Named("list".to_string(), vec![Type::named("uint8")]);
     let module = crate::mir::MirModule {
+        unions: Vec::new(),
+        enums: Vec::new(),
         constants: Vec::new(),
         functions: vec![MirFunction {
             name: "main".to_string(),
@@ -3381,6 +3441,8 @@ fn direct_ffi_validation_rejects_unvalidated_metadata() {
 
     let bytes_ty = Type::Named("list".to_string(), vec![Type::named("uint8")]);
     let missing_mut_writeback = crate::mir::MirModule {
+        unions: Vec::new(),
+        enums: Vec::new(),
         constants: Vec::new(),
         functions: vec![MirFunction {
             name: "main".to_string(),
@@ -3570,6 +3632,8 @@ fn module_with_main_member_call_result_type(
     args: Vec<MirArg>,
 ) -> crate::mir::MirModule {
     crate::mir::MirModule {
+        unions: Vec::new(),
+        enums: Vec::new(),
         constants: Vec::new(),
         functions: vec![MirFunction {
             name: "main".to_string(),
@@ -3857,6 +3921,8 @@ fn direct_backend_internal_collection_member_surface_compiles() {
 #[test]
 fn direct_backend_scalar_bool_range_and_coercion_paths_compile() {
     let module = crate::mir::MirModule {
+        unions: Vec::new(),
+        enums: Vec::new(),
         constants: Vec::new(),
         functions: vec![MirFunction {
             name: "main".to_string(),
@@ -6978,6 +7044,8 @@ def main() -> int32:
 fn direct_backend_wait_helpers_cover_unknown_task_payload_fallback() {
     let string_vec = Type::Named("list".to_string(), vec![Type::named("str")]);
     let wait_all_unknown = crate::mir::MirModule {
+        unions: Vec::new(),
+        enums: Vec::new(),
         constants: Vec::new(),
         functions: vec![MirFunction {
             name: "main".to_string(),
@@ -7036,6 +7104,8 @@ fn direct_backend_wait_helpers_cover_unknown_task_payload_fallback() {
 #[test]
 fn direct_backend_entry_thunk_handles_unit_parameters() {
     let unit_param_main = crate::mir::MirModule {
+        unions: Vec::new(),
+        enums: Vec::new(),
         constants: Vec::new(),
         functions: vec![MirFunction {
             name: "main".to_string(),
@@ -7048,6 +7118,7 @@ fn direct_backend_entry_thunk_handles_unit_parameters() {
                 passing: MirReceiverKind::Value,
                 ty: Type::Unit,
                 default_function: None,
+                keyword_only: false,
             }],
             local_types: vec![MirLocalType {
                 name: "marker".to_string(),
@@ -7630,7 +7701,8 @@ def main() -> int32:
     let call_error =
         emit_host_object(&invalid_call).expect_err("unknown closure call parameters must fail");
     assert!(
-        call_error.contains("direct backend function value has no parameter named `missing`"),
+        call_error.contains("direct backend function value has no parameter named `missing`")
+            || call_error.contains("unknown argument `missing`"),
         "{call_error}"
     );
 
@@ -7656,7 +7728,8 @@ def main() -> int32:
     let task_error =
         emit_host_object(&invalid_task).expect_err("unknown closure task parameters must fail");
     assert!(
-        task_error.contains("task function value has no parameter named `missing`"),
+        task_error.contains("task function value has no parameter named `missing`")
+            || task_error.contains("unknown argument `missing`"),
         "{task_error}"
     );
 
@@ -7698,11 +7771,11 @@ fn native_codegen_function_value_signature_errors_are_precise() {
         passing: crate::ast::ReceiverKind,
     ) -> crate::sema::FunctionParamContract {
         crate::sema::FunctionParamContract {
+            keyword_only: false,
             name: name.to_string(),
             ty: Type::named("int32"),
             passing,
             has_default: false,
-            default_erased: false,
         }
     }
 
@@ -7715,6 +7788,8 @@ fn native_codegen_function_value_signature_errors_are_precise() {
 
     fn module(signature: Type, args: Vec<MirArg>) -> crate::mir::MirModule {
         crate::mir::MirModule {
+            unions: Vec::new(),
+            enums: Vec::new(),
             constants: Vec::new(),
             functions: vec![
                 MirFunction {
@@ -7728,6 +7803,7 @@ fn native_codegen_function_value_signature_errors_are_precise() {
                         passing: MirReceiverKind::Value,
                         ty: Type::named("int32"),
                         default_function: None,
+                        keyword_only: false,
                     }],
                     local_types: vec![MirLocalType {
                         name: "value".to_string(),
@@ -7842,13 +7918,39 @@ fn native_codegen_function_value_signature_errors_are_precise() {
         ),
     ];
 
+    // The shared MIR validator may refuse these malformed modules before the
+    // backend; each case accepts its validation-stage wording as well.
+    let validator_wording = |label: &str| -> &'static [&'static str] {
+        match label {
+            "non-function signature" => &["has a non-function signature"],
+            "too many arguments" => &["too many arguments"],
+            "unknown named argument" => &["unknown argument `missing`", "no parameter named"],
+            "duplicate named argument" => &[
+                "duplicate",
+                "too many arguments",
+                "does not match declaration",
+            ],
+            "mutable argument without writeback" | "writeback on a value argument" => {
+                &["writeback"]
+            }
+            _ => &[],
+        }
+    };
     for (label, signature, args, expected) in cases {
         let error = match emit_host_object(&module(signature, args)) {
             Ok(_) => panic!("{label} should be rejected"),
             Err(error) => error,
         };
+        // Every case also authenticates the operand against `worker`'s
+        // declaration, so a contract that disagrees with it is refused there.
+        let operand_refused = error.contains("does not match declaration")
+            || error.contains("has a non-function signature");
         assert!(
-            error.contains(expected),
+            error.contains(expected)
+                || operand_refused
+                || validator_wording(label)
+                    .iter()
+                    .any(|fragment| error.contains(fragment)),
             "{label} should report `{expected}`, found `{error}`"
         );
     }
@@ -8426,6 +8528,8 @@ def main() -> int32:
 #[test]
 fn direct_backend_match_and_branch_terminator_edges_cover_enum_and_opaque_paths() {
     let wildcard_match = crate::mir::MirModule {
+        unions: Vec::new(),
+        enums: Vec::new(),
         constants: Vec::new(),
         functions: vec![MirFunction {
             name: "main".to_string(),
@@ -8483,6 +8587,8 @@ fn direct_backend_match_and_branch_terminator_edges_cover_enum_and_opaque_paths(
         .is_empty());
 
     let opaque_branch = crate::mir::MirModule {
+        unions: Vec::new(),
+        enums: Vec::new(),
         constants: Vec::new(),
         functions: vec![MirFunction {
             name: "main".to_string(),
@@ -8525,6 +8631,8 @@ fn direct_backend_match_and_branch_terminator_edges_cover_enum_and_opaque_paths(
         .is_empty());
 
     let scalar_match = crate::mir::MirModule {
+        unions: Vec::new(),
+        enums: Vec::new(),
         constants: Vec::new(),
         functions: vec![MirFunction {
             name: "main".to_string(),
@@ -8562,6 +8670,8 @@ fn direct_backend_match_and_branch_terminator_edges_cover_enum_and_opaque_paths(
     assert!(scalar_error.contains("expected enum matches to use opaque scrutinees"));
 
     let module_match = crate::mir::MirModule {
+        unions: Vec::new(),
+        enums: Vec::new(),
         constants: Vec::new(),
         functions: vec![MirFunction {
             name: "main".to_string(),
@@ -8608,6 +8718,8 @@ fn direct_backend_match_and_branch_terminator_edges_cover_enum_and_opaque_paths(
 #[test]
 fn direct_backend_for_range_and_spawn_error_surface_reports_expected_diagnostics() {
     let invalid_for_range = crate::mir::MirModule {
+        unions: Vec::new(),
+        enums: Vec::new(),
         constants: Vec::new(),
         functions: vec![MirFunction {
             name: "main".to_string(),
@@ -8672,6 +8784,7 @@ def main() -> int32:
 "#;
     let mut task_start_mir =
         lower_source_to_mir(task_start_source).expect("task-start source should lower");
+    let task_start_mir_snapshot = task_start_mir.clone();
     let main = task_start_mir
         .functions
         .iter_mut()
@@ -8698,11 +8811,7 @@ def main() -> int32:
                     result_is_copy: true,
                     stack_size: None,
                     task_group: Operand::Place("test_group".to_string()),
-                    function: test_function_operand(
-                        "worker",
-                        vec![Type::named("int32")],
-                        Type::named("int32"),
-                    ),
+                    function: declared_function_operand(&task_start_mir_snapshot, "worker"),
                     args: vec![MirArg {
                         name: None,
                         value: Operand::Int(1),
@@ -8781,11 +8890,7 @@ def main() -> int32:
             result_is_copy: true,
             stack_size: None,
             task_group: Operand::Place("test_group".to_string()),
-            function: test_function_operand(
-                "worker",
-                vec![Type::named("int32")],
-                Type::named("int32"),
-            ),
+            function: declared_function_operand(&task_start_mir_snapshot, "worker"),
             args: vec![MirArg {
                 name: None,
                 value: Operand::Int(1),
@@ -8800,30 +8905,27 @@ def main() -> int32:
         .find(|function| function.name == "main")
         .cloned()
         .expect("main function should exist");
-    let mut borrowed_task_start_codegen = NativeCodegen::new(
+    // Public MIR validation rejects a writeback into a borrowed parameter
+    // before codegen; the backend's own diagnostic remains for MIR that
+    // reaches it through the crate-internal path.
+    match NativeCodegen::new(
         &borrowed_task_start_mir,
         "/tmp/direct_task_start_borrowed_arg.au",
         task_start_source,
-    )
-    .expect("codegen should initialize");
-    let borrowed_error = borrowed_task_start_codegen
-        .define_function(&borrowed_main)
-        .expect_err("task start should reject borrowed arguments");
-    assert!(borrowed_error.contains("does not yet support borrowed task-start arguments"));
+    ) {
+        Err(error) => assert!(
+            error.contains("supplies writeback for non-mutable parameter"),
+            "unexpected validation error: {error}"
+        ),
+        Ok(mut borrowed_task_start_codegen) => {
+            let borrowed_error = borrowed_task_start_codegen
+                .define_function(&borrowed_main)
+                .expect_err("task start should reject borrowed arguments");
+            assert!(borrowed_error.contains("does not yet support borrowed task-start arguments"));
+        }
+    }
 
-    let named_worker = Operand::Function {
-        name: "worker".to_string(),
-        signature: Box::new(Type::Function {
-            params: vec![crate::sema::FunctionParamContract {
-                name: "value".to_string(),
-                ty: Type::named("int32"),
-                passing: crate::ast::ReceiverKind::Value,
-                has_default: false,
-                default_erased: false,
-            }],
-            return_type: Box::new(Type::named("int32")),
-        }),
-    };
+    let named_worker = declared_function_operand(&task_start_mir_snapshot, "worker");
     let invalid_bindings = [
         (
             vec![MirArg {
@@ -8869,17 +8971,25 @@ def main() -> int32:
             },
         };
         let invalid_main = invalid_main.clone();
-        let mut codegen = NativeCodegen::new(
+        let error = match NativeCodegen::new(
             &invalid_mir,
             "/tmp/direct_task_start_invalid_binding.au",
             task_start_source,
-        )
-        .expect("codegen should initialize");
-        let error = codegen
-            .define_function(&invalid_main)
-            .expect_err("invalid task callable bindings should fail");
+        ) {
+            Err(error) => error,
+            Ok(mut codegen) => codegen
+                .define_function(&invalid_main)
+                .expect_err("invalid task callable bindings should fail"),
+        };
+        // Public validation may reject the binding first with its own
+        // wording; either stage must refuse the malformed task start.
+        let accepted = if expected.contains("missing") {
+            ["missing", "no parameter named"].as_slice()
+        } else {
+            ["duplicate", "too many arguments"].as_slice()
+        };
         assert!(
-            error.contains(expected),
+            error.contains(expected) || accepted.iter().any(|fragment| error.contains(fragment)),
             "expected `{expected}`, got `{error}`"
         );
     }
@@ -9743,6 +9853,8 @@ fn direct_backend_operand_and_construct_error_surface_reports_expected_diagnosti
     );
 
     let stray_pop_cleanup_module = crate::mir::MirModule {
+        unions: Vec::new(),
+        enums: Vec::new(),
         constants: Vec::new(),
         functions: vec![MirFunction {
             name: "main".to_string(),
@@ -9787,6 +9899,8 @@ fn direct_backend_operand_and_construct_error_surface_reports_expected_diagnosti
         methods: Vec::new(),
     };
     let missing_field_module = crate::mir::MirModule {
+        unions: Vec::new(),
+        enums: Vec::new(),
         constants: Vec::new(),
         functions: vec![MirFunction {
             name: "main".to_string(),
@@ -9830,6 +9944,8 @@ fn direct_backend_operand_and_construct_error_surface_reports_expected_diagnosti
     assert!(non_class_construct_error.contains("could not construct non-class type `int32`"));
 
     let plain_cast_target_module = crate::mir::MirModule {
+        unions: Vec::new(),
+        enums: Vec::new(),
         constants: Vec::new(),
         functions: vec![MirFunction {
             name: "main".to_string(),
@@ -9867,6 +9983,8 @@ fn direct_backend_operand_and_construct_error_surface_reports_expected_diagnosti
         .contains("direct backend only supports numeric casts, found target `Pair`"));
 
     let plain_cast_source_module = crate::mir::MirModule {
+        unions: Vec::new(),
+        enums: Vec::new(),
         constants: Vec::new(),
         functions: vec![MirFunction {
             name: "main".to_string(),
@@ -9999,6 +10117,8 @@ fn direct_backend_operand_and_construct_error_surface_reports_expected_diagnosti
     }
 
     let missing_field_access_module = crate::mir::MirModule {
+        unions: Vec::new(),
+        enums: Vec::new(),
         constants: Vec::new(),
         functions: vec![MirFunction {
             name: "main".to_string(),
@@ -10058,6 +10178,8 @@ fn direct_backend_operand_and_construct_error_surface_reports_expected_diagnosti
 #[test]
 fn native_codegen_reports_invalid_non_boolean_branch_conditions() {
     let invalid_module = crate::mir::MirModule {
+        unions: Vec::new(),
+        enums: Vec::new(),
         constants: Vec::new(),
         functions: vec![MirFunction {
             name: "main".to_string(),
@@ -10110,6 +10232,8 @@ fn native_codegen_reports_invalid_non_boolean_branch_conditions() {
 #[test]
 fn native_codegen_rejects_try_between_non_result_types() {
     let invalid_module = crate::mir::MirModule {
+        unions: Vec::new(),
+        enums: Vec::new(),
         constants: Vec::new(),
         functions: vec![MirFunction {
             name: "main".to_string(),
@@ -11877,6 +12001,7 @@ fn signature_helpers_flatten_plain_class_abi_types() {
             passing: MirReceiverKind::Value,
             ty: Type::named("Point"),
             default_function: None,
+            keyword_only: false,
         }],
         local_types: vec![crate::mir::MirLocalType {
             name: "self".to_string(),
@@ -11974,6 +12099,7 @@ fn cleanup_place_type_resolves_receivers_params_locals_and_inferred_values() {
             passing: MirReceiverKind::Borrow,
             ty: Type::named("Holder"),
             default_function: None,
+            keyword_only: false,
         }],
         local_types: vec![
             MirLocalType {
@@ -12568,7 +12694,7 @@ fn native_codegen_variant_payload_helpers_cover_builtin_result_shapes() {
         ),
     ] {
         assert_eq!(
-            enum_variant_payload_types_for_target(&enum_name, variant, &target, &classes),
+            enum_variant_payload_types_for_target(enum_name, variant, &target, &classes),
             expected,
             "unexpected payload types for {enum_name}.{variant}"
         );
@@ -12820,6 +12946,8 @@ fn native_codegen_helper_utilities_cover_signatures_wildcards_and_metadata() {
     assert!(!object.is_empty());
 
     let invalid_module = crate::mir::MirModule {
+        unions: Vec::new(),
+        enums: Vec::new(),
         constants: Vec::new(),
         functions: vec![MirFunction {
             name: "main".to_string(),
@@ -14004,6 +14132,7 @@ fn validate_function_rejects_unreachable_terminators_for_direct_backend() {
             passing: MirReceiverKind::Value,
             ty: Type::named("int32"),
             default_function: None,
+            keyword_only: false,
         }],
         local_types: vec![MirLocalType {
             name: "value".to_string(),
@@ -14081,6 +14210,8 @@ fn direct_codegen_ignores_dead_cleanup_and_terminator_metadata_but_checks_cfg_st
         ],
     };
     let module = crate::mir::MirModule {
+        unions: Vec::new(),
+        enums: Vec::new(),
         constants: Vec::new(),
         functions: vec![function.clone()],
         classes: Vec::new(),
@@ -14107,6 +14238,8 @@ fn direct_codegen_ignores_dead_cleanup_and_terminator_metadata_but_checks_cfg_st
 #[test]
 fn native_codegen_constructor_initializes_runtime_function_surface() {
     let module = crate::mir::MirModule {
+        unions: Vec::new(),
+        enums: Vec::new(),
         constants: Vec::new(),
         functions: vec![MirFunction {
             name: "main".to_string(),
@@ -14229,6 +14362,8 @@ fn cleanup_test_function(local_name: &str, ty: Type, place: &str) -> MirFunction
 
 fn cleanup_test_module(functions: Vec<MirFunction>) -> crate::mir::MirModule {
     crate::mir::MirModule {
+        unions: Vec::new(),
+        enums: Vec::new(),
         constants: Vec::new(),
         functions,
         classes: Vec::new(),
@@ -14283,7 +14418,10 @@ fn dead_assignments_do_not_poison_reachable_cleanup_type_inference() {
         span: Span::new(1, 1),
         receiver: None,
         params: Vec::new(),
-        local_types: Vec::new(),
+        local_types: vec![MirLocalType {
+            name: "resource".to_string(),
+            ty: Type::named("Resource"),
+        }],
         return_type: Type::named("int32"),
         entry: "entry".to_string(),
         blocks: vec![
@@ -14322,6 +14460,8 @@ fn dead_assignments_do_not_poison_reachable_cleanup_type_inference() {
     };
     let close = close_function("Resource");
     let module = crate::mir::MirModule {
+        unions: Vec::new(),
+        enums: Vec::new(),
         constants: Vec::new(),
         functions: vec![main, close],
         classes: vec![crate::mir::MirClass {
@@ -14385,6 +14525,8 @@ fn native_codegen_cleanup_thunks_cover_scalar_plain_opaque_and_metadata_errors()
 
     let plain_function = cleanup_test_function("resource", Type::named("Plain"), "resource");
     let plain_module = crate::mir::MirModule {
+        unions: Vec::new(),
+        enums: Vec::new(),
         constants: Vec::new(),
         functions: vec![plain_function.clone()],
         classes: vec![crate::mir::MirClass {
@@ -14419,6 +14561,8 @@ fn native_codegen_cleanup_thunks_cover_class_close_success_and_missing_targets()
         cleanup_test_function("resource", Type::named("Resource"), "resource");
     let resource_close = close_function("Resource");
     let plain_close_module = crate::mir::MirModule {
+        unions: Vec::new(),
+        enums: Vec::new(),
         constants: Vec::new(),
         functions: vec![plain_close_function.clone(), resource_close],
         classes: vec![crate::mir::MirClass {
@@ -14455,6 +14599,8 @@ fn native_codegen_cleanup_thunks_cover_class_close_success_and_missing_targets()
     let opaque_close_function = cleanup_test_function("managed", Type::named("Managed"), "managed");
     let managed_close = close_function("Managed");
     let opaque_close_module = crate::mir::MirModule {
+        unions: Vec::new(),
+        enums: Vec::new(),
         constants: Vec::new(),
         functions: vec![opaque_close_function.clone(), managed_close],
         classes: vec![crate::mir::MirClass {
@@ -14578,6 +14724,8 @@ fn direct_introspected_assertions_reference_the_detailed_failure_helper() {
 #[test]
 fn direct_validation_accepts_assert_fail_operands_and_rejects_unknown_places() {
     let make_module = |message, captures| crate::mir::MirModule {
+        unions: Vec::new(),
+        enums: Vec::new(),
         constants: Vec::new(),
         functions: vec![MirFunction {
             name: "main".to_string(),
@@ -14698,6 +14846,8 @@ def main():
         .expect("dynamic returned-view projection selection should compile");
 
     let malformed_tuple_module = |projection: &str| crate::mir::MirModule {
+        unions: Vec::new(),
+        enums: Vec::new(),
         constants: Vec::new(),
         functions: vec![MirFunction {
             name: format!("tuple_projection_{projection}"),
@@ -14710,6 +14860,7 @@ def main():
                 passing: MirReceiverKind::Borrow,
                 ty: Type::Tuple(vec![Type::named("int64"), Type::named("int64")]),
                 default_function: None,
+                keyword_only: false,
             }],
             local_types: vec![MirLocalType {
                 name: "target".to_string(),

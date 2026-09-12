@@ -1,0 +1,7 @@
+error[AU2012]: cyclic type alias: Outer -> Inner -> Outer
+ --> crates/aura-compiler/tests/fixtures/check-fail/alias_cycle_nested.au:2:24
+  |
+2 | type Inner = dict[str, Outer]
+  |                        ^
+  = related crates/aura-compiler/tests/fixtures/check-fail/alias_cycle_nested.au:1:1: alias `Outer` declared here
+  = related crates/aura-compiler/tests/fixtures/check-fail/alias_cycle_nested.au:2:1: alias `Inner` declared here

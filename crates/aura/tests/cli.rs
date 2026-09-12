@@ -235,6 +235,7 @@ fn hold_native_runtime_build_locks(target_dir: &std::path::Path) -> Vec<fs::File
                 .read(true)
                 .write(true)
                 .create(true)
+                .truncate(true)
                 .open(&lock_path)
                 .expect("native runtime lock should be openable");
             fs::set_permissions(&lock_path, fs::Permissions::from_mode(0o600))
@@ -751,12 +752,14 @@ fn adr0038_cfg_view_module(reverse_branch_storage: bool, include_dead_loan: bool
                 passing: MirReceiverKind::BorrowMut,
                 ty: pair_type.clone(),
                 default_function: None,
+                keyword_only: false,
             },
             MirParam {
                 name: "choose_left".to_string(),
                 passing: MirReceiverKind::Borrow,
                 ty: Type::named("bool"),
                 default_function: None,
+                keyword_only: false,
             },
         ],
         local_types: vec![
@@ -911,6 +914,8 @@ fn adr0038_cfg_view_module(reverse_branch_storage: bool, include_dead_loan: bool
     };
 
     MirModule {
+        unions: Vec::new(),
+        enums: Vec::new(),
         functions: vec![main, update],
         classes: vec![MirClass {
             name: "Pair".to_string(),
@@ -943,6 +948,7 @@ fn adr0038_mutable_closure_type() -> Type {
             ty: Type::named("int64"),
             mode: ClosureCaptureMode::MutableView,
             span: Span::new(1, 1),
+            mutated: false,
         }]),
         call_kind: ClosureCallKind::MutableRepeatable,
     }
@@ -961,6 +967,7 @@ fn adr0038_set_capture_function() -> MirFunction {
             passing: MirReceiverKind::BorrowMut,
             ty: Type::named("int64"),
             default_function: None,
+            keyword_only: false,
         }],
         local_types: vec![MirLocalType {
             name: "captured".to_string(),
@@ -1037,8 +1044,10 @@ fn adr0038_closure_branch_module(flag: bool, reverse_branch_storage: bool) -> Mi
                         passing: MirReceiverKind::BorrowMut,
                         source_place: Some(source.to_string()),
                         resolve_source_at_capture: false,
+                        mutated: false,
                     }],
                     consuming: false,
+                    mutable: true,
                 },
             },
             Instruction::EndLoan {
@@ -1127,6 +1136,8 @@ fn adr0038_closure_branch_module(flag: bool, reverse_branch_storage: bool) -> Mi
     });
     let main = adr0038_closure_main(blocks, locals);
     MirModule {
+        unions: Vec::new(),
+        enums: Vec::new(),
         functions: vec![main, adr0038_set_capture_function()],
         classes: Vec::new(),
         trait_impls: Vec::new(),
@@ -1149,12 +1160,14 @@ fn adr0038_choose_pair_field_function() -> MirFunction {
                 passing: MirReceiverKind::BorrowMut,
                 ty: Type::named("Pair"),
                 default_function: None,
+                keyword_only: false,
             },
             MirParam {
                 name: "left".to_string(),
                 passing: MirReceiverKind::Borrow,
                 ty: Type::named("bool"),
                 default_function: None,
+                keyword_only: false,
             },
         ],
         local_types: vec![
@@ -1262,8 +1275,10 @@ fn adr0038_selector_reuse_module() -> MirModule {
                     passing: MirReceiverKind::BorrowMut,
                     source_place: Some("selected".to_string()),
                     resolve_source_at_capture: true,
+                    mutated: false,
                 }],
                 consuming: false,
+                mutable: true,
             },
         },
         Instruction::EndLoan {
@@ -1329,6 +1344,8 @@ fn adr0038_selector_reuse_module() -> MirModule {
         locals,
     );
     MirModule {
+        unions: Vec::new(),
+        enums: Vec::new(),
         functions: vec![
             main,
             adr0038_choose_pair_field_function(),
@@ -11554,7 +11571,8 @@ fn module_qualified_spawn_target_runs_across_commands() {
         String::from_utf8_lossy(&check.stderr)
     );
 
-    for command in ["run"] {
+    {
+        let command = "run";
         let output = Command::new(aura_bin())
             .arg(command)
             .arg(&source_path)

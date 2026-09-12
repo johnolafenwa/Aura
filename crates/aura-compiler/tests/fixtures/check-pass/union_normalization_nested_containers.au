@@ -1,0 +1,2 @@
+def accept(values: list[str | None | str], mapping: dict[str, int64 | None]):
+    pass

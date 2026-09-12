@@ -240,6 +240,7 @@ fn type_ref_json_preserves_named_tuple_and_function_shapes() {
         serde_json::to_value(&function).expect("function type reference should serialize"),
         serde_json::json!({
             "params": [{
+                "name": null, "keyword_only": false, "has_default": false,
                 "mode": "BorrowMut",
                 "ty": {
                     "name": "str",
@@ -249,6 +250,7 @@ fn type_ref_json_preserves_named_tuple_and_function_shapes() {
                 },
                 "span": {"line": 3, "column": 5}
             }, {
+                "name": null, "keyword_only": false, "has_default": false,
                 "mode": "Own",
                 "ty": {
                     "name": "int32",
@@ -264,6 +266,7 @@ fn type_ref_json_preserves_named_tuple_and_function_shapes() {
                 "indirect": false,
                 "span": {"line": 3, "column": 5}
             },
+            "view_return": null,
             "indirect": false,
             "span": {"line": 3, "column": 5}
         })
@@ -340,6 +343,7 @@ fn function_type_pretty_json_preserves_the_public_wire_shape() {
             .expect("the public function-type JSON should round trip as a JSON value"),
         serde_json::json!({
             "params": [{
+                "name": null, "keyword_only": false, "has_default": false,
                 "mode": "Own",
                 "ty": {
                     "elements": [{
@@ -359,6 +363,7 @@ fn function_type_pretty_json_preserves_the_public_wire_shape() {
                 "indirect": false,
                 "span": {"line": 8, "column": 25}
             },
+            "view_return": null,
             "indirect": false,
             "span": {"line": 8, "column": 4}
         })
@@ -648,4 +653,17 @@ fn conditional_expression_json_shape_names_all_three_operands() {
             "span": {"line": 8, "column": 9}
         })
     );
+}
+
+#[test]
+fn type_alias_items_report_their_alias_name() {
+    let alias = Item::TypeAlias(super::TypeAliasDecl {
+        public: false,
+        name: "Pair".to_string(),
+        type_params: vec![],
+        type_param_bounds: BTreeMap::new(),
+        target: dummy_type("int32"),
+        span: Span::new(1, 1),
+    });
+    assert_eq!(alias.name(), "Pair");
 }

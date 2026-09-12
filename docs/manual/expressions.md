@@ -192,7 +192,11 @@ The form has lower precedence than `or` and associates to the right.
 `a if first else b if second else c` means
 `a if first else (b if second else c)`.
 
-Both arms are checked even when the condition is a literal. Ownership state is
+A condition that tests a union place with `is None` or `is not None`
+[narrows](/manual/enums-and-match#conditional-narrowing) that place in the arm
+the test selects, so `value + 1 if value is not None else 0` reads `value` as
+its non-`None` member. Both arms are checked even when the condition is a
+literal. Ownership state is
 checked independently for each arm and merged conservatively afterward. A
 non-copy value moved by either arm is therefore unavailable after the
 conditional expression. The surrounding use determines whether an arm is
@@ -244,9 +248,36 @@ Equality and inequality have one contextual `Option` rule: when either operand
 has static type `Option[T]`, a bare `None` on the other side denotes
 `Option.None` of that same specialization. The rule is symmetric. Unit
 `None == None` is `true` and unit `None != None` is `false`; a qualified
-`Option.None` with no context for its type argument is rejected. Aura rejects
-Python identity tests such as `value is None`; use `value == None`,
-`value != None`, or `match`.
+`Option.None` with no context for its type argument is rejected.
+
+Union equality follows the ratified member rule. Two values of the same
+normalized union are equal exactly when their active members agree and the
+payloads are equal; equality is available only when every member defines
+it, so a union with a callable, `random.Rng`, opaque handle, or `Array`
+member reports `AU2008` whatever its current member. When exactly one operand
+has a union type, the other operand is injected for the comparison only under
+the [union injection](/manual/types#scalar-types) rules: a typed member value
+selects its member, a literal that fits several members is `AU2011`, and a
+nonmember or a different normalized union is `AU2003`. The rule is symmetric
+(`value == 1` and `1 == value`), evaluates each operand once, and neither moves
+nor clones a payload. Comparing with `None` works when the union has a `None`
+member and establishes no narrowing fact. Where a hashing operation is
+available, a union hashes as its active member, so a member value and the
+union holding it hash alike and may share a dictionary or set slot; different
+members compare unequal but may collide. Ordering and arithmetic are never
+available on a union, even when every member supports them (`AU2003`).
+
+`value is None` and `value is not None` are the two `None` tests. They sit at
+the comparison level, produce `bool`, and evaluate their operand exactly once
+as its declared type. `is` is contextual to these complete forms only:
+`None is value`, other identity comparisons, `isinstance`, and truthiness
+unwrapping are not accepted, and a `None` test cannot be chained with a
+comparison operator. A test on a place whose type has no `None` member is a
+constant test that still evaluates the operand. When the operand is a stable
+place of a union type, the test also establishes a narrowing fact for the
+branches it selects; see
+[conditional narrowing](/manual/enums-and-match#conditional-narrowing).
+Equality with `None` compares values and never narrows.
 
 Arithmetic and ordering may resolve through the corresponding operator trait.
 For non-numeric user types, `/` requests `Div.div`; `//` requests
@@ -801,7 +832,9 @@ positional argument list. Storage preserves each parameter's bare shared,
 `mut`, or `own` ABI capability. Contextually typed
 `lambda parameters: expression` values use the same callable contract and may
 capture owned outer locals by value. See [Closures](/manual/closures).
-Instance and associated method values and trait-object interactions remain
+`receiver.method` outside call position is a bound method closure and
+`Class.method` is an associated function value; see
+[Closures](/manual/closures#bound-methods). Trait-object interactions remain
 unavailable.
 
 ## Fixed-Width Numeric Example
@@ -841,7 +874,7 @@ one value per line.
 
 ## Forms Not Implemented
 
-Aura 0.3 expressions do not include generator expressions, method values,
+Aura 0.3 expressions do not include generator expressions,
 assignment expressions, call-site capability annotations, non-numeric casts, or
 ordinary trailing commas. Lambdas are expression-bodied and contextually
 typed; they do not add statement-bodied or implicitly reference-capturing
@@ -933,7 +966,11 @@ member. `AU2002` means a type, constructor-payload, match-result, or index-type
 mismatch. `AU2003` means an unsupported unary, binary, compound, membership, or
 cast operator. `AU2004` means call or constructor argument binding failed.
 `AU2005` means an unsupported syntax or expression feature,
-including the exact generator-expression guidance recorded above. `AU2999`
+including the exact generator-expression guidance recorded above. `AU2010`
+means a value is not a direct member of its expected union, and `AU2011`
+means a literal that more than one member could accept. `AU2014` means a
+member use through a place whose `None`-test narrowing was invalidated by an
+assignment, mutable match, or call with mutable access. `AU2999`
 means an expression rejection without a narrower compile-time code. `AU3001`
 means use of a moved value; `AU3002` means a borrow conflict, including a later
 mutable borrow or consumption overlapping a retained non-copy binary operand,
@@ -989,4 +1026,5 @@ call-site capability modifiers are unavailable. Eager owned list, set, and dicti
 comprehensions are implemented under Accepted ADR-0039.
 Integer base spellings, fixed-width bitwise operations, and shifts are
 Accepted under ADR-0047. Power, `round`, and `divmod` are Accepted under
-ADR-0048.
+ADR-0048. Contextual `is None` and `is not None` tests with short-circuit
+narrowing are implemented under the Batch 1 phase 1 design checkpoint.

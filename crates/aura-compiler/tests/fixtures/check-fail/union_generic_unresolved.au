@@ -1,0 +1,5 @@
+def show[V](value: V | None) -> bool:
+    return value is not None
+
+def main():
+    print(show(None))

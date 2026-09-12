@@ -1,0 +1,14 @@
+type Reader = Callable[def() -> int64]
+
+def make_reader(base: int64) -> Reader:
+    offset = base + 1
+    return Reader(lambda: offset)
+
+def read_twice(reader: Reader) -> int64:
+    return reader() + reader()
+
+def main():
+    reader = make_reader(1)
+    print(reader())
+    print(reader())
+    print(read_twice(reader))

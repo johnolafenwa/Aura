@@ -1,0 +1,6 @@
+type Choice = int64 | str
+def main():
+    value: Choice = 1
+    match value:
+        case Choice as item:
+            print(item)

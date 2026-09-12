@@ -1,0 +1,4 @@
+def main():
+    callback: def() -> (int64 | str) = lambda: 42
+    value = callback()
+    print(42)

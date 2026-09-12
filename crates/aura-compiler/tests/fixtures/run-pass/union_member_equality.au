@@ -1,0 +1,27 @@
+def main():
+    left: int64 | str | None = 1
+    right: int64 | str | None = 1
+    print(left == right)
+    print(left == 1)
+    print(1 == left)
+    print(left != "1")
+    print("1" == left)
+    print(left == None)
+    other: int64 | str | None = None
+    print(other == None)
+    print(None == other)
+    print(other != left)
+    text: int64 | str | None = "1"
+    print(text == "1")
+    print(text != left)
+    mut counts: dict[int64 | str, int64] = {}
+    counts[1] = 10
+    counts["one"] = 11
+    counts[1] = 12
+    print(len(counts))
+    print(counts[1])
+    print(counts["one"])
+    keys: set[int64 | None] = {1, None, 1}
+    print(len(keys))
+    print(None in keys)
+    print(2 in keys)

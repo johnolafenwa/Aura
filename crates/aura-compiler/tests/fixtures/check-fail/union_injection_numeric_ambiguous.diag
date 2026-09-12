@@ -1,0 +1,5 @@
+error[AU2011]: literal matches multiple members of 'float64 | int64': float64, int64; annotate one member before injection
+ --> crates/aura-compiler/tests/fixtures/check-fail/union_injection_numeric_ambiguous.au:2:30
+  |
+2 |     value: int64 | float64 = 1
+  |                              ^

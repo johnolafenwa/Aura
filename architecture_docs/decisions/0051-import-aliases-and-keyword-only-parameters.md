@@ -207,3 +207,17 @@ Batch S1 accepts import aliases for Aura 0.3 and defers keyword-only
 parameters until callable identity can preserve their binding restriction.
 Parser, resolver, packages, initialization, both backends, analysis, reference,
 examples, and tooling land together for the implemented alias surface.
+
+## 2026-09-08 — Batch 1 detailed design amendment
+
+Accepted under Q19 in the
+[ratified checkpoint](../16-batch-1-design-checkpoint.md#ratification-record).
+
+The keyword-only * boundary is accepted for Batch 1 declarations and
+contextually typed lambdas. Complete stored callable contracts preserve names,
+default availability and keyword-only restrictions. The declaration-only
+rejection below describes the preceding compiler surface; Q19 is the new
+implementation target. Import alias behavior remains unchanged.
+
+Implementation is in Batch 1 phase 1; this dated amendment extends the
+recorded baseline without claiming the feature is already delivered.

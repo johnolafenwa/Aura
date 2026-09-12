@@ -1,0 +1,5 @@
+error[AU2010]: invalid or incomplete union member `Named`
+ --> crates/aura-compiler/tests/fixtures/check-fail/union_member_trait.au:3:15
+  |
+3 | type Broken = Named | None
+  |               ^

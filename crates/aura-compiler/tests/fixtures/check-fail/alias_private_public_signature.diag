@@ -1,0 +1,5 @@
+error[AU2005]: public signature uses alias `Hidden` exposing private type `Secret`
+ --> crates/aura-compiler/tests/fixtures/check-fail/alias_private_public_signature.au:4:26
+  |
+4 | public def accept(value: Hidden):
+  |                          ^

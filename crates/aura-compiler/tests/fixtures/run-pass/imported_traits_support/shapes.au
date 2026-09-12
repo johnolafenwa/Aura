@@ -1,0 +1,30 @@
+public trait Named:
+    def name(self) -> str
+
+public trait Shape:
+    def area(self) -> int64
+    def doubled(self) -> int64:
+        return self.area() * 2
+
+public trait Add[Rhs, Out]:
+    def add(self, rhs: Rhs) -> Out
+
+public class Square:
+    public side: int64
+
+impl Named for Square:
+    def name(self) -> str:
+        return "square"
+
+impl Shape for Square:
+    def area(self) -> int64:
+        return self.side * self.side
+
+impl Add[Square, Square] for Square:
+    def add(self, rhs: Square) -> Square:
+        return Square(side=self.side + rhs.side)
+
+public def largest[T: Shape](left: T, right: T) -> int64:
+    if left.area() >= right.area():
+        return left.area()
+    return right.area()

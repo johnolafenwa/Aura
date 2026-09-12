@@ -1,0 +1,7 @@
+type Reader = Callable[def() -> int64]
+type Work = TaskCallable[def() -> int64]
+
+def main():
+    offset = 1
+    reader = Reader(lambda: offset)
+    work = Work(lambda [own reader]: reader())

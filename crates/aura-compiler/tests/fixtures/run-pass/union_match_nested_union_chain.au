@@ -1,0 +1,22 @@
+enum Inner:
+    Data(int64 | str)
+def main():
+    mut value: Inner | None = Inner.Data(41)
+    match mut value:
+        case Inner as inner:
+            match mut inner:
+                case Inner.Data(int64 as number):
+                    number += 1
+                case Inner.Data(str as text):
+                    text = "changed"
+        case None:
+            print("missing")
+    match value:
+        case Inner as inner:
+            match inner:
+                case Inner.Data(int64 as number):
+                    print(number)
+                case Inner.Data(str as text):
+                    print(text)
+        case None:
+            print("missing")

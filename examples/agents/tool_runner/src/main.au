@@ -49,6 +49,9 @@ class ToolResult:
                 return Result.Err(error)
 
 
+type Tool = Callable[def(value: int64) -> Result[ToolResult, ToolError]]
+
+
 class Session:
     name: str
 
@@ -56,18 +59,28 @@ class Session:
         print(f"closed {self.name}")
 
 
-def double(value: int64) -> Result[ToolResult, ToolError]:
-    return Result.Ok(ToolResult(tool="double", value=value * 2))
+def scaled(value: int64, factor: int64) -> Result[ToolResult, ToolError]:
+    return Result.Ok(ToolResult(tool="double", value=value * factor))
 
 
-def increment(value: int64) -> Result[ToolResult, ToolError]:
-    return Result.Ok(ToolResult(tool="increment", value=value + 1))
+def make_double(factor: int64) -> Tool:
+    owned_factor = factor
+    return Tool(lambda value: scaled(value, owned_factor))
 
 
-def dispatch(request: ToolRequest, registry: dict[str, def(int64) -> Result[ToolResult, ToolError]]) -> Result[ToolResult, ToolError]:
-    match registry.get(request.tool):
+class Increment:
+    delta: int64
+
+    def run(self, value: int64) -> Result[ToolResult, ToolError]:
+        return Result.Ok(ToolResult(tool="increment", value=value + self.delta))
+
+
+def dispatch(request: ToolRequest, registry: mut dict[str, Tool]) -> Result[ToolResult, ToolError]:
+    match own registry.remove(request.tool):
         case Option.Some(tool):
-            return tool(request.value)
+            outcome = tool(value=request.value)
+            registry[request.tool.clone()] = tool
+            return outcome
         case Option.None:
             return Result.Err(ToolError.UnknownTool(request.tool.clone()))
 
@@ -88,7 +101,7 @@ def stream_events(events: Queue[str]) -> None:
 
 
 def run_tools() -> Result[int32, ToolError]:
-    registry: dict[str, def(int64) -> Result[ToolResult, ToolError]] = {"double": double, "increment": increment}
+    mut registry: dict[str, Tool] = {"double": make_double(2), "increment": Tool(Increment(delta=1).run)}
     request = try ToolRequest.from_json(json.Value.Object({"tool": json.Value.String("double"), "value": json.Value.Int(21)}))
     print(f"request {json.dumps(request.to_json())}")
     result = try dispatch(request, registry)
@@ -121,7 +134,7 @@ def run_tools() -> Result[int32, ToolError]:
 
 
 def main() -> int32:
-    print("tool-runner version 0")
+    print("tool-runner version 1")
     with session = Session(name="tool-runner"):
         match run_tools():
             case Result.Ok(code):

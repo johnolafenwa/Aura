@@ -1,0 +1,12 @@
+def main():
+    flag = true
+    pair = (1, "one") if flag else (2, "two")
+    print(pair[0])
+    values = [1, 2] if flag else [3, 4]
+    print(values.len())
+    unique = {1} if flag else {2}
+    print(unique.len())
+    table = {"a": 1} if flag else {"b": 2}
+    print(table.len())
+    nested = ((1, 2), [3]) if flag else ((4, 5), [6])
+    print(nested[0][1])

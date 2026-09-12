@@ -305,7 +305,9 @@ test("TextMate tokenization distinguishes returned-view contracts from calls nam
     "] from box:",
     "    return view box.values",
     "def logical(box: Box) -> view bool from box:",
-    "    return view and other"
+    "    return view and other",
+    "type Picker = Callable[def(pair: Pair) -> view str from pair]",
+    "chooser: def(pair: Pair) -> view str from pair = pick_left"
   ].join("\n");
   const tokenized = await tokenizeAura(source);
 
@@ -330,6 +332,12 @@ test("TextMate tokenization distinguishes returned-view contracts from calls nam
     scopesAt(tokenized, 11, "view").includes("keyword.declaration.view.aura"),
     false
   );
+  // Stored view contracts (C9) spell the same result inside a type
+  // position: an alias body and an annotated local.
+  assert.ok(scopesAt(tokenized, 12, "view").includes("keyword.declaration.view.aura"));
+  assert.ok(scopesAt(tokenized, 12, "from").includes("keyword.declaration.view.aura"));
+  assert.ok(scopesAt(tokenized, 13, "view").includes("keyword.declaration.view.aura"));
+  assert.ok(scopesAt(tokenized, 13, "from").includes("keyword.declaration.view.aura"));
 });
 
 test("extension highlights and snippets the maintained extern C surface", () => {

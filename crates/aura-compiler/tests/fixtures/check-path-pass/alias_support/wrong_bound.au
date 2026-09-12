@@ -1,0 +1,14 @@
+from types import Marker
+
+trait Named:
+    def name(self) -> str
+
+class Local:
+    pass
+
+impl Named for Local:
+    def name(self) -> str:
+        return "local"
+
+def accept(value: Marker[Local]):
+    pass

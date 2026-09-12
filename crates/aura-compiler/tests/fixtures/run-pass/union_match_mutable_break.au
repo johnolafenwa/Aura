@@ -1,0 +1,10 @@
+def main():
+    mut value: int64 | None = 41
+    while true:
+        match mut value:
+            case int64 as number:
+                number += 1
+                break
+            case None:
+                break
+    print(value)

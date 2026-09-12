@@ -734,11 +734,11 @@ fn direct_array_abi_uses_typed_storage_kernels_and_callback_thunks() {
 
     let signature = Type::Function {
         params: vec![FunctionParamContract {
+            keyword_only: false,
             name: "value".to_string(),
             ty: Type::named("int32"),
             passing: ReceiverKind::Value,
             has_default: false,
-            default_erased: false,
         }],
         return_type: Box::new(Type::named("int32")),
     };
@@ -1594,10 +1594,13 @@ fn direct_ffi_call_spec_round_trips_and_rejects_corruption() {
         Vec::new(),
         super::DirectFfiType::scalar(crate::ffi::FfiType::Unit),
     );
-    wrong_version[4] = 1;
+    wrong_version[4] = super::DIRECT_FFI_SPEC_VERSION + 1;
     assert_eq!(
         super::decode_direct_ffi_call_spec(&wrong_version),
-        Err("unsupported metadata version 1".to_string())
+        Err(format!(
+            "unsupported metadata version {}",
+            super::DIRECT_FFI_SPEC_VERSION + 1
+        ))
     );
 
     let mut invalid_utf8 = direct_ffi_spec(
@@ -1658,11 +1661,104 @@ fn direct_ffi_call_spec_round_trips_and_rejects_corruption() {
         result: super::DirectFfiType {
             ffi_type: crate::ffi::FfiType::I32,
             opaque_name: Some("NotAHandle".to_string()),
+            union_type: None,
         },
     });
     assert_eq!(
         super::decode_direct_ffi_call_spec(&scalar_with_handle_name),
-        Err("non-handle FFI type `int32` carries an opaque nominal name".to_string())
+        Err("non-handle FFI type `int32` carries handle or union metadata".to_string())
+    );
+
+    let scalar_with_union = super::encode_direct_ffi_call_spec(&super::DirectFfiCallSpec {
+        symbol: "x".to_string(),
+        params: Vec::new(),
+        result: super::DirectFfiType {
+            ffi_type: crate::ffi::FfiType::I32,
+            opaque_name: None,
+            union_type: Some(nullable_handle_union("Handle")),
+        },
+    });
+    assert_eq!(
+        super::decode_direct_ffi_call_spec(&scalar_with_union),
+        Err("non-handle FFI type `int32` carries handle or union metadata".to_string())
+    );
+
+    let opaque_with_union = super::encode_direct_ffi_call_spec(&super::DirectFfiCallSpec {
+        symbol: "x".to_string(),
+        params: Vec::new(),
+        result: super::DirectFfiType {
+            ffi_type: crate::ffi::FfiType::OpaqueHandle,
+            opaque_name: Some("Handle".to_string()),
+            union_type: Some(nullable_handle_union("Handle")),
+        },
+    });
+    assert_eq!(
+        super::decode_direct_ffi_call_spec(&opaque_with_union),
+        Err("non-handle FFI type `opaque handle` carries handle or union metadata".to_string())
+    );
+
+    let nullable_without_union = super::encode_direct_ffi_call_spec(&super::DirectFfiCallSpec {
+        symbol: "x".to_string(),
+        params: Vec::new(),
+        result: super::DirectFfiType {
+            ffi_type: crate::ffi::FfiType::NullableOpaqueHandle,
+            opaque_name: Some("Handle".to_string()),
+            union_type: None,
+        },
+    });
+    assert_eq!(
+        super::decode_direct_ffi_call_spec(&nullable_without_union),
+        Err("nullable-handle metadata is missing its nominal type or union".to_string())
+    );
+
+    let nullable_without_name = super::encode_direct_ffi_call_spec(&super::DirectFfiCallSpec {
+        symbol: "x".to_string(),
+        params: Vec::new(),
+        result: super::DirectFfiType {
+            ffi_type: crate::ffi::FfiType::NullableOpaqueHandle,
+            opaque_name: None,
+            union_type: Some(nullable_handle_union("Handle")),
+        },
+    });
+    assert_eq!(
+        super::decode_direct_ffi_call_spec(&nullable_without_name),
+        Err("nullable-handle metadata is missing its nominal type or union".to_string())
+    );
+
+    let nullable_with_other_union = super::encode_direct_ffi_call_spec(&super::DirectFfiCallSpec {
+        symbol: "x".to_string(),
+        params: Vec::new(),
+        result: super::DirectFfiType {
+            ffi_type: crate::ffi::FfiType::NullableOpaqueHandle,
+            opaque_name: Some("Handle".to_string()),
+            union_type: Some(nullable_handle_union("Other")),
+        },
+    });
+    assert_eq!(
+        super::decode_direct_ffi_call_spec(&nullable_with_other_union),
+        Err("nullable-handle metadata for `Handle` does not describe `Handle | None`".to_string())
+    );
+
+    let nullable_with_scalar_union =
+        super::encode_direct_ffi_call_spec(&super::DirectFfiCallSpec {
+            symbol: "x".to_string(),
+            params: Vec::new(),
+            result: super::DirectFfiType {
+                ffi_type: crate::ffi::FfiType::NullableOpaqueHandle,
+                opaque_name: Some("Handle".to_string()),
+                union_type: Some(
+                    Type::normalize_union(
+                        vec![Type::named("Handle"), Type::named("int64")],
+                        "main",
+                        &BTreeMap::new(),
+                    )
+                    .expect("`Handle | int64` normalizes"),
+                ),
+            },
+        });
+    assert_eq!(
+        super::decode_direct_ffi_call_spec(&nullable_with_scalar_union),
+        Err("nullable-handle metadata for `Handle` does not describe `Handle | None`".to_string())
     );
 }
 
@@ -1687,9 +1783,12 @@ fn direct_ffi_metadata_pins_every_v0_type_code() {
         (FfiType::BytesView, 13),
         (FfiType::BytesViewMut, 14),
         (FfiType::OpaqueHandle, 15),
+        (FfiType::NullableOpaqueHandle, 16),
     ] {
         let result = if ffi_type == FfiType::OpaqueHandle {
             super::DirectFfiType::opaque("Handle")
+        } else if ffi_type == FfiType::NullableOpaqueHandle {
+            super::DirectFfiType::nullable("Handle", nullable_handle_union("Handle"))
         } else {
             super::DirectFfiType::scalar(ffi_type)
         };
@@ -1707,6 +1806,17 @@ fn direct_ffi_metadata_pins_every_v0_type_code() {
             "FFI v0 type-code round trip for {ffi_type}"
         );
     }
+}
+
+/// The one nullable FFI result shape, `Handle | None`, as semantic analysis
+/// normalizes it.
+fn nullable_handle_union(handle: &str) -> Type {
+    Type::normalize_union(
+        vec![Type::named(handle), Type::Unit],
+        "main",
+        &BTreeMap::new(),
+    )
+    .expect("`Handle | None` normalizes")
 }
 
 #[test]
@@ -1931,6 +2041,114 @@ fn direct_ffi_value_conversion_reports_range_type_and_nominal_mismatches() {
             &super::DirectFfiType::scalar(FfiType::Bool),
         ),
         Err("FFI engine returned a value incompatible with declared result `bool`".to_string())
+    );
+}
+
+#[test]
+fn ffi_nullable_handle_direct_conversion_builds_none_or_the_owned_handle() {
+    use crate::ffi::{FfiType, FfiValue, OpaqueHandle};
+
+    let nullable = super::DirectFfiType::nullable("Handle", nullable_handle_union("Handle"));
+    let Some(Type::Union(union)) = nullable.union_type.clone() else {
+        panic!("nullable metadata must describe a union");
+    };
+    let handle_index = union
+        .members
+        .iter()
+        .position(|member| *member == Type::named("Handle"))
+        .expect("the handle member");
+    let none_index = union
+        .members
+        .iter()
+        .position(|member| *member == Type::Unit)
+        .expect("the `None` member");
+    let pointer = std::ptr::without_provenance_mut::<std::ffi::c_void>(1);
+    let raw_handle =
+        || OpaqueHandle::new(pointer).expect("the non-null test address is an identity");
+
+    let present = super::direct_ffi_to_value(FfiValue::OpaqueHandle(raw_handle()), &nullable)
+        .expect("a non-null result constructs the owned handle member");
+    match &present {
+        Value::Union(value) => {
+            assert_eq!(value.union_type, Type::Union(union.clone()));
+            assert_eq!(value.member_index, handle_index);
+            match &value.payload {
+                Value::FfiHandle(handle) => {
+                    assert_eq!(handle.type_name(), "Handle");
+                    assert_eq!(handle.as_ptr(), pointer);
+                }
+                other => panic!("expected an owned opaque handle payload, found {other:?}"),
+            }
+        }
+        other => panic!("expected a union value, found {other:?}"),
+    }
+
+    let absent = super::direct_ffi_to_value(FfiValue::Unit, &nullable)
+        .expect("a null result constructs `None`");
+    match &absent {
+        Value::Union(value) => {
+            assert_eq!(value.union_type, Type::Union(union.clone()));
+            assert_eq!(value.member_index, none_index);
+            assert_eq!(value.payload, Value::Unit);
+        }
+        other => panic!("expected a union value, found {other:?}"),
+    }
+
+    assert_eq!(
+        super::direct_ffi_to_value(FfiValue::I32(1), &nullable),
+        Err(
+            "FFI engine returned a value incompatible with declared result `nullable opaque handle`"
+                .to_string()
+        )
+    );
+    let without_union = super::DirectFfiType {
+        ffi_type: FfiType::NullableOpaqueHandle,
+        opaque_name: Some("Handle".to_string()),
+        union_type: None,
+    };
+    assert_eq!(
+        super::direct_ffi_to_value(FfiValue::Unit, &without_union),
+        Err("nullable-handle FFI metadata is missing its union".to_string())
+    );
+    let without_name = super::DirectFfiType {
+        ffi_type: FfiType::NullableOpaqueHandle,
+        opaque_name: None,
+        union_type: Some(nullable_handle_union("Handle")),
+    };
+    assert_eq!(
+        super::direct_ffi_to_value(FfiValue::OpaqueHandle(raw_handle()), &without_name),
+        Err("nullable-handle FFI metadata is missing its nominal type".to_string())
+    );
+    let other_union = super::DirectFfiType {
+        ffi_type: FfiType::NullableOpaqueHandle,
+        opaque_name: Some("Handle".to_string()),
+        union_type: Some(nullable_handle_union("Other")),
+    };
+    assert_eq!(
+        super::direct_ffi_to_value(FfiValue::OpaqueHandle(raw_handle()), &other_union),
+        Err(
+            "FFI engine returned a value incompatible with declared result `nullable opaque handle`"
+                .to_string()
+        )
+    );
+    let scalar_union = super::DirectFfiType {
+        ffi_type: FfiType::NullableOpaqueHandle,
+        opaque_name: Some("Handle".to_string()),
+        union_type: Some(
+            Type::normalize_union(
+                vec![Type::named("Handle"), Type::named("int64")],
+                "main",
+                &BTreeMap::new(),
+            )
+            .expect("`Handle | int64` normalizes"),
+        ),
+    };
+    assert_eq!(
+        super::direct_ffi_to_value(FfiValue::Unit, &scalar_union),
+        Err(
+            "FFI engine returned a value incompatible with declared result `nullable opaque handle`"
+                .to_string()
+        )
     );
 }
 
@@ -5105,25 +5323,25 @@ fn direct_runtime_type_tags_preserve_generic_identity_through_clone() {
     let concrete_function_signature = Type::Function {
         params: vec![
             FunctionParamContract {
+                keyword_only: false,
                 name: "shared".to_string(),
                 ty: Type::named("str"),
                 passing: ReceiverKind::Borrow,
                 has_default: false,
-                default_erased: false,
             },
             FunctionParamContract {
+                keyword_only: false,
                 name: "mutable".to_string(),
                 ty: Type::Named("list".to_string(), vec![Type::named("int32")]),
                 passing: ReceiverKind::BorrowMut,
                 has_default: true,
-                default_erased: false,
             },
             FunctionParamContract {
+                keyword_only: false,
                 name: "owned".to_string(),
                 ty: nested_callback,
                 passing: ReceiverKind::Value,
                 has_default: false,
-                default_erased: false,
             },
         ],
         return_type: Box::new(Type::named("int64")),
@@ -5133,25 +5351,25 @@ fn direct_runtime_type_tags_preserve_generic_identity_through_clone() {
         signature: Type::Function {
             params: vec![
                 FunctionParamContract {
+                    keyword_only: false,
                     name: "shared".to_string(),
                     ty: Type::TypeParam("A".to_string()),
                     passing: ReceiverKind::Borrow,
                     has_default: false,
-                    default_erased: false,
                 },
                 FunctionParamContract {
+                    keyword_only: false,
                     name: "mutable".to_string(),
                     ty: Type::TypeParam("B".to_string()),
                     passing: ReceiverKind::BorrowMut,
                     has_default: true,
-                    default_erased: false,
                 },
                 FunctionParamContract {
+                    keyword_only: false,
                     name: "owned".to_string(),
                     ty: Type::TypeParam("C".to_string()),
                     passing: ReceiverKind::Value,
                     has_default: false,
-                    default_erased: false,
                 },
             ],
             return_type: Box::new(Type::TypeParam("R".to_string())),
@@ -5230,25 +5448,25 @@ fn direct_function_value_abi_preserves_signature_capabilities_defaults_and_metad
     let signature = Type::Function {
         params: vec![
             FunctionParamContract {
+                keyword_only: false,
                 name: "shared".to_string(),
                 ty: Type::named("str"),
                 passing: ReceiverKind::Borrow,
                 has_default: false,
-                default_erased: false,
             },
             FunctionParamContract {
+                keyword_only: false,
                 name: "mutable".to_string(),
                 ty: Type::Named("list".to_string(), vec![Type::named("int32")]),
                 passing: ReceiverKind::BorrowMut,
                 has_default: true,
-                default_erased: false,
             },
             FunctionParamContract {
+                keyword_only: false,
                 name: "owned".to_string(),
                 ty: Type::named("str"),
                 passing: ReceiverKind::Value,
                 has_default: false,
-                default_erased: false,
             },
         ],
         return_type: Box::new(Type::named("int64")),
@@ -5310,11 +5528,11 @@ fn direct_function_value_abi_preserves_signature_capabilities_defaults_and_metad
 fn direct_function_value_type_patterns_bind_nested_types_and_capabilities() {
     fn contract(name: &str, ty: Type, passing: ReceiverKind) -> FunctionParamContract {
         FunctionParamContract {
+            keyword_only: false,
             name: name.to_string(),
             ty,
             passing,
             has_default: false,
-            default_erased: false,
         }
     }
 
@@ -5449,17 +5667,18 @@ fn direct_function_value_type_patterns_bind_nested_types_and_capabilities() {
 #[test]
 fn direct_closure_type_matching_preserves_callable_and_capture_contracts() {
     let param = |ty, passing| FunctionParamContract {
+        keyword_only: false,
         name: "value".to_string(),
         ty,
         passing,
         has_default: false,
-        default_erased: false,
     };
     let capture = |ty, mode| ClosureCapture {
         name: "captured".to_string(),
         ty,
         mode,
         span: Span::new(3, 5),
+        mutated: false,
     };
     let closure = |parameter_ty, passing, capture_ty, mode, call_kind| Type::Closure {
         params: Box::new(vec![param(parameter_ty, passing)]),
@@ -5882,7 +6101,7 @@ fn native_runtime_process_error_and_wait_all_helpers_cover_remaining_paths() {
     .is_empty());
     assert_eq!(
         expect_variant_value(
-            super::process_error_from_io(io::Error::new(io::ErrorKind::Other, "io failure")),
+            super::process_error_from_io(io::Error::other("io failure")),
             "Error",
             "Io",
         )
@@ -5939,7 +6158,7 @@ fn native_runtime_process_error_and_wait_all_helpers_cover_remaining_paths() {
         Ok(Value::Int(IntegerValue::from_signed(70)))
     }));
     let ready_payloads = expect_variant_ptr(
-        super::aura_direct_wait_any(task_vec(&[ready_task.clone()])),
+        super::aura_direct_wait_any(task_vec(std::slice::from_ref(&ready_task))),
         "WaitAny",
         "Ready",
     );
@@ -5954,7 +6173,7 @@ fn native_runtime_process_error_and_wait_all_helpers_cover_remaining_paths() {
     let error_task =
         TaskValue::from_handle(thread::spawn(|| Err(Diagnostic::new("wait_any failed"))));
     let error_payloads = expect_variant_ptr(
-        super::aura_direct_wait_any(task_vec(&[error_task.clone()])),
+        super::aura_direct_wait_any(task_vec(std::slice::from_ref(&error_task))),
         "WaitAny",
         "Error",
     );
@@ -6013,7 +6232,7 @@ fn native_runtime_process_error_and_wait_all_helpers_cover_remaining_paths() {
     }));
     assert!(expect_variant_ptr(
         super::aura_direct_wait_any_timeout_value(
-            task_vec(&[slow_task.clone()]),
+            task_vec(std::slice::from_ref(&slow_task)),
             duration_value(0)
         ),
         "WaitAny",
@@ -6022,7 +6241,7 @@ fn native_runtime_process_error_and_wait_all_helpers_cover_remaining_paths() {
     .is_empty());
     assert!(expect_variant_ptr(
         super::aura_direct_wait_all_timeout_value(
-            task_vec(&[slow_task.clone()]),
+            task_vec(std::slice::from_ref(&slow_task)),
             duration_value(0)
         ),
         "WaitAll",
@@ -9681,15 +9900,12 @@ fn direct_runtime_scalar_and_concurrency_helpers_cover_remaining_surface() {
         1,
         bool_value(true),
     )));
-    assert_eq!(
-        expect_bool_boxed(super::aura_direct_unary_value_at(
-            1,
-            bool_value(false),
-            1,
-            1
-        )),
-        true
-    );
+    assert!(expect_bool_boxed(super::aura_direct_unary_value_at(
+        1,
+        bool_value(false),
+        1,
+        1
+    )));
     assert_eq!(
         expect_int(super::aura_direct_binary_value(
             0,
@@ -11220,12 +11436,12 @@ fn native_runtime_direct_concurrency_wrappers_cover_cancelled_paths() {
         );
 
         expect_variant_ptr(
-            super::aura_direct_wait_any(task_vec(&[task_value.clone()])),
+            super::aura_direct_wait_any(task_vec(std::slice::from_ref(&task_value))),
             "WaitAny",
             "Cancelled",
         );
         expect_variant_ptr(
-            super::aura_direct_wait_all(task_vec(&[task_value.clone()])),
+            super::aura_direct_wait_all(task_vec(std::slice::from_ref(&task_value))),
             "WaitAll",
             "Cancelled",
         );
@@ -11655,9 +11871,13 @@ fn native_runtime_entrypoint_guards_invalid_inputs() {
         1
     );
 
-    assert_eq!(
-        render_runtime_diagnostic(crate::diag::Diagnostic::new("oops")),
-        "error[AU2999]: oops"
+    // Another test in this binary may already have installed the process-wide
+    // program source, which appends a ` --> path` trailer to every rendering;
+    // only the bare prefix is order-independent.
+    let rendered = render_runtime_diagnostic(crate::diag::Diagnostic::new("oops"));
+    assert!(
+        rendered.starts_with("error[AU2999]: oops"),
+        "unexpected runtime diagnostic rendering: {rendered}"
     );
 }
 
@@ -14268,23 +14488,23 @@ fn native_runtime_scalar_helpers_cover_comparisons_unary_ops_and_metadata() {
     assert_eq!(normalize_vec_index(-1, 5), Some(4));
     assert_eq!(normalize_vec_index(-6, 5), None);
 
-    assert_eq!(value_type_name(&Value::Bool(true)), "bool");
-    assert_eq!(value_type_name(&Value::Unit), "None");
+    assert_eq!(value_type_name(Value::Bool(true)), "bool");
+    assert_eq!(value_type_name(Value::Unit), "None");
     assert_eq!(
-        value_type_name(&Value::ModuleNamespace(ModuleNamespaceValue {
+        value_type_name(Value::ModuleNamespace(ModuleNamespaceValue {
             path: "pkg.tools".to_string(),
         })),
         "module pkg.tools"
     );
     assert_eq!(
-        value_type_name(&Value::Instance(InstanceValue {
+        value_type_name(Value::Instance(InstanceValue {
             class_name: "Point".to_string(),
             fields: Default::default(),
         })),
         "Point"
     );
     assert_eq!(
-        value_type_name(&Value::EnumVariant(EnumVariantValue {
+        value_type_name(Value::EnumVariant(EnumVariantValue {
             enum_name: "Status".to_string(),
             variant_name: "Ready".to_string(),
             payloads: Vec::new(),
@@ -14292,12 +14512,12 @@ fn native_runtime_scalar_helpers_cover_comparisons_unary_ops_and_metadata() {
         "Status"
     );
     assert_eq!(
-        value_type_name(&Value::Int(IntegerValue::from_signed(1))),
+        value_type_name(Value::Int(IntegerValue::from_signed(1))),
         "integer"
     );
-    assert_eq!(value_type_name(&Value::Float(1.5)), "float64");
+    assert_eq!(value_type_name(Value::Float(1.5)), "float64");
     assert_eq!(
-        value_type_name(&Value::Vec(VecValue {
+        value_type_name(Value::Vec(VecValue {
             element_type: crate::sema::Type::named("int32"),
             elements: Vec::new(),
         })),
@@ -14313,42 +14533,42 @@ fn native_runtime_scalar_helpers_cover_comparisons_unary_ops_and_metadata() {
         Type::Named("Array".to_string(), vec![Type::named("int64")])
     );
     assert_eq!(
-        value_type_name(&Value::Set(SetValue {
+        value_type_name(Value::Set(SetValue {
             element_type: crate::sema::Type::named("str"),
             elements: Vec::new(),
         })),
         "set"
     );
     assert_eq!(
-        value_type_name(&Value::Map(MapValue {
+        value_type_name(Value::Map(MapValue {
             key_type: crate::sema::Type::named("str"),
             value_type: crate::sema::Type::named("int32"),
             entries: Vec::new(),
         })),
         "dict"
     );
-    assert_eq!(value_type_name(&Value::Duration(5)), "Duration");
+    assert_eq!(value_type_name(Value::Duration(5)), "Duration");
     assert_value_metadata(
         &Value::Rng(RngValue::from_seed(42)),
         "random.Rng",
         "random.Rng",
     );
     assert_eq!(
-        value_type_name(&Value::Range(RangeValue { start: 1, end: 2 })),
+        value_type_name(Value::Range(RangeValue { start: 1, end: 2 })),
         "Range"
     );
     assert_eq!(
-        value_type_name(&Value::Channel(ChannelValue::new())),
+        value_type_name(Value::Channel(ChannelValue::new())),
         "Queue"
     );
     assert_eq!(
-        value_type_name(&Value::Task(TaskValue::from_handle(thread::spawn(|| Ok(
+        value_type_name(Value::Task(TaskValue::from_handle(thread::spawn(|| Ok(
             Value::Unit
         ))))),
         "Task"
     );
     assert_eq!(
-        value_type_name(&Value::TaskGroup(TaskGroupValue::new(
+        value_type_name(Value::TaskGroup(TaskGroupValue::new(
             &CancellationContext::default()
         ))),
         "TaskGroup"
@@ -15380,22 +15600,22 @@ fn native_runtime_thread_local_and_pointer_helpers_cover_remaining_paths() {
     assert_eq!(runtime_span(1, 0), None);
     assert_eq!(runtime_span(2, 3), Some(crate::diag::Span::new(2, 3)));
 
-    assert_eq!(value_type_name(&Value::Unit), "None");
+    assert_eq!(value_type_name(Value::Unit), "None");
     assert_eq!(
-        value_type_name(&Value::ModuleNamespace(ModuleNamespaceValue {
+        value_type_name(Value::ModuleNamespace(ModuleNamespaceValue {
             path: "pkg.tools".to_string(),
         })),
         "module pkg.tools"
     );
     assert_eq!(
-        value_type_name(&Value::Instance(InstanceValue {
+        value_type_name(Value::Instance(InstanceValue {
             class_name: "Counter".to_string(),
             fields: BTreeMap::new(),
         })),
         "Counter"
     );
     assert_eq!(
-        value_type_name(&Value::EnumVariant(EnumVariantValue {
+        value_type_name(Value::EnumVariant(EnumVariantValue {
             enum_name: "Status".to_string(),
             variant_name: "Ready".to_string(),
             payloads: Vec::new(),
@@ -15403,17 +15623,17 @@ fn native_runtime_thread_local_and_pointer_helpers_cover_remaining_paths() {
         "Status"
     );
     assert_eq!(
-        value_type_name(&Value::Channel(ChannelValue::new())),
+        value_type_name(Value::Channel(ChannelValue::new())),
         "Queue"
     );
     assert_eq!(
-        value_type_name(&Value::Task(TaskValue::from_handle(thread::spawn(|| Ok(
+        value_type_name(Value::Task(TaskValue::from_handle(thread::spawn(|| Ok(
             Value::Unit
         ))))),
         "Task"
     );
     assert_eq!(
-        value_type_name(&Value::TaskGroup(TaskGroupValue::new(
+        value_type_name(Value::TaskGroup(TaskGroupValue::new(
             &CancellationContext::default()
         ))),
         "TaskGroup"
@@ -16102,6 +16322,7 @@ fn native_runtime_closure_task_handoff_transfers_capture_ownership_to_child() {
                         ty: capture_type.clone(),
                         mode: crate::sema::ClosureCaptureMode::Copy,
                         span: Span::new(2, 1),
+                        mutated: false,
                     }]),
                     call_kind: crate::sema::ClosureCallKind::Repeatable,
                 },
@@ -16190,6 +16411,7 @@ fn native_runtime_closure_task_handoff_preserves_repeatable_and_one_shot_semanti
                         crate::sema::ClosureCaptureMode::Copy
                     },
                     span: Span::new(2, 1),
+                    mutated: false,
                 }]),
                 call_kind: if consuming {
                     crate::sema::ClosureCallKind::Consuming
@@ -16351,6 +16573,7 @@ fn native_runtime_closure_task_rejects_negative_public_arity_then_allows_valid_r
                         ty: Type::named("int64"),
                         mode: crate::sema::ClosureCaptureMode::Copy,
                         span: Span::new(2, 1),
+                        mutated: false,
                     }]),
                     call_kind: crate::sema::ClosureCallKind::Repeatable,
                 },
@@ -16467,6 +16690,7 @@ fn native_runtime_detached_closure_task_surfaces_unobserved_trap_and_cleans_capt
                                 ty: Type::named("str"),
                                 mode: crate::sema::ClosureCaptureMode::Move,
                                 span: Span::new(2, 1),
+                                mutated: false,
                             }]),
                             call_kind: crate::sema::ClosureCallKind::Consuming,
                         },
@@ -16871,11 +17095,11 @@ fn native_runtime_closure_calls_preserve_results_writebacks_and_call_kind() {
                 name: "main::__lambda_repeatable".to_string(),
                 signature: Type::Closure {
                     params: Box::new(vec![FunctionParamContract {
+                        keyword_only: false,
                         name: "value".to_string(),
                         ty: Type::named("int64"),
                         passing: ReceiverKind::BorrowMut,
                         has_default: false,
-                        default_erased: false,
                     }]),
                     return_type: Box::new(Type::named("int64")),
                     captures: Box::new(vec![crate::sema::ClosureCapture {
@@ -16883,6 +17107,7 @@ fn native_runtime_closure_calls_preserve_results_writebacks_and_call_kind() {
                         ty: Type::named("int64"),
                         mode: crate::sema::ClosureCaptureMode::Copy,
                         span: Span::new(2, 17),
+                        mutated: false,
                     }]),
                     call_kind: crate::sema::ClosureCallKind::Repeatable,
                 },
@@ -16961,6 +17186,7 @@ fn native_runtime_closure_calls_preserve_results_writebacks_and_call_kind() {
                         ty: Type::named("int64"),
                         mode: crate::sema::ClosureCaptureMode::Move,
                         span: Span::new(4, 17),
+                        mutated: false,
                     }]),
                     call_kind: crate::sema::ClosureCallKind::Consuming,
                 },
@@ -16999,18 +17225,18 @@ fn native_runtime_closure_call_moves_owned_args_and_copies_only_mutable_writebac
                 signature: Type::Closure {
                     params: Box::new(vec![
                         FunctionParamContract {
+                            keyword_only: false,
                             name: "owned".to_string(),
                             ty: Type::named("int64"),
                             passing: ReceiverKind::Value,
                             has_default: false,
-                            default_erased: false,
                         },
                         FunctionParamContract {
+                            keyword_only: false,
                             name: "mutable".to_string(),
                             ty: Type::named("int64"),
                             passing: ReceiverKind::BorrowMut,
                             has_default: false,
-                            default_erased: false,
                         },
                     ]),
                     return_type: Box::new(Type::named("int64")),
@@ -17019,6 +17245,7 @@ fn native_runtime_closure_call_moves_owned_args_and_copies_only_mutable_writebac
                         ty: Type::named("int64"),
                         mode: crate::sema::ClosureCaptureMode::Copy,
                         span: Span::new(3, 17),
+                        mutated: false,
                     }]),
                     call_kind: crate::sema::ClosureCallKind::Repeatable,
                 },
@@ -17160,18 +17387,18 @@ fn native_runtime_closure_construction_handles_zero_captures_and_reports_invalid
 }
 
 #[test]
-fn native_runtime_selected_default_callbacks_bind_functions_but_not_closures() {
+fn native_runtime_selected_default_callbacks_bind_functions_and_closures() {
     let result = run_lightweight_root_task(|| {
         super::with_direct_task_runtime_scope(|| {
             let ordinary = boxed_value(Value::Function(Box::new(FunctionValue {
                 name: "selected".to_string(),
                 signature: Type::Function {
                     params: vec![FunctionParamContract {
+                        keyword_only: false,
                         name: "value".to_string(),
                         ty: Type::named("int64"),
                         passing: ReceiverKind::Value,
                         has_default: true,
-                        default_erased: false,
                     }],
                     return_type: Box::new(Type::named("int64")),
                 },
@@ -17203,11 +17430,11 @@ fn native_runtime_selected_default_callbacks_bind_functions_but_not_closures() {
                 name: "main::__lambda_no_defaults".to_string(),
                 signature: Type::Closure {
                     params: Box::new(vec![FunctionParamContract {
+                        keyword_only: false,
                         name: "value".to_string(),
                         ty: Type::named("int64"),
                         passing: ReceiverKind::Value,
                         has_default: false,
-                        default_erased: false,
                     }]),
                     return_type: Box::new(Type::Unit),
                     captures: Box::new(Vec::new()),
@@ -17223,12 +17450,16 @@ fn native_runtime_selected_default_callbacks_bind_functions_but_not_closures() {
             })));
             let closure_args = super::aura_direct_arg_buffer_new(1);
             super::aura_direct_function_bind_defaults(closure, closure_args, 1, 0);
+            // A closure binds omitted defaults through its own binder over a
+            // capture-offset shadow buffer (bound methods forward declaration
+            // defaults); the public slot receives the bound value.
             assert_eq!(
-                unsafe { *closure_args },
-                0,
-                "lambda parameters have no declaration defaults and must bypass the binder callback"
+                unsafe { value_ref(*closure_args as *mut OpaqueValue) },
+                Value::Int(IntegerValue::from_signed(41)),
+                "a closure's native default binder must fill its missing public slot"
             );
             unsafe {
+                release_value(*closure_args as *mut OpaqueValue);
                 free_arg_buffer(closure_args, 1);
                 release_value(closure);
                 release_value(ordinary);
@@ -17338,11 +17569,11 @@ fn native_runtime_trapping_closure_call_releases_combined_buffer_without_mut_wri
     let external_address = external as usize;
     let signature = Type::Closure {
         params: Box::new(vec![FunctionParamContract {
+            keyword_only: false,
             name: "value".to_string(),
             ty: Type::named("str"),
             passing: ReceiverKind::BorrowMut,
             has_default: false,
-            default_erased: false,
         }]),
         return_type: Box::new(Type::Unit),
         captures: Box::new(vec![crate::sema::ClosureCapture {
@@ -17350,6 +17581,7 @@ fn native_runtime_trapping_closure_call_releases_combined_buffer_without_mut_wri
             ty: Type::named("str"),
             mode: crate::sema::ClosureCaptureMode::Move,
             span: Span::new(3, 13),
+            mutated: false,
         }]),
         call_kind: crate::sema::ClosureCallKind::Consuming,
     };
@@ -17426,6 +17658,7 @@ fn native_runtime_uncalled_closure_releases_owned_capture_environment() {
                         ty: Type::named("str"),
                         mode: crate::sema::ClosureCaptureMode::Move,
                         span: Span::new(2, 17),
+                        mutated: false,
                     }]),
                     call_kind: crate::sema::ClosureCallKind::Consuming,
                 },
@@ -20522,11 +20755,11 @@ fn direct_capacity_format_and_detailed_assertion_abis_pin_observable_contracts()
 fn coverage_native_runtime_decodes_closure_patterns_and_uses_type_fallbacks() {
     let encoded_closure = super::canonical_runtime_type_name(&Type::Closure {
         params: Box::new(vec![FunctionParamContract {
+            keyword_only: false,
             name: "value".to_string(),
             ty: Type::named("?Item"),
             passing: ReceiverKind::Borrow,
             has_default: false,
-            default_erased: false,
         }]),
         return_type: Box::new(Type::named("?Item")),
         captures: Box::new(vec![ClosureCapture {
@@ -20534,6 +20767,7 @@ fn coverage_native_runtime_decodes_closure_patterns_and_uses_type_fallbacks() {
             ty: Type::named("?Captured"),
             mode: ClosureCaptureMode::Copy,
             span: Span::new(3, 7),
+            mutated: false,
         }]),
         call_kind: ClosureCallKind::Repeatable,
     });
@@ -21066,4 +21300,1741 @@ fn direct_array_kernels_match_frozen_pre_vectorization_bits() {
             })
         })
     });
+}
+
+#[test]
+fn direct_frame_metadata_materializes_call_frames_and_task_ancestry() {
+    use super::{
+        reset_direct_runtime_frame_materialization_count, DirectCallFrameStorage, DirectFrameText,
+        DirectRuntimeCallFrame, DirectRuntimeSourceSpan, DirectRuntimeTaskFrame,
+        DirectTaskAncestry, PreparedDirectTaskRuntimeState,
+        DIRECT_RUNTIME_FRAME_MATERIALIZATION_COUNT,
+    };
+    use crate::diag::{RuntimeSourceSpan, RuntimeTaskFrame, Span};
+
+    let static_text: &'static [u8] = b"main.au";
+    let path = unsafe { DirectFrameText::validate_static(static_text.as_ptr(), static_text.len()) }
+        .expect("valid UTF-8 static frame text");
+    assert_eq!(path.as_str(), "main.au");
+    assert!(unsafe { DirectFrameText::validate_static(std::ptr::null(), 0) }.is_err());
+    let invalid: &'static [u8] = &[0xff, 0xfe];
+    assert!(unsafe { DirectFrameText::validate_static(invalid.as_ptr(), invalid.len()) }.is_err());
+
+    let span = DirectRuntimeSourceSpan::point(Some(path.clone()), Span::new(3, 7));
+    let materialized = span.materialize();
+    assert_eq!(materialized.path.as_deref(), Some("main.au"));
+    assert_eq!(materialized.end, Span::new(3, 8));
+
+    reset_direct_runtime_frame_materialization_count();
+    let mut storage = DirectCallFrameStorage::default();
+    assert!(storage.pop().is_none());
+    assert!(storage.materialize_innermost_first().is_empty());
+    for index in 0..3 {
+        storage.push(DirectRuntimeCallFrame {
+            function: DirectFrameText::shared(format!("frame{index}")),
+            span: DirectRuntimeSourceSpan::point(None, Span::new(index + 1, 1)),
+        });
+    }
+    assert_eq!(storage.len(), 3);
+    assert!(storage.has_heap_spill());
+    let innermost_first = storage.materialize_innermost_first();
+    assert_eq!(innermost_first[0].function, "frame2");
+    assert_eq!(innermost_first[2].span.start, Span::new(1, 1));
+    assert_eq!(
+        storage
+            .pop()
+            .map(|frame| frame.function.materialize())
+            .as_deref(),
+        Some("frame2")
+    );
+    assert_eq!(
+        storage
+            .pop()
+            .map(|frame| frame.function.materialize())
+            .as_deref(),
+        Some("frame1")
+    );
+    assert_eq!(storage.len(), 1);
+    assert!(!storage.has_heap_spill());
+    assert_eq!(storage.materialize_innermost_first().len(), 1);
+    assert!(storage.pop().is_some());
+    assert!(storage.pop().is_none());
+    assert!(DIRECT_RUNTIME_FRAME_MATERIALIZATION_COUNT.with(|count| count.get()) >= 4);
+
+    let frames = (0..2)
+        .map(|index| RuntimeTaskFrame {
+            task_function: format!("task{index}"),
+            task_entry_span: RuntimeSourceSpan {
+                path: Some("worker.au".to_string()),
+                start: Span::new(1, 1),
+                end: Span::new(1, 2),
+            },
+            parent_function: "main".to_string(),
+            spawn_span: RuntimeSourceSpan {
+                path: None,
+                start: Span::new(9, 5),
+                end: Span::new(9, 6),
+            },
+        })
+        .collect::<Vec<_>>();
+    let ancestry = DirectTaskAncestry::from_runtime(frames.clone());
+    assert_eq!(ancestry.len(), 2);
+    assert_eq!(ancestry.materialize(), frames);
+    let extended = ancestry.prepend(DirectRuntimeTaskFrame::from_runtime(frames[0].clone()));
+    assert_eq!(extended.len(), 3);
+    assert_eq!(extended.materialize()[0].task_function, "task0");
+    // Dropping a snapshot that shares nodes with `extended` must leave the
+    // shared chain intact for the remaining owner.
+    drop(ancestry);
+    assert_eq!(extended.materialize().len(), 3);
+    let prepared = PreparedDirectTaskRuntimeState::new(extended.clone());
+    let state = prepared.into_state();
+    assert_eq!(state.task_ancestry.len(), 3);
+    drop(extended);
+    drop(state);
+}
+
+// ---------------------------------------------------------------------------
+// Batch 1 coverage: union member dispatch, projections, and runtime type
+// patterns on the direct runtime ABI.
+// ---------------------------------------------------------------------------
+
+fn coverage_union(members: Vec<Type>) -> crate::sema::UnionType {
+    match Type::normalize_union(members, "main", &BTreeMap::new()).expect("normalized union") {
+        Type::Union(union) => *union,
+        other => panic!("expected a union, found {other}"),
+    }
+}
+
+fn coverage_union_member_index(target: &crate::sema::UnionType, member: &Type) -> usize {
+    target
+        .members
+        .iter()
+        .position(|candidate| candidate == member)
+        .expect("member present")
+}
+
+fn coverage_union_value(
+    target: &crate::sema::UnionType,
+    member_index: usize,
+    payload: Value,
+) -> Value {
+    Value::Union(Box::new(crate::runtime_value::UnionValue {
+        union_type: Type::Union(Box::new(target.clone())),
+        member_index,
+        payload,
+    }))
+}
+
+fn coverage_union_payload(ptr: *mut OpaqueValue) -> Value {
+    unsafe {
+        super::with_value(ptr, |value| match value {
+            Value::Union(union) => union.payload.clone(),
+            other => panic!("expected a union value, found {other:?}"),
+        })
+    }
+}
+
+fn coverage_int(value: i64) -> Value {
+    Value::Int(IntegerValue::from_i64(value))
+}
+
+/// Captures a direct-runtime trap without a direct task runtime scope. Union
+/// identity traps fire while the value lock is held, so the poisoned value
+/// must stay untouched afterwards instead of being released by scope teardown.
+fn capture_unscoped_error_message(work: impl FnOnce() + Send + 'static) -> String {
+    run_lightweight_root_task(move || {
+        super::with_task_runtime_error_capture(|| {
+            work();
+            Ok(Value::Unit)
+        })
+    })
+    .expect_err("the direct runtime call should fail")
+    .message
+}
+
+#[test]
+fn direct_union_active_payload_copies_or_moves_the_active_member() {
+    let target = coverage_union(vec![Type::named("int64"), Type::Unit]);
+    let index = coverage_union_member_index(&target, &Type::named("int64"));
+    let union = boxed_value(coverage_union_value(&target, index, coverage_int(4)));
+
+    assert_eq!(
+        expect_int(super::aura_direct_union_active_payload(union, 0)),
+        4
+    );
+    assert_eq!(
+        coverage_union_payload(union),
+        coverage_int(4),
+        "a shared receiver copy leaves the union payload in place"
+    );
+    assert_eq!(
+        expect_int(super::aura_direct_union_active_payload(union, 1)),
+        4
+    );
+    assert_eq!(
+        coverage_union_payload(union),
+        Value::Unit,
+        "a consuming receiver moves the payload out of the union"
+    );
+    unsafe {
+        release_value(union);
+    }
+
+    let not_a_union = boxed_value(coverage_int(1)) as usize;
+    assert_eq!(
+        capture_direct_boundary_error_message(move || {
+            super::aura_direct_union_active_payload(not_a_union as *mut OpaqueValue, 0);
+        }),
+        "union member dispatch requires an active union"
+    );
+}
+
+#[test]
+fn direct_none_test_recognizes_unit_and_unions_holding_none() {
+    let target = coverage_union(vec![Type::named("int64"), Type::Unit]);
+    let none_index = coverage_union_member_index(&target, &Type::Unit);
+    let int_index = coverage_union_member_index(&target, &Type::named("int64"));
+    let unit = boxed_value(Value::Unit);
+    let none = boxed_value(coverage_union_value(&target, none_index, Value::Unit));
+    let some = boxed_value(coverage_union_value(&target, int_index, coverage_int(3)));
+    let plain = int_value(3);
+    assert_eq!(super::aura_direct_none_test(unit), 1);
+    assert_eq!(super::aura_direct_none_test(none), 1);
+    assert_eq!(super::aura_direct_none_test(some), 0);
+    assert_eq!(super::aura_direct_none_test(plain), 0);
+    unsafe {
+        release_value(unit);
+        release_value(none);
+        release_value(some);
+        release_value(plain);
+    }
+}
+
+#[test]
+fn direct_union_tag_take_and_inject_reject_invalid_metadata_and_identities() {
+    let target = coverage_union(vec![Type::named("int64"), Type::Unit]);
+    let int_index = coverage_union_member_index(&target, &Type::named("int64"));
+    let none_index = coverage_union_member_index(&target, &Type::Unit);
+    let union_name = super::canonical_runtime_type_name(&Type::Union(Box::new(target.clone())));
+    let scalar_name = super::canonical_runtime_type_name(&Type::named("int64"));
+
+    let cases: Vec<(&str, Box<dyn FnOnce() + Send>)> = vec![
+        (
+            "invalid union tag type",
+            Box::new(|| {
+                let value = int_value(1);
+                super::aura_direct_union_tag_test(value, b"bogus".as_ptr(), 5, 0);
+            }),
+        ),
+        (
+            "union tag test requires a union type",
+            Box::new({
+                let name = scalar_name.clone();
+                move || {
+                    let value = int_value(1);
+                    super::aura_direct_union_tag_test(value, name.as_ptr(), name.len(), 0);
+                }
+            }),
+        ),
+        (
+            "union tag test type identity mismatch",
+            Box::new({
+                let name = union_name.clone();
+                move || {
+                    let value = string_value("text");
+                    super::aura_direct_union_tag_test(value, name.as_ptr(), name.len(), 0);
+                }
+            }),
+        ),
+        (
+            "invalid union take type",
+            Box::new(|| {
+                let value = int_value(1);
+                super::aura_direct_union_take_payload(value, b"bogus".as_ptr(), 5, 0);
+            }),
+        ),
+        (
+            "union take requires a union type",
+            Box::new({
+                let name = scalar_name.clone();
+                move || {
+                    let value = int_value(1);
+                    super::aura_direct_union_take_payload(value, name.as_ptr(), name.len(), 0);
+                }
+            }),
+        ),
+        (
+            "union take type identity mismatch",
+            Box::new({
+                let name = union_name.clone();
+                move || {
+                    let value = string_value("text");
+                    super::aura_direct_union_take_payload(value, name.as_ptr(), name.len(), 0);
+                }
+            }),
+        ),
+        (
+            "union take member or type identity mismatch",
+            Box::new({
+                let name = union_name.clone();
+                let target = target.clone();
+                move || {
+                    let value =
+                        boxed_value(coverage_union_value(&target, int_index, coverage_int(1)));
+                    super::aura_direct_union_take_payload(
+                        value,
+                        name.as_ptr(),
+                        name.len(),
+                        none_index,
+                    );
+                }
+            }),
+        ),
+        (
+            "invalid union injection type",
+            Box::new(|| {
+                let payload = int_value(1);
+                super::aura_direct_union_inject(b"bogus".as_ptr(), 5, 0, payload);
+            }),
+        ),
+        (
+            "union injection requires a union type",
+            Box::new({
+                let name = scalar_name.clone();
+                move || {
+                    let payload = int_value(1);
+                    super::aura_direct_union_inject(name.as_ptr(), name.len(), 0, payload);
+                }
+            }),
+        ),
+        (
+            "union injection member index is out of range",
+            Box::new({
+                let name = union_name.clone();
+                move || {
+                    let payload = int_value(1);
+                    super::aura_direct_union_inject(name.as_ptr(), name.len(), 9, payload);
+                }
+            }),
+        ),
+        (
+            "union injection cannot nest a union inside a concrete member",
+            Box::new({
+                let name = union_name.clone();
+                let target = target.clone();
+                move || {
+                    let payload =
+                        boxed_value(coverage_union_value(&target, int_index, coverage_int(1)));
+                    super::aura_direct_union_inject(name.as_ptr(), name.len(), int_index, payload);
+                }
+            }),
+        ),
+    ];
+    for (expected, work) in cases {
+        assert_eq!(capture_unscoped_error_message(work), expected);
+    }
+
+    let aligned = boxed_value(coverage_union_value(&target, int_index, coverage_int(7)));
+    assert_eq!(
+        super::aura_direct_union_tag_test(
+            aligned,
+            union_name.as_ptr(),
+            union_name.len(),
+            int_index
+        ),
+        1
+    );
+    assert_eq!(
+        expect_int(super::aura_direct_union_take_payload(
+            aligned,
+            union_name.as_ptr(),
+            union_name.len(),
+            int_index,
+        )),
+        7
+    );
+    unsafe {
+        release_value(aligned);
+    }
+}
+
+#[test]
+fn direct_instance_field_access_follows_enum_and_union_payload_projections() {
+    let some = boxed_value(Value::EnumVariant(EnumVariantValue {
+        enum_name: "Option".to_string(),
+        variant_name: "Some".to_string(),
+        payloads: vec![coverage_int(41)],
+    }));
+    let projection = "__variant_payload_Some_0";
+    assert_eq!(
+        expect_int(super::aura_direct_instance_get_field(
+            some,
+            projection.as_ptr(),
+            projection.len(),
+        )),
+        41
+    );
+    for (field, expected) in [
+        (
+            "__variant_payload_None_0",
+            "enum payload projection does not select the active variant",
+        ),
+        (
+            "__variant_payload_Some_3",
+            "enum payload projection does not select the active variant",
+        ),
+        ("bogus", "invalid enum payload projection"),
+    ] {
+        let address = some as usize;
+        let field = field.to_string();
+        assert_eq!(
+            capture_direct_boundary_error_message(move || {
+                super::aura_direct_instance_get_field(
+                    address as *mut OpaqueValue,
+                    field.as_ptr(),
+                    field.len(),
+                );
+            }),
+            expected
+        );
+    }
+    unsafe {
+        release_value(some);
+    }
+
+    let concrete = coverage_union(vec![Type::named("int64"), Type::Unit]);
+    let int_index = coverage_union_member_index(&concrete, &Type::named("int64"));
+    let none_index = coverage_union_member_index(&concrete, &Type::Unit);
+    let union = boxed_value(coverage_union_value(&concrete, int_index, coverage_int(5)));
+    for field in [
+        format!("__union_payload_{int_index}"),
+        super::DIRECT_UNION_ACTIVE_PAYLOAD_PROJECTION.to_string(),
+    ] {
+        assert_eq!(
+            expect_int(super::aura_direct_instance_get_field(
+                union,
+                field.as_ptr(),
+                field.len(),
+            )),
+            5
+        );
+    }
+    let inactive = format!("__union_payload_{none_index}");
+    let address = union as usize;
+    assert_eq!(
+        capture_direct_boundary_error_message(move || {
+            super::aura_direct_instance_get_field(
+                address as *mut OpaqueValue,
+                inactive.as_ptr(),
+                inactive.len(),
+            );
+        }),
+        "union payload projection does not select the active member"
+    );
+    unsafe {
+        release_value(union);
+    }
+
+    let symbolic = coverage_union(vec![Type::TypeParam("V".to_string()), Type::Unit]);
+    let param_index = coverage_union_member_index(&symbolic, &Type::TypeParam("V".to_string()));
+    let generic = boxed_value(coverage_union_value(
+        &symbolic,
+        param_index,
+        coverage_int(9),
+    ));
+    let other_layout = "__union_payload_7";
+    assert_eq!(
+        expect_int(super::aura_direct_instance_get_field(
+            generic,
+            other_layout.as_ptr(),
+            other_layout.len(),
+        )),
+        9,
+        "a generic frame's symbolic layout admits any validated payload index"
+    );
+    let malformed = "__union_payload_x".to_string();
+    let address = generic as usize;
+    assert_eq!(
+        capture_direct_boundary_error_message(move || {
+            super::aura_direct_instance_get_field(
+                address as *mut OpaqueValue,
+                malformed.as_ptr(),
+                malformed.len(),
+            );
+        }),
+        "union payload projection does not select the active member"
+    );
+    unsafe {
+        release_value(generic);
+    }
+}
+
+#[test]
+fn direct_owned_field_assignment_writes_through_enum_and_union_payloads() {
+    fn holder(value: Value) -> Value {
+        Value::Instance(InstanceValue {
+            class_name: "Holder".to_string(),
+            fields: BTreeMap::from([("value".to_string(), value)]),
+        })
+    }
+    fn assign(target: *mut OpaqueValue, path: &str, new_value: Value) {
+        let owned = boxed_value(new_value);
+        super::aura_direct_instance_set_field_owned(target, path.as_ptr(), path.len(), owned);
+    }
+    fn holder_value(value: &Value) -> Value {
+        match value {
+            Value::Instance(instance) => instance.fields["value"].clone(),
+            other => panic!("expected a Holder instance, found {other:?}"),
+        }
+    }
+
+    let some = boxed_value(Value::EnumVariant(EnumVariantValue {
+        enum_name: "Option".to_string(),
+        variant_name: "Some".to_string(),
+        payloads: vec![holder(coverage_int(1))],
+    }));
+    assign(some, "__variant_payload_Some_0.value", coverage_int(2));
+    let nested = expect_variant_ptr(super::aura_direct_clone_value(some), "Option", "Some");
+    assert_eq!(holder_value(&nested[0]), coverage_int(2));
+    assign(
+        some,
+        "__variant_payload_Some_0",
+        Value::String("flat".to_string()),
+    );
+    let flat = expect_variant_ptr(super::aura_direct_clone_value(some), "Option", "Some");
+    assert_eq!(flat[0], Value::String("flat".to_string()));
+    unsafe {
+        release_value(some);
+    }
+
+    let concrete = coverage_union(vec![Type::named("Holder"), Type::named("str"), Type::Unit]);
+    let holder_index = coverage_union_member_index(&concrete, &Type::named("Holder"));
+    let text_index = coverage_union_member_index(&concrete, &Type::named("str"));
+    let union = boxed_value(coverage_union_value(
+        &concrete,
+        holder_index,
+        holder(coverage_int(1)),
+    ));
+    assign(
+        union,
+        &format!("__union_payload_{holder_index}.value"),
+        coverage_int(3),
+    );
+    assert_eq!(
+        holder_value(&coverage_union_payload(union)),
+        coverage_int(3)
+    );
+    assign(
+        union,
+        &format!("__union_payload_{holder_index}"),
+        holder(coverage_int(4)),
+    );
+    assert_eq!(
+        holder_value(&coverage_union_payload(union)),
+        coverage_int(4)
+    );
+    let wrong_member = format!("__union_payload_{text_index}");
+    let address = union as usize;
+    assert_eq!(
+        capture_direct_boundary_error_message(move || {
+            let owned = boxed_value(Value::String("moved".to_string()));
+            super::aura_direct_instance_set_field_owned(
+                address as *mut OpaqueValue,
+                wrong_member.as_ptr(),
+                wrong_member.len(),
+                owned,
+            );
+        }),
+        "union payload projection does not select the active member"
+    );
+    unsafe {
+        release_value(union);
+    }
+}
+
+#[test]
+fn direct_runtime_type_patterns_decode_and_match_callable_and_view_contracts() {
+    use crate::sema::{CallableType, ReturnedViewType};
+
+    fn param(ty: Type) -> FunctionParamContract {
+        FunctionParamContract {
+            keyword_only: false,
+            name: "value".to_string(),
+            ty,
+            passing: ReceiverKind::Value,
+            has_default: false,
+        }
+    }
+    let callable = |task: bool, call_kind: ClosureCallKind, ty: Type| {
+        Type::Callable(Box::new(CallableType {
+            task,
+            call_kind,
+            params: vec![param(ty)],
+            return_type: Type::named("str"),
+        }))
+    };
+    let function = Type::Function {
+        params: vec![param(Type::named("int64"))],
+        return_type: Box::new(Type::named("str")),
+    };
+    let closure = |call_kind: ClosureCallKind| Type::Closure {
+        params: Box::new(vec![param(Type::named("int64"))]),
+        return_type: Box::new(Type::named("str")),
+        captures: Box::new(Vec::new()),
+        call_kind,
+    };
+    let repeatable = callable(false, ClosureCallKind::Repeatable, Type::named("int64"));
+    let mut substitutions = BTreeMap::new();
+    assert!(runtime_type_pattern_matches(
+        &repeatable,
+        &function,
+        &mut substitutions
+    ));
+    assert!(runtime_type_pattern_matches(
+        &repeatable,
+        &closure(ClosureCallKind::Repeatable),
+        &mut substitutions
+    ));
+    assert!(
+        !runtime_type_pattern_matches(
+            &repeatable,
+            &closure(ClosureCallKind::Consuming),
+            &mut substitutions
+        ),
+        "a consuming closure is stronger than a shared callable contract"
+    );
+    assert!(runtime_type_pattern_matches(
+        &repeatable,
+        &repeatable,
+        &mut substitutions
+    ));
+    assert!(!runtime_type_pattern_matches(
+        &callable(true, ClosureCallKind::Repeatable, Type::named("int64")),
+        &repeatable,
+        &mut substitutions
+    ));
+    assert!(!runtime_type_pattern_matches(
+        &repeatable,
+        &Type::named("int64"),
+        &mut substitutions
+    ));
+    let generic = callable(
+        false,
+        ClosureCallKind::Repeatable,
+        Type::TypeParam("T".to_string()),
+    );
+    let mut bound = BTreeMap::new();
+    assert!(runtime_type_pattern_matches(
+        &generic, &function, &mut bound
+    ));
+    assert_eq!(bound.get("T"), Some(&Type::named("int64")));
+
+    let view = |mutable: bool, origin: usize, pointee: Type| {
+        Type::ReturnedView(Box::new(ReturnedViewType {
+            mutable,
+            pointee,
+            origin,
+        }))
+    };
+    assert!(runtime_type_pattern_matches(
+        &view(false, 0, Type::named("int64")),
+        &view(false, 0, Type::named("int64")),
+        &mut substitutions
+    ));
+    assert!(!runtime_type_pattern_matches(
+        &view(true, 0, Type::named("int64")),
+        &view(false, 0, Type::named("int64")),
+        &mut substitutions
+    ));
+    assert!(!runtime_type_pattern_matches(
+        &view(false, 0, Type::named("int64")),
+        &Type::named("int64"),
+        &mut substitutions
+    ));
+
+    let symbolic_union = Type::Union(Box::new(coverage_union(vec![
+        Type::named("?V"),
+        Type::Unit,
+    ])));
+    let decoded =
+        runtime_type_pattern_from_name(&super::canonical_runtime_type_name(&symbolic_union));
+    match &decoded {
+        Type::Union(union) => assert!(
+            union
+                .members
+                .iter()
+                .any(|member| *member == Type::TypeParam("V".to_string())),
+            "union members decode their `?` type parameters: {decoded}"
+        ),
+        other => panic!("expected a union pattern, found {other}"),
+    }
+    let decoded_view = runtime_type_pattern_from_name(&super::canonical_runtime_type_name(&view(
+        false,
+        1,
+        Type::named("?T"),
+    )));
+    assert_eq!(
+        decoded_view,
+        view(false, 1, Type::TypeParam("T".to_string()))
+    );
+    let decoded_callable = runtime_type_pattern_from_name(&super::canonical_runtime_type_name(
+        &callable(false, ClosureCallKind::Repeatable, Type::named("?T")),
+    ));
+    assert_eq!(
+        decoded_callable,
+        callable(
+            false,
+            ClosureCallKind::Repeatable,
+            Type::TypeParam("T".to_string())
+        )
+    );
+}
+
+#[test]
+fn direct_ffi_metadata_rejects_invalid_nullable_unions_and_missing_nominal_types() {
+    use crate::ffi::{FfiType, FfiValue, OpaqueHandle};
+
+    fn append_text(bytes: &mut Vec<u8>, text: &str) {
+        bytes.extend_from_slice(&(text.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(text.as_bytes());
+    }
+    let mut spec = Vec::new();
+    spec.extend_from_slice(b"AUFI");
+    spec.push(super::DIRECT_FFI_SPEC_VERSION);
+    append_text(&mut spec, "make");
+    spec.extend_from_slice(&0u32.to_le_bytes());
+    spec.push(16);
+    append_text(&mut spec, "Handle");
+    append_text(&mut spec, "{not json");
+    let error = super::decode_direct_ffi_call_spec(&spec).expect_err("invalid union metadata");
+    assert!(
+        error.starts_with("nullable-handle metadata carries invalid union metadata:"),
+        "{error}"
+    );
+
+    let missing_name = super::DirectFfiType {
+        ffi_type: FfiType::OpaqueHandle,
+        opaque_name: None,
+        union_type: None,
+    };
+    let mut backing = 0u8;
+    let pointer = (&mut backing as *mut u8).cast::<std::ffi::c_void>();
+    let handle = crate::runtime_value::FfiHandleValue::new("Handle".to_string(), pointer)
+        .expect("non-null handle");
+    assert!(matches!(
+        super::direct_value_to_ffi(&Value::FfiHandle(handle), &missing_name),
+        Err(message) if message == "opaque FFI metadata is missing its nominal type"
+    ));
+    assert!(matches!(
+        super::direct_ffi_to_value(
+            FfiValue::OpaqueHandle(OpaqueHandle::new(pointer).expect("non-null handle")),
+            &missing_name,
+        ),
+        Err(message) if message == "opaque FFI metadata is missing its nominal type"
+    ));
+}
+
+#[test]
+fn direct_root_entry_runs_thunks_in_process_and_reports_return_kinds() {
+    unsafe extern "C-unwind" fn root_returns_seven(
+        _args: *const i64,
+        _arg_count: usize,
+    ) -> *mut OpaqueValue {
+        super::aura_direct_box_i32(7)
+    }
+    unsafe extern "C-unwind" fn root_returns_unit(
+        _args: *const i64,
+        _arg_count: usize,
+    ) -> *mut OpaqueValue {
+        boxed_value(Value::Unit)
+    }
+    unsafe extern "C-unwind" fn root_traps(
+        _args: *const i64,
+        _arg_count: usize,
+    ) -> *mut OpaqueValue {
+        super::runtime_error("root trap")
+    }
+
+    assert_eq!(
+        unsafe { super::aura_direct_run_root(root_returns_seven as *const () as usize as i64) },
+        7
+    );
+    assert_eq!(
+        unsafe { super::aura_direct_run_root(root_returns_unit as *const () as usize as i64) },
+        0
+    );
+    assert_eq!(
+        capture_direct_boundary_error_message(|| unsafe {
+            super::aura_direct_run_root(root_traps as *const () as usize as i64);
+        }),
+        "root trap"
+    );
+}
+
+#[test]
+fn direct_call_depth_overflow_reports_the_call_site_and_uses_the_program_path() {
+    let path = "/virtual/depth.au";
+    let source = "def main() -> int32:\n    return 0\n";
+    super::aura_direct_runtime_init(path.as_ptr(), path.len(), source.as_ptr(), source.len());
+    let diagnostic = capture_direct_boundary_diagnostic(|| unsafe {
+        for _ in 0..=super::DIRECT_MAX_CALL_DEPTH {
+            super::aura_direct_enter_call(2, 3, b"recurse".as_ptr(), b"recurse".len());
+        }
+    });
+    assert_eq!(
+        diagnostic.message,
+        format!(
+            "maximum call depth of {} exceeded while calling `recurse`",
+            super::DIRECT_MAX_CALL_DEPTH
+        )
+    );
+    assert_eq!(diagnostic.span, Some(Span::new(2, 3)));
+    assert_eq!(diagnostic.call_frames.len(), super::DIRECT_MAX_CALL_DEPTH);
+}
+
+#[test]
+fn direct_scalar_wrappers_reject_out_of_range_values_and_wrong_receivers() {
+    assert_eq!(
+        capture_direct_boundary_error_message(|| {
+            super::aura_direct_box_i32(i64::MAX);
+        }),
+        int32_overflow_message(i64::MAX)
+    );
+    assert_eq!(
+        capture_direct_boundary_error_message(|| {
+            super::aura_direct_string_byte_len(int_value(1));
+        }),
+        "expected `str`, found `integer`"
+    );
+    assert_eq!(
+        capture_direct_boundary_error_message(|| {
+            super::aura_direct_integer_to_float(string_value("x"));
+        }),
+        "direct backend expected an integer, found `str`"
+    );
+    let empty = super::aura_direct_tuple_new(std::ptr::null_mut(), 0);
+    match unsafe { take_value(empty) } {
+        Value::Tuple(tuple) => assert!(tuple.elements.is_empty() && tuple.element_types.is_empty()),
+        other => panic!("expected an empty tuple, found {other:?}"),
+    }
+    assert_eq!(
+        capture_direct_boundary_error_message(|| {
+            super::direct_assert_string(0, "message");
+        }),
+        "direct assertion message must be `str`, found null"
+    );
+}
+
+#[test]
+fn direct_collection_index_wrappers_report_spans_and_negative_indices() {
+    let diagnostic = capture_direct_boundary_diagnostic(|| {
+        super::aura_direct_vec_index(int_vec(&[1, 2]), 5, 3, 4);
+    });
+    assert_eq!(
+        diagnostic.message,
+        "list index `5` is out of bounds for length `2`"
+    );
+    assert_eq!(diagnostic.span, Some(Span::new(3, 4)));
+    assert_eq!(
+        capture_direct_boundary_error_message(|| {
+            super::aura_direct_set_index_option(super::aura_direct_set_empty(), -1);
+        }),
+        "list index `-1` cannot be negative"
+    );
+    assert_eq!(
+        capture_direct_boundary_error_message(|| {
+            super::aura_direct_set_take_index_in_place(super::aura_direct_set_empty(), -1);
+        }),
+        "set index `-1` cannot be negative"
+    );
+    assert_eq!(
+        capture_direct_boundary_error_message(|| {
+            super::aura_direct_collection_operation(
+                super::aura_direct_set_empty(),
+                std::ptr::null_mut(),
+                0,
+                99,
+            );
+        }),
+        "unknown direct collection operation"
+    );
+    let set = super::aura_direct_set_empty();
+    assert_eq!(super::aura_direct_set_insert_in_place(set, int_value(1)), 1);
+    expect_unit(super::aura_direct_collection_operation(
+        set,
+        std::ptr::null_mut(),
+        0,
+        7,
+    ));
+    assert_eq!(super::aura_direct_set_len(set), 0, "opcode 7 clears a set");
+    unsafe {
+        release_value(set);
+    }
+}
+
+#[test]
+fn direct_operator_and_cast_wrappers_reject_unknown_codes() {
+    assert_eq!(
+        capture_direct_boundary_error_message(|| {
+            super::aura_direct_unary_value(9, int_value(1));
+        }),
+        "unknown unary opcode `9`"
+    );
+    assert!(capture_direct_boundary_error_message(|| {
+        super::aura_direct_unary_value(0, string_value("x"));
+    })
+    .contains("unary"));
+    assert_eq!(
+        capture_direct_boundary_error_message(|| {
+            super::aura_direct_binary_value_at(99, int_value(1), int_value(2), 0, 0, 0);
+        }),
+        "unknown binary opcode `99`"
+    );
+    assert_eq!(
+        capture_direct_boundary_error_message(|| {
+            super::aura_direct_binary_value_at(0, int_value(1), int_value(2), 7, 0, 0);
+        }),
+        "unknown direct floating width `7`"
+    );
+    assert_eq!(
+        expect_float(super::aura_direct_binary_value_at(
+            14,
+            float_value(2.0),
+            float_value(3.0),
+            32,
+            0,
+            0,
+        )),
+        8.0
+    );
+    assert_eq!(
+        capture_direct_boundary_error_message(|| {
+            super::aura_direct_cast_integer_to_integer(1, 2, 1, 0, 0);
+        }),
+        "unknown direct integer source kind `2`"
+    );
+    assert_eq!(
+        capture_direct_boundary_error_message(|| {
+            super::aura_direct_cast_integer_to_integer(1, 0, 5, 0, 0);
+        }),
+        "unknown direct integer target kind `5`"
+    );
+    assert_eq!(
+        capture_direct_boundary_error_message(|| {
+            super::aura_direct_cast_integer_to_float(1, 0, 3, 0, 0);
+        }),
+        "unknown direct float target kind `3`"
+    );
+    let diagnostic = capture_direct_boundary_diagnostic(|| {
+        super::aura_direct_cast_value_at(string_value("x"), b"int64".as_ptr(), 5, 0, 0);
+    });
+    assert!(
+        diagnostic.span.is_none(),
+        "a cast without a call site reports no span: {diagnostic:?}"
+    );
+}
+
+#[test]
+fn direct_value_type_matches_falls_back_to_structural_names_for_unions_and_handles() {
+    let target = coverage_union(vec![Type::named("int64"), Type::Unit]);
+    let index = coverage_union_member_index(&target, &Type::named("int64"));
+    let union_type = Type::Union(Box::new(target.clone()));
+    let union = boxed_value(coverage_union_value(&target, index, coverage_int(1)));
+    let expected = union_type.to_string();
+    assert_eq!(
+        super::aura_direct_value_type_matches(union, expected.as_ptr(), expected.len()),
+        1
+    );
+    assert_eq!(
+        super::aura_direct_value_type_matches(union, b"str".as_ptr(), 3),
+        0
+    );
+    let mut backing = 0u8;
+    let handle = boxed_value(Value::FfiHandle(
+        crate::runtime_value::FfiHandleValue::new(
+            "Handle".to_string(),
+            (&mut backing as *mut u8).cast::<std::ffi::c_void>(),
+        )
+        .expect("non-null handle"),
+    ));
+    assert_eq!(
+        super::aura_direct_value_type_matches(handle, b"Handle".as_ptr(), 6),
+        1
+    );
+    let text = string_value("plain");
+    for pattern in ["?T", "module ?m"] {
+        assert_eq!(
+            super::aura_direct_value_type_matches(text, pattern.as_ptr(), pattern.len()),
+            0,
+            "an untagged value never matches the bare pattern `{pattern}`"
+        );
+    }
+    unsafe {
+        release_value(union);
+        release_value(handle);
+        release_value(text);
+    }
+}
+
+#[test]
+fn native_runtime_operator_helpers_cover_duration_comparisons_float_power_and_shift_edges() {
+    let error = compare_values(Value::Duration(1), Value::Duration(2), BinaryOp::Add)
+        .expect_err("duration comparison rejects arithmetic operators");
+    assert_eq!(
+        error.message,
+        "unsupported comparison operator `Add` for Duration values"
+    );
+    assert_eq!(
+        eval_binary_value(Value::Float(2.0), Value::Float(3.0), BinaryOp::Pow)
+            .expect("float power"),
+        Value::Float(8.0)
+    );
+    let int8 = |value| {
+        Value::Int(IntegerValue::from_typed_signed(value, IntegerKind::Int8).expect("fits int8"))
+    };
+    let mismatched = eval_binary_value(int8(1), coverage_int(1), BinaryOp::Shl)
+        .expect_err("shift kinds must match");
+    assert_eq!(mismatched.code, "AU2002");
+    assert_eq!(mismatched.message, "shift operand types must match");
+    let overflow = eval_binary_value(int8(1), int8(7), BinaryOp::Shl)
+        .expect_err("shifting into the sign bit overflows");
+    assert_eq!(overflow.message, "integer left shift overflow");
+
+    let target = coverage_union(vec![Type::named("int64"), Type::Unit]);
+    let union = coverage_union_value(&target, 0, coverage_int(1));
+    let union_type = Type::Union(Box::new(target));
+    assert_eq!(inferred_collection_type(&union), union_type);
+    assert_eq!(value_type_name(&union), union_type.to_string());
+    let mut backing = 0u8;
+    let handle = Value::FfiHandle(
+        crate::runtime_value::FfiHandleValue::new(
+            "Handle".to_string(),
+            (&mut backing as *mut u8).cast::<std::ffi::c_void>(),
+        )
+        .expect("non-null handle"),
+    );
+    assert_eq!(inferred_collection_type(&handle), Type::named("Handle"));
+    assert_eq!(
+        inferred_collection_type(&Value::EnumVariant(EnumVariantValue {
+            enum_name: "Shape".to_string(),
+            variant_name: "Circle".to_string(),
+            payloads: Vec::new(),
+        })),
+        Type::named("Shape")
+    );
+    assert_eq!(
+        inferred_collection_type(&Value::ModuleNamespace(ModuleNamespaceValue {
+            path: "m".to_string(),
+        })),
+        Type::named("Unknown")
+    );
+}
+
+#[test]
+fn wide_integer_overflow_messages_cover_division_and_unsigned_products() {
+    assert_eq!(
+        super::wide_integer_overflow_message(0, 3, 6, 2),
+        "integer value `3` does not fit in `int64`"
+    );
+    assert_eq!(
+        super::wide_integer_overflow_message(1, 2, 3, 4),
+        "integer value `12` does not fit in `uint64`"
+    );
+    assert_eq!(
+        super::wide_integer_overflow_message(1, 3, 8, 2),
+        "integer value `4` does not fit in `uint64`"
+    );
+    for (kind, op, expected) in [
+        (0, 9, "unknown signed overflow opcode `9`"),
+        (1, 9, "unknown unsigned overflow opcode `9`"),
+        (2, 0, "unknown integer overflow kind `2`"),
+    ] {
+        assert_eq!(
+            capture_direct_boundary_error_message(move || {
+                super::wide_integer_overflow_message(kind, op, 1, 1);
+            }),
+            expected
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn internal_diagnostic_channels_reject_shared_descriptors_and_recover_from_poison() {
+    let mut fds = [0i32; 2];
+    assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
+    super::install_internal_diagnostic_channels(fds[0], fds[0]);
+    assert_eq!(
+        super::try_emit_internal_structured_diagnostic(&Diagnostic::new("shared descriptors")),
+        super::InternalDiagnosticEmission::NoChannel
+    );
+    assert!(super::inherited_internal_diagnostic_file(-1).is_none());
+    assert_eq!(unsafe { libc::close(fds[1]) }, 0);
+    assert!(
+        super::inherited_internal_diagnostic_file(fds[1]).is_none(),
+        "a closed descriptor number is rejected before ownership is assumed"
+    );
+
+    let mut signal_pipe = [0i32; 2];
+    assert_eq!(unsafe { libc::pipe(signal_pipe.as_mut_ptr()) }, 0);
+    assert_eq!(unsafe { libc::close(signal_pipe[0]) }, 0);
+    let mut data_pipe = [0i32; 2];
+    assert_eq!(unsafe { libc::pipe(data_pipe.as_mut_ptr()) }, 0);
+    super::install_internal_diagnostic_channels(data_pipe[1], signal_pipe[1]);
+    assert_eq!(
+        super::try_emit_internal_structured_diagnostic(&Diagnostic::new("dead signal")),
+        super::InternalDiagnosticEmission::NoChannel,
+        "a signal channel without a reader disables structured emission"
+    );
+    assert_eq!(unsafe { libc::close(data_pipe[0]) }, 0);
+
+    let path = "/virtual/channels.au";
+    let source = "def main() -> int32:\n    return 0\n";
+    super::aura_direct_runtime_init(path.as_ptr(), path.len(), source.as_ptr(), source.len());
+    let record_path = std::env::temp_dir().join(format!(
+        "aura-native-diagnostic-record-{}-{}.json",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos()
+    ));
+    {
+        let mut record = std::fs::File::create(&record_path).expect("record file");
+        super::write_internal_structured_diagnostic_to_fd(
+            &Diagnostic::coded("AU4001", "recorded"),
+            &mut record,
+        )
+        .expect("structured record should be written");
+    }
+    let encoded = std::fs::read_to_string(&record_path).expect("record readable");
+    let _ = std::fs::remove_file(&record_path);
+    assert!(encoded.contains("recorded"), "{encoded}");
+
+    let poisoner = thread::spawn(|| {
+        let _guard = super::INTERNAL_DIAGNOSTIC_CHANNELS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        panic!("poison the diagnostic channel lock");
+    });
+    assert!(poisoner.join().is_err());
+    *super::lock_internal_diagnostic_channels() = None;
+    assert_eq!(
+        super::try_emit_internal_structured_diagnostic(&Diagnostic::new("after poison")),
+        super::InternalDiagnosticEmission::NoChannel
+    );
+}
+
+fn coverage_closed_port_address() -> String {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind an ephemeral port");
+    let address = listener.local_addr().expect("local address");
+    drop(listener);
+    address.to_string()
+}
+
+fn coverage_unique_temp_path(label: &str) -> std::path::PathBuf {
+    std::env::temp_dir().join(format!(
+        "aura-native-coverage-{label}-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos()
+    ))
+}
+
+fn coverage_is_none(value: Value) -> bool {
+    matches!(
+        value,
+        Value::EnumVariant(variant)
+            if variant.enum_name == "Option" && variant.variant_name == "None"
+    )
+}
+
+#[test]
+fn direct_wait_wrappers_reject_non_task_lists_and_repeated_observations() {
+    assert_eq!(
+        capture_direct_boundary_error_message(|| {
+            super::aura_direct_wait_any(int_vec(&[1]));
+        }),
+        "expected `wait_any` tasks to be `Task`, found `integer`"
+    );
+
+    let observed =
+        TaskValue::from_handle_with_result_repeatability(thread::spawn(|| Ok(Value::Unit)), false);
+    let _ = expect_variant_ptr(
+        super::aura_direct_wait_all(task_vec(std::slice::from_ref(&observed))),
+        "WaitAll",
+        "Ready",
+    );
+    for (label, work) in [
+        (
+            "wait_all",
+            Box::new({
+                let task = observed.clone();
+                move || {
+                    super::aura_direct_wait_all(task_vec(&[task]));
+                }
+            }) as Box<dyn FnOnce() + Send>,
+        ),
+        (
+            "wait_all(timeout=...)",
+            Box::new({
+                let task = observed.clone();
+                move || {
+                    super::aura_direct_wait_all_timeout_value(
+                        task_vec(&[task]),
+                        duration_value(1_000),
+                    );
+                }
+            }),
+        ),
+        (
+            "wait_any",
+            Box::new({
+                let task = observed.clone();
+                move || {
+                    super::aura_direct_wait_any(task_vec(&[task]));
+                }
+            }),
+        ),
+        (
+            "wait_any(timeout=...)",
+            Box::new({
+                let task = observed.clone();
+                move || {
+                    super::aura_direct_wait_any_timeout_value(
+                        task_vec(&[task]),
+                        duration_value(1_000),
+                    );
+                }
+            }),
+        ),
+    ] {
+        let message = capture_direct_boundary_error_message(work);
+        assert!(
+            message.contains("task result has already been observed"),
+            "{label}: {message}"
+        );
+    }
+
+    let group = TaskGroupValue::new(&CancellationContext::default());
+    group.cancel();
+    let cancelled = group.child_cancellation();
+    let payloads = expect_variant_ptr(
+        with_cancellation_scope(cancelled, || {
+            super::aura_direct_wait_any(super::aura_direct_vec_empty())
+        }),
+        "WaitAny",
+        "Cancelled",
+    );
+    assert!(payloads.is_empty());
+}
+
+#[test]
+fn direct_select_rejects_mismatched_queue_and_task_payload_types() {
+    let queues = capture_direct_boundary_diagnostic(|| {
+        super::aura_direct_select(select_sources(
+            vec![
+                Type::Named("Queue".to_string(), vec![Type::named("int64")]),
+                Type::Named("Queue".to_string(), vec![Type::named("str")]),
+            ],
+            vec![
+                Value::Channel(ChannelValue::new()),
+                Value::Channel(ChannelValue::new()),
+            ],
+        ));
+    });
+    assert_eq!(queues.code, "AU4001");
+    assert!(
+        queues
+            .message
+            .contains("Queue sources must share one payload type"),
+        "{}",
+        queues.message
+    );
+
+    let tasks = capture_direct_boundary_diagnostic(|| {
+        let first = TaskValue::from_handle(thread::spawn(|| Ok(Value::Unit)));
+        let second = TaskValue::from_handle(thread::spawn(|| Ok(Value::Unit)));
+        super::aura_direct_select(select_sources(
+            vec![
+                Type::Named("Task".to_string(), vec![Type::named("int64")]),
+                Type::Named("Task".to_string(), vec![Type::named("str")]),
+            ],
+            vec![Value::Task(first), Value::Task(second)],
+        ));
+    });
+    assert_eq!(tasks.code, "AU4001");
+    assert!(
+        tasks
+            .message
+            .contains("Task sources must share one result type"),
+        "{}",
+        tasks.message
+    );
+}
+
+#[test]
+fn direct_network_connectors_report_unreachable_endpoints_as_io_errors() {
+    let closed = coverage_closed_port_address();
+    let timeout = || duration_value(2_000);
+    expect_result_err_payload(super::aura_direct_net_connect_timeout(
+        string_value(&closed),
+        timeout(),
+    ));
+    let missing_socket = coverage_unique_temp_path("missing-dir").join("aura.sock");
+    let missing_socket = missing_socket
+        .to_str()
+        .expect("utf-8 temp path")
+        .to_string();
+    expect_result_err_payload(super::aura_direct_net_unix_listen(string_value(
+        &missing_socket,
+    )));
+    expect_result_err_payload(super::aura_direct_net_unix_connect_timeout(
+        string_value(&missing_socket),
+        timeout(),
+    ));
+    let missing_cert = coverage_unique_temp_path("missing-ca").join("ca.pem");
+    expect_result_err_payload(super::aura_direct_net_tls_connect_timeout(
+        string_value(&closed),
+        string_value("localhost"),
+        string_value(missing_cert.to_str().expect("utf-8 temp path")),
+        timeout(),
+    ));
+    let url = format!("http://{closed}/");
+    expect_result_err_payload(super::aura_direct_net_http_request_text(
+        string_value("GET"),
+        string_value(&url),
+        string_value(""),
+        string_map(&[]),
+    ));
+    expect_result_err_payload(super::aura_direct_net_http_request_text_timeout(
+        string_value("GET"),
+        string_value(&url),
+        string_value(""),
+        string_map(&[]),
+        timeout(),
+    ));
+    expect_result_err_payload(super::aura_direct_net_http_request_bytes(
+        string_value("POST"),
+        string_value(&url),
+        int_vec(&[]),
+        string_map(&[]),
+    ));
+    expect_result_err_payload(super::aura_direct_net_http_request_bytes_timeout(
+        string_value("POST"),
+        string_value(&url),
+        int_vec(&[]),
+        string_map(&[]),
+        timeout(),
+    ));
+    expect_result_err_payload(super::aura_direct_net_websocket_connect_timeout(
+        string_value(&format!("ws://{closed}")),
+        timeout(),
+    ));
+}
+
+#[test]
+fn direct_tcp_wrappers_cover_stream_reads_at_end_of_stream_and_closed_resources() {
+    let listener = match expect_result_ok_payload(super::aura_direct_net_listen(string_value(
+        "127.0.0.1:0",
+    ))) {
+        Value::TcpListener(listener) => listener,
+        other => panic!("expected net.TcpListener, found {:?}", other),
+    };
+    let listener_ptr = boxed_value(Value::TcpListener(listener.clone()));
+    let address = expect_result_ok_string(super::aura_direct_tcp_listener_local_addr(listener_ptr));
+    let server_listener = listener.clone();
+    let server = thread::spawn(move || {
+        let accepted = match expect_result_ok_payload(super::aura_direct_tcp_listener_accept(
+            boxed_value(Value::TcpListener(server_listener)),
+            duration_value(5_000),
+        )) {
+            Value::TcpStream(stream) => stream,
+            other => panic!("expected accepted net.TcpStream, found {:?}", other),
+        };
+        let accepted_ptr = boxed_value(Value::TcpStream(accepted));
+        expect_result_ok_unit(super::aura_direct_tcp_stream_write_all(
+            accepted_ptr,
+            string_value("abc"),
+            duration_value(5_000),
+        ));
+        expect_result_ok_unit(super::aura_direct_tcp_stream_shutdown_both(accepted_ptr));
+        expect_unit(super::aura_direct_tcp_stream_close(accepted_ptr));
+    });
+    let client =
+        match expect_result_ok_payload(super::aura_direct_net_connect(string_value(&address))) {
+            Value::TcpStream(stream) => stream,
+            other => panic!("expected connected net.TcpStream, found {:?}", other),
+        };
+    let client_ptr = boxed_value(Value::TcpStream(client));
+    assert_eq!(
+        expect_result_ok_string(super::aura_direct_tcp_stream_read_all(
+            client_ptr,
+            duration_value(5_000),
+        )),
+        "abc"
+    );
+    server.join().expect("tcp server thread should join");
+    assert!(coverage_is_none(expect_result_ok_payload(
+        super::aura_direct_tcp_stream_read_line(client_ptr, duration_value(5_000)),
+    )));
+    assert!(coverage_is_none(expect_result_ok_payload(
+        super::aura_direct_tcp_stream_read_bytes(client_ptr, int_value(4), duration_value(5_000)),
+    )));
+    expect_unit(super::aura_direct_tcp_stream_close(client_ptr));
+    let timeout = || duration_value(1_000);
+    expect_result_err_payload(super::aura_direct_tcp_stream_read_all(
+        client_ptr,
+        timeout(),
+    ));
+    expect_result_err_payload(super::aura_direct_tcp_stream_read_line(
+        client_ptr,
+        timeout(),
+    ));
+    expect_result_err_payload(super::aura_direct_tcp_stream_read_bytes(
+        client_ptr,
+        int_value(4),
+        timeout(),
+    ));
+    expect_result_err_payload(super::aura_direct_tcp_stream_read_exact(
+        client_ptr,
+        int_value(1),
+        timeout(),
+    ));
+    expect_result_err_payload(super::aura_direct_tcp_stream_write_all(
+        client_ptr,
+        string_value("x"),
+        timeout(),
+    ));
+    expect_result_err_payload(super::aura_direct_tcp_stream_write_bytes(
+        client_ptr,
+        int_vec(&[1]),
+        timeout(),
+    ));
+    expect_result_err_payload(super::aura_direct_tcp_stream_shutdown_write(client_ptr));
+    expect_result_err_payload(super::aura_direct_tcp_stream_flush(client_ptr));
+    expect_result_err_payload(super::aura_direct_tcp_stream_local_addr(client_ptr));
+    expect_result_err_payload(super::aura_direct_tcp_stream_peer_addr(client_ptr));
+    expect_unit(super::aura_direct_tcp_listener_close(listener_ptr));
+    unsafe {
+        release_value(client_ptr);
+        release_value(listener_ptr);
+    }
+
+    for (expected, work) in [
+        (
+            "expected `net.TcpListener`, found `integer`",
+            Box::new(|| {
+                super::aura_direct_tcp_listener_accept(int_value(1), duration_value(1));
+            }) as Box<dyn FnOnce() + Send>,
+        ),
+        (
+            "expected `net.TcpListener`, found `integer`",
+            Box::new(|| {
+                super::aura_direct_tcp_listener_local_addr(int_value(1));
+            }),
+        ),
+        (
+            "expected `net.TcpListener`, found `integer`",
+            Box::new(|| {
+                super::aura_direct_tcp_listener_close(int_value(1));
+            }),
+        ),
+        (
+            "expected `net.TcpStream`, found `integer`",
+            Box::new(|| {
+                super::aura_direct_tcp_stream_read_all(int_value(1), duration_value(1));
+            }),
+        ),
+        (
+            "expected `net.TcpStream`, found `integer`",
+            Box::new(|| {
+                super::aura_direct_tcp_stream_read_bytes(
+                    int_value(1),
+                    int_value(1),
+                    duration_value(1),
+                );
+            }),
+        ),
+    ] {
+        assert_eq!(capture_direct_boundary_error_message(work), expected);
+    }
+}
+
+#[test]
+fn direct_udp_wrappers_report_invalid_addresses_and_closed_sockets() {
+    let socket = match expect_result_ok_payload(super::aura_direct_net_udp_bind(string_value(
+        "127.0.0.1:0",
+    ))) {
+        Value::UdpSocket(socket) => socket,
+        other => panic!("expected net.UdpSocket, found {:?}", other),
+    };
+    let socket_ptr = boxed_value(Value::UdpSocket(socket));
+    let timeout = || duration_value(1_000);
+    expect_result_err_payload(super::aura_direct_udp_socket_send_text(
+        socket_ptr,
+        string_value("not an address"),
+        string_value("x"),
+        timeout(),
+    ));
+    expect_result_err_payload(super::aura_direct_udp_socket_send_bytes(
+        socket_ptr,
+        string_value("not an address"),
+        int_vec(&[1]),
+        timeout(),
+    ));
+    expect_unit(super::aura_direct_udp_socket_close(socket_ptr));
+    expect_result_err_payload(super::aura_direct_udp_socket_recv(
+        socket_ptr,
+        int_value(16),
+        timeout(),
+    ));
+    expect_result_err_payload(super::aura_direct_udp_socket_recv_from(
+        socket_ptr,
+        int_value(16),
+        timeout(),
+    ));
+    expect_result_err_payload(super::aura_direct_udp_socket_local_addr(socket_ptr));
+    unsafe {
+        release_value(socket_ptr);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn direct_unix_stream_wrappers_cover_end_of_stream_and_closed_resources() {
+    let socket_path = std::path::PathBuf::from(format!(
+        "/tmp/a-cov-{}-{}.sock",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .subsec_nanos()
+    ));
+    let socket_text = socket_path.to_str().expect("utf-8 temp path").to_string();
+    let listener = match expect_result_ok_payload(super::aura_direct_net_unix_listen(string_value(
+        &socket_text,
+    ))) {
+        Value::UnixListener(listener) => listener,
+        other => panic!("expected net.UnixListener, found {:?}", other),
+    };
+    let server_listener = listener.clone();
+    let server = thread::spawn(move || {
+        let accepted = match expect_result_ok_payload(super::aura_direct_unix_listener_accept(
+            boxed_value(Value::UnixListener(server_listener)),
+            duration_value(5_000),
+        )) {
+            Value::UnixStream(stream) => stream,
+            other => panic!("expected accepted net.UnixStream, found {:?}", other),
+        };
+        let accepted_ptr = boxed_value(Value::UnixStream(accepted));
+        expect_result_ok_unit(super::aura_direct_unix_stream_write_all(
+            accepted_ptr,
+            string_value("x\n"),
+            duration_value(5_000),
+        ));
+        expect_unit(super::aura_direct_unix_stream_close(accepted_ptr));
+    });
+    let client = match expect_result_ok_payload(super::aura_direct_net_unix_connect(string_value(
+        &socket_text,
+    ))) {
+        Value::UnixStream(stream) => stream,
+        other => panic!("expected connected net.UnixStream, found {:?}", other),
+    };
+    let client_ptr = boxed_value(Value::UnixStream(client));
+    let line = expect_option_some_payload(expect_result_ok_payload(
+        super::aura_direct_unix_stream_read_line(client_ptr, duration_value(5_000)),
+    ));
+    assert_eq!(line, Value::String("x".to_string()));
+    server.join().expect("unix server thread should join");
+    assert!(coverage_is_none(expect_result_ok_payload(
+        super::aura_direct_unix_stream_read_line(client_ptr, duration_value(5_000)),
+    )));
+    expect_unit(super::aura_direct_unix_stream_close(client_ptr));
+    let timeout = || duration_value(1_000);
+    expect_result_err_payload(super::aura_direct_unix_stream_read_line(
+        client_ptr,
+        timeout(),
+    ));
+    expect_result_err_payload(super::aura_direct_unix_stream_read_exact(
+        client_ptr,
+        int_value(1),
+        timeout(),
+    ));
+    expect_result_err_payload(super::aura_direct_unix_stream_write_all(
+        client_ptr,
+        string_value("x"),
+        timeout(),
+    ));
+    close_via_direct(Value::UnixListener(listener));
+    unsafe {
+        release_value(client_ptr);
+    }
+    let _ = std::fs::remove_file(&socket_path);
+}
+
+#[test]
+fn direct_tls_wrappers_cover_listener_accept_and_stream_lifecycle() {
+    let certificate =
+        generate_simple_self_signed(vec!["localhost".to_string()]).expect("cert generation");
+    let cert_path = coverage_unique_temp_path("tls").with_extension("cert.pem");
+    let key_path = coverage_unique_temp_path("tls").with_extension("key.pem");
+    std::fs::write(&cert_path, certificate.cert.pem().as_bytes()).expect("write cert pem");
+    std::fs::write(&key_path, certificate.key_pair.serialize_pem().as_bytes())
+        .expect("write key pem");
+    let cert_text = cert_path.to_str().expect("utf-8 temp path").to_string();
+    let key_text = key_path.to_str().expect("utf-8 temp path").to_string();
+
+    let listener = match expect_result_ok_payload(super::aura_direct_net_tls_listen(
+        string_value("127.0.0.1:0"),
+        string_value(&cert_text),
+        string_value(&key_text),
+    )) {
+        Value::TlsListener(listener) => listener,
+        other => panic!("expected net.TlsListener, found {:?}", other),
+    };
+    let listener_ptr = boxed_value(Value::TlsListener(listener.clone()));
+    let address = expect_result_ok_string(super::aura_direct_tls_listener_local_addr(listener_ptr));
+    let server_listener = listener.clone();
+    let server = thread::spawn(move || {
+        let accepted = match expect_result_ok_payload(super::aura_direct_tls_listener_accept(
+            boxed_value(Value::TlsListener(server_listener)),
+            duration_value(5_000),
+        )) {
+            Value::TlsStream(stream) => stream,
+            other => panic!("expected accepted net.TlsStream, found {:?}", other),
+        };
+        let accepted_ptr = boxed_value(Value::TlsStream(accepted));
+        expect_result_ok_unit(super::aura_direct_tls_stream_write_all(
+            accepted_ptr,
+            string_value("hi\n"),
+            duration_value(5_000),
+        ));
+        expect_unit(super::aura_direct_tls_stream_close(accepted_ptr));
+    });
+    let client = match expect_result_ok_payload(super::aura_direct_net_tls_connect_timeout(
+        string_value(&address),
+        string_value("localhost"),
+        string_value(&cert_text),
+        duration_value(5_000),
+    )) {
+        Value::TlsStream(stream) => stream,
+        other => panic!("expected connected net.TlsStream, found {:?}", other),
+    };
+    let client_ptr = boxed_value(Value::TlsStream(client));
+    assert_eq!(
+        expect_result_ok_vec_ints(super::aura_direct_tls_stream_read_exact(
+            client_ptr,
+            int_value(3),
+            duration_value(5_000),
+        )),
+        vec![104, 105, 10]
+    );
+    server.join().expect("tls server thread should join");
+    assert!(coverage_is_none(expect_result_ok_payload(
+        super::aura_direct_tls_stream_read_line(client_ptr, duration_value(5_000)),
+    )));
+    expect_unit(super::aura_direct_tls_stream_close(client_ptr));
+    let timeout = || duration_value(1_000);
+    expect_result_err_payload(super::aura_direct_tls_stream_read_line(
+        client_ptr,
+        timeout(),
+    ));
+    expect_result_err_payload(super::aura_direct_tls_stream_read_exact(
+        client_ptr,
+        int_value(1),
+        timeout(),
+    ));
+    expect_result_err_payload(super::aura_direct_tls_stream_write_all(
+        client_ptr,
+        string_value("x"),
+        timeout(),
+    ));
+    expect_unit(super::aura_direct_tls_listener_close(listener_ptr));
+    unsafe {
+        release_value(client_ptr);
+        release_value(listener_ptr);
+    }
+    let _ = std::fs::remove_file(&cert_path);
+    let _ = std::fs::remove_file(&key_path);
+
+    for (expected, work) in [
+        (
+            "expected `net.TlsListener`, found `integer`",
+            Box::new(|| {
+                super::aura_direct_tls_listener_accept(int_value(1), duration_value(1));
+            }) as Box<dyn FnOnce() + Send>,
+        ),
+        (
+            "expected `net.TlsListener`, found `integer`",
+            Box::new(|| {
+                super::aura_direct_tls_listener_local_addr(int_value(1));
+            }),
+        ),
+        (
+            "expected `net.TlsListener`, found `integer`",
+            Box::new(|| {
+                super::aura_direct_tls_listener_close(int_value(1));
+            }),
+        ),
+        (
+            "expected `net.TlsStream`, found `integer`",
+            Box::new(|| {
+                super::aura_direct_tls_stream_read_exact(
+                    int_value(1),
+                    int_value(1),
+                    duration_value(1),
+                );
+            }),
+        ),
+    ] {
+        assert_eq!(capture_direct_boundary_error_message(work), expected);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn direct_process_pipe_reads_report_end_of_stream_as_none() {
+    let child = ProcessChildValue::spawn(
+        vec![
+            "/bin/sh".to_string(),
+            "-c".to_string(),
+            "exit 0".to_string(),
+        ],
+        None,
+        Vec::new(),
+        ProcessStdioConfig::Null,
+        ProcessStdioConfig::Pipe,
+        ProcessStdioConfig::Null,
+        false,
+    )
+    .expect("process should spawn");
+    let child_ptr = boxed_value(Value::ProcessChild(child));
+    let stdout = match expect_option_some_payload(unsafe {
+        take_value(super::aura_direct_process_child_stdout(child_ptr))
+    }) {
+        Value::ProcessPipe(pipe) => pipe,
+        other => panic!("expected a stdout pipe, found {:?}", other),
+    };
+    let pipe_ptr = boxed_value(Value::ProcessPipe(stdout));
+    assert!(coverage_is_none(expect_result_ok_payload(
+        super::aura_direct_process_pipe_read_line(pipe_ptr, duration_value(5_000)),
+    )));
+    assert!(coverage_is_none(expect_result_ok_payload(
+        super::aura_direct_process_pipe_read_bytes(pipe_ptr, int_value(8), duration_value(5_000)),
+    )));
+    let _ = unsafe {
+        take_value(super::aura_direct_process_child_wait(
+            child_ptr,
+            std::ptr::null_mut(),
+        ))
+    };
+    expect_unit(super::aura_direct_process_child_close(child_ptr));
+    unsafe {
+        release_value(pipe_ptr);
+        release_value(child_ptr);
+    }
 }

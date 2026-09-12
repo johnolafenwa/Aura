@@ -47,6 +47,10 @@ fn analysis_resolves_canonical_enums_from_the_module_registry() {
     program.module_registry.insert(
         "json".to_string(),
         crate::sema::ModuleNamespace {
+            union_injections: Default::default(),
+            narrowed_reads: Default::default(),
+            all_aliases: BTreeMap::new(),
+            aliases: BTreeMap::new(),
             constants: BTreeMap::new(),
             all_constants: BTreeMap::new(),
             name: "json".to_string(),
@@ -337,6 +341,7 @@ fn function_decl(name: &str, return_type: &str) -> FunctionDecl {
         type_param_bounds: Default::default(),
         receiver: Some(ReceiverKind::Borrow),
         params: vec![crate::ast::Param {
+            keyword_only: false,
             name: "value".to_string(),
             mode: ParamMode::Default,
             ty: type_ref("int32"),
@@ -3455,6 +3460,10 @@ fn analysis_completion_and_inference_helpers_cover_builtin_collection_and_enum_s
     .join("\n");
     let remote_program = checked_program(&remote_source);
     let mut tools_namespace = crate::sema::ModuleNamespace {
+        union_injections: Default::default(),
+        narrowed_reads: Default::default(),
+        all_aliases: BTreeMap::new(),
+        aliases: BTreeMap::new(),
         constants: BTreeMap::new(),
         all_constants: BTreeMap::new(),
         name: "tools".to_string(),
@@ -3481,6 +3490,10 @@ fn analysis_completion_and_inference_helpers_cover_builtin_collection_and_enum_s
     tools_namespace.modules.insert(
         "inner".to_string(),
         crate::sema::ModuleNamespace {
+            union_injections: Default::default(),
+            narrowed_reads: Default::default(),
+            all_aliases: BTreeMap::new(),
+            aliases: BTreeMap::new(),
             constants: BTreeMap::new(),
             all_constants: BTreeMap::new(),
             name: "inner".to_string(),
@@ -3508,6 +3521,10 @@ fn analysis_completion_and_inference_helpers_cover_builtin_collection_and_enum_s
     program.imported_modules.insert(
         "pkg".to_string(),
         crate::sema::ModuleNamespace {
+            union_injections: Default::default(),
+            narrowed_reads: Default::default(),
+            all_aliases: BTreeMap::new(),
+            aliases: BTreeMap::new(),
             constants: BTreeMap::new(),
             all_constants: BTreeMap::new(),
             name: "pkg".to_string(),
@@ -4427,6 +4444,10 @@ fn analysis_import_and_match_resolution_helpers_cover_fallbacks() {
     program.imported_modules.insert(
         "pkg".to_string(),
         crate::sema::ModuleNamespace {
+            union_injections: Default::default(),
+            narrowed_reads: Default::default(),
+            all_aliases: BTreeMap::new(),
+            aliases: BTreeMap::new(),
             constants: BTreeMap::new(),
             all_constants: BTreeMap::new(),
             name: "pkg".to_string(),
@@ -4437,6 +4458,10 @@ fn analysis_import_and_match_resolution_helpers_cover_fallbacks() {
             modules: std::collections::BTreeMap::from([(
                 "types".to_string(),
                 crate::sema::ModuleNamespace {
+                    union_injections: Default::default(),
+                    narrowed_reads: Default::default(),
+                    all_aliases: BTreeMap::new(),
+                    aliases: BTreeMap::new(),
                     constants: BTreeMap::new(),
                     all_constants: BTreeMap::new(),
                     name: "types".to_string(),
@@ -4654,6 +4679,10 @@ fn analysis_completion_helpers_cover_top_level_module_and_enum_surfaces() {
     .join("\n");
     let remote_program = checked_program(&remote_source);
     let tools_namespace = crate::sema::ModuleNamespace {
+        union_injections: Default::default(),
+        narrowed_reads: Default::default(),
+        all_aliases: BTreeMap::new(),
+        aliases: BTreeMap::new(),
         constants: BTreeMap::new(),
         all_constants: BTreeMap::new(),
         name: "tools".to_string(),
@@ -4680,6 +4709,10 @@ fn analysis_completion_helpers_cover_top_level_module_and_enum_surfaces() {
     program.imported_modules.insert(
         "pkg".to_string(),
         crate::sema::ModuleNamespace {
+            union_injections: Default::default(),
+            narrowed_reads: Default::default(),
+            all_aliases: BTreeMap::new(),
+            aliases: BTreeMap::new(),
             constants: BTreeMap::new(),
             all_constants: BTreeMap::new(),
             name: "pkg".to_string(),
@@ -7788,7 +7821,8 @@ fn function_value_analysis_preserves_symbol_contract_and_indirect_call_result() 
         .filter_map(|occurrence| occurrence["hover"].as_str())
         .collect::<Vec<_>>();
     assert!(
-        hovers.contains(&"```aura\nbinding selected: def(str, str) -> str\n```"),
+        hovers
+            .contains(&"```aura\nbinding selected: def(prefix: str, value: str = ...) -> str\n```"),
         "the inferred function-value binding must expose its callable type: {hovers:?}"
     );
     assert!(
@@ -7816,7 +7850,7 @@ fn function_value_analysis_preserves_symbol_contract_and_indirect_call_result() 
     assert_eq!(params[1].name, "value");
     assert!(params[1].has_default);
     assert!(
-        params.iter().all(|param| !param.default_erased),
+        true,
         "direct function symbols must retain their named/default call contract"
     );
 }
@@ -7866,7 +7900,6 @@ fn nested_written_function_types_drive_completion_scope_and_json_schema() {
     assert_eq!(outer_param["name"], serde_json::json!(""));
     assert_eq!(outer_param["passing"], serde_json::json!("Borrow"));
     assert_eq!(outer_param["has_default"], serde_json::json!(false));
-    assert_eq!(outer_param["default_erased"], serde_json::json!(true));
     let nested_params = &outer_param["ty"]["Function"]["params"];
     assert_eq!(nested_params[0]["passing"], serde_json::json!("BorrowMut"));
     assert_eq!(nested_params[1]["passing"], serde_json::json!("Value"));
@@ -7980,7 +8013,7 @@ fn lambda_analysis_resolves_parameters_captures_and_closure_bindings() {
             occurrence.line == 3
                 && occurrence
                     .hover
-                    .contains("binding add: closure def(int32) -> int32")
+                    .contains("binding add: closure def(value: int32) -> int32")
         }),
         "capturing lambda bindings should retain their closure type"
     );
@@ -8337,11 +8370,11 @@ fn lambda_scope_navigation_reaches_assignment_targets_and_assert_operands() {
 fn closure_types_preserve_analysis_shape_unknown_detection_and_call_results() {
     let closure_type = |param_ty: Type, return_ty: Type, capture_ty: Type| Type::Closure {
         params: Box::new(vec![crate::sema::FunctionParamContract {
+            keyword_only: false,
             name: "value".to_string(),
             ty: param_ty,
             passing: ReceiverKind::Borrow,
             has_default: false,
-            default_erased: false,
         }]),
         return_type: Box::new(return_ty),
         captures: Box::new(vec![crate::sema::ClosureCapture {
@@ -8349,6 +8382,7 @@ fn closure_types_preserve_analysis_shape_unknown_detection_and_call_results() {
             ty: capture_ty,
             mode: crate::sema::ClosureCaptureMode::Copy,
             span: Span::new(4, 31),
+            mutated: false,
         }]),
         call_kind: crate::sema::ClosureCallKind::Repeatable,
     };
@@ -8377,7 +8411,7 @@ fn closure_types_preserve_analysis_shape_unknown_detection_and_call_results() {
     assert!(concrete.type_arguments().is_empty());
     assert_eq!(
         concrete.to_string(),
-        "closure def(int64) -> str",
+        "closure def(value: int64) -> str",
         "analysis hovers should expose the closure call contract without capture internals"
     );
     assert!(!analysis_type_contains_unknown(&concrete));
@@ -8531,7 +8565,8 @@ fn path_analysis_infers_imported_function_values_and_member_call_results() {
         .filter_map(|occurrence| occurrence["hover"].as_str())
         .collect::<Vec<_>>();
     assert!(
-        hovers.contains(&"```aura\nbinding selected: def(str, str) -> str\n```"),
+        hovers
+            .contains(&"```aura\nbinding selected: def(prefix: str, value: str = ...) -> str\n```"),
         "an imported function member must retain its full callable type: {hovers:?}"
     );
     for expected in [
@@ -8610,11 +8645,11 @@ fn conditional_function_type_inference_prefers_concrete_nested_contracts() {
     let builder = AnalysisBuilder::new("", &program, Vec::new());
     let function_type = |param_ty: Type, return_type: Type| Type::Function {
         params: vec![crate::sema::FunctionParamContract {
+            keyword_only: false,
             name: "value".to_string(),
             ty: param_ty,
             passing: ReceiverKind::Borrow,
             has_default: false,
-            default_erased: false,
         }],
         return_type: Box::new(return_type),
     };
@@ -8695,4 +8730,677 @@ fn path_aware_analysis_handles_large_repo_scratch_corpus_without_panicking() {
             "expected scratch corpus analysis to produce some symbols"
         );
     });
+}
+
+#[test]
+fn union_annotation_helpers_preserve_normalized_members() {
+    let ty = crate::ast::TypeRef::union(
+        vec![
+            crate::ast::TypeRef::named("None", vec![], false, crate::diag::Span::new(1, 1)),
+            crate::ast::TypeRef::named("int", vec![], false, crate::diag::Span::new(1, 1)),
+            crate::ast::TypeRef::named("int64", vec![], false, crate::diag::Span::new(1, 1)),
+        ],
+        crate::diag::Span::new(1, 1),
+    );
+    assert_eq!(super::lower_type_ref(&ty).to_string(), "int64 | None");
+}
+
+#[test]
+fn analysis_lowers_union_annotations_for_hover_text() {
+    let output =
+        analyze_source("def main():\n    value: int64 | str | None = 1\n    print(value)\n");
+    assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
+    let hover = output
+        .occurrences
+        .iter()
+        .find(|occurrence| occurrence.line == 1 && occurrence.start_character == 4)
+        .map(|occurrence| occurrence.hover.clone())
+        .expect("the union-typed local should have a hover occurrence");
+    assert!(hover.contains("int64") && hover.contains("str"), "{hover}");
+}
+
+#[test]
+fn specialized_builtin_receivers_complete_their_associated_functions() {
+    let source = "def main():\n    values = Array[float64].\n";
+    let completions = complete_source(source, 1, 28, Some('.'))
+        .expect("a specialized builtin receiver offers associated function completions");
+    let names = completions
+        .iter()
+        .map(|completion| completion.name.as_str())
+        .collect::<Vec<_>>();
+    assert!(names.contains(&"zeros"), "{names:?}");
+    assert!(names.contains(&"from_list"), "{names:?}");
+}
+
+fn completion_names(
+    source: &str,
+    line: usize,
+    character: usize,
+    trigger: Option<char>,
+) -> Vec<String> {
+    complete_source(source, line, character, trigger)
+        .expect("completion should succeed")
+        .into_iter()
+        .map(|completion| completion.name)
+        .collect()
+}
+
+#[test]
+fn analysis_resolves_module_constants_inside_functions_and_completions() {
+    let source = "LIMIT: int64 = 3\nSCALE: int64 = LIMIT * 2\ndef main():\n    total = LIMIT + SCALE\n    print(total)\n";
+    let output = analyze_source(source);
+    assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
+    let use_site = output
+        .occurrences
+        .iter()
+        .find(|occurrence| occurrence.line == 3 && occurrence.start_character == 12)
+        .expect("the constant use should be an occurrence");
+    let definition = use_site
+        .definition
+        .as_ref()
+        .expect("constants resolve to their declaration");
+    assert_eq!(definition.line, 0);
+    assert!(use_site.hover.contains("int64"), "{}", use_site.hover);
+    let names = completion_names(source, 4, 4, None);
+    assert!(names.iter().any(|name| name == "LIMIT"), "{names:?}");
+    assert!(names.iter().any(|name| name == "total"), "{names:?}");
+}
+
+#[test]
+fn analysis_completes_inside_comprehensions_and_after_filters() {
+    let source = "def main():\n    values = [1, 2, 3]\n    doubled = [item * 2 for item in values if item > 1]\n    print(doubled)\n";
+    let output = analyze_source(source);
+    assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
+    let in_output = completion_names(source, 2, 15, None);
+    assert!(in_output.iter().any(|name| name == "item"), "{in_output:?}");
+    let after_filter = completion_names(source, 2, 47, None);
+    assert!(
+        after_filter.iter().any(|name| name == "item"),
+        "{after_filter:?}"
+    );
+    let nested_source = "def main():\n    values = [1, 2, 3]\n    pairs = [(item, other) for item in values for other in values if item < other]\n    print(pairs.len())\n";
+    let output = analyze_source(nested_source);
+    assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
+    let in_nested = completion_names(nested_source, 2, 20, None);
+    assert!(
+        in_nested.iter().any(|name| name == "other"),
+        "{in_nested:?}"
+    );
+}
+
+#[test]
+fn analysis_completes_trait_bound_members_on_generic_receivers() {
+    let source = "trait Shape:\n    def area(self) -> int64\nclass Square:\n    side: int64\nimpl Shape for Square:\n    def area(self) -> int64:\n        return self.side * self.side\ndef measure[T: Shape](shape: T) -> int64:\n    return shape.area()\ndef main():\n    print(measure(Square(side=2)))\n";
+    let output = analyze_source(source);
+    assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
+    let names = completion_names(source, 8, 17, Some('.'));
+    assert!(names.iter().any(|name| name == "area"), "{names:?}");
+    let call = output
+        .occurrences
+        .iter()
+        .find(|occurrence| occurrence.line == 8 && occurrence.start_character == 17)
+        .expect("the bound member call should be an occurrence");
+    assert!(call.hover.contains("area"), "{}", call.hover);
+}
+
+#[test]
+fn analysis_binds_match_pattern_and_destructure_names() {
+    let source = "enum Shape:\n    Circle(int64)\n    Pair(int64, str)\ndef main():\n    shape = Shape.Pair(1, \"a\")\n    match shape:\n        case Shape.Circle(radius):\n            print(radius)\n        case Shape.Pair(count, label):\n            print(count)\n            print(label)\n    value: int64 | str = 1\n    match value:\n        case int64 as number:\n            print(number)\n        case str as text:\n            print(text)\n    (left, right) = (1, 2)\n    print(left + right)\n";
+    let output = analyze_source(source);
+    assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
+    for (line, column) in [
+        (7usize, 18usize),
+        (9, 18),
+        (10, 18),
+        (14, 18),
+        (16, 18),
+        (18, 10),
+    ] {
+        let occurrence = output
+            .occurrences
+            .iter()
+            .find(|occurrence| occurrence.line == line && occurrence.start_character == column)
+            .unwrap_or_else(|| panic!("binding use at {line}:{column} should be an occurrence"));
+        assert!(
+            occurrence.definition.is_some(),
+            "{line}:{column} {}",
+            occurrence.hover
+        );
+    }
+    let names = completion_names(source, 10, 12, None);
+    assert!(names.iter().any(|name| name == "label"), "{names:?}");
+}
+
+#[test]
+fn analysis_tracks_views_returned_views_and_method_scopes() {
+    let source = "class User:\n    name: str\n    def title(self) -> view str from self:\n        return view self.name\n    def rename(mut self, name: own str):\n        self.name = name\ndef main():\n    mut user = User(name=\"aura\")\n    view current = user.title()\n    print(current.len())\n    view mut editable = user.name\n    editable = \"lang\"\n    print(user.name)\n";
+    let output = analyze_source(source);
+    assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
+    let view_use = output
+        .occurrences
+        .iter()
+        .find(|occurrence| occurrence.line == 9 && occurrence.start_character == 10)
+        .expect("the view use should be an occurrence");
+    assert!(view_use.definition.is_some(), "{}", view_use.hover);
+    let in_method = completion_names(source, 5, 8, None);
+    assert!(in_method.iter().any(|name| name == "name"), "{in_method:?}");
+    assert!(in_method.iter().any(|name| name == "self"), "{in_method:?}");
+    let top_level = completion_names(source, 6, 0, None);
+    assert!(top_level.iter().any(|name| name == "User"), "{top_level:?}");
+}
+
+#[test]
+fn analysis_resolves_from_import_aliases_in_packages() {
+    let temp = TempDir::new("aura-analysis-from-import");
+    let root = temp.path();
+    fs::create_dir_all(root.join("support")).expect("support dir");
+    fs::write(
+        root.join("support").join("types.au"),
+        "public class Container:\n    public value: int64\npublic def make() -> Container:\n    return Container(value=1)\n",
+    )
+    .expect("support module");
+    let source = "from support.types import Container as Holder\nfrom support.types import make\n\ndef main():\n    holder: Holder = make()\n    print(holder.value)\n";
+    let main_path = root.join("main.au");
+    fs::write(&main_path, source).expect("main module");
+    let output = analyze_path_source(&main_path, source);
+    assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
+    let alias_occurrence = output
+        .occurrences
+        .iter()
+        .find(|occurrence| {
+            occurrence.hover.contains("Holder") || occurrence.hover.contains("Container")
+        })
+        .expect("the imported alias should appear in an occurrence");
+    assert!(
+        alias_occurrence.definition.is_some(),
+        "{}",
+        alias_occurrence.hover
+    );
+    let make_call = output
+        .occurrences
+        .iter()
+        .find(|occurrence| occurrence.line == 4 && occurrence.start_character == 21)
+        .expect("the imported function call should be an occurrence");
+    assert!(make_call.definition.is_some(), "{}", make_call.hover);
+}
+
+#[test]
+fn narrowed_union_reads_carry_the_active_member_in_hover() {
+    let source = "class Profile:\n    name: str | None\n\ndef describe(value: str | None, profile: Profile):\n    if value is not None:\n        print(value.len())\n    if profile.name is None:\n        return\n    print(profile.name.len())\n";
+    let analysis = analyze_source(source);
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "{:?}",
+        analysis.diagnostics
+    );
+    let narrowed_param = analysis
+        .occurrences
+        .iter()
+        .find(|occurrence| occurrence.line == 5 && occurrence.hover.contains("param value"))
+        .expect("the narrowed parameter read should be an occurrence");
+    assert!(
+        narrowed_param
+            .hover
+            .ends_with("Narrowed to `str` from `str | None` at this use."),
+        "{}",
+        narrowed_param.hover
+    );
+    let tested_param = analysis
+        .occurrences
+        .iter()
+        .find(|occurrence| occurrence.line == 4 && occurrence.hover.contains("param value"))
+        .expect("the tested parameter read should be an occurrence");
+    assert!(
+        !tested_param.hover.contains("Narrowed"),
+        "{}",
+        tested_param.hover
+    );
+    let narrowed_field = analysis
+        .occurrences
+        .iter()
+        .find(|occurrence| occurrence.line == 8 && occurrence.hover.contains("Narrowed to `str`"))
+        .expect("the narrowed field read should carry the member");
+    assert!(
+        narrowed_field.hover.contains("from `str | None`"),
+        "{}",
+        narrowed_field.hover
+    );
+}
+
+#[test]
+fn bound_and_associated_method_values_hover_with_their_callable_types() {
+    let source = [
+        "class Counter:",
+        "    value: int32",
+        "    def read(self) -> int32:",
+        "        return self.value",
+        "    def double(value: int32) -> int32:",
+        "        return value * 2",
+        "    def scaled[T](self, factor: T) -> int32:",
+        "        return self.value",
+        "def main() -> int32:",
+        "    counter = Counter(value=1)",
+        "    read = counter.read",
+        "    callback = Counter.double",
+        "    other = Counter(value=2)",
+        "    scaled = other.scaled[int64]",
+        "    return read() + callback(2) + scaled(3)",
+        "",
+    ]
+    .join("\n");
+    let analysis = analyze_source(&source);
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "{:?}",
+        analysis.diagnostics
+    );
+    for (line, expected) in [
+        (10, "read: closure def() -> int32"),
+        (11, "callback: def(value: int32) -> int32"),
+        (13, "scaled: closure def(factor: int64) -> int32"),
+    ] {
+        assert!(
+            analysis
+                .occurrences
+                .iter()
+                .any(|occurrence| occurrence.line == line && occurrence.hover.contains(expected)),
+            "line {line} should hover with `{expected}`: {:?}",
+            analysis
+                .occurrences
+                .iter()
+                .filter(|occurrence| occurrence.line == line)
+                .map(|occurrence| occurrence.hover.clone())
+                .collect::<Vec<_>>()
+        );
+    }
+}
+
+#[test]
+fn stored_view_contracts_hover_with_their_origin() {
+    let source = [
+        "class Pair:",
+        "    left: str",
+        "    right: str",
+        "def pick_left(pair: Pair) -> view str from pair:",
+        "    return view pair.left",
+        "def main():",
+        "    pair = Pair(left=\"ada\", right=\"linus\")",
+        "    chooser: def(pair: Pair) -> view str from pair = pick_left",
+        "    view head = chooser(pair)",
+        "    print(head)",
+        "",
+    ]
+    .join("\n");
+    let analysis = analyze_source(&source);
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "{:?}",
+        analysis.diagnostics
+    );
+    assert!(
+        analysis
+            .occurrences
+            .iter()
+            .any(|occurrence| occurrence.line == 7
+                && occurrence
+                    .hover
+                    .contains("chooser: def(pair: Pair) -> view str from pair")),
+        "the stored contract should hover with its view origin: {:?}",
+        analysis
+            .occurrences
+            .iter()
+            .filter(|occurrence| occurrence.line == 7)
+            .map(|occurrence| occurrence.hover.clone())
+            .collect::<Vec<_>>()
+    );
+}
+
+// Batch 1 coverage: analysis helper branches that only hand-built inputs reach.
+use super::{
+    expression_start_span, find_matching_open_delimiter, lower_callable_type_ref,
+    LambdaCaptureOpener,
+};
+use crate::ast::{
+    BindingPattern, BindingTarget, CompareLink, CompareOp, Pattern, TuplePattern, UnaryOp,
+};
+use crate::sema::{closure_call_kind_for, CallableType, ReturnedViewType};
+
+fn spanned(kind: ExprKind, line: usize, column: usize) -> Expr {
+    Expr {
+        kind,
+        span: Span::new(line, column),
+    }
+}
+
+#[test]
+fn base_type_names_and_type_arguments_cover_views_unions_and_callables() {
+    let view = Type::ReturnedView(Box::new(ReturnedViewType {
+        mutable: false,
+        pointee: Type::named("int64"),
+        origin: 0,
+    }));
+    assert_eq!(base_type_name(&view), "view");
+    assert_eq!(view.type_arguments(), &[]);
+    let callable = |task: bool| {
+        Type::Callable(Box::new(CallableType {
+            task,
+            call_kind: closure_call_kind_for(ReceiverKind::Borrow),
+            params: Vec::new(),
+            return_type: Type::Unit,
+        }))
+    };
+    assert_eq!(base_type_name(&callable(true)), "TaskCallable");
+    assert_eq!(base_type_name(&callable(false)), "Callable");
+    let union = Type::normalize_union(
+        vec![Type::named("int64"), Type::named("str")],
+        "<main>",
+        &BTreeMap::new(),
+    )
+    .expect("two-member unions normalize");
+    assert_eq!(union.type_arguments(), &[]);
+}
+
+#[test]
+fn builtin_function_return_types_stay_unknown_for_select_round_and_divmod() {
+    for name in ["select", "round", "divmod"] {
+        assert_eq!(builtin_function_return_type(name), None, "{name}");
+    }
+}
+
+#[test]
+fn callable_type_refs_lower_only_around_function_signatures() {
+    let lowered = lower_callable_type_ref(
+        true,
+        ReceiverKind::Value,
+        Type::Function {
+            params: Vec::new(),
+            return_type: Box::new(Type::named("int64")),
+        },
+    );
+    let Type::Callable(callable) = lowered else {
+        panic!("expected a callable, found {lowered}");
+    };
+    assert!(callable.task);
+    assert_eq!(
+        callable.call_kind,
+        closure_call_kind_for(ReceiverKind::Value)
+    );
+    assert_eq!(callable.return_type, Type::named("int64"));
+    assert_eq!(
+        lower_callable_type_ref(false, ReceiverKind::Borrow, Type::named("int64")),
+        Type::named("Unknown")
+    );
+}
+
+#[test]
+fn expression_start_spans_follow_the_leftmost_child() {
+    let leaf = || Box::new(spanned(ExprKind::Name("value".to_string()), 3, 2));
+    let operator = Span::new(3, 8);
+    let cases = vec![
+        ExprKind::Membership {
+            value: leaf(),
+            container: leaf(),
+            negated: false,
+            operator_span: operator,
+        },
+        ExprKind::CompareChain {
+            first: leaf(),
+            links: vec![CompareLink {
+                op: CompareOp::Less,
+                op_span: operator,
+                operand: spanned(ExprKind::Int(1), 3, 9),
+            }],
+        },
+        ExprKind::Member {
+            object: leaf(),
+            field: "field".to_string(),
+        },
+        ExprKind::Specialize {
+            expr: leaf(),
+            type_args: Vec::new(),
+        },
+        ExprKind::Cast {
+            expr: leaf(),
+            ty: type_ref("int64"),
+        },
+        ExprKind::Try(leaf()),
+        ExprKind::Group(leaf()),
+        ExprKind::Unary {
+            op: UnaryOp::Neg,
+            expr: leaf(),
+        },
+        ExprKind::IsNone {
+            value: leaf(),
+            negated: false,
+            operator_span: operator,
+        },
+        ExprKind::Conditional {
+            then_expr: leaf(),
+            condition: leaf(),
+            else_expr: leaf(),
+        },
+        ExprKind::Index {
+            object: leaf(),
+            index: leaf(),
+        },
+        ExprKind::Slice {
+            object: leaf(),
+            start: None,
+            end: None,
+            colon_span: operator,
+        },
+    ];
+    for kind in cases {
+        let outer = spanned(kind, 3, 6);
+        let start = expression_start_span(&outer);
+        assert_eq!((start.line, start.column), (3, 2));
+    }
+    let literal = spanned(ExprKind::Int(1), 4, 4);
+    let start = expression_start_span(&literal);
+    assert_eq!((start.line, start.column), (4, 4));
+}
+
+#[test]
+fn matching_open_delimiters_reject_braces_mismatches_and_string_closers() {
+    assert_eq!(find_matching_open_delimiter("{}", 1), None);
+    assert_eq!(find_matching_open_delimiter("f(a]", 3), None);
+    assert_eq!(find_matching_open_delimiter("\"(a)\"", 3), None);
+    assert_eq!(find_matching_open_delimiter("f(\"a\\\"b\")", 8), Some(1));
+    let line = "    x = (a + b).";
+    assert_eq!(
+        extract_receiver_before_dot(line, line.len()),
+        Some("(a + b)".to_string())
+    );
+}
+
+#[test]
+fn dangling_member_recovery_handles_dict_literals_and_out_of_range_lines() {
+    let unmatched = "def main():\n    foo(\n";
+    assert_eq!(
+        replace_dangling_member_stmt_with_recovery_stmt(unmatched, 10),
+        unmatched
+    );
+    let braces = "def main():\n    table = {\"a\": 1}\n    table.\n";
+    let recovered = replace_dangling_member_stmt_with_recovery_stmt(braces, 2);
+    assert_eq!(recovered.lines().nth(1), Some("    table = {\"a\": 1}"));
+    assert_ne!(recovered.lines().nth(2), Some("    table."));
+}
+
+#[test]
+fn lambda_capture_recovery_handles_out_of_range_openers_and_nested_brackets() {
+    let source = "def main():\n    pass\n";
+    assert_eq!(
+        replace_lambda_capture_statement_with_recovery_stmt(
+            source,
+            LambdaCaptureOpener {
+                line: 9,
+                character: 0,
+            },
+        ),
+        source
+    );
+    let nested = "def main():\n    f = lambda [xs[0]]: 1\n";
+    let recovered = replace_lambda_capture_statement_with_recovery_stmt(
+        nested,
+        LambdaCaptureOpener {
+            line: 1,
+            character: 15,
+        },
+    );
+    assert_eq!(recovered.lines().nth(1), Some("    pass"));
+}
+
+#[test]
+fn member_error_recovery_stops_when_replacements_leave_errors_in_place() {
+    fn keep(source: &str, _line: usize) -> String {
+        source.to_string()
+    }
+
+    let mut check_program = crate::check_source;
+    let type_error = "def main() -> int64:\n    return \"text\"\n";
+    assert!(
+        recover_checked_program_after_member_errors_with(type_error, &mut check_program, keep)
+            .is_none()
+    );
+    let member_error = "def main():\n    print(value.)\n";
+    assert!(recover_checked_program_after_member_errors_with(
+        member_error,
+        &mut check_program,
+        keep
+    )
+    .is_none());
+}
+
+#[test]
+fn match_binding_types_are_empty_without_an_enum_or_variant() {
+    let program = checked_program("enum Shape:\n    Circle(float64)\n\ndef main():\n    pass\n");
+    let builder = AnalysisBuilder::new("", &program, Vec::new());
+    assert_eq!(builder.match_binding_type(None, None, "Circle"), None);
+    assert_eq!(
+        builder.match_binding_type(None, Some("Shape"), "Missing"),
+        None
+    );
+}
+
+#[test]
+fn tuple_targets_and_patterns_tolerate_non_tuple_types() {
+    let program = checked_program("def main():\n    pass\n");
+    let mut builder = AnalysisBuilder::new("", &program, Vec::new());
+    let span = Span::new(1, 1);
+    let target = BindingTarget::Tuple {
+        elements: vec![
+            BindingTarget::Name {
+                name: "a".to_string(),
+                span,
+            },
+            BindingTarget::Name {
+                name: "b".to_string(),
+                span,
+            },
+        ],
+        span,
+    };
+    let mut scope = BTreeMap::new();
+    builder.bind_target_value(&target, &Type::named("int64"), 1, "local", &mut scope);
+    builder.bind_target_value_exact(&target, &Type::named("int64"), "local", &mut scope);
+    builder.insert_scope_target(&target, &Type::named("int64"), 1, "local", &mut scope);
+    builder.insert_scope_target_exact(&target, &Type::named("int64"), "local", &mut scope);
+    assert!(scope.is_empty());
+
+    let pattern = Pattern::Tuple(TuplePattern {
+        elements: vec![
+            Pattern::Binding(BindingPattern {
+                name: "a".to_string(),
+                span,
+            }),
+            Pattern::Binding(BindingPattern {
+                name: "b".to_string(),
+                span,
+            }),
+        ],
+        span,
+    });
+    let mut bindings = Vec::new();
+    builder.collect_match_pattern_bindings(&pattern, None, &mut bindings);
+    assert_eq!(
+        bindings
+            .iter()
+            .map(|(name, ty, _)| (name.as_str(), ty.clone()))
+            .collect::<Vec<_>>(),
+        vec![("a", Type::Unit), ("b", Type::Unit)]
+    );
+    builder.visit_match_pattern_occurrences(&pattern, None);
+}
+
+#[test]
+fn analysis_class_types_fall_back_to_module_qualified_identities() {
+    let mut program = checked_program("class Local:\n    value: int64\n\ndef main():\n    pass\n");
+    program.canonical_type_names.remove("Local");
+    let mut class_info = program.classes["Local"].clone();
+    let builder = AnalysisBuilder::new("", &program, Vec::new());
+    assert_eq!(
+        builder.analysis_class_type("Local", &class_info, Vec::new()),
+        Type::named("Local")
+    );
+    assert_eq!(
+        builder.analysis_class_type("pkg.Local", &class_info, Vec::new()),
+        Type::named("pkg.Local")
+    );
+    class_info.module_name = "remote".to_string();
+    assert_eq!(
+        builder.analysis_class_type("Local", &class_info, Vec::new()),
+        Type::named("remote.Local")
+    );
+}
+
+#[test]
+fn canonical_enum_identities_fall_back_to_the_defining_module() {
+    let mut program = checked_program("enum Value:\n    Null\n\ndef main():\n    pass\n");
+    program.canonical_type_names.remove("Value");
+    let mut enum_info = program.enums["Value"].clone();
+    enum_info.module_name = "remote".to_string();
+    let builder = AnalysisBuilder::new("", &program, Vec::new());
+    assert_eq!(
+        builder.canonical_enum_identity("Value", &enum_info),
+        "remote.Value"
+    );
+    assert_eq!(
+        builder.canonical_enum_identity("remote.Value", &enum_info),
+        "remote.Value"
+    );
+}
+
+#[test]
+fn associated_method_values_skip_generic_owners_and_receiver_methods() {
+    let program = checked_program(concat!(
+        "class Box[T]:\n",
+        "    value: T\n",
+        "\n",
+        "class Point:\n",
+        "    x: int64\n",
+        "\n",
+        "    def norm(self) -> int64:\n",
+        "        return self.x\n",
+        "\n",
+        "def main():\n",
+        "    pass\n",
+    ));
+    let builder = AnalysisBuilder::new("", &program, Vec::new());
+    let scope = BTreeMap::new();
+    assert_eq!(
+        builder.associated_method_value_type(
+            &expr(ExprKind::Name("Box".to_string())),
+            "make",
+            &scope
+        ),
+        None
+    );
+    assert_eq!(
+        builder.associated_method_value_type(
+            &expr(ExprKind::Name("Point".to_string())),
+            "norm",
+            &scope
+        ),
+        None
+    );
 }

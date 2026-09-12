@@ -1,0 +1,3 @@
+public type Values[T: Eq] = list[T]
+public type Outcome[T, E] = T | E
+type Concrete = Values[int64]

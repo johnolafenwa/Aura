@@ -1,0 +1,9 @@
+trait Named:
+    def name(self) -> str
+class Missing:
+    pass
+class Box[T]:
+    value: T
+type Container[T: Named] = Box[T]
+def main():
+    value = Container(value=Missing())

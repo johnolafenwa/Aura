@@ -1,0 +1,4 @@
+def main():
+    left: int64 | float64 = 1.5
+    right: int64 | float64 = 2.5
+    print(left < right)

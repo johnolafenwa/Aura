@@ -1,0 +1,2 @@
+def scale(value: int64 = 1, factor: int64, *, offset: int64) -> int64:
+    return value * factor + offset

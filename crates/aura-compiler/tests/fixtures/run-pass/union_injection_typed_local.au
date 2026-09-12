@@ -1,0 +1,4 @@
+def main():
+    source: int64 = 42
+    value: int64 | float64 = source
+    print(source)

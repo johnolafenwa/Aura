@@ -1,0 +1,32 @@
+import callable_store_support.tools as tools
+
+type Tool = Callable[def(value: int64) -> int64]
+
+class Holder:
+    action: Tool
+
+def increment(value: int64) -> int64:
+    return value + 1
+
+def apply(tool: Tool, value: int64) -> int64:
+    return tool(value)
+
+def make_scaler(factor: int64) -> Tool:
+    scale = factor
+    return Tool(lambda value: value * scale)
+
+def main():
+    holder = Holder(action=make_scaler(3))
+    print(holder.action(2))
+    print(apply(holder.action, 5))
+    steps: list[Tool] = [Tool(increment), make_scaler(2), Tool(lambda value: value - 1)]
+    print(steps[0](1))
+    print(steps[1](1))
+    print(steps[2](1))
+    mut registry: dict[str, Tool] = {"double": make_scaler(2)}
+    registry["inc"] = Tool(increment)
+    print(registry["double"](4))
+    print(registry["inc"](4))
+    imported: tools.Tool = tools.make_adder(10)
+    print(imported(1))
+    print(imported(value=2))

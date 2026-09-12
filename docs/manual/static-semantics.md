@@ -214,6 +214,12 @@ type, the known type contextually types the literal recursively. The rule is
 symmetric. Each equality link in a comparison chain applies the same
 contextual typing before enforcing exact operand-type equality.
 
+Union `==` and `!=` require the same normalized union on both sides, or one
+union operand and one operand that injects as a direct member; every member
+must define equality. The result is `bool`, both operands are read, and no
+narrowing fact results. Ordering and arithmetic operators reject union
+operands (`AU2003`).
+
 Operator operands are not implicitly widened. An integer literal may be contextually typed to match an integer operand, or a `float32`/`float64` operand when the literal is exactly representable in that floating type. A floating literal may adopt the other operand's floating type. Non-literal values require an explicit numeric cast or integer `.to_float()` conversion.
 
 Integer power requires a non-negative exponent. A negative exponent visible in
@@ -228,6 +234,23 @@ operations and do not dispatch through operator traits.
 `or`, and `not` also require boolean results under the rules above. Aura does
 not apply general truthiness conversion to strings, collections, resources, or
 user types.
+
+`place is None` and `place is not None` on a stable place of a union type
+establish narrowing facts: the place has the effective type `None` where the
+test holds and the union of its remaining members where it fails. Facts
+compose through `not`, parentheses, and short-circuit `and`/`or`, and a
+right operand of `and`/`or` is checked under the left operand's fact. An
+`if` branch, `while` body, or conditional-expression arm is checked under the
+facts its condition selects. A branch that diverges with `return`, `break`,
+or `continue` contributes nothing to the join, so its complement's facts
+continue after the statement. At a join, a place keeps only the facts present
+on every reachable path. A `while` body is checked twice so that a fact
+established before the loop survives only when no iteration can invalidate
+it. Assigning, moving, or mutably matching the place or an ancestor, or
+passing either to a call with mutable access, ends the fact; a later member
+use through the stale place is `AU2014`. A single remaining member is the
+effective type of the place; a larger remaining set only sharpens `match`
+coverage. Equality with `None` does not narrow.
 
 ### Assertions
 
@@ -417,6 +440,24 @@ An `impl` identifies one trait specialization and one target type pattern. Its m
 For a concrete receiver, the checker chooses the unique applicable implementation with greatest specificity. If multiple equally specific implementations apply, the call or operator is ambiguous and rejected. Source order is not a tie breaker.
 
 For a type parameter, available methods and operators come from its declared bounds. If multiple bounds expose an indistinguishable method, the access is ambiguous unless the language can resolve one unique contract.
+
+A union receiver has a trait method when every member resolves that method
+through the same trait specialization with one contract after substituting
+the member for `Self`: the same receiver mode, parameter modes and types,
+and result type. The call then dispatches on the active member; a member
+without an implementation, or a differing contract, is rejected with
+`AU2999`. A mutable call locks the union's tag for the call, and a consuming
+call consumes the whole union. `.clone()` is available when every member is
+Copy or clones itself.
+
+A type parameter may be a union member. Unifying such a union with an
+argument requires every concrete member of the pattern to be a member of the
+argument and binds the parameter to the normalized remainder; an empty
+remainder or a remainder that could belong to more than one parameter
+requires explicit specialization (`AU2010`). Substituted unions are
+renormalized, and a generic body is checked once under its symbolic members:
+`is None` on `V | None` refines to `None` and to `V`, `is None` on a bare
+`V` is a runtime test, and `case V` is rejected (`AU2013`).
 
 Trait and implementation methods cannot declare default ordinary parameters in Aura 0.3. Trait default method bodies are permitted; a signature-only trait method has no body after its terminating newline.
 

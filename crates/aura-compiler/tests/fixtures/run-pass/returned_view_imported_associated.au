@@ -1,0 +1,21 @@
+import view_imported_support.api
+
+class Holder:
+    box: view_imported_support.api.LeftBox
+    other: int64
+
+    def left(self) -> view int64 from self:
+        return view view_imported_support.api.LeftBox.associated(self.box)
+
+def peek(holder: Holder) -> view int64 from holder:
+    return view view_imported_support.api.LeftBox.associated(holder.box)
+
+def main():
+    mut holder = Holder(box=view_imported_support.api.LeftBox(left=1, right=2), other=0)
+    view chosen = holder.left()
+    holder.other = 3
+    holder.box.right = 4
+    print(chosen)
+    view peeked = peek(holder)
+    holder.other = 5
+    print(peeked)

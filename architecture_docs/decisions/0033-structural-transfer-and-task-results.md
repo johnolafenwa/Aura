@@ -244,3 +244,17 @@ messages.
 The focused semantic, fixture, compiler-service, both-backend parity, full-CI,
 and frozen-coverage gates passed at the Batch 4 checkpoint, including the
 Phase 5.7 pinned-worker completion evidence.
+
+## 2026-09-08 — Batch 1 detailed design amendment
+
+Accepted under Q21 in the
+[ratified checkpoint](../16-batch-1-design-checkpoint.md#ratification-record).
+
+TaskCallable admission checks the complete concrete environment before
+erasure; ordinary erased Callable is non-Transfer. All four task-start
+methods move admitted targets into child-owned storage. Default evaluation
+remains in the parent, and argument/result isolation still applies. This
+extension does not change the scheduler or the non-repeatable result rule.
+
+Implementation is in Batch 1 phase 1; this dated amendment extends the
+recorded baseline without claiming the feature is already delivered.

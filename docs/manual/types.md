@@ -10,6 +10,28 @@ The type system is designed to keep three facts visible:
 
 ## Scalar Types
 
+Transparent aliases use `type Name = Type`, with optional generic parameters
+and `public` visibility. For example, `type ToolValue = int64 | str | None`
+names a union of three existing types. Union identity ignores member order,
+flattens nested unions, removes duplicates, and collapses a single member to
+that member's type. `None` is the unit member; aliases introduce no runtime
+wrapper or new nominal identity. A declared type parameter may be a member,
+and substitution renormalizes the result, so `V | None` with `V = int64 | None`
+is `int64 | None`; see
+[type parameters as union members](/manual/generics-and-traits#type-parameters-as-union-members).
+
+A value enters a union at an explicit expected-type boundary, such as an
+annotated binding or a declared parameter or result. Its type must be a direct
+member. Contextual numeric literals must have exactly one eligible member;
+ambiguous literals require a typed spelling or intermediate binding. There is
+no implicit conversion between unrelated unions or between containers with
+different element types. Select a member with the
+[type patterns](/manual/enums-and-match#union-type-patterns) described in the
+match chapter, or test the `None` member with `is None` and `is not None`,
+which [narrow](/manual/enums-and-match#conditional-narrowing) a stable place
+to its remaining members for the selected branch. `Option[T]` and `T?` remain
+supported during phase 1.
+
 | Type | Description |
 | --- | --- |
 | `bool` | Boolean value: `true` or `false`. |
@@ -112,10 +134,12 @@ positions:
 - `copy class` values whose fields are all copyable
 - user enum values when every declared payload type is statically copyable
 - `Option[T]`, `Result[T, E]`, `SendError[T]`, and `QueueReceive[T]` when all payload types are copyable
+- union values when every member type is copyable
 
 Move values transfer ownership:
 
 - tuple values with at least one move element
+- union values with at least one move member
 - `str`
 - `list[T]`
 - `dict[K, V]`
@@ -190,7 +214,8 @@ Accepted ADR-0033 defines the static property used at a task boundary.
 worker to another; it is separate from both Copy and clone safety. `Transfer`
 is derived by the compiler and is not a builtin trait that source code can
 implement or assert. An ordinary user trait also named `Transfer` does not
-affect this structural classification.
+affect this structural classification. A union is Transfer when every member
+is Transfer, and a member that is not names the failing member in `AU3008`.
 
 All copy types and `str` are `Transfer`. `list[T]`, `set[T]`, `dict[K, V]`,
 tuples, classes, and enums are `Transfer` exactly when all of their stored
@@ -453,7 +478,10 @@ does not change the underlying copy/move category.
 reports an unknown or unavailable type name. `AU2002` reports type mismatches,
 unresolved contextual literal typing, generic arity, payload, field, and
 annotation mismatches. `AU2003` reports unsupported numeric operators or
-casts, and `AU2004` reports invalid constructor argument binding. `AU2999`
+casts, and `AU2004` reports invalid constructor argument binding. `AU2010`
+reports a value that is not a direct member of its expected union, `AU2011`
+an ambiguous contextual literal, `AU2012` a cyclic transparent alias, and
+`AU2014` a member use whose `None`-test narrowing was invalidated. `AU2999`
 covers invalid recursive layouts and other type rejections without a narrower
 category. `AU3001` reports use of a moved non-copy value; `AU3002` reports a
 borrow conflict; `AU3003` reports mutation through an immutable place; and
@@ -485,13 +513,30 @@ and non-numeric casts are unavailable, and recursive value fields require
 same source-level callable signature; a capturing closure additionally owns
 its hidden environment. Arbitrary stored and parameter `def` types describe
 capture-free code pointers; compiler-known callback and task-start sites
-preserve the additional closure metadata. `intsize` and
+preserve the additional closure metadata. `Callable[def(...) -> R]`,
+`Callable[mut def(...) -> R]`, `Callable[own def(...) -> R]`, and
+`TaskCallable[...]` are owned storage types for a Shared, Mutable, or
+Consuming callable with an erased capture set; they are non-Copy,
+non-cloneable, and Transfer only as `TaskCallable`. `intsize` and
 `uintsize` follow the target pointer width, and host process exit transport may
 narrow an `int32` after Aura returns it. Other numeric widths and overflow
 behavior are language-defined rather than implementation-defined. FFI v0
 opaque handles are nominal non-Copy, non-cloneable, non-Transfer wrappers for
 one non-null foreign pointer. Extern functions are direct-call-only
 declarations rather than `def(...) -> ...` values.
+
+Every normalized union has one explicit-tag layout plan shared by both
+execution paths: logical tags are the dense canonical member ordinals, the
+tag is the smallest unsigned width that holds every member (one byte up to
+256 members), the payload is aligned to the widest member alignment and
+sized to the widest member, and the total size rounds up to the aggregate
+alignment. Scalars use their width, unit `None` is empty, and every boxed
+aggregate, handle, callable, or type parameter occupies one pointer. The
+plan is internal, target-dependent Aura ABI rather than a C ABI or a
+portable serialization. It is encoded in the lowered program together with
+each member's drop obligation, so importers and native caches rebuild
+rather than guess a tag from source order, and only the active payload owns
+cleanup and is destroyed once.
 
 ## Status
 

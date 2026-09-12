@@ -1,0 +1,11 @@
+class Counter:
+    value: int64
+
+def make(counter: mut Counter) -> int64:
+    counter.value += 1
+    return 42
+
+def main():
+    mut counter = Counter(value=0)
+    value: int64 | str = make(counter=counter)
+    print(counter.value)

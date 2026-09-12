@@ -1,0 +1,12 @@
+def next_value() -> int64:
+    print("evaluated")
+    return 3
+
+def main():
+    plain = 5
+    if plain is None:
+        print("impossible")
+    else:
+        print(plain)
+    if next_value() is not None:
+        print("present")

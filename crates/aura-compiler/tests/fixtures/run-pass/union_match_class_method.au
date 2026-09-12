@@ -1,0 +1,22 @@
+class Tally:
+    count: int64
+
+    def bump(mut self):
+        self.count += 1
+
+    def total(self) -> int64:
+        return self.count
+
+def main():
+    mut value: Tally | None = Tally(count=1)
+    match mut value:
+        case Tally as tally:
+            tally.bump()
+            print(tally.total())
+        case None:
+            print(0)
+    match value:
+        case Tally as tally:
+            print(tally.total())
+        case None:
+            print(0)

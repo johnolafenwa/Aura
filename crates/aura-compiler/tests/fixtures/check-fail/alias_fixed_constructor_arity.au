@@ -1,0 +1,5 @@
+class Box[T]:
+    value: T
+type Number = Box[int64]
+def main():
+    value = Number[str](value=42)

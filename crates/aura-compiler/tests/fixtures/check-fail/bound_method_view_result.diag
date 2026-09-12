@@ -1,0 +1,6 @@
+error[AU3010]: view-returning method `Holder.peek` cannot become a bound method value
+ --> crates/aura-compiler/tests/fixtures/check-fail/bound_method_view_result.au:9:19
+  |
+9 |     peek = holder.peek
+  |                   ^
+  = help: call it directly and bind the result with `view`, because a bound method's contract cannot name its moved receiver as a view origin

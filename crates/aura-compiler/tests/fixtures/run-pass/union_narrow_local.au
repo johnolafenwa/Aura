@@ -1,0 +1,17 @@
+def describe(value: str | None):
+    if value is None:
+        print("missing")
+    else:
+        print("present")
+        print(value.len())
+
+def main():
+    describe(None)
+    describe("aura")
+    local: int64 | None = 7
+    if local is not None:
+        print(local + 1)
+    if local is None:
+        print("unreachable")
+    else:
+        print(local * 2)

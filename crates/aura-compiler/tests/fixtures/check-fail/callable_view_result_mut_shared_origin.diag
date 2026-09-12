@@ -1,0 +1,5 @@
+error[AU2004]: argument for parameter `pair` in function value must be a mutable place
+ --> crates/aura-compiler/tests/fixtures/check-fail/callable_view_result_mut_shared_origin.au:14:30
+   |
+14 |     view mut chosen = picker(pair)
+   |                              ^

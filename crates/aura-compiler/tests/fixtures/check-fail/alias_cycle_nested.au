@@ -1,0 +1,2 @@
+type Outer = list[Inner]
+type Inner = dict[str, Outer]

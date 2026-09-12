@@ -1,21 +1,46 @@
 # ADR-0052: Anonymous closed union types
 
-- Status: Accepted direction; detailed design pending
+- Status: Accepted; detailed design ratified 2026-09-08; implementation in Batch 1
 - Ratified direction: 2026-09-06, user approval of the priority roadmap
 - Date: 2026-08-02
 - Version target: Aura 0.4
-- Implementation: Not started
-- Roadmap decision: Batch S1, design-only checkpoint
+- Implementation: Phase 1 in progress; Option removal remains phase 2
+- Roadmap decision: Batch 1, phase 1
 - Related: ADR-0001, ADR-0011, ADR-0022, ADR-0026, ADR-0028, ADR-0033,
   ADR-0034, ADR-0038, ADR-0039, and ADR-0044
+
+## Ratified detailed design
+
+Ratified on 2026-09-08; recorded in design commit `7685199`. The
+[design checkpoint](../16-batch-1-design-checkpoint.md) is normative where a
+retained baseline below differs. The answers are:
+
+- Q1: A — singleton unions collapse, including unit None ([design section](../16-batch-1-design-checkpoint.md#union-rules--q1q10)).
+- Q2: A — unique injection; annotate through existing casts or typed bindings ([design section](../16-batch-1-design-checkpoint.md#a2-injection-and-a-member-annotation-inside-an-expression--q2)).
+- Q3: A — stable place refinements preserve capabilities and expire on invalidation ([design section](../16-batch-1-design-checkpoint.md#a3-stable-places-and-invalidation--q3)).
+- Q4: A — contextual None tests compose with Boolean and reachable control flow ([design section](../16-batch-1-design-checkpoint.md#a4-conditions-and-control-flow--q4)).
+- Q5: A — direct-member patterns support shared, owned, and mutable matching ([design section](../16-batch-1-design-checkpoint.md#a5-patterns-exhaustiveness-and-mutable-tag-changes--q5)).
+- Q6: B — symmetric member comparison and active-payload hashing ([design section](../16-batch-1-design-checkpoint.md#a6-equality-and-hashing--q6)).
+- Q7: A — declared generic members normalize again after substitution ([design section](../16-batch-1-design-checkpoint.md#a7-generic-members-and-specialization--q7)).
+- Q8: A — nominal trait obligations remain separate from structural rendering ([design section](../16-batch-1-design-checkpoint.md#a8-trait-dispatch-and-display--q8)).
+- Q9: A — shared explicit-tag layout; no Batch 1 niches ([design section](../16-batch-1-design-checkpoint.md#a9-layout-cleanup-interfaces-and-niches--q9)).
+- Q10: A — exactly opaque Handle plus None is an extern result exception ([design section](../16-batch-1-design-checkpoint.md#union-rules--q1q10)).
+- Q11: A — contextual module-level generic transparent aliases; expansion cycles fail ([design section](../16-batch-1-design-checkpoint.md#alias-rules--q11q12)).
+- Q12: A — retain alias presentation while canonicalizing semantic identity ([design section](../16-batch-1-design-checkpoint.md#alias-rules--q11q12)).
+- Q23: A — Lookup/Poll preserve generic presence; Batch 2 revisits app-facing optional dict.get ([design section](../16-batch-1-design-checkpoint.md#library-and-diagnostic-rules--q23q24)).
+- Q24: A — AU2010–AU2015 plus the existing diagnostic families ([design section](../16-batch-1-design-checkpoint.md#library-and-diagnostic-rules--q23q24)).
+
+Phase 1 implements the type and owned-callable foundations. Existing Option
+library signatures, `T?`, and `*_or_none` names remain until phase 2. Stored
+loan captures and captured-self result origins remain outside phase 1.
 
 ## Decision boundary
 
 The user approved explicit closed unions, replacement of `Option[T]` by
 `T | None`, type aliases, safe narrowing, and deterministic normalization.
 These features are not implemented. The ratification section distinguishes
-settled behavior from remaining details; the other sections retain the design
-baseline for those details. See the [approved roadmap](../14-priority-roadmap.md).
+settled behavior from retained alternatives; the detailed answers above now
+govern implementation. See the [approved roadmap](../14-priority-roadmap.md).
 
 ## Context
 
@@ -44,7 +69,7 @@ join. The source must state the complete set of alternatives.
 - implicit least-upper-bound inference for literals, branches, or returns
 - subtyping between different union member sets
 - user-selected discriminant values or layout control
-- union types in the C FFI
+- general union types in the C FFI; Q10 admits one nullable-handle result exception
 - unions containing views, mutable capabilities, or other non-owning types
 - ordering comparisons across union values
 
@@ -61,7 +86,7 @@ dict[str, int64 | float64 | None]
 `|` binds less tightly than generic application, tuple construction, and every
 non-union type constructor. Parentheses may group it wherever that improves
 readability. A union must contain at least two distinct normalized members.
-**Proposed baseline, not ratified; resolved in Batch 1.** This marker applies
+**Proposed alternative, not ratified.** This marker applies
 to the minimum-member-count requirement.
 
 The compiler recursively flattens nested unions, removes duplicate members,
@@ -79,15 +104,15 @@ diagnostics, runtime tag assignment, native cache identity, and backend parity.
 General type aliases are part of the approved type-foundation batch. Expand
 aliases before normalization; aliases name an existing type and add no runtime
 wrapper or new nominal identity. Alias declaration syntax, generic aliases,
-visibility, cycle rejection, and imported diagnostic spelling still need a
-detailed contract before implementation.
+visibility, cycle rejection, and imported diagnostic spelling are settled by
+Q11/Q12 in the detailed design.
 
 A member may be any complete owned value type except another union after
 flattening, a view type, an unspecialized generic, or an FFI-only opaque view.
 `None` is a valid member. A one-member result after normalization is rejected
 as a redundant union type. It never silently becomes that member.
-**Proposed baseline, not ratified; resolved in Batch 1.** The one-member
-rejection is a pending choice, not part of the approved normalization direction.
+**Proposed alternative, not ratified.** The one-member
+rejection is unselected; Q1 collapses the normalized singleton.
 
 ## One optional spelling
 
@@ -98,8 +123,8 @@ language does not define `Option[T]` as an alias or second spelling.
 `None | T` normalizes and is displayed as `T | None`, with `None` placed last
 for optional unions. If `T` itself normalizes to a union containing `None`, the
 duplicate is removed. `None | None` is rejected as a redundant union.
-**Proposed baseline, not ratified; resolved in Batch 1.** The rejection follows
-the pending one-member policy.
+**Proposed alternative, not ratified.** The rejection follows
+the unselected one-member policy; Q1 retains unit None.
 
 This choice gives absence the same narrowing, ownership, exhaustiveness, and
 generic-composition rules as every other closed union. One spelling also keeps
@@ -144,7 +169,7 @@ Without an explicitly written expected union, these remain errors:
 - a mixed-type collection literal
 - incompatible `if` or match-arm result types
 - incompatible returns whose declaration omits a return type
-- an unconstrained `None`
+- an unconstrained `None` (**Proposed alternative, not ratified.** Q1 retains unit None)
 - a generic type argument inferred from values of different types
 
 The inferred type of a union-valued expression is its already-established
@@ -166,7 +191,8 @@ Injection evaluates the payload expression exactly once and then constructs
 the tagged value. Reading a tag never evaluates, clones, or converts the
 payload. Cleanup destroys only the active payload, exactly once, on normal
 scope exit, move, trap unwinding, propagated error, cancellation, or partial
-aggregate cleanup.
+aggregate cleanup, subject to ADR-0038's existing forced-frame-reset boundary;
+this batch does not extend source cleanup across destroyed frames.
 
 Two values of the same union type compare equal only when their tags are equal
 and their active payloads compare equal. Different tags compare unequal even
@@ -174,16 +200,17 @@ when their rendered values or numeric magnitudes coincide. Equality between
 different union types is a static error.
 
 Equality and hashing are available exactly when every normalized member
-supports the corresponding operation. Hashing includes the member tag, so
-different alternatives cannot collide solely because their payload hashes are
-equal. Ordering operators and ordered-container keys are unavailable for union
+supports the corresponding operation. **Proposed alternative, not ratified:**
+hashing includes the member tag so alternatives with equal payload hashes
+receive distinct tag contributions. Q6 B instead uses active-payload hashing
+and symmetric member comparison, as recorded above. Ordering operators and ordered-container keys are unavailable for union
 types, even when every member is individually orderable.
 
 ## Type patterns and exhaustiveness
 
 Straightforward optional-value checks must narrow access to the corresponding
 member safely. Exact condition syntax, stable-place eligibility, mutation
-invalidation, and branch-join rules remain to be specified. Such narrowing
+invalidation, and branch-join rules are ratified in Q3/Q4. Such narrowing
 does not grant an ownership capability absent from the source place.
 
 `match` narrows a union with type patterns:
@@ -256,10 +283,11 @@ order. MIR and direct lowering must use the same normalized tags, active-payload
 drop behavior, match coverage, and rendered type names. Native cache keys
 include the normalized union schema.
 
-The direct backend may choose an optimized payload layout, including a
+**Proposed alternative, not ratified.** The direct backend may choose an optimized payload layout, including a
 null-pointer niche, only when the optimization is unobservable and preserves
 tag identity, cleanup, size/alignment metadata, and cross-module ABI. No union
-crosses the C FFI in either direction.
+crosses the C FFI in either direction. Q9/Q10 instead require the shared
+explicit-tag layout and the sole nullable-handle result adapter.
 
 ## Diagnostics
 
@@ -270,12 +298,12 @@ Dedicated diagnostics must identify:
 - a mixed literal with the exact explicit union annotation that would make
   its intended member set clear
 - redundant one-member unions and invalid member categories
-  (**Proposed baseline, not ratified; resolved in Batch 1.** One-member policy.)
+  (**Proposed alternative, not ratified.** One-member policy.)
 - missing, duplicate, unreachable, or guarded-only match coverage
 - a type pattern that is not a direct normalized member
 - unavailable Copy, clone, Transfer, equality, or hash behavior, including
   the blocking member path
-- ordering and FFI use of a union
+- ordering and forbidden FFI shapes under Q10
 - an attempted move from shared or mutable narrowed payload access
 
 Diagnostics print the deterministic normalized type and point both to the use
@@ -295,8 +323,9 @@ for a closed sum.
 
 ## Implementation adoption
 
-The approved union system lands as one atomic clean-slate feature family once
-its remaining details are settled.
+**Proposed alternative, not ratified:** union foundations and Option removal
+land as one atomic family. The ratified delivery order is phase 1 foundations,
+then a reviewable checkpoint, then phase 2 removal as specified in H1/H2.
 `T | None` is the sole optional type spelling and `None` is its sole absence
 value. Parsing, normalization, type patterns, exhaustive matching,
 checked-interface support, both backends, compiler fixtures, examples,
@@ -322,9 +351,9 @@ the version change.
   `None`, malformed bars, and forbidden union member categories
 - normalization: recursive flattening, duplicate removal, source-order
   independence, deterministic qualified-name order, and one-member rejection
-  (**Proposed baseline, not ratified; resolved in Batch 1.** One-member rejection.)
+  (**Proposed alternative, not ratified.** One-member rejection.)
 - optional typing: sole `T | None` spelling, `None` placement, nested optional
-  normalization, unconstrained `None` rejection, narrowing invalidation, and
+  normalization, unit None, narrowing invalidation, and
   distinct present-`None`/absent outcomes where the API needs both
 - aliases: expansion, equality with the named type, imports, generic policy,
   cycle diagnostics, and normalized union identity
@@ -339,7 +368,7 @@ the version change.
   replacement, moves, partial cleanup, and every abnormal arm exit
 - derived properties: positive and negative Copy, clone, Transfer, equality,
   and hash cases with nested diagnostic paths; ordering always rejected
-- runtime: tag-sensitive equality/hash, active-payload destruction exactly
+- runtime: tag-sensitive equality and Q6 B payload hashing, active-payload destruction exactly
   once, nested aggregate cleanup, and deterministic rendering
 - traits: all-member dispatch, missing-member rejection, coherent result
   checking, and no common-name duck typing
@@ -350,7 +379,7 @@ the version change.
 - parity: byte-identical MIR/direct results and diagnostics across the entire
   matrix, plus forced-backend fixtures and release archive smoke tests
 
-## Batch 1 must-resolve
+## Batch 1 removal criteria
 
 - **Type-parameter members:** a member such as `V` in `V | None` must be
   well-formed for generic library APIs. Reconcile this with the baseline's
@@ -361,21 +390,19 @@ the version change.
   `if x is not None:` shape has exact syntax to be designed in Batch 1.
 - **FFI nullable results:** state the replacement for nullable results at the
   FFI boundary before removing `Option[T]`, reconciling the baseline exclusion
-  of unions from C FFI. No new spelling is selected here.
+  of unions from C FFI. Q10 selects the nullable-handle result exception.
 
 Batch 1 has a reviewable checkpoint after unions, aliases, and owned-capture
 closures, before optional removal. The three criteria above are required for
 the removal; this staging adds no compatibility path or migration diagnostics.
 
-## Ratification and remaining design
+## Ratification
 
 Accepted on 2026-09-06: explicitly typed mixed collections with a fixed member
 set, homogeneous literal inference, `T | None` as the sole optional surface,
 safe narrowing, type aliases, deterministic normalization, and static rejection
 of unsupported operations. Mixed-literal union inference is deferred.
 
-Remaining details are alias syntax and generic/recursive policy; conditional
-narrowing and invalidation; one-member normalization; exact injection/type-pattern
-rules; derived operations and FFI boundaries; and physical layout/ABI choices.
-The corresponding sections above are the design baseline for these details,
-not a claim that the user individually ratified every original proposal.
+The 2026-09-08 detailed answers above settle those type-foundation choices.
+Retained alternatives are explicitly marked and do not override the detailed
+design. The two implementation phases preserve the removal checkpoint.

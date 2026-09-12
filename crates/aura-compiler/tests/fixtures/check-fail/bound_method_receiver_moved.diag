@@ -1,0 +1,7 @@
+error[AU3001]: use of moved value `counter`
+ --> crates/aura-compiler/tests/fixtures/check-fail/bound_method_receiver_moved.au:10:11
+   |
+10 |     print(counter.total)
+   |           ^
+  = related crates/aura-compiler/tests/fixtures/check-fail/bound_method_receiver_moved.au:9:12: value moved into bound method here
+  = help: pass shared access when ownership is not needed, or transfer this non-cloneable value only once

@@ -1,0 +1,5 @@
+def accept(value: int64 | None) -> int64:
+    return 42
+def main():
+    number = 1
+    print(accept(value=number))

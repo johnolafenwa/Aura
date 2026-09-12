@@ -24,7 +24,7 @@ use std::thread;
 use std::time::{Duration as StdDuration, Instant};
 
 use base64::Engine as _;
-use corosensei::stack::DefaultStack;
+use corosensei::stack::{DefaultStack, Stack};
 use corosensei::{Coroutine, CoroutineResult, Yielder};
 use httparse::{
     Request as HttpParseRequest, Response as HttpParseResponse, Status as HttpParseStatus,
@@ -275,6 +275,7 @@ pub enum Value {
     FfiHandle(FfiHandleValue),
     Instance(InstanceValue),
     EnumVariant(EnumVariantValue),
+    Union(Box<UnionValue>),
     Channel(ChannelValue),
     Task(TaskValue),
     TaskGroup(TaskGroupValue),
@@ -296,6 +297,15 @@ pub enum Value {
     UnixStream(UnixStreamValue),
     TlsListener(TlsListenerValue),
     TlsStream(TlsStreamValue),
+}
+
+/// Interpreter and opaque boundary transport for a selected union payload.
+/// Native local layout is planned independently by the shared MIR layout plan.
+#[derive(Clone, Debug, PartialEq)]
+pub struct UnionValue {
+    pub union_type: Type,
+    pub member_index: usize,
+    pub payload: Value,
 }
 
 /// A non-null foreign-owned opaque address tagged with its Aura nominal
@@ -376,6 +386,15 @@ pub struct ClosureEnvironment {
 }
 
 impl ClosureEnvironment {
+    /// The number of captured values the environment was created with.
+    pub(crate) fn capture_count(&self) -> usize {
+        self.captures
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .as_ref()
+            .map_or(0, Vec::len)
+    }
+
     pub fn new(captures: Vec<ClosureCaptureValue>, consuming: bool) -> Self {
         Self {
             captures: Mutex::new(Some(captures)),
@@ -2808,6 +2827,35 @@ struct LightweightTaskRecord {
     context: Rc<LightweightTaskContext>,
     coroutine: Coroutine<RuntimeSchedulerWakeReason, TaskYield, TaskExecutionResult>,
     forced_exit_cleanup: Option<Box<dyn FnOnce() + Send>>,
+    /// Lowest usable address of the task's coroutine stack, published while
+    /// the task runs so the interpreter can refuse a call that would hit the
+    /// guard page.
+    stack_limit: usize,
+}
+
+thread_local! {
+    static CURRENT_TASK_STACK_LIMIT: Cell<Option<usize>> = const { Cell::new(None) };
+}
+
+struct TaskStackLimitGuard(Option<usize>);
+
+impl Drop for TaskStackLimitGuard {
+    fn drop(&mut self) {
+        CURRENT_TASK_STACK_LIMIT.with(|limit| limit.set(self.0));
+    }
+}
+
+fn enter_task_stack_limit(limit: usize) -> TaskStackLimitGuard {
+    TaskStackLimitGuard(CURRENT_TASK_STACK_LIMIT.with(|current| current.replace(Some(limit))))
+}
+
+/// Bytes of the running lightweight task's coroutine stack that remain below
+/// the caller's frame, or `None` outside a task.
+pub(crate) fn task_stack_headroom() -> Option<usize> {
+    let limit = CURRENT_TASK_STACK_LIMIT.with(|limit| limit.get())?;
+    let marker = 0u8;
+    let stack_pointer = std::ptr::addr_of!(marker) as usize;
+    Some(stack_pointer.saturating_sub(limit))
 }
 
 type LightweightTaskEntry =
@@ -2870,6 +2918,9 @@ struct LightweightWorkerCoordinator {
 // task reaches a blocking host call. Keep enough headroom for ordinary builtin
 // function values; the run-pass fixture suite pins this path.
 const LIGHTWEIGHT_TASK_STACK_SIZE: usize = 768 * 1024;
+/// Stack reserved for the root task that executes the program entry; it is
+/// mapped lazily, so the reservation costs only address space.
+const ROOT_LIGHTWEIGHT_TASK_STACK_SIZE: usize = 16 * 1024 * 1024;
 #[cfg(test)]
 thread_local! {
     static FAIL_NEXT_LIGHTWEIGHT_TASK_STACK_ALLOCATION: Cell<bool> = const { Cell::new(false) };
@@ -3058,6 +3109,7 @@ pub(crate) fn cast_numeric_value(value: Value, target: &Type, span: Option<Span>
 
     fn render_source_type(value: &Value) -> String {
         match value {
+            Value::Union(union) => union.union_type.to_string(),
             Value::Int(_) | Value::Float(_) => {
                 unreachable!("numeric source types are handled before render_source_type")
             }
@@ -5516,6 +5568,7 @@ impl LightweightTaskScheduler {
             cancellation: request.cancellation,
             task_state: Arc::downgrade(&request.state),
         });
+        let stack_limit = request.stack.limit().get();
         let coroutine = Coroutine::with_stack(request.stack, move |yielder, _| {
             let context_was_installed = with_current_lightweight_task_context(|context| {
                 context.yielder.set(yielder as *const _);
@@ -5535,6 +5588,7 @@ impl LightweightTaskScheduler {
                 context,
                 coroutine,
                 forced_exit_cleanup: request.forced_exit_cleanup,
+                stack_limit,
             },
         );
         self.ready
@@ -5587,6 +5641,7 @@ impl LightweightTaskScheduler {
             .store(false, Ordering::SeqCst);
         *lock_mutex(&record.state.current_wait) = None;
         let _guard = enter_lightweight_task_context(&record.context);
+        let _stack_guard = enter_task_stack_limit(record.stack_limit);
         let outcome = record.coroutine.resume(reason);
         // A running coroutine may prepare children, but it never aliases the
         // scheduler itself. Admit those owned requests before deciding what
@@ -6222,7 +6277,18 @@ fn run_lightweight_root_task_on_workers_with_faults(
     faults: LightweightWorkerFaults,
 ) -> std::result::Result<Value, Diagnostic> {
     let workers = LightweightWorkerCoordinator::new(worker_count);
-    let (root, request) = prepare_lightweight_task(None, None, true, entry, forced_exit_cleanup)?;
+    // The root task runs the whole program. Child tasks keep the small
+    // documented default (overridable per start), but the entry's interpreter
+    // frames must never hit a coroutine guard page before the call-depth
+    // diagnostic can fire, so the root reserves a generous lazily committed
+    // stack.
+    let (root, request) = prepare_lightweight_task(
+        None,
+        Some(ROOT_LIGHTWEIGHT_TASK_STACK_SIZE),
+        true,
+        entry,
+        forced_exit_cleanup,
+    )?;
     workers.submit(request);
 
     let mut threads = Vec::with_capacity(worker_count);
@@ -6659,6 +6725,7 @@ impl Clone for Value {
             Self::FfiHandle(value) => Self::FfiHandle(value.clone()),
             Self::Instance(value) => Self::Instance(value.clone()),
             Self::EnumVariant(value) => Self::EnumVariant(value.clone()),
+            Self::Union(value) => Self::Union(value.clone()),
             Self::Channel(value) => Self::Channel(value.clone()),
             Self::Task(value) => Self::Task(value.clone()),
             Self::TaskGroup(value) => Self::TaskGroup(value.clone()),
@@ -6725,6 +6792,14 @@ impl PartialEq for Value {
             (Value::UnixStream(left), Value::UnixStream(right)) => left == right,
             (Value::TlsListener(left), Value::TlsListener(right)) => left == right,
             (Value::TlsStream(left), Value::TlsStream(right)) => left == right,
+            // Union equality is active-member equality (ADR-0052 A6, Q6 B):
+            // the same member identity and equal payloads, regardless of the
+            // union each side was built with. A bare member value compares
+            // through the same rule, which is the comparison-only injection
+            // the checker admits without allocating a union box.
+            (Value::Union(_), _) | (_, Value::Union(_)) => {
+                crate::union_runtime::union_values_equal(self, other)
+            }
             _ => false,
         }
     }
@@ -6865,6 +6940,7 @@ impl Value {
                             }
                         }
                     }
+                    Value::Union(union) => actions.push(RenderAction::Value(&union.payload)),
                     Value::EnumVariant(variant) => {
                         rendered.push_str(nominal_runtime_base_name(&variant.enum_name));
                         rendered.push('.');
@@ -7709,6 +7785,7 @@ impl ChannelValue {
 
 pub(crate) fn collect_queue_values(value: &Value, queues: &mut Vec<ChannelValue>) {
     match value {
+        Value::Union(union) => collect_queue_values(&union.payload, queues),
         Value::Channel(channel) => queues.push(channel.clone()),
         Value::Tuple(tuple) => {
             for element in &tuple.elements {

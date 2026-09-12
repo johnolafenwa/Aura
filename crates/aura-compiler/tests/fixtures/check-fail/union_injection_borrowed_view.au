@@ -1,0 +1,10 @@
+class Profile:
+    name: str
+def profile_name(profile: Profile) -> view str from profile:
+    return view profile.name
+def accept(value: str | None) -> int64:
+    return 42
+def main():
+    profile = Profile(name="Ada")
+    view name = profile_name(profile)
+    print(accept(value=name))

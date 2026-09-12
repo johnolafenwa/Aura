@@ -42,13 +42,21 @@ consume it; tuple ordering remains rejected. See
 [Statements](/manual/statements#for-iteration) for the loop-form contract.
 
 Phase 6.1 capture-free function values make named functions Copy and Transfer
-values with structural `def(...) -> ...` types. Phase 6.2 uses that surface for
+values with structural `def(...) -> ...` types. Under the Batch 1 phase 1
+checkpoint those types are complete contracts: slots may be named, a `*`
+boundary makes slots keyword-only in declarations, lambdas, and types, and
+`= ...` promises default availability; a written contract may only hide names
+or default availability or restrict a slot to keyword-only, inference never
+invents a common contract (`AU2015`), and a thin alias call such as
+`Unary(function)` is the explicit adapter. Phase 6.2 uses that surface for
 the maintained eager natural/keyed `list.sort`, `map`, and `filter` algorithms and
 for `control.retry`. These are current technical-preview APIs. `control`
 resolves as a builtin module namespace, and the four List member names are
 part of the builtin no-shadowing surface. Callback
 capabilities are exact: code must pass bare/shared element callbacks rather
-than relying on adaptation from `mut` or `own`.
+than relying on adaptation from `mut` or `own`; a packed Shared
+`Callable[...]` or `TaskCallable[...]` value with that contract is borrowed
+at these sites and at `control.retry` (C10).
 
 Contextually typed `lambda parameters: expression` closures follow Accepted
 ADR-0037. Without a capture list, Copy values copy and owned non-Copy values
@@ -58,8 +66,19 @@ through a mutable closure place, and consuming owned-capture use is single-use.
 A by-value closure is Transfer only when every capture is Transfer; a loan
 closure is never Transfer. Zero-parameter lambdas may infer their result
 without a contextual callable type. Capturing closures retain compiler
-metadata and therefore do not cross arbitrary written-`def` parameter, field,
-collection, or annotated return boundaries.
+metadata and therefore do not cross thin written-`def` parameter, field,
+collection, or annotated return boundaries; under the Batch 1 phase 1
+checkpoint they cross those boundaries as explicitly packed `Callable[...]`
+or `TaskCallable[...]` values whose call kind may only weaken and whose
+captures are owned, and a body may mutate an owned capture, which makes the
+closure Mutable. `receiver.method` outside call position is a bound method:
+a compiler-synthesized closure over the receiver whose call kind follows the
+receiver capability (Q18 A), and `Class.method` on a non-generic class is a
+function value. A stored callable's contract may return a view of one
+explicit parameter, `def(...) -> view [mut] T from name` (Q22 A); a call
+through it binds a `view` whose footprint is every fixed path of the origin
+with the result type. Captured-self origins and loan environments remain
+unstorable, and task callables cannot return views.
 
 Phase 6.5 implements ADR-0038 place-based loans and views. Local shared and
 mutable views cover roots, fixed class fields, and tuple positions; lifetimes
@@ -67,16 +86,18 @@ end after conservative final use; reborrows preserve source identity; and
 mutable views write through immediately. One declared receiver or parameter
 may be the origin of `-> view [mut] T from source`. MIR execution, direct
 native builds, analysis/LSP, and editor tooling share semantic-interface
-schema 6 for this surface. Views and loan closures remain task-local and
+schema 7 for this surface. Views and loan closures remain task-local and
 non-Transfer.
 
 Phase 6.4 adds explicitly authorized FFI v0 packages. Bodyless
 `extern "C"` functions call process-global symbols synchronously through
 fixed-width scalars, pointer-length str/byte views, or non-null opaque
 handles. FFI-enabled dependencies must be visible in the root manifest's exact
-`[ffi] dependencies` report. Externs are direct-call-only; callbacks, raw
-pointers, variadics, returned views, nullable handles, and explicit library
-loading remain unavailable. This is an unsafe native boundary, not a memory
+`[ffi] dependencies` report. Externs are direct-call-only. Under the Batch 1
+phase 1 checkpoint an extern result may be exactly `Handle | None`, marshalled
+as one nullable C pointer; callbacks, raw pointers, variadics, returned views,
+other nullable shapes, and explicit library loading remain unavailable. This
+is an unsafe native boundary, not a memory
 safety promise for a false declaration or misbehaving C implementation.
 
 Phase 7.1 adds eager owned list, set, and dictionary comprehensions under Accepted
@@ -213,7 +234,7 @@ youngest-first task ancestry. Each public schema-version-1 frame span has its
 own required source `path`; the analysis/LSP editor shape permits an optional
 `file_path` for source-only analysis. The public diagnostic schema remains
 version `1` because the always-present arrays are an additive extension;
-compiler-service/editor transport uses semantic schema version `6`. This
+compiler-service/editor transport uses semantic schema version `14`. This
 version includes structural function values, import aliases, and the expanded
 numeric expression surface, and forwards the same diagnostic records.
 

@@ -1,0 +1,9 @@
+def main():
+    print(3ms)
+    print(4s)
+    print(5m)
+    print(1m + 30s + 250ms)
+    print(2s > 1500ms)
+    print(90s // 3)
+    print(3 * 1s)
+    print(2s - 500ms)

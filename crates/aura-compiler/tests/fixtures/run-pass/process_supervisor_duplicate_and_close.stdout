@@ -1,0 +1,5 @@
+started
+Error.Other(supervisor already manages a child named `worker`)
+sleeper started
+waited
+closed

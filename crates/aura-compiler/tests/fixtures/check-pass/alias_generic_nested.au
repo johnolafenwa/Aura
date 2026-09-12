@@ -1,0 +1,4 @@
+type Optional[T] = T | None
+type Entries[K, V] = dict[K, list[Optional[V]]]
+def accept(values: Entries[str, int64]):
+    pass

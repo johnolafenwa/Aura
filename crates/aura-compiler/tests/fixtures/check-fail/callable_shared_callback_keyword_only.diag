@@ -1,0 +1,5 @@
+error[AU2004]: `list.map` calls its callback positionally, but parameter `value` of `Callable[def(*, value: int64) -> int64]` is keyword-only
+ --> crates/aura-compiler/tests/fixtures/check-fail/callable_shared_callback_keyword_only.au:9:23
+  |
+9 |     print(numbers.map(named))
+  |                       ^

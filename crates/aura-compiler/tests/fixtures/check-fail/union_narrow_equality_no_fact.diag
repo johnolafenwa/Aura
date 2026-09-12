@@ -1,0 +1,5 @@
+error[AU2999]: unsupported method call `len` on `str | None`
+ --> crates/aura-compiler/tests/fixtures/check-fail/union_narrow_equality_no_fact.au:4:21
+  |
+4 |         print(value.len())
+  |                     ^

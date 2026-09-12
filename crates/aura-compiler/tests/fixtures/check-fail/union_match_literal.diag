@@ -1,0 +1,5 @@
+error[AU2013]: a union member literal requires a type arm followed by a guard or nested match
+ --> crates/aura-compiler/tests/fixtures/check-fail/union_match_literal.au:4:14
+  |
+4 |         case 1:
+  |              ^

@@ -1,0 +1,5 @@
+error[AU3002]: cannot use pattern binding `number` after reassigning match scrutinee `value`
+ --> crates/aura-compiler/tests/fixtures/check-fail/union_match_retag_mutable.au:6:19
+  |
+6 |             print(number)
+  |                   ^

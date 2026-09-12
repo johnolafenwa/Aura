@@ -1,0 +1,4 @@
+from alias_support.types import Choice
+
+def accept(value: Choice):
+    pass

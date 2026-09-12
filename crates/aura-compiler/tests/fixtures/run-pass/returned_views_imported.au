@@ -1,0 +1,14 @@
+import returned_views_imported_support.views
+
+def main():
+    user = returned_views_imported_support.views.User(name="aura", pair=(7, "first"))
+    view current = returned_views_imported_support.views.name(user)
+    print(current.len())
+    view head = returned_views_imported_support.views.first_of(user)
+    print(head)
+    view titled = user.title()
+    print(titled)
+    view leading = user.first()
+    print(leading + 1)
+    view labeled = user.label()
+    print(labeled)

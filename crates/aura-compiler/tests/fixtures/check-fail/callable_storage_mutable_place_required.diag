@@ -1,0 +1,6 @@
+error[AU3003]: a Mutable callable must be called through a mutable place
+ --> crates/aura-compiler/tests/fixtures/check-fail/callable_storage_mutable_place_required.au:13:11
+   |
+13 |     print(bumper())
+   |           ^
+  = help: store the callable in a `mut` local, or take it as a `mut` parameter

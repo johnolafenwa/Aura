@@ -1,0 +1,3 @@
+def main():
+    value: int64 | float64 = 1 as float64
+    print(42)

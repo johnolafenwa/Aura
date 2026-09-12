@@ -1,0 +1,24 @@
+class Names:
+    first: str
+    second: str
+
+def pick(names: Names, flag: bool) -> view str from names:
+    if flag:
+        return view names.first
+    return view names.second
+
+def longest(names: Names) -> view str from names:
+    if names.first.len() >= names.second.len():
+        return view names.first
+    else:
+        return view names.second
+
+def main():
+    names = Names(first="aura", second="language")
+    view chosen = pick(names, true)
+    print(chosen)
+    view other = pick(names, false)
+    print(other.len())
+    view long = longest(names)
+    print(long)
+    print(pick(names, false).len())

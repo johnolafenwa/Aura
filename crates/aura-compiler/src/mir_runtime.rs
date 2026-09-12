@@ -309,7 +309,11 @@ fn args_materialize_process_run(args: &[MirArg]) -> bool {
 
 fn rvalue_materializes_process_run(value: &Rvalue) -> bool {
     match value {
+        Rvalue::UnionTagTest { .. } | Rvalue::UnionTakePayload { .. } | Rvalue::NoneTest { .. } => {
+            false
+        }
         Rvalue::Use(value)
+        | Rvalue::UnionInject { value, .. }
         | Rvalue::Unary { value, .. }
         | Rvalue::Cast { value, .. }
         | Rvalue::Try { value }
@@ -407,6 +411,10 @@ fn deserialize_runtime_module(mir_json: &[u8]) -> Result<MirModule> {
 // stack ceiling. Recursive Aura programs should fail with a diagnostic before
 // the runtime thread can overflow its Rust stack.
 const MAX_CALL_DEPTH: usize = 256;
+/// Coroutine stack the interpreter keeps free before entering another Aura
+/// call, so an exhausted task stack becomes a diagnostic instead of a guard
+/// page fault.
+const TASK_STACK_HEADROOM_RESERVE: usize = 128 * 1024;
 const MIR_RUNTIME_STACK_SIZE: usize = 64 * 1024 * 1024;
 const MAX_EMBEDDED_RUNTIME_BYTES: usize = 1 << 30;
 const MAX_RUNTIME_BLOCKS: usize = 1_000_000;
@@ -857,6 +865,9 @@ pub unsafe extern "C" fn aura_native_run(
 
 struct MirRuntime {
     module: Arc<MirModule>,
+    /// Explicit-tag layout plans keyed by canonical union identity
+    /// (ADR-0052 A9); an injection into an unplanned union is refused.
+    union_layouts: Arc<HashMap<String, crate::union_layout::MirUnionLayout>>,
     safepoints_enabled: bool,
     functions: HashMap<String, MirFunction>,
     classes: HashMap<String, MirClass>,
@@ -1205,6 +1216,14 @@ impl Env {
         while index < rest.len() {
             let segment = &rest[index];
             value = match value {
+                Value::EnumVariant(variant) => {
+                    let index = enum_projection_index(variant, segment)?;
+                    &variant.payloads[index]
+                }
+                Value::Union(union) => {
+                    check_union_projection(union, segment)?;
+                    &union.payload
+                }
                 Value::Instance(instance) => instance.fields.get(segment).ok_or_else(|| {
                     Diagnostic::new(format!(
                         "class `{}` has no field `{}` in MIR place `{}`",
@@ -1589,6 +1608,43 @@ fn split_place_segments(place: &str) -> Result<Vec<String>> {
     Ok(segments)
 }
 
+fn check_union_projection(union: &crate::runtime_value::UnionValue, segment: &str) -> Result<()> {
+    let index = segment
+        .strip_prefix("__union_payload_")
+        .and_then(|value| value.parse::<usize>().ok());
+    if index == Some(union.member_index)
+        && segment == format!("__union_payload_{}", union.member_index)
+    {
+        return Ok(());
+    }
+    // A value tagged by a generic frame keeps that frame's symbolic layout
+    // until an operation in this frame retags it; the validated tag proof
+    // that dominates this projection already selected the active member.
+    let symbolic = matches!(&union.union_type, Type::Union(target)
+        if target.members.iter().any(|member| matches!(member, Type::TypeParam(_))));
+    if index.is_some() && symbolic {
+        return Ok(());
+    }
+    Err(Diagnostic::new(
+        "union payload projection does not select the active member",
+    ))
+}
+
+fn enum_projection_index(
+    variant: &crate::runtime_value::EnumVariantValue,
+    segment: &str,
+) -> Result<usize> {
+    let Some((name, index)) = crate::mir::enum_payload_projection(segment) else {
+        return Err(Diagnostic::new("invalid enum payload projection"));
+    };
+    if name != variant.variant_name || index >= variant.payloads.len() {
+        return Err(Diagnostic::new(
+            "enum payload projection does not select the active variant",
+        ));
+    }
+    Ok(index)
+}
+
 fn write_nested_place(
     current: &mut Value,
     segments: &[&str],
@@ -1601,6 +1657,24 @@ fn write_nested_place(
         )));
     };
     match current {
+        Value::EnumVariant(variant) => {
+            let index = enum_projection_index(variant, segment)?;
+            if rest.is_empty() {
+                variant.payloads[index] = value;
+                Ok(())
+            } else {
+                write_nested_place(&mut variant.payloads[index], rest, value, full_place)
+            }
+        }
+        Value::Union(union) => {
+            check_union_projection(union, segment)?;
+            if rest.is_empty() {
+                union.payload = value;
+                Ok(())
+            } else {
+                write_nested_place(&mut union.payload, rest, value, full_place)
+            }
+        }
         Value::Instance(instance) => {
             if rest.is_empty() {
                 instance.fields.insert((*segment).to_string(), value);
@@ -1645,6 +1719,9 @@ fn take_nested_place(value: &mut Value, segments: &[String], full_place: &str) -
         )));
     };
     match value {
+        Value::Union(_) => Err(Diagnostic::new(
+            "union payload moves require a checked UnionTakePayload operation",
+        )),
         Value::Instance(instance) => {
             if rest.is_empty() {
                 return instance.fields.remove(segment).ok_or_else(|| {
@@ -1694,6 +1771,14 @@ fn nested_place_mut<'a>(
         return Ok(value);
     };
     let child = match value {
+        Value::EnumVariant(variant) => {
+            let index = enum_projection_index(variant, segment)?;
+            &mut variant.payloads[index]
+        }
+        Value::Union(union) => {
+            check_union_projection(union, segment)?;
+            &mut union.payload
+        }
         Value::Instance(instance) => instance.fields.get_mut(segment).ok_or_else(|| {
             Diagnostic::new(format!(
                 "class `{}` has no field `{}` in MIR place `{full_place}`",
@@ -2215,8 +2300,21 @@ impl MirRuntime {
             classes.insert(class.name.clone(), class.clone());
         }
         let trait_impls = module.trait_impls.clone();
+        let union_layouts = Arc::new(
+            module
+                .unions
+                .iter()
+                .map(|plan| {
+                    (
+                        crate::union_layout::union_plan_key(&plan.union_type),
+                        plan.clone(),
+                    )
+                })
+                .collect::<HashMap<_, _>>(),
+        );
         Self {
             module: Arc::new(module),
+            union_layouts,
             safepoints_enabled,
             functions,
             classes,
@@ -2577,6 +2675,7 @@ impl MirRuntime {
 
     fn infer_value_type(value: &Value) -> Option<Type> {
         match value {
+            Value::Union(union) => Some(union.union_type.clone()),
             Value::Int(value) => Some(Type::named(value.runtime_type_name().unwrap_or("int64"))),
             Value::Float(_) => Some(Type::named("float64")),
             Value::Bool(_) => Some(Type::named("bool")),
@@ -2794,6 +2893,9 @@ impl MirRuntime {
                 function.signature = ty.clone();
                 Value::Function(function)
             }
+            (Value::Union(_), _) | (_, Type::Union(_)) => {
+                crate::union_runtime::coerce_union_boundary(value, ty)
+            }
             _ => value,
         };
         self.validate_value_fits_type(&coerced, ty, span)?;
@@ -2941,6 +3043,17 @@ impl MirRuntime {
         concrete_function_type: Option<&Type>,
         receiver_type: Option<&Type>,
     ) -> Result<CallOutcome> {
+        if let Some(headroom) = crate::runtime_value::task_stack_headroom() {
+            if headroom < TASK_STACK_HEADROOM_RESERVE {
+                return Err(Diagnostic::coded(
+                    "AU4005",
+                    format!(
+                        "task stack exhausted while calling `{}`: {} bytes remain; start the task with `start_with_stack` and a larger size",
+                        function.name, headroom
+                    ),
+                ));
+            }
+        }
         if self.call_depth >= MAX_CALL_DEPTH {
             return Err(Diagnostic::at(
                 function.span,
@@ -3708,6 +3821,17 @@ impl MirRuntime {
             Rvalue::Use(operand) => Ok(RvalueOutcome::Value(
                 self.evaluate_owned_operand(operand, env)?,
             )),
+            Rvalue::NoneTest { value } => {
+                let is_none = match value {
+                    Operand::Place(place) | Operand::MovePlace(place) => {
+                        crate::union_runtime::is_none_value(env.place_ref(place)?)
+                    }
+                    other => crate::union_runtime::is_none_value(
+                        &self.evaluate_owned_operand(other, env)?,
+                    ),
+                };
+                Ok(RvalueOutcome::Value(Value::Bool(is_none)))
+            }
             Rvalue::ModuleConstant { key, initializer } => Ok(RvalueOutcome::SharedModuleConstant(
                 self.read_module_constant(key, initializer)?,
             )),
@@ -3716,6 +3840,7 @@ impl MirRuntime {
                 signature,
                 captures,
                 consuming,
+                mutable: _,
             } => {
                 let mut captured = Vec::with_capacity(captures.len());
                 for capture in captures {
@@ -3730,7 +3855,7 @@ impl MirRuntime {
                         ty: capture.ty.clone(),
                         value: self.evaluate_owned_operand(&capture.value, env)?,
                         source_place,
-                        mutable: capture.passing == MirReceiverKind::BorrowMut,
+                        mutable: capture.passing == MirReceiverKind::BorrowMut || capture.mutated,
                     });
                 }
                 let metadata = self.functions.get(function);
@@ -4069,6 +4194,80 @@ impl MirRuntime {
                     class_name: class_name.clone(),
                     fields: values,
                 })))
+            }
+            Rvalue::UnionTagTest {
+                place,
+                union_type,
+                member_index,
+            } => {
+                let Type::Union(target) = union_type else {
+                    return Err(Diagnostic::new("union tag test requires a union type"));
+                };
+                // Align the value to this frame's union so the payload
+                // projections proved by this test address the active member
+                // (ADR-0052 A7); a value that cannot be retagged in place is
+                // still tested structurally.
+                let active = match env.place_mut(place) {
+                    Ok(value) => {
+                        crate::union_runtime::align_union_value(value, target, "union tag test")
+                    }
+                    Err(_) => crate::union_runtime::aligned_member_index(
+                        env.place_ref(place)?,
+                        target,
+                        "union tag test",
+                    ),
+                }
+                .map_err(Diagnostic::new)?;
+                Ok(RvalueOutcome::Value(Value::Bool(active == *member_index)))
+            }
+            Rvalue::UnionTakePayload {
+                place,
+                union_type,
+                member_index,
+                ..
+            } => {
+                let Type::Union(target) = union_type else {
+                    return Err(Diagnostic::new("union take requires a union type"));
+                };
+                let active = crate::union_runtime::align_union_value(
+                    env.place_mut(place)?,
+                    target,
+                    "union take",
+                )
+                .map_err(Diagnostic::new)?;
+                if active != *member_index {
+                    return Err(Diagnostic::new(
+                        "union take member or type identity mismatch",
+                    ));
+                }
+                let Value::Union(union) = env.take_place(place)? else {
+                    unreachable!("checked union take")
+                };
+                Ok(RvalueOutcome::Value(union.payload))
+            }
+            Rvalue::UnionInject {
+                value,
+                union_type,
+                member_index,
+                ..
+            } => {
+                let Type::Union(target) = union_type else {
+                    return Err(Diagnostic::new("union injection requires a union type"));
+                };
+                // The plan both backends share must exist for every union a
+                // module builds (ADR-0052 A9).
+                if !self
+                    .union_layouts
+                    .contains_key(&crate::union_layout::union_plan_key(union_type))
+                {
+                    return Err(Diagnostic::new(format!(
+                        "union `{union_type}` has no layout plan in this module"
+                    )));
+                }
+                let payload = self.evaluate_owned_operand(value, env)?;
+                crate::union_runtime::inject_union_member(target, *member_index, payload)
+                    .map(RvalueOutcome::Value)
+                    .map_err(Diagnostic::new)
             }
             Rvalue::EnumVariant {
                 enum_name,
@@ -4741,8 +4940,19 @@ impl MirRuntime {
                 if let CallTarget::TraitMember { trait_name, .. } = callee {
                     let receiver_static_ty = self
                         .resolve_operand_type(object, env)
-                        .filter(|ty| !matches!(ty, Type::TypeParam(_)));
-                    let receiver = self.evaluate_owned_operand(object, env)?;
+                        .filter(|ty| !matches!(ty, Type::TypeParam(_) | Type::Union(_)));
+                    let mut receiver = self.evaluate_owned_operand(object, env)?;
+                    // A union receiver dispatches on its active member
+                    // (ADR-0052 A8): the payload is the receiver, and a
+                    // mutable method writes back through the payload
+                    // projection so the tag cannot change during the call.
+                    let mut union_receiver_place = None;
+                    if let Value::Union(union) = receiver {
+                        union_receiver_place = receiver_place
+                            .as_deref()
+                            .map(|place| format!("{place}.__union_payload_{}", union.member_index));
+                        receiver = union.payload;
+                    }
                     let resolved_receiver_ty = receiver_static_ty
                         .or_else(|| self.infer_runtime_value_type(&receiver))
                         .ok_or_else(|| {
@@ -4762,12 +4972,15 @@ impl MirRuntime {
                                 "type `{resolved_receiver_ty}` has no MIR implementation of `{trait_name}.{field}`"
                             ))
                         })?;
+                    let effective_receiver_place = union_receiver_place
+                        .as_deref()
+                        .or(receiver_place.as_deref());
                     return self.evaluate_resolved_trait_method_call(
                         receiver,
                         &resolved_receiver_ty,
                         field,
                         method,
-                        receiver_place.as_deref(),
+                        effective_receiver_place,
                         args,
                         expected_return_type,
                         env,
@@ -4833,6 +5046,15 @@ impl MirRuntime {
                     .resolve_operand_type(object, env)
                     .filter(|ty| !matches!(ty, Type::TypeParam(_)));
                 let mut receiver = self.evaluate_owned_operand(object, env)?;
+
+                if field == "clone" && matches!(receiver, Value::Union(_)) {
+                    // A union clones as its active member (ADR-0052 A6); the
+                    // checker admits this only when every member clones.
+                    if !args.is_empty() {
+                        return Err(Diagnostic::new("`clone` does not take arguments"));
+                    }
+                    return Ok(receiver);
+                }
 
                 if field == "__take_index_option" {
                     let receiver = std::mem::replace(&mut receiver, Value::Unit);
@@ -5393,6 +5615,7 @@ impl MirRuntime {
             })?;
         if let Some(closure) = &function_value.closure_environment {
             let captures = closure.arguments(&function_value.name)?;
+            let capture_count = captures.len();
             let mut combined = Vec::with_capacity(captures.len() + evaluated_args.len());
             for capture in captures {
                 let value = match &capture.source_place {
@@ -5410,10 +5633,23 @@ impl MirRuntime {
             let writeback_places = bind_function_writeback_places(&function.params, &combined)?;
             let outcome =
                 self.call_function_for_target(&function, None, combined, expected_return_type)?;
+            // Environment-owned mutable captures have no caller place: their
+            // updated values return to the closure environment (C2).
+            let mut place_updates = Vec::with_capacity(outcome.updated_params.len());
+            for (index, value) in outcome.updated_params {
+                if index < capture_count
+                    && writeback_places.get(index).is_some_and(Option::is_none)
+                    && function.params[index].passing == MirReceiverKind::BorrowMut
+                {
+                    closure.write_back_mutable(index, value)?;
+                } else {
+                    place_updates.push((index, value));
+                }
+            }
             self.apply_borrowed_param_writebacks(
                 &function.params,
                 &writeback_places,
-                outcome.updated_params,
+                place_updates,
                 env,
             )?;
             let value = outcome.value.into_result()?;
@@ -5462,7 +5698,13 @@ impl MirRuntime {
             .ok_or_else(|| {
                 Diagnostic::new(format!("unknown MIR function `{}`", function_value.name))
             })?;
-        self.require_task_startable_function(&function)?;
+        // Environment-owned captures of a Mutable stored target are child-owned
+        // state (C8); only public mutable parameters imply a parent writeback.
+        let capture_count = function_value
+            .closure_environment
+            .as_ref()
+            .map_or(0, |environment| environment.capture_count());
+        self.require_task_startable_function(&function, capture_count)?;
         // Capture evaluation and target-owned defaults both happen in the
         // parent task. The child receives a complete declaration-ordered
         // argument vector, so a dynamically selected target cannot defer its
@@ -5630,10 +5872,15 @@ impl MirRuntime {
         Ok(())
     }
 
-    fn require_task_startable_function(&self, function: &MirFunction) -> Result<()> {
+    fn require_task_startable_function(
+        &self,
+        function: &MirFunction,
+        capture_count: usize,
+    ) -> Result<()> {
         if let Some(param) = function
             .params
             .iter()
+            .skip(capture_count)
             .find(|param| param.passing == MirReceiverKind::BorrowMut)
         {
             return Err(Diagnostic::coded(
@@ -9375,6 +9622,12 @@ fn ffi_type_for_extern_param(param: &MirExternParam) -> Result<FfiType> {
         {
             Ok(FfiType::BytesViewMut)
         }
+        // Semantic analysis rejects every union parameter (AU2010); the
+        // nullable-handle form is result-only.
+        (ty @ Type::Union(_), _) => Err(Diagnostic::coded(
+            "AU4005",
+            format!("union FFI parameter type `{ty}` reached MIR execution"),
+        )),
         (ty, _) => ffi_type_for_extern_result(ty),
     }
 }
@@ -9401,6 +9654,17 @@ fn ffi_type_for_extern_result(ty: &Type) -> Result<FfiType> {
         },
         Type::Named(name, args) if name == "list" && args.as_slice() == [Type::named("uint8")] => {
             FfiType::BytesView
+        }
+        // Semantic analysis admits exactly `Handle | None` as a union result.
+        Type::Union(union)
+            if union.members.len() == 2
+                && union.members.contains(&Type::Unit)
+                && union
+                    .members
+                    .iter()
+                    .any(|member| matches!(member, Type::Named(_, args) if args.is_empty())) =>
+        {
+            FfiType::NullableOpaqueHandle
         }
         other => {
             return Err(Diagnostic::coded(
@@ -9602,6 +9866,35 @@ fn runtime_value_from_ffi(value: FfiValue, ty: &Type) -> Result<Value> {
                 .ok_or_else(|| {
                     Diagnostic::coded("AU4005", "FFI function returned a null opaque handle")
                 })
+        }
+        // A `Handle | None` result (ADR-0052 A10): non-null constructs the
+        // owned handle member, null constructs `None`.
+        (FfiValue::OpaqueHandle(handle), Type::Union(union)) => {
+            let (index, member) = union
+                .members
+                .iter()
+                .enumerate()
+                .find(|(_, member)| matches!(member, Type::Named(_, args) if args.is_empty()))
+                .ok_or_else(|| mismatch(FfiType::NullableOpaqueHandle))?;
+            let Type::Named(class_name, _) = member else {
+                unreachable!("checked handle member")
+            };
+            let payload = FfiHandleValue::new(class_name.clone(), handle.as_ptr())
+                .map(Value::FfiHandle)
+                .ok_or_else(|| {
+                    Diagnostic::coded("AU4005", "FFI function returned a null opaque handle")
+                })?;
+            crate::union_runtime::inject_union_member(union, index, payload)
+                .map_err(|message| Diagnostic::coded("AU4005", message))
+        }
+        (FfiValue::Unit, Type::Union(union)) => {
+            let index = union
+                .members
+                .iter()
+                .position(|member| *member == Type::Unit)
+                .ok_or_else(|| mismatch(FfiType::NullableOpaqueHandle))?;
+            crate::union_runtime::inject_union_member(union, index, Value::Unit)
+                .map_err(|message| Diagnostic::coded("AU4005", message))
         }
         (value, _) => Err(mismatch(value.ffi_type())),
     }
@@ -10478,6 +10771,7 @@ fn collect_runtime_type_substitutions(
     substitutions: &mut HashMap<String, Type>,
 ) {
     match pattern {
+        Type::Union(_) => {}
         Type::TypeParam(name) => {
             substitutions
                 .entry(name.clone())
@@ -10532,6 +10826,37 @@ fn collect_runtime_type_substitutions(
                 );
             }
             collect_runtime_type_substitutions(pattern_return, actual_return, substitutions);
+        }
+        Type::ReturnedView(view) => {
+            if let Type::ReturnedView(actual_view) = actual {
+                collect_runtime_type_substitutions(
+                    &view.pointee,
+                    &actual_view.pointee,
+                    substitutions,
+                );
+            }
+        }
+        Type::Callable(pattern_callable) => {
+            let Type::Callable(actual_callable) = actual else {
+                return;
+            };
+            if pattern_callable.params.len() != actual_callable.params.len() {
+                return;
+            }
+            for (pattern_param, actual_param) in
+                pattern_callable.params.iter().zip(&actual_callable.params)
+            {
+                collect_runtime_type_substitutions(
+                    &pattern_param.ty,
+                    &actual_param.ty,
+                    substitutions,
+                );
+            }
+            collect_runtime_type_substitutions(
+                &pattern_callable.return_type,
+                &actual_callable.return_type,
+                substitutions,
+            );
         }
         Type::Closure {
             params: pattern_params,
@@ -10614,6 +10939,11 @@ fn public_runtime_function_name(name: &str) -> String {
 
 fn collect_type_params_from_type(ty: &Type, collected: &mut std::collections::BTreeSet<String>) {
     match ty {
+        Type::Union(union) => {
+            for member in &union.members {
+                collect_type_params_from_type(member, collected);
+            }
+        }
         Type::TypeParam(name) => {
             collected.insert(name.clone());
         }
@@ -10636,6 +10966,13 @@ fn collect_type_params_from_type(ty: &Type, collected: &mut std::collections::BT
                 collect_type_params_from_type(&param.ty, collected);
             }
             collect_type_params_from_type(return_type, collected);
+        }
+        Type::ReturnedView(view) => collect_type_params_from_type(&view.pointee, collected),
+        Type::Callable(callable) => {
+            for param in &callable.params {
+                collect_type_params_from_type(&param.ty, collected);
+            }
+            collect_type_params_from_type(&callable.return_type, collected);
         }
         Type::Closure {
             params,

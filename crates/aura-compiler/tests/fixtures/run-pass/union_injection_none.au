@@ -1,0 +1,6 @@
+def make() -> int64 | None:
+    return None
+def main():
+    value: int64 | None = None
+    other = make()
+    print(42)

@@ -1,0 +1,9 @@
+def main():
+    value: list[int64] | None = [42]
+    match own value:
+        case list[int64] as values if false:
+            print(0)
+        case list[int64] as values:
+            print(values.len())
+        case None:
+            print(0)

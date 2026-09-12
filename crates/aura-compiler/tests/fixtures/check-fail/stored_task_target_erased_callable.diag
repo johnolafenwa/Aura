@@ -1,0 +1,6 @@
+error[AU3008]: task target of type `Callable[def() -> int64]` hides its environment and is not Transfer
+ --> crates/aura-compiler/tests/fixtures/check-fail/stored_task_target_erased_callable.au:9:28
+  |
+9 |         task = group.start(make_job(1))
+  |                            ^
+  = help: pack the closure as `TaskCallable[...]`, which proves every capture Transfer when it is created

@@ -23,6 +23,7 @@ pub struct ConstantDecl {
 
 #[derive(Clone, Debug, Serialize)]
 pub enum Item {
+    TypeAlias(TypeAliasDecl),
     Class(ClassDecl),
     Enum(EnumDecl),
     ExternFunction(ExternFunctionDecl),
@@ -35,6 +36,7 @@ pub enum Item {
 impl Item {
     pub fn name(&self) -> &str {
         match self {
+            Item::TypeAlias(alias) => &alias.name,
             Item::Class(class_decl) => &class_decl.name,
             Item::Enum(enum_decl) => &enum_decl.name,
             Item::ExternFunction(function_decl) => &function_decl.name,
@@ -44,6 +46,16 @@ impl Item {
             Item::Impl(impl_decl) => &impl_decl.trait_name,
         }
     }
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct TypeAliasDecl {
+    pub public: bool,
+    pub name: String,
+    pub type_params: Vec<String>,
+    pub type_param_bounds: BTreeMap<String, Vec<TypeRef>>,
+    pub target: TypeRef,
+    pub span: Span,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -131,7 +143,7 @@ pub struct FunctionDecl {
     pub span: Span,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct ViewReturn {
     pub mutable: bool,
     pub origin: String,
@@ -214,6 +226,7 @@ pub struct Param {
     pub mode: ParamMode,
     pub ty: TypeRef,
     pub default: Option<Expr>,
+    pub keyword_only: bool,
     pub span: Span,
 }
 
@@ -362,12 +375,20 @@ pub struct MatchExprArm {
 
 #[derive(Clone, Debug, Serialize)]
 pub enum Pattern {
+    Type(TypePattern),
     Or(OrPattern),
     Variant(VariantPattern),
     Tuple(TuplePattern),
     Binding(BindingPattern),
     Literal(LiteralPattern),
     Wildcard(Span),
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct TypePattern {
+    pub ty: TypeRef,
+    pub binding: BindingPattern,
+    pub span: Span,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -483,6 +504,7 @@ pub struct Expr {
 pub struct LambdaParam {
     pub name: String,
     pub mode: ParamMode,
+    pub keyword_only: bool,
     pub span: Span,
 }
 
@@ -604,6 +626,12 @@ pub enum ExprKind {
         first: Box<Expr>,
         links: Vec<CompareLink>,
     },
+    /// A contextual absence test. This does not perform identity equality.
+    IsNone {
+        value: Box<Expr>,
+        negated: bool,
+        operator_span: Span,
+    },
 }
 
 /// One `operator operand` step of a comparison chain.
@@ -698,23 +726,39 @@ pub enum FormatPart {
 
 /// One parameter contract inside a structural `def(...) -> ...` type.
 ///
-/// Function types retain the source capability and type, but deliberately do
-/// not carry declaration-only parameter names or default expressions.
+/// Complete source slot syntax. A callable type promises default availability
+/// without embedding a target's default expression.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct FunctionTypeParam {
+    pub name: Option<String>,
     pub mode: ParamMode,
     pub ty: TypeRef,
+    pub keyword_only: bool,
+    pub has_default: bool,
     pub span: Span,
 }
 
 impl FunctionTypeParam {
     pub fn new(mode: ParamMode, ty: TypeRef, span: Span) -> Self {
-        Self { mode, ty, span }
+        Self {
+            name: None,
+            mode,
+            ty,
+            keyword_only: false,
+            has_default: false,
+            span,
+        }
     }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub enum TypeRefKind {
+    Union(Vec<TypeRef>),
+    Callable {
+        task: bool,
+        call_kind: ReceiverKind,
+        signature: Box<TypeRef>,
+    },
     Named {
         name: String,
         args: Vec<TypeRef>,
@@ -723,6 +767,9 @@ pub enum TypeRefKind {
     Function {
         params: Vec<FunctionTypeParam>,
         return_type: Box<TypeRef>,
+        /// `-> view [mut] T from name`: the call returns a view of one named
+        /// parameter of this contract (C9, Q22 A).
+        view_return: Option<ViewReturn>,
     },
 }
 
@@ -739,6 +786,24 @@ impl Serialize for TypeRef {
         S: Serializer,
     {
         match &self.kind {
+            TypeRefKind::Union(members) => {
+                let mut state = serializer.serialize_struct("UnionTypeRef", 2)?;
+                state.serialize_field("members", members)?;
+                state.serialize_field("span", &self.span)?;
+                state.end()
+            }
+            TypeRefKind::Callable {
+                task,
+                call_kind,
+                signature,
+            } => {
+                let mut state = serializer.serialize_struct("CallableTypeRef", 4)?;
+                state.serialize_field("task", task)?;
+                state.serialize_field("call_kind", call_kind)?;
+                state.serialize_field("signature", signature)?;
+                state.serialize_field("span", &self.span)?;
+                state.end()
+            }
             TypeRefKind::Named { name, args } => {
                 let mut state = serializer.serialize_struct("TypeRef", 4)?;
                 state.serialize_field("name", name)?;
@@ -757,10 +822,12 @@ impl Serialize for TypeRef {
             TypeRefKind::Function {
                 params,
                 return_type,
+                view_return,
             } => {
-                let mut state = serializer.serialize_struct("FunctionTypeRef", 4)?;
+                let mut state = serializer.serialize_struct("FunctionTypeRef", 5)?;
                 state.serialize_field("params", params)?;
                 state.serialize_field("return_type", return_type)?;
+                state.serialize_field("view_return", view_return)?;
                 state.serialize_field("indirect", &self.indirect)?;
                 state.serialize_field("span", &self.span)?;
                 state.end()
@@ -770,6 +837,25 @@ impl Serialize for TypeRef {
 }
 
 impl TypeRef {
+    pub fn union(members: Vec<TypeRef>, span: Span) -> Self {
+        Self {
+            kind: TypeRefKind::Union(members),
+            indirect: false,
+            span,
+        }
+    }
+
+    pub fn callable(task: bool, call_kind: ReceiverKind, signature: TypeRef, span: Span) -> Self {
+        Self {
+            kind: TypeRefKind::Callable {
+                task,
+                call_kind,
+                signature: Box::new(signature),
+            },
+            indirect: false,
+            span,
+        }
+    }
     pub fn named(name: impl Into<String>, args: Vec<TypeRef>, indirect: bool, span: Span) -> Self {
         Self {
             kind: TypeRefKind::Named {
@@ -805,10 +891,20 @@ impl TypeRef {
         return_type: TypeRef,
         span: Span,
     ) -> Self {
+        Self::function_with_view_return(params, return_type, None, span)
+    }
+
+    pub fn function_with_view_return(
+        params: Vec<FunctionTypeParam>,
+        return_type: TypeRef,
+        view_return: Option<ViewReturn>,
+        span: Span,
+    ) -> Self {
         Self {
             kind: TypeRefKind::Function {
                 params,
                 return_type: Box::new(return_type),
+                view_return,
             },
             indirect: false,
             span,
@@ -818,14 +914,20 @@ impl TypeRef {
     pub fn named_parts(&self) -> Option<(&str, &[TypeRef])> {
         match &self.kind {
             TypeRefKind::Named { name, args } => Some((name, args)),
-            TypeRefKind::Tuple(_) | TypeRefKind::Function { .. } => None,
+            TypeRefKind::Tuple(_)
+            | TypeRefKind::Function { .. }
+            | TypeRefKind::Union(_)
+            | TypeRefKind::Callable { .. } => None,
         }
     }
 
     pub fn elements(&self) -> Option<&[TypeRef]> {
         match &self.kind {
             TypeRefKind::Tuple(elements) => Some(elements),
-            TypeRefKind::Named { .. } | TypeRefKind::Function { .. } => None,
+            TypeRefKind::Named { .. }
+            | TypeRefKind::Function { .. }
+            | TypeRefKind::Union(_)
+            | TypeRefKind::Callable { .. } => None,
         }
     }
 
@@ -834,8 +936,12 @@ impl TypeRef {
             TypeRefKind::Function {
                 params,
                 return_type,
+                ..
             } => Some((params, return_type)),
-            TypeRefKind::Named { .. } | TypeRefKind::Tuple(_) => None,
+            TypeRefKind::Named { .. }
+            | TypeRefKind::Tuple(_)
+            | TypeRefKind::Union(_)
+            | TypeRefKind::Callable { .. } => None,
         }
     }
 }

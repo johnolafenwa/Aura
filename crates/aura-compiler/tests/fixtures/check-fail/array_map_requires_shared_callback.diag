@@ -1,4 +1,4 @@
-error[AU2002]: `Array.map` callback must take exactly one shared parameter of type `int32`, found `def(mut int32) -> int32`
+error[AU2002]: `Array.map` callback must take exactly one shared parameter of type `int32`, found `def(value: mut int32) -> int32`
  --> crates/aura-compiler/tests/fixtures/check-fail/array_map_requires_shared_callback.au:6:32
   |
 6 |     mapped = values.map[int32](f=mutate)

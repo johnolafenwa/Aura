@@ -1,0 +1,6 @@
+error[AU2015]: callable contract mismatch: the destination promises a default for parameter `value`, which the source does not declare
+ --> crates/aura-compiler/tests/fixtures/check-fail/callable_binding_invented_default.au:5:46
+  |
+5 |     step: def(value: int64 = ...) -> int64 = increment
+  |                                              ^
+  = help: annotate the destination with a contract every value satisfies, or adapt a value explicitly through a thin callable alias call such as `Alias(function)`

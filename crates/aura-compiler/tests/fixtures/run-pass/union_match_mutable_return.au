@@ -1,0 +1,12 @@
+def bump(value: mut (int64 | str)) -> int64:
+    match mut value:
+        case int64 as number:
+            number += 1
+            return number
+        case str as text:
+            return 0
+def main():
+    mut value: int64 | str = 41
+    result = bump(value=value)
+    print(result)
+    print(value)

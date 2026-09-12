@@ -1,0 +1,4 @@
+public enum Inner:
+    Data(int64 | str)
+public enum Outer[T]:
+    Item(T)

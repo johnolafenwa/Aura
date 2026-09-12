@@ -1,0 +1,7 @@
+error[AU2014]: narrowing of `value` no longer applies after a call with mutable access; test the current value again
+ --> crates/aura-compiler/tests/fixtures/check-fail/union_narrow_stale_mut_call.au:8:21
+  |
+8 |         print(value.len())
+  |                     ^
+  = related crates/aura-compiler/tests/fixtures/check-fail/union_narrow_stale_mut_call.au:6:14: narrowed by this test
+  = related crates/aura-compiler/tests/fixtures/check-fail/union_narrow_stale_mut_call.au:7:15: invalidated here

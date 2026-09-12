@@ -1,0 +1,5 @@
+error[AU1101]: `is None` tests cannot be chained with comparisons
+ --> crates/aura-compiler/tests/fixtures/parse-fail/union_syntax_none_test_after_comparison.au:2:23
+  |
+2 |     return 0 == value is None
+  |                       ^

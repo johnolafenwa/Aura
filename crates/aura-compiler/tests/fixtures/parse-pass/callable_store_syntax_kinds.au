@@ -1,0 +1,6 @@
+type Read = Callable[def(value: int64) -> int64]
+type Update = Callable[mut def(value: int64) -> int64]
+type Finish = Callable[own def() -> str]
+type Work = TaskCallable[def() -> int64]
+type MutWork = TaskCallable[mut def() -> int64]
+type OwnWork = TaskCallable[own def() -> int64]

@@ -1,0 +1,4 @@
+def main():
+    value: str | None = "aura"
+    if value is None or value.len() > 1:
+        print(value.len())

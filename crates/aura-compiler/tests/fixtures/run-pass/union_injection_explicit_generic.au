@@ -1,0 +1,4 @@
+def accept[T](value: own T) -> int64:
+    return 42
+def main():
+    print(accept[int64 | str](value=1))

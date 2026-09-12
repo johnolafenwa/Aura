@@ -1,0 +1,5 @@
+error[AU2004]: function `scale` is missing required argument `factor`
+ --> crates/aura-compiler/tests/fixtures/check-fail/callable_binding_keyword_only_missing.au:5:11
+  |
+5 |     print(scale(2))
+  |           ^

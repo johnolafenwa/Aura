@@ -558,6 +558,8 @@ fn manifest_authorized_ffi_lowering_exposes_exact_extern_mir_to_backends() {
 #[test]
 fn public_native_codegen_rejects_invalid_mir_surface() {
     let invalid_module = MirModule {
+        unions: Vec::new(),
+        enums: Vec::new(),
         constants: Vec::new(),
         functions: vec![MirFunction {
             name: "main".to_string(),
@@ -705,6 +707,8 @@ fn public_serialized_mir_api_runs_safe_payloads_and_rejects_forged_ffi() {
     );
 
     let forged = MirModule {
+        unions: Vec::new(),
+        enums: Vec::new(),
         constants: Vec::new(),
         functions: vec![MirFunction {
             name: "main".to_string(),

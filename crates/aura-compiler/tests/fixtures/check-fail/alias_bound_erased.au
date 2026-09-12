@@ -1,0 +1,7 @@
+trait Named:
+    def name(self) -> str
+class Missing:
+    pass
+type Marker[T: Named] = int64
+def accept(value: Marker[Missing]):
+    pass

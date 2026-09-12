@@ -1,0 +1,5 @@
+class Packet:
+    value: int64 | str
+def main():
+    packet = Packet(value=42)
+    print(42)

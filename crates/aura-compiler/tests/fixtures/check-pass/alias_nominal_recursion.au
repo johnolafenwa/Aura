@@ -1,0 +1,5 @@
+class Node:
+    next: indirect Node?
+type NodeAlias = Node
+def accept(value: NodeAlias):
+    pass

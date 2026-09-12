@@ -1,0 +1,5 @@
+error[AU2001]: unknown type `Missing`
+ --> crates/aura-compiler/tests/fixtures/check-fail/alias_unknown_target.au:1:15
+  |
+1 | type Broken = Missing
+  |               ^

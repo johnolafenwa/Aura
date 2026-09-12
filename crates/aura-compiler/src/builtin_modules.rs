@@ -19,6 +19,25 @@ fn type_ref(name: &str, args: Vec<TypeRef>) -> TypeRef {
     TypeRef::named(name, args, false, builtin_span())
 }
 
+fn lower_callable_type_ref(
+    task: bool,
+    call_kind: crate::ast::ReceiverKind,
+    signature: Type,
+) -> Type {
+    match signature {
+        Type::Function {
+            params,
+            return_type,
+        } => Type::Callable(Box::new(crate::sema::CallableType {
+            task,
+            call_kind: crate::sema::closure_call_kind_for(call_kind),
+            params,
+            return_type: *return_type,
+        })),
+        _ => Type::named("Unknown"),
+    }
+}
+
 fn lower_type_ref(type_ref: &TypeRef) -> Type {
     lower_type_ref_with_type_params(type_ref, None)
 }
@@ -32,6 +51,20 @@ fn lower_type_ref_with_type_params(
     type_params: Option<&BTreeSet<String>>,
 ) -> Type {
     match &type_ref.kind {
+        crate::ast::TypeRefKind::Union(members) => Type::normalize_union(
+            members
+                .iter()
+                .map(|member| lower_type_ref_with_type_params(member, type_params))
+                .collect(),
+            "<builtin>",
+            &BTreeMap::new(),
+        )
+        .expect("builtin union declarations have bounded normalized types"),
+        crate::ast::TypeRefKind::Callable {
+            task,
+            call_kind,
+            signature,
+        } => lower_callable_type_ref(*task, *call_kind, lower_type_ref(signature)),
         crate::ast::TypeRefKind::Tuple(elements) => Type::Tuple(
             elements
                 .iter()
@@ -46,7 +79,11 @@ fn lower_type_ref_with_type_params(
             Type::TypeParam(name.clone())
         }
         crate::ast::TypeRefKind::Named { name, args } => Type::Named(
-            name.clone(),
+            if name == "int" {
+                "int64".to_string()
+            } else {
+                name.clone()
+            },
             args.iter()
                 .map(|arg| lower_type_ref_with_type_params(arg, type_params))
                 .collect(),
@@ -54,24 +91,34 @@ fn lower_type_ref_with_type_params(
         crate::ast::TypeRefKind::Function {
             params,
             return_type,
-        } => Type::Function {
-            params: params
+            view_return,
+        } => {
+            let params = params
                 .iter()
                 .map(|param| FunctionParamContract {
-                    name: String::new(),
+                    keyword_only: param.keyword_only,
+                    name: param.name.clone().unwrap_or_default(),
                     ty: lower_type_ref_with_type_params(&param.ty, type_params),
                     passing: resolve_param_passing(param.mode),
-                    has_default: false,
-                    default_erased: true,
+                    has_default: param.has_default,
                 })
-                .collect(),
-            return_type: Box::new(lower_type_ref_with_type_params(return_type, type_params)),
-        },
+                .collect::<Vec<_>>();
+            let return_type = crate::sema::wrap_returned_view(
+                &params,
+                lower_type_ref_with_type_params(return_type, type_params),
+                view_return.as_ref(),
+            );
+            Type::Function {
+                params,
+                return_type: Box::new(return_type),
+            }
+        }
     }
 }
 
 fn value_param(name: &str, ty: TypeRef) -> Param {
     Param {
+        keyword_only: false,
         name: name.to_string(),
         mode: ParamMode::Default,
         ty,
@@ -82,6 +129,7 @@ fn value_param(name: &str, ty: TypeRef) -> Param {
 
 fn value_param_with_default(name: &str, ty: TypeRef, default: Expr) -> Param {
     Param {
+        keyword_only: false,
         name: name.to_string(),
         mode: ParamMode::Default,
         ty,
@@ -92,6 +140,7 @@ fn value_param_with_default(name: &str, ty: TypeRef, default: Expr) -> Param {
 
 fn borrow_param(name: &str, ty: TypeRef) -> Param {
     Param {
+        keyword_only: false,
         name: name.to_string(),
         mode: ParamMode::Default,
         ty,
@@ -102,6 +151,7 @@ fn borrow_param(name: &str, ty: TypeRef) -> Param {
 
 fn own_param(name: &str, ty: TypeRef) -> Param {
     Param {
+        keyword_only: false,
         name: name.to_string(),
         mode: ParamMode::Own,
         ty,
@@ -924,6 +974,10 @@ fn io_namespace() -> ModuleNamespace {
     enums.insert(error.decl.name.clone(), error.clone());
 
     ModuleNamespace {
+        union_injections: Default::default(),
+        narrowed_reads: Default::default(),
+        all_aliases: BTreeMap::new(),
+        aliases: BTreeMap::new(),
         constants: BTreeMap::new(),
         all_constants: BTreeMap::new(),
         name: "io".to_string(),
@@ -1072,6 +1126,10 @@ fn fs_namespace() -> ModuleNamespace {
     }
 
     ModuleNamespace {
+        union_injections: Default::default(),
+        narrowed_reads: Default::default(),
+        all_aliases: BTreeMap::new(),
+        aliases: BTreeMap::new(),
         constants: BTreeMap::new(),
         all_constants: BTreeMap::new(),
         name: "fs".to_string(),
@@ -1297,6 +1355,10 @@ fn net_namespace() -> ModuleNamespace {
     }
 
     ModuleNamespace {
+        union_injections: Default::default(),
+        narrowed_reads: Default::default(),
+        all_aliases: BTreeMap::new(),
+        aliases: BTreeMap::new(),
         constants: BTreeMap::new(),
         all_constants: BTreeMap::new(),
         name: "net".to_string(),
@@ -1451,6 +1513,10 @@ fn process_namespace() -> ModuleNamespace {
     }
 
     ModuleNamespace {
+        union_injections: Default::default(),
+        narrowed_reads: Default::default(),
+        all_aliases: BTreeMap::new(),
+        aliases: BTreeMap::new(),
         constants: BTreeMap::new(),
         all_constants: BTreeMap::new(),
         name: "process".to_string(),
@@ -1501,6 +1567,10 @@ fn random_namespace() -> ModuleNamespace {
     .collect::<BTreeMap<_, _>>();
 
     ModuleNamespace {
+        union_injections: Default::default(),
+        narrowed_reads: Default::default(),
+        all_aliases: BTreeMap::new(),
+        aliases: BTreeMap::new(),
         constants: BTreeMap::new(),
         all_constants: BTreeMap::new(),
         name: "random".to_string(),
@@ -1564,6 +1634,10 @@ fn function_only_namespace(name: &str, functions: Vec<FunctionInfo>) -> ModuleNa
         .map(|function| (function.decl.name.clone(), function))
         .collect::<BTreeMap<_, _>>();
     ModuleNamespace {
+        union_injections: Default::default(),
+        narrowed_reads: Default::default(),
+        all_aliases: BTreeMap::new(),
+        aliases: BTreeMap::new(),
         constants: BTreeMap::new(),
         all_constants: BTreeMap::new(),
         name: name.to_string(),
@@ -1964,6 +2038,10 @@ fn json_namespace() -> ModuleNamespace {
         (error.decl.name.clone(), error),
     ]);
     ModuleNamespace {
+        union_injections: Default::default(),
+        narrowed_reads: Default::default(),
+        all_aliases: BTreeMap::new(),
+        aliases: BTreeMap::new(),
         constants: BTreeMap::new(),
         all_constants: BTreeMap::new(),
         name: "json".to_string(),
@@ -2081,6 +2159,10 @@ fn bytes_namespace() -> ModuleNamespace {
     let error = bytes_error_enum_info();
     let enums = BTreeMap::from([(error.decl.name.clone(), error)]);
     ModuleNamespace {
+        union_injections: Default::default(),
+        narrowed_reads: Default::default(),
+        all_aliases: BTreeMap::new(),
+        aliases: BTreeMap::new(),
         constants: BTreeMap::new(),
         all_constants: BTreeMap::new(),
         name: "bytes".to_string(),

@@ -1,0 +1,5 @@
+error[AU2013]: type arm `int64 | str` denotes several union members; select one direct member
+ --> crates/aura-compiler/tests/fixtures/check-fail/union_match_union_alias.au:5:14
+  |
+5 |         case Choice as item:
+  |              ^

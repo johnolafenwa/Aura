@@ -1,0 +1,14 @@
+def show(value: int64 | str | None):
+    if value is None:
+        print("none")
+        return
+    match value:
+        case int64 as number:
+            print(number + 1)
+        case str as text:
+            print(text.len())
+
+def main():
+    show(None)
+    show(41)
+    show("abc")

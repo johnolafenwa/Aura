@@ -1,0 +1,3 @@
+def main():
+    value: int64 | str = 42
+    print(42)

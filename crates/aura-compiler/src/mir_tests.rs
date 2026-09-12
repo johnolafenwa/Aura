@@ -90,6 +90,7 @@ fn add_test_returned_view_callee(
             },
             ty: origin_ty.clone(),
             default_function: None,
+            keyword_only: false,
         }],
         local_types: Vec::new(),
         return_type: origin_ty,
@@ -381,11 +382,11 @@ def main():
         name: "borrow_pair".to_string(),
         signature: Box::new(Type::Function {
             params: vec![crate::sema::FunctionParamContract {
+                keyword_only: false,
                 name: "origin".to_string(),
                 ty: Type::named("Pair"),
                 passing: crate::ast::ReceiverKind::Borrow,
                 has_default: false,
-                default_erased: false,
             }],
             return_type: Box::new(Type::named("int64")),
         }),
@@ -541,6 +542,7 @@ def main():
             .params
             .iter()
             .map(|param| crate::sema::FunctionParamContract {
+                keyword_only: false,
                 name: param.name.clone(),
                 ty: param.ty.clone(),
                 passing: match param.passing {
@@ -549,10 +551,17 @@ def main():
                     MirReceiverKind::BorrowMut => crate::ast::ReceiverKind::BorrowMut,
                 },
                 has_default: param.default_function.is_some(),
-                default_erased: false,
             })
             .collect(),
-        return_type: Box::new(identity.return_type.clone()),
+        // `identity` returns `view int64 from origin`: the value's result
+        // position carries that contract by origin ordinal (C9).
+        return_type: Box::new(Type::ReturnedView(Box::new(
+            crate::sema::ReturnedViewType {
+                mutable: false,
+                pointee: identity.return_type.clone(),
+                origin: 0,
+            },
+        ))),
     };
 
     let mut unknown = baseline.clone();
@@ -603,12 +612,29 @@ def main():
         "{error}"
     );
 
+    let mut dropped_view = baseline.clone();
+    let mut signature = exact_signature.clone();
+    let Type::Function { return_type, .. } = &mut signature else {
+        unreachable!()
+    };
+    **return_type = Type::named("int64");
+    with_function_operand(&mut dropped_view, "identity", signature);
+    let error = validate_loan_flow(&dropped_view)
+        .expect_err("function operands cannot drop a declared returned-view contract");
+    assert!(
+        error.contains("returned-view contract that does not match declaration"),
+        "{error}"
+    );
+
     let mut wrong_return = baseline.clone();
     let mut signature = exact_signature;
     let Type::Function { return_type, .. } = &mut signature else {
         unreachable!()
     };
-    **return_type = Type::named("str");
+    let Type::ReturnedView(view) = &mut **return_type else {
+        unreachable!()
+    };
+    view.pointee = Type::named("str");
     with_function_operand(&mut wrong_return, "identity", signature);
     let error = validate_loan_flow(&wrong_return)
         .expect_err("function operand return contracts must match declarations");
@@ -834,6 +860,7 @@ def main():
             .params
             .iter()
             .map(|param| crate::sema::FunctionParamContract {
+                keyword_only: false,
                 name: param.name.clone(),
                 ty: param.ty.clone(),
                 passing: match param.passing {
@@ -842,10 +869,16 @@ def main():
                     MirReceiverKind::BorrowMut => crate::ast::ReceiverKind::BorrowMut,
                 },
                 has_default: param.default_function.is_some(),
-                default_erased: false,
             })
             .collect(),
-        return_type: Box::new(inspect.return_type.clone()),
+        // `inspect` returns `view int64 from origin` (C9).
+        return_type: Box::new(Type::ReturnedView(Box::new(
+            crate::sema::ReturnedViewType {
+                mutable: false,
+                pointee: inspect.return_type.clone(),
+                origin: 0,
+            },
+        ))),
     };
     let mut exact_function = baseline;
     mutate_call(&mut exact_function, &mut |callee, args| {
@@ -2075,6 +2108,8 @@ def main():
 #[test]
 fn adr0038_loan_validator_rejects_alias_spelling_moves_and_use_after_end() {
     let make_module = |instructions: Vec<Instruction>| MirModule {
+        unions: Vec::new(),
+        enums: Vec::new(),
         constants: Vec::new(),
         functions: vec![MirFunction {
             name: "main".to_string(),
@@ -2301,6 +2336,7 @@ fn adr0038_returned_contract_analysis_rejects_inconsistent_and_invalid_descripto
         passing,
         ty: Type::named("int64"),
         default_function: None,
+        keyword_only: false,
     };
 
     let owned_origin = make_function(
@@ -2529,6 +2565,8 @@ fn adr0038_returned_contract_analysis_rejects_inconsistent_and_invalid_descripto
 #[test]
 fn adr0038_public_mir_rejects_suspended_locked_and_overlapping_loan_accesses() {
     let make_module = |instructions: Vec<Instruction>| MirModule {
+        unions: Vec::new(),
+        enums: Vec::new(),
         constants: Vec::new(),
         functions: vec![MirFunction {
             name: "main".to_string(),
@@ -2646,6 +2684,8 @@ fn adr0038_public_mir_rejects_suspended_locked_and_overlapping_loan_accesses() {
 fn adr0038_malformed_mir_loan_instruction_diagnostics_are_specific() {
     let reject = |instructions: Vec<Instruction>, expected: &str| {
         let module = MirModule {
+            unions: Vec::new(),
+            enums: Vec::new(),
             constants: Vec::new(),
             functions: vec![MirFunction {
                 name: "probe".to_string(),
@@ -2658,6 +2698,7 @@ fn adr0038_malformed_mir_loan_instruction_diagnostics_are_specific() {
                     passing: MirReceiverKind::Borrow,
                     ty: Type::named("int64"),
                     default_function: None,
+                    keyword_only: false,
                 }],
                 local_types: ["parent", "child", "other", "target"]
                     .into_iter()
@@ -2898,6 +2939,8 @@ fn adr0038_mir_reborrow_and_returned_projections_are_canonical_and_type_valid() 
                        child_ty: Type,
                        classes: Vec<MirClass>,
                        instructions: Vec<Instruction>| MirModule {
+        unions: Vec::new(),
+        enums: Vec::new(),
         constants: Vec::new(),
         functions: vec![MirFunction {
             name: "main".to_string(),
@@ -3565,11 +3608,11 @@ fn mir_projection_and_unknown_type_helpers_preserve_fallback_contracts() {
     assert!(return_view_projection_set(&expr(ExprKind::Int(1)), "origin", &aliases).is_empty());
 
     let contract = |ty| crate::sema::FunctionParamContract {
+        keyword_only: false,
         name: "value".to_string(),
         ty,
         passing: ReceiverKind::Value,
         has_default: false,
-        default_erased: false,
     };
     let closure = |params, captures, return_type| Type::Closure {
         params: Box::new(params),
@@ -3589,6 +3632,7 @@ fn mir_projection_and_unknown_type_helpers_preserve_fallback_contracts() {
             ty: Type::named("Unknown"),
             mode: crate::sema::ClosureCaptureMode::Copy,
             span: Span::new(1, 1),
+            mutated: false,
         }],
         Type::Unit,
     )));
@@ -7899,6 +7943,10 @@ fn namespace_from_program(name: &str, path: &str, program: &Program) -> ModuleNa
         function.module_name = path.to_string();
     }
     ModuleNamespace {
+        union_injections: Default::default(),
+        narrowed_reads: Default::default(),
+        all_aliases: BTreeMap::new(),
+        aliases: BTreeMap::new(),
         constants: BTreeMap::new(),
         all_constants: BTreeMap::new(),
         name: name.to_string(),
@@ -7981,6 +8029,10 @@ def generic_helper[T](value: own T) -> T:
     reexport.classes.clear();
     reexport.enums.clear();
     let mut pkg = ModuleNamespace {
+        union_injections: Default::default(),
+        narrowed_reads: Default::default(),
+        all_aliases: BTreeMap::new(),
+        aliases: BTreeMap::new(),
         constants: BTreeMap::new(),
         all_constants: BTreeMap::new(),
         name: "pkg".to_string(),
@@ -8013,6 +8065,10 @@ def generic_helper[T](value: own T) -> T:
         .insert("reexport".to_string(), reexport.clone());
 
     let mut current = ModuleNamespace {
+        union_injections: Default::default(),
+        narrowed_reads: Default::default(),
+        all_aliases: BTreeMap::new(),
+        aliases: BTreeMap::new(),
         constants: BTreeMap::new(),
         all_constants: BTreeMap::new(),
         name: "main".to_string(),
@@ -8325,6 +8381,10 @@ fn lowerer_module_resolution_and_rendering_helpers_cover_imported_paths() {
         Some("RemoteTrait")
     );
     let mut imported_only_root = ModuleNamespace {
+        union_injections: Default::default(),
+        narrowed_reads: Default::default(),
+        all_aliases: BTreeMap::new(),
+        aliases: BTreeMap::new(),
         constants: BTreeMap::new(),
         all_constants: BTreeMap::new(),
         name: "pkg".to_string(),
@@ -10185,6 +10245,7 @@ def main() -> int32:
         binding_success,
         binding_failure,
         PatternLoweringOptions {
+            typed_payload_views: false,
             collect_writeback: true,
             consume_payloads: false,
         },
@@ -10217,6 +10278,7 @@ def main() -> int32:
         mismatch_success,
         mismatch_failure,
         PatternLoweringOptions {
+            typed_payload_views: false,
             collect_writeback: true,
             consume_payloads: false,
         },
@@ -10238,6 +10300,7 @@ def main() -> int32:
         unknown_success,
         unknown_failure,
         PatternLoweringOptions {
+            typed_payload_views: false,
             collect_writeback: true,
             consume_payloads: false,
         },
@@ -10264,6 +10327,7 @@ def main() -> int32:
         unit_variant_success,
         unit_variant_failure,
         PatternLoweringOptions {
+            typed_payload_views: false,
             collect_writeback: true,
             consume_payloads: false,
         },
@@ -10310,6 +10374,7 @@ def main() -> int32:
         literal_success,
         literal_failure,
         PatternLoweringOptions {
+            typed_payload_views: false,
             collect_writeback: true,
             consume_payloads: false,
         },
@@ -10951,7 +11016,6 @@ def main():
     assert_eq!(params.len(), 1);
     assert_eq!(params[0].name, "value");
     assert!(params[0].has_default);
-    assert!(!params[0].default_erased);
 
     let indirect_args = instructions
         .iter()
@@ -11019,11 +11083,11 @@ def main():
 #[test]
 fn mir_function_value_helpers_preserve_nested_types_and_imported_specialization() {
     let contract = |ty: Type, passing: ReceiverKind| crate::sema::FunctionParamContract {
+        keyword_only: false,
         name: String::new(),
         ty,
         passing,
         has_default: false,
-        default_erased: true,
     };
     let nested = Type::Function {
         params: vec![contract(
@@ -11063,6 +11127,7 @@ fn mir_function_value_helpers_preserve_nested_types_and_imported_specialization(
             ty: Type::Named("Option".to_string(), vec![Type::named("Unknown")]),
             mode: crate::sema::ClosureCaptureMode::Copy,
             span: Span::new(1, 1),
+            mutated: false,
         }]),
         call_kind: crate::sema::ClosureCallKind::Repeatable,
     };
@@ -11116,11 +11181,11 @@ fn mir_function_value_helpers_preserve_nested_types_and_imported_specialization(
         .expect("an imported generic function should specialize as a value");
     let expected = Type::Function {
         params: vec![crate::sema::FunctionParamContract {
+            keyword_only: false,
             name: "value".to_string(),
             ty: Type::named("str"),
             passing: ReceiverKind::Value,
             has_default: false,
-            default_erased: false,
         }],
         return_type: Box::new(Type::named("str")),
     };
@@ -11931,6 +11996,7 @@ def main():
                         signature,
                         captures,
                         consuming,
+                        mutable: _,
                     },
                 ..
             } => Some((function, signature, captures, consuming)),
@@ -12110,6 +12176,7 @@ def main() -> int32:
                         signature,
                         captures,
                         consuming,
+                        mutable: _,
                     },
             } => Some((target, function, signature, captures, consuming)),
             _ => None,
@@ -12489,4 +12556,451 @@ def main() -> int32:
         Some(Type::Named(name, args))
             if name == "Task" && args.as_slice() == [Type::named("int64")]
     ));
+}
+
+#[test]
+fn closure_body_move_scan_visits_every_rvalue_and_terminator_kind() {
+    // One program whose lowered MIR contains every rvalue and terminator shape
+    // the scan inspects, so a root that is never moved exercises each arm.
+    let source = r#"
+class Holder:
+    values: list[int64]
+enum Shape:
+    Circle(int64)
+    Square(int64)
+LIMIT: int64 = 3
+def parse(text: str) -> Result[int64, str]:
+    return Result[int64, str].Ok(text.len())
+def consume(item: own Holder):
+    pass
+def worker() -> int64:
+    return 1
+def run() -> Result[int64, str]:
+    holder = Holder(values=[1, 2])
+    pair = (1, "two")
+    first = pair[0]
+    total = first + LIMIT
+    text = f"{total} {first}"
+    shape = Shape.Circle(3)
+    match shape:
+        case Shape.Circle(radius):
+            print(radius)
+        case Shape.Square(side):
+            print(side)
+    tagged: int64 | str = 1
+    match tagged:
+        case int64 as number:
+            print(number)
+        case str as value:
+            print(value)
+    owned: list[int64] | None = [42]
+    match own owned:
+        case list[int64] as values:
+            print(values.len())
+        case None:
+            print(0)
+    items = {1, 2}
+    mapping = {"a": 1}
+    flag = not (total > 1)
+    widened = total as float64
+    add: def(int64) -> int64 = lambda value: value + total
+    print(add(1))
+    parsed = try parse(text)
+    with TaskGroup() as group:
+        task = group.start_with_stack(262144, worker)
+        print(task.result_or(0, timeout=1s))
+    assert flag or parsed >= 0, "message"
+    consume(holder)
+    return Result[int64, str].Ok(parsed)
+def main():
+    match run():
+        case Result.Ok(value):
+            print(value)
+        case Result.Err(message):
+            print(message)
+"#;
+    let program = checked_program(source);
+    let module = lower(&program);
+    let run = module
+        .functions
+        .iter()
+        .find(|function| function.name == "run")
+        .expect("run should lower");
+    assert!(!function_body_moves_root(run, "never_used"));
+    assert!(function_body_moves_root(run, "holder"));
+    assert!(function_body_moves_root(run, "owned"));
+    for function in &module.functions {
+        // Every lowered function is scanned; none moves a root it does not know.
+        assert!(!function_body_moves_root(function, "never_used"));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Batch 1 coverage: private helpers no program or forged module can reach.
+// ---------------------------------------------------------------------------
+
+fn batch1_test_function(name: &str) -> MirFunction {
+    MirFunction {
+        name: name.to_string(),
+        module_name: "<test>".to_string(),
+        source_path: None,
+        span: Span::new(1, 1),
+        receiver: None,
+        params: Vec::new(),
+        local_types: Vec::new(),
+        return_type: Type::Unit,
+        entry: "entry".to_string(),
+        blocks: vec![BasicBlock {
+            label: "entry".to_string(),
+            instructions: Vec::new(),
+            terminator: Terminator::Return(Operand::Unit),
+        }],
+    }
+}
+
+fn batch1_param(ty: Type) -> FunctionParamContract {
+    FunctionParamContract {
+        keyword_only: false,
+        name: "value".to_string(),
+        ty,
+        passing: ReceiverKind::Borrow,
+        has_default: false,
+    }
+}
+
+fn batch1_callable(
+    call_kind: ClosureCallKind,
+    params: Vec<FunctionParamContract>,
+    return_type: Type,
+) -> Type {
+    Type::Callable(Box::new(crate::sema::CallableType {
+        task: false,
+        call_kind,
+        params,
+        return_type,
+    }))
+}
+
+fn batch1_closure(call_kind: ClosureCallKind, return_type: Type) -> Type {
+    Type::Closure {
+        params: Box::new(Vec::new()),
+        return_type: Box::new(return_type),
+        captures: Box::new(Vec::new()),
+        call_kind,
+    }
+}
+
+fn batch1_returned_view(pointee: Type) -> Type {
+    Type::ReturnedView(Box::new(crate::sema::ReturnedViewType {
+        mutable: false,
+        pointee,
+        origin: 0,
+    }))
+}
+
+#[test]
+fn batch1_type_contains_unknown_walks_callable_and_returned_view_types() {
+    let unknown = Type::named("Unknown");
+    assert!(type_contains_unknown(&batch1_callable(
+        ClosureCallKind::Repeatable,
+        vec![batch1_param(unknown.clone())],
+        Type::Unit,
+    )));
+    assert!(type_contains_unknown(&batch1_callable(
+        ClosureCallKind::Repeatable,
+        Vec::new(),
+        unknown.clone(),
+    )));
+    assert!(!type_contains_unknown(&batch1_callable(
+        ClosureCallKind::Repeatable,
+        vec![batch1_param(Type::named("int64"))],
+        Type::named("str"),
+    )));
+    assert!(type_contains_unknown(&batch1_returned_view(unknown)));
+    assert!(!type_contains_unknown(&batch1_returned_view(Type::named(
+        "str"
+    ))));
+}
+
+#[test]
+fn batch1_lower_type_ref_lowers_written_callable_and_union_references() {
+    let span = Span::new(1, 1);
+    let signature = TypeRef::function(vec![type_ref("int64")], type_ref("str"), span);
+    let callable = TypeRef {
+        kind: crate::ast::TypeRefKind::Callable {
+            task: true,
+            call_kind: ReceiverKind::BorrowMut,
+            signature: Box::new(signature),
+        },
+        indirect: false,
+        span,
+    };
+    let Type::Callable(lowered) = lower_type_ref(&callable) else {
+        panic!("a written callable lowers to erased storage");
+    };
+    assert!(lowered.task);
+    assert_eq!(lowered.call_kind, ClosureCallKind::MutableRepeatable);
+    assert_eq!(lowered.params.len(), 1);
+    assert_eq!(lowered.params[0].ty, Type::named("int64"));
+    assert_eq!(lowered.return_type, Type::named("str"));
+
+    let malformed = TypeRef {
+        kind: crate::ast::TypeRefKind::Callable {
+            task: false,
+            call_kind: ReceiverKind::Borrow,
+            signature: Box::new(type_ref("int64")),
+        },
+        indirect: false,
+        span,
+    };
+    assert_eq!(lower_type_ref(&malformed), Type::named("Unknown"));
+    let union = TypeRef {
+        kind: crate::ast::TypeRefKind::Union(vec![type_ref("int64"), type_ref("str")]),
+        indirect: false,
+        span,
+    };
+    assert_eq!(lower_type_ref(&union), Type::named("Unknown"));
+    assert_eq!(
+        lower_callable_type_ref(false, ReceiverKind::Value, Type::Unit),
+        Type::named("Unknown")
+    );
+}
+
+#[test]
+fn batch1_payload_projection_parsers_reject_malformed_segments() {
+    assert_eq!(union_payload_projection_index("__union_payload_"), None);
+    assert_eq!(union_payload_projection_index("__union_payload_1x"), None);
+    assert_eq!(union_payload_projection_index("__union_payload_2"), Some(2));
+    assert_eq!(enum_payload_projection("__variant_payload__1"), None);
+    assert_eq!(enum_payload_projection("__variant_payload_Some_"), None);
+    assert_eq!(enum_payload_projection("__variant_payload_Some_x"), None);
+    assert_eq!(
+        enum_payload_projection("__variant_payload_Some_1"),
+        Some(("Some", 1))
+    );
+}
+
+#[test]
+fn batch1_erased_callable_admission_checks_kind_and_shape() {
+    let contract = |call_kind| batch1_callable(call_kind, Vec::new(), Type::Unit);
+    assert!(!callable_admitted_by_erased(
+        &Type::named("int64"),
+        &batch1_closure(ClosureCallKind::Repeatable, Type::Unit),
+    ));
+    assert!(callable_admitted_by_erased(
+        &contract(ClosureCallKind::Consuming),
+        &batch1_closure(ClosureCallKind::MutableRepeatable, Type::Unit),
+    ));
+    assert!(!callable_admitted_by_erased(
+        &contract(ClosureCallKind::Repeatable),
+        &batch1_closure(ClosureCallKind::Consuming, Type::Unit),
+    ));
+    assert!(!callable_admitted_by_erased(
+        &contract(ClosureCallKind::Repeatable),
+        &Type::named("int64"),
+    ));
+    assert!(callable_admitted_by_erased(
+        &contract(ClosureCallKind::Repeatable),
+        &Type::Function {
+            params: Vec::new(),
+            return_type: Box::new(Type::Unit),
+        },
+    ));
+}
+
+#[test]
+fn batch1_merging_callable_identities_without_contracts() {
+    let marker = ValidatedCallable {
+        function: None,
+        signature: Type::named(EMPTY_CONTAINER_MARKER),
+    };
+    let merged = merge_validated_callables([&marker, &marker].into_iter());
+    assert!(callable_container_is_empty_marker(&merged));
+    assert!(merged.function.is_none());
+    assert_eq!(
+        merge_validated_callables(std::iter::empty()),
+        unknown_validated_callable()
+    );
+}
+
+#[test]
+fn batch1_container_element_keys_include_map_and_set_projections() {
+    assert!(callable_segment_is_element_key("__map_key_3"));
+    assert!(callable_segment_is_element_key("__set_element_0"));
+    assert!(callable_segment_is_element_key("__map_value_1"));
+    assert!(callable_segment_is_element_key("7"));
+    assert!(!callable_segment_is_element_key("field"));
+}
+
+#[test]
+fn batch1_index_helpers_follow_groups_and_reject_non_constants() {
+    let name = expr(ExprKind::Name("index".to_string()));
+    assert_eq!(tuple_constant_index(&name), None);
+    let grouped = expr(ExprKind::Group(Box::new(expr(ExprKind::Int(2)))));
+    assert_eq!(tuple_constant_index(&grouped), Some(2));
+    assert_eq!(array_coordinate_type(&grouped), Type::named("int64"));
+    let pair = expr(ExprKind::Group(Box::new(expr(ExprKind::Tuple(vec![
+        expr(ExprKind::Int(1)),
+        expr(ExprKind::Int(2)),
+    ])))));
+    assert_eq!(
+        array_coordinate_type(&pair),
+        Type::Tuple(vec![Type::named("int64"); 2])
+    );
+    assert_eq!(callback_result_type(Type::named("int64")), None);
+    assert_eq!(
+        callback_result_type(batch1_callable(
+            ClosureCallKind::Repeatable,
+            Vec::new(),
+            Type::named("str"),
+        )),
+        Some(Type::named("str"))
+    );
+}
+
+#[test]
+fn batch1_loan_ancestor_walks_stop_on_cycles() {
+    let loan = |parent: Option<&str>, returned: bool| ValidatedLoan {
+        sources: Vec::<String>::new().into(),
+        mutable: false,
+        parent: parent.map(str::to_owned),
+        returned_descriptor: returned,
+        active_children: 0,
+    };
+    let mut loans = ValidatedLoans::new();
+    loans.insert("a".to_string(), loan(Some("b"), false));
+    loans.insert("b".to_string(), loan(Some("a"), false));
+    assert_eq!(
+        validated_loan_ancestors("a", &loans),
+        BTreeSet::from(["a".to_string(), "b".to_string()])
+    );
+    assert!(!validated_loan_has_returned_ancestor("a", &loans));
+    loans.insert("c".to_string(), loan(Some("a"), true));
+    assert!(validated_loan_has_returned_ancestor("c", &loans));
+    assert!(!validated_loan_has_returned_ancestor("missing", &loans));
+}
+
+#[test]
+fn batch1_loan_path_budgets_reject_oversized_expansions() {
+    let function = batch1_test_function("budget");
+    let mut state = ValidatedLoanState::default();
+    state.active_path_bytes = MAX_VALIDATED_EXPANDED_LOAN_PATH_BYTES;
+    let error = validate_active_loan_path_budget(&function, "loan", &state, 1)
+        .expect_err("a full path budget admits no new loan");
+    assert!(
+        error.contains(
+            "invalid MIR loan `loan` in `budget` exceeds the active loan-path byte limit"
+        ),
+        "{error}"
+    );
+
+    let huge = "x".repeat(MAX_VALIDATED_EXPANDED_LOAN_PATH_BYTES / 2 + 1);
+    let mut loans = ValidatedLoans::new();
+    loans.insert(
+        "big".to_string(),
+        ValidatedLoan {
+            sources: vec![format!("{huge}a"), format!("{huge}b")].into(),
+            mutable: false,
+            parent: None,
+            returned_descriptor: false,
+            active_children: 0,
+        },
+    );
+    let error = validated_loan_sources("big.field", &loans)
+        .expect_err("expanding every alternative must stay within the byte limit");
+    assert!(
+        error.contains("expanded MIR loan place `big.field` exceeds the loan-path byte limit"),
+        "{error}"
+    );
+}
+
+#[test]
+fn batch1_union_argument_specialization_edge_cases() {
+    let names = BTreeMap::new();
+    let union = |members: Vec<Type>| {
+        Type::normalize_union(members, "<main>", &names).expect("union normalizes")
+    };
+    let int = Type::named("int64");
+    let text = Type::named("str");
+    let flag = Type::named("bool");
+    let params = BTreeSet::from(["T".to_string()]);
+
+    // A non-union parameter never specializes through this path.
+    let mut substitutions = HashMap::new();
+    assert!(!union_argument_specializes(
+        &int,
+        &text,
+        &params,
+        &mut substitutions
+    ));
+    // A union without unresolved type parameters must match exactly.
+    let mut substitutions = HashMap::new();
+    assert!(!union_argument_specializes(
+        &union(vec![int.clone(), text.clone()]),
+        &union(vec![int.clone(), flag.clone()]),
+        &params,
+        &mut substitutions,
+    ));
+
+    let pattern = union(vec![Type::TypeParam("T".to_string()), int.clone()]);
+    // The concrete member must be present in the argument.
+    let mut substitutions = HashMap::new();
+    assert!(!union_argument_specializes(
+        &pattern,
+        &text,
+        &params,
+        &mut substitutions
+    ));
+    // Nothing remains for the type parameter.
+    let mut substitutions = HashMap::new();
+    assert!(!union_argument_specializes(
+        &pattern,
+        &int,
+        &params,
+        &mut substitutions
+    ));
+    // One remaining member binds the parameter.
+    let mut substitutions = HashMap::new();
+    assert!(union_argument_specializes(
+        &pattern,
+        &union(vec![int.clone(), text.clone()]),
+        &params,
+        &mut substitutions,
+    ));
+    assert_eq!(substitutions.get("T"), Some(&text));
+    // Several remaining members bind the parameter to their union.
+    let mut substitutions = HashMap::new();
+    assert!(union_argument_specializes(
+        &pattern,
+        &union(vec![int.clone(), text.clone(), flag.clone()]),
+        &params,
+        &mut substitutions,
+    ));
+    assert!(matches!(substitutions.get("T"), Some(Type::Union(_))));
+
+    // An already-bound parameter whose substitution is itself a union
+    // contributes every member as concrete evidence.
+    let two_params = BTreeSet::from(["T".to_string(), "U".to_string()]);
+    let pattern = union(vec![
+        Type::TypeParam("T".to_string()),
+        Type::TypeParam("U".to_string()),
+    ]);
+    let mut substitutions =
+        HashMap::from([("U".to_string(), union(vec![int.clone(), text.clone()]))]);
+    assert!(union_argument_specializes(
+        &pattern,
+        &union(vec![int.clone(), text.clone(), flag.clone()]),
+        &two_params,
+        &mut substitutions,
+    ));
+    assert_eq!(substitutions.get("T"), Some(&flag));
+    // Two unresolved parameters cannot be told apart here.
+    let mut substitutions = HashMap::new();
+    assert!(union_argument_specializes(
+        &pattern,
+        &union(vec![int, text]),
+        &two_params,
+        &mut substitutions,
+    ));
+    assert!(substitutions.is_empty());
 }

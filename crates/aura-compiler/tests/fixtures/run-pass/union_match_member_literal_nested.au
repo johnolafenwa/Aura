@@ -1,0 +1,11 @@
+def main():
+    value: int64 | str = 42
+    match value:
+        case int64 as number:
+            match number:
+                case 42:
+                    print("answer")
+                case _:
+                    print("other")
+        case str as text:
+            print(text)

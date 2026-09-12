@@ -298,7 +298,9 @@ printed-output order unless they explicitly coordinate that order.
 ### `agents/`
 
 - `tool_runner/`
-  - version-0 reference agent package: named-function dictionary registry, typed
+  - version-1 reference agent package (Batch 1 phase 1): a `Callable[...]`
+    registry contract holding a factory-owned closure and a packed bound
+    method, remove/call/reinsert dispatch through a `mut` dictionary, typed
     JSON request/result methods, Result errors, `control.retry`, Queue events
     produced by a TaskGroup child and consumed with `for`, and user-resource cleanup
   - no network, filesystem, or process access; both backends match `tool_runner/stdout.txt`
@@ -419,6 +421,15 @@ printed-output order unless they explicitly coordinate that order.
   - prints `ok`
 
 ### `enums/`
+
+- `union_type_patterns.au`
+  - transparent union alias, exhaustive type arms, and mutable member access
+  - prints `42` twice
+
+- `union_narrowing.au`
+  - `is None` and `is not None` tests that narrow a parameter and a class
+    field, an early `return` edge, and an `and` composition
+  - prints `missing`, `4`, `anonymous or new`, `aura`, `anonymous or new`
 
 - `result_match.au`
   - enum declarations, owned payload variants, an explicit `own` parameter,

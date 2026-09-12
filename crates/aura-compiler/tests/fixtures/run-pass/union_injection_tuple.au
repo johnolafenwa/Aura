@@ -1,0 +1,3 @@
+def main():
+    values: (int64 | str, int64 | str) = (42, "text")
+    print(42)

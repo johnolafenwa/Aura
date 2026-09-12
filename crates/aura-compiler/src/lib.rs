@@ -20,6 +20,8 @@ pub(crate) mod runtime_config;
 mod runtime_reactor;
 pub mod runtime_value;
 pub mod sema;
+pub mod union_layout;
+pub(crate) mod union_runtime;
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -84,7 +86,7 @@ pub const MAX_INTERNAL_DIAGNOSTIC_BYTES: usize = 1024 * 1024;
 /// Every persisted artifact or long-lived tooling cache that can contain
 /// compiler semantic metadata must bind this value. Bump it whenever the
 /// meaning or representation of checked source changes incompatibly.
-pub const SEMANTIC_INTERFACE_SCHEMA_VERSION: u32 = 6;
+pub const SEMANTIC_INTERFACE_SCHEMA_VERSION: u32 = 14;
 
 /// Lowercase hexadecimal SHA-256 of `bytes`, for content-addressed identities.
 pub fn sha256_hex(bytes: &[u8]) -> String {
@@ -105,6 +107,7 @@ use package::PackageGraph;
 #[doc(hidden)]
 pub mod native_runtime_coverage {
     pub use super::native_runtime::aura_direct_tag_value_type;
+    pub use super::native_runtime::DIRECT_FFI_SPEC_VERSION;
     pub use super::native_runtime::DIRECT_VALUE_LIVE_COUNT;
     pub use super::native_runtime::{
         aura_direct_arg_buffer_new, aura_direct_arg_buffer_store_owned, aura_direct_array_binary,
@@ -170,17 +173,18 @@ pub mod native_runtime_coverage {
         aura_direct_udp_socket_recv, aura_direct_udp_socket_recv_from,
         aura_direct_udp_socket_send_bytes, aura_direct_unary_value, aura_direct_unary_value_at,
         aura_direct_unbox_bool, aura_direct_unbox_f64, aura_direct_unbox_i64,
-        aura_direct_unbox_int64, aura_direct_unbox_u64, aura_direct_unix_listener_accept,
-        aura_direct_unix_listener_close, aura_direct_unix_stream_close,
-        aura_direct_unix_stream_read_exact, aura_direct_unix_stream_write_all,
-        aura_direct_value_as_condition, aura_direct_variant_payload,
-        aura_direct_vec_clear_in_place, aura_direct_vec_contains, aura_direct_vec_empty,
-        aura_direct_vec_extend_in_place, aura_direct_vec_get, aura_direct_vec_index,
-        aura_direct_vec_index_option, aura_direct_vec_insert_in_place, aura_direct_vec_is_empty,
-        aura_direct_vec_len, aura_direct_vec_pop_in_place, aura_direct_vec_push_in_place,
-        aura_direct_vec_remove_in_place, aura_direct_vec_reverse_in_place,
-        aura_direct_vec_set_in_place, aura_direct_vec_set_index_in_place, aura_direct_vec_slice,
-        aura_direct_vec_swap_in_place, aura_direct_vec_take_index_in_place, aura_direct_wait_all,
+        aura_direct_unbox_int64, aura_direct_unbox_u64, aura_direct_union_inject,
+        aura_direct_unix_listener_accept, aura_direct_unix_listener_close,
+        aura_direct_unix_stream_close, aura_direct_unix_stream_read_exact,
+        aura_direct_unix_stream_write_all, aura_direct_value_as_condition,
+        aura_direct_variant_payload, aura_direct_vec_clear_in_place, aura_direct_vec_contains,
+        aura_direct_vec_empty, aura_direct_vec_extend_in_place, aura_direct_vec_get,
+        aura_direct_vec_index, aura_direct_vec_index_option, aura_direct_vec_insert_in_place,
+        aura_direct_vec_is_empty, aura_direct_vec_len, aura_direct_vec_pop_in_place,
+        aura_direct_vec_push_in_place, aura_direct_vec_remove_in_place,
+        aura_direct_vec_reverse_in_place, aura_direct_vec_set_in_place,
+        aura_direct_vec_set_index_in_place, aura_direct_vec_slice, aura_direct_vec_swap_in_place,
+        aura_direct_vec_take_index_in_place, aura_direct_wait_all,
         aura_direct_wait_all_timeout_value, aura_direct_wait_any,
         aura_direct_wait_any_timeout_value, aura_direct_websocket_close,
         aura_direct_websocket_listener_accept, aura_direct_websocket_listener_local_addr,
@@ -1022,6 +1026,15 @@ fn find_type_namespace_path(
 
 fn qualify_export_type(program: &Program, ty: &sema::Type) -> sema::Type {
     match ty {
+        sema::Type::Union(union) => {
+            let mut qualified = union.clone();
+            qualified.members = union
+                .members
+                .iter()
+                .map(|member| qualify_export_type(program, member))
+                .collect();
+            sema::Type::Union(qualified)
+        }
         sema::Type::Named(name, args) => {
             let qualified_args = args
                 .iter()
@@ -1061,15 +1074,38 @@ fn qualify_export_type(program: &Program, ty: &sema::Type) -> sema::Type {
             params: params
                 .iter()
                 .map(|param| sema::FunctionParamContract {
+                    keyword_only: param.keyword_only,
                     name: param.name.clone(),
                     ty: qualify_export_type(program, &param.ty),
                     passing: param.passing,
                     has_default: param.has_default,
-                    default_erased: param.default_erased,
                 })
                 .collect(),
             return_type: Box::new(qualify_export_type(program, return_type)),
         },
+        sema::Type::ReturnedView(view) => {
+            sema::Type::ReturnedView(Box::new(sema::ReturnedViewType {
+                mutable: view.mutable,
+                pointee: qualify_export_type(program, &view.pointee),
+                origin: view.origin,
+            }))
+        }
+        sema::Type::Callable(callable) => sema::Type::Callable(Box::new(sema::CallableType {
+            task: callable.task,
+            call_kind: callable.call_kind,
+            params: callable
+                .params
+                .iter()
+                .map(|param| sema::FunctionParamContract {
+                    keyword_only: param.keyword_only,
+                    name: param.name.clone(),
+                    ty: qualify_export_type(program, &param.ty),
+                    passing: param.passing,
+                    has_default: param.has_default,
+                })
+                .collect(),
+            return_type: qualify_export_type(program, &callable.return_type),
+        })),
         sema::Type::Closure {
             params,
             return_type,
@@ -1080,11 +1116,11 @@ fn qualify_export_type(program: &Program, ty: &sema::Type) -> sema::Type {
                 params
                     .iter()
                     .map(|param| sema::FunctionParamContract {
+                        keyword_only: param.keyword_only,
                         name: param.name.clone(),
                         ty: qualify_export_type(program, &param.ty),
                         passing: param.passing,
                         has_default: param.has_default,
-                        default_erased: param.default_erased,
                     })
                     .collect(),
             ),
@@ -1097,6 +1133,7 @@ fn qualify_export_type(program: &Program, ty: &sema::Type) -> sema::Type {
                         ty: qualify_export_type(program, &capture.ty),
                         mode: capture.mode,
                         span: capture.span,
+                        mutated: capture.mutated,
                     })
                     .collect(),
             ),
@@ -1111,7 +1148,10 @@ fn qualify_export_type(program: &Program, ty: &sema::Type) -> sema::Type {
 fn qualify_export_type_ref(program: &Program, type_ref: &ast::TypeRef) -> ast::TypeRef {
     let mut qualified = type_ref.clone();
     match &mut qualified.kind {
-        ast::TypeRefKind::Tuple(elements) => {
+        ast::TypeRefKind::Callable { signature, .. } => {
+            **signature = qualify_export_type_ref(program, signature);
+        }
+        ast::TypeRefKind::Tuple(elements) | ast::TypeRefKind::Union(elements) => {
             *elements = elements
                 .iter()
                 .map(|element| qualify_export_type_ref(program, element))
@@ -1120,6 +1160,7 @@ fn qualify_export_type_ref(program: &Program, type_ref: &ast::TypeRef) -> ast::T
         ast::TypeRefKind::Function {
             params,
             return_type,
+            ..
         } => {
             for param in params {
                 param.ty = qualify_export_type_ref(program, &param.ty);
@@ -1258,11 +1299,44 @@ fn qualify_impl_decl_for_export(program: &Program, decl: &ast::ImplDecl) -> ast:
     qualified
 }
 
+fn qualify_checked_trait_bound(program: &Program, bound: &sema::TraitBound) -> sema::TraitBound {
+    let qualified = qualify_export_type(
+        program,
+        &sema::Type::Named(bound.trait_name.clone(), bound.trait_args.clone()),
+    );
+    let sema::Type::Named(trait_name, trait_args) = qualified else {
+        unreachable!("qualification preserves named trait identity")
+    };
+    sema::TraitBound {
+        trait_name,
+        trait_args,
+    }
+}
+
+fn qualify_checked_bounds(
+    program: &Program,
+    bounds: &BTreeMap<String, Vec<sema::TraitBound>>,
+) -> BTreeMap<String, Vec<sema::TraitBound>> {
+    bounds
+        .iter()
+        .map(|(param, bounds)| {
+            (
+                param.clone(),
+                bounds
+                    .iter()
+                    .map(|bound| qualify_checked_trait_bound(program, bound))
+                    .collect(),
+            )
+        })
+        .collect()
+}
+
 fn qualify_function_info_for_export(
     program: &Program,
     info: &sema::FunctionInfo,
 ) -> sema::FunctionInfo {
     let mut qualified = info.clone();
+    qualified.type_param_bounds = qualify_checked_bounds(program, &info.type_param_bounds);
     qualified.decl = qualify_function_decl_for_export(program, &qualified.decl);
     qualified.signature.params = qualified
         .signature
@@ -1297,11 +1371,13 @@ fn qualify_extern_function_info_for_export(
 
 fn qualify_class_info_for_export(program: &Program, info: &sema::ClassInfo) -> sema::ClassInfo {
     let mut qualified = info.clone();
+    qualified.type_param_bounds = qualify_checked_bounds(program, &info.type_param_bounds);
     qualified.decl = qualify_class_decl_for_export(program, &qualified.decl);
     for field in qualified.fields.values_mut() {
         field.ty = qualify_export_type(program, &field.ty);
     }
     for method in qualified.methods.values_mut() {
+        method.type_param_bounds = qualify_checked_bounds(program, &method.type_param_bounds);
         method.decl = qualify_function_decl_for_export(program, &method.decl);
         method.signature.params = method
             .signature
@@ -1316,6 +1392,7 @@ fn qualify_class_info_for_export(program: &Program, info: &sema::ClassInfo) -> s
 
 fn qualify_enum_info_for_export(program: &Program, info: &sema::EnumInfo) -> sema::EnumInfo {
     let mut qualified = info.clone();
+    qualified.type_param_bounds = qualify_checked_bounds(program, &info.type_param_bounds);
     qualified.decl = qualify_enum_decl_for_export(program, &qualified.decl);
     for variant in qualified.variants.values_mut() {
         variant.payloads = variant
@@ -1335,6 +1412,7 @@ fn qualify_trait_info_for_export(program: &Program, info: &sema::TraitInfo) -> s
     let mut qualified = info.clone();
     qualified.decl = qualify_trait_decl_for_export(program, &qualified.decl);
     for method in qualified.methods.values_mut() {
+        method.type_param_bounds = qualify_checked_bounds(program, &method.type_param_bounds);
         method.decl = qualify_function_decl_for_export(program, &method.decl);
         method.signature.params = method
             .signature
@@ -1352,6 +1430,7 @@ fn qualify_trait_impl_info_for_export(
     info: &sema::TraitImplInfo,
 ) -> sema::TraitImplInfo {
     let mut qualified = info.clone();
+    qualified.type_param_bounds = qualify_checked_bounds(program, &info.type_param_bounds);
     qualified.decl = qualify_impl_decl_for_export(program, &qualified.decl);
     qualified.trait_args = qualified
         .trait_args
@@ -1360,6 +1439,7 @@ fn qualify_trait_impl_info_for_export(
         .collect();
     qualified.for_type = qualify_export_type(program, &qualified.for_type);
     for method in qualified.methods.values_mut() {
+        method.type_param_bounds = qualify_checked_bounds(program, &method.type_param_bounds);
         method.decl = qualify_function_decl_for_export(program, &method.decl);
         method.signature.params = method
             .signature
@@ -1381,7 +1461,25 @@ fn qualify_constant_info_for_export(
     qualified
 }
 
+fn qualify_alias_info_for_export(program: &Program, alias: &sema::AliasInfo) -> sema::AliasInfo {
+    let mut qualified = alias.clone();
+    qualified.target = qualify_export_type(program, &alias.target);
+    qualified.type_param_bounds = qualify_checked_bounds(program, &alias.type_param_bounds);
+    qualified.decl.type_param_bounds =
+        qualify_export_bounds(program, &alias.decl.type_param_bounds);
+    qualified
+}
+
 fn exported_binding(program: &Program, name: &str) -> Option<ImportedBinding> {
+    if let Some(alias) = program
+        .aliases
+        .get(name)
+        .filter(|alias| alias.module_name == program.module_name && alias.decl.public)
+    {
+        return Some(ImportedBinding::Alias(qualify_alias_info_for_export(
+            program, alias,
+        )));
+    }
     if let Some(constant) = program
         .constants
         .get(name)
@@ -1447,6 +1545,18 @@ fn exported_namespace(path: &[String], program: &Program) -> ModuleNamespace {
         .cloned()
         .unwrap_or_else(|| program.module_name.clone());
     let mut namespace = ModuleNamespace {
+        union_injections: program.type_definitions.union_injections.borrow().clone(),
+        narrowed_reads: program.type_definitions.narrowed_reads.borrow().clone(),
+        all_aliases: program
+            .aliases_in_scope()
+            .map(|(name, info)| (name.clone(), qualify_alias_info_for_export(program, info)))
+            .collect(),
+        aliases: program
+            .aliases
+            .iter()
+            .filter(|(_, info)| info.module_name == program.module_name && info.decl.public)
+            .map(|(name, info)| (name.clone(), qualify_alias_info_for_export(program, info)))
+            .collect(),
         constants: program
             .constants
             .iter()
@@ -1530,11 +1640,11 @@ fn exported_namespace(path: &[String], program: &Program) -> ModuleNamespace {
                     .params
                     .iter()
                     .map(|param| sema::FunctionParamContract {
+                        keyword_only: param.keyword_only,
                         name: param.name.clone(),
                         ty: qualify_export_type(program, &param.ty),
                         passing: param.passing,
                         has_default: param.has_default,
-                        default_erased: param.default_erased,
                     })
                     .collect();
                 qualified.return_type = qualify_export_type(program, &qualified.return_type);
@@ -1546,6 +1656,7 @@ fn exported_namespace(path: &[String], program: &Program) -> ModuleNamespace {
                         ty: qualify_export_type(program, &capture.ty),
                         mode: capture.mode,
                         span: capture.span,
+                        mutated: capture.mutated,
                     })
                     .collect();
                 (id.clone(), qualified)
@@ -1638,6 +1749,10 @@ fn insert_namespace_import(
     let root_name = path[0].clone();
     let root = bindings.entry(root_name.clone()).or_insert_with(|| {
         ImportedBinding::Module(ModuleNamespace {
+            union_injections: Default::default(),
+            narrowed_reads: Default::default(),
+            all_aliases: BTreeMap::new(),
+            aliases: BTreeMap::new(),
             constants: BTreeMap::new(),
             all_constants: BTreeMap::new(),
             name: root_name.clone(),
@@ -1682,6 +1797,10 @@ fn insert_namespace_import(
             .modules
             .entry(segment.clone())
             .or_insert_with(|| ModuleNamespace {
+                union_injections: Default::default(),
+                narrowed_reads: Default::default(),
+                all_aliases: BTreeMap::new(),
+                aliases: BTreeMap::new(),
                 constants: BTreeMap::new(),
                 all_constants: BTreeMap::new(),
                 name: segment.clone(),

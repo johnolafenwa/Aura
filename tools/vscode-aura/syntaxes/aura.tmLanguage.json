@@ -363,7 +363,7 @@
               "name": "keyword.operator.aura"
             }
           },
-          "end": "\\b(from)(\\s+)([A-Za-z_][A-Za-z0-9_]*)(?=\\s*(?::|$))",
+          "end": "\\b(from)(\\s+)([A-Za-z_][A-Za-z0-9_]*)(?=\\s*(?::|=|\\]|,|\\)|$))",
           "endCaptures": {
             "1": {
               "name": "keyword.declaration.view.aura"

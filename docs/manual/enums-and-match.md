@@ -4,6 +4,123 @@ Enums define nominal sum types. Each value contains exactly one declared variant
 
 Aura uses enums for user data and for maintained runtime outcomes including `Option`, `Result`, queue operations, task waits, process status, supervisor events, and I/O errors.
 
+## Union Type Patterns
+
+A union can be matched by its direct member types:
+
+```aura
+def main():
+    mut value: int64 | str | None = 41
+    match mut value:
+        case int64 as number:
+            number += 1
+            print(number)
+        case str as text:
+            print(text)
+        case None:
+            print("missing")
+    print(value)
+```
+
+This prints `42` twice. `case Type as name` selects exactly one normalized
+member after transparent alias expansion. An alias for several members cannot
+stand for a single type arm, and neither can a type parameter: `case V as
+inner` is rejected with AU2013 because `V` is not proved disjoint from the
+other arms; use `case None` and a catch-all. A matching type arm is irrefutable when the
+scrutinee type has collapsed to one member. Type patterns may also occur
+inside nominal enum payload patterns.
+
+An unguarded type arm covers its member; guards contribute no exhaustiveness
+coverage. A final `_` or name covers the remainder. Missing members, duplicate
+coverage, unreachable type arms, and nonmembers are rejected with AU2013.
+Or-patterns bind identical names, types, and capabilities. A bare union cannot
+be matched directly against a member literal: select the type, then use a
+guard or a nested match for the literal.
+
+Bare matches borrow non-Copy payloads and expose ordinary Copy values.
+`match mut` gives mutable payload bindings without an additional `mut` after
+`as`; replacement must preserve that member type. `match own` consumes the
+union, and moves the selected payload only after its guard succeeds. Failed
+patterns and guards release their temporary views. Payload views are local
+to the arm, and return, break, and continue release them before cleanup.
+Shared and mutable matches lock the original source for the arm, including
+when the selected payload is Copy. Replacing the whole union to change its
+tag is allowed after the conflicting arm access ends.
+
+A union is Copy when every member is Copy and otherwise moves; `.clone()`
+is available when every member is Copy or clones itself, and cloning copies
+the active payload. A union crosses a task boundary when every member is
+Transfer. Two values of one union are equal when their active members agree
+and the payloads are equal, and a union compares symmetrically with a value
+that injects as one of its members; see
+[equality](/manual/expressions#arithmetic-and-comparison). Printing a union
+renders its active payload, or `None`, without a tag. Unions have no ordering.
+
+The existing `Option[T]` library and `T?` spelling remain available during
+Batch 1 phase 1; their removal belongs to phase 2.
+
+## Conditional Narrowing
+
+`value is None` and `value is not None` test a union's `None` member without
+a match. When the tested operand is a stable place, the checker records a
+narrowing fact for each branch the test selects:
+
+```aura
+def describe(value: str | None):
+    if value is None:
+        print("missing")
+    else:
+        print(value.len())
+
+def main():
+    describe(None)
+    describe("aura")
+    mut local: int64 | None = 7
+    if local is not None:
+        local += 1
+        print(local)
+    local = None
+    if local is None:
+        print("cleared")
+```
+
+This prints `missing`, `4`, `8`, and `cleared`. Where `value is not None`
+holds, `value` has the effective type `str`; where it fails, `value` has the
+effective type `None`. Only `is None` and `is not None` narrow. `==` and `!=`
+compare values, and a `match` arm narrows its own binding instead.
+
+A stable place is an owned or `mut` local, a parameter or receiver, a fixed
+class field or tuple position reached through one of those, or a view. An
+index, a dictionary lookup, a call result, or any other temporary may be
+tested, but no fact attaches to a later evaluation; bind the value first.
+Narrowing never changes the capability of the place: a shared parameter
+gives shared payload access, a `mut` place or `view mut` gives mutable
+access, and an owned local may be consumed as the member, which consumes the
+whole union.
+
+Facts flow through `not`, parentheses, and short-circuit `and` and `or`. Both
+operands of `and` hold in its `true` branch, both operands of `or` fail in
+its `false` branch, and the right operand is checked under the left operand's
+fact. A branch that ends with `return`, `break`, or `continue` leaves its
+complement on the continuing path, so `if value is None: return` narrows the
+rest of the function, and `if value is None: continue` narrows the rest of
+the loop iteration. Where paths join, only facts present on every reachable
+path survive. A fact established before a `while` loop survives into the body
+only when no iteration can invalidate it.
+
+A fact ends when the place or an enclosing place is assigned, matched with
+`match mut`, or passed to a call with `mut` access. A later member use
+through that place is rejected with `AU2014`, which labels the test and the
+invalidation; test the current value again. Moving the place, including
+with `match own`, leaves it moved as usual, so a later use is `AU3001`. Writing through
+the narrowed payload, such as `local += 1` above, keeps the fact because it
+cannot change the member, and so does changing a proven-disjoint sibling
+field.
+
+A narrowed union with more than two members keeps its remaining member set
+for match coverage: after `if value is None: return`, a `match value` over
+`int64 | str | None` is exhaustive with only `int64` and `str` arms.
+
 ## Enum Declarations
 
 ```aura
@@ -407,6 +524,14 @@ payload order, and borrowed-match writeback are language-defined rather than
 implementation-defined.
 
 ## Status
+
+Batch 1 phase 1 adds normalized union type arms, unit-member cases, singleton
+type arms, nested union payload patterns, and AU2013 coverage diagnostics on
+both backends, together with `is None` and `is not None` conditional
+narrowing of stable places and AU2014 stale-narrowing diagnostics, generic
+union members, and the union property rules: all-member Copy, clone, and
+Transfer, member-injected equality, and active-member trait dispatch. Guards preserve candidate ownership until commitment, and
+mutable arms retain member type and source locks.
 
 Nominal and generic enums, positional and named payloads, qualified and
 contextual builtin construction, structural copy/move classification,

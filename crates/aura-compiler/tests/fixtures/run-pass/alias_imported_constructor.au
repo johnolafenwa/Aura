@@ -1,0 +1,5 @@
+from alias_runtime_support.types import Container as Holder
+
+def main():
+    value = Holder[int64](value=42)
+    print(value.value)

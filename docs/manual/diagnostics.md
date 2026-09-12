@@ -15,7 +15,7 @@ the phase that owns the failure:
 | --- | --- | --- |
 | `AU10xx` | lexical analysis | `AU1001` invalid lexical input; `AU1002` invalid f-string delimiter |
 | `AU11xx` | parsing | `AU1101` invalid syntax |
-| `AU20xx` | names and types | `AU2001` name resolution; `AU2002` type mismatch; `AU2003` unsupported operator; `AU2004` argument binding; `AU2005` unsupported syntax or feature; `AU2006` builtin method collision; `AU2007` builtin function redefinition; `AU2008` equality unavailable; `AU2999` general compile-time rejection |
+| `AU20xx` | names and types | `AU2001` name resolution; `AU2002` type mismatch; `AU2003` unsupported operator; `AU2004` argument binding; `AU2005` unsupported syntax or feature; `AU2006` builtin method collision; `AU2007` builtin function redefinition; `AU2008` equality unavailable; `AU2010` union member or context; `AU2011` ambiguous union injection; `AU2012` cyclic type alias; `AU2013` union pattern coverage; `AU2014` invalidated narrowing; `AU2015` callable contract mismatch; `AU2999` general compile-time rejection |
 | `AU30xx` | ownership, loans, and transfer | `AU3001` moved value; `AU3002` borrow/loan conflict; `AU3003` mutability violation; `AU3004` ownership or place mode; `AU3005` non-copy indexed read; `AU3006` non-copy indexed compound assignment; `AU3007` non-cloneable state duplication; `AU3008` non-transferable task/Queue boundary; `AU3009` single-consumer task-result duplication; `AU3010` view escape or returned provenance |
 | `AU40xx` | runtime-checked traps | `AU4001` general runtime trap; `AU4002` arithmetic overflow or underflow; `AU4003` bounds or lookup violation; `AU4004` zero divisor; `AU4005` resource, allocation, or I/O failure; `AU4006` invalid runtime configuration; `AU4007` numeric Array shape or reduction violation |
 
@@ -24,6 +24,35 @@ that closer. A mismatched closer names the expected kind and labels its opener
 as related information. EOF with an unclosed delimiter reports the expected
 closer and labels the opener. These locations and labels are preserved by
 analysis JSON and the LSP bridge.
+
+`AU2003` also reports an incomparable union pair (`cannot compare
+`U` and `T`: expected the same union type or an eligible member`) and any
+ordering or arithmetic operator on a union.
+
+`AU2010` through `AU2015` belong to the Batch 1 union, alias, narrowing, and
+callable surface. `AU2010` reports a value that is not a direct member of the
+expected union, a union spelling without enough context, a type
+parameter that a union member argument cannot determine, or an extern
+signature whose union is not the one admitted `Handle | None` result (a union
+parameter, or any other union result). `AU2011` reports a
+literal that more than one member could accept. `AU2012` reports a cyclic
+transparent alias. `AU2013` reports missing, duplicate, unreachable, or
+nonmember union type arms. `AU2014` reports a member use through a place whose
+`None`-test narrowing was invalidated; its message is exactly
+`narrowing of \`PLACE\` no longer applies after OPERATION; test the current value again`,
+where the operation is `assignment`, `a mutable match`, `a call with mutable
+access`, or the mutating operation that exposed the place, and it carries two
+related labels: `narrowed by this test` at the test and `invalidated here` at
+the invalidation. `AU2015` reports a callable contract mismatch: a value whose
+complete contract (exposed names, keyword-only boundary, default availability)
+is not admitted by the written destination, a rebinding, branch join,
+container literal, or generic observation that would need an invented common
+contract, a lambda that does not meet its expected contract, an invalid
+thin-alias adaptation, implicit erased storage into `Callable[...]`, or a
+packed call kind that would strengthen; its message names the difference. `AU2004` also
+reports a positional argument reaching a keyword-only parameter
+(`parameter `x` of function `f` is keyword-only`) and a named argument aimed
+at a positional-only slot of a written callable type.
 
 The registry is append-only. Once published, a code MUST NOT be reused,
 renumbered, or silently reassigned to a different diagnostic category. If a
@@ -145,6 +174,10 @@ an invalid returned kind, or a call whose origin is not an addressable place.
 The diagnostic identifies the declared origin and the incompatible expression
 or destination. Return an owned clone/index/handle when the access must escape,
 or keep a local/closure loan synchronous and inside the owner's region.
+A function type whose `view` result names an origin that is not one of its
+named parameters, or a `view mut` result over a non-`mut` origin, also
+reports `AU3010`; a task callable contract that returns a view reports
+`AU3008`.
 
 For explicit views, `AU3002` labels both the view creation and the final use
 that keeps its inferred region live. Removing a later use can shorten the loan;
@@ -281,7 +314,7 @@ imported module is never mislabeled with the entry module's path.
 
 The arrays are an additive schema-version-1 extension. Schema-version-1
 readers MUST ignore unrecognized object members while continuing to validate
-the fields they use. The compiler-service semantic-interface version is `6`.
+the fields they use. The compiler-service semantic-interface version is `14`.
 
 The process exits unsuccessfully after emitting a JSON error report. Tools MUST
 parse standard error as one JSON document in JSON mode and MUST NOT scrape the

@@ -1,0 +1,35 @@
+enum Packet:
+    Data(int64 | str)
+def next_value(ok: bool) -> Result[int64, str]:
+    if ok:
+        return Result.Ok(1)
+    return Result.Err("stopped")
+def bump(value: mut Packet, ok: bool) -> Result[int64, str]:
+    match mut value:
+        case Packet.Data(int64 as number):
+            number += 1
+            extra = try next_value(ok=ok)
+            number += extra
+            return Result.Ok(number)
+        case Packet.Data(str as text):
+            return Result.Ok(0)
+def show(value: Packet):
+    match value:
+        case Packet.Data(int64 as number):
+            print(number)
+        case Packet.Data(str as text):
+            print(text)
+def main():
+    mut value = Packet.Data(40)
+    match own bump(value=value, ok=true):
+        case Result.Ok(number):
+            print(number)
+        case Result.Err(message):
+            print(message)
+    show(value=value)
+    match own bump(value=value, ok=false):
+        case Result.Ok(number):
+            print(number)
+        case Result.Err(message):
+            print(message)
+    show(value=value)

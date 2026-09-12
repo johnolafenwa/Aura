@@ -1,0 +1,5 @@
+enum Packet:
+    Data(int64 | str)
+def main():
+    packet = Packet.Data(42)
+    print(42)

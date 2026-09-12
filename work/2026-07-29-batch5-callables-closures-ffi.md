@@ -555,3 +555,15 @@ The global hygiene command reaches only the unrelated user-owned
 `personal/file_ops.au`. The Batch 5 tree and all other hygiene invariants pass
 when that file and the untracked user-owned ADR-0022 draft are excluded. Both
 files remain untouched and outside Batch 5.
+
+## 2026-09-08 — Batch 1 FFI result amendment
+
+The [ratified Q10 contract](../architecture_docs/16-batch-1-design-checkpoint.md#a10-nullable-results-at-the-ffi-boundary--q10)
+extends FFI v0 with exactly `Handle | None` as an extern result, marshalled
+as one C pointer. Null yields None; a non-null result yields an owned opaque
+handle. Non-nullable handles retain AU4005 on null. Existing opt-in, ABI
+ordering and mutable-byte writeback rules remain; no nullable parameters,
+scalar optionals, callbacks or automatic foreign destructor are introduced.
+Implementation is Batch 1 phase 1 and requires a linked C shim on both
+backends. The completed Phase 6.4 baseline above remains the pre-extension
+record.

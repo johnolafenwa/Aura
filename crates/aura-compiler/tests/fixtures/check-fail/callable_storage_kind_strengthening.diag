@@ -1,0 +1,6 @@
+error[AU2015]: callable contract mismatch: a Mutable value cannot be packed as Shared `Reader`; a call kind may only weaken
+ --> crates/aura-compiler/tests/fixtures/check-fail/callable_storage_kind_strengthening.au:12:21
+   |
+12 |     reader = Reader(lambda [own counter]: counter.bump())
+   |                     ^
+  = help: annotate the destination with a contract every value satisfies, or adapt a value explicitly through a thin callable alias call such as `Alias(function)`

@@ -1,0 +1,4 @@
+def main():
+    flag = true
+    value: int64 | str = 42 if flag else "text"
+    print(42)

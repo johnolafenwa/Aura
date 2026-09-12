@@ -17,6 +17,8 @@ pub enum CallConvention {
 pub struct CallableParam<'a> {
     pub name: &'a str,
     pub required: bool,
+    /// A slot after the `*` boundary: it binds by name only.
+    pub keyword_only: bool,
 }
 
 impl<'a> CallableParam<'a> {
@@ -24,6 +26,7 @@ impl<'a> CallableParam<'a> {
         Self {
             name,
             required: true,
+            keyword_only: false,
         }
     }
 
@@ -31,6 +34,14 @@ impl<'a> CallableParam<'a> {
         Self {
             name,
             required: false,
+            keyword_only: false,
+        }
+    }
+
+    pub const fn keyword_only(self) -> Self {
+        Self {
+            keyword_only: true,
+            ..self
         }
     }
 }
@@ -38,9 +49,16 @@ impl<'a> CallableParam<'a> {
 pub fn callable_params_from_decl<'a>(params: &'a [Param]) -> Vec<CallableParam<'a>> {
     params
         .iter()
-        .map(|param| match param.default.is_some() {
-            true => CallableParam::optional(&param.name),
-            false => CallableParam::required(&param.name),
+        .map(|param| {
+            let binding = match param.default.is_some() {
+                true => CallableParam::optional(&param.name),
+                false => CallableParam::required(&param.name),
+            };
+            if param.keyword_only {
+                binding.keyword_only()
+            } else {
+                binding
+            }
         })
         .collect()
 }
@@ -57,6 +75,7 @@ macro_rules! builtin_param {
             binding: CallableParam {
                 name: $name,
                 required: true,
+                keyword_only: false,
             },
             passing: $passing,
         }
@@ -66,6 +85,7 @@ macro_rules! builtin_param {
             binding: CallableParam {
                 name: $name,
                 required: false,
+                keyword_only: false,
             },
             passing: $passing,
         }
@@ -141,6 +161,10 @@ pub fn bind_call_arguments<'arg, 'param>(
     span: Span,
     convention: CallConvention,
 ) -> Result<Vec<Option<&'arg Argument>>> {
+    let positional_slots = params
+        .iter()
+        .position(|param| param.keyword_only)
+        .unwrap_or(params.len());
     if args.len() > params.len() {
         return Err(Diagnostic::at(
             span,
@@ -209,6 +233,19 @@ pub fn bind_call_arguments<'arg, 'param>(
             CallConvention::PositionalOnly | CallConvention::PositionalOrNamed => {}
         }
 
+        if next_positional >= positional_slots {
+            // Every remaining slot is keyword-only; the parameter this
+            // positional argument would reach binds by name only.
+            return Err(Diagnostic::coded_at(
+                "AU2004",
+                argument.span,
+                format!(
+                    "parameter `{}` of {} is keyword-only",
+                    params[next_positional.min(params.len() - 1)].name,
+                    callee_name
+                ),
+            ));
+        }
         ordered_args[next_positional] = Some(argument);
         next_positional += 1;
     }

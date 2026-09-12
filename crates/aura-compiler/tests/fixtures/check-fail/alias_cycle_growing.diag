@@ -1,0 +1,6 @@
+error[AU2012]: cyclic type alias: Grow -> Grow
+ --> crates/aura-compiler/tests/fixtures/check-fail/alias_cycle_growing.au:1:16
+  |
+1 | type Grow[T] = Grow[list[T]]
+  |                ^
+  = related crates/aura-compiler/tests/fixtures/check-fail/alias_cycle_growing.au:1:1: alias `Grow` declared here

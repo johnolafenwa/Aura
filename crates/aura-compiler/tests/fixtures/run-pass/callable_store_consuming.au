@@ -1,0 +1,13 @@
+type Finish = Callable[own def() -> str]
+
+def make_finish(text: own str) -> Finish:
+    return Finish(lambda [own text]: text)
+
+def finish_once(finish: own Finish) -> str:
+    return finish()
+
+def main():
+    first = make_finish("done")
+    print(first())
+    second = make_finish("later")
+    print(finish_once(second))

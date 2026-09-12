@@ -1,0 +1,39 @@
+trait Scale:
+    def factor(self) -> int64
+
+class Twice:
+    pass
+
+impl Scale for Twice:
+    def factor(self) -> int64:
+        return 2
+
+class Thrice:
+    pass
+
+impl Scale for Thrice:
+    def factor(self) -> int64:
+        return 3
+
+class Counter:
+    total: int64
+
+    def scaled[S: Scale](self, scale: S) -> int64:
+        return self.total * scale.factor()
+
+    def apply[S: Scale](value: int64, scale: S) -> int64:
+        return value * scale.factor()
+
+type Scaler = Callable[def(scale: Thrice) -> int64]
+
+def main():
+    counter = Counter(total=3)
+    scaled = counter.scaled[Twice]
+    print(scaled(Twice()))
+    other = Counter(total=5)
+    packed = Scaler(other.scaled)
+    print(packed(Thrice()))
+    apply_twice = Counter.apply[Twice]
+    print(apply_twice(7, Twice()))
+    inferred: def(value: int64, scale: Thrice) -> int64 = Counter.apply
+    print(inferred(2, Thrice()))

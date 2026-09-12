@@ -1,0 +1,10 @@
+class Box[T]:
+    value: T
+
+    def make(value: T) -> Box[T]:
+        return Box(value=value)
+
+def main() -> int32:
+    callback = Box.make
+    print(callback(21).value)
+    return 0

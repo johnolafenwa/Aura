@@ -1,0 +1,23 @@
+import process
+
+def main():
+    with supervisor = process.supervisor():
+        match supervisor.start(name="worker", command=["/bin/sleep", "0.1"]):
+            case Result.Ok(started):
+                print("started")
+            case Result.Err(error):
+                print(error)
+        match supervisor.start(name="worker", command=["/bin/sleep", "0.1"]):
+            case Result.Ok(started):
+                print("started twice")
+            case Result.Err(error):
+                print(error)
+        match supervisor.start(name="sleeper", command=["/bin/sleep", "30"]):
+            case Result.Ok(started):
+                print("sleeper started")
+            case Result.Err(error):
+                print(error)
+        match supervisor.wait(timeout=2s):
+            case _:
+                print("waited")
+    print("closed")

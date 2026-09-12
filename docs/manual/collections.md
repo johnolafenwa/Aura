@@ -333,7 +333,12 @@ transfers any stored `V`.
 
 List callbacks use exact shared function types. `map` requires
 `def(T) -> U`, `filter` requires `def(T) -> bool`, and keyed sorting requires
-`def(T) -> K` with `K: Ord`. The callback must be repeatable.
+`def(T) -> K` with `K: Ord`. The callback must be repeatable. It may be a
+named function, a repeatable closure, or a packed Shared `Callable[...]` or
+`TaskCallable[...]` value with that contract, which the site borrows for the
+operation without cloning it or erasing its contract. A Mutable or Consuming
+packed value is rejected (`AU2002`), and because the site calls its callback
+positionally a keyword-only element parameter is rejected (`AU2004`).
 
 ## Runtime Semantics
 

@@ -1,0 +1,5 @@
+error[AU2010]: cannot infer type parameter `V` for function `show` from its union member arguments; specialize the callable explicitly
+ --> crates/aura-compiler/tests/fixtures/check-fail/union_generic_unresolved.au:5:11
+  |
+5 |     print(show(None))
+  |           ^

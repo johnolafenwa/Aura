@@ -1,0 +1,19 @@
+public class Token:
+    public value: int64
+
+public type Choice = Token | str | None
+public type Entries[K, V] = dict[K, V]
+public type Forward[T] = Nested[T]
+type Nested[T] = list[T | None]
+
+public trait Named:
+    def name(self) -> str
+
+public class Good:
+    pass
+
+impl Named for Good:
+    def name(self) -> str:
+        return "good"
+
+public type Marker[T: Named] = int64

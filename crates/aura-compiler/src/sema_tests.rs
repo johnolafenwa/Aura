@@ -423,13 +423,13 @@ fn s1_sema_fifth_contextual_literals_lambdas_and_variants_keep_exact_errors() {
 #[test]
 fn s1_sema_fifth_member_values_methods_and_missing_fields_stay_specific() {
     let associated = crate::check_source(
-        "class Box:\n    value: int32\n\n    def make(value: int32) -> Box:\n        return Box(value=value)\n\ndef main():\n    callback = Box.make\n    print(callback)\n",
+        "class Box[T]:\n    value: T\n\n    def make(value: T) -> Box[T]:\n        return Box(value=value)\n\ndef main():\n    callback = Box.make\n    print(callback(1).value)\n",
     )
-    .expect_err("associated methods are callable only through direct syntax");
+    .expect_err("associated methods of generic classes need a call to fix their type arguments");
     assert_eq!(associated.code, "AU2005");
     assert_eq!(
         associated.message,
-        "associated method values are not supported in this language version; call `Box.make(...)` directly or wrap it in a named function"
+        "associated method values on generic classes are not supported in this language version; call `Box.make(...)` directly or wrap it in a named function"
     );
 
     let integer = crate::check_source(
@@ -609,11 +609,11 @@ fn s1_sema_final_task_specializations_preserve_matching_type_arguments() {
 fn s1_sema_type_pattern_unification_rejects_callable_kind_and_capture_mismatches() {
     let function = Type::Function {
         params: vec![FunctionParamContract {
+            keyword_only: false,
             name: String::new(),
             ty: Type::named("int64"),
             passing: ReceiverKind::Borrow,
             has_default: false,
-            default_erased: false,
         }],
         return_type: Box::new(Type::named("int64")),
     };
@@ -632,6 +632,7 @@ fn s1_sema_type_pattern_unification_rejects_callable_kind_and_capture_mismatches
             ty: Type::named("int64"),
             mode: ClosureCaptureMode::SharedView,
             span: Span::new(1, 1),
+            mutated: false,
         }]),
         call_kind: ClosureCallKind::Repeatable,
     };
@@ -1068,6 +1069,10 @@ fn public_ffi_handle_namespace(module_name: &str) -> ModuleNamespace {
     let mut handle = remote.opaque_handles["Handle"].clone();
     handle.module_name = module_name.to_string();
     ModuleNamespace {
+        union_injections: Default::default(),
+        narrowed_reads: Default::default(),
+        all_aliases: BTreeMap::new(),
+        aliases: BTreeMap::new(),
         constants: BTreeMap::new(),
         all_constants: BTreeMap::new(),
         name: module_name.to_string(),
@@ -1100,6 +1105,10 @@ fn public_ffi_function_namespace(module_name: &str) -> ModuleNamespace {
     let mut scalar = remote.extern_functions["scalar"].clone();
     scalar.module_name = module_name.to_string();
     ModuleNamespace {
+        union_injections: Default::default(),
+        narrowed_reads: Default::default(),
+        all_aliases: BTreeMap::new(),
+        aliases: BTreeMap::new(),
         constants: BTreeMap::new(),
         all_constants: BTreeMap::new(),
         name: module_name.to_string(),
@@ -2906,6 +2915,10 @@ fn ffi_extern_metadata_supports_from_and_qualified_import_calls() {
     let mut scalar = remote.extern_functions["scalar"].clone();
     scalar.module_name = "ffi_api".to_string();
     let namespace = ModuleNamespace {
+        union_injections: Default::default(),
+        narrowed_reads: Default::default(),
+        all_aliases: BTreeMap::new(),
+        aliases: BTreeMap::new(),
         constants: BTreeMap::new(),
         all_constants: BTreeMap::new(),
         name: "ffi_api".to_string(),
@@ -2974,6 +2987,10 @@ fn ffi_qualified_imports_do_not_expose_private_extern_declarations() {
     let mut hidden = remote.extern_functions["hidden"].clone();
     hidden.module_name = "ffi_api".to_string();
     let namespace = ModuleNamespace {
+        union_injections: Default::default(),
+        narrowed_reads: Default::default(),
+        all_aliases: BTreeMap::new(),
+        aliases: BTreeMap::new(),
         constants: BTreeMap::new(),
         all_constants: BTreeMap::new(),
         name: "ffi_api".to_string(),
@@ -3028,6 +3045,10 @@ fn ffi_qualified_imports_do_not_expose_private_opaque_handles() {
     let mut hidden = remote.opaque_handles["Hidden"].clone();
     hidden.module_name = "ffi_api".to_string();
     let namespace = ModuleNamespace {
+        union_injections: Default::default(),
+        narrowed_reads: Default::default(),
+        all_aliases: BTreeMap::new(),
+        aliases: BTreeMap::new(),
         constants: BTreeMap::new(),
         all_constants: BTreeMap::new(),
         name: "ffi_api".to_string(),
@@ -3230,7 +3251,7 @@ fn tuple_type_helpers_preserve_generic_matching_and_recursive_storage_semantics(
     let mut collected_ref_params = BTreeSet::new();
     collect_type_ref_type_params(
         &tuple_ref,
-        &BTreeMap::new(),
+        &TypeDefinitions::default(),
         &mut collected_ref_params,
         false,
     );
@@ -7173,7 +7194,7 @@ def main() -> int32:
     assert_eq!(
         lower_type(
             &type_ref("int"),
-            &BTreeMap::new(),
+            &TypeDefinitions::default(),
             &BTreeMap::new(),
             &BTreeMap::new(),
             &BTreeMap::new(),
@@ -7459,6 +7480,11 @@ fn nested_type_ref(name: &str, args: Vec<TypeRef>) -> TypeRef {
 
 fn type_to_ref(ty: &Type) -> TypeRef {
     match ty {
+        Type::Union(union) => TypeRef {
+            kind: crate::ast::TypeRefKind::Union(union.members.iter().map(type_to_ref).collect()),
+            indirect: false,
+            span: Span::new(1, 1),
+        },
         Type::Named(name, args) => TypeRef::named(
             name,
             args.iter().map(type_to_ref).collect(),
@@ -7490,6 +7516,17 @@ fn type_to_ref(ty: &Type) -> TypeRef {
                 })
                 .collect(),
             type_to_ref(return_type),
+            Span::new(1, 1),
+        ),
+        Type::ReturnedView(view) => type_to_ref(&view.pointee),
+        Type::Callable(callable) => TypeRef::callable(
+            callable.task,
+            match callable.call_kind {
+                ClosureCallKind::Repeatable => ReceiverKind::Borrow,
+                ClosureCallKind::MutableRepeatable => ReceiverKind::BorrowMut,
+                ClosureCallKind::Consuming => ReceiverKind::Value,
+            },
+            type_to_ref(&callable.contract()),
             Span::new(1, 1),
         ),
         Type::Closure {
@@ -7561,6 +7598,7 @@ fn function_decl(name: &str) -> FunctionDecl {
 fn unary_function_decl(name: &str) -> FunctionDecl {
     let mut decl = function_decl(name);
     decl.params.push(Param {
+        keyword_only: false,
         name: "value".to_string(),
         mode: ParamMode::Own,
         ty: type_ref("int32"),
@@ -7699,6 +7737,10 @@ fn enum_info(name: &str, payload: Option<Type>) -> EnumInfo {
 
 fn namespace(path: &str) -> ModuleNamespace {
     ModuleNamespace {
+        union_injections: Default::default(),
+        narrowed_reads: Default::default(),
+        all_aliases: BTreeMap::new(),
+        aliases: BTreeMap::new(),
         constants: BTreeMap::new(),
         all_constants: BTreeMap::new(),
         name: path.rsplit('.').next().unwrap_or(path).to_string(),
@@ -7726,7 +7768,7 @@ fn namespace(path: &str) -> ModuleNamespace {
 
 fn checker<'a>(
     module_name: &'a str,
-    type_names: &'a BTreeMap<String, Span>,
+    type_names: &'a TypeDefinitions,
     type_arities: &'a BTreeMap<String, usize>,
     classes: &'a BTreeMap<String, ClassInfo>,
     enums: &'a BTreeMap<String, EnumInfo>,
@@ -7782,6 +7824,8 @@ fn local_binding(
         captured: false,
         view: None,
         closure_loans: Vec::new(),
+        narrowed: BTreeMap::new(),
+        stale_narrowing: BTreeMap::new(),
     }
 }
 
@@ -7802,8 +7846,8 @@ fn assign_stmt(
     }
 }
 
-fn type_maps_from_program(program: &Program) -> (BTreeMap<String, Span>, BTreeMap<String, usize>) {
-    let mut type_names = BTreeMap::new();
+fn type_maps_from_program(program: &Program) -> (TypeDefinitions, BTreeMap<String, usize>) {
+    let mut type_names = TypeDefinitions::default();
     let mut type_arities = BTreeMap::new();
     for (name, class_info) in &program.classes {
         type_names.insert(name.clone(), class_info.decl.span);
@@ -7823,7 +7867,8 @@ fn type_maps_from_program(program: &Program) -> (BTreeMap<String, Span>, BTreeMa
 #[test]
 fn checker_small_helper_utilities_cover_default_arg_and_recursive_type_paths() {
     let mut collected = BTreeSet::new();
-    let type_names = BTreeMap::from([("Known".to_string(), Span::new(1, 1))]);
+    let type_names =
+        TypeDefinitions::from(BTreeMap::from([("Known".to_string(), Span::new(1, 1))]));
     collect_type_ref_type_params(&type_ref("T"), &type_names, &mut collected, true);
     collect_type_ref_type_params(
         &nested_type_ref("list", vec![type_ref("U")]),
@@ -8408,11 +8453,11 @@ fn checker_expression_helper_paths_cover_collection_specialization_and_control_e
             .expect("functions should resolve to first-class callable types"),
         Type::Function {
             params: vec![FunctionParamContract {
+                keyword_only: false,
                 name: "value".to_string(),
                 ty: Type::named("int32"),
                 passing: ReceiverKind::Borrow,
                 has_default: false,
-                default_erased: false,
             }],
             return_type: Box::new(Type::named("int32")),
         }
@@ -9191,7 +9236,8 @@ fn checker_assignment_helper_paths_cover_index_member_and_binding_edges() {
             ],
         ),
     )]);
-    let type_names = BTreeMap::from([("Counter".to_string(), Span::new(1, 1))]);
+    let type_names =
+        TypeDefinitions::from(BTreeMap::from([("Counter".to_string(), Span::new(1, 1))]));
     let type_arities = BTreeMap::from([("Counter".to_string(), 0usize)]);
     let enums = BTreeMap::new();
     let functions = BTreeMap::new();
@@ -9651,10 +9697,10 @@ fn checker_call_surface_helpers_cover_builtin_constructors_and_builtin_calls() {
         ("Box".to_string(), box_class),
         ("Phantom".to_string(), phantom_class),
     ]);
-    let type_names = BTreeMap::from([
+    let type_names = TypeDefinitions::from(BTreeMap::from([
         ("Box".to_string(), Span::new(1, 1)),
         ("Phantom".to_string(), Span::new(1, 1)),
-    ]);
+    ]));
     let type_arities =
         BTreeMap::from([("Box".to_string(), 1usize), ("Phantom".to_string(), 1usize)]);
     let enums = BTreeMap::new();
@@ -10285,12 +10331,12 @@ fn checker_type_of_call_covers_associated_methods_generic_variants_and_private_f
     let traits = BTreeMap::new();
     let imported_modules = BTreeMap::new();
     let module_registry = BTreeMap::new();
-    let type_names = BTreeMap::from([
+    let type_names = TypeDefinitions::from(BTreeMap::from([
         ("Widget".to_string(), span),
         ("SecretBox".to_string(), span),
         ("Shape".to_string(), span),
         ("Status".to_string(), span),
-    ]);
+    ]));
     let type_arities = BTreeMap::from([
         ("Widget".to_string(), 0usize),
         ("SecretBox".to_string(), 0usize),
@@ -10692,7 +10738,7 @@ fn checker_type_of_call_covers_associated_methods_generic_variants_and_private_f
 
 #[test]
 fn checker_member_call_helpers_cover_string_map_set_and_channel_builtins() {
-    let type_names = BTreeMap::new();
+    let type_names = TypeDefinitions::default();
     let type_arities = BTreeMap::new();
     let classes = BTreeMap::new();
     let enums = BTreeMap::new();
@@ -10964,7 +11010,7 @@ fn checker_member_call_helpers_cover_string_map_set_and_channel_builtins() {
 
 #[test]
 fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfaces() {
-    let type_names = BTreeMap::new();
+    let type_names = TypeDefinitions::default();
     let type_arities = BTreeMap::new();
     let classes = BTreeMap::new();
     let enums = BTreeMap::new();
@@ -13725,7 +13771,7 @@ fn sema_helper_edges_cover_copy_defaults_literal_patterns_and_module_members() {
     imported_modules.insert("pkg".to_string(), root.clone());
     registry.insert("pkg".to_string(), root);
 
-    let type_names = BTreeMap::new();
+    let type_names = TypeDefinitions::default();
     let type_arities = BTreeMap::new();
     let functions = BTreeMap::new();
     let traits = BTreeMap::new();
@@ -13841,7 +13887,7 @@ fn sema_helper_edges_cover_copy_defaults_literal_patterns_and_module_members() {
 
 #[test]
 fn sema_render_and_builtin_enum_hint_helpers_cover_remaining_paths() {
-    let type_names = BTreeMap::new();
+    let type_names = TypeDefinitions::default();
     let type_arities = BTreeMap::new();
     let classes = BTreeMap::new();
     let enums = BTreeMap::new();
@@ -13921,7 +13967,7 @@ fn sema_render_and_builtin_enum_hint_helpers_cover_remaining_paths() {
 
 #[test]
 fn checker_helper_paths_cover_imported_modules_type_args_and_binding_consumption() {
-    let type_names = BTreeMap::new();
+    let type_names = TypeDefinitions::default();
     let type_arities = BTreeMap::new();
     let classes = BTreeMap::new();
     let enums = BTreeMap::new();
@@ -14033,6 +14079,8 @@ fn checker_helper_paths_cover_imported_modules_type_args_and_binding_consumption
             captured: false,
             view: None,
             closure_loans: Vec::new(),
+            narrowed: BTreeMap::new(),
+            stale_narrowing: BTreeMap::new(),
         },
     )]);
     checker
@@ -14066,6 +14114,8 @@ fn checker_helper_paths_cover_imported_modules_type_args_and_binding_consumption
             captured: false,
             view: None,
             closure_loans: Vec::new(),
+            narrowed: BTreeMap::new(),
+            stale_narrowing: BTreeMap::new(),
         },
     )]);
     let borrowed_error = checker
@@ -14096,6 +14146,8 @@ fn checker_helper_paths_cover_imported_modules_type_args_and_binding_consumption
             captured: false,
             view: None,
             closure_loans: Vec::new(),
+            narrowed: BTreeMap::new(),
+            stale_narrowing: BTreeMap::new(),
         },
     )]);
     let moved_error = checker
@@ -14111,7 +14163,7 @@ fn checker_move_consumption_helpers_cover_managed_specialized_member_and_match_p
         "Holder".to_string(),
         class_info("Holder", false, vec![("text", Type::named("str"), false)]),
     )]);
-    let type_names = BTreeMap::from([("Holder".to_string(), span)]);
+    let type_names = TypeDefinitions::from(BTreeMap::from([("Holder".to_string(), span)]));
     let type_arities = BTreeMap::from([("Holder".to_string(), 0usize)]);
     let enums = BTreeMap::new();
     let functions = BTreeMap::new();
@@ -14390,7 +14442,7 @@ fn namespace_and_type_parameter_helpers_cover_registration_lookup_and_collection
     root.imported_modules
         .insert("external".to_string(), imported.clone());
 
-    let mut type_names = BTreeMap::new();
+    let mut type_names = TypeDefinitions::default();
     let mut type_arities = BTreeMap::new();
     register_module_namespace_types(&root, &mut type_names, &mut type_arities);
 
@@ -14437,7 +14489,7 @@ fn namespace_and_type_parameter_helpers_cover_registration_lookup_and_collection
     let mut collected = BTreeSet::new();
     collect_type_ref_type_params(
         &nested_type_ref("list", vec![nested_type_ref("Boxed", vec![type_ref("T")])]),
-        &BTreeMap::from([("list".to_string(), Span::new(1, 1))]),
+        &TypeDefinitions::from(BTreeMap::from([("list".to_string(), Span::new(1, 1))])),
         &mut collected,
         false,
     );
@@ -14473,10 +14525,10 @@ fn default_argument_and_trait_bound_helpers_cover_nested_expression_cases() {
         ("Named".to_string(), trait_info("Named", vec![])),
         ("Mapper".to_string(), trait_info("Mapper", vec!["T"])),
     ]);
-    let type_names = BTreeMap::from([
+    let type_names = TypeDefinitions::from(BTreeMap::from([
         ("str".to_string(), Span::new(1, 1)),
         ("int32".to_string(), Span::new(1, 1)),
-    ]);
+    ]));
     let type_arities = BTreeMap::from([("str".to_string(), 0), ("int32".to_string(), 0)]);
     let lowered = lower_trait_bounds(
         &BTreeMap::from([(
@@ -14791,6 +14843,7 @@ fn builtin_omitted_marker_is_valid_only_while_checking_generated_defaults() {
         span: Span::new(1, 1),
     };
     let param = Param {
+        keyword_only: false,
         name: "timeout".to_string(),
         mode: ParamMode::Default,
         ty: type_ref("Option"),
@@ -15130,10 +15183,10 @@ fn check_rejects_duplicate_ordinary_parameter_names() {
 
 #[test]
 fn lower_type_covers_builtin_generic_and_error_paths() {
-    let type_names = BTreeMap::from([
+    let type_names = TypeDefinitions::from(BTreeMap::from([
         ("Box".to_string(), Span::new(1, 1)),
         ("pkg.Counter".to_string(), Span::new(1, 1)),
-    ]);
+    ]));
     let type_arities = BTreeMap::from([
         ("Box".to_string(), 1usize),
         ("pkg.Counter".to_string(), 0usize),
@@ -15308,7 +15361,7 @@ fn lower_trait_bounds_reports_unknown_traits_and_arity_mismatches() {
         ("Named".to_string(), trait_info("Named", vec![])),
         ("Mapper".to_string(), trait_info("Mapper", vec!["T"])),
     ]);
-    let type_names = BTreeMap::from([("str".to_string(), Span::new(1, 1))]);
+    let type_names = TypeDefinitions::from(BTreeMap::from([("str".to_string(), Span::new(1, 1))]));
     let type_arities = BTreeMap::from([("str".to_string(), 0usize)]);
     let scope = type_param_scope(&["T".to_string()]);
 
@@ -15362,10 +15415,10 @@ fn lower_supertraits_reports_unknown_arity_and_lowers_self_args() {
         ("Base".to_string(), trait_info("Base", vec![])),
         ("Mapper".to_string(), trait_info("Mapper", vec!["T"])),
     ]);
-    let type_names = BTreeMap::from([
+    let type_names = TypeDefinitions::from(BTreeMap::from([
         ("str".to_string(), Span::new(1, 1)),
         ("Widget".to_string(), Span::new(1, 1)),
-    ]);
+    ]));
     let type_arities = BTreeMap::from([("str".to_string(), 0usize), ("Widget".to_string(), 0)]);
     let scope = type_param_scope(&["T".to_string()]);
 
@@ -15846,7 +15899,8 @@ fn checker_direct_entrypoints_cover_top_level_function_method_and_impl_paths() {
             vec![("value", Type::named("int32"), false)],
         ),
     )]);
-    let type_names = BTreeMap::from([("Counter".to_string(), Span::new(1, 1))]);
+    let type_names =
+        TypeDefinitions::from(BTreeMap::from([("Counter".to_string(), Span::new(1, 1))]));
     let type_arities = BTreeMap::from([("Counter".to_string(), 0usize)]);
     let enums = BTreeMap::new();
     let functions = BTreeMap::new();
@@ -16025,6 +16079,7 @@ fn checker_direct_entrypoints_cover_top_level_function_method_and_impl_paths() {
     impl_method_with_default.receiver = Some(ReceiverKind::Borrow);
     impl_method_with_default.return_type = type_ref("int32");
     impl_method_with_default.params = vec![Param {
+        keyword_only: false,
         name: "value".to_string(),
         ty: type_ref("int32"),
         mode: ParamMode::Default,
@@ -16065,7 +16120,8 @@ fn checker_select_and_assignment_direct_helpers_cover_remaining_error_and_succes
             vec![("value", Type::named("int32"), false)],
         ),
     )]);
-    let type_names = BTreeMap::from([("Counter".to_string(), Span::new(1, 1))]);
+    let type_names =
+        TypeDefinitions::from(BTreeMap::from([("Counter".to_string(), Span::new(1, 1))]));
     let type_arities = BTreeMap::from([("Counter".to_string(), 0usize)]);
     let enums = BTreeMap::new();
     let functions = BTreeMap::new();
@@ -16283,7 +16339,7 @@ fn builtin_call_and_member_resolution_surface_type_checks() {
 
 #[test]
 fn checker_builtin_function_success_surface_infers_expected_types() {
-    let type_names = BTreeMap::new();
+    let type_names = TypeDefinitions::default();
     let type_arities = BTreeMap::new();
     let classes = BTreeMap::new();
     let enums = BTreeMap::new();
@@ -16520,7 +16576,7 @@ fn checker_builtin_function_success_surface_infers_expected_types() {
 
 #[test]
 fn checker_builtin_constructor_and_variant_error_edges_cover_direct_paths() {
-    let type_names = BTreeMap::new();
+    let type_names = TypeDefinitions::default();
     let type_arities = BTreeMap::new();
     let classes = BTreeMap::new();
     let enums = BTreeMap::new();
@@ -16755,7 +16811,10 @@ fn checker_builtin_constructor_and_variant_error_edges_cover_direct_paths() {
 #[test]
 fn checker_class_constructor_direct_errors_cover_field_binding_edges() {
     let span = Span::new(1, 1);
-    let type_names = BTreeMap::from([("Pair".to_string(), span), ("Widget".to_string(), span)]);
+    let type_names = TypeDefinitions::from(BTreeMap::from([
+        ("Pair".to_string(), span),
+        ("Widget".to_string(), span),
+    ]));
     let type_arities = BTreeMap::from([("Pair".to_string(), 0usize), ("Widget".to_string(), 0)]);
     let mut widget = class_info(
         "Widget",
@@ -17328,11 +17387,11 @@ fn checker_match_and_builtin_error_surfaces_cover_remaining_branches() {
         ),
         ("Status".to_string(), enum_info("Status", None)),
     ]);
-    let type_names = BTreeMap::from([
+    let type_names = TypeDefinitions::from(BTreeMap::from([
         ("Other".to_string(), span),
         ("PayloadStatus".to_string(), span),
         ("Status".to_string(), span),
-    ]);
+    ]));
     let type_arities = BTreeMap::from([
         ("Other".to_string(), 0usize),
         ("PayloadStatus".to_string(), 0usize),
@@ -17446,7 +17505,7 @@ fn checker_match_and_builtin_error_surfaces_cover_remaining_branches() {
 #[test]
 fn checker_module_member_type_edges_cover_private_and_uncalled_members() {
     let span = Span::new(1, 1);
-    let type_names = BTreeMap::new();
+    let type_names = TypeDefinitions::default();
     let type_arities = BTreeMap::new();
     let enums = BTreeMap::new();
     let functions = BTreeMap::new();
@@ -17685,11 +17744,11 @@ def main():
     );
     let trait_method_value = base_checker
         .resolve_member_type(&Type::named("User"), "name", span)
-        .expect_err("trait-dispatched method values are explicitly out of scope");
+        .expect_err("a trait method is not a field; binding it goes through the member arm");
     assert_eq!(trait_method_value.code, "AU2005");
     assert!(trait_method_value
         .message
-        .contains("trait-dispatched method values are not supported"));
+        .contains("trait method `name` on `User` cannot be used as a field"));
     base_checker
         .assert_type_satisfies_bounds(
             &Type::named("User"),
@@ -17990,6 +18049,7 @@ fn operator_method_from_type_param_reports_ambiguity_when_multiple_bounds_match(
     let mut add_decl = function_decl("add");
     add_decl.receiver = Some(ReceiverKind::Borrow);
     add_decl.params = vec![Param {
+        keyword_only: false,
         name: "rhs".to_string(),
         mode: ParamMode::Default,
         ty: type_ref("Rhs"),
@@ -18009,7 +18069,7 @@ fn operator_method_from_type_param_reports_ambiguity_when_multiple_bounds_match(
         },
     );
 
-    let type_names = BTreeMap::from([("Add".to_string(), Span::new(1, 1))]);
+    let type_names = TypeDefinitions::from(BTreeMap::from([("Add".to_string(), Span::new(1, 1))]));
     let type_arities = BTreeMap::from([("Add".to_string(), 2usize)]);
     let classes = BTreeMap::new();
     let enums = BTreeMap::new();
@@ -18063,7 +18123,7 @@ fn operator_method_from_type_param_reports_ambiguity_when_multiple_bounds_match(
 #[test]
 fn module_namespace_and_builtin_enum_helpers_cover_resolution_paths() {
     let span = Span::new(1, 1);
-    let type_names = BTreeMap::new();
+    let type_names = TypeDefinitions::default();
     let type_arities = BTreeMap::new();
     let classes = BTreeMap::new();
     let enums = BTreeMap::new();
@@ -18652,7 +18712,7 @@ fn module_qualified_builtin_io_error_variants_type_check() {
 #[test]
 fn checker_module_resolution_helpers_cover_current_module_and_index_wrappers() {
     let span = Span::new(1, 1);
-    let type_names = BTreeMap::new();
+    let type_names = TypeDefinitions::default();
     let type_arities = BTreeMap::new();
     let classes = BTreeMap::new();
     let enums = BTreeMap::new();
@@ -18679,6 +18739,7 @@ fn checker_module_resolution_helpers_cover_current_module_and_index_wrappers() {
     let mut merge_decl = function_decl("merge");
     merge_decl.params = vec![
         Param {
+            keyword_only: false,
             name: "left".to_string(),
             ty: type_ref("Widget"),
             mode: ParamMode::BorrowMut,
@@ -18686,6 +18747,7 @@ fn checker_module_resolution_helpers_cover_current_module_and_index_wrappers() {
             span,
         },
         Param {
+            keyword_only: false,
             name: "right".to_string(),
             ty: type_ref("Widget"),
             mode: ParamMode::BorrowMut,
@@ -18989,7 +19051,7 @@ fn checker_module_resolution_helpers_cover_current_module_and_index_wrappers() {
 
 #[test]
 fn spawn_callable_resolution_covers_module_and_associated_targets() {
-    let type_names = BTreeMap::new();
+    let type_names = TypeDefinitions::default();
     let type_arities = BTreeMap::new();
     let mut worker = class_info("Worker", false, vec![]);
     worker.methods.insert(
@@ -19158,7 +19220,7 @@ fn spawn_callable_resolution_covers_module_and_associated_targets() {
 #[test]
 fn place_path_and_resource_helpers_cover_remaining_checker_paths() {
     let span = Span::new(1, 1);
-    let type_names = BTreeMap::new();
+    let type_names = TypeDefinitions::default();
     let type_arities = BTreeMap::new();
 
     let mut resource = class_info(
@@ -19242,6 +19304,8 @@ fn place_path_and_resource_helpers_cover_remaining_checker_paths() {
                 captured: false,
                 view: None,
                 closure_loans: Vec::new(),
+                narrowed: BTreeMap::new(),
+                stale_narrowing: BTreeMap::new(),
             },
         ),
         (
@@ -19287,6 +19351,8 @@ fn place_path_and_resource_helpers_cover_remaining_checker_paths() {
                 captured: false,
                 view: None,
                 closure_loans: Vec::new(),
+                narrowed: BTreeMap::new(),
+                stale_narrowing: BTreeMap::new(),
             },
         ),
         (
@@ -19310,6 +19376,8 @@ fn place_path_and_resource_helpers_cover_remaining_checker_paths() {
                 captured: false,
                 view: None,
                 closure_loans: Vec::new(),
+                narrowed: BTreeMap::new(),
+                stale_narrowing: BTreeMap::new(),
             },
         ),
     ]);
@@ -19460,6 +19528,8 @@ fn place_path_and_resource_helpers_cover_remaining_checker_paths() {
             captured: false,
             view: None,
             closure_loans: Vec::new(),
+            narrowed: BTreeMap::new(),
+            stale_narrowing: BTreeMap::new(),
         },
     )]);
     let receiver_error = match checker.prepare_method_receiver_borrows(
@@ -19511,6 +19581,7 @@ fn place_path_and_resource_helpers_cover_remaining_checker_paths() {
         .require_task_startable_function(
             "work",
             &[Param {
+                keyword_only: false,
                 name: "value".to_string(),
                 ty: type_ref("str"),
                 mode: ParamMode::Default,
@@ -19525,6 +19596,7 @@ fn place_path_and_resource_helpers_cover_remaining_checker_paths() {
         .require_task_startable_function(
             "work",
             &[Param {
+                keyword_only: false,
                 name: "value".to_string(),
                 ty: type_ref("int32"),
                 mode: ParamMode::BorrowMut,
@@ -19759,6 +19831,10 @@ fn check_with_context_covers_imported_binding_registration_and_duplicate_item_pa
     let remote_enum = enum_info("RemoteStatus", Some(Type::named("int32")));
     let remote_trait = trait_info("RemoteShow", Vec::new());
     let namespace = ModuleNamespace {
+        union_injections: Default::default(),
+        narrowed_reads: Default::default(),
+        all_aliases: BTreeMap::new(),
+        aliases: BTreeMap::new(),
         constants: BTreeMap::new(),
         all_constants: BTreeMap::new(),
         name: "tools".to_string(),
@@ -20325,10 +20401,10 @@ def main():
 
 #[test]
 fn lower_type_and_imported_context_helpers_cover_builtin_and_context_paths() {
-    let mut type_names = BTreeMap::from([
+    let mut type_names = TypeDefinitions::from(BTreeMap::from([
         ("Pair".to_string(), Span::new(1, 1)),
         ("pkg.tools.Widget".to_string(), Span::new(1, 1)),
-    ]);
+    ]));
     let mut type_arities = BTreeMap::from([
         ("Pair".to_string(), 2usize),
         ("pkg.tools.Widget".to_string(), 0usize),
@@ -23279,25 +23355,25 @@ fn capture_free_function_types_are_copy_values_with_declaration_spelling() {
     let function = Type::Function {
         params: vec![
             FunctionParamContract {
+                keyword_only: false,
                 name: "left".to_string(),
                 ty: Type::named("int32"),
                 passing: ReceiverKind::Borrow,
                 has_default: false,
-                default_erased: false,
             },
             FunctionParamContract {
+                keyword_only: false,
                 name: "right".to_string(),
                 ty: Type::named("str"),
                 passing: ReceiverKind::Value,
                 has_default: true,
-                default_erased: false,
             },
             FunctionParamContract {
+                keyword_only: false,
                 name: "counter".to_string(),
                 ty: Type::named("int64"),
                 passing: ReceiverKind::BorrowMut,
                 has_default: false,
-                default_erased: false,
             },
         ],
         return_type: Box::new(Type::named("bool")),
@@ -23305,8 +23381,8 @@ fn capture_free_function_types_are_copy_values_with_declaration_spelling() {
     assert!(function.is_copy(), "capture-free code pointers are Copy");
     assert_eq!(
         function.to_string(),
-        "def(int32, own str, mut int64) -> bool",
-        "written function types preserve parameter capability contracts"
+        "def(left: int32, right: own str = ..., counter: mut int64) -> bool",
+        "complete contracts render names, capabilities, and default availability"
     );
 }
 
@@ -23453,7 +23529,7 @@ def main():
 }
 
 #[test]
-fn dynamic_function_contracts_retain_only_names_and_defaults_that_agree() {
+fn dynamic_function_contracts_require_one_complete_contract() {
     crate::check_source(
         r#"
 def plus_one(value: int32 = 1) -> int32:
@@ -23468,7 +23544,7 @@ def main():
     named: int32 = selected(value=4)
 "#,
     )
-    .expect("different default values are supplied by the runtime-selected target");
+    .expect("targets with one complete contract keep names and defaults through a join");
 
     let names = crate::check_source(
         r#"
@@ -23480,13 +23556,13 @@ def second(number: int32 = 2) -> int32:
 
 def main():
     selected = first if true else second
-    defaulted: int32 = selected()
     selected(value=3)
 "#,
     )
-    .expect_err("different names erase named access without erasing shared defaults");
-    assert_eq!(names.code, "AU2003");
-    assert!(names.message.contains("contract was erased"));
+    .expect_err("an inferred join never invents a common contract from differing names");
+    assert_eq!(names.code, "AU2015");
+    assert!(names.message.contains("callable contract mismatch"));
+    assert!(names.message.contains("differs from"));
 
     let defaults = crate::check_source(
         r#"
@@ -23501,13 +23577,44 @@ def main():
     selected()
 "#,
     )
-    .expect_err("a join with different default masks requires all positional arguments");
-    assert_eq!(defaults.code, "AU2003");
-    assert!(defaults.message.contains("complete positional list"));
+    .expect_err("an inferred join never invents a common default availability");
+    assert_eq!(defaults.code, "AU2015");
+
+    crate::check_source(
+        r#"
+def first(value: int32 = 1) -> int32:
+    return value
+
+def second(number: int32 = 2) -> int32:
+    return number
+
+def main():
+    selected: def(int32) -> int32 = first if true else second
+    positional: int32 = selected(3)
+"#,
+    )
+    .expect("a written positional-only contract admits both branches");
+
+    let named = crate::check_source(
+        r#"
+def first(value: int32 = 1) -> int32:
+    return value
+
+def second(number: int32 = 2) -> int32:
+    return number
+
+def main():
+    selected: def(int32) -> int32 = first if true else second
+    selected(value=3)
+"#,
+    )
+    .expect_err("a written positional-only contract exposes no names");
+    assert_eq!(named.code, "AU2004");
+    assert!(named.message.contains("has no parameter named `value`"));
 }
 
 #[test]
-fn function_reassignment_intersects_named_and_default_contracts() {
+fn function_reassignment_must_satisfy_the_local_contract() {
     let names = crate::check_source(
         r#"
 def first(value: int32 = 1) -> int32:
@@ -23522,9 +23629,9 @@ def main():
     selected(value=3)
 "#,
     )
-    .expect_err("reassignment to a differently named target erases named arguments");
-    assert_eq!(names.code, "AU2003");
-    assert!(names.message.contains("contract was erased"));
+    .expect_err("rebinding cannot rename the local's exposed parameter");
+    assert_eq!(names.code, "AU2015");
+    assert!(names.message.contains("would be renamed"));
 
     let defaults = crate::check_source(
         r#"
@@ -23540,13 +23647,46 @@ def main():
     selected()
 "#,
     )
-    .expect_err("reassignment to a required target erases default availability");
-    assert_eq!(defaults.code, "AU2003");
-    assert!(defaults.message.contains("complete positional list"));
+    .expect_err("rebinding cannot drop the local's promised default");
+    assert_eq!(defaults.code, "AU2015");
+    assert!(defaults.message.contains("promises a default"));
+
+    crate::check_source(
+        r#"
+def first(value: int32 = 1) -> int32:
+    return value
+
+def second(number: int32 = 2) -> int32:
+    return number
+
+def main():
+    mut selected: def(int32) -> int32 = first
+    selected = second
+    positional: int32 = selected(3)
+"#,
+    )
+    .expect("a written positional-only local admits every ABI-equal target");
+
+    crate::check_source(
+        r#"
+def first(value: int32 = 1) -> int32:
+    return value
+
+def plus(value: int32 = 2) -> int32:
+    return value + 1
+
+def main():
+    mut selected = first
+    selected = plus
+    defaulted: int32 = selected()
+    named: int32 = selected(value=3)
+"#,
+    )
+    .expect("a target with the same complete contract rebinds and keeps names and defaults");
 }
 
 #[test]
-fn control_flow_reassignment_intersects_function_contracts() {
+fn control_flow_reassignment_must_satisfy_the_local_contract() {
     let error = crate::check_source(
         r#"
 def first(value: int32 = 1) -> int32:
@@ -23562,20 +23702,21 @@ def choose(use_second: bool) -> int32:
     return selected(value=3)
 "#,
     )
-    .expect_err("post-branch function contracts include every reachable assignment");
-    assert_eq!(error.code, "AU2003");
-    assert!(error.message.contains("contract was erased"));
+    .expect_err("a branch cannot rebind a local to a differently named contract");
+    assert_eq!(error.code, "AU2015");
+    assert!(error.message.contains("would be renamed"));
+    assert_eq!(error.span.map(|span| span.line), Some(11));
 }
 
 #[test]
-fn repeated_generic_evidence_intersects_callable_contract_metadata() {
+fn repeated_generic_evidence_requires_identical_callable_contracts() {
     let callback = |name: &str, has_default: bool| Type::Function {
         params: vec![FunctionParamContract {
+            keyword_only: false,
             name: name.to_string(),
             ty: Type::named("int32"),
             passing: ReceiverKind::Borrow,
             has_default,
-            default_erased: false,
         }],
         return_type: Box::new(Type::named("int32")),
     };
@@ -23587,18 +23728,26 @@ fn repeated_generic_evidence_intersects_callable_contract_metadata() {
         &mut names,
     )
     .expect("first generic observation binds the function contract");
-    unify_type_pattern(
+    let conflict = unify_type_pattern(
         &Type::TypeParam("T".to_string()),
         &callback("number", true),
         &mut names,
     )
-    .expect("ABI-equal function evidence remains compatible");
+    .expect_err("ABI-equal evidence with another exposed name is not one contract");
+    assert!(conflict
+        .message
+        .contains("conflicting inferred callable contracts for `T`"));
+    unify_type_pattern(
+        &Type::TypeParam("T".to_string()),
+        &callback("value", true),
+        &mut names,
+    )
+    .expect("identical evidence agrees");
     let Type::Function { params, .. } = names.get("T").expect("T is inferred") else {
         panic!("T should remain a function type");
     };
-    assert_eq!(params[0].name, "");
+    assert_eq!(params[0].name, "value");
     assert!(params[0].has_default);
-    assert!(!params[0].default_erased);
 
     let nested = |contract| {
         Type::Tuple(vec![Type::Named(
@@ -23613,28 +23762,15 @@ fn repeated_generic_evidence_intersects_callable_contract_metadata() {
         &mut nested_defaults,
     )
     .expect("first nested generic observation binds T");
-    unify_type_pattern(
+    let nested_conflict = unify_type_pattern(
         &Type::TypeParam("T".to_string()),
         &nested(callback("value", false)),
         &mut nested_defaults,
     )
-    .expect("nested ABI-equal evidence remains compatible");
-    let nested_result = nested_defaults.get("T").expect("nested T is inferred");
-    let Type::Tuple(tuple) = nested_result else {
-        panic!("nested result should retain its tuple wrapper");
-    };
-    let Type::Named(_, vec_args) = &tuple[0] else {
-        panic!("nested result should retain its Vec wrapper");
-    };
-    let Type::Named(_, holder_args) = &vec_args[0] else {
-        panic!("nested result should retain its Holder wrapper");
-    };
-    let Type::Function { params, .. } = &holder_args[0] else {
-        panic!("nested result should retain its callback");
-    };
-    assert_eq!(params[0].name, "value");
-    assert!(!params[0].has_default);
-    assert!(params[0].default_erased);
+    .expect_err("nested evidence with another default availability is not one contract");
+    assert!(nested_conflict
+        .message
+        .contains("conflicting inferred callable contracts for `T`"));
 
     let type_params = BTreeSet::from(["T".to_string()]);
     let mut matcher_substitutions = HashMap::new();
@@ -23646,14 +23782,20 @@ fn repeated_generic_evidence_intersects_callable_contract_metadata() {
     ));
     assert!(type_pattern_matches(
         &Type::TypeParam("T".to_string()),
+        &nested(callback("value", true)),
+        &type_params,
+        &mut matcher_substitutions,
+    ));
+    assert!(!type_pattern_matches(
+        &Type::TypeParam("T".to_string()),
         &nested(callback("number", true)),
         &type_params,
         &mut matcher_substitutions,
     ));
-    let merged = matcher_substitutions
+    let bound = matcher_substitutions
         .get("T")
-        .expect("trait-style matching also retains the safe intersection");
-    let Type::Tuple(tuple) = merged else {
+        .expect("trait-style matching keeps the first complete contract");
+    let Type::Tuple(tuple) = bound else {
         panic!("matcher substitution should retain its tuple wrapper");
     };
     let Type::Named(_, vec_args) = &tuple[0] else {
@@ -23665,13 +23807,12 @@ fn repeated_generic_evidence_intersects_callable_contract_metadata() {
     let Type::Function { params, .. } = &holder_args[0] else {
         panic!("matcher substitution should retain its callback");
     };
-    assert_eq!(params[0].name, "");
+    assert_eq!(params[0].name, "value");
     assert!(params[0].has_default);
-    assert!(!params[0].default_erased);
 }
 
 #[test]
-fn generic_choose_returns_only_the_callable_contract_common_to_all_evidence() {
+fn generic_choose_requires_identical_callable_evidence() {
     let defaults = crate::check_source(
         r#"
 def choose[T](first: own T, second: own T, use_second: bool) -> T:
@@ -23688,9 +23829,9 @@ def main():
     selected()
 "#,
     )
-    .expect_err("generic inference must not retain a default absent from later evidence");
-    assert_eq!(defaults.code, "AU2003");
-    assert!(defaults.message.contains("complete positional list"));
+    .expect_err("generic evidence cannot drop a default the first observation promised");
+    assert_eq!(defaults.code, "AU2015");
+    assert!(defaults.message.contains("promises a default"));
 
     let names = crate::check_source(
         r#"
@@ -23708,9 +23849,9 @@ def main():
     selected(value=3)
 "#,
     )
-    .expect_err("generic inference must not retain a name absent from later evidence");
-    assert_eq!(names.code, "AU2003");
-    assert!(names.message.contains("contract was erased"));
+    .expect_err("generic evidence cannot rename the first observation's parameter");
+    assert_eq!(names.code, "AU2015");
+    assert!(names.message.contains("would be renamed"));
 
     for (surface, main_body) in [
         (
@@ -23744,13 +23885,13 @@ def main():
 {main_body}"#,
         );
         let nested = crate::check_source(&source)
-            .expect_err("nested generic results must recursively intersect callable contracts");
+            .expect_err("nested generic evidence must agree on every callable contract");
         assert_eq!(
-            nested.code, "AU2003",
-            "{surface} generic evidence should erase incompatible callable names: {}",
+            nested.code, "AU2015",
+            "{surface} generic evidence cannot rename a nested callable slot: {}",
             nested.message,
         );
-        assert!(nested.message.contains("contract was erased"));
+        assert!(nested.message.contains("would be renamed"));
     }
 }
 
@@ -23790,7 +23931,7 @@ def main():
 }
 
 #[test]
-fn mutable_function_storage_erases_names_and_defaults_but_keeps_exact_calls() {
+fn mutable_storage_keeps_the_written_or_inferred_contract() {
     crate::check_source(
         r#"
 class Holder[T]:
@@ -23803,21 +23944,39 @@ def second(number: int32 = 2) -> int32:
     return number
 
 def main():
-    mut callbacks = [first]
+    mut callbacks: list[def(int32) -> int32] = [first]
     callbacks.append(second)
     callbacks.set(0, second)
     from_vec: int32 = callbacks[0](3)
 
-    mut callbacks_by_name = {"first": first}
+    mut callbacks_by_name: dict[str, def(int32) -> int32] = {"first": first}
     callbacks_by_name["second"] = second
     from_map: int32 = callbacks_by_name["second"](4)
 
-    mut holder = Holder(callback=first)
+    mut holder: Holder[def(int32) -> int32] = Holder(callback=first)
     holder.callback = second
     from_field: int32 = holder.callback(5)
 "#,
     )
-    .expect("mutable storage preserves structural signatures for exact positional calls");
+    .expect("written positional-only storage contracts admit every ABI-equal target");
+
+    crate::check_source(
+        r#"
+def first(value: int32 = 1) -> int32:
+    return value
+
+def plus(value: int32 = 2) -> int32:
+    return value + 1
+
+def main():
+    mut callbacks = [first]
+    callbacks.append(plus)
+    callbacks.set(0, plus)
+    defaulted: int32 = callbacks[0]()
+    named: int32 = callbacks[1](value=3)
+"#,
+    )
+    .expect("an inferred element contract keeps names and defaults every stored target shares");
 
     let vec_names = crate::check_source(
         r#"
@@ -23830,13 +23989,11 @@ def second(number: int32 = 2) -> int32:
 def main():
     mut callbacks = [first]
     callbacks.append(second)
-    callbacks.set(0, second)
-    callbacks[0](value=3)
 "#,
     )
-    .expect_err("Vec mutation makes declaration names unavailable");
-    assert_eq!(vec_names.code, "AU2003");
-    assert!(vec_names.message.contains("contract was erased"));
+    .expect_err("an inferred element contract cannot be renamed by a later insertion");
+    assert_eq!(vec_names.code, "AU2015");
+    assert!(vec_names.message.contains("would be renamed"));
 
     let vec_defaults = crate::check_source(
         r#"
@@ -23848,14 +24005,12 @@ def required(value: int32) -> int32:
 
 def main():
     mut callbacks = [defaulted]
-    callbacks.append(required)
     callbacks.set(0, required)
-    callbacks[0]()
 "#,
     )
-    .expect_err("Vec mutation makes omitted arguments unavailable");
-    assert_eq!(vec_defaults.code, "AU2003");
-    assert!(vec_defaults.message.contains("complete positional list"));
+    .expect_err("an inferred element contract cannot drop its default through a replacement");
+    assert_eq!(vec_defaults.code, "AU2015");
+    assert!(vec_defaults.message.contains("promises a default"));
 
     let map_names = crate::check_source(
         r#"
@@ -23868,12 +24023,11 @@ def second(number: int32 = 2) -> int32:
 def main():
     mut callbacks = {"first": first}
     callbacks["second"] = second
-    callbacks["second"](number=3)
 "#,
     )
-    .expect_err("Map mutation makes declaration names unavailable");
-    assert_eq!(map_names.code, "AU2003");
-    assert!(map_names.message.contains("contract was erased"));
+    .expect_err("an inferred value contract cannot be renamed by a later insertion");
+    assert_eq!(map_names.code, "AU2015");
+    assert!(map_names.message.contains("would be renamed"));
 
     let field_defaults = crate::check_source(
         r#"
@@ -23889,12 +24043,11 @@ def required(value: int32) -> int32:
 def main():
     mut holder = Holder(callback=defaulted)
     holder.callback = required
-    holder.callback()
 "#,
     )
-    .expect_err("generic field mutation makes omitted arguments unavailable");
-    assert_eq!(field_defaults.code, "AU2003");
-    assert!(field_defaults.message.contains("complete positional list"));
+    .expect_err("an inferred field contract cannot drop its default through a replacement");
+    assert_eq!(field_defaults.code, "AU2015");
+    assert!(field_defaults.message.contains("promises a default"));
 }
 
 #[test]
@@ -23927,6 +24080,10 @@ fn imported_module_functions_are_first_class_values() {
         type_param_bounds: BTreeMap::new(),
     };
     let namespace = ModuleNamespace {
+        union_injections: Default::default(),
+        narrowed_reads: Default::default(),
+        all_aliases: BTreeMap::new(),
+        aliases: BTreeMap::new(),
         constants: BTreeMap::new(),
         all_constants: BTreeMap::new(),
         name: "tools".to_string(),
@@ -23978,6 +24135,10 @@ fn nested_imported_module_functions_are_first_class_values() {
         type_param_bounds: BTreeMap::new(),
     };
     let helpers = ModuleNamespace {
+        union_injections: Default::default(),
+        narrowed_reads: Default::default(),
+        all_aliases: BTreeMap::new(),
+        aliases: BTreeMap::new(),
         constants: BTreeMap::new(),
         all_constants: BTreeMap::new(),
         name: "helpers".to_string(),
@@ -24002,6 +24163,10 @@ fn nested_imported_module_functions_are_first_class_values() {
         comprehensions: BTreeMap::new(),
     };
     let support = ModuleNamespace {
+        union_injections: Default::default(),
+        narrowed_reads: Default::default(),
+        all_aliases: BTreeMap::new(),
+        aliases: BTreeMap::new(),
         constants: BTreeMap::new(),
         all_constants: BTreeMap::new(),
         name: "function_value_imported_support".to_string(),
@@ -24050,8 +24215,8 @@ fn nested_imported_module_functions_are_first_class_values() {
 }
 
 #[test]
-fn method_values_and_function_trait_dispatch_are_explicitly_out_of_scope() {
-    let method = crate::check_source(
+fn method_values_bind_while_function_trait_dispatch_stays_out_of_scope() {
+    crate::check_source(
         r#"
 class Counter:
     value: int32
@@ -24062,11 +24227,28 @@ class Counter:
 def main():
     counter = Counter(value=1)
     callback = counter.read
+    print(callback())
 "#,
     )
-    .expect_err("instance method values remain out of scope");
-    assert_eq!(method.code, "AU2005");
-    assert!(method.message.contains("method values are not supported"));
+    .expect("an instance method binds as a closure over its receiver");
+    let field_use = crate::check_source(
+        r#"
+class Counter:
+    value: int32
+
+    def read(self) -> int32:
+        return self.value
+
+def main():
+    mut counter = Counter(value=1)
+    counter.read = 2
+"#,
+    )
+    .expect_err("a method is not an assignable field");
+    assert_eq!(field_use.code, "AU2005");
+    assert!(field_use
+        .message
+        .contains("method `read` on `Counter` cannot be used as a field"));
 
     let trait_dispatch = crate::check_source(
         r#"
@@ -24103,7 +24285,12 @@ fn function_type_helpers_preserve_nested_generic_shape_and_capability_diagnostic
         span,
     );
     let mut ref_params = BTreeSet::new();
-    collect_type_ref_type_params(&function_ref, &BTreeMap::new(), &mut ref_params, false);
+    collect_type_ref_type_params(
+        &function_ref,
+        &TypeDefinitions::default(),
+        &mut ref_params,
+        false,
+    );
     assert_eq!(
         ref_params,
         BTreeSet::from(["T".to_string(), "U".to_string()]),
@@ -24112,11 +24299,11 @@ fn function_type_helpers_preserve_nested_generic_shape_and_capability_diagnostic
 
     let pattern = Type::Function {
         params: vec![FunctionParamContract {
+            keyword_only: false,
             name: String::new(),
             ty: Type::TypeParam("T".to_string()),
             passing: ReceiverKind::BorrowMut,
             has_default: false,
-            default_erased: true,
         }],
         return_type: Box::new(Type::Named(
             "list".to_string(),
@@ -24133,11 +24320,11 @@ fn function_type_helpers_preserve_nested_generic_shape_and_capability_diagnostic
     assert!(
         has_unresolved_type_params(&Type::Function {
             params: vec![FunctionParamContract {
+                keyword_only: false,
                 name: String::new(),
                 ty: Type::named("int32"),
                 passing: ReceiverKind::Borrow,
                 has_default: false,
-                default_erased: true,
             }],
             return_type: Box::new(Type::TypeParam("U".to_string())),
         }),
@@ -24151,11 +24338,11 @@ fn function_type_helpers_preserve_nested_generic_shape_and_capability_diagnostic
 
     let actual = Type::Function {
         params: vec![FunctionParamContract {
+            keyword_only: false,
             name: "value".to_string(),
             ty: Type::named("int32"),
             passing: ReceiverKind::BorrowMut,
             has_default: true,
-            default_erased: false,
         }],
         return_type: Box::new(Type::Named("list".to_string(), vec![Type::named("str")])),
     };
@@ -24188,11 +24375,11 @@ fn function_type_helpers_preserve_nested_generic_shape_and_capability_diagnostic
 
     let wrong_capability = Type::Function {
         params: vec![FunctionParamContract {
+            keyword_only: false,
             name: "value".to_string(),
             ty: Type::named("int32"),
             passing: ReceiverKind::Value,
             has_default: false,
-            default_erased: false,
         }],
         return_type: Box::new(Type::Named("list".to_string(), vec![Type::named("str")])),
     };
@@ -24471,6 +24658,10 @@ fn imported_generic_function_values_specialize_as_values_and_task_targets() {
         type_param_bounds: BTreeMap::new(),
     };
     let namespace = ModuleNamespace {
+        union_injections: Default::default(),
+        narrowed_reads: Default::default(),
+        all_aliases: BTreeMap::new(),
+        aliases: BTreeMap::new(),
         constants: BTreeMap::new(),
         all_constants: BTreeMap::new(),
         name: "tools".to_string(),
@@ -25138,11 +25329,11 @@ def main():
 fn closure_type_keeps_compact_runtime_layout_and_stable_serialization() {
     let closure = Type::Closure {
         params: Box::new(vec![FunctionParamContract {
+            keyword_only: false,
             name: "value".to_string(),
             ty: Type::named("int32"),
             passing: ReceiverKind::Borrow,
             has_default: false,
-            default_erased: false,
         }]),
         return_type: Box::new(Type::named("str")),
         captures: Box::new(vec![ClosureCapture {
@@ -25150,6 +25341,7 @@ fn closure_type_keeps_compact_runtime_layout_and_stable_serialization() {
             ty: Type::named("str"),
             mode: ClosureCaptureMode::Move,
             span: Span::new(4, 17),
+            mutated: false,
         }]),
         call_kind: ClosureCallKind::Repeatable,
     };
@@ -25169,10 +25361,6 @@ fn closure_type_keeps_compact_runtime_layout_and_stable_serialization() {
         &mut HashMap::new(),
     ));
     assert!(!has_unresolved_type_params(&closure));
-    assert!(matches!(
-        erase_type_callable_contracts(&closure),
-        Type::Closure { .. }
-    ));
 
     assert!(
         std::mem::size_of::<Type>() <= 48,
@@ -25191,18 +25379,19 @@ fn closure_type_keeps_compact_runtime_layout_and_stable_serialization() {
         serde_json::json!({
             "Closure": {
                 "params": [{
+                    "keyword_only": false,
                     "name": "value",
                     "ty": {"Named": ["int32", []]},
                     "passing": "Borrow",
-                    "has_default": false,
-                    "default_erased": false
+                    "has_default": false
                 }],
                 "return_type": {"Named": ["str", []]},
                 "captures": [{
                     "name": "prefix",
                     "ty": {"Named": ["str", []]},
                     "mode": "Move",
-                    "span": {"line": 4, "column": 17}
+                    "span": {"line": 4, "column": 17},
+                    "mutated": false
                 }],
                 "call_kind": "Repeatable"
             }
@@ -25276,20 +25465,53 @@ def build(value: str):
 }
 
 #[test]
-fn mutable_access_to_a_capture_is_rejected_until_fnmut_exists() {
-    let diagnostic = crate::check_source(
+fn mutable_access_to_an_owned_capture_makes_the_closure_mutable() {
+    let stored_immutably = crate::check_source(
         r#"
 def main():
     mut values = ["kept"]
     update: def() -> None = lambda: values.append("new")
 "#,
     )
-    .expect_err("Phase 6.3 does not define mutable closures");
-    assert_eq!(diagnostic.code, "AU3003");
+    .expect_err("a Mutable closure must live in a mutable local");
     assert_eq!(
-        diagnostic.message,
-        "lambda capture `values` cannot be mutably accessed because mutable closures are not supported"
+        stored_immutably.message,
+        "a mutable-repeatable closure must be stored in a mutable local"
     );
+
+    let program = crate::check_source(
+        r#"
+def main():
+    mut values = ["kept"]
+    mut update: def() -> None = lambda: values.append("new")
+    update()
+    update()
+"#,
+    )
+    .expect("mutating an owned capture mutates closure-owned state (C2)");
+    let closure = program
+        .closures
+        .values()
+        .next()
+        .expect("closure metadata is retained");
+    assert_eq!(closure.call_kind, ClosureCallKind::MutableRepeatable);
+    assert!(closure
+        .captures
+        .iter()
+        .any(|capture| capture.name == "values" && capture.mutated));
+
+    let shared_view = crate::check_source(
+        r#"
+def main():
+    mut values = ["kept"]
+    update: def() -> None = lambda [values]: values.append("new")
+"#,
+    )
+    .expect_err("a shared-view capture stays read-only");
+    assert_eq!(shared_view.code, "AU3003");
+    assert!(shared_view
+        .message
+        .contains("is a shared view and cannot be mutably accessed"));
 }
 
 #[test]
@@ -25495,7 +25717,7 @@ def main():
     assert_eq!(consuming.code, "AU2002");
     assert_eq!(
         consuming.message,
-        "`list.map` callback must be repeatable, found `consuming closure def(int64) -> int64`"
+        "`list.map` callback must be repeatable, found `consuming closure def(value: int64) -> int64`"
     );
 
     let non_callable = crate::check_source("def main():\n    values = [1]\n    values.map(1)\n")
@@ -25946,6 +26168,7 @@ def hold[T](value: own T):
                 ty: Type::named("str"),
                 mode: ClosureCaptureMode::Move,
                 span: generic_closure.captures[0].span,
+                mutated: false,
             }]),
             call_kind: ClosureCallKind::Repeatable,
         }
@@ -26018,7 +26241,7 @@ def main():
         .next()
         .expect("default lambda metadata");
     assert!(closure.captures.is_empty());
-    assert_eq!(closure.ty().to_string(), "def(int64) -> int64");
+    assert_eq!(closure.ty().to_string(), "def(value: int64) -> int64");
 
     let diagnostic = crate::check_source(
         r#"
@@ -27251,10 +27474,13 @@ def main():
 def values_view(values: list[int64]) -> view list[int64] from values:
     return view values
 
+def sink(value: own list[int64]):
+    print(value)
+
 def main():
     borrower = values_view
     values = [1]
-    print(borrower(values))
+    sink(borrower(values))
 "#,
     ] {
         let error = crate::check_source(source)
@@ -30444,14 +30670,18 @@ def main():
     crate::check_path(&main_path)
         .expect("imported explicit and inferred calls must retain declaration-owner precision");
 
+    // A parameter-origin view result is part of a stored contract (C9).
+    std::fs::write(
+        &main_path,
+        "import api\n\ndef main():\n    value = api.LeftBox.associated\n    holder = api.LeftBox(left=1, right=2)\n    view result = value(holder)\n    print(result)\n",
+    )
+    .expect("temporary stored-view entry should be writable");
+    crate::check_path(&main_path)
+        .expect("an imported associated function returning a parameter view is storable");
     for (expression, expected) in [
         (
-            "api.LeftBox.associated",
-            "associated method values are not supported",
-        ),
-        (
             "api.forward",
-            "cannot be stored as a structural function value",
+            "requires explicit type arguments or an expected function type",
         ),
         ("api.LeftBox", "must be constructed with `(...)`"),
     ] {
@@ -30465,4 +30695,308 @@ def main():
         assert!(error.message.contains(expected), "{expression}: {error:?}");
     }
     let _ = std::fs::remove_dir_all(&package);
+}
+
+#[test]
+fn source_type_refs_round_trip_every_complete_type_shape() {
+    use crate::ast::TypeRefKind;
+    let span = crate::diag::Span::new(3, 5);
+    let union = Type::normalize_union(
+        vec![Type::named("int64"), Type::named("str"), Type::Unit],
+        "main",
+        &BTreeMap::new(),
+    )
+    .expect("a three-member union normalizes");
+    let function = Type::Function {
+        params: vec![
+            FunctionParamContract {
+                keyword_only: false,
+                name: "left".to_string(),
+                ty: Type::Tuple(vec![Type::TypeParam("T".to_string()), union.clone()]),
+                passing: ReceiverKind::Value,
+                has_default: false,
+            },
+            FunctionParamContract {
+                keyword_only: true,
+                name: String::new(),
+                ty: Type::Named("list".to_string(), vec![Type::named("int64")]),
+                passing: ReceiverKind::BorrowMut,
+                has_default: true,
+            },
+            FunctionParamContract {
+                keyword_only: false,
+                name: "shared".to_string(),
+                ty: Type::named("str"),
+                passing: ReceiverKind::Borrow,
+                has_default: false,
+            },
+        ],
+        return_type: Box::new(Type::Unit),
+    };
+    let type_ref = function
+        .source_type_ref(span)
+        .expect("complete callable types render as source type references");
+    let TypeRefKind::Function {
+        params,
+        return_type,
+        ..
+    } = type_ref.kind
+    else {
+        panic!("expected a function type reference");
+    };
+    assert_eq!(params.len(), 3);
+    assert_eq!(params[0].name.as_deref(), Some("left"));
+    assert!(matches!(params[0].ty.kind, TypeRefKind::Tuple(_)));
+    assert!(params[1].name.is_none());
+    assert!(params[1].keyword_only && params[1].has_default);
+    assert!(matches!(
+        return_type.kind,
+        TypeRefKind::Named { ref name, .. } if name == "None"
+    ));
+    assert!(matches!(
+        union.source_type_ref(span).expect("unions render").kind,
+        TypeRefKind::Union(ref members) if members.len() == 3
+    ));
+
+    let closure = Type::Closure {
+        params: Box::new(Vec::new()),
+        return_type: Box::new(Type::Unit),
+        captures: Box::new(Vec::new()),
+        call_kind: ClosureCallKind::Repeatable,
+    };
+    let error = closure
+        .source_type_ref(span)
+        .expect_err("closure types are not complete source types");
+    assert_eq!(error.code, "AU2010");
+    let module = Type::Module("pkg".to_string());
+    assert!(module.source_type_ref(span).is_err());
+}
+
+#[test]
+fn closure_types_have_canonical_keys_and_empty_unions_are_rejected() {
+    let closure = Type::Closure {
+        params: Box::new(vec![FunctionParamContract {
+            keyword_only: false,
+            name: "value".to_string(),
+            ty: Type::named("int64"),
+            passing: ReceiverKind::Borrow,
+            has_default: false,
+        }]),
+        return_type: Box::new(Type::named("str")),
+        captures: Box::new(vec![ClosureCapture {
+            name: "offset".to_string(),
+            ty: Type::named("int64"),
+            mode: ClosureCaptureMode::Copy,
+            span: crate::diag::Span::new(1, 1),
+            mutated: false,
+        }]),
+        call_kind: ClosureCallKind::Consuming,
+    };
+    let key = closure.canonical_key("main", &BTreeMap::new());
+    assert!(key.contains("closure"), "{key}");
+    assert!(key.contains("offset"), "{key}");
+    let repeatable = Type::Closure {
+        params: Box::new(Vec::new()),
+        return_type: Box::new(Type::Unit),
+        captures: Box::new(Vec::new()),
+        call_kind: ClosureCallKind::Repeatable,
+    };
+    assert_ne!(
+        repeatable.canonical_key("main", &BTreeMap::new()),
+        key,
+        "call kinds and captures distinguish closure keys"
+    );
+    let error = Type::normalize_union(Vec::new(), "main", &BTreeMap::new())
+        .expect_err("a union needs at least one member");
+    assert_eq!(error.code, "AU2010");
+}
+
+#[test]
+fn ffi_signature_validation_reserves_function_typed_parameters_and_returns() {
+    let span = Span::new(1, 1);
+    let callback_type = || TypeRef::function(vec![type_ref("int32")], type_ref("int32"), span);
+    let decl =
+        |params: Vec<crate::ast::Param>, return_type: TypeRef| crate::ast::ExternFunctionDecl {
+            public: false,
+            abi: "C".to_string(),
+            name: "visit".to_string(),
+            name_span: span,
+            params,
+            return_type,
+            span,
+        };
+    let opaque_handles = BTreeMap::new();
+    let type_names = TypeDefinitions::default();
+    let type_arities = BTreeMap::new();
+    let canonical_type_names = BTreeMap::new();
+
+    let parameter = validate_ffi_signature(
+        &decl(
+            vec![crate::ast::Param {
+                name: "callback".to_string(),
+                mode: crate::ast::ParamMode::Default,
+                ty: callback_type(),
+                default: None,
+                keyword_only: false,
+                span,
+            }],
+            type_ref("int32"),
+        ),
+        &opaque_handles,
+        &type_names,
+        &type_arities,
+        &canonical_type_names,
+    )
+    .expect_err("callback parameters are reserved in FFI v0");
+    assert_eq!(parameter.code, "AU2005");
+    assert_eq!(
+        parameter.message,
+        "FFI callbacks are reserved; parameter `callback` cannot use a function type"
+    );
+    assert!(!parameter.help.is_empty());
+
+    let returned = validate_ffi_signature(
+        &decl(Vec::new(), callback_type()),
+        &opaque_handles,
+        &type_names,
+        &type_arities,
+        &canonical_type_names,
+    )
+    .expect_err("callback returns are reserved in FFI v0");
+    assert_eq!(returned.code, "AU2005");
+    assert_eq!(
+        returned.message,
+        "FFI callbacks are reserved; an extern declaration cannot return a function value"
+    );
+}
+
+#[test]
+fn rng_clone_obligations_with_unresolved_type_parameters_are_rejected_before_inference() {
+    let type_names = TypeDefinitions::default();
+    let type_arities = BTreeMap::new();
+    let classes = BTreeMap::new();
+    let enums = BTreeMap::new();
+    let functions = BTreeMap::new();
+    let traits = BTreeMap::new();
+    let imported_modules = BTreeMap::new();
+    let module_registry = BTreeMap::new();
+    let checker = checker(
+        "<main>",
+        &type_names,
+        &type_arities,
+        &classes,
+        &enums,
+        &functions,
+        &traits,
+        &[],
+        &imported_modules,
+        &module_registry,
+    );
+    let span = Span::new(3, 7);
+    let obligations = BTreeSet::from(["T".to_string(), "U".to_string()]);
+
+    // A method-level type parameter without a substitution is deferred.
+    checker
+        .enforce_rng_clone_obligations_before_method_inference(
+            "method `probe`",
+            &obligations,
+            &HashMap::new(),
+            &["T".to_string(), "U".to_string()],
+            span,
+        )
+        .expect("method type parameters are inferred later");
+
+    // A foreign type parameter has no substitution and is not in scope, so
+    // the obligation cannot be discharged.
+    let error = checker
+        .enforce_rng_clone_obligations_before_method_inference(
+            "method `probe`",
+            &obligations,
+            &HashMap::new(),
+            &[],
+            span,
+        )
+        .expect_err("unresolved foreign type parameters cannot prove clone safety");
+    assert_eq!(error.code, "AU3007");
+    assert_eq!(error.span, Some(span));
+    assert_eq!(
+        error.message,
+        "cannot prove clone safety for unresolved type parameter `T` while checking method `probe`"
+    );
+
+    let substituted = checker
+        .enforce_rng_clone_obligations_before_method_inference(
+            "method `probe`",
+            &BTreeSet::from(["T".to_string()]),
+            &HashMap::from([("T".to_string(), Type::named("random.Rng"))]),
+            &[],
+            span,
+        )
+        .expect_err("a substituted Rng obligation is rejected");
+    assert_eq!(substituted.code, "AU3007");
+    assert!(
+        substituted.message.contains("random.Rng"),
+        "{}",
+        substituted.message
+    );
+}
+
+#[test]
+fn opaque_handle_operands_reach_the_binary_operator_equality_gate() {
+    let namespace = public_ffi_handle_namespace("ffi_types");
+    let module_registry = BTreeMap::from([("ffi_types".to_string(), namespace)]);
+    let type_names = TypeDefinitions::default();
+    let type_arities = BTreeMap::new();
+    let classes = BTreeMap::new();
+    let enums = BTreeMap::new();
+    let functions = BTreeMap::new();
+    let traits = BTreeMap::new();
+    let imported_modules = BTreeMap::new();
+    let checker = checker(
+        "app",
+        &type_names,
+        &type_arities,
+        &classes,
+        &enums,
+        &functions,
+        &traits,
+        &[],
+        &imported_modules,
+        &module_registry,
+    );
+    let span = Span::new(2, 5);
+    let handle = Type::named("ffi_types.Handle");
+    assert!(checker.is_opaque_handle_type(&handle));
+
+    for (left, right) in [
+        (handle.clone(), Type::named("int64")),
+        (Type::named("int64"), handle.clone()),
+    ] {
+        for op in [BinaryOp::Eq, BinaryOp::NotEq] {
+            // The equality-eligibility gate runs before the operator-specific
+            // opaque-handle comparison branch, so that later branch is never
+            // the reporting site for either operand position.
+            let error = checker
+                .type_of_binary(span, op, left.clone(), right.clone())
+                .expect_err("opaque handles have no foreign identity equality");
+            assert_eq!(error.code, "AU2008", "{}", error.message);
+            assert_eq!(
+                error.message,
+                "cannot compare `ffi_types.Handle` because opaque FFI handle `ffi_types.Handle` does not define equality"
+            );
+            assert!(!error.help.is_empty());
+        }
+    }
+
+    let bitwise = checker
+        .type_of_binary(span, BinaryOp::BitAnd, handle.clone(), handle)
+        .expect_err("opaque handles are not integers");
+    assert_eq!(bitwise.code, "AU2003", "{}", bitwise.message);
+    assert!(
+        bitwise
+            .message
+            .contains("bitwise and shift operators require integer operands"),
+        "{}",
+        bitwise.message
+    );
 }

@@ -1,0 +1,54 @@
+def configure(path: str, *, retries: int64 = 2, verbose: bool = false) -> int64:
+    if verbose:
+        print(path)
+    return retries
+
+def scale(value: int64, factor: int64 = 3, *, offset: int64) -> int64:
+    return value * factor + offset
+
+class Counter:
+    total: int64
+
+    def bump(mut self, *, by: int64 = 1) -> int64:
+        self.total = self.total + by
+        return self.total
+
+trait Scaler:
+    def apply(self, value: int64, *, factor: int64) -> int64
+
+class Doubler:
+    extra: int64
+
+impl Scaler for Doubler:
+    def apply(self, value: int64, *, factor: int64) -> int64:
+        return value * factor + self.extra
+
+def increment(value: int64) -> int64:
+    return value + 1
+
+def use_scaler[S: Scaler](scaler: S, value: int64) -> int64:
+    return scaler.apply(value, factor=2)
+
+def main():
+    print(configure("cfg"))
+    print(configure("cfg", retries=5))
+    print(configure("verbose", verbose=true, retries=1))
+    print(scale(2, offset=1))
+    print(scale(2, 4, offset=1))
+    print(scale(value=1, offset=10))
+    mut counter = Counter(total=0)
+    print(counter.bump())
+    print(counter.bump(by=5))
+    print(use_scaler(Doubler(extra=1), 4))
+    combine: def(left: int64, *, right: int64) -> int64 = lambda left, *, right: left - right
+    print(combine(10, right=3))
+    print(combine(left=1, right=2))
+    named: def(value: int64) -> int64 = increment
+    print(named(value=4))
+    positional: def(int64) -> int64 = increment
+    print(positional(5))
+    keyed: def(*, value: int64) -> int64 = increment
+    print(keyed(value=6))
+    promised: def(value: int64, factor: int64 = ..., *, offset: int64) -> int64 = scale
+    print(promised(2, offset=100))
+    print(promised(2, 5, offset=100))

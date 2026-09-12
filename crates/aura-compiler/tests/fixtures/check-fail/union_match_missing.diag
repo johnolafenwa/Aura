@@ -1,0 +1,5 @@
+error[AU2013]: match does not cover str
+ --> crates/aura-compiler/tests/fixtures/check-fail/union_match_missing.au:3:5
+  |
+3 |     match value:
+  |     ^

@@ -1,0 +1,16 @@
+type Unary = Callable[def(value: int64) -> int64]
+type Update = Callable[mut def(value: int64) -> int64]
+type Finish = Callable[own def(value: int64) -> int64]
+
+def increment(value: int64) -> int64:
+    return value + 1
+
+def main():
+    packed = Unary(increment)
+    print(packed(1))
+    inline = Unary(lambda value: value * 2)
+    print(inline(3))
+    mut update = Update(increment)
+    print(update(4))
+    finish = Finish(Unary(increment))
+    print(finish(5))

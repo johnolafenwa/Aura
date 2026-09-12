@@ -1,0 +1,5 @@
+import alias_runtime_support.types
+
+def main():
+    value = alias_runtime_support.types.Container[int64](value=42)
+    print(value.value)

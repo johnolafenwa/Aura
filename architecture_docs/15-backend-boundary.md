@@ -206,3 +206,263 @@ includes lossless raw sample XML, exact record/export commands, selected
 instructions, an executable attribution script, binary hashes, the reverted
 experiment and all paired timings. These are diagnostic quiet-host observations,
 not post-reboot release results.
+
+## Batch 1 phase 1: normalized types and alias expansion
+
+The first type family establishes a shared producer in `sema/types.rs` for
+flattened union members and canonical structural keys. Alias constructor and
+member adaptation lives in `sema/aliases.rs` and uses checked `AliasInfo`
+metadata in both semantic checking and MIR lowering. Imported implementation
+bodies retain private alias metadata without exporting those names for lookup.
+The direct emitter receives expanded nominal types; it does not resolve aliases
+or choose a preferred union-member order. Checked lowering uses the same
+bounded expansion with no duplicate charge to semantic aggregate accounting.
+
+This establishes type identity inputs for the ordered moves below the original
+inventory. Injection, explicit union layout/tag plans, callable ABI and binding
+plans, and property dispatch are still pending their respective families; no
+native emission decision is claimed moved merely because a type is accepted.
+
+## Batch 1 phase 1: checked union injection
+
+`sema/unions.rs` selects an injection member exactly once under the expected
+type boundary. Literal probes isolate ownership, loan, obligation, and
+expression metadata; shared compilation budgets still charge their work.
+The resulting module/source-position/type identity record is retained with
+imported bodies. MIR consumes it as `UnionInject`, including the canonical tag,
+member type, union type, and payload operand. Conditional and match arms receive
+their expected result context in shared lowering.
+
+Both runtime paths execute this operation without another member search.
+The common MIR validator checks the selected member, operand and destination
+types before either backend executes. Immediate owned payload transfer uses
+the existing tracked ownership ABI; it does not change frame or scheduler
+contracts. Dense tag selection has moved into shared checking/lowering.
+Borrowed injection builds real union storage for Copy snapshots and fresh
+values; it rejects implicit cloning of non-Copy member places. Returned-view
+origins require an exact union place. Common call validation checks union
+operand storage for named, method, and indirect function-signature calls,
+including metadata supplied through the public MIR interface.
+Native storage layout, allocation-free union locals, generic tag remapping,
+property dispatch, and callable layouts remain the later ordered families.
+
+## Batch 1 phase 1: union type patterns
+
+`sema/patterns.rs` now owns pattern checking, guard capabilities and coverage.
+MIR emits `UnionTagTest` with a canonical type and member index, guarded
+payload loans, and `UnionTakePayload` after an owned guard commits. The common
+validator tracks true-edge tag facts through physical loan origins, intersects
+facts at joins, invalidates them on mutation or move, and merges possibly
+consumed storage at joins. Reinitialization begins a new storage generation.
+Payload views cannot increase capability or escape through an arm-local return.
+
+The interpreter rechecks active tags before projecting, writing or taking a
+payload. Native view alternatives retain structural union base/type/index
+metadata, including through projected aliases, and compare it at CFG joins.
+Native runtime helpers also recheck the active member before payload access.
+No native emitter chooses a preferred member or decides exhaustiveness.
+
+Alternative arms lower separately where their payload sources differ. A failed
+guard skips the remaining alternatives of that source arm. Partial-pattern
+failure releases previously acquired payload views; successful owned arms end
+probe loans before moving into distinct owned slots. Mutable bindings update
+their selected storage. Typed nested nominal patterns project through recorded
+enum layouts into the original storage, so early returns, loop exits, and `try`
+need no payload reconstruction. Every enum/union prefix requires its own
+physical-source tag proof, including through generic payloads and nested views.
+Ancestor loans remain live until their arm-local descendants have ended.
+These changes preserve the existing ownership ABI and frame contract. The
+explicit-tag layout and drop plans are recorded below; final inline union
+storage remains A9 work.
+
+## Batch 1 phase 1: generic union members
+
+Generic bodies execute once for every specialization on both paths, so a
+union written as `V | None` reaches the runtime with a symbolic member. The
+shared `union_runtime` module gives both backends one rule: a union value
+carries the union it was built with and a bare payload; every union
+operation aligns that value to the union the instruction names by the active
+member's identity (a concrete member of the value's union, or the runtime
+type of the payload behind a type-parameter member), retags it in place when
+the frame allows mutation, and rejects any active member the instruction's
+union cannot admit. Injecting a union-typed `V` payload flattens it into the
+destination, so `present[int64 | None](None)` and `absent[int64 | None]()`
+are the same value. The interpreter's `NoneTest` and the native
+`aura_direct_none_test` helper decide `value is None` on a type-parameter
+value at run time. The common validator accepts a union argument that is
+the specialization of a generic callee's symbolic union, and the semantic
+interface schema is version 10.
+
+## Batch 1 phase 1: union properties
+
+Union equality lives in the shared `PartialEq for Value` and routes through
+`union_runtime::union_values_equal`: the active member identities must
+match and the payloads must be equal, and a bare member value compares by
+the same rule, which is the checker's comparison-only injection with no
+runtime union box. Dictionary and set keys of union type reuse that
+equality, so a union hashes as its active member. Copy, symbolic copy, and
+Transfer classification fold over every member in `sema/properties.rs`;
+`.clone()` on a union clones the active payload on both paths. A trait call
+on a union receiver lowers to `TraitMember` when every member resolves the
+method through one trait: the interpreter dispatches on the payload and
+writes a mutable receiver back through the active payload projection, and
+the direct backend takes or copies the payload with
+`aura_direct_union_active_payload` and writes back through its private
+`__union_payload_active` spelling, which never appears in MIR.
+
+## Batch 1 phase 1: union layout and drop plans
+
+`union_layout.rs` owns the explicit-tag plan (ADR-0052 A9): dense canonical
+tag ordinals, the smallest unsigned tag width, the widest member alignment
+and size, rounding to the aggregate alignment, a size model in which scalars
+use their width and every boxed aggregate is one pointer, and per-member
+`copy`/`needs_drop` flags. Lowering plans every union a module holds or
+operates on into `MirModule.unions`; the common validator recomputes and
+compares each plan, refuses duplicates, stale layout versions, foreign
+pointer widths, and Copy claims about definitely non-Copy members, and
+refuses any union operation whose type has no plan. Both backends ingest
+the table and refuse to build or execute an unplanned union. Runtime values
+stay tagged boxed values on both paths, so the plan is the shared ABI
+contract and identity input rather than a second physical representation;
+the semantic interface schema is version 11.
+
+## Batch 1 phase 1: nullable handle FFI results
+
+The one union an extern signature may carry is exactly a declared opaque
+handle plus `None`, as a result (ADR-0052 A10, Q10 A). Semantic analysis
+admits that shape, through aliases too, and rejects every other extern union
+with `AU2010`. The engine's result-only `FfiType::NullableOpaqueHandle`
+marshals one C pointer after mutable byte views write back: null yields
+`None`, non-null yields the owned handle. Both runtimes construct the result
+through the structural union injection helper against the declared union,
+so it is the same tagged boxed union as any Aura-built value. The direct
+call spec is version 1: a nullable result carries its nominal handle name
+and the serialized `Handle | None` union, and decoding refuses any other
+combination. `aura_direct_ffi_call` runs inside `task_runtime_boundary`
+like every other runtime helper, so an engine failure after the foreign
+call returns (a null non-optional handle, a missing symbol, an argument
+mismatch) is reported as an `AU4005` diagnostic instead of unwinding
+through generated code that carries no unwind tables.
+
+## Batch 1 phase 1: callable contracts
+
+A callable contract is complete (Q17 A, Q19 A): slot names or explicit
+positional-only slots, the keyword-only boundary, capabilities, types,
+default availability, and the result. `Type` equality stays ABI-only because
+both runtimes compare types at run time; `sema/callables.rs` owns the
+contract comparison (`callable_slot_admission`, `check_callable_positions`,
+`same_callable_contracts`), which the checker applies at every hinted
+destination and the shared validator applies at every callable boundary
+(`check_callable_contract`) and at every function operand, where the
+operand's declared contract is the destination the declaration must satisfy.
+A boundary may hide a name, drop default availability, or restrict a named
+slot to keyword-only; it may never rename, invent a default, or expose a
+keyword-only slot positionally. `MirParam.keyword_only` records the declared
+boundary so closure declarations and function operands can be checked, and
+the shared binder (`call.rs`) refuses a positional argument that reaches a
+keyword-only slot for direct calls, indirect calls, lowering, and both
+backends alike. The thin alias adapter `Alias(value)` lowers to the adapted
+operand in a temporary typed with the alias contract; no runtime
+representation changes. The semantic interface schema is 12.
+
+## Batch 1 phase 1: callable packing and call kinds
+
+Both runtimes already represent a closure as one boxed function value whose
+`ClosureEnvironment` owns its captures, so `Callable[...]` /
+`TaskCallable[...]` storage (Q13-Q16 A) is a compile-time erasure over that
+value rather than a second representation: `Type::Callable` records the
+task flag, the call kind, and the complete contract, and a packed value is
+the closure or function value moved into a temporary of that type. The
+checkpoint's four-word inline buffer with an operations table is the native
+ABI target this boxed environment stands in for; no packing allocation is
+added and destruction stays the environment's own. Owned-capture mutation
+marks the capture `mutated` in the checker and MIR: the closure function
+takes it mutably, the interpreter writes the updated value back into the
+environment after each call, and the direct runtime's existing mutable
+capture writeback covers it. The MIR closure rvalue carries a `mutable` bit
+so the validator's authoritative identity is the closure's real kind; the
+validator admits an erased destination only when its kind is no weaker than
+the value's, checks erased contracts for top-level arguments, call results,
+task starts, and function operands, and merges disagreeing identities under
+one erased element type into that contract. Runtime type patterns admit a
+function or closure signature for an erased declared type when the ABI
+matches and the kind is admitted. The semantic interface schema is 13.
+
+## Batch 1 phase 1: stored task targets
+
+A `TaskCallable[...]` value is the same boxed function value as any packed
+callable; only its type carries the Transfer proof its packing established
+(Q21 A). Every start method resolves a stored target from its erased
+contract on both backends, and the checker and the validator both refuse an
+ordinary erased `Callable` target. A Mutable stored target's mutably taken,
+environment-owned captures are child-owned: the interpreter's startable
+check skips them, and the direct runtime releases the child's claim on
+those handles after the single invocation, so a normally completed task
+retains nothing. Parent-evaluated defaults and task ancestry are unchanged.
+
+## Batch 1 phase 1: bound methods
+
+`receiver.method` outside call position is a compiler-synthesized closure
+(C6, Q18 A), not a new runtime value kind. The checker registers ordinary
+closure metadata for the member expression whose single capture is the
+receiver under the reserved name `__receiver`: the closure's parameters are
+the method's contracts, its call kind follows the receiver capability, and a
+`mut self` receiver is a mutated environment-owned capture. The lowering
+evaluates the receiver once into that capture and emits a generated function
+whose body forwards `__receiver.method(...)`; omitted defaults point at the
+method's own default helpers, so the interpreter binds them through the
+existing per-parameter default functions and the direct runtime binds them
+through the closure function's native binder over a capture-offset shadow
+buffer, never exposing the environment to the caller's argument buffer. Both
+backends therefore run bound methods with the closure machinery introduced
+for packing and stored targets, including Mutable receiver writeback and
+Consuming single use. `Class.method` on a non-generic class is a thin function
+value whose identity is the method's MIR function; the validator checks its
+contract like any function operand. Member spans point at the field token,
+so bound-method metadata never collides with a lambda's. The validator also
+ties the closure rvalue's kind bits to the declaration: a closure whose
+generated function takes any capture mutably cannot claim a Repeatable
+kind, which is what keeps a Mutable bound method out of shared storage.
+A generic method's value carries substituted contracts: explicit
+`method[T]` arguments are substituted by the checker into the closure
+metadata (bound form) or by the lowering into the function operand's
+signature (associated form), and an expected contract resolves them by
+unification, so neither backend ever sees an unresolved method type
+parameter in a callable value.
+
+## Batch 1 phase 1: stored argument-origin views
+
+A stored callable's `-> view [mut] T from name` result is a
+`Type::ReturnedView` in the callable type's result position (C9, Q22 A),
+encoding the origin parameter by ordinal; it never types a runtime value.
+A call through such a value has the pointee type and binds a returned view
+exactly like a named call: the callee sets its projection before returning
+and the caller's `BeginReturnedLoan` takes it, on both backends, so neither
+runtime gained new code. The lowering enumerates the loan's alternatives as
+every fixed field path or tuple position of the origin with the pointee
+type, since the callee behind a value is opaque; the validator admits any
+pointee-typed projection set for an indirect call while still checking each
+projection's type, binds the origin argument by ordinal with its writeback
+for `view mut`, and refuses an `Operand::Function` whose signature drops,
+invents, or strengthens the declaration's view contract. The direct backend
+unwraps the pointee for its indirect-call result type. The semantic
+interface schema is 14.
+
+## Batch 1 phase 1: Shared callback sites
+
+Compiler-known repeatable callback sites borrow a packed Shared value
+(C10) exactly as they borrow a closure: the checker admits an ABI-equal,
+positionally callable contract, the lowering reads the argument as a place,
+and both runtimes call the boxed function value through the generic
+indirect-call path, so the packing family's environment representation is
+the only runtime surface involved. Mutable and Consuming packed values,
+keyword-only element parameters, and view-returning callback contracts are
+refused at the checker; the validator needs no new rule because builtin
+member callees have no MIR candidates to bind.
+The interpreter's root task, which executes the program entry, reserves a
+lazily mapped 16 MiB coroutine stack; child tasks keep the 768 KiB default.
+A debug build's interpreter frames for packed-closure calls are large enough
+that the old shared default overflowed at call depth five before the
+call-depth diagnostic could fire. Every task now publishes its coroutine
+stack limit while it runs, and the interpreter converts low headroom at a
+call into an `AU4005` diagnostic naming the callee.

@@ -6,8 +6,8 @@ use crate::ast::{
     FormatPart, FunctionDecl, FunctionTypeParam, IfBranch, IfStmt, ImplDecl, ImportDecl,
     ImportKind, ImportName, Item, LambdaCapture, LambdaParam, LiteralPattern, LiteralPatternKind,
     MapEntryExpr, MatchArm, MatchExprArm, MatchStmt, Module, Param, ParamMode, Pattern,
-    ReceiverKind, ReturnStmt, Stmt, TraitDecl, TuplePattern, TypeRef, TypeRefKind, UnaryOp,
-    VariantPattern, ViewKind, ViewReturn, ViewStmt, WhileStmt, WithStmt,
+    ReceiverKind, ReturnStmt, Stmt, TraitDecl, TuplePattern, TypeAliasDecl, TypeRef, TypeRefKind,
+    UnaryOp, VariantPattern, ViewKind, ViewReturn, ViewStmt, WhileStmt, WithStmt,
 };
 use crate::diag::{Diagnostic, Result, Span};
 use crate::integer::IntegerValue;
@@ -23,6 +23,7 @@ fn parse_error(span: Span, message: impl Into<String>) -> Diagnostic {
 
 fn pattern_span(pattern: &Pattern) -> Span {
     match pattern {
+        Pattern::Type(pattern) => pattern.span,
         Pattern::Or(pattern) => pattern.span,
         Pattern::Variant(pattern) => pattern.span,
         Pattern::Tuple(pattern) => pattern.span,
@@ -111,6 +112,8 @@ impl Parser {
         while !self.at_eof() {
             if self.at_keyword_import() || self.at_from_import_start() {
                 imports.push(self.parse_import()?);
+            } else if self.at_type_alias_start() {
+                items.push(self.parse_item()?);
             } else if self.at_module_constant_start()
                 && !matches!(
                     self.current_kind(),
@@ -183,7 +186,9 @@ impl Parser {
 
     fn parse_item(&mut self) -> Result<Item> {
         let public = self.eat_simple(&TokenKind::KwPublic).is_some();
-        if self.at_copy_class_start() || self.at_keyword_class() {
+        if self.at_type_alias_start() {
+            Ok(Item::TypeAlias(self.parse_type_alias(public)?))
+        } else if self.at_copy_class_start() || self.at_keyword_class() {
             Ok(Item::Class(self.parse_class(public)?))
         } else if self.at_keyword_enum() {
             Ok(Item::Enum(self.parse_enum(public)?))
@@ -201,6 +206,52 @@ impl Parser {
         } else {
             Err(self.error_here("expected `class`, `enum`, `extern`, `def`, `trait`, or `impl`"))
         }
+    }
+
+    fn at_type_alias_start(&self) -> bool {
+        let mut offset = usize::from(self.at_simple(&TokenKind::KwPublic));
+        if !matches!(self.peek_kind(offset), Some(TokenKind::Identifier(name)) if name == "type")
+            || !matches!(self.peek_kind(offset + 1), Some(TokenKind::Identifier(_)))
+        {
+            return false;
+        }
+        offset += 2;
+        if matches!(self.peek_kind(offset), Some(TokenKind::LBracket)) {
+            let mut depth = 0usize;
+            loop {
+                match self.peek_kind(offset) {
+                    Some(TokenKind::LBracket) => depth += 1,
+                    Some(TokenKind::RBracket) => {
+                        depth -= 1;
+                        if depth == 0 {
+                            offset += 1;
+                            break;
+                        }
+                    }
+                    Some(TokenKind::Eof) | None => return false,
+                    _ => {}
+                }
+                offset += 1;
+            }
+        }
+        matches!(self.peek_kind(offset), Some(TokenKind::Equal))
+    }
+
+    fn parse_type_alias(&mut self, public: bool) -> Result<TypeAliasDecl> {
+        let span = self.bump().span;
+        let name = self.expect_identifier()?;
+        let (type_params, type_param_bounds) = self.parse_optional_type_params(true)?;
+        self.expect_simple(TokenKind::Equal)?;
+        let target = self.parse_type()?;
+        self.expect_statement_terminator()?;
+        Ok(TypeAliasDecl {
+            public,
+            name,
+            type_params,
+            type_param_bounds,
+            target,
+            span,
+        })
     }
 
     fn parse_extern_item(&mut self, public: bool) -> Result<Item> {
@@ -423,6 +474,12 @@ impl Parser {
         let mut fields = Vec::new();
         let mut methods = Vec::new();
         while !self.at_simple(&TokenKind::Dedent) && !self.at_eof() {
+            if self.at_type_alias_start() {
+                return Err(parse_error(
+                    self.current_span(),
+                    "type aliases are only allowed at module scope",
+                ));
+            }
             if self.at_simple(&TokenKind::Newline) {
                 self.bump();
                 continue;
@@ -792,20 +849,17 @@ impl Parser {
     fn parse_params(&mut self, allow_receiver: bool) -> Result<(Option<ReceiverKind>, Vec<Param>)> {
         let mut receiver = None;
         let mut params = Vec::new();
+        let mut keyword_only = false;
 
         if self.at_simple(&TokenKind::RParen) {
             return Ok((receiver, params));
         }
 
         loop {
-            if self.at_simple(&TokenKind::Star) {
-                return Err(Diagnostic::coded_at(
-                    "AU1101",
-                    self.current_span(),
-                    "keyword-only parameters are not part of Aura 0.3's structural callable model",
-                ));
+            if self.parse_keyword_boundary(&mut keyword_only, &TokenKind::RParen)? {
+                continue;
             }
-            if allow_receiver && receiver.is_none() {
+            if allow_receiver && receiver.is_none() && !keyword_only {
                 if self.at_typed_receiver_start() {
                     return Err(Diagnostic::coded_at(
                         "AU3004",
@@ -888,6 +942,7 @@ impl Parser {
                 mode,
                 ty,
                 default,
+                keyword_only,
                 span,
             });
 
@@ -897,6 +952,26 @@ impl Parser {
         }
 
         Ok((receiver, params))
+    }
+
+    fn parse_keyword_boundary(&mut self, keyword_only: &mut bool, end: &TokenKind) -> Result<bool> {
+        let Some(star) = self.eat_simple(&TokenKind::Star) else {
+            return Ok(false);
+        };
+        if *keyword_only {
+            return Err(parse_error(
+                star.span,
+                "only one '*' keyword-only boundary is allowed",
+            ));
+        }
+        *keyword_only = true;
+        if self.eat_simple(&TokenKind::Comma).is_none() || self.at_simple(end) {
+            return Err(parse_error(
+                star.span,
+                "expected a named parameter after '*'",
+            ));
+        }
+        Ok(true)
     }
 
     fn at_mut_receiver_start(&self) -> bool {
@@ -945,6 +1020,12 @@ impl Parser {
     }
 
     fn parse_stmt_inner(&mut self) -> Result<Stmt> {
+        if self.at_type_alias_start() {
+            return Err(parse_error(
+                self.current_span(),
+                "type aliases are only allowed at module scope",
+            ));
+        }
         if self.at_simple(&TokenKind::KwTry) && matches!(self.peek_kind(1), Some(TokenKind::Colon))
         {
             Err(Diagnostic::coded_at(
@@ -1307,8 +1388,47 @@ impl Parser {
         Ok(Pattern::Or(crate::ast::OrPattern { alternatives, span }))
     }
 
+    fn at_type_pattern(&self) -> bool {
+        let mut depth = 0usize;
+        let function_type = self.at_simple(&TokenKind::KwDef);
+        for token in &self.tokens[self.index..] {
+            match &token.kind {
+                TokenKind::LParen | TokenKind::LBracket => depth += 1,
+                TokenKind::RParen | TokenKind::RBracket if depth > 0 => depth -= 1,
+                TokenKind::KwAs if depth == 0 => return true,
+                TokenKind::Pipe if depth == 0 && !function_type => return false,
+                TokenKind::Comma
+                | TokenKind::Colon
+                | TokenKind::KwIf
+                | TokenKind::RParen
+                | TokenKind::RBracket
+                    if depth == 0 =>
+                {
+                    return false
+                }
+                TokenKind::Newline | TokenKind::Eof => return false,
+                _ => {}
+            }
+        }
+        false
+    }
+
     fn parse_pattern_inner(&mut self) -> Result<Pattern> {
         let span = self.current_span();
+        if self.at_type_pattern() {
+            let ty = self.parse_type()?;
+            self.expect_simple(TokenKind::KwAs)?;
+            let binding_span = self.current_span();
+            let name = self.expect_identifier()?;
+            return Ok(Pattern::Type(crate::ast::TypePattern {
+                ty,
+                binding: BindingPattern {
+                    name,
+                    span: binding_span,
+                },
+                span,
+            }));
+        }
         if self.eat_simple(&TokenKind::LParen).is_some() {
             if self.at_simple(&TokenKind::RParen) {
                 return Err(parse_error(span, "empty tuple patterns are not supported"));
@@ -1532,6 +1652,54 @@ impl Parser {
     }
 
     fn parse_type_inner(&mut self) -> Result<TypeRef> {
+        if self.at_simple(&TokenKind::Pipe) {
+            return Err(parse_error(
+                self.current_span(),
+                "expected a type before '|'",
+            ));
+        }
+        let first = self.parse_type_atom_inner()?;
+        let span = first.span;
+        let Some(pipe) = self.eat_simple(&TokenKind::Pipe) else {
+            return Ok(first);
+        };
+        let mut members = vec![first];
+        let mut previous_pipe = pipe.span;
+        loop {
+            if matches!(
+                self.current_kind(),
+                TokenKind::Newline
+                    | TokenKind::Eof
+                    | TokenKind::RParen
+                    | TokenKind::RBracket
+                    | TokenKind::Comma
+                    | TokenKind::Colon
+                    | TokenKind::Pipe
+            ) {
+                let span = if self.at_simple(&TokenKind::Pipe) {
+                    self.current_span()
+                } else {
+                    previous_pipe
+                };
+                return Err(parse_error(span, "expected a type after '|'"));
+            }
+            members.push(self.parse_type_atom()?);
+            let Some(pipe) = self.eat_simple(&TokenKind::Pipe) else {
+                break;
+            };
+            previous_pipe = pipe.span;
+        }
+        Ok(TypeRef::union(members, span))
+    }
+
+    fn parse_type_atom(&mut self) -> Result<TypeRef> {
+        self.enter_recursion("type")?;
+        let result = self.parse_type_atom_inner();
+        self.exit_recursion();
+        result
+    }
+
+    fn parse_type_atom_inner(&mut self) -> Result<TypeRef> {
         let span = self.current_span();
         let capability = match self.current_kind() {
             TokenKind::KwMut => Some("mut"),
@@ -1539,79 +1707,17 @@ impl Parser {
             _ => None,
         };
         if let Some(capability) = capability {
-            return Err(parse_error(
-                span,
-                format!(
-                    "`{capability}` is not valid in a type position; capability modifiers belong only on parameters and receivers or on supported `for` and `match` selectors (`mut` also declares mutable local bindings)"
-                ),
-            ));
+            if matches!(self.peek_kind(1), Some(TokenKind::KwDef)) {
+                return Err(parse_error(span, format!("`{capability} def` is only valid inside Callable[...] or TaskCallable[...]")));
+            }
+            return Err(parse_error(span, format!("`{capability}` is not valid in a type position; capability modifiers belong only on parameters and receivers or on supported `for` and `match` selectors (`mut` also declares mutable local bindings)")));
         }
-
         let indirect = self.eat_simple(&TokenKind::KwIndirect).is_some();
         let mut ty = if self.eat_simple(&TokenKind::KwDef).is_some() {
             if indirect {
-                return Err(parse_error(
-                    span,
-                    "`indirect` is not valid on function types; function values already use pointer-like representation",
-                ));
+                return Err(parse_error(span, "`indirect` is not valid on function types; function values already use pointer-like representation"));
             }
-            self.expect_simple(TokenKind::LParen)?;
-            let mut params = Vec::new();
-            if self.eat_simple(&TokenKind::RParen).is_none() {
-                loop {
-                    let param_span = self.current_span();
-                    let mode = if self.eat_simple(&TokenKind::KwMut).is_some() {
-                        ParamMode::BorrowMut
-                    } else if self.eat_simple(&TokenKind::KwOwn).is_some() {
-                        ParamMode::Own
-                    } else {
-                        ParamMode::Default
-                    };
-                    if matches!(self.current_kind(), TokenKind::KwMut | TokenKind::KwOwn) {
-                        return Err(parse_error(
-                            self.current_span(),
-                            "function type parameters accept only one capability modifier",
-                        ));
-                    }
-                    if matches!(
-                        self.current_kind(),
-                        TokenKind::Comma | TokenKind::RParen | TokenKind::Arrow
-                    ) {
-                        let message = if mode == ParamMode::Default {
-                            "expected a function parameter type"
-                        } else {
-                            "expected a type after the function parameter capability"
-                        };
-                        return Err(parse_error(self.current_span(), message));
-                    }
-                    let ty = self.parse_type()?;
-                    if self.at_simple(&TokenKind::Colon) {
-                        return Err(parse_error(
-                            self.current_span(),
-                            "function type parameters contain types only; remove the parameter name",
-                        ));
-                    }
-                    if self.at_simple(&TokenKind::Equal) {
-                        return Err(parse_error(
-                            self.current_span(),
-                            "function type parameters cannot declare default values",
-                        ));
-                    }
-                    params.push(FunctionTypeParam::new(mode, ty, param_span));
-                    if self.eat_simple(&TokenKind::Comma).is_none() {
-                        break;
-                    }
-                }
-                self.expect_simple(TokenKind::RParen)?;
-            }
-            if self.eat_simple(&TokenKind::Arrow).is_none() {
-                return Err(parse_error(
-                    self.current_span(),
-                    "expected `->` and a return type after function type parameters",
-                ));
-            }
-            let return_type = self.parse_type()?;
-            TypeRef::function_with_params(params, return_type, span)
+            self.parse_function_type(span)?
         } else if self.eat_simple(&TokenKind::LParen).is_some() {
             if indirect {
                 return Err(parse_error(
@@ -1622,53 +1728,204 @@ impl Parser {
             if self.at_simple(&TokenKind::RParen) {
                 return Err(parse_error(span, "empty tuple types are not supported"));
             }
-
             let first = self.parse_type()?;
             if self.eat_simple(&TokenKind::Comma).is_none() {
-                return Err(parse_error(
-                    self.current_span(),
-                    "tuple types need a comma; write `(T,)` for a singleton tuple type or `T` for the type itself",
-                ));
-            }
-
-            let mut elements = vec![first];
-            if self.eat_simple(&TokenKind::RParen).is_none() {
-                loop {
-                    elements.push(self.parse_type()?);
-                    if self.eat_simple(&TokenKind::Comma).is_none() {
-                        break;
-                    }
-                    if self.at_simple(&TokenKind::RParen) {
-                        return Err(parse_error(
-                            self.current_span(),
-                            "trailing commas are only allowed for singleton tuple types",
-                        ));
-                    }
-                }
                 self.expect_simple(TokenKind::RParen)?;
+                first
+            } else {
+                let mut elements = vec![first];
+                if self.eat_simple(&TokenKind::RParen).is_none() {
+                    loop {
+                        elements.push(self.parse_type()?);
+                        if self.eat_simple(&TokenKind::Comma).is_none() {
+                            break;
+                        }
+                        if self.at_simple(&TokenKind::RParen) {
+                            return Err(parse_error(
+                                self.current_span(),
+                                "trailing commas are only allowed for singleton tuple types",
+                            ));
+                        }
+                    }
+                    self.expect_simple(TokenKind::RParen)?;
+                }
+                TypeRef::tuple(elements, false, span)
             }
-            TypeRef::tuple(elements, false, span)
         } else {
             let name = self.parse_identifier_path()?.join(".");
-            let mut args = Vec::new();
-
-            if self.eat_simple(&TokenKind::LBracket).is_some() {
-                loop {
-                    args.push(self.parse_type()?);
-                    if self.eat_simple(&TokenKind::Comma).is_none() {
-                        break;
-                    }
+            if matches!(name.as_str(), "Callable" | "TaskCallable")
+                && self.eat_simple(&TokenKind::LBracket).is_some()
+            {
+                if indirect {
+                    return Err(parse_error(
+                        span,
+                        "`indirect` is not valid on owned callable types",
+                    ));
                 }
+                let call_kind = if self.eat_simple(&TokenKind::KwMut).is_some() {
+                    ReceiverKind::BorrowMut
+                } else if self.eat_simple(&TokenKind::KwOwn).is_some() {
+                    ReceiverKind::Value
+                } else {
+                    ReceiverKind::Borrow
+                };
+                let signature_span = self.expect_simple(TokenKind::KwDef)?.span;
+                self.enter_recursion("type")?;
+                let signature = self.parse_function_type(signature_span);
+                self.exit_recursion();
+                let signature = signature?;
                 self.expect_simple(TokenKind::RBracket)?;
+                TypeRef::callable(name == "TaskCallable", call_kind, signature, span)
+            } else {
+                let mut args = Vec::new();
+                if self.eat_simple(&TokenKind::LBracket).is_some() {
+                    loop {
+                        args.push(self.parse_type()?);
+                        if self.eat_simple(&TokenKind::Comma).is_none() {
+                            break;
+                        }
+                    }
+                    self.expect_simple(TokenKind::RBracket)?;
+                }
+                TypeRef::named(name, args, indirect, span)
             }
-
-            TypeRef::named(name, args, indirect, span)
         };
         if self.eat_simple(&TokenKind::Question).is_some() {
             ty = TypeRef::named("Option", vec![ty], indirect, span);
         }
-
         Ok(ty)
+    }
+
+    fn parse_function_type(&mut self, span: Span) -> Result<TypeRef> {
+        self.expect_simple(TokenKind::LParen)?;
+        let mut params = Vec::new();
+        let mut keyword_only = false;
+        if self.eat_simple(&TokenKind::RParen).is_none() {
+            loop {
+                if self.parse_keyword_boundary(&mut keyword_only, &TokenKind::RParen)? {
+                    continue;
+                }
+                let param_span = self.current_span();
+                let name = if matches!(
+                    self.current_kind(),
+                    TokenKind::Identifier(_) | TokenKind::KwFrom
+                ) && matches!(self.peek_kind(1), Some(TokenKind::Colon))
+                {
+                    let name = self.expect_identifier()?;
+                    self.expect_simple(TokenKind::Colon)?;
+                    Some(name)
+                } else {
+                    None
+                };
+                if keyword_only && name.is_none() {
+                    return Err(parse_error(
+                        param_span,
+                        "expected a named parameter after '*'",
+                    ));
+                }
+                let mode = if self.eat_simple(&TokenKind::KwMut).is_some() {
+                    ParamMode::BorrowMut
+                } else if self.eat_simple(&TokenKind::KwOwn).is_some() {
+                    ParamMode::Own
+                } else {
+                    ParamMode::Default
+                };
+                if matches!(self.current_kind(), TokenKind::KwMut | TokenKind::KwOwn) {
+                    return Err(parse_error(
+                        self.current_span(),
+                        "function type parameters accept only one capability modifier",
+                    ));
+                }
+                if matches!(
+                    self.current_kind(),
+                    TokenKind::Comma | TokenKind::RParen | TokenKind::Arrow
+                ) {
+                    let message = if mode == ParamMode::Default {
+                        "expected a function parameter type"
+                    } else {
+                        "expected a type after the function parameter capability"
+                    };
+                    return Err(parse_error(self.current_span(), message));
+                }
+                let ty = self.parse_type()?;
+                let has_default = if self.eat_simple(&TokenKind::Equal).is_some() {
+                    if !matches!(
+                        (self.peek_kind(0), self.peek_kind(1), self.peek_kind(2)),
+                        (
+                            Some(TokenKind::Dot),
+                            Some(TokenKind::Dot),
+                            Some(TokenKind::Dot)
+                        )
+                    ) {
+                        return Err(parse_error(
+                            self.current_span(),
+                            "callable types use '= ...' to promise a default",
+                        ));
+                    }
+                    self.bump();
+                    self.bump();
+                    self.bump();
+                    true
+                } else {
+                    false
+                };
+                params.push(FunctionTypeParam {
+                    name,
+                    mode,
+                    ty,
+                    keyword_only,
+                    has_default,
+                    span: param_span,
+                });
+                if self.eat_simple(&TokenKind::Comma).is_none() {
+                    break;
+                }
+            }
+            self.expect_simple(TokenKind::RParen)?;
+        }
+        if self.eat_simple(&TokenKind::Arrow).is_none() {
+            return Err(parse_error(
+                self.current_span(),
+                "expected `->` and a return type after function type parameters",
+            ));
+        }
+        // `-> view [mut] T from name` names a stored callable's argument
+        // origin (C9); the checker resolves `name` against the parameters.
+        if matches!(self.current_kind(), TokenKind::Identifier(name) if name == "view")
+            && matches!(
+                self.peek_kind(1),
+                Some(
+                    TokenKind::KwMut
+                        | TokenKind::KwIndirect
+                        | TokenKind::KwDef
+                        | TokenKind::Identifier(_)
+                        | TokenKind::LParen
+                )
+            )
+        {
+            let view_span = self.bump().span;
+            let mutable = self.eat_simple(&TokenKind::KwMut).is_some();
+            let return_type = self.parse_type_atom()?;
+            if self.eat_simple(&TokenKind::KwFrom).is_none() {
+                return Err(parse_error(
+                    self.current_span(),
+                    "a view return type requires `from` and one named parameter origin",
+                ));
+            }
+            let origin = self.expect_identifier()?;
+            return Ok(TypeRef::function_with_view_return(
+                params,
+                return_type,
+                Some(ViewReturn {
+                    mutable,
+                    origin,
+                    span: view_span,
+                }),
+                span,
+            ));
+        }
+        let return_type = self.parse_type_atom()?;
+        Ok(TypeRef::function_with_params(params, return_type, span))
     }
 
     fn parse_identifier_path(&mut self) -> Result<Vec<String>> {
@@ -1756,8 +2013,12 @@ impl Parser {
         };
 
         let mut params: Vec<LambdaParam> = Vec::new();
+        let mut keyword_only = false;
         if !self.at_simple(&TokenKind::Colon) {
             loop {
+                if self.parse_keyword_boundary(&mut keyword_only, &TokenKind::Colon)? {
+                    continue;
+                }
                 let mode = if self.eat_simple(&TokenKind::KwOwn).is_some() {
                     ParamMode::Own
                 } else if self.eat_simple(&TokenKind::KwMut).is_some() {
@@ -1793,6 +2054,7 @@ impl Parser {
                 params.push(LambdaParam {
                     name,
                     mode,
+                    keyword_only,
                     span: param_span,
                 });
 
@@ -1941,12 +2203,40 @@ impl Parser {
         let mut links: Vec<CompareLink> = Vec::new();
 
         loop {
-            if let Some(token) = self.eat_simple(&TokenKind::KwIs) {
-                return Err(Diagnostic::coded_at(
-                    "AU2005",
-                    token.span,
-                    "`is` is not supported; use `== None` or `match` for optional values",
-                ));
+            if matches!(self.current_kind(), TokenKind::Identifier(name) if name == "is") {
+                let token = self.bump();
+                if !links.is_empty() {
+                    return Err(parse_error(
+                        token.span,
+                        "`is None` tests cannot be chained with comparisons",
+                    ));
+                }
+                let negated = self.eat_simple(&TokenKind::KwNot).is_some();
+                if !matches!(self.current_kind(), TokenKind::Identifier(name) if name == "None") {
+                    return Err(parse_error(
+                        token.span,
+                        "expected None after 'is' or 'is not'",
+                    ));
+                }
+                self.bump();
+                let next_span = self.current_span();
+                if self.eat_comparison_operator().is_some()
+                    || matches!(self.current_kind(), TokenKind::Identifier(name) if name == "is")
+                {
+                    return Err(parse_error(
+                        next_span,
+                        "`is None` tests cannot be chained with comparisons",
+                    ));
+                }
+                let span = first.span;
+                return Ok(Expr {
+                    kind: ExprKind::IsNone {
+                        value: Box::new(first),
+                        negated,
+                        operator_span: token.span,
+                    },
+                    span,
+                });
             }
             let Some((op, op_span)) = self.eat_comparison_operator() else {
                 break;
@@ -3021,7 +3311,19 @@ impl Parser {
         )
     }
 
-    fn skip_type_tokens(&self, mut idx: usize) -> usize {
+    fn skip_type_tokens(&self, idx: usize) -> usize {
+        let mut end = self.skip_type_atom_tokens(idx);
+        while end > idx && matches!(self.peek_kind_at(end), Some(TokenKind::Pipe)) {
+            let next = self.skip_type_atom_tokens(end + 1);
+            if next == end + 1 {
+                return next;
+            }
+            end = next;
+        }
+        end
+    }
+
+    fn skip_type_atom_tokens(&self, mut idx: usize) -> usize {
         while matches!(
             self.peek_kind_at(idx),
             Some(TokenKind::KwMut | TokenKind::KwOwn)
@@ -3041,6 +3343,11 @@ impl Parser {
             idx += 1;
             if !matches!(self.peek_kind_at(idx), Some(TokenKind::RParen)) {
                 loop {
+                    if matches!(self.peek_kind_at(idx), Some(TokenKind::Star))
+                        && matches!(self.peek_kind_at(idx + 1), Some(TokenKind::Comma))
+                    {
+                        idx += 2;
+                    }
                     let next = self.skip_type_tokens(idx);
                     if next == idx {
                         return idx;
@@ -3087,7 +3394,36 @@ impl Parser {
             if !matches!(self.peek_kind_at(idx), Some(TokenKind::Arrow)) {
                 return idx;
             }
-            return self.skip_type_tokens(idx + 1);
+            idx += 1;
+            // `-> view [mut] T from name` (C9) spans the same annotation.
+            let view_result = matches!(
+                self.peek_kind_at(idx),
+                Some(TokenKind::Identifier(name)) if name == "view"
+            ) && matches!(
+                self.peek_kind_at(idx + 1),
+                Some(
+                    TokenKind::KwMut
+                        | TokenKind::KwIndirect
+                        | TokenKind::KwDef
+                        | TokenKind::Identifier(_)
+                        | TokenKind::LParen
+                )
+            );
+            if view_result {
+                idx += 1;
+                if matches!(self.peek_kind_at(idx), Some(TokenKind::KwMut)) {
+                    idx += 1;
+                }
+            }
+            let end = self.skip_type_tokens(idx);
+            if view_result
+                && end > idx
+                && matches!(self.peek_kind_at(end), Some(TokenKind::KwFrom))
+                && matches!(self.peek_kind_at(end + 1), Some(TokenKind::Identifier(_)))
+            {
+                return end + 2;
+            }
+            return end;
         }
 
         if matches!(self.peek_kind_at(idx), Some(TokenKind::LParen)) {
@@ -3641,6 +3977,15 @@ fn offset_expr_span(expr: &mut Expr, line: usize, column_offset: usize) {
     expr.span.column += column_offset;
 
     match &mut expr.kind {
+        ExprKind::IsNone {
+            value,
+            operator_span,
+            ..
+        } => {
+            operator_span.line = line;
+            operator_span.column += column_offset;
+            offset_expr_span(value, line, column_offset);
+        }
         ExprKind::Unary { expr: inner, .. } | ExprKind::Try(inner) | ExprKind::Group(inner) => {
             offset_expr_span(inner, line, column_offset)
         }
@@ -3847,7 +4192,10 @@ fn offset_type_ref_span(type_ref: &mut TypeRef, line: usize, column_offset: usiz
     type_ref.span.line = line;
     type_ref.span.column += column_offset;
     match &mut type_ref.kind {
-        TypeRefKind::Named { args, .. } | TypeRefKind::Tuple(args) => {
+        TypeRefKind::Callable { signature, .. } => {
+            offset_type_ref_span(signature, line, column_offset)
+        }
+        TypeRefKind::Named { args, .. } | TypeRefKind::Tuple(args) | TypeRefKind::Union(args) => {
             for arg in args {
                 offset_type_ref_span(arg, line, column_offset);
             }
@@ -3855,6 +4203,7 @@ fn offset_type_ref_span(type_ref: &mut TypeRef, line: usize, column_offset: usiz
         TypeRefKind::Function {
             params,
             return_type,
+            view_return,
         } => {
             for param in params {
                 param.span.line = line;
@@ -3862,6 +4211,10 @@ fn offset_type_ref_span(type_ref: &mut TypeRef, line: usize, column_offset: usiz
                 offset_type_ref_span(&mut param.ty, line, column_offset);
             }
             offset_type_ref_span(return_type, line, column_offset);
+            if let Some(view_return) = view_return {
+                view_return.span.line = line;
+                view_return.span.column += column_offset;
+            }
         }
     }
 }

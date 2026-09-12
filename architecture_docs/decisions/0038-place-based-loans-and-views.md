@@ -740,3 +740,16 @@ execute lines only.
 - compiler analysis, LSP, extension, cache/schema invalidation, reference,
   tutorials, maintained examples, forced-backend parity, coverage, audits,
   Clippy, and hygiene
+
+## 2026-09-08 — Batch 1 detailed design amendment
+
+Accepted under Q22 in the
+[ratified checkpoint](../16-batch-1-design-checkpoint.md#ratification-record).
+
+Stored callables may return a view with the existing single explicit ordinary
+argument origin. Stored loan environments and captured-self origins remain
+deferred to the joint Batch 1–2 design. No frame/reset or source-cleanup
+contract changes. Collection-entry loans remain Batch 2.
+
+Implementation is in Batch 1 phase 1; this dated amendment extends the
+recorded baseline without claiming the feature is already delivered.

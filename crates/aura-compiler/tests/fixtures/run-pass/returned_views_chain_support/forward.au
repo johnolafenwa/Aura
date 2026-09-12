@@ -1,0 +1,13 @@
+import returned_views_chain_support.base
+
+public def outer_name(user: returned_views_chain_support.base.User) -> view str from user:
+    return view returned_views_chain_support.base.name(user)
+
+public def outer_title(user: returned_views_chain_support.base.User) -> view str from user:
+    return view user.title()
+
+public def outer_label(user: returned_views_chain_support.base.User) -> view str from user:
+    return view user.label()
+
+public def outer_first(user: returned_views_chain_support.base.User) -> view int64 from user:
+    return view returned_views_chain_support.base.first_of(user)

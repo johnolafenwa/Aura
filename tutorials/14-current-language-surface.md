@@ -108,8 +108,8 @@ Capture-free named function values use `def(T1, mut T2, own T3) -> R`. They are 
 values, satisfy `Transfer`, and may be stored in bindings, parameters, fields,
 and collections or used as `TaskGroup` targets. Bare function-type parameters
 are shared; written or inferred `mut`/`own` modes are part of the contract.
-Instance, associated, and trait method values remain
-outside the implemented surface.
+`receiver.method` binds a closure over the receiver with the method's
+contract, and `Class.method` on a non-generic class is a function value.
 
 Contextually typed expression lambdas use `lambda parameters: expression`.
 The expected `def(...) -> ...` type supplies parameter types and constrains
@@ -992,7 +992,7 @@ The current compiler does not support:
 
 - non-numeric casts
 - direct recursive fields without `indirect`
-- method values, statement-bodied closures, or implicit shared parameter
+- statement-bodied closures or implicit shared parameter
   captures; mutable captured state is supported through an explicit
   `lambda [mut place] ...` loan capture stored in a mutable local
 

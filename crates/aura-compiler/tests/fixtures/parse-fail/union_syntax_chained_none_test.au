@@ -1,0 +1,2 @@
+def f(value: int64) -> bool:
+    return value is None == true

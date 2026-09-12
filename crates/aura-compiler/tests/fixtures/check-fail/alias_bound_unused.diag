@@ -1,0 +1,5 @@
+error[AU2001]: unknown trait `Missing`
+ --> crates/aura-compiler/tests/fixtures/check-fail/alias_bound_unused.au:1:16
+  |
+1 | type Marker[T: Missing] = int64
+  |                ^

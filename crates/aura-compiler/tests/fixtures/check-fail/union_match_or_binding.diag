@@ -1,0 +1,5 @@
+error[AU2013]: every alternative in an or-pattern must bind the same names with identical types and capabilities
+ --> crates/aura-compiler/tests/fixtures/check-fail/union_match_or_binding.au:4:14
+  |
+4 |         case int64 as item | str as item:
+  |              ^

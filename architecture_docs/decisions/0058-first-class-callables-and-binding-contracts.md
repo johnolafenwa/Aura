@@ -1,11 +1,33 @@
 # ADR-0058: First-class callables and binding contracts
 
-- Status: Accepted direction; detailed design pending
+- Status: Accepted; detailed design ratified 2026-09-08; implementation in Batch 1
 - Date: 2026-09-06
-- Implementation: Not started
+- Implementation: Phase 1 in progress; Option removal remains phase 2
 - Roadmap: Batch 1
 - Extends: ADR-0013, ADR-0037, ADR-0038, and ADR-0051
 - Required by: ADR-0053
+
+## Ratified detailed design
+
+Ratified on 2026-09-08; recorded in design commit `7685199`. The
+[design checkpoint](../16-batch-1-design-checkpoint.md) is normative where a
+retained baseline below differs. The answers are:
+
+- Q13: A — thin def remains Copy; explicit owned Callable types add storage ([design section](../16-batch-1-design-checkpoint.md#callable-rules--q13q22)).
+- Q14: A — derive call kind from owned use; allow explicit one-way restrictions ([design section](../16-batch-1-design-checkpoint.md#c2-call-kinds-capture-ownership-and-local-mutation--q14)).
+- Q15: A — three-word inline environment and checked overflow allocation ([design section](../16-batch-1-design-checkpoint.md#c3-inline-versus-allocated-environments--q15)).
+- Q16: A — shared operations table supplies indirect destruction ([design section](../16-batch-1-design-checkpoint.md#c4-destruction-and-unavoidable-erased-dispatch--q16)).
+- Q17: A — explicit common contracts and invariant safe restrictions ([design section](../16-batch-1-design-checkpoint.md#c5-heterogeneous-values-names-restrictions-and-variance--q17)).
+- Q18: A — bound methods move owned receivers or snapshot Copy receivers ([design section](../16-batch-1-design-checkpoint.md#c6-bound-methods-on-owned-or-copy-receivers--q18)).
+- Q19: A — names, modes, keyword-only boundary and default availability form identity ([design section](../16-batch-1-design-checkpoint.md#c7-defaults-keyword-only-declarations-and-forwarding--q19-and-q20)).
+- Q20: B — ordinary wrappers declare their own policy; no wrap intrinsic ([design section](../16-batch-1-design-checkpoint.md#c7-defaults-keyword-only-declarations-and-forwarding--q19-and-q20)).
+- Q21: A — TaskCallable admission preserves structural Transfer evidence ([design section](../16-batch-1-design-checkpoint.md#c8-structural-transfer-and-task-targets--q21)).
+- Q22: A — stored result views may originate only in one explicit ordinary argument ([design section](../16-batch-1-design-checkpoint.md#callable-rules--q13q22)).
+- Q24: A — AU2010–AU2015 plus the existing diagnostic families ([design section](../16-batch-1-design-checkpoint.md#library-and-diagnostic-rules--q23q24)).
+
+Phase 1 implements the type and owned-callable foundations. Existing Option
+library signatures, `T?`, and `*_or_none` names remain until phase 2. Stored
+loan captures and captured-self result origins remain outside phase 1.
 
 ## Authority and current boundary
 
@@ -41,8 +63,8 @@ callbacks inherit the necessary lifetime constraints.
 A bound method retains its receiver relation. Shared methods retain shared
 access, mutable methods require exclusive access, and an owning receiver moves
 into a consuming callback. The receiver cannot be destroyed or invalidated
-while a retained loan requires it. Exact acquisition/reborrow timing remains
-part of the detailed design.
+while a retained loan requires it. Q18 settles owned/Copy receiver acquisition; retained loan storage and
+reborrowing remain the joint Batch 1–2 design.
 
 Cross-task use requires the full environment to satisfy structural `Transfer`
 and the task API's call contract. Shared/mutable loan captures do not become
@@ -56,7 +78,7 @@ parameter positionally callable. A future intentionally restricted interface
 must specify its conversions explicitly; there is no implicit loss of a
 declared calling restriction.
 
-## Remaining detailed design
+## Delivery boundary and detailed design
 
 ### Open conflicts
 
@@ -85,9 +107,9 @@ aliases, and owned-capture closures, before the ADR-0052 optional removal.
   dispatch/ABI layout, and optimization. No mandatory boxing or garbage
   collection is implied by general callable storage.
 
-These details must be written before the compiler exposes the extended
-surface. ADR-0051's implemented deferral is resolved in direction, not yet
-in implementation. Decorators use this model rather than a private storage
+Q13–Q22 above settle the owned-capture scope of these details. Lifetime-bearing
+loan storage remains deferred. ADR-0051's implemented deferral is resolved by
+Q19 for Batch 1, with tests still required before claiming implementation. Decorators use this model rather than a private storage
 exception.
 
 ## Completion evidence required

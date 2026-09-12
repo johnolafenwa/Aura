@@ -1,6 +1,190 @@
 # Task Board
 
-Last updated: 2026-09-07
+Last updated: 2026-09-12
+
+## Batch 1 phase 1 (in progress)
+
+- Target: implement the ratified foundations and owned callables, complete
+  extraction and feature commits in the prescribed order, and merge after
+  green branch and main CI. Branch: `codex/batch-1-phase-1`, from `7685199`.
+- Stage 1: ADR answer records and dated dependent amendments pass 14-document
+  scope/link checks and all 15 identity tests; committed as `b05ddda`.
+- Pre-extraction baseline: nine fixture suites, two semantic characterizations,
+  378 CLI tests, and native-codegen acceptance pass. E2.1 repeats those gates
+  successfully, plus all 1,885 compiler unit tests; all fixture hashes remain
+  unchanged. E2.1 commit: `83ee945`. E2.2 places/loans repeats all required
+  gates successfully, with 404 semantic unit tests, committed as `38c995c`.
+  E2.3 passes complete compiler/fixture/CLI/native acceptance and all 385
+  forced parity cases. Coverage is 96.314750% lines / 97.221029% functions /
+  94.821287% regions, above unchanged floors. E2.3 commit: `e600cb4`.
+- Parser family is complete: ten positive/fourteen negative fixtures added
+  failing first; seven AST tests, 84 parser tests, full fixtures, 385 forced
+  parity cases, 378 CLI tests, and native acceptance pass. The two changed JSON
+  assertions pass after pinning new metadata. Schema 7 and all 96 bridge tests
+  are green. The normalization/alias family passes all nine fixture suites,
+  378 CLI tests, native acceptance, and 400 forced parity cases. It adds 49
+  top-level fixtures plus type/alias and bounded metadata regressions. Schema 8
+  rejection/current-schema tests pass; all 111 LSP tests retain 100% coverage.
+- Normalization/aliases committed as `7ad4089`. Injection verification is complete:
+  transactional member selection, shared typed MIR injection, and metadata
+  validation are implemented. All 24 new run-pass fixtures match both forced
+  backends; 11 new check-fail fixtures pin diagnostics. Final gates pass all
+  nine fixture suites, 378 CLI tests, native acceptance, and 424 forced parity
+  cases. Borrowed storage and named/method/indirect call-layout regressions
+  are closed. Clippy and formatting pass; frozen source hashes are unchanged.
+- Injection committed as `3f9f95a`. Type patterns/exhaustiveness is in progress:
+  the checker pattern module is extracted; 51 focused pattern cases and
+  167 common MIR security regressions pass after the container callable
+  identity closure and the independent review's ten findings (see the work
+  note's 2026-09-10 sections). Structural payload views cover
+  nested enums, imported generic types, and the retained Option library. The
+  shared public/deserialized MIR validator now enforces payload proofs and
+  layout, mutation/move/cleanup authority, payload-return containment, and
+  nominal metadata uniqueness before both runtimes. Post-fix verification
+  passes all 1,906 compiler unit tests, all nine fixture suites, 34 CLI unit
+  tests, all 378 CLI product tests and their integration packages, and
+  warning-denied workspace Clippy. The final audit's runtime-selected
+  container bypass, a return-path laundering gap, and forged call-result and
+  parameter metadata are closed with dual-backend regressions; regressions the
+  uncommitted work introduced in ordinary programs are repaired. Indirect
+  calls and task starts are now fail-closed on missing callable identity, with
+  closure, `items`, and `copy` identities recorded and a latent over-strict
+  consuming-call rule removed. Daybreak Blue was unavailable and its absence is
+  recorded rather than substituted. An accidental checkout of the validator was
+  recovered from the rollout logs and verified against twelve recorded hashes.
+  The final-file unit, integration, CLI, and forced parity reruns pass; the
+  coverage floor check measures 95.29/96.10/94.03 against unchanged floors of
+  96.30/97.21/94.71, so a coverage-recovery change follows the family commit
+  before the narrowing family. The family is committed as `9ab3176`; the
+  recovery change (about 110 forged-MIR, checker, analysis, and runtime cases,
+  eight unit tests, 30 dual-backend fixtures, two validator corrections, and
+  a `match mut` view-lock fix) raises coverage to 95.85/96.76/94.45 and is
+  committed with the remaining floor gap carried to the phase-end ratchet.
+- Narrowing and flow family (2026-09-10): `is None` / `is not None` refine
+  stable places (locals, parameters, fixed fields, tuple positions, views)
+  through `not`/`and`/`or`, `if`/`elif`/`while`, conditional expressions,
+  and diverging `return`/`break`/`continue` edges; joins keep facts on every
+  reachable path; assignment, `match mut`, and mutable call access end a fact
+  and a stale member use reports AU2014 with test and invalidation spans.
+  Single-member facts change the effective type through a span-keyed
+  `NarrowedRead` side table shared by the lowering and the analysis hover;
+  multi-member facts sharpen match coverage. Every `is None` leaf lowers to a
+  validator-proven tag-test branch on both backends. Probing found and fixed
+  two defects beyond the plan: the value form `flag = value is None` lowered
+  as a constant, and returning a narrowed Copy member of a shared parameter
+  was rejected as a borrowed move. Thirteen run-pass, eight check-fail, and
+  one parse-fail fixtures; Manual, tutorial 09, example, grammar, and the
+  AU2010–AU2015 registry rows are updated.
+- Generic members family (2026-09-10): type parameters are union members
+  end to end. The checker infers a parameter from the remainder of a union
+  argument (AU2010 when nothing or more than one parameter could take it),
+  re-types arguments under the resolved union, and keeps `case V` at AU2013.
+  Both backends share a structural union identity: values built in generic
+  bodies keep their symbolic layout and every union operation aligns them by
+  the active member, flattening union-typed `V` payloads, so
+  `present[int64 | None](None)` and `absent[int64 | None]()` agree. A
+  `NoneTest` rvalue decides `is None` on bare type-parameter values at run
+  time; the validator accepts specialized union arguments; the semantic
+  interface schema is 10. Four run-pass and three check-fail fixtures, the
+  generics chapter, and the backend-boundary note are updated.
+- Union properties family (2026-09-10): union equality is active-member
+  equality shared by both backends and by dictionary and set keys, with
+  member operands injected for the comparison only (AU2003 for nonmembers or
+  different unions, AU2011 for ambiguous literals); Copy, clone, and
+  Transfer derive from every member; trait methods dispatch on the active
+  member when every member shares one contract, including mutable and
+  consuming receivers on both backends; ordering and arithmetic on unions
+  are AU2003. Four run-pass and six check-fail fixtures plus Manual updates.
+- Layout, interfaces, and drop plans family (2026-09-10): every union a
+  module uses carries one encoded explicit-tag plan (dense canonical tags,
+  smallest tag width, widest member alignment and size, rounded total, per-
+  member Copy and drop obligations) that the shared validator recomputes and
+  both backends ingest; unplanned, forged, stale, or duplicate plans fail
+  closed; schema 11. Runtime values stay tagged boxed values on both paths,
+  so the plan is the shared ABI contract rather than a second representation.
+- Nullable handle FFI results family (2026-09-11): exactly a declared opaque
+  handle plus `None` as an extern result is marshalled as one nullable C
+  pointer on both backends (null is `None`, non-null the owned handle, byte
+  writeback first); every other extern union is AU2010; the direct call spec
+  is version 1; and the direct FFI helper now reports engine failures as
+  AU4005 instead of aborting while unwinding through generated code.
+- Callable contracts family (2026-09-11): callable types, declarations, and
+  lambdas carry complete contracts (names, one `*` keyword-only boundary,
+  `= ...` default promises); a written destination admits only safe
+  restrictions, inference never invents a common contract (AU2015),
+  keyword-only binding is enforced (AU2004), a thin alias call adapts a
+  function value explicitly, trait conformance compares the boundary, and the
+  validator checks admission at every callable boundary; schema 12.
+- Callable packing and call kinds family (2026-09-11): `Callable[...]` and
+  `TaskCallable[...]` owned storage types with explicit alias-call packing,
+  contract admission, kind weakening only, loan captures refused, Transfer
+  proof for task callables, owned-capture mutation making closures Mutable
+  with environment writeback on both backends, calls through fields and
+  elements, and erased identities validated at every boundary; schema 13.
+- TaskCallable targets family (2026-09-11): every `TaskGroup` start method
+  takes a stored `TaskCallable` target by move on both backends, Mutable
+  targets own their captures in the child, ordinary erased callables are
+  refused by checker and validator, and function-valued task results keep
+  their callable type.
+- Bound methods family (2026-09-11): `receiver.method` is a synthesized
+  closure over the receiver with the method's contract and a call kind from
+  the receiver capability (Copy snapshot, owned move, borrowed receivers
+  refused), `Class.method` is a thin function value, and omitted defaults
+  bind through the method's own helpers on both backends.
+- Bound methods family committed (`7a760ad4`); the generic type-argument
+  follow-up (`method[T]` and expected-contract inference) is gated separately.
+- Generic bound-method follow-up committed (`3108f3cd`).
+- Stored argument-origin views family (2026-09-11): a stored callable's
+  result may be `view [mut] T from name` for one named parameter; values,
+  packing, and calls through locals, fields, and container elements work on
+  both backends; owned and view contracts never admit each other; `from
+  self` origins and task callables are refused; schema 14.
+- Stored-view family committed (`a39bb312`).
+- Shared callback sites family (2026-09-11): list algorithms, `Array.map`,
+  and `control.retry` borrow packed Shared callable values with ABI-equal,
+  positionally callable contracts; Mutable/Consuming packed values and
+  keyword-only element parameters are refused.
+- Callback-sites family committed (`13824c3c`) with the interpreter
+  root-task stack fix and the task stack headroom diagnostic.
+- Reference agent version 1 installed (144 lines, pinned stdout on both
+  backends); extension grammar tokenizes stored view contracts; LSP coverage
+  at 100%.
+- Reference agent and editor updates committed (`7065aa65`). Maintained
+  documentation pass complete: generics and ownership pages cross-link bound
+  methods and stored view contracts, the unreleased changelog records the
+  phase, LLM export regenerated; reference, tutorial, and hygiene gates green.
+- Full local verification and ratchet complete: the coverage-only FFI test
+  was repaired (spec version 1), 350 coverage tests and three run-pass
+  fixtures were added, four lowering/estimator defects and a dead identity
+  spelling were fixed, and the complete `npm run ci` chain is green. Coverage
+  measured 96.4664% lines / 97.3304% functions / 95.2373% regions; floors
+  raised to 96.46 / 97.33 / 95.23. LSP coverage 100%.
+- Next: hosted integration (push, PR to `main`, green branch CI, merge, green
+  main CI).
+- Option removal and all phase 2 signature changes remain excluded; protected
+  user files and coverage floors remain unchanged.
+- Work and handoff ledger: [2026-09-09-batch-1-phase-1.md](2026-09-09-batch-1-phase-1.md).
+
+## Batch 1 design checkpoint (ratified; phase 1 in progress)
+
+- Authorized target: the detailed design and ratification, roadmap/index links, a work
+  note and this board entry; no compiler, runtime, example, Manual or ADR-body changes.
+- Deliverable: [Batch 1 design checkpoint](../architecture_docs/16-batch-1-design-checkpoint.md),
+  with 24 recorded ratification answers, all 39 public Option APIs audited, owned
+  callable storage costs, a complete hypothetical reference-agent rewrite,
+  the sema extraction plan and two implementation phases.
+- The ten Approved Decisions and deferred stored-loan boundary remain intact.
+  Protected user files are outside the change.
+- User ratification: all recommended except Q6 B and Q20 B. Q6 admits
+  symmetric union/member equality with a matching payload hash law; Q20 adds
+  no wrapper helper. Q23 A retains Lookup/Poll and requires the Batch 2
+  element-loan design to revisit an app-facing `V | None` form of `dict.get`.
+- Ratification verification passed: six scoped documents, 150 links/anchors,
+  all 24 recorded answers, all 15 identity tests, and Manual/tutorial gate-scope
+  checks. Original questionnaire options and the ten Approved Decisions are unchanged.
+- Ratification recording is complete. ADR amendments and phase 1 implementation
+  now proceed under the active Batch 1 phase 1 entry above.
+- Work note: [2026-09-08-batch-1-design-checkpoint.md](2026-09-08-batch-1-design-checkpoint.md).
 
 ## Pre-Batch-1 foundations items 6 and 7 (complete)
 

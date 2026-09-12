@@ -1,0 +1,5 @@
+error[AU2002]: expected `def(pair: Pair) -> view str from pair`, found `def(pair: Pair) -> str`
+ --> crates/aura-compiler/tests/fixtures/check-fail/callable_view_result_view_contract.au:10:5
+   |
+10 |     chooser: def(pair: Pair) -> view str from pair = left_copy
+   |     ^

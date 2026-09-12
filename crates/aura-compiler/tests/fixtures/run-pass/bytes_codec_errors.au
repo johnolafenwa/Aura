@@ -1,0 +1,24 @@
+import bytes
+
+def main():
+    match bytes.hex_decode("zz"):
+        case Result.Ok(value):
+            print(value.len())
+        case Result.Err(error):
+            print(error)
+    match bytes.base64_decode("###"):
+        case Result.Ok(value):
+            print(value.len())
+        case Result.Err(error):
+            print(error)
+    broken: list[uint8] = [255, 254]
+    match str.from_bytes(broken):
+        case Result.Ok(text):
+            print(text)
+        case Result.Err(error):
+            print(error)
+    match bytes.hex_decode("abc"):
+        case Result.Ok(value):
+            print(value.len())
+        case Result.Err(error):
+            print(error)

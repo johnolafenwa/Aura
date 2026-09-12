@@ -1,0 +1,22 @@
+class Pair:
+    left: str
+    right: str
+
+class Chooser:
+    prefer_left: bool
+
+    def pick(self, pair: Pair) -> view str from pair:
+        if self.prefer_left:
+            return view pair.left
+        return view pair.right
+
+def main():
+    pair = Pair(left="ada", right="linus")
+    chooser = Chooser(prefer_left=false)
+    picker = chooser.pick
+    view chosen = picker(pair)
+    print(chosen)
+    other = Chooser(prefer_left=true)
+    first = other.pick
+    view head = first(pair)
+    print(head)

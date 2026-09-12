@@ -1,0 +1,30 @@
+def mark(label: str, value: own str) -> str:
+    print(label)
+    return value
+
+def render(value: int64, *, prefix: str = mark("render-default", "value")) -> str:
+    print("render-body")
+    return f"{prefix}: {value}"
+
+type Renderer = def(value: int64, *, prefix: str = ...) -> str
+
+def render_with_prefix(base: Renderer, value: int64, *, prefix: str = mark("wrapper-default", "wrapped")) -> str:
+    print("wrapper-body")
+    return base(value, prefix=prefix)
+
+def render_twice(base: Renderer, value: int64) -> str:
+    print("forwarder-body")
+    first = base(value)
+    second = base(value + 1)
+    return first + " / " + second
+
+def number(label: str, value: int64) -> int64:
+    print(label)
+    return value
+
+def main():
+    print(render(1))
+    print(render(2, prefix="explicit"))
+    print(render_with_prefix(render, number("supplied-value", 3)))
+    print(render_with_prefix(render, number("supplied-value", 4), prefix=mark("supplied-prefix", "given")))
+    print(render_twice(render, 5))

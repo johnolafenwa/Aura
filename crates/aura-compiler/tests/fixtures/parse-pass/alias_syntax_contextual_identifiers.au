@@ -1,0 +1,11 @@
+type = 1
+
+def is(type: int64) -> int64:
+    return type
+
+class Words:
+    type: int64
+
+def main():
+    word = Words(type=type)
+    print(is(word.type))

@@ -1,0 +1,15 @@
+enum Packet:
+    Data(int64 | str)
+def main():
+    mut value = Packet.Data(41)
+    match mut value:
+        case Packet.Data(int64 as number):
+            number += 1
+            print(number)
+        case Packet.Data(str as text):
+            print(text)
+    match value:
+        case Packet.Data(int64 as number):
+            print(number)
+        case Packet.Data(str as text):
+            print(text)

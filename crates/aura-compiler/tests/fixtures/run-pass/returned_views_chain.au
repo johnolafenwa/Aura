@@ -1,0 +1,13 @@
+import returned_views_chain_support.base
+import returned_views_chain_support.forward
+
+def main():
+    user = returned_views_chain_support.base.User(name="aura", pair=(7, "x"))
+    view named = returned_views_chain_support.forward.outer_name(user)
+    print(named)
+    view titled = returned_views_chain_support.forward.outer_title(user)
+    print(titled.len())
+    view labeled = returned_views_chain_support.forward.outer_label(user)
+    print(labeled)
+    view first = returned_views_chain_support.forward.outer_first(user)
+    print(first + 1)

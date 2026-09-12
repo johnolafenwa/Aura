@@ -1,0 +1,5 @@
+error[AU2010]: argument type mismatch for function `pair`: cannot infer `V` and `W` from `int64 | str | None`; the union members cannot be assigned to more than one type parameter, so specialize the callable explicitly
+ --> crates/aura-compiler/tests/fixtures/check-fail/union_generic_ambiguous.au:6:16
+  |
+6 |     print(pair(mixed))
+  |                ^

@@ -117,9 +117,26 @@ render("Aura", 2)
 render(name="Aura", count=2)
 ```
 
-Every declared parameter is positionally bindable. Aura 0.3 structural
-callable types do not encode keyword-only callability, so a `*` marker in a
-parameter list is rejected with `AU1101`.
+A `*` boundary in a parameter list makes every parameter after it
+keyword-only: such a parameter binds by name only, a positional argument that
+would reach it is rejected with `AU2004` (`parameter `x` of function `f` is
+keyword-only`), and omitting a required keyword-only parameter reports the
+missing name. At most one `*` is allowed, it must be followed by at least one
+named parameter, and it adds no variadic parameters. The boundary belongs to
+the function's complete callable contract (see [Function
+Values](#function-values)); a trait implementation must place it exactly
+where the trait declaration does.
+
+```aura
+def configure(path: str, *, retries: int32 = 2, verbose: bool = false) -> int32:
+    if verbose:
+        print(path)
+    return retries
+
+configure("cfg")
+configure("cfg", retries=5)
+configure("cfg", verbose=true, retries=1)
+```
 
 Binding is deterministic:
 
@@ -153,7 +170,9 @@ The complete rules are:
 - a shared-borrow default is permitted; its default temporary lives until the
   call completes
 - an `own` default is permitted and its fresh temporary is consumed by the call
-- after the first defaulted parameter, every remaining parameter must also have a default
+- after the first defaulted positional parameter, every remaining positional
+  parameter must also have a default; keyword-only parameters bind by name,
+  so a required keyword-only parameter may follow a defaulted one
 - the default expression must have exactly the declared parameter type
 - a default expression cannot reference any parameter of the same declaration, including an earlier parameter
 - trait method declarations and trait implementation methods cannot declare defaults
@@ -326,37 +345,84 @@ Traits](/manual/generics-and-traits#inferred-clone-safety-obligations).
 ## Function Values
 
 A module-level named function is a value. Its type uses declaration-shaped
-syntax: `def(T1, mut T2, own T3) -> R`. The parameter list contains modes and
-types rather than parameter names, and `def() -> R` is the zero-parameter
+syntax: `def(T1, mut T2, own T3) -> R`, and `def() -> R` is the zero-parameter
 form. Bare parameters are shared. Function types may appear anywhere another
 complete type may appear, including variable and parameter annotations, class
-fields, return types, and collection element types.
+fields, return types, alias targets, and collection element types.
 
 This includes public user-module functions and maintained builtin-module
 functions such as `process.pipe`. Calling an imported builtin through a value
 uses the same builtin dispatch and result type as calling its qualified name.
 
-An inferred local binding retains the named function's exact declared
-parameter modes. An indirect call through a `mut` parameter requires a mutable
-place, and an `own` parameter moves a non-copy argument. Assignment and
-argument passing compare these modes as part of the function type:
-`def(mut Counter) -> None` does not match `def(Counter) -> None`.
+A callable type spells a *complete contract*. Each slot is either unnamed
+(`int64`, `mut Counter`, `own str`), which is positional-only, or named
+(`value: int64`), which may also be called by name. A `*` boundary makes the
+following named slots keyword-only, and `= ...` after a slot promises that
+the target supplies a default for it; the default expression itself belongs
+only to the target declaration and is never written in a type. Parameter
+names, modes, types, the keyword-only boundary, default availability, and the
+result type are all part of the contract. Two structurally identical
+signatures with different exposed names or default promises are different
+contracts.
+
+```aura
+type Unary = def(int64) -> int64
+type Renderer = def(value: int64, *, prefix: str = ...) -> str
+
+def render(value: int64, *, prefix: str = "value") -> str:
+    return f"{prefix}: {value}"
+
+def increment(value: int64) -> int64:
+    return value + 1
+
+renderer: Renderer = render
+print(renderer(4))
+print(renderer(4, prefix="n"))
+step: Unary = increment
+print(step(4))
+```
+
+An inferred local binding takes its target's complete contract: the
+declaration names, `*` boundary, capabilities, and default availability. A
+call through it accepts the same named arguments and omits the same
+parameters as a direct call, and an omitted argument evaluates the
+runtime-selected target's own default expression afresh. A written
+destination contract (an annotation, parameter, field, element type, alias,
+or return type) governs calls through that destination: an unnamed slot is
+called positionally, a named slot may be called by name, and an omitted slot
+must carry `= ...`.
+
+A value may be stored where a written contract *admits* it. A written
+contract may hide an exposed name (an unnamed slot accepts any named
+target), drop default availability (a slot without `= ...` accepts a target
+that declares a default), or restrict a named positional-or-keyword slot to
+keyword-only. It cannot make a keyword-only slot positional, rename a slot,
+promise a default the target does not declare, or change a parameter type,
+capability, or result type; parameter and result types are invariant, and
+there is no general callable subtyping. Passing `double(amount: int64)` to a
+`def(int64) -> int64` parameter is an admitted restriction; passing it where
+`def(value: int64) -> int64` is written is a rename and reports `AU2015`.
+
+Inference never invents a common contract. Rebinding a local must satisfy
+the contract the local already has, the arms of a conditional or `match`
+expression without an expected type must share one complete contract, a
+container literal's element contract is its annotation or its first
+element's contract and every later element and insertion must satisfy it,
+and repeated generic evidence must agree with its first observation. Each
+violation reports `AU2015` with the differing slot. Write the common contract
+as an annotation, or adapt a value explicitly: calling a non-generic alias of
+a thin `def` type with one function value or capture-free lambda, such as
+`Unary(increment)`, yields that alias contract when the alias admits the
+value and reports `AU2015` otherwise. No environment is added; a capturing
+closure packs into an owned `Callable[...]` storage type instead (see
+[Closures](/manual/closures#typing-rules)).
 
 Function values are code pointers. They are copy values, cloning is
 unnecessary, and copying or passing one as an `own def(...) -> R` parameter
 does not invalidate the source binding. They also satisfy `Transfer`.
 Ordinary indirect calls evaluate and bind arguments under the selected
-function's unchanged capability contract. A binding whose target declaration
-is statically known retains that declaration's call contract: named arguments
-are accepted and omitted arguments use its defaults. The structural
-`def(...) -> ...` type itself does not contain names or default expressions.
-A control-flow selection can retain names and default availability when every
-candidate agrees; an omitted argument then evaluates the runtime-selected
-target's own default expression. Reassignment between conflicting contracts,
-return through a structural function annotation, class-field storage, and
-mutable-collection storage erase those extras. Storage still retains the
-complete ABI type, including `mut` and `own`; a loaded value takes every
-argument positionally.
+function's unchanged capability contract; a stored value never takes an
+argument its contract does not admit.
 
 If an indirect-call default traps, diagnostics use the public target name and
 the precise default-expression span. Compiler-generated default helpers never
@@ -369,10 +435,20 @@ parameter default such as a generic `empty` used where
 `def() -> Option[str]` is required. A generic name with neither source of
 type arguments does not have one concrete function-value type.
 
-This stage is deliberately capture-free. Instance-method, associated-method,
-and trait-method values are not first-class; an associated method without
-`self` remains accepted only in the existing direct `TaskGroup` target form.
-Lambdas and closure capture are specified separately.
+An associated method without `self` named as `Class.method` is a thin
+function value carrying the method's complete contract when its class is not
+generic; a generic method takes explicit type arguments as `Class.method[T]`
+or infers them from an expected function type. `receiver.method` outside
+call position is a bound method: a
+compiler-synthesized closure over the receiver, specified in
+[Closures](/manual/closures#bound-methods). Lambdas and closure capture are
+specified separately.
+
+A function returning `view [mut] T from name` for one of its parameters
+keeps that contract in its value type, `def(pair: Pair) -> view str from
+pair`; a `from self` method result has no value type. Storage, packing, and
+calls through such values are specified in
+[Closures](/manual/closures#stored-view-contracts).
 
 ## Function Values And Task Starts
 
@@ -395,7 +471,10 @@ argument is first copied or moved into task-owned capture storage: `own` target
 parameters consume their capture, while bare shared parameters access that
 storage for the duration of the child call. `mut` targets are rejected because
 mutable access to detached capture
-storage has no caller-visible writeback contract. See [Concurrency](/manual/concurrency).
+storage has no caller-visible writeback contract. A stored
+`TaskCallable[...]` value is also a target, moved into the start for one child
+call; an ordinary erased `Callable` is not, because its environment was never
+proven Transfer (`AU3008`). See [Concurrency](/manual/concurrency).
 
 ## `main`
 
@@ -458,7 +537,8 @@ owned captures and then invokes the target under its declared ABI.
 `AU2002` means a signature, function-value capability, parameter, default,
 return, bound, or entrypoint type mismatch. `AU2004` means positional or named
 argument binding failed. `AU2005` means focused guidance for an unavailable
-callable spelling, including out-of-scope method values. `AU2999` means another
+callable spelling, including a generic method value whose type arguments
+are neither written nor implied by an expected contract. `AU2999` means another
 callable rejection without a narrower compile-time code.
 `AU3001` means a moved argument was used; `AU3002` means a borrow or alias
 conflict; `AU3003` means a mutability violation; and `AU3004` means an invalid
@@ -482,8 +562,7 @@ resolved signature metadata, including inferred clone-safety obligations.
 
 ## Limits And Implementation-Defined Behavior
 
-Aura has no method values, trait-object function interactions, Aura
-variadic functions,
+Aura has no trait-object function interactions, Aura variadic functions,
 overloads, nested functions, or mutable-parameter task targets. Expression
 lambdas are specified by [Closures](/manual/closures); they do not add nested
 item declarations. Written function types express bare shared, `mut`, and `own`

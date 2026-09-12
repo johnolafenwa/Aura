@@ -1,0 +1,4 @@
+from alias_runtime_support.types import make
+
+def main():
+    print(make().value)

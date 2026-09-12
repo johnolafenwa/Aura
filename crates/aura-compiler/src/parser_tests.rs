@@ -194,16 +194,19 @@ fn p63_lambda_parameters_are_contextual_and_the_body_is_an_expression() {
         params.as_slice(),
         [
             LambdaParam {
+                keyword_only: false,
                 name: value,
                 mode: ParamMode::Default,
                 ..
             },
             LambdaParam {
+                keyword_only: false,
                 name: text,
                 mode: ParamMode::Own,
                 ..
             },
             LambdaParam {
+                keyword_only: false,
                 name: output,
                 mode: ParamMode::BorrowMut,
                 ..
@@ -372,7 +375,7 @@ fn named_type_ref(ty: &TypeRef) -> Option<(&str, &[TypeRef])> {
     match &ty.kind {
         TypeRefKind::Named { name, args } => Some((name, args)),
         TypeRefKind::Tuple(_) => None,
-        TypeRefKind::Function { .. } => None,
+        TypeRefKind::Function { .. } | TypeRefKind::Union(_) | TypeRefKind::Callable { .. } => None,
     }
 }
 
@@ -509,6 +512,7 @@ fn function_types_use_declaration_shaped_syntax_and_nest_structurally() {
     let TypeRefKind::Function {
         params,
         return_type,
+        ..
     } = &function.params[0].ty.kind
     else {
         panic!("expected callback function type");
@@ -546,12 +550,14 @@ fn function_types_use_declaration_shaped_syntax_and_nest_structurally() {
         TypeRefKind::Function {
             params,
             return_type,
+            ..
         } if params.is_empty()
             && matches!(
                 &return_type.kind,
                 TypeRefKind::Function {
                     params,
                     return_type,
+                    ..
                 } if matches!(
                     params.as_slice(),
                     [FunctionTypeParam {
@@ -573,6 +579,7 @@ fn function_types_use_declaration_shaped_syntax_and_nest_structurally() {
     let TypeRefKind::Function {
         params,
         return_type,
+        ..
     } = &function.return_type.kind
     else {
         panic!("expected function return type");
@@ -651,13 +658,14 @@ fn function_type_parameter_capabilities_reject_invalid_placements_precisely() {
         "expected a type after the function parameter capability"
     );
 
-    let named = parse_stmt_from("callback: def(value: str) -> None = factory\n")
-        .expect_err("function type parameters contain types, not names");
-    assert!(named.message.contains("contain types only"));
+    parse_stmt_from("callback: def(value: str) -> None = factory\n")
+        .expect("Batch 1 function type slots retain optional binding names");
 
     let default = parse_stmt_from("callback: def(str = \"x\") -> None = factory\n")
         .expect_err("function type parameters cannot have defaults");
-    assert!(default.message.contains("cannot declare default values"));
+    assert!(default
+        .message
+        .contains("callable types use '= ...' to promise a default"));
 
     let nested_default = parse_stmt_from(
         "callback: def(str = build((1, 2), [3, 4], {5: 6}), int32) -> None = factory\n",
@@ -667,7 +675,7 @@ fn function_type_parameter_capabilities_reject_invalid_placements_precisely() {
     );
     assert_eq!(
         nested_default.message,
-        "function type parameters cannot declare default values"
+        "callable types use '= ...' to promise a default"
     );
 
     let return_capability = parse_stmt_from("callback: def() -> own str = factory\n")
@@ -689,6 +697,7 @@ fn typed_binding_lookahead_recognizes_function_type_annotations() {
                     TypeRefKind::Function {
                         params,
                         return_type,
+                        ..
                     },
                 ..
             }),
@@ -855,11 +864,12 @@ fn tuple_parsing_keeps_container_commas_and_rejects_unsupported_forms() {
         }
     }
 
-    let missing_type_comma = parse_item_from("def read(value: (str)):\n    pass\n")
-        .expect_err("a singleton tuple type needs a comma");
-    assert!(missing_type_comma
-        .message
-        .contains("tuple types need a comma"));
+    let grouped_type = parse_item_from("def read(value: (str)):\n    pass\n")
+        .expect("Batch 1 permits grouping a type without forming a tuple");
+    let Item::Function(function) = grouped_type else {
+        panic!("expected function")
+    };
+    assert_eq!(function.params[0].ty.named_parts().unwrap().0, "str");
 
     let duplicate = parse_stmt_from("left, left = pair\n")
         .expect_err("duplicate destructuring names should fail in the parser");
@@ -1352,11 +1362,11 @@ fn parse_expression_reports_trailing_tokens_and_primary_errors() {
     assert!(borrow_sequence.edits.is_empty());
     assert_eq!(borrow_sequence.code, "AU1101");
 
-    let identity = parse_expression("value is None").expect_err("`is` should be rejected");
-    assert_eq!(
-        identity.message,
-        "`is` is not supported; use `== None` or `match` for optional values"
-    );
+    let identity = parse_expression("value is None").expect("Batch 1 admits contextual None tests");
+    assert!(matches!(
+        identity.kind,
+        ExprKind::IsNone { negated: false, .. }
+    ));
 
     let bool_expr = parse_expression("true").expect("bool literal should parse");
     assert!(matches!(bool_expr.kind, ExprKind::Bool(true)));
@@ -1704,17 +1714,14 @@ fn parse_import_aliases_preserve_target_and_local_names() {
 }
 
 #[test]
-fn keyword_only_parameter_markers_receive_a_focused_rejection() {
-    let error = parse("def configure(path: str, *, retries: int32):\n    return\n")
-        .expect_err("keyword-only parameters remain outside Aura 0.3");
-    assert_eq!(error.code, "AU1101");
-    assert!(
-        error.message.contains(
-            "keyword-only parameters are not part of Aura 0.3's structural callable model"
-        ),
-        "unexpected diagnostic: {}",
-        error.message
-    );
+fn keyword_only_parameter_markers_preserve_the_binding_boundary() {
+    let item = parse_item_from("def configure(path: str, *, retries: int32):\n    return\n")
+        .expect("Batch 1 ratifies keyword-only parameters");
+    let Item::Function(function) = item else {
+        panic!("expected function")
+    };
+    assert!(!function.params[0].keyword_only);
+    assert!(function.params[1].keyword_only);
 }
 
 #[test]
@@ -3263,6 +3270,7 @@ fn fstring_map_comprehension_preserves_exact_nested_source_spans() {
     let TypeRefKind::Function {
         params,
         return_type,
+        ..
     } = &type_args[0].kind
     else {
         panic!("expected a structural function type argument");
@@ -4223,4 +4231,185 @@ fn declaration_parser_reports_the_exact_stage_that_rejected_incomplete_syntax() 
             "parser diagnostics must identify the token to repair: {source}"
         );
     }
+}
+
+// Batch 1 coverage: lookahead helpers on hand-built token streams and
+// annotation spellings the lexer alone cannot reach.
+fn token(kind: crate::lexer::TokenKind) -> crate::lexer::Token {
+    crate::lexer::Token {
+        kind,
+        span: Span::new(1, 1),
+    }
+}
+
+fn parser_over(kinds: Vec<crate::lexer::TokenKind>) -> Parser {
+    Parser::new(kinds.into_iter().map(token).collect())
+}
+
+fn ident(name: &str) -> crate::lexer::TokenKind {
+    crate::lexer::TokenKind::Identifier(name.to_string())
+}
+
+#[test]
+fn type_alias_lookahead_handles_nested_brackets_and_missing_closers() {
+    let nested = Parser::new(lex("type Alias[dict[str, T]] = int64\n").expect("tokens"));
+    assert!(nested.at_type_alias_start());
+    let truncated = parser_over(vec![
+        ident("type"),
+        ident("Alias"),
+        TokenKind::LBracket,
+        ident("T"),
+        TokenKind::Eof,
+    ]);
+    assert!(!truncated.at_type_alias_start());
+}
+
+#[test]
+fn view_return_lookahead_requires_a_following_type_token() {
+    let module = parse("def f() -> view:\n    pass\n").expect("bare `view` parses as a named type");
+    let Item::Function(function) = &module.items[0] else {
+        panic!("expected a function item");
+    };
+    assert_eq!(
+        function.return_type.named_parts().map(|(name, _)| name),
+        Some("view")
+    );
+
+    let Stmt::Assign(assign) =
+        parse_stmt_from("f: def() -> view = g\n").expect("function annotation parses")
+    else {
+        panic!("expected an assignment");
+    };
+    let annotation = assign.annotation.expect("annotated assignment");
+    let (_, return_type) = annotation
+        .function_parts()
+        .expect("function annotation stays structural");
+    assert_eq!(
+        return_type.named_parts().map(|(name, _)| name),
+        Some("view")
+    );
+
+    let error = parse_stmt_from("f: def(a: int64) -> view int64 = g\n")
+        .expect_err("view returns need a `from` origin");
+    assert!(
+        error.message.contains("requires `from`"),
+        "unexpected message {:?}",
+        error.message
+    );
+}
+
+#[test]
+fn type_token_lookaheads_stop_at_malformed_annotations() {
+    use crate::lexer::TokenKind::{
+        Colon, Comma, Eof, Equal, IntLiteral, KwDef, LBracket, LParen, RBrace, RBracket, RParen,
+    };
+
+    assert!(parse_stmt_from("x: int64 | = 5\n").is_err());
+    assert!(parse_stmt_from("x: def = 1\n").is_err());
+    assert_eq!(
+        parser_over(vec![KwDef, LParen, Equal, RParen, Eof]).skip_type_atom_tokens(0),
+        2
+    );
+    assert_eq!(
+        parser_over(vec![KwDef, LParen, ident("a"), Colon, Equal, Eof]).skip_type_atom_tokens(0),
+        3
+    );
+    assert_eq!(
+        parser_over(vec![
+            KwDef,
+            LParen,
+            ident("a"),
+            Colon,
+            ident("int64"),
+            Equal,
+            IntLiteral(1),
+            Eof,
+        ])
+        .skip_type_atom_tokens(0),
+        7
+    );
+    assert_eq!(
+        parser_over(vec![KwDef, LParen, ident("a"), ident("b"), Eof]).skip_type_atom_tokens(0),
+        3
+    );
+    assert_eq!(
+        parser_over(vec![KwDef, LParen, RParen, Equal, Eof]).skip_type_atom_tokens(0),
+        3
+    );
+    assert_eq!(
+        parser_over(vec![LParen, ident("int64"), Comma, Eof]).skip_type_atom_tokens(0),
+        3
+    );
+    assert_eq!(
+        parser_over(vec![ident("list"), LBracket, ident("int64")]).skip_type_atom_tokens(0),
+        3
+    );
+    assert_eq!(
+        parser_over(vec![LBracket, ident("x")]).skip_bracketed_tokens(0),
+        None
+    );
+    assert!(!parser_over(vec![ident("x")]).at_type_pattern());
+    assert!(!parser_over(vec![ident("x"), LBracket, ident("i")]).is_assignment_stmt());
+    for closer in [RParen, RBracket, RBrace] {
+        assert!(!parser_over(vec![closer, Eof]).is_destructure_assignment_stmt());
+    }
+}
+
+#[test]
+fn index_assignment_targets_accept_multi_element_tuples() {
+    let Stmt::Assign(assign) =
+        parse_stmt_from("grid[1, 2, 3] = 4\n").expect("tuple index targets parse")
+    else {
+        panic!("expected an assignment");
+    };
+    let AssignTarget::Index { index, .. } = &assign.target else {
+        panic!("expected an index target");
+    };
+    assert!(matches!(&index.kind, ExprKind::Tuple(elements) if elements.len() == 3));
+}
+
+#[test]
+fn fstring_format_specs_fall_back_to_earlier_top_level_colons() {
+    let expr = parse_expression("f\"{a:b:c}\"").expect("format spec fallback parses");
+    let ExprKind::FString(parts) = &expr.kind else {
+        panic!("expected an f-string");
+    };
+    assert!(
+        matches!(&parts[0], FormatPart::Formatted { spec, .. } if spec == "b:c"),
+        "unexpected parts {parts:?}"
+    );
+    assert_eq!(top_level_format_colons("'a\\'b':5"), vec![6]);
+}
+
+#[test]
+fn type_ref_span_offsets_cover_callables_and_view_returns() {
+    let span = Span::new(1, 1);
+    let signature = TypeRef::function_with_view_return(
+        vec![crate::ast::FunctionTypeParam::new(
+            crate::ast::ParamMode::Default,
+            TypeRef::named("int64", Vec::new(), false, span),
+            span,
+        )],
+        TypeRef::named("int64", Vec::new(), false, span),
+        Some(crate::ast::ViewReturn {
+            mutable: false,
+            origin: "a".to_string(),
+            span,
+        }),
+        span,
+    );
+    let mut callable = TypeRef::callable(false, crate::ast::ReceiverKind::Borrow, signature, span);
+    offset_type_ref_span(&mut callable, 4, 2);
+    assert_eq!((callable.span.line, callable.span.column), (4, 3));
+    let crate::ast::TypeRefKind::Callable { signature, .. } = &callable.kind else {
+        panic!("expected a callable type ref");
+    };
+    assert_eq!((signature.span.line, signature.span.column), (4, 3));
+    let crate::ast::TypeRefKind::Function { view_return, .. } = &signature.kind else {
+        panic!("expected a function signature");
+    };
+    let view_return = view_return
+        .as_ref()
+        .expect("view return survives offsetting");
+    assert_eq!((view_return.span.line, view_return.span.column), (4, 3));
 }

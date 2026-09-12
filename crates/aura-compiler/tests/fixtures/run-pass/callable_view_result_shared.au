@@ -1,0 +1,29 @@
+class Pair:
+    left: str
+    right: str
+
+def pick_left(pair: Pair) -> view str from pair:
+    return view pair.left
+
+def pick_right(pair: Pair) -> view str from pair:
+    return view pair.right
+
+type Picker = Callable[def(pair: Pair) -> view str from pair]
+
+def pick_with(picker: def(pair: Pair) -> view str from pair, pair: Pair) -> int64:
+    view chosen = picker(pair)
+    return chosen.len()
+
+def main():
+    pair = Pair(left="ada", right="linus")
+    chooser: def(pair: Pair) -> view str from pair = pick_left
+    view head = chooser(pair)
+    print(head)
+    packed = Picker(pick_right)
+    view tail = packed(pair)
+    print(tail)
+    print(pick_with(pick_left, pair))
+    print(pick_with(pick_right, pair))
+    stored: list[Picker] = [Picker(pick_left), Picker(pick_right)]
+    view second = stored[1](pair)
+    print(second)

@@ -1,0 +1,6 @@
+def bump(counter: int64 | None):
+    if counter is not None:
+        counter += 1
+
+def main():
+    bump(1)

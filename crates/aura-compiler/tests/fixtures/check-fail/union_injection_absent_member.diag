@@ -1,0 +1,5 @@
+error[AU2010]: 'bool' is not a member of 'int64 | str'
+ --> crates/aura-compiler/tests/fixtures/check-fail/union_injection_absent_member.au:2:26
+  |
+2 |     value: int64 | str = true
+  |                          ^

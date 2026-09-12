@@ -266,9 +266,13 @@ measurement families and source identities separate.
 ## Executable Size
 
 Current counts are exact executable bytes from a clean detached release build
-at `d9fc79921ba9fed1116634ec9994bcb599aa9f90`. They include the actual maintained
-reference agent version 0, `examples/agents/tool_runner/`, whose initial source
-commit is `fc0361bc76b8b47d300a3089b1b4bb7c2b739dfc`.
+at `d9fc79921ba9fed1116634ec9994bcb599aa9f90`. They include the maintained
+reference agent as it was at that commit (version 0, `examples/agents/tool_runner/`,
+initial source commit `fc0361bc76b8b47d300a3089b1b4bb7c2b739dfc`). The package
+is now version 1 (Batch 1 phase 1: an owned-callable registry with a
+factory closure and a packed bound method); its release size is re-measured
+by the same bench at the phase-end head, and the table row below remains the
+version-0 measurement until then.
 
 | Executable | Tuned release bytes |
 | --- | ---: |

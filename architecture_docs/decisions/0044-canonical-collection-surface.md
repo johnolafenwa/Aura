@@ -358,3 +358,18 @@ Batch S1 accepts this decision as the binding Aura 0.3 collection contract.
 Compiler semantics, both execution backends, diagnostics, editor tooling,
 reference material, examples, tutorials, and conformance evidence implement
 this surface as one coordinated language change.
+
+## 2026-09-08 — Batch 1 detailed design amendment
+
+Accepted under Q6 B in the
+[ratified checkpoint](../16-batch-1-design-checkpoint.md#ratification-record).
+
+Unions support symmetric comparison with a uniquely injectable member.
+Same-union equality remains tag-sensitive; union hashing uses the active
+payload hash so equal union/member values hash equally. All-member property
+requirements remain, and callables still have no equality or identity hash.
+No collection signature changes in phase 1; Q23 A preserves the planned
+tagged replacement and records the Batch 2 optional dict.get review.
+
+Implementation is in Batch 1 phase 1; this dated amendment extends the
+recorded baseline without claiming the feature is already delivered.

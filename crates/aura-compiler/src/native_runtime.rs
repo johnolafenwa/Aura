@@ -70,20 +70,26 @@ use crate::runtime_value::{
 use crate::sema::Type;
 
 const DIRECT_FFI_SPEC_MAGIC: &[u8; 4] = b"AUFI";
-const DIRECT_FFI_SPEC_VERSION: u8 = 0;
+#[doc(hidden)]
+pub const DIRECT_FFI_SPEC_VERSION: u8 = 1;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct DirectFfiType {
     pub ffi_type: FfiType,
     pub opaque_name: Option<String>,
+    /// The declared `Handle | None` result union of a nullable handle
+    /// result (ADR-0052 A10); absent for every other FFI type.
+    pub union_type: Option<Type>,
 }
 
 impl DirectFfiType {
     pub(crate) fn scalar(ffi_type: FfiType) -> Self {
         debug_assert_ne!(ffi_type, FfiType::OpaqueHandle);
+        debug_assert_ne!(ffi_type, FfiType::NullableOpaqueHandle);
         Self {
             ffi_type,
             opaque_name: None,
+            union_type: None,
         }
     }
 
@@ -91,6 +97,15 @@ impl DirectFfiType {
         Self {
             ffi_type: FfiType::OpaqueHandle,
             opaque_name: Some(name.into()),
+            union_type: None,
+        }
+    }
+
+    pub(crate) fn nullable(name: impl Into<String>, union_type: Type) -> Self {
+        Self {
+            ffi_type: FfiType::NullableOpaqueHandle,
+            opaque_name: Some(name.into()),
+            union_type: Some(union_type),
         }
     }
 }
@@ -1401,6 +1416,15 @@ fn runtime_type_from_name(name: &str) -> Type {
 fn runtime_type_pattern_from_name(name: &str) -> Type {
     fn decode_pattern(ty: Type) -> Type {
         match ty {
+            Type::Union(union) => {
+                let module = union.module_name.clone();
+                Type::normalize_union(
+                    union.members.into_iter().map(decode_pattern).collect(),
+                    &module,
+                    &BTreeMap::new(),
+                )
+                .expect("decoding retains union members")
+            }
             Type::Named(name, args) if args.is_empty() && name.starts_with('?') => {
                 Type::TypeParam(name[1..].to_string())
             }
@@ -1424,6 +1448,17 @@ fn runtime_type_pattern_from_name(name: &str) -> Type {
                     .collect(),
                 return_type: Box::new(decode_pattern(*return_type)),
             },
+            Type::ReturnedView(mut view) => {
+                view.pointee = decode_pattern(view.pointee);
+                Type::ReturnedView(view)
+            }
+            Type::Callable(mut callable) => {
+                for param in callable.params.iter_mut() {
+                    param.ty = decode_pattern(param.ty.clone());
+                }
+                callable.return_type = decode_pattern(callable.return_type.clone());
+                Type::Callable(callable)
+            }
             Type::Closure {
                 params,
                 return_type,
@@ -1461,6 +1496,7 @@ fn runtime_type_pattern_matches(
     substitutions: &mut BTreeMap<String, Type>,
 ) -> bool {
     match pattern {
+        Type::Union(_) => pattern == actual,
         Type::TypeParam(name) => match substitutions.get(name) {
             Some(existing) => existing == actual,
             None => {
@@ -1515,6 +1551,66 @@ fn runtime_type_pattern_matches(
                     },
                 )
                 && runtime_type_pattern_matches(pattern_return, actual_return, substitutions)
+        }
+        // A packed callable value carries its own function or closure
+        // signature at run time; the declared erased type admits it when the
+        // contract ABI matches and the value's kind is no stronger.
+        Type::ReturnedView(view) => matches!(
+            actual,
+            Type::ReturnedView(actual_view)
+                if actual_view.mutable == view.mutable
+                    && actual_view.origin == view.origin
+                    && runtime_type_pattern_matches(
+                        &view.pointee,
+                        &actual_view.pointee,
+                        substitutions
+                    )
+        ),
+        Type::Callable(pattern_callable) => {
+            let (actual_params, actual_return, actual_kind): (
+                &[crate::sema::FunctionParamContract],
+                &Type,
+                Option<crate::sema::ClosureCallKind>,
+            ) = match actual {
+                Type::Callable(actual_callable) => {
+                    if actual_callable.task != pattern_callable.task
+                        || actual_callable.call_kind != pattern_callable.call_kind
+                    {
+                        return false;
+                    }
+                    (
+                        actual_callable.params.as_slice(),
+                        &actual_callable.return_type,
+                        None,
+                    )
+                }
+                Type::Function {
+                    params,
+                    return_type,
+                } => (params.as_slice(), return_type.as_ref(), None),
+                Type::Closure {
+                    params,
+                    return_type,
+                    call_kind,
+                    ..
+                } => (params.as_slice(), return_type.as_ref(), Some(*call_kind)),
+                _ => return false,
+            };
+            actual_kind.is_none_or(|kind| pattern_callable.call_kind.admits(kind))
+                && pattern_callable.params.len() == actual_params.len()
+                && pattern_callable
+                    .params
+                    .iter()
+                    .zip(actual_params)
+                    .all(|(pattern, actual)| {
+                        pattern.passing == actual.passing
+                            && runtime_type_pattern_matches(&pattern.ty, &actual.ty, substitutions)
+                    })
+                && runtime_type_pattern_matches(
+                    &pattern_callable.return_type,
+                    actual_return,
+                    substitutions,
+                )
         }
         Type::Closure {
             params: pattern_params,
@@ -2127,6 +2223,7 @@ fn direct_ffi_type_code(ffi_type: FfiType) -> u8 {
         FfiType::BytesView => 13,
         FfiType::BytesViewMut => 14,
         FfiType::OpaqueHandle => 15,
+        FfiType::NullableOpaqueHandle => 16,
     }
 }
 
@@ -2148,6 +2245,7 @@ fn direct_ffi_type_from_code(code: u8) -> Option<FfiType> {
         13 => FfiType::BytesView,
         14 => FfiType::BytesViewMut,
         15 => FfiType::OpaqueHandle,
+        16 => FfiType::NullableOpaqueHandle,
         _ => return None,
     })
 }
@@ -2178,6 +2276,14 @@ fn append_direct_ffi_text(encoded: &mut Vec<u8>, text: &str) {
 fn append_direct_ffi_type(encoded: &mut Vec<u8>, ty: &DirectFfiType) {
     encoded.push(direct_ffi_type_code(ty.ffi_type));
     append_direct_ffi_text(encoded, ty.opaque_name.as_deref().unwrap_or(""));
+    let union_text = ty
+        .union_type
+        .as_ref()
+        .map(|union_type| {
+            serde_json::to_string(union_type).expect("Aura semantic types must serialize")
+        })
+        .unwrap_or_default();
+    append_direct_ffi_text(encoded, &union_text);
 }
 
 pub(crate) fn encode_direct_ffi_call_spec(spec: &DirectFfiCallSpec) -> Vec<u8> {
@@ -2242,20 +2348,45 @@ impl<'a> DirectFfiSpecDecoder<'a> {
         let ffi_type = direct_ffi_type_from_code(code)
             .ok_or_else(|| format!("unknown FFI type code {code}"))?;
         let opaque_name = self.text()?;
-        match (ffi_type, opaque_name.is_empty()) {
-            (FfiType::OpaqueHandle, false) => Ok(DirectFfiType {
+        let union_text = self.text()?;
+        match (ffi_type, opaque_name.is_empty(), union_text.is_empty()) {
+            (FfiType::OpaqueHandle, false, true) => Ok(DirectFfiType {
                 ffi_type,
                 opaque_name: Some(opaque_name),
+                union_type: None,
             }),
-            (FfiType::OpaqueHandle, true) => {
+            (FfiType::OpaqueHandle, true, _) => {
                 Err("opaque-handle metadata is missing its nominal type".to_string())
             }
-            (_, true) => Ok(DirectFfiType {
+            (FfiType::NullableOpaqueHandle, false, false) => {
+                let union_type: Type = serde_json::from_str(&union_text).map_err(|error| {
+                    format!("nullable-handle metadata carries invalid union metadata: {error}")
+                })?;
+                let valid = matches!(&union_type, Type::Union(union)
+                    if union.members.len() == 2
+                        && union.members.contains(&Type::Unit)
+                        && union.members.iter().any(|member| matches!(member, Type::Named(name, args) if args.is_empty() && *name == opaque_name)));
+                if !valid {
+                    return Err(format!(
+                        "nullable-handle metadata for `{opaque_name}` does not describe `{opaque_name} | None`"
+                    ));
+                }
+                Ok(DirectFfiType {
+                    ffi_type,
+                    opaque_name: Some(opaque_name),
+                    union_type: Some(union_type),
+                })
+            }
+            (FfiType::NullableOpaqueHandle, _, _) => {
+                Err("nullable-handle metadata is missing its nominal type or union".to_string())
+            }
+            (_, true, true) => Ok(DirectFfiType {
                 ffi_type,
                 opaque_name: None,
+                union_type: None,
             }),
-            (_, false) => Err(format!(
-                "non-handle FFI type `{ffi_type}` carries an opaque nominal name"
+            (_, _, _) => Err(format!(
+                "non-handle FFI type `{ffi_type}` carries handle or union metadata"
             )),
         }
     }
@@ -2441,6 +2572,41 @@ fn direct_ffi_to_value(value: FfiValue, ty: &DirectFfiType) -> std::result::Resu
                     .ok_or_else(|| "FFI function returned a null opaque handle".to_string())?,
             )
         }
+        // A `Handle | None` result (ADR-0052 A10): non-null constructs the
+        // owned handle member, null constructs `None`.
+        (FfiType::NullableOpaqueHandle, value) => {
+            let Some(Type::Union(union)) = ty.union_type.as_ref() else {
+                return Err("nullable-handle FFI metadata is missing its union".to_string());
+            };
+            let (index, payload) = match value {
+                FfiValue::OpaqueHandle(handle) => {
+                    let type_name = ty.opaque_name.clone().ok_or_else(|| {
+                        "nullable-handle FFI metadata is missing its nominal type".to_string()
+                    })?;
+                    let index = union
+                        .members
+                        .iter()
+                        .position(|member| matches!(member, Type::Named(name, args) if args.is_empty() && *name == type_name))
+                        .ok_or_else(mismatch)?;
+                    let payload = Value::FfiHandle(
+                        FfiHandleValue::new(type_name, handle.as_ptr()).ok_or_else(|| {
+                            "FFI function returned a null opaque handle".to_string()
+                        })?,
+                    );
+                    (index, payload)
+                }
+                FfiValue::Unit => (
+                    union
+                        .members
+                        .iter()
+                        .position(|member| *member == Type::Unit)
+                        .ok_or_else(mismatch)?,
+                    Value::Unit,
+                ),
+                _ => return Err(mismatch()),
+            };
+            crate::union_runtime::inject_union_member(union, index, payload)?
+        }
         _ => return Err(mismatch()),
     })
 }
@@ -2501,63 +2667,71 @@ pub extern "C-unwind" fn aura_direct_ffi_call(
     args_ptr: *const i64,
     arg_count: i64,
 ) -> *mut OpaqueValue {
-    let spec_len = usize::try_from(spec_len)
-        .unwrap_or_else(|_| runtime_error("invalid direct FFI call-spec length"));
-    if spec_ptr.is_null() && spec_len != 0 {
-        runtime_error("direct FFI call received a null call-spec pointer");
-    }
-    let spec_bytes = unsafe { slice::from_raw_parts(spec_ptr, spec_len) };
-    let spec = decode_direct_ffi_call_spec(spec_bytes)
-        .unwrap_or_else(|error| runtime_error(format!("invalid direct FFI call spec: {error}")));
-    let arg_count = usize::try_from(arg_count)
-        .unwrap_or_else(|_| runtime_error("invalid direct FFI argument count"));
-    if args_ptr.is_null() && arg_count != 0 {
-        runtime_error("direct FFI call received a null argument buffer");
-    }
-    if arg_count != spec.params.len() {
-        runtime_error(format!(
-            "direct FFI call spec expected {} argument(s), but received {arg_count}",
-            spec.params.len()
-        ));
-    }
-    let handles = unsafe { slice::from_raw_parts(args_ptr, arg_count) };
-    let mut arguments = Vec::with_capacity(arg_count);
-    for (index, (handle, param)) in handles.iter().zip(&spec.params).enumerate() {
-        if *handle == 0 {
+    // Every trap raised here, including an engine failure after the foreign
+    // call returned, must stop at this helper's boundary like every other
+    // runtime helper: generated code carries no unwind tables to cross.
+    task_runtime_boundary(|| {
+        let spec_len = usize::try_from(spec_len)
+            .unwrap_or_else(|_| runtime_error("invalid direct FFI call-spec length"));
+        if spec_ptr.is_null() && spec_len != 0 {
+            runtime_error("direct FFI call received a null call-spec pointer");
+        }
+        let spec_bytes = unsafe { slice::from_raw_parts(spec_ptr, spec_len) };
+        let spec = decode_direct_ffi_call_spec(spec_bytes).unwrap_or_else(|error| {
+            runtime_error(format!("invalid direct FFI call spec: {error}"))
+        });
+        let arg_count = usize::try_from(arg_count)
+            .unwrap_or_else(|_| runtime_error("invalid direct FFI argument count"));
+        if args_ptr.is_null() && arg_count != 0 {
+            runtime_error("direct FFI call received a null argument buffer");
+        }
+        if arg_count != spec.params.len() {
             runtime_error(format!(
-                "direct FFI argument {} has a null runtime value",
-                index + 1
+                "direct FFI call spec expected {} argument(s), but received {arg_count}",
+                spec.params.len()
             ));
         }
-        let value = unsafe { value_ref(*handle as *mut OpaqueValue) };
-        arguments.push(
-            direct_value_to_ffi(&value, &param.ty).unwrap_or_else(|error| {
-                runtime_diagnostic_error(Diagnostic::coded(
-                    "AU4005",
-                    format!("FFI call to `{}` failed: {error}", spec.symbol),
-                ))
-            }),
-        );
-    }
-    let signature = FfiSignature::new(
-        spec.params.iter().map(|param| param.ty.ffi_type).collect(),
-        spec.result.ffi_type,
-    );
-    let result =
-        unsafe { crate::ffi::call_process_symbol(&spec.symbol, &signature, &mut arguments) };
-    let result =
-        finish_direct_ffi_call(&spec, handles, &arguments, result).unwrap_or_else(|error| {
-            match error {
-                DirectFfiCompletionError::Engine(error) => direct_ffi_error(&spec.symbol, error),
-                DirectFfiCompletionError::Runtime(error) => {
+        let handles = unsafe { slice::from_raw_parts(args_ptr, arg_count) };
+        let mut arguments = Vec::with_capacity(arg_count);
+        for (index, (handle, param)) in handles.iter().zip(&spec.params).enumerate() {
+            if *handle == 0 {
+                runtime_error(format!(
+                    "direct FFI argument {} has a null runtime value",
+                    index + 1
+                ));
+            }
+            let value = unsafe { value_ref(*handle as *mut OpaqueValue) };
+            arguments.push(
+                direct_value_to_ffi(&value, &param.ty).unwrap_or_else(|error| {
                     runtime_diagnostic_error(Diagnostic::coded(
                         "AU4005",
                         format!("FFI call to `{}` failed: {error}", spec.symbol),
                     ))
+                }),
+            );
+        }
+        let signature = FfiSignature::new(
+            spec.params.iter().map(|param| param.ty.ffi_type).collect(),
+            spec.result.ffi_type,
+        );
+        let result =
+            unsafe { crate::ffi::call_process_symbol(&spec.symbol, &signature, &mut arguments) };
+        let result =
+            finish_direct_ffi_call(&spec, handles, &arguments, result).unwrap_or_else(|error| {
+                match error {
+                    DirectFfiCompletionError::Engine(error) => {
+                        direct_ffi_error(&spec.symbol, error)
+                    }
+                    DirectFfiCompletionError::Runtime(error) => {
+                        runtime_diagnostic_error(Diagnostic::coded(
+                            "AU4005",
+                            format!("FFI call to `{}` failed: {error}", spec.symbol),
+                        ))
+                    }
                 }
-            }
-        });
-    boxed_value(result)
+            });
+        boxed_value(result)
+    })
 }
 
 fn headers_map_value(headers: Vec<(String, String)>) -> Value {
@@ -3105,6 +3279,7 @@ fn runtime_span(line: i64, column: i64) -> Option<Span> {
 
 fn value_type_name(value: impl Borrow<Value>) -> String {
     match value.borrow() {
+        Value::Union(union) => union.union_type.to_string(),
         Value::Int(_) => "integer".to_string(),
         Value::Float(_) => "float64".to_string(),
         Value::Bool(_) => "bool".to_string(),
@@ -3150,6 +3325,9 @@ fn value_type_name(value: impl Borrow<Value>) -> String {
 }
 
 fn inferred_collection_type(value: &Value) -> Type {
+    if let Value::Union(union) = value {
+        return union.union_type.clone();
+    }
     if let Value::Function(function) = value {
         return function.signature.clone();
     }
@@ -3157,6 +3335,7 @@ fn inferred_collection_type(value: &Value) -> Type {
         return runtime_type_from_name(&runtime_type_name);
     }
     match value {
+        Value::Union(union) => union.union_type.clone(),
         Value::String(_) => Type::named("str"),
         Value::Bool(_) => Type::named("bool"),
         Value::Float(_) => Type::named("float64"),
@@ -3945,12 +4124,6 @@ pub extern "C-unwind" fn aura_direct_function_bind_defaults(
                 value_type_name(&other)
             )),
         };
-        // Lambda parameters cannot declare defaults. Hidden captures belong to
-        // the closure environment and must never be exposed to the ordinary
-        // declaration binder.
-        if function.closure_environment.is_some() {
-            return;
-        }
         let binder_ptr = function
             .direct_default_binder
             .unwrap_or_else(|| runtime_error("direct function value has no native default binder"));
@@ -3958,7 +4131,22 @@ pub extern "C-unwind" fn aura_direct_function_bind_defaults(
             unsafe { std::mem::transmute(binder_ptr as usize) };
         let arg_count = usize::try_from(arg_count)
             .unwrap_or_else(|_| runtime_error("invalid indirect-call arg count"));
-        unsafe { binder(args, arg_count, transfer_defaults) };
+        let Some(environment) = &function.closure_environment else {
+            unsafe { binder(args, arg_count, transfer_defaults) };
+            return;
+        };
+        // A closure's binder indexes its declaration buffer, whose leading
+        // slots are the hidden captures. Lambdas declare no defaults, but a
+        // bound method forwards the method's defaults (C6). Bind through a
+        // capture-offset shadow buffer so the environment is never exposed
+        // to the caller's public argument buffer.
+        let capture_count = environment.capture_count();
+        let mut shadow = vec![0i64; capture_count + arg_count];
+        unsafe {
+            std::ptr::copy_nonoverlapping(args, shadow.as_mut_ptr().add(capture_count), arg_count);
+            binder(shadow.as_mut_ptr(), shadow.len(), transfer_defaults);
+            std::ptr::copy_nonoverlapping(shadow.as_ptr().add(capture_count), args, arg_count);
+        }
     })
 }
 
@@ -6904,6 +7092,7 @@ pub extern "C-unwind" fn aura_direct_value_type_matches(
                 ));
             }
             let untagged_outer_wildcard = match &pattern {
+                Type::Union(_) => false,
                 Type::Named(name, args) => {
                     value_type_name(&actual) == *name
                         && args.iter().all(|arg| matches!(arg, Type::TypeParam(_)))
@@ -6918,6 +7107,8 @@ pub extern "C-unwind" fn aura_direct_value_type_matches(
                 },
                 Type::Function { .. }
                 | Type::Closure { .. }
+                | Type::Callable(_)
+                | Type::ReturnedView(_)
                 | Type::Unit
                 | Type::Module(_)
                 | Type::TypeParam(_) => false,
@@ -6932,6 +7123,7 @@ pub extern "C-unwind" fn aura_direct_value_type_matches(
             Value::EnumVariant(variant) => {
                 nominal_runtime_base_name(&variant.enum_name) == expected
             }
+            Value::Union(union) => union.union_type.to_string() == expected,
             Value::String(_) => expected == "str",
             Value::Tuple(tuple) => {
                 expected == "tuple"
@@ -6986,6 +7178,148 @@ pub extern "C-unwind" fn aura_direct_value_type_matches(
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_value_has_runtime_type(value: *mut OpaqueValue) -> i64 {
     task_runtime_boundary(|| i64::from(unsafe { effective_runtime_type_name(value) }.is_some()))
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_union_tag_test(
+    value: *mut OpaqueValue,
+    type_ptr: *const u8,
+    type_len: usize,
+    member_index: usize,
+) -> i64 {
+    task_runtime_boundary(|| {
+        let expected = canonical_runtime_type_from_name(&decode_bytes(type_ptr, type_len))
+            .unwrap_or_else(|| runtime_error("invalid union tag type"));
+        let Type::Union(target) = &expected else {
+            runtime_error("union tag test requires a union type");
+        };
+        unsafe {
+            value_mut(value, |value| {
+                let active =
+                    crate::union_runtime::align_union_value(value, target, "union tag test")
+                        .unwrap_or_else(|message| runtime_error(message));
+                i64::from(active == member_index)
+            })
+        }
+    })
+}
+
+/// The direct backend's spelling for the active member payload of a union
+/// place, used only for trait-method receiver write-back.
+pub(crate) const DIRECT_UNION_ACTIVE_PAYLOAD_PROJECTION: &str = "__union_payload_active";
+
+/// The active member payload of a union receiver for trait dispatch
+/// (ADR-0052 A8): a copy for shared and mutable receivers, or the payload
+/// moved out when the call consumes the union.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_union_active_payload(
+    value: *mut OpaqueValue,
+    consume: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let payload = unsafe {
+            value_mut(value, |value| {
+                let Value::Union(union) = value else {
+                    runtime_error("union member dispatch requires an active union");
+                };
+                if consume != 0 {
+                    std::mem::replace(&mut union.payload, Value::Unit)
+                } else {
+                    try_clone_array_containing_value(&union.payload)
+                        .unwrap_or_else(|error| runtime_error(error.message))
+                }
+            })
+        };
+        boxed_value(payload)
+    })
+}
+
+/// `value is None` on a type-parameter value: unit `None` itself or a union
+/// currently holding it (ADR-0052 A7).
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_none_test(value: *mut OpaqueValue) -> i64 {
+    task_runtime_boundary(|| unsafe {
+        with_value(value, |value| {
+            i64::from(crate::union_runtime::is_none_value(value))
+        })
+    })
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_union_take_payload(
+    value: *mut OpaqueValue,
+    type_ptr: *const u8,
+    type_len: usize,
+    member_index: usize,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let expected = canonical_runtime_type_from_name(&decode_bytes(type_ptr, type_len))
+            .unwrap_or_else(|| runtime_error("invalid union take type"));
+        let Type::Union(target) = &expected else {
+            runtime_error("union take requires a union type");
+        };
+        let payload = unsafe {
+            value_mut(value, |value| {
+                let active = crate::union_runtime::align_union_value(value, target, "union take")
+                    .unwrap_or_else(|message| runtime_error(message));
+                if active != member_index {
+                    runtime_error("union take member or type identity mismatch");
+                }
+                let Value::Union(union) = std::mem::replace(value, Value::Unit) else {
+                    unreachable!()
+                };
+                union.payload
+            })
+        };
+        boxed_value(payload)
+    })
+}
+
+fn direct_union_projection(union: &crate::runtime_value::UnionValue, field: &str) -> bool {
+    if field == format!("__union_payload_{}", union.member_index) {
+        return true;
+    }
+    // The direct backend writes a trait method's mutated receiver back into
+    // whichever member is active (ADR-0052 A8); this spelling never appears
+    // in MIR.
+    if field == DIRECT_UNION_ACTIVE_PAYLOAD_PROJECTION {
+        return true;
+    }
+    // A value tagged by a generic frame keeps that frame's symbolic layout
+    // until an operation in this frame retags it; the validated tag proof
+    // that dominates this projection already selected the active member.
+    let symbolic = matches!(&union.union_type, Type::Union(target)
+        if target.members.iter().any(|member| matches!(member, Type::TypeParam(_))));
+    symbolic
+        && field
+            .strip_prefix("__union_payload_")
+            .is_some_and(|index| index.parse::<usize>().is_ok())
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_union_inject(
+    type_ptr: *const u8,
+    type_len: usize,
+    member_index: usize,
+    payload: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let name = decode_bytes(type_ptr, type_len);
+        let union_type = canonical_runtime_type_from_name(&name)
+            .unwrap_or_else(|| runtime_error("invalid union injection type"));
+        let Type::Union(union) = &union_type else {
+            runtime_error("union injection requires a union type");
+        };
+        if member_index >= union.members.len() {
+            runtime_error("union injection member index is out of range");
+        }
+        // Immediate owned calls pass a registered handle. Unlike an argument
+        // buffer, this boundary has not already detached its registration.
+        let payload = unsafe { consume_owned_value(payload) };
+        let injected = crate::union_runtime::inject_union_member(union, member_index, payload)
+            .unwrap_or_else(|message| runtime_error(message));
+        boxed_typed_value(injected, &name)
+    })
 }
 
 #[cfg_attr(not(coverage), no_mangle)]
@@ -7253,6 +7587,17 @@ pub extern "C-unwind" fn aura_direct_instance_get_field(
         let field = decode_bytes(field_ptr, field_len);
         let cloned = unsafe {
             with_value(value, |value| {
+                if let Value::EnumVariant(variant) = value {
+                    let index = direct_enum_projection_index(variant, &field)
+                        .unwrap_or_else(|message| runtime_error(message));
+                    return try_clone_array_containing_value(&variant.payloads[index]);
+                }
+                if let Value::Union(union) = value {
+                    if !direct_union_projection(union, &field) {
+                        runtime_error("union payload projection does not select the active member");
+                    }
+                    return try_clone_array_containing_value(&union.payload);
+                }
                 let Value::Instance(instance) = value else {
                     runtime_error(format!(
                         "cannot access field `{}` on non-instance `{}`",
@@ -7354,6 +7699,19 @@ pub extern "C-unwind" fn aura_direct_instance_set_field(
     })
 }
 
+fn direct_enum_projection_index(
+    variant: &crate::runtime_value::EnumVariantValue,
+    segment: &str,
+) -> std::result::Result<usize, String> {
+    let Some((name, index)) = crate::mir::enum_payload_projection(segment) else {
+        return Err("invalid enum payload projection".to_string());
+    };
+    if name != variant.variant_name || index >= variant.payloads.len() {
+        return Err("enum payload projection does not select the active variant".to_string());
+    }
+    Ok(index)
+}
+
 fn set_direct_instance_field_owned(
     value: &mut Value,
     segments: &[&str],
@@ -7364,6 +7722,33 @@ fn set_direct_instance_field_owned(
         return Err("direct runtime received an empty instance assignment path".to_string());
     };
     match value {
+        Value::EnumVariant(variant) => {
+            let index = direct_enum_projection_index(variant, projection)?;
+            if rest.is_empty() {
+                variant.payloads[index] = new_value;
+                Ok(())
+            } else {
+                set_direct_instance_field_owned(
+                    &mut variant.payloads[index],
+                    rest,
+                    full_path,
+                    new_value,
+                )
+            }
+        }
+        Value::Union(union) => {
+            if !direct_union_projection(union, projection) {
+                return Err(
+                    "union payload projection does not select the active member".to_string()
+                );
+            }
+            if rest.is_empty() {
+                union.payload = new_value;
+                Ok(())
+            } else {
+                set_direct_instance_field_owned(&mut union.payload, rest, full_path, new_value)
+            }
+        }
         Value::Instance(instance) => {
             if rest.is_empty() {
                 instance.fields.insert((*projection).to_string(), new_value);
@@ -11816,6 +12201,7 @@ where
                 result_is_copy,
                 stack_size,
                 task_ancestry: DirectTaskAncestry::default(),
+                mutable_capture_indices: Vec::new(),
             },
             register_before_submit,
         )
@@ -11830,6 +12216,7 @@ struct DirectTaskSpawn {
     result_is_copy: bool,
     stack_size: Option<usize>,
     task_ancestry: DirectTaskAncestry,
+    mutable_capture_indices: Vec<usize>,
 }
 
 unsafe fn spawn_direct_task_with_external_state_and_ancestry<R>(
@@ -11847,6 +12234,7 @@ where
         result_is_copy,
         stack_size,
         task_ancestry,
+        mutable_capture_indices,
     } = spawn;
     // Build the full state on the spawning task's stack. The child coroutine
     // receives only the ready box pointer, keeping the 272-byte state
@@ -11870,6 +12258,15 @@ where
                 }
                 let args = unsafe { &*(args_address as *const Vec<i64>) };
                 let result_ptr = unsafe { thunk(args.as_ptr(), args.len()) };
+                // A Mutable stored target's environment-owned captures are
+                // taken mutably by the thunk and stay claimed by this child;
+                // its single invocation is over, so release them here (C8).
+                for index in &mutable_capture_indices {
+                    let handle = args[*index];
+                    if handle != 0 {
+                        unsafe { aura_direct_release_value(handle as *mut OpaqueValue) };
+                    }
+                }
                 unsafe { consume_direct_task_result(result_ptr, result_is_copy) }
             }))
         })
@@ -11923,6 +12320,7 @@ pub unsafe extern "C-unwind" fn aura_direct_start_task_call(
             stack_size_present,
             stack_size,
             task_ancestry: DirectTaskAncestry::default(),
+            mutable_capture_indices: Vec::new(),
         })
     }
 }
@@ -12014,6 +12412,7 @@ pub unsafe extern "C-unwind" fn aura_direct_start_task_call_with_frames(
             stack_size_present,
             stack_size,
             task_ancestry,
+            mutable_capture_indices: Vec::new(),
         })
     }
 }
@@ -12101,6 +12500,12 @@ pub unsafe extern "C-unwind" fn aura_direct_start_task_function_with_frames(
             ),
         ),
     });
+    let mutable_capture_indices = closure_captures
+        .iter()
+        .enumerate()
+        .filter(|(_, capture)| capture.mutable && capture.source_place.is_none())
+        .map(|(index, _)| index)
+        .collect::<Vec<_>>();
     let (args_ptr, arg_count) = if closure_captures.is_empty() {
         (args_ptr, arg_count)
     } else {
@@ -12134,6 +12539,7 @@ pub unsafe extern "C-unwind" fn aura_direct_start_task_function_with_frames(
             stack_size_present,
             stack_size,
             task_ancestry,
+            mutable_capture_indices,
         })
     }
 }
@@ -12188,6 +12594,9 @@ struct DirectTaskCall {
     stack_size_present: i64,
     stack_size: i64,
     task_ancestry: DirectTaskAncestry,
+    /// Argument slots holding environment-owned captures a Mutable stored
+    /// target takes mutably; the child releases them after its one call.
+    mutable_capture_indices: Vec<usize>,
 }
 
 unsafe fn start_direct_task_call(call: DirectTaskCall) -> *mut OpaqueValue {
@@ -12195,6 +12604,7 @@ unsafe fn start_direct_task_call(call: DirectTaskCall) -> *mut OpaqueValue {
         thunk_ptr,
         args_ptr,
         arg_count,
+        mutable_capture_indices,
         returns_handle,
         task_group,
         result_is_copy,
@@ -12285,6 +12695,7 @@ unsafe fn start_direct_task_call(call: DirectTaskCall) -> *mut OpaqueValue {
                     result_is_copy: result_is_copy != 0,
                     stack_size,
                     task_ancestry,
+                    mutable_capture_indices,
                 },
                 |task| {
                     group.register_task(task.clone());
@@ -12453,3 +12864,6 @@ pub extern "C-unwind" fn aura_direct_fail_integer_overflow(
 
 #[path = "native_runtime_tests.rs"]
 mod tests;
+#[cfg(test)]
+#[path = "native_union_injection_security_tests.rs"]
+mod union_injection_security_tests;

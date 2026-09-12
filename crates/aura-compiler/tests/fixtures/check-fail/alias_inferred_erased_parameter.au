@@ -1,0 +1,5 @@
+class Box[T]:
+    value: T
+type Hidden[T] = Box[int64]
+def main():
+    value = Hidden(value=42)

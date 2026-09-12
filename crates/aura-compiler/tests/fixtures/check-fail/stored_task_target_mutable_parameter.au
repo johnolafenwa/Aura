@@ -1,0 +1,14 @@
+class Counter:
+    total: int64
+
+type Work = TaskCallable[def(counter: mut Counter) -> int64]
+
+def bump(counter: mut Counter) -> int64:
+    counter.total = counter.total + 1
+    return counter.total
+
+def main():
+    mut counter = Counter(total=0)
+    with TaskGroup() as group:
+        task = group.start(Work(bump), counter)
+        print(task.result_or(-1, timeout=1s))

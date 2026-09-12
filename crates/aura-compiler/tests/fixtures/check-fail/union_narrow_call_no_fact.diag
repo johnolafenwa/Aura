@@ -1,0 +1,6 @@
+error[AU2003]: operator `+` is not supported for union `int64 | None`: unions have no ordering or arithmetic
+ --> crates/aura-compiler/tests/fixtures/check-fail/union_narrow_call_no_fact.au:6:15
+  |
+6 |         print(read() + 1)
+  |               ^
+  = help: select one member with a type pattern before comparing or computing

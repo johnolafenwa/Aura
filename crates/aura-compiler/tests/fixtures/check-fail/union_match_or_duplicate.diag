@@ -1,0 +1,5 @@
+error[AU2013]: duplicate or subsumed alternative in or-pattern
+ --> crates/aura-compiler/tests/fixtures/check-fail/union_match_or_duplicate.au:4:32
+  |
+4 |         case int64 as number | int64 as number:
+  |                                ^

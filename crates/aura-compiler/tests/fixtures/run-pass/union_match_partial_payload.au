@@ -1,0 +1,11 @@
+enum Packet:
+    Data(int64 | str, bool)
+def main():
+    value = Packet.Data(42, false)
+    match value:
+        case Packet.Data(int64 as number, true):
+            print(0)
+        case Packet.Data(int64 as number, false):
+            print(number)
+        case Packet.Data(str as text, _):
+            print(text)

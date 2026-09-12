@@ -1,0 +1,6 @@
+error[AU2003]: cannot compare `int64 | str` and `int64 | None`: expected the same union type or an eligible member
+ --> crates/aura-compiler/tests/fixtures/check-fail/union_member_equality_other_union.au:4:19
+  |
+4 |     print(left == right)
+  |                   ^
+  = help: compare a direct member value, or select the member with a type pattern first

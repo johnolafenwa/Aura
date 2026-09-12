@@ -1,0 +1,7 @@
+error[AU2008]: cannot compare `Callable[def(value: int64) -> int64]` because `Callable[def(value: int64) -> int64]` does not define equality
+ --> crates/aura-compiler/tests/fixtures/check-fail/callable_storage_equality.au:9:11
+  |
+9 |     print(left == right)
+  |           ^
+  = note: Aura has no identity-equality fallback; equality-dependent operations require a defined value relation
+  = help: compare explicit results or a stable discriminant; callable identity is not value equality

@@ -1,0 +1,5 @@
+error[AU2002]: constructor for alias `Nested`: conflicting inferred types for `T`: `int64` and `str`
+ --> crates/aura-compiler/tests/fixtures/check-fail/alias_inferred_repeated.au:6:13
+  |
+6 |     value = Nested(first=[42], second="wrong")
+  |             ^

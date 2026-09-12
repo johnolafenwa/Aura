@@ -1,0 +1,41 @@
+class Pair:
+    left: int64
+    right: int64
+
+def total(pair: Pair) -> int64:
+    return pair.left + pair.right
+
+def main():
+    values = [1, 2, 3]
+    pair = Pair(left=4, right=5)
+    view v = values
+    view p = pair
+    print(f"{v.len()} items and {p.left}")
+    print(v.len() as float64)
+    print((v.len(), p.right)[0])
+    print([v.len(), p.left].len())
+    print({v.len()}.len())
+    print({"n": v.len()}.len())
+    print(v.len() if p.left > 1 else 0)
+    print(0 - v.len())
+    print(1 < v.len() < 10)
+    print(2 in values and p.left in [4])
+    print(total(pair=p))
+    assert v.len() == 3, f"expected {v.len()}"
+    mut count = 0
+    while count < v.len():
+        count += 1
+    print(count)
+    for item in values:
+        count += item
+    print(count)
+    match p.left:
+        case 4:
+            print("four")
+        case _:
+            print("other")
+    (first, second) = (v.len(), p.right)
+    print(first + second)
+    shown: def() -> int64 = lambda: 1
+    print(shown() + v.len())
+    print(total(p))

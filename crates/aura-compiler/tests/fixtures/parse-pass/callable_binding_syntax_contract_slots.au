@@ -1,0 +1,3 @@
+type Mixed = def(int64, label: str, *, retries: int32 = ...) -> bool
+type Access = def(input: own list[int64], output: mut int64) -> None
+type PositionalDefault = def(int64 = ...) -> int64

@@ -1,0 +1,4 @@
+from alias_support.types import Entries, Forward
+
+def accept(entries: Entries[str, int64], values: Forward[int64]):
+    pass

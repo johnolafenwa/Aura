@@ -1,0 +1,6 @@
+error[AU2015]: callable contract mismatch: lambda parameter `value` precedes the `*` keyword-only boundary, but the expected contract makes it keyword-only
+ --> crates/aura-compiler/tests/fixtures/check-fail/callable_binding_lambda_keyword_boundary_mismatch.au:2:50
+  |
+2 |     step: def(*, value: int64) -> int64 = lambda value: value + 1
+  |                                                  ^
+  = help: annotate the destination with a contract every value satisfies, or adapt a value explicitly through a thin callable alias call such as `Alias(function)`

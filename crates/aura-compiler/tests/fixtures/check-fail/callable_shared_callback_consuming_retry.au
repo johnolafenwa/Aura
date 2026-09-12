@@ -1,0 +1,7 @@
+import control
+
+type Once = Callable[own def() -> Result[int64, str]]
+
+def main():
+    once = Once(lambda: Result.Ok(1))
+    print(control.retry(once, max_attempts=2))

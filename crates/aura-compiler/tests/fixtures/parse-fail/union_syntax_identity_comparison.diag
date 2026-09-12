@@ -1,0 +1,5 @@
+error[AU1101]: expected None after 'is' or 'is not'
+ --> crates/aura-compiler/tests/fixtures/parse-fail/union_syntax_identity_comparison.au:2:18
+  |
+2 |     return value is 1
+  |                  ^

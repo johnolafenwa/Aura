@@ -63,8 +63,12 @@ This page documents known current limits of the Aura compiler and runtime.
 - Capture-free named functions are copy, `Transfer` values. They may be stored
   and called through `def(T1, mut T2, own T3) -> R` types and used as task
   targets; bare function-type parameters are shared.
-  Instance, associated, and trait method values remain unavailable; the task
-  API retains its direct associated-method-without-`self` target carve-out.
+  `receiver.method` binds a closure over the receiver with the method's
+  contract, and `Class.method` on a non-generic class is a function value;
+  a generic method's type arguments come from `method[T]` or an expected
+  contract, and an associated method of a generic class still needs a call.
+  A stored callable may return a view of one named parameter; a `from self`
+  view result and loan captures still cannot be stored.
 - Lambdas with parameters require complete expected parameter types; a
   zero-parameter lambda may infer `def() -> R` from its expression body.
   A lambda without a capture list captures by value. An explicit exhaustive
@@ -76,9 +80,14 @@ This page documents known current limits of the Aura compiler and runtime.
   annotated returns because those boundaries describe capture-free code
   pointers. Compiler-known repeatable callback sites preserve closure
   metadata; task start accepts a qualifying closure by move for one call.
-  Conditional and `match` expressions cannot merge capturing closures from
-  multiple branches because Phase 6.3 has no closure-union type; invoke the
-  closure within each branch or use capture-free lambdas or named functions.
+  Conditional and `match` expressions merge capturing closures only through
+  an explicit common `Callable[...]` contract on the destination; otherwise
+  invoke the closure within each branch or use capture-free lambdas or named
+  functions. Owned callable storage (`Callable[...]`, `TaskCallable[...]`)
+  holds owned captures only and is packed explicitly through an alias call.
+  Callable identities are tracked through at most eight levels of class
+  field nesting; a call through a callable stored deeper than that is
+  refused by the MIR validator.
 - List, set, and dictionary comprehensions are eager and always return fresh owned
   collections. Their clauses use bare-loop iteration only; there is no
   comprehension `mut`/`own` source form, early `break`/`continue`, or lazy
@@ -125,8 +134,10 @@ This page documents known current limits of the Aura compiler and runtime.
   nominal type with an application-specific `Ord` implementation when text
   records require ordering.
   Keyed `sort`, `map`, and `filter` accept only their exact bare/shared callback
-  parameter capabilities. There is no comparator-form sort, lazy map/filter,
-  parallel traversal, or algorithm callback with mutable/owned element access.
+  parameter capabilities, from a named function, a repeatable closure, or a
+  packed Shared callable value. There is no comparator-form sort, lazy
+  map/filter, parallel traversal, mutable standard-library algorithm callback
+  contract, or algorithm callback with mutable/owned element access.
 - `TaskGroup.start(...)` and `start_soon(...)` support bare shared and `own`
   target parameters; `mut` targets are rejected because child tasks cannot
   write back through the starting call frame.

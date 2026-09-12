@@ -908,6 +908,7 @@ fn discover_test_hooks(syntax: &aura_compiler::ast::Module) -> Result<TestHooks,
             return Err(Diagnostic::coded_at(
                 "AU2999",
                 match item {
+                    Item::TypeAlias(decl) => decl.span,
                     Item::Class(decl) => decl.span,
                     Item::Enum(decl) => decl.span,
                     Item::ExternFunction(decl) => decl.name_span,
@@ -1135,7 +1136,7 @@ fn is_test_registration_type_ref(ty: &aura_compiler::ast::TypeRef) -> bool {
     );
     let case_is_function = matches!(
         &elements[1].kind,
-        TypeRefKind::Function { params, return_type }
+        TypeRefKind::Function { params, return_type, .. }
             if params.is_empty() && is_none_type_ref(return_type)
     );
     label_is_str && case_is_function
@@ -2494,6 +2495,7 @@ fn native_cache_root() -> Option<PathBuf> {
 const NATIVE_RUNTIME_BUILD_LOCK: &str = ".aura-native-runtime-build.lock";
 const NATIVE_CACHE_LOCKS: &str = "locks";
 
+#[derive(Debug)]
 struct NativeBuildLock {
     _file: fs::File,
 }
@@ -4902,8 +4904,7 @@ mod tests {
         fs::write(&target, b"external").expect("symlink target should be writable");
         symlink(&target, &symlink_lock).expect("lock symlink should be creatable");
         let symlink_error = acquire_native_build_lock_at(&symlink_lock, None)
-            .err()
-            .expect("a lock symlink must be rejected");
+            .expect_err("a lock symlink must be rejected");
         assert!(
             symlink_error.contains("failed to open native build lock"),
             "{symlink_error}"
@@ -4914,8 +4915,7 @@ mod tests {
         fs::set_permissions(&writable_lock, fs::Permissions::from_mode(0o666))
             .expect("writable lock permissions should be configurable");
         let writable_error = acquire_native_build_lock_at(&writable_lock, None)
-            .err()
-            .expect("a shared-writable lock must be rejected");
+            .expect_err("a shared-writable lock must be rejected");
         assert!(
             writable_error.contains("not group- or world-writable"),
             "{writable_error}"
@@ -5210,8 +5210,7 @@ mod tests {
         )
         .expect("oversized-record native child should start");
         let error = wait_for_native_binary(spawned)
-            .err()
-            .expect("oversized record must be rejected before JSON decoding");
+            .expect_err("oversized record must be rejected before JSON decoding");
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
         assert!(
             error.to_string().contains("exceeded"),

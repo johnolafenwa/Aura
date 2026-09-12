@@ -1,0 +1,16 @@
+def main():
+    mut value: Option[int64 | str] = Option.Some(41)
+    match mut value:
+        case Option.Some(int64 as number):
+            number += 1
+        case Option.Some(str as text):
+            text = "changed"
+        case Option.None:
+            pass
+    match value:
+        case Option.Some(int64 as number):
+            print(number)
+        case Option.Some(str as text):
+            print(text)
+        case Option.None:
+            print("missing")

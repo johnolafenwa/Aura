@@ -1,0 +1,5 @@
+error[AU2002]: argument type mismatch for function `retry`: expected `def() -> Result[int64, str]`, found `Callable[own def() -> Result[int64, str]]`
+ --> crates/aura-compiler/tests/fixtures/check-fail/callable_shared_callback_consuming_retry.au:7:25
+  |
+7 |     print(control.retry(once, max_attempts=2))
+  |                         ^

@@ -1,0 +1,5 @@
+error[AU2010]: invalid or incomplete union member `list`
+ --> crates/aura-compiler/tests/fixtures/check-fail/union_member_bare_list.au:1:15
+  |
+1 | type Broken = list | None
+  |               ^

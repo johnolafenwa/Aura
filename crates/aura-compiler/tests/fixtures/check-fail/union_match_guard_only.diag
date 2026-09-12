@@ -1,0 +1,5 @@
+error[AU2013]: match does not cover int64
+ --> crates/aura-compiler/tests/fixtures/check-fail/union_match_guard_only.au:3:5
+  |
+3 |     match value:
+  |     ^

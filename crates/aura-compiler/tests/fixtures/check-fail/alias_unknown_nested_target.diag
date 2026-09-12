@@ -1,0 +1,5 @@
+error[AU2001]: unknown type `Missing`
+ --> crates/aura-compiler/tests/fixtures/check-fail/alias_unknown_nested_target.au:1:23
+  |
+1 | type Broken[T] = list[Missing[T]]
+  |                       ^

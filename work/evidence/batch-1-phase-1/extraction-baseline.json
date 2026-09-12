@@ -1,0 +1,65 @@
+{
+  "cli_and_native_acceptance": {
+    "cli_passed": 378,
+    "failed": 0,
+    "native_codegen_acceptance_passed": 1
+  },
+  "digest_algorithm": "SHA-256 of sorted tracked path + newline + SHA-256(file bytes) + newline for every entry in each category",
+  "fixture_categories": {
+    "check-fail": {
+      "aura_sources": 395,
+      "files": 790,
+      "sha256": "05240d90ecca227748aa659789d0b84ce99164aee5200a90c9ac62cc40738286"
+    },
+    "check-pass": {
+      "aura_sources": 89,
+      "files": 89,
+      "sha256": "b4236b910ff4838f8ceb9760e622b65673e2dd51f05da709b1926d4053c2fa80"
+    },
+    "check-path-fail": {
+      "aura_sources": 6,
+      "files": 11,
+      "sha256": "ad39df23600cc1cf7480154a551f1596529f0ee0c61e48d772fb8dfde44424a1"
+    },
+    "check-path-pass": {
+      "aura_sources": 4,
+      "files": 4,
+      "sha256": "de224a06116d08d84415c429aa59163e87f54e06e822e069fcd34cbf4b6f082b"
+    },
+    "parse-fail": {
+      "aura_sources": 32,
+      "files": 64,
+      "sha256": "331060ef0fd2c67efef9d9b2f3274f57951de79c0ca808761a3abfd381b2bad0"
+    },
+    "parse-pass": {
+      "aura_sources": 36,
+      "files": 36,
+      "sha256": "48829021397bddbb1f8a78d6abcbcfb8cbd0331fb23f9445a5c402a2d4e15b88"
+    },
+    "python-hints": {
+      "aura_sources": 11,
+      "files": 33,
+      "sha256": "24399abe313bc3861166980989a1fd3734ef8ab94ad95ee32197441b995bd90d"
+    },
+    "run-fail": {
+      "aura_sources": 94,
+      "files": 188,
+      "sha256": "86ec77b72dc164216778e8f6e8247a00a7946457f9ff2373185a4c72d96ba2e5"
+    },
+    "run-pass": {
+      "aura_sources": 301,
+      "files": 592,
+      "sha256": "61cfe061a04915a557b1f9c8102ff0f2b2cb3ccd9aaa054680b61f19821f2506"
+    }
+  },
+  "fixture_suites": {
+    "failed": 0,
+    "passed": 9
+  },
+  "reference_commit": "b05dddaa449af9e6629d5d2c13592dab655cd564",
+  "sema_source_sha256": "5e75d822139998a4bfcbd6b8084dc839dd6c39b28a580f576bbe1e96688b7ec6",
+  "semantic_characterization": {
+    "failed": 0,
+    "passed": 2
+  }
+}

@@ -1,0 +1,9 @@
+def consume(items: own list[int64]):
+    pass
+def main():
+    value: list[int64] | None = [1]
+    match value:
+        case list[int64] as items:
+            consume(items=items)
+        case None:
+            pass

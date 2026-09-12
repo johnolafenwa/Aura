@@ -1,0 +1,28 @@
+def read(index: int64) -> int64 | None:
+    if index == 1 or index == 3:
+        return None
+    return index * 2
+
+def main():
+    mut index = 0
+    mut total = 0
+    while index < 5:
+        current = read(index)
+        index += 1
+        if current is None:
+            continue
+        total += current
+    print(total)
+    mut found: int64 | None = None
+    mut probe = 0
+    while probe < 5:
+        candidate = read(probe)
+        probe += 1
+        if candidate is None:
+            continue
+        found = candidate
+        break
+    if found is None:
+        print("none found")
+    else:
+        print(found * 10)

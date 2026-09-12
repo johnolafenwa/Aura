@@ -2552,7 +2552,7 @@ such as `self: Counter` is not a receiver and is rejected with a diagnostic
 naming the valid forms. `Self` may be used in class method parameter and return
 type positions and denotes the enclosing class specialization.
 
-An associated method has no implicit `self` and is called as `Counter.zero()`. Instance syntax is reserved for methods with a compatible receiver and for trait methods selected for the instance type.
+An associated method has no implicit `self` and is called as `Counter.zero()`. Instance syntax is reserved for methods with a compatible receiver and for trait methods selected for the instance type. Named without a call, `Counter.zero` is a function value with the method's contract (non-generic classes only), `counter.read` is a bound method closure over the receiver, and a generic method spells its type arguments as `method[T]`; see [Closures](/manual/closures#bound-methods).
 
 ## Mutation
 
@@ -2934,7 +2934,7 @@ The JSON result is an array of `{ "name": str, "kind": str, "detail": str }` obj
 `ast-json`, `analyze`, `complete`, and `lsp` emit JSON. The `analyze` and `complete` shapes described here are maintained tooling contracts for Aura 0.3. `ast`, `ast-json`, and `mir` expose compiler inspection data for people and tests; their exact formatting and internal node/block shape are not a stable cross-version serialization API.
 
 `aura lsp` is a persistent JSON-lines compiler service. Every request requires
-`semantic_interface_version: 6` plus string fields `method`, `path`, and
+`semantic_interface_version: 14` plus string fields `method`, `path`, and
 `source`; `id` is optional and is echoed in the response. Supported requests
 are:
 
@@ -2944,7 +2944,7 @@ are:
 ```
 
 Each response is one line containing the same `id`,
-`semantic_interface_version: 6`, and either `result` or an `error` string.
+`semantic_interface_version: 14`, and either `result` or an `error` string.
 Paths give the virtual source a package/import context; ranges and completion
 positions are zero-based. A missing or different semantic interface version is
 an incompatible request and returns a schema-mismatch error.
@@ -3132,7 +3132,7 @@ Tool-side mutations are explicit: `fmt` without `--check`, `deps update`, and su
 
 ## Diagnostics
 
-Compiler-backed commands can surface the complete append-only registry. `AU1001` means invalid lexical input; `AU1002` means an invalid f-string delimiter; and `AU1101` means invalid syntax. `AU2001` means name-resolution failure; `AU2002` means type mismatch; `AU2003` means unsupported operator; `AU2004` means argument-binding failure; `AU2005` means unsupported syntax or feature; `AU2006` means a builtin method collision; `AU2007` means builtin function redefinition; `AU2008` means equality unavailable; and `AU2999` means a general compile-time rejection without a narrower code. `AU3001` means use of a moved value; `AU3002` means a borrow violation; `AU3003` means a mutability violation; `AU3004` means an invalid ownership mode; `AU3005` means a non-copy indexed read; `AU3006` means a non-copy indexed compound assignment; `AU3007` means non-cloneable state duplication; `AU3008` means a non-transferable task or Queue boundary; `AU3009` means single-consumer task-result duplication; and `AU3010` means a view escape or returned-view provenance failure. `AU4001` means a general runtime trap; `AU4002` means arithmetic overflow or underflow; `AU4003` means a bounds or lookup violation; `AU4004` means a zero divisor; `AU4005` means a resource, allocation, or I/O failure; `AU4006` means invalid runtime configuration; and `AU4007` means a numeric Array shape or reduction violation. The structured schema is defined in [Diagnostics](/manual/diagnostics).
+Compiler-backed commands can surface the complete append-only registry. `AU1001` means invalid lexical input; `AU1002` means an invalid f-string delimiter; and `AU1101` means invalid syntax. `AU2001` means name-resolution failure; `AU2002` means type mismatch; `AU2003` means unsupported operator; `AU2004` means argument-binding failure; `AU2005` means unsupported syntax or feature; `AU2006` means a builtin method collision; `AU2007` means builtin function redefinition; `AU2008` means equality unavailable; `AU2010` means a union member or context failure, including an extern union other than the `Handle | None` result; `AU2011` means an ambiguous union injection; `AU2012` means a cyclic type alias; `AU2013` means a union pattern coverage failure; `AU2014` means invalidated narrowing; `AU2015` means a callable contract mismatch; and `AU2999` means a general compile-time rejection without a narrower code. `AU3001` means use of a moved value; `AU3002` means a borrow violation; `AU3003` means a mutability violation; `AU3004` means an invalid ownership mode; `AU3005` means a non-copy indexed read; `AU3006` means a non-copy indexed compound assignment; `AU3007` means non-cloneable state duplication; `AU3008` means a non-transferable task or Queue boundary; `AU3009` means single-consumer task-result duplication; and `AU3010` means a view escape or returned-view provenance failure. `AU4001` means a general runtime trap; `AU4002` means arithmetic overflow or underflow; `AU4003` means a bounds or lookup violation; `AU4004` means a zero divisor; `AU4005` means a resource, allocation, or I/O failure; `AU4006` means invalid runtime configuration; and `AU4007` means a numeric Array shape or reduction violation. The structured schema is defined in [Diagnostics](/manual/diagnostics).
 
 Human diagnostics render as `error[AU####]` with source context when a span is
 available. Ordinary notes are followed by readable call-chain and task-entry
@@ -3150,7 +3150,7 @@ The parser, checker, package resolver, diagnostic model, analysis engine, and MI
 
 `aura run --backend auto` prefers the direct backend and degrades to the MIR runtime only when direct building or launching is unavailable. Once a direct child runs, an Aura trap, signal termination, wait failure, or diagnostic-protocol failure is a final program/execution outcome and never triggers MIR fallback. Human mode prints an actual fallback reason on standard error before the MIR program runs; JSON mode includes it in the final structured report after execution. A forced `direct` run never degrades, so a parity or benchmark caller cannot silently measure the other backend. Every backend observes the same program arguments, standard output, exit code, and complete runtime diagnostic, including typed call frames and task ancestry.
 
-The native path is content-addressed. A successful direct build atomically publishes its binary, that artifact's SHA-256, and a key-bound unique entry identity into a cache keyed by native cache format `v5`, compiler-owned semantic-interface schema version `6`, this compiler's version, the host target, the backend, the exact linked runtime archive content, its ordered native link arguments, and the complete lowered program, which already incorporates the entry source and every resolved dependency source. The format and semantic identities are independent key fields: changing compiler-owned type or ownership metadata invalidates artifacts even if the native container format remains readable. Cache artifacts above 512 MiB are simply not retained; the just-built program still runs. A later run with the same inputs requires a regular directory and bounded regular sidecars, verifies the entry identity, digest, artifact size, execute permission, and platform-native executable shape, and only then uses the entry. It launches a private copy of exactly those verified bytes through a no-shell-fallback native execution path, so replacement of the shared cache pathname after verification cannot substitute different bytes. Missing or mismatched metadata, truncation, a non-regular member, a lost execute permission, or an executable-format/architecture rejection makes the entry a cache miss: Aura quarantines and removes that exact entry, then rebuilds before running. A temporary-directory failure, process-resource failure, `noexec` mount, or other environmental launch failure is not evidence that verified cache bytes are corrupt; Aura preserves the entry and reports or falls back according to the selected backend.
+The native path is content-addressed. A successful direct build atomically publishes its binary, that artifact's SHA-256, and a key-bound unique entry identity into a cache keyed by native cache format `v5`, compiler-owned semantic-interface schema version `14`, this compiler's version, the host target, the backend, the exact linked runtime archive content, its ordered native link arguments, and the complete lowered program, which already incorporates the entry source and every resolved dependency source. The format and semantic identities are independent key fields: changing compiler-owned type or ownership metadata invalidates artifacts even if the native container format remains readable. Cache artifacts above 512 MiB are simply not retained; the just-built program still runs. A later run with the same inputs requires a regular directory and bounded regular sidecars, verifies the entry identity, digest, artifact size, execute permission, and platform-native executable shape, and only then uses the entry. It launches a private copy of exactly those verified bytes through a no-shell-fallback native execution path, so replacement of the shared cache pathname after verification cannot substitute different bytes. Missing or mismatched metadata, truncation, a non-regular member, a lost execute permission, or an executable-format/architecture rejection makes the entry a cache miss: Aura quarantines and removes that exact entry, then rebuilds before running. A temporary-directory failure, process-resource failure, `noexec` mount, or other environmental launch failure is not evidence that verified cache bytes are corrupt; Aura preserves the entry and reports or falls back according to the selected backend.
 
 On maintained Unix hosts, cache establishment is coordinated across processes. A short runtime-identity lock protects source-checkout runtime discovery, and a separate writer lock for each content key protects the miss/recheck/build/publish sequence. Therefore, N concurrent cold runs of the same program perform one build; after that publication, the other N-1 processes recheck and consume the verified entry. Existing verified hits take the optimistic read path and do not wait for a writer holding that key. Locks are released before linking output is executed, while atomic publication and invalidation continue to ensure that readers never observe a partial entry and a stale invalidator cannot delete a replacement published for the same key.
 
@@ -3173,7 +3173,7 @@ streaming contract is ratified.
 
 `AURA_CACHE_DIR` selects the cache directory; the default is `~/.cache/aura/native`. The directory is a trust boundary. Its colocated SHA-256 detects corruption but does not authenticate bytes written by a hostile account, so the root must be private to the current OS user and every writer with access to it must be trusted. On the maintained Unix hosts, Aura rejects a root that is owned by another user or writable by group/other and creates or tightens accepted cache directories to mode `0700`. Private launch copies are removed after the child exits. Each launch carries an inherited exclusive lease, so later cleanup preserves the directory while either the `aura` parent or native child is still using it. Interrupted cache-publication, memo, and quarantine stages are collected only after their encoded 24-hour grace period and confirmation that their owner process is gone. An installed immutable runtime can still perform a direct build when caching is disabled or unavailable; no cache lock is required merely to build, and the uncached artifact is not retained.
 
-ADR-0031 ratifies the command split: `aura run` defaults to `mir` for the interactive edit-run path, while `aura build` defaults to `auto` for artifact production. Maintained measurements put a cold miss at about 1.3 seconds; a direct hello-world executable is roughly 57 MB of statically linked runtime. Each cache hit reads, hashes, and privately materializes the artifact, and workloads dominated by programs seen once, including CI, still pay the cold path on every program. `aura build --backend direct` uses native direct emission, and `--backend auto` may select the checked MIR-launcher fallback. The language server delegates semantic analysis and completion to the persistent compiler service; every JSON-lines request and response identifies semantic-interface schema version `6`. A missing or different identity closes the incompatible service and invalidates all document analysis before the lexical recovery path is used, so cached function-type or ownership metadata cannot cross compiler versions. The lexical fallback is recovery-only and is not a second language implementation.
+ADR-0031 ratifies the command split: `aura run` defaults to `mir` for the interactive edit-run path, while `aura build` defaults to `auto` for artifact production. Maintained measurements put a cold miss at about 1.3 seconds; a direct hello-world executable is roughly 57 MB of statically linked runtime. Each cache hit reads, hashes, and privately materializes the artifact, and workloads dominated by programs seen once, including CI, still pay the cold path on every program. `aura build --backend direct` uses native direct emission, and `--backend auto` may select the checked MIR-launcher fallback. The language server delegates semantic analysis and completion to the persistent compiler service; every JSON-lines request and response identifies semantic-interface schema version `14`. A missing or different identity closes the incompatible service and invalidates all document analysis before the lexical recovery path is used, so cached function-type or ownership metadata cannot cross compiler versions. The lexical fallback is recovery-only and is not a second language implementation.
 
 Backend parity is a release gate. A construct accepted by one maintained
 execution backend must have the same observable result or complete diagnostic
@@ -3302,6 +3302,20 @@ silently changed. The body must have exactly the expected result type.
 Parameters are in scope only in the body and follow the ordinary no-shadowing
 rules.
 
+The expected contract's names, keyword-only boundary, and default promises
+bind the lambda too (see [Function Values](/manual/functions#function-values)).
+Where the expected slot is named, the lambda parameter must use that name;
+the lambda's `*` boundary must sit where the expected contract's does; and a
+lambda cannot satisfy a slot written `= ...`, because only a named
+declaration supplies a default. Each mismatch reports `AU2015`. A
+compiler-known callback site such as `list.map` supplies positional parameter
+types only, so its lambda parameters may use any names.
+
+```aura
+combine: def(left: int64, *, right: int64) -> int64 = lambda left, *, right: left - right
+print(combine(10, right=3))
+```
+
 The compiler does not guess parameter types from body operations. Generic
 lambdas and lambda parameter type annotations are unavailable. A capture-free
 lambda uses the ordinary function-value representation and is Copy and
@@ -3312,18 +3326,84 @@ A capturing closure retains semantic environment and call-kind metadata that
 an arbitrary written `def(...) -> R` storage type does not describe. It may be
 held in an immutable inferred or contextually typed local, called directly,
 passed directly to compiler-known repeatable callback sites such as the list
-algorithms and `control.retry`, or moved into a qualifying task start. It
-cannot be coerced through an arbitrary written `def` parameter, stored in a
-`def` field or collection element, or returned through an annotated `def`
-result. Those metadata-erasing boundaries report `AU2002`.
+algorithms and `control.retry` (which also borrow a packed Shared value with
+the same contract), moved into a qualifying task start, or packed
+into an owned callable storage type. It cannot be coerced through a thin
+`def` parameter, field, element, or annotated result; those boundaries
+report `AU2002`.
 
-A conditional or `match` expression also cannot merge capturing closure
-values from different branches. The branches may have different capture
-sets, ownership states, and call kinds, and Phase 6.3 has no closure-union
-type that preserves those differences. Call the closure inside each branch,
-or return capture-free lambdas or named functions with one structural
-`def(...) -> R` type. Creating and calling a closure wholly inside a branch
-remains supported.
+`Callable[def(...) -> R]`, `Callable[mut def(...) -> R]`, and
+`Callable[own def(...) -> R]` are owned storage types for a Shared, Mutable,
+or Consuming callable with a complete contract (see [Function
+Values](/manual/functions#function-values)) and an erased capture set;
+`TaskCallable[...]` is the same storage whose every capture is proven
+Transfer. Packing is explicit: calling a non-generic alias of such a type
+with one value packs it, and the packed value keeps the closure's own
+environment.
+
+```aura
+class Counter:
+    total: int64
+
+    def bump(mut self) -> int64:
+        self.total = self.total + 1
+        return self.total
+
+type Reader = Callable[def() -> int64]
+type Bumper = Callable[mut def() -> int64]
+type Finish = Callable[own def() -> str]
+
+def make_reader(base: int64) -> Reader:
+    offset = base + 1
+    return Reader(lambda: offset)
+
+def make_bumper() -> Bumper:
+    counter = Counter(total=0)
+    return Bumper(lambda [own counter]: counter.bump())
+
+reader = make_reader(1)
+print(reader())
+print(reader())
+def make_finish(text: own str) -> Finish:
+    return Finish(lambda [own text]: text)
+
+def finish_once(finish: own Finish) -> str:
+    return finish()
+
+mut bumper = make_bumper()
+print(bumper())
+print(bumper())
+print(finish_once(make_finish("done")))
+```
+
+The packed value's contract must be admitted by the storage contract, and
+its call kind may only weaken: a Shared value packs into any kind, a
+Mutable value into Mutable or Consuming storage, and a Consuming value only
+into Consuming storage; the reverse reports `AU2015`. A closure or function
+value that reaches a `Callable` destination without the constructor reports
+`AU2015` as implicit erased storage. A loan capture (`[values]`,
+`[mut values]`, or a live view) cannot be packed (`AU3010`); move or clone
+an owned value into the lambda instead. Packing into `TaskCallable[...]`
+additionally requires every capture type to be Transfer (`AU3008`, naming
+the capture); an ordinary erased `Callable` is never Transfer.
+
+Packed values are non-Copy and non-cloneable, so `dict.get`, snapshots, and
+generic cloning reject them (`AU3007`), they have no equality (`AU2008`), and
+they move like any owned value (`AU3001` after a move or a consuming call).
+They may be stored in parameters (`mut Bumper`, `own Finish`), results,
+class fields, list and dictionary elements, and cross modules through public
+aliases. A Shared value is called through any access, a Mutable value only
+through a mutable place (`AU3003`), and a Consuming value once, by an owner;
+a callable element of a list or dictionary is called through a call-scoped
+shared read, and a Consuming element must be removed before it is consumed.
+
+A conditional or `match` expression merges capturing closures only through
+an explicit common `Callable` contract on the destination (an annotation,
+parameter, or return type): each reached branch packs its own value, and
+untaken lambda expressions acquire no captures. Without such a contract,
+different capturing closures still cannot merge; call the closure inside
+each branch, or return capture-free lambdas or named functions with one
+structural `def(...) -> R` type.
 
 A resolved name in a lambda without a list is a capture only when it denotes
 an outer owned local or an `own` parameter. Lambda parameters, module
@@ -3406,6 +3486,14 @@ non-Transfer leaf retains the ordinary `AU3008` boundary explanation. A
 closure containing any shared or mutable loan is always non-Transfer and
 cannot cross a task, Queue, supervisor, detached-work, or FFI boundary.
 
+A body may call a `mut` operation on an owned capture, whether it moved or
+copied into the environment implicitly or through `own name`. The closure is
+then Mutable: it must be held in a `mut` local or called through a mutable
+place, and the updated capture value persists in the environment across
+calls, so a packed counter counts across invocations. The original outer
+binding is not changed. A shared-view capture stays read-only (`AU3003`);
+capture it `mut` for a mutable view of the original place instead.
+
 ### Comprehension Interaction
 
 Comprehensions do not change closure capture. A lambda enclosing a
@@ -3433,15 +3521,20 @@ consuming closure.
 
 `AU1101` reports malformed lambda parameter or body syntax. `AU2002` reports a
 missing or mismatched parameter context, parameter capability, result type,
-metadata-erasing storage boundary, or a consuming closure supplied where a
-repeatable callback is required. `AU3001` reports use after a non-Copy value
-moved into a closure and use after a consuming closure call. `AU3002` rejects
-overlapping capture loans and source accesses. `AU3003` rejects capability
-escalation or a mutable-repeatable call through an immutable closure place.
-`AU3008` reports a closure whose
-captured environment cannot cross a task boundary because some captured value
-is not Transfer. `AU3010` reports a loan closure escaping into storage or a
-metadata-erasing callable boundary.
+thin-`def` storage boundary, or a consuming closure supplied where a
+repeatable callback is required. `AU2015` reports implicit erased storage
+(a closure or function reaching `Callable[...]` without its constructor), a
+packed value whose contract is not admitted, or a call kind that would
+strengthen. `AU3001` reports use after a non-Copy value moved into a closure
+and use after a consuming closure or consuming callable call. `AU3002`
+rejects overlapping capture loans and source accesses. `AU3003` rejects
+capability escalation, mutation of a shared-view capture, or a Mutable call
+through an immutable place. `AU3007` rejects duplicating a packed callable.
+`AU3008` reports a closure whose captured environment cannot cross a task
+boundary or become `TaskCallable` because some captured value is not
+Transfer. `AU3010` reports a loan closure escaping into storage, a loan
+capture packed into owned callable storage, or a metadata-erasing callable
+boundary.
 
 The shared-capability diagnostic recommends cloning to an owned local or
 taking owned input. Move diagnostics identify closure creation or the
@@ -3458,20 +3551,132 @@ analysis and the language server expose lambda parameter scope,
 captured-name definitions, callable hover, completions, and the compiler-owned
 diagnostics.
 
+## Bound Methods
+
+`receiver.method` outside call position is a bound method: a
+compiler-synthesized closure whose single capture is the receiver and whose
+contract is the method's own parameter names, keyword-only boundary, default
+availability, passing modes, and result. The call kind follows the receiver
+capability: a `self` method binds a Repeatable closure, a `mut self` method
+binds a Mutable closure whose receiver is environment-owned state updated on
+every call, and an `own self` method binds a Consuming closure. The receiver
+is acquired exactly once when the bound method is created. A `copy class`
+receiver is snapshotted, so later calls never change the original. Any other
+receiver must be an owned local, which moves into the closure, or a fresh
+temporary. A shared or mutable parameter and a view cannot be bound by this
+spelling; clone the value into an owned local first. Trait methods selected
+for the concrete receiver type bind the same way and dispatch statically. An
+omitted argument with a declaration default is supplied by the method's own
+default expression, evaluated at the call. Bound methods store, pack, and
+start like any closure with the same call kind.
+
+```aura
+class Counter:
+    total: int64
+
+    def read(self) -> int64:
+        return self.total
+
+    def bump(mut self, by: int64 = 1) -> int64:
+        self.total = self.total + by
+        return self.total
+
+type Bumper = Callable[mut def(by: int64 = ...) -> int64]
+
+def main():
+    counter = Counter(total=1)
+    read = counter.read
+    print(read())
+    mut bump = Bumper(Counter(total=10).bump)
+    print(bump())
+    print(bump(by=5))
+```
+
+A generic method's type arguments must be concrete: write them explicitly
+as `receiver.method[T]` (or `Class.method[T]` for an associated method), or
+let an expected callable contract supply them, such as the contract of a
+`Callable[...]` constructor call or an annotated function-typed local for an
+associated method. A bare generic method reference reports `AU2005`, a
+wrong type-argument count or an unsatisfiable bound reports `AU2002`, and an
+associated method of a generic class still needs a call (`AU2005`). A
+`view ... from self` method cannot be bound (`AU3010`), while a method
+returning a view of one of its other parameters keeps that contract in the
+bound closure (see Stored View Contracts). Binding a shared or mutable
+parameter reports `AU3002`, binding a
+view reports `AU3004`, and a later use of the moved receiver reports `AU3001`
+pointing at the binding site. Calling a Mutable bound method through an
+immutable local reports `AU3003`.
+
+## Stored View Contracts
+
+A function whose result is `view [mut] T from name` for one of its ordinary
+parameters keeps that contract in its value type, written
+`def(pair: Pair) -> view str from pair`. The origin is one named parameter
+of the contract; a positional-only slot or an unknown name is rejected
+(`AU3010`), and a `view mut` result requires a `mut` origin parameter. Such
+a value stores, packs into `Callable[...]`, and passes like any other
+callable with an identical contract: an owned-result contract does not admit
+a view-returning function and a view contract does not admit an
+owned-result function (`AU2002`). A call through the value is a returned-view
+call: its result must initialize a `view` binding (`AU3010`), a `view mut`
+result needs a mutable origin argument, and because the callee behind a value
+is opaque the view's footprint is every fixed field path or tuple position of
+the origin argument whose type is the result type, so the whole origin stays
+borrowed for the binding's lifetime. A `from self` result has no value type,
+so a bound method returning a view of its receiver cannot be stored
+(`AU3010`); a bound method whose view originates in another parameter keeps
+that contract, and a `TaskCallable[...]` contract cannot return a view
+(`AU3008`).
+
+```aura
+class Pair:
+    left: str
+    right: str
+
+def pick_left(pair: Pair) -> view str from pair:
+    return view pair.left
+
+def pick_right(pair: Pair) -> view str from pair:
+    return view pair.right
+
+type Picker = Callable[def(pair: Pair) -> view str from pair]
+
+def main():
+    pair = Pair(left="ada", right="linus")
+    packed = Picker(pick_right)
+    view tail = packed(pair)
+    print(tail)
+    chooser: def(pair: Pair) -> view str from pair = pick_left
+    view head = chooser(pair)
+    print(head)
+```
+
 ## Limits And Implementation-Defined Behavior
 
 Closures are expression-only and contextually typed. They do not support
 statement bodies, inline parameter types, defaults, generics, implicit
-reference capture, method values, trait objects, FFI callbacks, asynchronous
+reference capture, trait objects, FFI callbacks, asynchronous
 syntax, returned loan closures, or lifetime-bearing structural callable types.
+Owned callable storage holds owned captures only; loan captures stay in
+local loan closures. A stored callable may return a view of one explicit
+parameter but never of a captured receiver. A packed value keeps the closure's existing environment
+as its storage, so packing allocates no second environment on either
+backend; the checkpoint's inline-buffer plan is the native ABI target this
+representation stands in for. A `TaskCallable[...]` value is a stored task
+target: every `TaskGroup` start method takes it by move for one child call,
+whether Shared, Mutable, or Consuming, and a Mutable target's captures are
+child-owned state with no parent writeback (see
+[Concurrency](/manual/concurrency)).
 Explicit lists accept local identifiers; project a field into a named view
 before capturing it.
 
 Arbitrary structural `def` parameters and stored `def` fields, collection
 elements, and annotated returns currently carry only capture-free code
-pointers. Compiler-known callback sites preserve repeatable closure metadata;
-`control.retry` and the list callbacks reject consuming closures. Task start
-accepts a qualifying closure by move for one invocation.
+pointers. Compiler-known callback sites preserve repeatable closure metadata
+and borrow packed Shared values with an ABI-equal, positionally callable
+contract; `control.retry` and the list callbacks reject consuming and
+Mutable callbacks. Task start accepts a qualifying closure by move for one
+invocation.
 
 Conditional and `match` expressions cannot merge capturing closures from
 multiple branches. This is an explicit closure-union boundary, not an
@@ -3828,7 +4033,12 @@ transfers any stored `V`.
 
 List callbacks use exact shared function types. `map` requires
 `def(T) -> U`, `filter` requires `def(T) -> bool`, and keyed sorting requires
-`def(T) -> K` with `K: Ord`. The callback must be repeatable.
+`def(T) -> K` with `K: Ord`. The callback must be repeatable. It may be a
+named function, a repeatable closure, or a packed Shared `Callable[...]` or
+`TaskCallable[...]` value with that contract, which the site borrows for the
+operation without cloning it or erasing its contract. A Mutable or Consuming
+packed value is rejected (`AU2002`), and because the site calls its callback
+positionally a keyword-only element parameter is rejected (`AU2004`).
 
 ## Runtime Semantics
 
@@ -3951,17 +4161,26 @@ with group = TaskGroup():
 | constructor | `TaskGroup()` | Creates a task group resource. |
 | `start` | `start(function, own ...) -> Task[T]` | Requires every capture and result to be `Transfer`, starts the specialized target, and returns its handle. |
 | `start_soon` | `start_soon(function, own ...) -> None` | Requires every capture and result to be `Transfer` and starts the specialized target without returning a handle. |
-| `start_with_stack` | `start_with_stack(bytes: int64, function, own ...) -> Task[T]` | Applies the same Transfer rules with an explicit guarded stack-capacity request and returns the handle. |
+| `start_with_stack` | `start_with_stack(bytes: int64, function, own ...) -> Task[T]` | Applies the same Transfer rules with an explicit guarded stack-capacity request and returns the handle. A task whose stack would be exhausted by its next call reports `AU4005` naming the callee instead of faulting. |
 | `start_soon_with_stack` | `start_soon_with_stack(bytes: int64, function, own ...) -> None` | Applies the same Transfer rules with an explicit guarded stack-capacity request and no returned handle. |
 | `cancel` | `cancel() -> None` | Signals cancellation to child tasks. |
 
 All four start methods accept capture-free function values, which are copy
-values and satisfy `Transfer`, plus closure values whose complete captured
-environment is Transfer. Existing direct named-function and
+values and satisfy `Transfer`, closure values whose complete captured
+environment is Transfer, and stored `TaskCallable[...]` values, whose packing
+proved every capture Transfer (see [Closures](/manual/closures#typing-rules)).
+A stored target is moved into the start for one child call, whether its call
+kind is Shared, Mutable, or Consuming; a Mutable target's captures are
+child-owned state with no parent writeback. An ordinary erased `Callable`
+target is rejected with `AU3008` because its environment is hidden, and a
+`TaskCallable[...]` contract cannot return a view (`AU3008`) because the
+child's result must be an owned value. Existing
+direct named-function and
 associated-method-without-`self` targets remain accepted, including explicit
 generic targets written as `function[Types]` or
-`Type.associated_method[Types]` in the callable slot. Associated methods do not
-thereby become general first-class method values. Every target argument is
+`Type.associated_method[Types]` in the callable slot. A bound method
+(`receiver.method`) is an ordinary closure target with its own call kind.
+Every target argument is
 copied or moved into task-owned capture storage. A bare shared target parameter
 borrows from that storage for the child call; an `own` parameter consumes it.
 `mut` targets are rejected because detached mutable capture has no
@@ -5114,8 +5333,12 @@ This page documents known current limits of the Aura compiler and runtime.
 - Capture-free named functions are copy, `Transfer` values. They may be stored
   and called through `def(T1, mut T2, own T3) -> R` types and used as task
   targets; bare function-type parameters are shared.
-  Instance, associated, and trait method values remain unavailable; the task
-  API retains its direct associated-method-without-`self` target carve-out.
+  `receiver.method` binds a closure over the receiver with the method's
+  contract, and `Class.method` on a non-generic class is a function value;
+  a generic method's type arguments come from `method[T]` or an expected
+  contract, and an associated method of a generic class still needs a call.
+  A stored callable may return a view of one named parameter; a `from self`
+  view result and loan captures still cannot be stored.
 - Lambdas with parameters require complete expected parameter types; a
   zero-parameter lambda may infer `def() -> R` from its expression body.
   A lambda without a capture list captures by value. An explicit exhaustive
@@ -5127,9 +5350,14 @@ This page documents known current limits of the Aura compiler and runtime.
   annotated returns because those boundaries describe capture-free code
   pointers. Compiler-known repeatable callback sites preserve closure
   metadata; task start accepts a qualifying closure by move for one call.
-  Conditional and `match` expressions cannot merge capturing closures from
-  multiple branches because Phase 6.3 has no closure-union type; invoke the
-  closure within each branch or use capture-free lambdas or named functions.
+  Conditional and `match` expressions merge capturing closures only through
+  an explicit common `Callable[...]` contract on the destination; otherwise
+  invoke the closure within each branch or use capture-free lambdas or named
+  functions. Owned callable storage (`Callable[...]`, `TaskCallable[...]`)
+  holds owned captures only and is packed explicitly through an alias call.
+  Callable identities are tracked through at most eight levels of class
+  field nesting; a call through a callable stored deeper than that is
+  refused by the MIR validator.
 - List, set, and dictionary comprehensions are eager and always return fresh owned
   collections. Their clauses use bare-loop iteration only; there is no
   comprehension `mut`/`own` source form, early `break`/`continue`, or lazy
@@ -5176,8 +5404,10 @@ This page documents known current limits of the Aura compiler and runtime.
   nominal type with an application-specific `Ord` implementation when text
   records require ordering.
   Keyed `sort`, `map`, and `filter` accept only their exact bare/shared callback
-  parameter capabilities. There is no comparator-form sort, lazy map/filter,
-  parallel traversal, or algorithm callback with mutable/owned element access.
+  parameter capabilities, from a named function, a repeatable closure, or a
+  packed Shared callable value. There is no comparator-form sort, lazy
+  map/filter, parallel traversal, mutable standard-library algorithm callback
+  contract, or algorithm callback with mutable/owned element access.
 - `TaskGroup.start(...)` and `start_soon(...)` support bare shared and `own`
   target parameters; `mut` targets are rejected because child tasks cannot
   write back through the starting call frame.
@@ -5416,7 +5646,7 @@ the phase that owns the failure:
 | --- | --- | --- |
 | `AU10xx` | lexical analysis | `AU1001` invalid lexical input; `AU1002` invalid f-string delimiter |
 | `AU11xx` | parsing | `AU1101` invalid syntax |
-| `AU20xx` | names and types | `AU2001` name resolution; `AU2002` type mismatch; `AU2003` unsupported operator; `AU2004` argument binding; `AU2005` unsupported syntax or feature; `AU2006` builtin method collision; `AU2007` builtin function redefinition; `AU2008` equality unavailable; `AU2999` general compile-time rejection |
+| `AU20xx` | names and types | `AU2001` name resolution; `AU2002` type mismatch; `AU2003` unsupported operator; `AU2004` argument binding; `AU2005` unsupported syntax or feature; `AU2006` builtin method collision; `AU2007` builtin function redefinition; `AU2008` equality unavailable; `AU2010` union member or context; `AU2011` ambiguous union injection; `AU2012` cyclic type alias; `AU2013` union pattern coverage; `AU2014` invalidated narrowing; `AU2015` callable contract mismatch; `AU2999` general compile-time rejection |
 | `AU30xx` | ownership, loans, and transfer | `AU3001` moved value; `AU3002` borrow/loan conflict; `AU3003` mutability violation; `AU3004` ownership or place mode; `AU3005` non-copy indexed read; `AU3006` non-copy indexed compound assignment; `AU3007` non-cloneable state duplication; `AU3008` non-transferable task/Queue boundary; `AU3009` single-consumer task-result duplication; `AU3010` view escape or returned provenance |
 | `AU40xx` | runtime-checked traps | `AU4001` general runtime trap; `AU4002` arithmetic overflow or underflow; `AU4003` bounds or lookup violation; `AU4004` zero divisor; `AU4005` resource, allocation, or I/O failure; `AU4006` invalid runtime configuration; `AU4007` numeric Array shape or reduction violation |
 
@@ -5425,6 +5655,35 @@ that closer. A mismatched closer names the expected kind and labels its opener
 as related information. EOF with an unclosed delimiter reports the expected
 closer and labels the opener. These locations and labels are preserved by
 analysis JSON and the LSP bridge.
+
+`AU2003` also reports an incomparable union pair (`cannot compare
+`U` and `T`: expected the same union type or an eligible member`) and any
+ordering or arithmetic operator on a union.
+
+`AU2010` through `AU2015` belong to the Batch 1 union, alias, narrowing, and
+callable surface. `AU2010` reports a value that is not a direct member of the
+expected union, a union spelling without enough context, a type
+parameter that a union member argument cannot determine, or an extern
+signature whose union is not the one admitted `Handle | None` result (a union
+parameter, or any other union result). `AU2011` reports a
+literal that more than one member could accept. `AU2012` reports a cyclic
+transparent alias. `AU2013` reports missing, duplicate, unreachable, or
+nonmember union type arms. `AU2014` reports a member use through a place whose
+`None`-test narrowing was invalidated; its message is exactly
+`narrowing of \`PLACE\` no longer applies after OPERATION; test the current value again`,
+where the operation is `assignment`, `a mutable match`, `a call with mutable
+access`, or the mutating operation that exposed the place, and it carries two
+related labels: `narrowed by this test` at the test and `invalidated here` at
+the invalidation. `AU2015` reports a callable contract mismatch: a value whose
+complete contract (exposed names, keyword-only boundary, default availability)
+is not admitted by the written destination, a rebinding, branch join,
+container literal, or generic observation that would need an invented common
+contract, a lambda that does not meet its expected contract, an invalid
+thin-alias adaptation, implicit erased storage into `Callable[...]`, or a
+packed call kind that would strengthen; its message names the difference. `AU2004` also
+reports a positional argument reaching a keyword-only parameter
+(`parameter `x` of function `f` is keyword-only`) and a named argument aimed
+at a positional-only slot of a written callable type.
 
 The registry is append-only. Once published, a code MUST NOT be reused,
 renumbered, or silently reassigned to a different diagnostic category. If a
@@ -5546,6 +5805,10 @@ an invalid returned kind, or a call whose origin is not an addressable place.
 The diagnostic identifies the declared origin and the incompatible expression
 or destination. Return an owned clone/index/handle when the access must escape,
 or keep a local/closure loan synchronous and inside the owner's region.
+A function type whose `view` result names an origin that is not one of its
+named parameters, or a `view mut` result over a non-`mut` origin, also
+reports `AU3010`; a task callable contract that returns a view reports
+`AU3008`.
 
 For explicit views, `AU3002` labels both the view creation and the final use
 that keeps its inferred region live. Removing a later use can shorten the loan;
@@ -5682,7 +5945,7 @@ imported module is never mislabeled with the entry module's path.
 
 The arrays are an additive schema-version-1 extension. Schema-version-1
 readers MUST ignore unrecognized object members while continuing to validate
-the fields they use. The compiler-service semantic-interface version is `6`.
+the fields they use. The compiler-service semantic-interface version is `14`.
 
 The process exits unsuccessfully after emitting a JSON error report. Tools MUST
 parse standard error as one JSON document in JSON mode and MUST NOT scrape the
@@ -5929,6 +6192,123 @@ or runtime bugs.
 Enums define nominal sum types. Each value contains exactly one declared variant and, when that variant has payloads, one value for each payload position. Pattern matching evaluates a scrutinee once, selects the first matching arm, and binds payload values for that arm.
 
 Aura uses enums for user data and for maintained runtime outcomes including `Option`, `Result`, queue operations, task waits, process status, supervisor events, and I/O errors.
+
+## Union Type Patterns
+
+A union can be matched by its direct member types:
+
+```aura
+def main():
+    mut value: int64 | str | None = 41
+    match mut value:
+        case int64 as number:
+            number += 1
+            print(number)
+        case str as text:
+            print(text)
+        case None:
+            print("missing")
+    print(value)
+```
+
+This prints `42` twice. `case Type as name` selects exactly one normalized
+member after transparent alias expansion. An alias for several members cannot
+stand for a single type arm, and neither can a type parameter: `case V as
+inner` is rejected with AU2013 because `V` is not proved disjoint from the
+other arms; use `case None` and a catch-all. A matching type arm is irrefutable when the
+scrutinee type has collapsed to one member. Type patterns may also occur
+inside nominal enum payload patterns.
+
+An unguarded type arm covers its member; guards contribute no exhaustiveness
+coverage. A final `_` or name covers the remainder. Missing members, duplicate
+coverage, unreachable type arms, and nonmembers are rejected with AU2013.
+Or-patterns bind identical names, types, and capabilities. A bare union cannot
+be matched directly against a member literal: select the type, then use a
+guard or a nested match for the literal.
+
+Bare matches borrow non-Copy payloads and expose ordinary Copy values.
+`match mut` gives mutable payload bindings without an additional `mut` after
+`as`; replacement must preserve that member type. `match own` consumes the
+union, and moves the selected payload only after its guard succeeds. Failed
+patterns and guards release their temporary views. Payload views are local
+to the arm, and return, break, and continue release them before cleanup.
+Shared and mutable matches lock the original source for the arm, including
+when the selected payload is Copy. Replacing the whole union to change its
+tag is allowed after the conflicting arm access ends.
+
+A union is Copy when every member is Copy and otherwise moves; `.clone()`
+is available when every member is Copy or clones itself, and cloning copies
+the active payload. A union crosses a task boundary when every member is
+Transfer. Two values of one union are equal when their active members agree
+and the payloads are equal, and a union compares symmetrically with a value
+that injects as one of its members; see
+[equality](/manual/expressions#arithmetic-and-comparison). Printing a union
+renders its active payload, or `None`, without a tag. Unions have no ordering.
+
+The existing `Option[T]` library and `T?` spelling remain available during
+Batch 1 phase 1; their removal belongs to phase 2.
+
+## Conditional Narrowing
+
+`value is None` and `value is not None` test a union's `None` member without
+a match. When the tested operand is a stable place, the checker records a
+narrowing fact for each branch the test selects:
+
+```aura
+def describe(value: str | None):
+    if value is None:
+        print("missing")
+    else:
+        print(value.len())
+
+def main():
+    describe(None)
+    describe("aura")
+    mut local: int64 | None = 7
+    if local is not None:
+        local += 1
+        print(local)
+    local = None
+    if local is None:
+        print("cleared")
+```
+
+This prints `missing`, `4`, `8`, and `cleared`. Where `value is not None`
+holds, `value` has the effective type `str`; where it fails, `value` has the
+effective type `None`. Only `is None` and `is not None` narrow. `==` and `!=`
+compare values, and a `match` arm narrows its own binding instead.
+
+A stable place is an owned or `mut` local, a parameter or receiver, a fixed
+class field or tuple position reached through one of those, or a view. An
+index, a dictionary lookup, a call result, or any other temporary may be
+tested, but no fact attaches to a later evaluation; bind the value first.
+Narrowing never changes the capability of the place: a shared parameter
+gives shared payload access, a `mut` place or `view mut` gives mutable
+access, and an owned local may be consumed as the member, which consumes the
+whole union.
+
+Facts flow through `not`, parentheses, and short-circuit `and` and `or`. Both
+operands of `and` hold in its `true` branch, both operands of `or` fail in
+its `false` branch, and the right operand is checked under the left operand's
+fact. A branch that ends with `return`, `break`, or `continue` leaves its
+complement on the continuing path, so `if value is None: return` narrows the
+rest of the function, and `if value is None: continue` narrows the rest of
+the loop iteration. Where paths join, only facts present on every reachable
+path survive. A fact established before a `while` loop survives into the body
+only when no iteration can invalidate it.
+
+A fact ends when the place or an enclosing place is assigned, matched with
+`match mut`, or passed to a call with `mut` access. A later member use
+through that place is rejected with `AU2014`, which labels the test and the
+invalidation; test the current value again. Moving the place, including
+with `match own`, leaves it moved as usual, so a later use is `AU3001`. Writing through
+the narrowed payload, such as `local += 1` above, keeps the fact because it
+cannot change the member, and so does changing a proven-disjoint sibling
+field.
+
+A narrowed union with more than two members keeps its remaining member set
+for match coverage: after `if value is None: return`, a `match value` over
+`int64 | str | None` is exhaustive with only `int64` and `str` arms.
 
 ## Enum Declarations
 
@@ -6333,6 +6713,14 @@ payload order, and borrowed-match writeback are language-defined rather than
 implementation-defined.
 
 ## Status
+
+Batch 1 phase 1 adds normalized union type arms, unit-member cases, singleton
+type arms, nested union payload patterns, and AU2013 coverage diagnostics on
+both backends, together with `is None` and `is not None` conditional
+narrowing of stable places and AU2014 stale-narrowing diagnostics, generic
+union members, and the union property rules: all-member Copy, clone, and
+Transfer, member-injected equality, and active-member trait dispatch. Guards preserve candidate ownership until commitment, and
+mutable arms retain member type and source locks.
 
 Nominal and generic enums, positional and named payloads, qualified and
 contextual builtin construction, structural copy/move classification,
@@ -7225,7 +7613,11 @@ The form has lower precedence than `or` and associates to the right.
 `a if first else b if second else c` means
 `a if first else (b if second else c)`.
 
-Both arms are checked even when the condition is a literal. Ownership state is
+A condition that tests a union place with `is None` or `is not None`
+[narrows](/manual/enums-and-match#conditional-narrowing) that place in the arm
+the test selects, so `value + 1 if value is not None else 0` reads `value` as
+its non-`None` member. Both arms are checked even when the condition is a
+literal. Ownership state is
 checked independently for each arm and merged conservatively afterward. A
 non-copy value moved by either arm is therefore unavailable after the
 conditional expression. The surrounding use determines whether an arm is
@@ -7277,9 +7669,36 @@ Equality and inequality have one contextual `Option` rule: when either operand
 has static type `Option[T]`, a bare `None` on the other side denotes
 `Option.None` of that same specialization. The rule is symmetric. Unit
 `None == None` is `true` and unit `None != None` is `false`; a qualified
-`Option.None` with no context for its type argument is rejected. Aura rejects
-Python identity tests such as `value is None`; use `value == None`,
-`value != None`, or `match`.
+`Option.None` with no context for its type argument is rejected.
+
+Union equality follows the ratified member rule. Two values of the same
+normalized union are equal exactly when their active members agree and the
+payloads are equal; equality is available only when every member defines
+it, so a union with a callable, `random.Rng`, opaque handle, or `Array`
+member reports `AU2008` whatever its current member. When exactly one operand
+has a union type, the other operand is injected for the comparison only under
+the [union injection](/manual/types#scalar-types) rules: a typed member value
+selects its member, a literal that fits several members is `AU2011`, and a
+nonmember or a different normalized union is `AU2003`. The rule is symmetric
+(`value == 1` and `1 == value`), evaluates each operand once, and neither moves
+nor clones a payload. Comparing with `None` works when the union has a `None`
+member and establishes no narrowing fact. Where a hashing operation is
+available, a union hashes as its active member, so a member value and the
+union holding it hash alike and may share a dictionary or set slot; different
+members compare unequal but may collide. Ordering and arithmetic are never
+available on a union, even when every member supports them (`AU2003`).
+
+`value is None` and `value is not None` are the two `None` tests. They sit at
+the comparison level, produce `bool`, and evaluate their operand exactly once
+as its declared type. `is` is contextual to these complete forms only:
+`None is value`, other identity comparisons, `isinstance`, and truthiness
+unwrapping are not accepted, and a `None` test cannot be chained with a
+comparison operator. A test on a place whose type has no `None` member is a
+constant test that still evaluates the operand. When the operand is a stable
+place of a union type, the test also establishes a narrowing fact for the
+branches it selects; see
+[conditional narrowing](/manual/enums-and-match#conditional-narrowing).
+Equality with `None` compares values and never narrows.
 
 Arithmetic and ordering may resolve through the corresponding operator trait.
 For non-numeric user types, `/` requests `Div.div`; `//` requests
@@ -7834,7 +8253,9 @@ positional argument list. Storage preserves each parameter's bare shared,
 `mut`, or `own` ABI capability. Contextually typed
 `lambda parameters: expression` values use the same callable contract and may
 capture owned outer locals by value. See [Closures](/manual/closures).
-Instance and associated method values and trait-object interactions remain
+`receiver.method` outside call position is a bound method closure and
+`Class.method` is an associated function value; see
+[Closures](/manual/closures#bound-methods). Trait-object interactions remain
 unavailable.
 
 ## Fixed-Width Numeric Example
@@ -7874,7 +8295,7 @@ one value per line.
 
 ## Forms Not Implemented
 
-Aura 0.3 expressions do not include generator expressions, method values,
+Aura 0.3 expressions do not include generator expressions,
 assignment expressions, call-site capability annotations, non-numeric casts, or
 ordinary trailing commas. Lambdas are expression-bodied and contextually
 typed; they do not add statement-bodied or implicitly reference-capturing
@@ -7966,7 +8387,11 @@ member. `AU2002` means a type, constructor-payload, match-result, or index-type
 mismatch. `AU2003` means an unsupported unary, binary, compound, membership, or
 cast operator. `AU2004` means call or constructor argument binding failed.
 `AU2005` means an unsupported syntax or expression feature,
-including the exact generator-expression guidance recorded above. `AU2999`
+including the exact generator-expression guidance recorded above. `AU2010`
+means a value is not a direct member of its expected union, and `AU2011`
+means a literal that more than one member could accept. `AU2014` means a
+member use through a place whose `None`-test narrowing was invalidated by an
+assignment, mutable match, or call with mutable access. `AU2999`
 means an expression rejection without a narrower compile-time code. `AU3001`
 means use of a moved value; `AU3002` means a borrow conflict, including a later
 mutable borrow or consumption overlapping a retained non-copy binary operand,
@@ -8022,7 +8447,8 @@ call-site capability modifiers are unavailable. Eager owned list, set, and dicti
 comprehensions are implemented under Accepted ADR-0039.
 Integer base spellings, fixed-width bitwise operations, and shifts are
 Accepted under ADR-0047. Power, `round`, and `divmod` are Accepted under
-ADR-0048.
+ADR-0048. Contextual `is None` and `is not None` tests with short-circuit
+narrowing are implemented under the Batch 1 phase 1 design checkpoint.
 
 ## Source: docs/manual/ffi.md
 
@@ -8144,8 +8570,16 @@ layout. A bare handle parameter shares the pointer for that call and retains
 the Aura handle. An `own Handle` parameter consumes it, normally for a
 foreign close/free operation. `mut Handle` is reserved. Opaque handles are
 non-Copy, non-cloneable, and never `Transfer`, so they cannot cross a task or
-Queue boundary. A returned null pointer is an Aura runtime failure; nullable
-opaque handles are not part of FFI v0.
+Queue boundary. A `-> Handle` result that is null is an Aura runtime failure
+(`AU4005`). One nullable form exists: an extern result whose normalized type
+is exactly a declared opaque handle plus `None`, written `-> Handle | None`
+or through an alias of that shape, is marshalled as one C pointer. A null
+pointer constructs `None` and a non-null pointer constructs the owned handle;
+no union tag or aggregate crosses C. Optional scalars, strings, byte views,
+nullable parameters, several handle alternatives, and every other union
+shape are rejected with `AU2010` and need an explicit C adapter. Mutable
+byte-view writeback precedes result translation as before, and the
+resulting handle keeps every opaque-handle rule.
 
 This non-cloneability is structural through tuples, collections, user classes,
 enum payloads, and generic specializations. `.clone()` and clone-producing
@@ -8259,8 +8693,8 @@ must name the host's actual C symbol.
 
 FFI v0 does not load libraries, select symbols by link name, define C structs
 or unions, pass enums, allocate foreign memory, expose pointer arithmetic,
-return views, represent nullable handles, accept callbacks or variadics, or
-offer asynchronous foreign calls. C ABI layout outside the explicit table is
+return views, represent nullable handles beyond the `Handle | None` result
+form, accept callbacks or variadics, or offer asynchronous foreign calls. C ABI layout outside the explicit table is
 not inferred.
 
 Symbol availability and behavior are host-defined. `size_t`, pointer layout,
@@ -8275,9 +8709,11 @@ FFI v0, its package opt-in and root dependency report, bodyless
 `extern "C"` functions, opaque handles, fixed-width scalars, pointer-length
 views, and Unix process-global lookup are implemented in Aura 0.3.
 
-Callbacks, raw pointers, variadics, returned views, nullable handles, explicit
-library loading/link configuration, and foreign aggregate layout are reserved
-or unavailable. They are not inferred from current syntax.
+The `Handle | None` result form is implemented under the Batch 1 phase 1
+design checkpoint. Callbacks, raw pointers, variadics, returned views, other
+nullable shapes, explicit library loading/link configuration, and foreign
+aggregate layout are reserved or unavailable. They are not inferred from
+current syntax.
 
 ## Source: docs/manual/filesystem.md
 
@@ -8559,9 +8995,26 @@ render("Aura", 2)
 render(name="Aura", count=2)
 ```
 
-Every declared parameter is positionally bindable. Aura 0.3 structural
-callable types do not encode keyword-only callability, so a `*` marker in a
-parameter list is rejected with `AU1101`.
+A `*` boundary in a parameter list makes every parameter after it
+keyword-only: such a parameter binds by name only, a positional argument that
+would reach it is rejected with `AU2004` (`parameter `x` of function `f` is
+keyword-only`), and omitting a required keyword-only parameter reports the
+missing name. At most one `*` is allowed, it must be followed by at least one
+named parameter, and it adds no variadic parameters. The boundary belongs to
+the function's complete callable contract (see [Function
+Values](#function-values)); a trait implementation must place it exactly
+where the trait declaration does.
+
+```aura
+def configure(path: str, *, retries: int32 = 2, verbose: bool = false) -> int32:
+    if verbose:
+        print(path)
+    return retries
+
+configure("cfg")
+configure("cfg", retries=5)
+configure("cfg", verbose=true, retries=1)
+```
 
 Binding is deterministic:
 
@@ -8595,7 +9048,9 @@ The complete rules are:
 - a shared-borrow default is permitted; its default temporary lives until the
   call completes
 - an `own` default is permitted and its fresh temporary is consumed by the call
-- after the first defaulted parameter, every remaining parameter must also have a default
+- after the first defaulted positional parameter, every remaining positional
+  parameter must also have a default; keyword-only parameters bind by name,
+  so a required keyword-only parameter may follow a defaulted one
 - the default expression must have exactly the declared parameter type
 - a default expression cannot reference any parameter of the same declaration, including an earlier parameter
 - trait method declarations and trait implementation methods cannot declare defaults
@@ -8768,37 +9223,84 @@ Traits](/manual/generics-and-traits#inferred-clone-safety-obligations).
 ## Function Values
 
 A module-level named function is a value. Its type uses declaration-shaped
-syntax: `def(T1, mut T2, own T3) -> R`. The parameter list contains modes and
-types rather than parameter names, and `def() -> R` is the zero-parameter
+syntax: `def(T1, mut T2, own T3) -> R`, and `def() -> R` is the zero-parameter
 form. Bare parameters are shared. Function types may appear anywhere another
 complete type may appear, including variable and parameter annotations, class
-fields, return types, and collection element types.
+fields, return types, alias targets, and collection element types.
 
 This includes public user-module functions and maintained builtin-module
 functions such as `process.pipe`. Calling an imported builtin through a value
 uses the same builtin dispatch and result type as calling its qualified name.
 
-An inferred local binding retains the named function's exact declared
-parameter modes. An indirect call through a `mut` parameter requires a mutable
-place, and an `own` parameter moves a non-copy argument. Assignment and
-argument passing compare these modes as part of the function type:
-`def(mut Counter) -> None` does not match `def(Counter) -> None`.
+A callable type spells a *complete contract*. Each slot is either unnamed
+(`int64`, `mut Counter`, `own str`), which is positional-only, or named
+(`value: int64`), which may also be called by name. A `*` boundary makes the
+following named slots keyword-only, and `= ...` after a slot promises that
+the target supplies a default for it; the default expression itself belongs
+only to the target declaration and is never written in a type. Parameter
+names, modes, types, the keyword-only boundary, default availability, and the
+result type are all part of the contract. Two structurally identical
+signatures with different exposed names or default promises are different
+contracts.
+
+```aura
+type Unary = def(int64) -> int64
+type Renderer = def(value: int64, *, prefix: str = ...) -> str
+
+def render(value: int64, *, prefix: str = "value") -> str:
+    return f"{prefix}: {value}"
+
+def increment(value: int64) -> int64:
+    return value + 1
+
+renderer: Renderer = render
+print(renderer(4))
+print(renderer(4, prefix="n"))
+step: Unary = increment
+print(step(4))
+```
+
+An inferred local binding takes its target's complete contract: the
+declaration names, `*` boundary, capabilities, and default availability. A
+call through it accepts the same named arguments and omits the same
+parameters as a direct call, and an omitted argument evaluates the
+runtime-selected target's own default expression afresh. A written
+destination contract (an annotation, parameter, field, element type, alias,
+or return type) governs calls through that destination: an unnamed slot is
+called positionally, a named slot may be called by name, and an omitted slot
+must carry `= ...`.
+
+A value may be stored where a written contract *admits* it. A written
+contract may hide an exposed name (an unnamed slot accepts any named
+target), drop default availability (a slot without `= ...` accepts a target
+that declares a default), or restrict a named positional-or-keyword slot to
+keyword-only. It cannot make a keyword-only slot positional, rename a slot,
+promise a default the target does not declare, or change a parameter type,
+capability, or result type; parameter and result types are invariant, and
+there is no general callable subtyping. Passing `double(amount: int64)` to a
+`def(int64) -> int64` parameter is an admitted restriction; passing it where
+`def(value: int64) -> int64` is written is a rename and reports `AU2015`.
+
+Inference never invents a common contract. Rebinding a local must satisfy
+the contract the local already has, the arms of a conditional or `match`
+expression without an expected type must share one complete contract, a
+container literal's element contract is its annotation or its first
+element's contract and every later element and insertion must satisfy it,
+and repeated generic evidence must agree with its first observation. Each
+violation reports `AU2015` with the differing slot. Write the common contract
+as an annotation, or adapt a value explicitly: calling a non-generic alias of
+a thin `def` type with one function value or capture-free lambda, such as
+`Unary(increment)`, yields that alias contract when the alias admits the
+value and reports `AU2015` otherwise. No environment is added; a capturing
+closure packs into an owned `Callable[...]` storage type instead (see
+[Closures](/manual/closures#typing-rules)).
 
 Function values are code pointers. They are copy values, cloning is
 unnecessary, and copying or passing one as an `own def(...) -> R` parameter
 does not invalidate the source binding. They also satisfy `Transfer`.
 Ordinary indirect calls evaluate and bind arguments under the selected
-function's unchanged capability contract. A binding whose target declaration
-is statically known retains that declaration's call contract: named arguments
-are accepted and omitted arguments use its defaults. The structural
-`def(...) -> ...` type itself does not contain names or default expressions.
-A control-flow selection can retain names and default availability when every
-candidate agrees; an omitted argument then evaluates the runtime-selected
-target's own default expression. Reassignment between conflicting contracts,
-return through a structural function annotation, class-field storage, and
-mutable-collection storage erase those extras. Storage still retains the
-complete ABI type, including `mut` and `own`; a loaded value takes every
-argument positionally.
+function's unchanged capability contract; a stored value never takes an
+argument its contract does not admit.
 
 If an indirect-call default traps, diagnostics use the public target name and
 the precise default-expression span. Compiler-generated default helpers never
@@ -8811,10 +9313,20 @@ parameter default such as a generic `empty` used where
 `def() -> Option[str]` is required. A generic name with neither source of
 type arguments does not have one concrete function-value type.
 
-This stage is deliberately capture-free. Instance-method, associated-method,
-and trait-method values are not first-class; an associated method without
-`self` remains accepted only in the existing direct `TaskGroup` target form.
-Lambdas and closure capture are specified separately.
+An associated method without `self` named as `Class.method` is a thin
+function value carrying the method's complete contract when its class is not
+generic; a generic method takes explicit type arguments as `Class.method[T]`
+or infers them from an expected function type. `receiver.method` outside
+call position is a bound method: a
+compiler-synthesized closure over the receiver, specified in
+[Closures](/manual/closures#bound-methods). Lambdas and closure capture are
+specified separately.
+
+A function returning `view [mut] T from name` for one of its parameters
+keeps that contract in its value type, `def(pair: Pair) -> view str from
+pair`; a `from self` method result has no value type. Storage, packing, and
+calls through such values are specified in
+[Closures](/manual/closures#stored-view-contracts).
 
 ## Function Values And Task Starts
 
@@ -8837,7 +9349,10 @@ argument is first copied or moved into task-owned capture storage: `own` target
 parameters consume their capture, while bare shared parameters access that
 storage for the duration of the child call. `mut` targets are rejected because
 mutable access to detached capture
-storage has no caller-visible writeback contract. See [Concurrency](/manual/concurrency).
+storage has no caller-visible writeback contract. A stored
+`TaskCallable[...]` value is also a target, moved into the start for one child
+call; an ordinary erased `Callable` is not, because its environment was never
+proven Transfer (`AU3008`). See [Concurrency](/manual/concurrency).
 
 ## `main`
 
@@ -8900,7 +9415,8 @@ owned captures and then invokes the target under its declared ABI.
 `AU2002` means a signature, function-value capability, parameter, default,
 return, bound, or entrypoint type mismatch. `AU2004` means positional or named
 argument binding failed. `AU2005` means focused guidance for an unavailable
-callable spelling, including out-of-scope method values. `AU2999` means another
+callable spelling, including a generic method value whose type arguments
+are neither written nor implied by an expected contract. `AU2999` means another
 callable rejection without a narrower compile-time code.
 `AU3001` means a moved argument was used; `AU3002` means a borrow or alias
 conflict; `AU3003` means a mutability violation; and `AU3004` means an invalid
@@ -8924,8 +9440,7 @@ resolved signature metadata, including inferred clone-safety obligations.
 
 ## Limits And Implementation-Defined Behavior
 
-Aura has no method values, trait-object function interactions, Aura
-variadic functions,
+Aura has no trait-object function interactions, Aura variadic functions,
 overloads, nested functions, or mutable-parameter task targets. Expression
 lambdas are specified by [Closures](/manual/closures); they do not add nested
 item declarations. Written function types express bare shared, `mut`, and `own`
@@ -9023,6 +9538,50 @@ ok = Result[int32, str].Ok(7)
 ```
 
 Explicit arguments must have exact arity and satisfy all substituted bounds. Specialization and indexing share bracket syntax; the parser rules that distinguish them are specified in [Grammar](/manual/grammar#explicit-specialization).
+
+### Type Parameters As Union Members
+
+A declared type parameter is a valid union member, and a generic alias may
+name such a union. Substitution renormalizes the union: `V | None` with
+`V = int64 | None` is `int64 | None`, and with `V = None` it is unit `None`.
+A generic union never keeps a phantom outer tag to tell those results apart.
+
+```aura
+type MaybeValue[V] = V | None
+
+def absent[V]() -> V | None:
+    return None
+
+def present[V](value: own V) -> V | None:
+    return value
+
+def main():
+    first: MaybeValue[int64] = present[int64](4)
+    if first is not None:
+        print(first + 1)
+    print(absent[int64 | None]() is None)
+    print(present[int64 | None](None) is None)
+```
+
+This prints `5`, `true`, and `true`. Inference reads a parameter that is a
+union member from the remaining members of the argument: every concrete
+member of the parameter's union must be a member of the argument, and the
+rest binds the parameter, so `V | None` infers `V = Dog` from `Dog` or
+`Dog | None` and `V = int64 | str` from `int64 | str | None`. An argument that
+leaves nothing for the parameter, such as `None`, or a union whose members
+could belong to more than one parameter, is rejected with `AU2010`; specialize
+explicitly rather than expecting the checker to invert normalization.
+
+Inside a generic body the checker cannot assume that `V`, `W`, and `None`
+are distinct. `value is None` and `value is not None` on `V | None` narrow to
+`None` and to `V`, and `V` there is only the non-`None` refinement; the test
+does not prove that `V` itself excludes `None`. A `None` test on a bare `V`
+value, or on a union whose only `None` could come from a type parameter, is
+decided at run time. A type arm `case V as inner` is rejected with `AU2013`
+because `V` is not proved to be one member disjoint from every other arm;
+write `case None` and a catch-all instead. Concrete union properties are
+derived from the concrete members after specialization; an unresolved member
+grants nothing without a bound.
 
 ## Inferred Clone-Safety Obligations
 
@@ -9141,6 +9700,16 @@ Two implementations with exactly the same trait specialization and target are du
 
 Aura 0.3 does not impose a separate orphan-rule restriction, but an implementation must refer to known visible types and traits and participates only where that implementation is present in the loaded module/package context.
 
+A union value dispatches a trait method when every member implements the
+same trait specialization with one contract: the same receiver mode,
+parameter modes and types, and owned result type after substituting each
+member for `Self`. The active member's implementation runs; a `mut self`
+method mutates the payload in place while the tag stays fixed, and an
+`own self` method consumes the union. A result written as `Self` that would
+differ per member is not one contract; match the member and declare the
+result union explicitly. There is no duck typing over common method names,
+no `impl` for an anonymous union, and no inferred trait intersection.
+
 ## Implementation Method Conformance
 
 An implementation may define only methods belonging to the trait. It must provide every signature-only required method; a trait method with a default body is inherited when omitted. An implementation may override a default method.
@@ -9180,6 +9749,8 @@ This rule is applied after default trait methods are inherited.
 ## Trait Method Dispatch
 
 For a concrete value, member lookup considers inherent class methods and applicable visible trait implementations. The selected method keeps its declared receiver and argument ownership behavior.
+
+A trait method selected for a concrete value also binds as a method value: `value.method` outside a call is a closure over the receiver with the method's complete contract, subject to the receiver rules in [Closures](/manual/closures#bound-methods).
 
 For a type parameter, only methods justified by declared bounds are available:
 
@@ -9328,7 +9899,9 @@ implementation methods always use ordinary method-definition syntax.
 
 Generic arguments are invariant and have exact arity. Inference is local and
 contextual, must resolve every declared parameter, and must satisfy every
-substituted bound. Trait satisfaction is nominal through a visible applicable
+substituted bound. A parameter that is a union member binds to the argument's
+remaining members; unions are renormalized after every substitution, and a
+generic body is checked once, universally, before any specialization. Trait satisfaction is nominal through a visible applicable
 `impl`, never structural. Implementations must conform after substituting
 receiver mode, parameter modes and types, owned return type, clone-safety
 obligations, and supertrait requirements. Dispatch selects one unique
@@ -9339,7 +9912,12 @@ only in its supported declaration contexts.
 ## Runtime Semantics
 
 Generic construction and calls use the statically resolved specialization;
-there is no runtime generic inference. Trait member and operator calls invoke
+there is no runtime generic inference. A union value built inside a generic
+body keeps the body's symbolic member layout until a concrete operation reads
+it; every union operation aligns the value to the union it names by the
+active member's identity, and a `V`-typed union payload flattens into its
+destination without a nested wrapper, so both execution paths agree on the
+one normalized value. Trait member and operator calls invoke
 the statically selected implementation, inheriting a trait default body when
 the implementation omits that method. Source order never resolves overlapping
 implementations. `try` invokes the selected `From[Source]` conversion before
@@ -9364,7 +9942,9 @@ concrete dispatch discharges them after substitution.
 implementation syntax. `AU2001` reports unknown types, traits, methods, and
 members. `AU2002` covers inference failure, generic arity, unsatisfied bounds,
 missing trait satisfaction, ambiguous equal-specificity dispatch, invalid
-specialization, and substituted type mismatch. `AU2003` reports an unsupported
+specialization, and substituted type mismatch. `AU2010` reports a type
+parameter that a union member argument cannot determine, and `AU2013` a
+type arm over a type parameter. `AU2003` reports an unsupported
 operator when no builtin rule or applicable operator trait supplies it.
 `AU2004` reports call argument binding and the prohibition on ordinary default
 arguments in trait methods. `AU2006` reports builtin method collisions.
@@ -9415,6 +9995,9 @@ implementations, unique-most-specific dispatch, operator traits, `Self`, and
 Ordinary `-> T` return values are owned. Generic functions and methods may
 instead declare `-> view [mut] T from origin`; trait implementations preserve
 the trait declaration's origin slot as well as its specialized pointee type.
+Type parameters as union members, renormalizing specialization, remainder
+inference, and universal generic body checks are implemented under the Batch
+1 phase 1 design checkpoint.
 Trait objects, dynamic dispatch, associated types,
 higher-kinded types, general
 subtyping, and arbitrary blanket implementation targets are unavailable.
@@ -9776,7 +10359,12 @@ type
 type-primary
     = identifier-path, [ "[", type-list, "]" ]
     | tuple-type
-    | function-type ;
+    | function-type
+    | owned-callable-type ;
+
+owned-callable-type
+    = ( "Callable" | "TaskCallable" ), "[",
+      [ "mut" | "own" ], function-type, "]" ;
 
 type-list = type, { ",", type } ;
 
@@ -9785,11 +10373,25 @@ tuple-type
     | "(", type, ",", type, { ",", type }, ")" ;
 
 function-type
-    = "def", "(", [ function-type-parameter,
-      { ",", function-type-parameter } ], ")", "->", type ;
+    = "def", "(", [ function-type-parameters ], ")", "->", function-type-result ;
+
+function-type-result
+    = type
+    | "view", [ "mut" ], type, "from", identifier ;
+
+function-type-parameters
+    = function-type-parameter, { ",", function-type-parameter },
+      [ ",", "*", ",", named-function-type-parameter,
+        { ",", named-function-type-parameter } ]
+    | "*", ",", named-function-type-parameter,
+      { ",", named-function-type-parameter } ;
 
 function-type-parameter
-    = [ "mut" | "own" ], type ;
+    = named-function-type-parameter
+    | [ "mut" | "own" ], type, [ "=", "..." ] ;
+
+named-function-type-parameter
+    = identifier, ":", [ "mut" | "own" ], type, [ "=", "..." ] ;
 
 plain-type-parameters
     = "[", identifier, { ",", identifier }, "]" ;
@@ -9802,11 +10404,20 @@ bounded-type-parameter
     = identifier, [ ":", type, { "+", type } ] ;
 ```
 
-A function type contains parameter modes and types, but no names or default
-expressions: `def(int32, mut Counter, own str) -> bool`. A bare parameter
-is shared, `mut` requires caller-visible mutable access, and `own` transfers
-the argument. Parameter names are not accepted inside the list. `indirect` is
-invalid on a function type because the value is already a code pointer.
+A function type spells a complete callable contract: `def(int32, label: str,
+*, retries: int32 = ...) -> bool`. A bare parameter is shared, `mut` requires
+caller-visible mutable access, and `own` transfers the argument. An unnamed
+slot is positional-only; `name: type` exposes a name; every slot after the
+single `*` boundary must be named and is keyword-only; and `= ...` promises
+that the target supplies a default, so a literal or expression after `=` in a
+type is rejected (`AU1101`). The same boundary rule applies to declaration
+and lambda parameter lists: at most one `*`, followed by at least one named
+parameter, adding no variadics. `indirect` is invalid on a function type
+because the value is already a code pointer. `Callable[...]` and
+`TaskCallable[...]` wrap one function type as owned callable storage; a bare
+`def` inside the brackets is Shared, `mut def` Mutable, and `own def`
+Consuming, and `mut def`/`own def` are not valid outside those brackets.
+`indirect` is invalid on owned callable types.
 
 `T?` denotes `Option[T]`, including when `T` is a tuple type. Type and
 type-parameter lists are nonempty when brackets are present and do not accept
@@ -9874,10 +10485,15 @@ method-declaration
       ":", NEWLINE, suite ;
 
 parameter-list
-    = parameter, { ",", parameter } ;
+    = parameter, { ",", parameter },
+      [ ",", keyword-only-parameters ]
+    | keyword-only-parameters ;
+
+keyword-only-parameters
+    = "*", ",", parameter, { ",", parameter } ;
 
 method-parameter-list
-    = receiver, [ ",", parameter, { ",", parameter } ]
+    = receiver, [ ",", parameter-list ]
     | parameter-list ;
 
 receiver
@@ -10091,10 +10707,13 @@ closed-pattern
     | INTEGER
     | "-", (INTEGER | FLOAT)
     | tuple-pattern
+    | type-pattern
     | binding-pattern
     | variant-pattern ;
 
 binding-pattern = IDENT ;
+
+type-pattern = type, "as", IDENT ;
 
 variant-pattern
     = identifier-path,
@@ -10108,6 +10727,9 @@ tuple-pattern
 ```
 
 Pattern parsing uses these contextual rules:
+
+- `Type as name` selects a direct union member or the same singleton type;
+  a type alias must expand to one member, and `None` selects the unit member
 
 - exact `_` is the wildcard
 - one unparenthesized, unqualified name beginning with lowercase ASCII or `_` is a binding
@@ -10156,8 +10778,12 @@ non-tuple-expression = conditional-expression ;
 
 lambda-expression
     = "lambda", [ lambda-capture-list ],
-      [ lambda-parameter,
-      { ",", lambda-parameter } ], ":", expression ;
+      [ lambda-parameter-list ], ":", expression ;
+
+lambda-parameter-list
+    = lambda-parameter, { ",", lambda-parameter },
+      [ ",", "*", ",", lambda-parameter, { ",", lambda-parameter } ]
+    | "*", ",", lambda-parameter, { ",", lambda-parameter } ;
 
 lambda-capture-list
     = "[", lambda-capture,
@@ -10184,7 +10810,10 @@ not-expression
 
 comparison-expression
     = bitwise-or-expression,
-      { comparison-operator, bitwise-or-expression } ;
+      ( { comparison-operator, bitwise-or-expression } | none-test ) ;
+
+none-test
+    = "is", [ "not" ], "None" ;
 
 comparison-operator
     = "==" | "!=" | "<" | "<=" | ">" | ">=" | "in" | "not", "in" ;
@@ -10254,7 +10883,10 @@ one comparison level and chain the Python way rather than left-folding, so
 operators means the conjunction of its `n` adjacent comparisons, with each
 operand evaluated at most once. `not a == b` means `not (a == b)`, because
 prefix `not` binds looser than the comparison level, while `a not in b` is one
-comparison operator. Casts bind more tightly than power and arithmetic.
+comparison operator. `is` is a contextual word: `value is None` and
+`value is not None` are complete comparison-level forms that take no further
+comparison operator on either side, so `a is None == b` and `a < b is None`
+are syntax errors rather than chains. Casts bind more tightly than power and arithmetic.
 
 Comma-separated index expressions are accepted only for `Array[T]`, where
 one `int64` coordinate is required per runtime axis. Other indexable
@@ -12786,6 +13418,7 @@ the source usable.
 | `view mut name = place` | Exclusive mutable write-through view. |
 | `-> view T from source` | Shared returned view tied to one receiver or parameter. |
 | `-> view mut T from source` | Mutable returned view tied to one mutable receiver or parameter. |
+| `def(...) -> view [mut] T from name` | Stored callable contract whose result is a view of the named parameter; see [Closures](/manual/closures#stored-view-contracts). |
 
 The spelling asymmetry is intentional: parameter ownership occupies the type position as `value: own T`, parallel to `value: T`, while loop ownership prefixes the iterable as `for value in own values` because loops have no type position.
 
@@ -13909,9 +14542,13 @@ measurement families and source identities separate.
 ## Executable Size
 
 Current counts are exact executable bytes from a clean detached release build
-at `d9fc79921ba9fed1116634ec9994bcb599aa9f90`. They include the actual maintained
-reference agent version 0, `examples/agents/tool_runner/`, whose initial source
-commit is `fc0361bc76b8b47d300a3089b1b4bb7c2b739dfc`.
+at `d9fc79921ba9fed1116634ec9994bcb599aa9f90`. They include the maintained
+reference agent as it was at that commit (version 0, `examples/agents/tool_runner/`,
+initial source commit `fc0361bc76b8b47d300a3089b1b4bb7c2b739dfc`). The package
+is now version 1 (Batch 1 phase 1: an owned-callable registry with a
+factory closure and a packed bound method); its release size is re-measured
+by the same bench at the phase-end head, and the table row below remains the
+version-0 measurement until then.
 
 | Executable | Tuned release bytes |
 | --- | ---: |
@@ -14834,6 +15471,12 @@ Conditions must have exactly type `bool`. Aura does not convert strings, numbers
 
 Conditions are evaluated in source order until one is `true`. Only the selected suite executes. Static checking analyzes branches independently and conservatively merges ownership, partial-move, and initialization state across paths that can continue.
 
+A condition that tests a union place with `is None` or `is not None`
+[narrows](/manual/enums-and-match#conditional-narrowing) that place inside
+the selected suite, and after the statement when the other branch cannot
+continue. An `elif` condition is checked under the facts of every failed
+condition before it.
+
 ## `while`
 
 A `while` statement evaluates its condition before each iteration:
@@ -14846,6 +15489,11 @@ def main():
 ```
 
 The condition must have type `bool`. A false first condition executes the body zero times. Aura 0.3 has no loop `else` clause.
+
+A `while` condition that tests a union place with `is None` or
+`is not None` narrows the place inside the body, and a body `continue` after
+such a test narrows the rest of that iteration. A fact established before the
+loop survives into the body only when no iteration can invalidate it.
 
 Moving a non-copy outer value for the first time inside a repeatable loop is rejected when it could make a later iteration invalid. Reinitialize the place on every continuing path or restructure ownership explicitly.
 
@@ -15148,8 +15796,10 @@ exactly `bool`; return values match the enclosing signature; iterables determine
 their loop binding contract; match patterns are compatible, reachable, and
 exhaustive where required; and `with` accepts only the maintained cleanup
 contract. Assertion conditions are exactly `bool` and messages are exactly
-`str`; an assertion does not refine later control flow. Contextual legality
-is checked after parsing.
+`str`; an assertion does not refine later control flow. `is None` and
+`is not None` conditions refine a stable union place for the paths they
+select, as described in [Static Semantics](/manual/static-semantics#conditions).
+Contextual legality is checked after parsing.
 
 ## Runtime Semantics
 
@@ -15191,7 +15841,10 @@ unresolved name or target. `AU2002` means an expected-type, condition,
 iteration, match, return, or assignment mismatch. `AU2003` means an unsupported
 compound-assignment operator. `AU2004` means call or target argument binding
 failed. `AU2005` means unsupported syntax or feature for a Python-shaped
-statement. `AU2999` means an exhaustiveness, contextual-legality, unsupported
+statement. `AU2013` means a union match is missing, duplicating, or cannot
+reach a type arm. `AU2014` means a member use through a place whose
+`None`-test narrowing was ended by an assignment, mutable match, or call with
+mutable access. `AU2999` means an exhaustiveness, contextual-legality, unsupported
 statement rejection without a narrower code. `AU3001` means use of a moved
 place; `AU3002` means a borrow conflict, including later access that mutably
 borrows or consumes an overlapping retained non-copy compound or indexed-
@@ -15451,6 +16104,12 @@ type, the known type contextually types the literal recursively. The rule is
 symmetric. Each equality link in a comparison chain applies the same
 contextual typing before enforcing exact operand-type equality.
 
+Union `==` and `!=` require the same normalized union on both sides, or one
+union operand and one operand that injects as a direct member; every member
+must define equality. The result is `bool`, both operands are read, and no
+narrowing fact results. Ordering and arithmetic operators reject union
+operands (`AU2003`).
+
 Operator operands are not implicitly widened. An integer literal may be contextually typed to match an integer operand, or a `float32`/`float64` operand when the literal is exactly representable in that floating type. A floating literal may adopt the other operand's floating type. Non-literal values require an explicit numeric cast or integer `.to_float()` conversion.
 
 Integer power requires a non-negative exponent. A negative exponent visible in
@@ -15465,6 +16124,23 @@ operations and do not dispatch through operator traits.
 `or`, and `not` also require boolean results under the rules above. Aura does
 not apply general truthiness conversion to strings, collections, resources, or
 user types.
+
+`place is None` and `place is not None` on a stable place of a union type
+establish narrowing facts: the place has the effective type `None` where the
+test holds and the union of its remaining members where it fails. Facts
+compose through `not`, parentheses, and short-circuit `and`/`or`, and a
+right operand of `and`/`or` is checked under the left operand's fact. An
+`if` branch, `while` body, or conditional-expression arm is checked under the
+facts its condition selects. A branch that diverges with `return`, `break`,
+or `continue` contributes nothing to the join, so its complement's facts
+continue after the statement. At a join, a place keeps only the facts present
+on every reachable path. A `while` body is checked twice so that a fact
+established before the loop survives only when no iteration can invalidate
+it. Assigning, moving, or mutably matching the place or an ancestor, or
+passing either to a call with mutable access, ends the fact; a later member
+use through the stale place is `AU2014`. A single remaining member is the
+effective type of the place; a larger remaining set only sharpens `match`
+coverage. Equality with `None` does not narrow.
 
 ### Assertions
 
@@ -15655,6 +16331,24 @@ For a concrete receiver, the checker chooses the unique applicable implementatio
 
 For a type parameter, available methods and operators come from its declared bounds. If multiple bounds expose an indistinguishable method, the access is ambiguous unless the language can resolve one unique contract.
 
+A union receiver has a trait method when every member resolves that method
+through the same trait specialization with one contract after substituting
+the member for `Self`: the same receiver mode, parameter modes and types,
+and result type. The call then dispatches on the active member; a member
+without an implementation, or a differing contract, is rejected with
+`AU2999`. A mutable call locks the union's tag for the call, and a consuming
+call consumes the whole union. `.clone()` is available when every member is
+Copy or clones itself.
+
+A type parameter may be a union member. Unifying such a union with an
+argument requires every concrete member of the pattern to be a member of the
+argument and binds the parameter to the normalized remainder; an empty
+remainder or a remainder that could belong to more than one parameter
+requires explicit specialization (`AU2010`). Substituted unions are
+renormalized, and a generic body is checked once under its symbolic members:
+`is None` on `V | None` refines to `None` and to `V`, `is None` on a bare
+`V` is a runtime test, and `case V` is rejected (`AU2013`).
+
 Trait and implementation methods cannot declare default ordinary parameters in Aura 0.3. Trait default method bodies are permitted; a signature-only trait method has no body after its terminating newline.
 
 A clone-producing operation over unresolved generic types infers clone-safety
@@ -15820,13 +16514,21 @@ consume it; tuple ordering remains rejected. See
 [Statements](/manual/statements#for-iteration) for the loop-form contract.
 
 Phase 6.1 capture-free function values make named functions Copy and Transfer
-values with structural `def(...) -> ...` types. Phase 6.2 uses that surface for
+values with structural `def(...) -> ...` types. Under the Batch 1 phase 1
+checkpoint those types are complete contracts: slots may be named, a `*`
+boundary makes slots keyword-only in declarations, lambdas, and types, and
+`= ...` promises default availability; a written contract may only hide names
+or default availability or restrict a slot to keyword-only, inference never
+invents a common contract (`AU2015`), and a thin alias call such as
+`Unary(function)` is the explicit adapter. Phase 6.2 uses that surface for
 the maintained eager natural/keyed `list.sort`, `map`, and `filter` algorithms and
 for `control.retry`. These are current technical-preview APIs. `control`
 resolves as a builtin module namespace, and the four List member names are
 part of the builtin no-shadowing surface. Callback
 capabilities are exact: code must pass bare/shared element callbacks rather
-than relying on adaptation from `mut` or `own`.
+than relying on adaptation from `mut` or `own`; a packed Shared
+`Callable[...]` or `TaskCallable[...]` value with that contract is borrowed
+at these sites and at `control.retry` (C10).
 
 Contextually typed `lambda parameters: expression` closures follow Accepted
 ADR-0037. Without a capture list, Copy values copy and owned non-Copy values
@@ -15836,8 +16538,19 @@ through a mutable closure place, and consuming owned-capture use is single-use.
 A by-value closure is Transfer only when every capture is Transfer; a loan
 closure is never Transfer. Zero-parameter lambdas may infer their result
 without a contextual callable type. Capturing closures retain compiler
-metadata and therefore do not cross arbitrary written-`def` parameter, field,
-collection, or annotated return boundaries.
+metadata and therefore do not cross thin written-`def` parameter, field,
+collection, or annotated return boundaries; under the Batch 1 phase 1
+checkpoint they cross those boundaries as explicitly packed `Callable[...]`
+or `TaskCallable[...]` values whose call kind may only weaken and whose
+captures are owned, and a body may mutate an owned capture, which makes the
+closure Mutable. `receiver.method` outside call position is a bound method:
+a compiler-synthesized closure over the receiver whose call kind follows the
+receiver capability (Q18 A), and `Class.method` on a non-generic class is a
+function value. A stored callable's contract may return a view of one
+explicit parameter, `def(...) -> view [mut] T from name` (Q22 A); a call
+through it binds a `view` whose footprint is every fixed path of the origin
+with the result type. Captured-self origins and loan environments remain
+unstorable, and task callables cannot return views.
 
 Phase 6.5 implements ADR-0038 place-based loans and views. Local shared and
 mutable views cover roots, fixed class fields, and tuple positions; lifetimes
@@ -15845,16 +16558,18 @@ end after conservative final use; reborrows preserve source identity; and
 mutable views write through immediately. One declared receiver or parameter
 may be the origin of `-> view [mut] T from source`. MIR execution, direct
 native builds, analysis/LSP, and editor tooling share semantic-interface
-schema 6 for this surface. Views and loan closures remain task-local and
+schema 7 for this surface. Views and loan closures remain task-local and
 non-Transfer.
 
 Phase 6.4 adds explicitly authorized FFI v0 packages. Bodyless
 `extern "C"` functions call process-global symbols synchronously through
 fixed-width scalars, pointer-length str/byte views, or non-null opaque
 handles. FFI-enabled dependencies must be visible in the root manifest's exact
-`[ffi] dependencies` report. Externs are direct-call-only; callbacks, raw
-pointers, variadics, returned views, nullable handles, and explicit library
-loading remain unavailable. This is an unsafe native boundary, not a memory
+`[ffi] dependencies` report. Externs are direct-call-only. Under the Batch 1
+phase 1 checkpoint an extern result may be exactly `Handle | None`, marshalled
+as one nullable C pointer; callbacks, raw pointers, variadics, returned views,
+other nullable shapes, and explicit library loading remain unavailable. This
+is an unsafe native boundary, not a memory
 safety promise for a false declaration or misbehaving C implementation.
 
 Phase 7.1 adds eager owned list, set, and dictionary comprehensions under Accepted
@@ -15991,7 +16706,7 @@ youngest-first task ancestry. Each public schema-version-1 frame span has its
 own required source `path`; the analysis/LSP editor shape permits an optional
 `file_path` for source-only analysis. The public diagnostic schema remains
 version `1` because the always-present arrays are an additive extension;
-compiler-service/editor transport uses semantic schema version `6`. This
+compiler-service/editor transport uses semantic schema version `14`. This
 version includes structural function values, import aliases, and the expanded
 numeric expression surface, and forwards the same diagnostic records.
 
@@ -16263,6 +16978,28 @@ The type system is designed to keep three facts visible:
 
 ## Scalar Types
 
+Transparent aliases use `type Name = Type`, with optional generic parameters
+and `public` visibility. For example, `type ToolValue = int64 | str | None`
+names a union of three existing types. Union identity ignores member order,
+flattens nested unions, removes duplicates, and collapses a single member to
+that member's type. `None` is the unit member; aliases introduce no runtime
+wrapper or new nominal identity. A declared type parameter may be a member,
+and substitution renormalizes the result, so `V | None` with `V = int64 | None`
+is `int64 | None`; see
+[type parameters as union members](/manual/generics-and-traits#type-parameters-as-union-members).
+
+A value enters a union at an explicit expected-type boundary, such as an
+annotated binding or a declared parameter or result. Its type must be a direct
+member. Contextual numeric literals must have exactly one eligible member;
+ambiguous literals require a typed spelling or intermediate binding. There is
+no implicit conversion between unrelated unions or between containers with
+different element types. Select a member with the
+[type patterns](/manual/enums-and-match#union-type-patterns) described in the
+match chapter, or test the `None` member with `is None` and `is not None`,
+which [narrow](/manual/enums-and-match#conditional-narrowing) a stable place
+to its remaining members for the selected branch. `Option[T]` and `T?` remain
+supported during phase 1.
+
 | Type | Description |
 | --- | --- |
 | `bool` | Boolean value: `true` or `false`. |
@@ -16365,10 +17102,12 @@ positions:
 - `copy class` values whose fields are all copyable
 - user enum values when every declared payload type is statically copyable
 - `Option[T]`, `Result[T, E]`, `SendError[T]`, and `QueueReceive[T]` when all payload types are copyable
+- union values when every member type is copyable
 
 Move values transfer ownership:
 
 - tuple values with at least one move element
+- union values with at least one move member
 - `str`
 - `list[T]`
 - `dict[K, V]`
@@ -16443,7 +17182,8 @@ Accepted ADR-0033 defines the static property used at a task boundary.
 worker to another; it is separate from both Copy and clone safety. `Transfer`
 is derived by the compiler and is not a builtin trait that source code can
 implement or assert. An ordinary user trait also named `Transfer` does not
-affect this structural classification.
+affect this structural classification. A union is Transfer when every member
+is Transfer, and a member that is not names the failing member in `AU3008`.
 
 All copy types and `str` are `Transfer`. `list[T]`, `set[T]`, `dict[K, V]`,
 tuples, classes, and enums are `Transfer` exactly when all of their stored
@@ -16706,7 +17446,10 @@ does not change the underlying copy/move category.
 reports an unknown or unavailable type name. `AU2002` reports type mismatches,
 unresolved contextual literal typing, generic arity, payload, field, and
 annotation mismatches. `AU2003` reports unsupported numeric operators or
-casts, and `AU2004` reports invalid constructor argument binding. `AU2999`
+casts, and `AU2004` reports invalid constructor argument binding. `AU2010`
+reports a value that is not a direct member of its expected union, `AU2011`
+an ambiguous contextual literal, `AU2012` a cyclic transparent alias, and
+`AU2014` a member use whose `None`-test narrowing was invalidated. `AU2999`
 covers invalid recursive layouts and other type rejections without a narrower
 category. `AU3001` reports use of a moved non-copy value; `AU3002` reports a
 borrow conflict; `AU3003` reports mutation through an immutable place; and
@@ -16738,13 +17481,30 @@ and non-numeric casts are unavailable, and recursive value fields require
 same source-level callable signature; a capturing closure additionally owns
 its hidden environment. Arbitrary stored and parameter `def` types describe
 capture-free code pointers; compiler-known callback and task-start sites
-preserve the additional closure metadata. `intsize` and
+preserve the additional closure metadata. `Callable[def(...) -> R]`,
+`Callable[mut def(...) -> R]`, `Callable[own def(...) -> R]`, and
+`TaskCallable[...]` are owned storage types for a Shared, Mutable, or
+Consuming callable with an erased capture set; they are non-Copy,
+non-cloneable, and Transfer only as `TaskCallable`. `intsize` and
 `uintsize` follow the target pointer width, and host process exit transport may
 narrow an `int32` after Aura returns it. Other numeric widths and overflow
 behavior are language-defined rather than implementation-defined. FFI v0
 opaque handles are nominal non-Copy, non-cloneable, non-Transfer wrappers for
 one non-null foreign pointer. Extern functions are direct-call-only
 declarations rather than `def(...) -> ...` values.
+
+Every normalized union has one explicit-tag layout plan shared by both
+execution paths: logical tags are the dense canonical member ordinals, the
+tag is the smallest unsigned width that holds every member (one byte up to
+256 members), the payload is aligned to the widest member alignment and
+sized to the widest member, and the total size rounds up to the aggregate
+alignment. Scalars use their width, unit `None` is empty, and every boxed
+aggregate, handle, callable, or type parameter occupies one pointer. The
+plan is internal, target-dependent Aura ABI rather than a C ABI or a
+portable serialization. It is encoded in the lowered program together with
+each member's drop obligation, so importers and native caches rebuild
+rather than guess a tag from source order, and only the active payload owns
+cleanup and is destroyed once.
 
 ## Status
 
@@ -20737,8 +21497,17 @@ print(subtract(left=10, right=3))
 print(subtract(10, right=3))
 ```
 
-Function parameters remain positionally bindable. A `*` keyword-only marker
-is not part of Aura 0.3's structural callable model and receives `AU1101`.
+A `*` in the parameter list makes the parameters after it keyword-only: they
+bind by name only, so a positional argument that would reach one is an
+`AU2004` error.
+
+```aura check-pass
+def scale(value: int32, *, factor: int32 = 2) -> int32:
+    return value * factor
+
+print(scale(4))
+print(scale(4, factor=3))
+```
 
 Rules:
 
@@ -20928,9 +21697,11 @@ Function values are code pointers, so they are copy values and satisfy
 expected type may come from an annotation, argument, field, collection
 element, or function-typed parameter default.
 
-Bound instance methods, associated-method values, and trait-method values are
-unavailable. Task targets may be direct associated methods without `self`;
-that task-target form does not create a general associated-method value.
+`Class.method` names an associated method (no `self`) as a function value
+with the method's contract, and `receiver.method` outside a call binds a
+closure over the receiver; see the Closures tutorial and manual. A generic
+method's type arguments are written as `method[T]` or come from an expected
+contract.
 
 See [examples/basics/function_values.au](../examples/basics/function_values.au).
 
@@ -20990,7 +21761,7 @@ normative [Closures](../docs/manual/closures.md) page.
 - ordinary `-> T` return values are owned; `-> view [mut] T from origin` is the
   explicit non-owning exception
 - clone-based non-copy returns require the returned type to be clone-safe
-- method values and multi-statement closure bodies are not part of this stage
+- multi-statement closure bodies are not part of this stage
 
 ## Source: tutorials/04-control-flow.md
 
@@ -23091,6 +23862,62 @@ This tutorial set tracks the compiler, not the proposal. When a feature is added
 
 Enums let you define a type that can be one of several variants. Combined with `match`, they give you exhaustive pattern matching -- the compiler guarantees you handle every case.
 
+## Matching A Union Member
+
+Use a union when the alternatives are existing types, and select a member
+with `case Type as name`:
+
+```aura check-pass
+def main():
+    mut value: int64 | str | None = 41
+    match mut value:
+        case int64 as number:
+            number += 1
+            print(number)
+        case str as text:
+            print(text)
+        case None:
+            print("missing")
+    print(value)
+```
+
+The output is `42` on two lines. The integer arm changes the existing payload.
+It cannot replace that payload with a string; a tag change requires assigning
+the whole `value` after the arm ends. An ordinary `match value` borrows its
+non-Copy payload, while `match own value` consumes it after a guard commits.
+Guards do not count toward coverage, so include an unguarded arm for every
+member or a final `_`. Type arms also work inside an enum payload pattern.
+
+See [union_type_patterns.au](../examples/enums/union_type_patterns.au).
+`Option[T]` and `T?` remain supported in phase 1.
+
+## Testing For `None`
+
+A union with a `None` member does not need a `match` for the common
+"present or missing" question. `is None` and `is not None` narrow the tested
+place for the branch they select:
+
+```aura check-pass
+def describe(value: str | None):
+    if value is None:
+        print("missing")
+        return
+    print(value.len())
+
+def main():
+    describe(None)
+    describe("aura")
+```
+
+Inside the `else` branch, and after an `if value is None: return`, `value` is
+a plain `str`. The same works for `mut` locals, class fields, and views, and
+through `not`, `and`, and `or`. Assigning to the place, matching it with
+`match mut`, or passing it to a call with `mut` access ends the narrowing;
+using the member afterwards reports `AU2014`, so test the value again. Only
+`is None` and `is not None` narrow; `== None` compares without narrowing.
+
+See [union_narrowing.au](../examples/enums/union_narrowing.au).
+
 ## Declaring An Enum
 
 ```aura check-pass
@@ -24354,8 +25181,8 @@ Capture-free named function values use `def(T1, mut T2, own T3) -> R`. They are 
 values, satisfy `Transfer`, and may be stored in bindings, parameters, fields,
 and collections or used as `TaskGroup` targets. Bare function-type parameters
 are shared; written or inferred `mut`/`own` modes are part of the contract.
-Instance, associated, and trait method values remain
-outside the implemented surface.
+`receiver.method` binds a closure over the receiver with the method's
+contract, and `Class.method` on a non-generic class is a function value.
 
 Contextually typed expression lambdas use `lambda parameters: expression`.
 The expected `def(...) -> ...` type supplies parameter types and constrains
@@ -25238,7 +26065,7 @@ The current compiler does not support:
 
 - non-numeric casts
 - direct recursive fields without `indirect`
-- method values, statement-bodied closures, or implicit shared parameter
+- statement-bodied closures or implicit shared parameter
   captures; mutable captured state is supported through an explicit
   `lambda [mut place] ...` loan capture stored in a mutable local
 

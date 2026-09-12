@@ -43,34 +43,34 @@ fn builtin_type_lowering_preserves_nested_function_signatures() {
         Type::Function {
             params: vec![
                 FunctionParamContract {
+                    keyword_only: false,
                     name: String::new(),
                     ty: Type::named("Duration"),
                     passing: ReceiverKind::Borrow,
                     has_default: false,
-                    default_erased: true,
                 },
                 FunctionParamContract {
+                    keyword_only: false,
                     name: String::new(),
                     ty: Type::named("str"),
                     passing: ReceiverKind::BorrowMut,
                     has_default: false,
-                    default_erased: true,
                 },
                 FunctionParamContract {
+                    keyword_only: false,
                     name: String::new(),
                     ty: Type::Tuple(vec![Type::named("int32")]),
                     passing: ReceiverKind::Value,
                     has_default: false,
-                    default_erased: true,
                 },
             ],
             return_type: Box::new(Type::Function {
                 params: vec![FunctionParamContract {
+                    keyword_only: false,
                     name: String::new(),
                     ty: Type::named("Duration"),
                     passing: ReceiverKind::Borrow,
                     has_default: false,
-                    default_erased: true,
                 }],
                 return_type: Box::new(Type::Unit),
             }),
@@ -726,4 +726,53 @@ fn json_namespace_exposes_dynamic_tree_contract() {
             "legacy json helper {legacy} must remain available"
         );
     }
+}
+
+#[test]
+fn union_annotation_helpers_preserve_normalized_members() {
+    let ty = crate::ast::TypeRef::union(
+        vec![
+            crate::ast::TypeRef::named("None", vec![], false, crate::diag::Span::new(1, 1)),
+            crate::ast::TypeRef::named("int", vec![], false, crate::diag::Span::new(1, 1)),
+            crate::ast::TypeRef::named("int64", vec![], false, crate::diag::Span::new(1, 1)),
+        ],
+        crate::diag::Span::new(1, 1),
+    );
+    assert_eq!(super::lower_type_ref(&ty).to_string(), "int64 | None");
+}
+
+#[test]
+fn builtin_callable_type_refs_lower_to_callable_storage_types() {
+    let span = Span::new(1, 1);
+    let signature = TypeRef::function(
+        vec![TypeRef::named("int64", Vec::new(), false, span)],
+        TypeRef::named("str", Vec::new(), false, span),
+        span,
+    );
+    let lowered = lower_type_ref(&TypeRef::callable(
+        true,
+        ReceiverKind::BorrowMut,
+        signature,
+        span,
+    ));
+    let Type::Callable(callable) = lowered else {
+        panic!("expected a callable, found {lowered}");
+    };
+    assert!(callable.task);
+    assert_eq!(
+        callable.call_kind,
+        crate::sema::closure_call_kind_for(ReceiverKind::BorrowMut)
+    );
+    assert_eq!(callable.params.len(), 1);
+    assert_eq!(callable.params[0].ty, Type::named("int64"));
+    assert_eq!(callable.return_type, Type::named("str"));
+    assert_eq!(
+        lower_type_ref(&TypeRef::callable(
+            false,
+            ReceiverKind::Borrow,
+            TypeRef::named("int64", Vec::new(), false, span),
+            span,
+        )),
+        Type::named("Unknown")
+    );
 }

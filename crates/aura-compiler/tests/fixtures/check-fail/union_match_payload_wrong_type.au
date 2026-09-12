@@ -1,0 +1,7 @@
+def main():
+    mut value: int64 | str = 1
+    match mut value:
+        case int64 as number:
+            number = "wrong"
+        case str as text:
+            pass

@@ -1,0 +1,9 @@
+def main():
+    mut value: int64 | str = 41
+    match mut value:
+        case int64 as number:
+            number += 1
+        case str as text:
+            pass
+    value = "updated"
+    print(value)

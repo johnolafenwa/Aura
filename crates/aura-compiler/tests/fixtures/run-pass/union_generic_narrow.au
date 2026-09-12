@@ -1,0 +1,43 @@
+trait Named:
+    def name(self) -> str
+
+class Dog:
+    tag: str
+
+impl Named for Dog:
+    def name(self) -> str:
+        return self.tag.clone()
+
+def show[V: Named](value: V | None):
+    if value is None:
+        print("none")
+    else:
+        print(value.name())
+
+def count[V](value: V | None) -> int64:
+    match value:
+        case None:
+            return 0
+        case _:
+            return 1
+
+def is_absent[V](value: V) -> bool:
+    return value is None
+
+def either[V, W](value: V | W) -> bool:
+    if value is None:
+        return true
+    return false
+
+def main():
+    show[Dog](Dog(tag="rex"))
+    show[Dog](None)
+    show(Dog(tag="inferred"))
+    print(count[int64](3))
+    print(count[int64](None))
+    print(count[int64 | None](None))
+    print(is_absent[int64](3))
+    print(is_absent[int64 | None](None))
+    print(is_absent[None](None))
+    print(either[int64, str](1))
+    print(either[int64 | None, str](None))

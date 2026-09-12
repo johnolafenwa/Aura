@@ -1,0 +1,16 @@
+class Packet:
+    payload: list[int64] | None
+
+def main():
+    packet = Packet(payload=[1, 2, 3])
+    match own packet.payload:
+        case list[int64] as values:
+            print(values.len())
+        case None:
+            print(0)
+    other = Packet(payload=None)
+    match own other.payload:
+        case list[int64] as values:
+            print(values.len())
+        case None:
+            print(0)

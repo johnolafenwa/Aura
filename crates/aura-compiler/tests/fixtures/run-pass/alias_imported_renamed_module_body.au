@@ -1,0 +1,5 @@
+from alias_runtime_support.proxy import make
+
+def main():
+    value = make()
+    print(value.value)

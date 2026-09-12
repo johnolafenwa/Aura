@@ -1,0 +1,4 @@
+from alias_support.types import Marker, Good
+
+def accept(value: Marker[Good]):
+    pass

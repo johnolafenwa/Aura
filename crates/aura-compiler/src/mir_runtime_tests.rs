@@ -39,11 +39,11 @@ fn test_function_operand(name: &str, params: Vec<Type>, return_type: Type) -> Op
             params: params
                 .into_iter()
                 .map(|ty| crate::sema::FunctionParamContract {
+                    keyword_only: false,
                     name: String::new(),
                     ty,
                     passing: crate::ast::ReceiverKind::Value,
                     has_default: false,
-                    default_erased: false,
                 })
                 .collect(),
             return_type: Box::new(return_type),
@@ -1400,6 +1400,8 @@ fn adr0038_mir_returned_loan_instruction_reports_handoff_errors_and_root_project
 fn test_runtime() -> MirRuntime {
     MirRuntime::new(
         MirModule {
+            unions: Vec::new(),
+            enums: Vec::new(),
             constants: Vec::new(),
             functions: Vec::new(),
             classes: Vec::new(),
@@ -2419,6 +2421,8 @@ def main():
 #[test]
 fn public_mir_execution_rejects_caller_supplied_ffi_metadata() {
     let forged = MirModule {
+        unions: Vec::new(),
+        enums: Vec::new(),
         constants: Vec::new(),
         functions: vec![MirFunction {
             name: "main".to_string(),
@@ -6654,7 +6658,7 @@ fn mir_runtime_process_capture_helpers_cover_success_and_malformed_results() {
         "Cancelled",
     );
     assert_process_error_variant(
-        super::process_error_from_io(io::Error::new(io::ErrorKind::Other, "io failed")),
+        super::process_error_from_io(io::Error::other("io failed")),
         "Io",
     );
 
@@ -6731,6 +6735,8 @@ fn mir_runtime_process_capture_helpers_cover_success_and_malformed_results() {
     let group = TaskGroupValue::new(&CancellationContext::default());
     let cancelled_runtime = MirRuntime::new(
         MirModule {
+            unions: Vec::new(),
+            enums: Vec::new(),
             constants: Vec::new(),
             functions: Vec::new(),
             classes: Vec::new(),
@@ -8894,12 +8900,14 @@ fn mir_runtime_argument_binding_helpers_cover_named_and_positional_cases() {
             passing: crate::mir::MirReceiverKind::Value,
             ty: Type::named("int32"),
             default_function: None,
+            keyword_only: false,
         },
         MirParam {
             name: "right".to_string(),
             passing: crate::mir::MirReceiverKind::Value,
             ty: Type::named("int32"),
             default_function: None,
+            keyword_only: false,
         },
     ];
     let rebound = bind_args(&params, bound.clone()).expect("mir params should bind");
@@ -8914,8 +8922,8 @@ fn mir_runtime_argument_binding_helpers_cover_named_and_positional_cases() {
             writeback_place: None,
         }],
     )
-    .err()
-    .expect("unknown MIR argument should fail");
+    .map(|_| ())
+    .expect_err("unknown MIR argument should fail");
     assert!(missing.message.contains("unknown MIR argument"));
 
     let duplicate = bind_builtin_args(
@@ -8955,8 +8963,8 @@ fn mir_runtime_argument_binding_helpers_cover_named_and_positional_cases() {
             },
         ],
     )
-    .err()
-    .expect("extra positional MIR arguments should fail");
+    .map(|_| ())
+    .expect_err("extra positional MIR arguments should fail");
     assert!(too_many.message.contains("too many MIR arguments"));
 
     let optional_named_then_positional = bind_optional_builtin_args(
@@ -9001,8 +9009,8 @@ fn mir_runtime_argument_binding_helpers_cover_named_and_positional_cases() {
             writeback_place: None,
         }],
     )
-    .err()
-    .expect("unknown optional MIR arguments should fail");
+    .map(|_| ())
+    .expect_err("unknown optional MIR arguments should fail");
     assert!(optional_unknown.message.contains("unknown MIR argument"));
 
     let optional_too_many = match bind_optional_builtin_args(
@@ -9036,8 +9044,8 @@ fn mir_runtime_argument_binding_helpers_cover_named_and_positional_cases() {
             writeback_place: None,
         }],
     )
-    .err()
-    .expect("missing MIR arguments should fail");
+    .map(|_| ())
+    .expect_err("missing MIR arguments should fail");
     assert!(missing_required.message.contains("missing MIR argument"));
 
     let eval_error = evaluate_named_args(
@@ -9048,8 +9056,8 @@ fn mir_runtime_argument_binding_helpers_cover_named_and_positional_cases() {
         }],
         &mut env,
     )
-    .err()
-    .expect("reading a missing MIR place should fail");
+    .map(|_| ())
+    .expect_err("reading a missing MIR place should fail");
     assert!(eval_error.message.contains("unknown MIR place `missing`"));
 
     let unit_value = evaluate_named_args(
@@ -9071,10 +9079,11 @@ fn mir_runtime_function_binding_reports_missing_and_invalid_writeback_arguments(
         passing: MirReceiverKind::BorrowMut,
         ty: Type::named("int64"),
         default_function: None,
+        keyword_only: false,
     }];
     assert!(bind_args(&params, Vec::new())
-        .err()
-        .expect("required function arguments must be present")
+        .map(|_| ())
+        .expect_err("required function arguments must be present")
         .message
         .contains("missing MIR argument `value`"));
 
@@ -9157,6 +9166,8 @@ fn mir_runtime_complexity_guard_rejects_excessive_instruction_counts() {
         terminator,
     };
     let module_with_blocks = |blocks: Vec<BasicBlock>| MirModule {
+        unions: Vec::new(),
+        enums: Vec::new(),
         constants: Vec::new(),
         functions: vec![MirFunction {
             name: "main".to_string(),
@@ -9176,6 +9187,8 @@ fn mir_runtime_complexity_guard_rejects_excessive_instruction_counts() {
     };
 
     let module = MirModule {
+        unions: Vec::new(),
+        enums: Vec::new(),
         constants: Vec::new(),
         functions: vec![MirFunction {
             name: "main".to_string(),
@@ -9554,6 +9567,8 @@ fn mir_runtime_task_detection_helpers_cover_task_and_process_shapes() {
     assert!(super::function_uses_lightweight_tasks(&process_run));
 
     let without_tasks = MirModule {
+        unions: Vec::new(),
+        enums: Vec::new(),
         constants: Vec::new(),
         functions: vec![ordinary.clone()],
         classes: Vec::new(),
@@ -9563,6 +9578,8 @@ fn mir_runtime_task_detection_helpers_cover_task_and_process_shapes() {
     assert!(!super::module_uses_lightweight_tasks(&without_tasks));
 
     let with_top_level_process_run = MirModule {
+        unions: Vec::new(),
+        enums: Vec::new(),
         constants: Vec::new(),
         functions: vec![ordinary],
         classes: Vec::new(),
@@ -9649,12 +9666,14 @@ fn mir_runtime_writeback_and_spawn_helpers_cover_borrow_mut_edges() {
             passing: crate::mir::MirReceiverKind::Borrow,
             ty: Type::named("int32"),
             default_function: None,
+            keyword_only: false,
         },
         MirParam {
             name: "target".to_string(),
             passing: crate::mir::MirReceiverKind::BorrowMut,
             ty: Type::named("int32"),
             default_function: None,
+            keyword_only: false,
         },
     ];
     let writeback_places = vec![None, Some("target".to_string())];
@@ -9701,6 +9720,7 @@ fn mir_runtime_writeback_and_spawn_helpers_cover_borrow_mut_edges() {
                 passing: crate::mir::MirReceiverKind::BorrowMut,
                 ty: Type::named("str"),
                 default_function: None,
+                keyword_only: false,
             }],
             &[Some("text_target".to_string())],
             vec![(0, Value::String(text))],
@@ -9730,6 +9750,7 @@ fn mir_runtime_writeback_and_spawn_helpers_cover_borrow_mut_edges() {
             passing: crate::mir::MirReceiverKind::Value,
             ty: Type::named("int32"),
             default_function: None,
+            keyword_only: false,
         }],
         local_types: Vec::new(),
         return_type: Type::named("int32"),
@@ -9737,29 +9758,37 @@ fn mir_runtime_writeback_and_spawn_helpers_cover_borrow_mut_edges() {
         blocks: Vec::new(),
     };
     runtime
-        .require_task_startable_function(&by_value)
+        .require_task_startable_function(&by_value, 0)
         .expect("by-value MIR functions should be task-startable");
     runtime
-        .require_task_startable_function(&MirFunction {
-            params: vec![MirParam {
-                name: "value".to_string(),
-                passing: crate::mir::MirReceiverKind::Borrow,
-                ty: Type::named("str"),
-                default_function: None,
-            }],
-            ..by_value.clone()
-        })
+        .require_task_startable_function(
+            &MirFunction {
+                params: vec![MirParam {
+                    name: "value".to_string(),
+                    passing: crate::mir::MirReceiverKind::Borrow,
+                    ty: Type::named("str"),
+                    default_function: None,
+                    keyword_only: false,
+                }],
+                ..by_value.clone()
+            },
+            0,
+        )
         .expect("shared borrowed MIR parameters should be task-startable");
     let task_start_error = runtime
-        .require_task_startable_function(&MirFunction {
-            params: vec![MirParam {
-                name: "value".to_string(),
-                passing: crate::mir::MirReceiverKind::BorrowMut,
-                ty: Type::named("int32"),
-                default_function: None,
-            }],
-            ..by_value
-        })
+        .require_task_startable_function(
+            &MirFunction {
+                params: vec![MirParam {
+                    name: "value".to_string(),
+                    passing: crate::mir::MirReceiverKind::BorrowMut,
+                    ty: Type::named("int32"),
+                    default_function: None,
+                    keyword_only: false,
+                }],
+                ..by_value
+            },
+            0,
+        )
         .expect_err("mutable borrowed params should not be task-startable in MIR");
     assert_eq!(task_start_error.code, "AU3002");
     assert_eq!(
@@ -10357,6 +10386,8 @@ fn mir_runtime_process_child_methods_cover_timeout_cancel_and_error_edges() {
     group.cancel();
     let mut cancelled_runtime = MirRuntime::new(
         MirModule {
+            unions: Vec::new(),
+            enums: Vec::new(),
             constants: Vec::new(),
             functions: Vec::new(),
             classes: Vec::new(),
@@ -10881,6 +10912,8 @@ fn mir_runtime_process_supervisor_methods_cover_start_wait_and_cancel_edges() {
     group.cancel();
     let mut cancelled_runtime = MirRuntime::new(
         MirModule {
+            unions: Vec::new(),
+            enums: Vec::new(),
             constants: Vec::new(),
             functions: Vec::new(),
             classes: Vec::new(),
@@ -11995,6 +12028,8 @@ fn mir_runtime_process_builtins_cover_spawn_timeout_and_cancelled_edges() {
     group.cancel();
     let mut cancelled_runtime = MirRuntime::new(
         MirModule {
+            unions: Vec::new(),
+            enums: Vec::new(),
             constants: Vec::new(),
             functions: Vec::new(),
             classes: Vec::new(),
@@ -12840,6 +12875,7 @@ fn mir_runtime_mutating_member_calls_write_back_receivers_and_params() {
                 passing: crate::mir::MirReceiverKind::BorrowMut,
                 ty: Type::named("int32"),
                 default_function: None,
+                keyword_only: false,
             }],
             local_types: Vec::new(),
             return_type: Type::Unit,
@@ -12892,6 +12928,7 @@ fn mir_runtime_mutating_member_calls_write_back_receivers_and_params() {
                 passing: crate::mir::MirReceiverKind::BorrowMut,
                 ty: Type::named("bool"),
                 default_function: None,
+                keyword_only: false,
             }],
             local_types: Vec::new(),
             return_type: Type::Unit,
@@ -13353,6 +13390,8 @@ fn mir_runtime_try_error_conversion_helpers_cover_context_and_from_paths() {
 
     let lookup_runtime = MirRuntime::new(
         MirModule {
+            unions: Vec::new(),
+            enums: Vec::new(),
             constants: Vec::new(),
             functions: Vec::new(),
             classes: Vec::new(),
@@ -13412,6 +13451,7 @@ fn mir_runtime_try_error_conversion_helpers_cover_context_and_from_paths() {
             passing: crate::mir::MirReceiverKind::Value,
             ty: Type::named("int32"),
             default_function: None,
+            keyword_only: false,
         }],
         local_types: Vec::new(),
         return_type: Type::named("str"),
@@ -13424,6 +13464,8 @@ fn mir_runtime_try_error_conversion_helpers_cover_context_and_from_paths() {
     };
     let mut converting_runtime = MirRuntime::new(
         MirModule {
+            unions: Vec::new(),
+            enums: Vec::new(),
             constants: Vec::new(),
             functions: vec![from_function],
             classes: Vec::new(),
@@ -13466,6 +13508,8 @@ fn trait_impl_lookup_and_top_level_run_helpers_cover_runtime_paths() {
     };
     let runtime = MirRuntime::new(
         MirModule {
+            unions: Vec::new(),
+            enums: Vec::new(),
             constants: Vec::new(),
             functions: Vec::new(),
             classes: Vec::new(),
@@ -13651,6 +13695,8 @@ fn trait_impl_lookup_and_top_level_run_helpers_cover_runtime_paths() {
 
     let mut missing_entrypoint_runtime = MirRuntime::new(
         MirModule {
+            unions: Vec::new(),
+            enums: Vec::new(),
             constants: Vec::new(),
             functions: Vec::new(),
             classes: vec![MirClass {
@@ -14650,6 +14696,8 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
     cancellation_group.cancel();
     let mut cancelled_runtime = MirRuntime::new(
         MirModule {
+            unions: Vec::new(),
+            enums: Vec::new(),
             constants: Vec::new(),
             functions: Vec::new(),
             classes: Vec::new(),
@@ -16605,6 +16653,8 @@ fn mir_runtime_task_result_or_helpers_cover_nonblocking_shortcuts() {
     group.cancel();
     let mut cancelled_runtime = MirRuntime::new(
         MirModule {
+            unions: Vec::new(),
+            enums: Vec::new(),
             constants: Vec::new(),
             functions: Vec::new(),
             classes: Vec::new(),
@@ -16734,6 +16784,8 @@ fn mir_runtime_single_consumer_task_results_claim_every_observing_attempt() {
     group.cancel();
     let mut cancelled_runtime = MirRuntime::new(
         MirModule {
+            unions: Vec::new(),
+            enums: Vec::new(),
             constants: Vec::new(),
             functions: Vec::new(),
             classes: Vec::new(),
@@ -17040,6 +17092,8 @@ fn mir_runtime_select_adapter_distinguishes_child_and_current_task_cancellation(
         .expect("queue should accept the ready value");
     let mut runtime = MirRuntime::new(
         MirModule {
+            unions: Vec::new(),
+            enums: Vec::new(),
             constants: Vec::new(),
             functions: Vec::new(),
             classes: Vec::new(),
@@ -17378,6 +17432,8 @@ fn mir_runtime_wait_helpers_cover_task_lists_ready_error_timeout_and_cancel_path
     group.cancel();
     let mut cancelled_runtime = MirRuntime::new(
         MirModule {
+            unions: Vec::new(),
+            enums: Vec::new(),
             constants: Vec::new(),
             functions: Vec::new(),
             classes: Vec::new(),
@@ -17439,6 +17495,8 @@ fn mir_runtime_print_tolerates_poisoned_stdout_lock() {
 
     let mut runtime = MirRuntime::new(
         MirModule {
+            unions: Vec::new(),
+            enums: Vec::new(),
             constants: Vec::new(),
             functions: Vec::new(),
             classes: Vec::new(),
@@ -17482,6 +17540,8 @@ fn mir_runtime_io_write_streams_to_stdout_sink() {
     });
     let mut runtime = MirRuntime::new_with_stdout_sink(
         MirModule {
+            unions: Vec::new(),
+            enums: Vec::new(),
             constants: Vec::new(),
             functions: Vec::new(),
             classes: Vec::new(),
@@ -17813,6 +17873,8 @@ fn mir_runtime_entrypoint_call_and_type_helpers_cover_remaining_edges() {
 
     let mut runtime = MirRuntime::new(
         MirModule {
+            unions: Vec::new(),
+            enums: Vec::new(),
             constants: Vec::new(),
             functions: Vec::new(),
             classes: vec![MirClass {
@@ -17905,21 +17967,21 @@ fn mir_runtime_entrypoint_call_and_type_helpers_cover_remaining_edges() {
         }),
     );
     assert_eq!(
-        runtime.resolve_place_type("pair", &mut env),
+        runtime.resolve_place_type("pair", &env),
         Some(Type::Named(
             "Pair".to_string(),
             vec![Type::named("int32"), Type::named("bool")]
         ))
     );
     assert_eq!(
-        runtime.resolve_place_type("pair.left", &mut env),
+        runtime.resolve_place_type("pair.left", &env),
         Some(Type::named("int32"))
     );
     assert_eq!(
-        runtime.resolve_place_type("wrapped.0.left", &mut env),
+        runtime.resolve_place_type("wrapped.0.left", &env),
         Some(Type::named("int32"))
     );
-    assert_eq!(runtime.resolve_place_type("number.value", &mut env), None);
+    assert_eq!(runtime.resolve_place_type("number.value", &env), None);
     runtime
         .validate_value_fits_type(&Value::Bool(true), &Type::named("int32"), None)
         .expect("non-integer values are ignored by integer-width validation");
@@ -17981,6 +18043,7 @@ fn mir_runtime_entrypoint_call_and_type_helpers_cover_remaining_edges() {
             passing: crate::mir::MirReceiverKind::BorrowMut,
             ty: Type::named("int32"),
             default_function: None,
+            keyword_only: false,
         }],
         local_types: vec![MirLocalType {
             name: "temp".to_string(),
@@ -18265,6 +18328,8 @@ fn mir_runtime_cleanup_and_rvalue_helpers_cover_remaining_error_paths() {
     };
     let mut runtime = MirRuntime::new(
         MirModule {
+            unions: Vec::new(),
+            enums: Vec::new(),
             constants: Vec::new(),
             functions: vec![close_fn, close_borrow_fn],
             classes: vec![
@@ -18716,15 +18781,17 @@ fn mir_runtime_env_and_entry_helpers_cover_additional_branch_paths() {
     let runtime = test_runtime();
     assert_eq!(
         runtime
-            .resolve_place_type("root", &mut env)
+            .resolve_place_type("root", &env)
             .expect("root type should resolve"),
         Type::named("Box")
     );
-    assert!(runtime.resolve_place_type("root.value", &mut env).is_none());
-    assert!(runtime.resolve_place_type("missing", &mut env).is_none());
+    assert!(runtime.resolve_place_type("root.value", &env).is_none());
+    assert!(runtime.resolve_place_type("missing", &env).is_none());
 
     let typed_runtime = MirRuntime::new(
         MirModule {
+            unions: Vec::new(),
+            enums: Vec::new(),
             constants: Vec::new(),
             functions: Vec::new(),
             classes: vec![MirClass {
@@ -18743,12 +18810,14 @@ fn mir_runtime_env_and_entry_helpers_cover_additional_branch_paths() {
         CancellationContext::default(),
     );
     assert_eq!(
-        typed_runtime.resolve_place_type("root.value", &mut env),
+        typed_runtime.resolve_place_type("root.value", &env),
         Some(Type::named("int32"))
     );
 
     let mut no_top_level = MirRuntime::new(
         MirModule {
+            unions: Vec::new(),
+            enums: Vec::new(),
             constants: Vec::new(),
             functions: vec![MirFunction {
                 name: "main".to_string(),
@@ -18796,6 +18865,8 @@ fn mir_runtime_env_and_entry_helpers_cover_additional_branch_paths() {
 
     let mut needs_receiver = MirRuntime::new(
         MirModule {
+            unions: Vec::new(),
+            enums: Vec::new(),
             constants: Vec::new(),
             functions: vec![MirFunction {
                 name: "update".to_string(),
@@ -18843,6 +18914,8 @@ fn mir_runtime_env_and_entry_helpers_cover_additional_branch_paths() {
 
     let missing_main_runtime = MirRuntime::new(
         MirModule {
+            unions: Vec::new(),
+            enums: Vec::new(),
             constants: Vec::new(),
             functions: Vec::new(),
             classes: Vec::new(),
@@ -19318,11 +19391,11 @@ fn mir_function_value_runtime_moves_owned_args_writes_back_mut_args_and_traps_ba
     let string_type = Type::named("str");
     let consume_signature = Type::Function {
         params: vec![crate::sema::FunctionParamContract {
+            keyword_only: false,
             name: "value".to_string(),
             ty: string_type.clone(),
             passing: crate::ast::ReceiverKind::Value,
             has_default: false,
-            default_erased: false,
         }],
         return_type: Box::new(string_type.clone()),
     };
@@ -19337,6 +19410,7 @@ fn mir_function_value_runtime_moves_owned_args_writes_back_mut_args_and_traps_ba
             passing: crate::mir::MirReceiverKind::Value,
             ty: string_type.clone(),
             default_function: None,
+            keyword_only: false,
         }],
         local_types: Vec::new(),
         return_type: string_type.clone(),
@@ -19351,11 +19425,11 @@ fn mir_function_value_runtime_moves_owned_args_writes_back_mut_args_and_traps_ba
     let int_type = Type::named("int32");
     let mutate_signature = Type::Function {
         params: vec![crate::sema::FunctionParamContract {
+            keyword_only: false,
             name: "value".to_string(),
             ty: int_type.clone(),
             passing: crate::ast::ReceiverKind::BorrowMut,
             has_default: false,
-            default_erased: false,
         }],
         return_type: Box::new(Type::Unit),
     };
@@ -19370,6 +19444,7 @@ fn mir_function_value_runtime_moves_owned_args_writes_back_mut_args_and_traps_ba
             passing: crate::mir::MirReceiverKind::BorrowMut,
             ty: int_type.clone(),
             default_function: None,
+            keyword_only: false,
         }],
         local_types: vec![MirLocalType {
             name: "next".to_string(),
@@ -19400,6 +19475,8 @@ fn mir_function_value_runtime_moves_owned_args_writes_back_mut_args_and_traps_ba
 
     let mut runtime = MirRuntime::new(
         MirModule {
+            unions: Vec::new(),
+            enums: Vec::new(),
             constants: Vec::new(),
             functions: vec![consume, mutate],
             classes: Vec::new(),
@@ -19510,6 +19587,7 @@ fn mir_function_value_runtime_rejects_missing_targets_defaults_and_malformed_tas
         passing: crate::mir::MirReceiverKind::Value,
         ty: int_type.clone(),
         default_function: default_function.map(str::to_string),
+        keyword_only: false,
     };
     let function = |name: &str, params: Vec<MirParam>| MirFunction {
         name: name.to_string(),
@@ -19535,6 +19613,8 @@ fn mir_function_value_runtime_rejects_missing_targets_defaults_and_malformed_tas
     let worker = function("worker", Vec::new());
     let mut runtime = MirRuntime::new(
         MirModule {
+            unions: Vec::new(),
+            enums: Vec::new(),
             constants: Vec::new(),
             functions: vec![required, broken_default, worker],
             classes: Vec::new(),
@@ -19684,11 +19764,11 @@ fn mir_function_value_runtime_rejects_missing_targets_defaults_and_malformed_tas
 #[test]
 fn mir_function_value_runtime_type_parameter_discovery_descends_into_signatures() {
     let contract = |ty: Type| crate::sema::FunctionParamContract {
+        keyword_only: false,
         name: String::new(),
         ty,
         passing: crate::ast::ReceiverKind::Value,
         has_default: false,
-        default_erased: true,
     };
     let signature = Type::Function {
         params: vec![contract(Type::TypeParam("CallbackInput".to_string()))],
@@ -19786,12 +19866,14 @@ fn mir_runtime_closure_environment_is_by_value_repeatable_and_one_shot_when_cons
         passing: crate::mir::MirReceiverKind::Borrow,
         ty: int_type.clone(),
         default_function: None,
+        keyword_only: false,
     };
     let owned_string_param = |name: &str| MirParam {
         name: name.to_string(),
         passing: crate::mir::MirReceiverKind::Value,
         ty: string_type.clone(),
         default_function: None,
+        keyword_only: false,
     };
     let repeatable_body = MirFunction {
         name: "main::__lambda_1".to_string(),
@@ -19841,6 +19923,8 @@ fn mir_runtime_closure_environment_is_by_value_repeatable_and_one_shot_when_cons
     };
     let mut runtime = MirRuntime::new(
         MirModule {
+            unions: Vec::new(),
+            enums: Vec::new(),
             constants: Vec::new(),
             functions: vec![repeatable_body, consuming_body],
             classes: Vec::new(),
@@ -19864,11 +19948,11 @@ fn mir_runtime_closure_environment_is_by_value_repeatable_and_one_shot_when_cons
 
     let repeatable_signature = Type::Closure {
         params: Box::new(vec![crate::sema::FunctionParamContract {
+            keyword_only: false,
             name: "value".to_string(),
             ty: int_type.clone(),
             passing: crate::ast::ReceiverKind::Borrow,
             has_default: false,
-            default_erased: false,
         }]),
         return_type: Box::new(int_type.clone()),
         captures: Box::new(vec![crate::sema::ClosureCapture {
@@ -19876,6 +19960,7 @@ fn mir_runtime_closure_environment_is_by_value_repeatable_and_one_shot_when_cons
             ty: int_type.clone(),
             mode: crate::sema::ClosureCaptureMode::Copy,
             span: Span::new(2, 16),
+            mutated: false,
         }]),
         call_kind: crate::sema::ClosureCallKind::Repeatable,
     };
@@ -19891,8 +19976,10 @@ fn mir_runtime_closure_environment_is_by_value_repeatable_and_one_shot_when_cons
                     passing: MirReceiverKind::Value,
                     source_place: None,
                     resolve_source_at_capture: false,
+                    mutated: false,
                 }],
                 consuming: false,
+                mutable: false,
             },
             &mut env,
         )
@@ -19930,6 +20017,7 @@ fn mir_runtime_closure_environment_is_by_value_repeatable_and_one_shot_when_cons
             ty: Type::named("str"),
             mode: crate::sema::ClosureCaptureMode::Move,
             span: Span::new(4, 16),
+            mutated: false,
         }]),
         call_kind: crate::sema::ClosureCallKind::Consuming,
     };
@@ -19945,8 +20033,10 @@ fn mir_runtime_closure_environment_is_by_value_repeatable_and_one_shot_when_cons
                     passing: MirReceiverKind::Value,
                     source_place: None,
                     resolve_source_at_capture: false,
+                    mutated: false,
                 }],
                 consuming: true,
+                mutable: false,
             },
             &mut env,
         )
@@ -20533,4 +20623,2162 @@ fn mir_array_kernels_match_frozen_pre_vectorization_bits() {
             }
         }
     });
+}
+
+// ---------------------------------------------------------------------------
+// Batch 1 coverage: interpreter helper edges that whole programs never reach.
+// ---------------------------------------------------------------------------
+
+fn coverage_union(members: Vec<Type>) -> crate::sema::UnionType {
+    match Type::normalize_union(members, "main", &BTreeMap::new()).expect("normalized union") {
+        Type::Union(union) => *union,
+        other => panic!("expected a union, found {other}"),
+    }
+}
+
+fn coverage_param(name: &str, ty: Type) -> crate::sema::FunctionParamContract {
+    crate::sema::FunctionParamContract {
+        keyword_only: false,
+        name: name.to_string(),
+        ty,
+        passing: crate::ast::ReceiverKind::Value,
+        has_default: false,
+    }
+}
+
+fn coverage_member_call(place: &str, field: &str, args: Vec<MirArg>) -> Rvalue {
+    Rvalue::Call {
+        callee: CallTarget::Member {
+            object: Operand::Place(place.to_string()),
+            field: field.to_string(),
+            receiver_place: Some(place.to_string()),
+        },
+        args,
+    }
+}
+
+fn coverage_string_arg(name: &str, text: &str) -> EvaluatedMirArg {
+    EvaluatedMirArg {
+        name: Some(name.to_string()),
+        value: Value::String(text.to_string()),
+        ty: Some(Type::named("str")),
+        writeback_place: None,
+    }
+}
+
+fn coverage_unique_suffix() -> String {
+    format!(
+        "{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time after the epoch")
+            .as_nanos()
+    )
+}
+
+fn assert_option_none(value: Value) {
+    assert!(enum_payloads(value, "Option", "None").is_empty());
+}
+
+#[test]
+fn union_payload_projections_check_the_active_member_and_symbolic_layouts() {
+    let concrete = coverage_union(vec![Type::named("int64"), Type::Unit]);
+    let int_index = concrete
+        .members
+        .iter()
+        .position(|member| *member == Type::named("int64"))
+        .expect("int64 member");
+    let value = crate::runtime_value::UnionValue {
+        union_type: Type::Union(Box::new(concrete)),
+        member_index: int_index,
+        payload: Value::Int(IntegerValue::from_i64(1)),
+    };
+    super::check_union_projection(&value, &format!("__union_payload_{int_index}"))
+        .expect("the active member projection is accepted");
+    for segment in [
+        format!("__union_payload_{}", 1 - int_index),
+        "field".to_string(),
+        "__union_payload_x".to_string(),
+    ] {
+        let error = super::check_union_projection(&value, &segment)
+            .expect_err("inactive or malformed projections are rejected");
+        assert_eq!(
+            error.message,
+            "union payload projection does not select the active member"
+        );
+    }
+
+    let symbolic = crate::runtime_value::UnionValue {
+        union_type: Type::Union(Box::new(crate::sema::UnionType {
+            members: vec![Type::TypeParam("T".to_string()), Type::Unit],
+            keys: vec!["T".to_string(), "None".to_string()],
+            module_name: "main".to_string(),
+        })),
+        member_index: 0,
+        payload: Value::Int(IntegerValue::from_i64(1)),
+    };
+    super::check_union_projection(&symbolic, "__union_payload_1")
+        .expect("generic frames keep their symbolic layout until retagged");
+    assert!(super::check_union_projection(&symbolic, "field").is_err());
+}
+
+#[test]
+fn enum_payload_projections_reject_malformed_and_inactive_segments() {
+    let variant = EnumVariantValue {
+        enum_name: "Option".to_string(),
+        variant_name: "Some".to_string(),
+        payloads: vec![Value::Unit],
+    };
+    assert_eq!(
+        super::enum_projection_index(&variant, "__variant_payload_Some_0")
+            .expect("the active payload projects"),
+        0
+    );
+    let malformed = super::enum_projection_index(&variant, "payload")
+        .expect_err("segments without the payload prefix are rejected");
+    assert_eq!(malformed.message, "invalid enum payload projection");
+    for segment in ["__variant_payload_None_0", "__variant_payload_Some_1"] {
+        let inactive = super::enum_projection_index(&variant, segment)
+            .expect_err("inactive variants and out-of-range payloads are rejected");
+        assert_eq!(
+            inactive.message,
+            "enum payload projection does not select the active variant"
+        );
+    }
+}
+
+#[test]
+fn immediate_operands_borrow_and_take_as_runtime_values() {
+    let mut env = Env::default();
+    env.define_typed(
+        "number",
+        Type::named("int64"),
+        Value::Int(IntegerValue::from_i64(3)),
+    );
+    for (operand, expected) in [
+        (Operand::Duration(5), Value::Duration(5)),
+        (Operand::Unit, Value::Unit),
+        (Operand::Int(7), Value::Int(IntegerValue::from_literal(7))),
+    ] {
+        assert_eq!(
+            super::borrow_mir_operand(&operand, &env)
+                .expect("immediate operands borrow")
+                .as_value(),
+            &expected
+        );
+        assert_eq!(
+            super::take_mir_operand(&operand, &mut env).expect("immediate operands take"),
+            expected
+        );
+    }
+    let function = test_function_operand("helper", Vec::new(), Type::Unit);
+    assert!(matches!(
+        super::borrow_mir_operand(&function, &env)
+            .expect("function operands borrow")
+            .as_value(),
+        Value::Function(function) if function.name == "helper"
+    ));
+    assert!(matches!(
+        super::take_mir_operand(&function, &mut env).expect("function operands take"),
+        Value::Function(function) if function.name == "helper"
+    ));
+
+    let error = super::borrow_mir_string(&Operand::Place("number".to_string()), &env, "demo")
+        .expect_err("non-string places are rejected");
+    assert_eq!(error.code, "AU4001");
+    assert!(
+        error.message.starts_with("`demo` expects `str`, found"),
+        "{}",
+        error.message
+    );
+    assert!(super::evaluate_borrowed_length_member(
+        &Value::Int(IntegerValue::from_i64(3)),
+        "len",
+        &[]
+    )
+    .is_none());
+}
+
+#[test]
+fn mir_try_rejects_unknown_result_variants() {
+    let mut runtime = test_runtime();
+    let mut env = Env::default();
+    env.define_typed(
+        "weird",
+        Type::Named(
+            "Result".to_string(),
+            vec![Type::named("int64"), Type::named("str")],
+        ),
+        Value::EnumVariant(EnumVariantValue {
+            enum_name: "Result".to_string(),
+            variant_name: "Maybe".to_string(),
+            payloads: vec![Value::Unit],
+        }),
+    );
+    let error = runtime
+        .evaluate_rvalue(
+            &Rvalue::Try {
+                value: Operand::Place("weird".to_string()),
+            },
+            &mut env,
+        )
+        .coverage_err("unknown Result variants are rejected");
+    assert_eq!(
+        error.message,
+        "MIR `try` encountered an invalid `Result` payload at runtime"
+    );
+}
+
+#[test]
+fn none_tests_evaluate_immediate_operands() {
+    let mut runtime = test_runtime();
+    let mut env = Env::default();
+    let outcome = runtime
+        .evaluate_rvalue(
+            &Rvalue::NoneTest {
+                value: Operand::Unit,
+            },
+            &mut env,
+        )
+        .expect("immediate operands are testable");
+    assert!(matches!(
+        outcome,
+        super::RvalueOutcome::Value(Value::Bool(true))
+    ));
+    let outcome = runtime
+        .evaluate_rvalue(
+            &Rvalue::NoneTest {
+                value: Operand::Int(1),
+            },
+            &mut env,
+        )
+        .expect("immediate operands are testable");
+    assert!(matches!(
+        outcome,
+        super::RvalueOutcome::Value(Value::Bool(false))
+    ));
+}
+
+#[test]
+fn trait_member_calls_diagnose_unresolvable_receivers_and_missing_impls() {
+    let mut runtime = test_runtime();
+    let mut env = Env::default();
+    env.define_typed(
+        "namespace",
+        Type::TypeParam("T".to_string()),
+        Value::ModuleNamespace(crate::runtime_value::ModuleNamespaceValue {
+            path: "demo".to_string(),
+        }),
+    );
+    env.define_typed(
+        "number",
+        Type::named("int64"),
+        Value::Int(IntegerValue::from_i64(1)),
+    );
+    let call = |place: &str| Rvalue::Call {
+        callee: CallTarget::TraitMember {
+            object: Operand::Place(place.to_string()),
+            trait_name: "Show".to_string(),
+            field: "render".to_string(),
+            receiver_place: Some(place.to_string()),
+        },
+        args: Vec::new(),
+    };
+    let unresolved = runtime
+        .evaluate_rvalue(&call("namespace"), &mut env)
+        .coverage_err("module namespaces have no runtime type");
+    assert_eq!(
+        unresolved.message,
+        "cannot resolve MIR trait receiver type for `Show.render`"
+    );
+    let missing = runtime
+        .evaluate_rvalue(&call("number"), &mut env)
+        .coverage_err("int64 has no Show implementation in an empty module");
+    assert_eq!(
+        missing.message,
+        "type `int64` has no MIR implementation of `Show.render`"
+    );
+}
+
+#[test]
+fn fixed_width_integer_methods_reject_untyped_and_mismatched_operands() {
+    let mut runtime = test_runtime();
+    let mut env = Env::default();
+    env.define_typed(
+        "untyped",
+        Type::Tuple(Vec::new()),
+        Value::Int(IntegerValue::from_literal(1)),
+    );
+    env.define_typed(
+        "narrow",
+        Type::named("int8"),
+        Value::Int(IntegerValue::from_literal(1_000)),
+    );
+    env.define_typed(
+        "small",
+        Type::named("int8"),
+        Value::Int(IntegerValue::from_literal(1)),
+    );
+    for (place, field, argument, value) in [
+        ("untyped", "wrapping_add", "rhs", Operand::Int(1)),
+        ("narrow", "saturating_sub", "rhs", Operand::Int(1)),
+        (
+            "small",
+            "wrapping_mul",
+            "rhs",
+            Operand::String("x".to_string()),
+        ),
+        ("small", "saturating_add", "rhs", Operand::Int(1_000)),
+        ("untyped", "wrapping_shl", "count", Operand::Int(1)),
+        ("narrow", "saturating_shr", "count", Operand::Int(1)),
+        (
+            "small",
+            "wrapping_shr",
+            "count",
+            Operand::String("x".to_string()),
+        ),
+        ("small", "saturating_shl", "count", Operand::Int(1_000)),
+    ] {
+        let error = runtime
+            .evaluate_rvalue(
+                &coverage_member_call(place, field, vec![mir_arg(Some(argument), value)]),
+                &mut env,
+            )
+            .coverage_err("mismatched fixed-width operands are rejected");
+        assert_eq!(error.code, "AU4001", "{field}: {}", error.message);
+        assert_eq!(
+            error.message,
+            format!("`{field}` expects matching fixed-width integer operands")
+        );
+    }
+
+    env.define_typed("ratio", Type::named("float64"), Value::Float(1.5));
+    env.define_typed("span", Type::named("Duration"), Value::Duration(1_000));
+    for (place, field, expected) in [
+        ("ratio", "to_string", "`to_string` does not take arguments"),
+        ("span", "to_seconds", "`to_seconds` does not take arguments"),
+    ] {
+        let error = runtime
+            .evaluate_rvalue(
+                &coverage_member_call(place, field, vec![mir_arg(None, Operand::Int(1))]),
+                &mut env,
+            )
+            .coverage_err("argument-free members reject arguments");
+        assert_eq!(error.message, expected);
+    }
+}
+
+#[test]
+fn rng_and_task_group_methods_reject_unknown_members_and_extra_arguments() {
+    let mut runtime = test_runtime();
+    let mut env = Env::default();
+    let unknown = runtime
+        .evaluate_rng_method(
+            crate::runtime_value::RngValue::from_seed(1),
+            "bogus",
+            &[],
+            &mut env,
+        )
+        .expect_err("unknown Rng members are diagnosed");
+    assert_eq!(
+        unknown.message,
+        "unsupported Rng method `bogus` in MIR runtime"
+    );
+    let extra = runtime
+        .evaluate_task_group_method(
+            TaskGroupValue::new(&CancellationContext::default()),
+            "cancel",
+            &[mir_arg(None, Operand::Int(1))],
+            &mut env,
+        )
+        .expect_err("cancel takes no arguments");
+    assert_eq!(extra.message, "`cancel` does not take arguments");
+}
+
+#[test]
+fn owned_collection_methods_require_their_source_places() {
+    let mut runtime = test_runtime();
+    let mut env = Env::default();
+    let vector = || VecValue {
+        element_type: Type::named("int64"),
+        elements: vec![Value::Int(IntegerValue::from_i64(1))],
+    };
+    let map = || MapValue {
+        key_type: Type::named("str"),
+        value_type: Type::named("int64"),
+        entries: Vec::new(),
+    };
+    let set = || SetValue {
+        element_type: Type::named("int64"),
+        elements: vec![Value::Int(IntegerValue::from_i64(1))],
+    };
+    let index = [mir_arg(Some("index"), Operand::Int(0))];
+    let additional = [mir_arg(Some("additional"), Operand::Int(4))];
+    let entry = [
+        mir_arg(Some("key"), Operand::String("k".to_string())),
+        mir_arg(Some("value"), Operand::Int(1)),
+    ];
+
+    let cases: Vec<(std::result::Result<Value, Diagnostic>, &str)> = vec![
+        (
+            runtime.evaluate_vec_method(vector(), "len", None, &index, &mut env),
+            "`len` does not take arguments",
+        ),
+        (
+            runtime.evaluate_vec_method(vector(), "__take_index_option", None, &index, &mut env),
+            "owned vector iteration requires its private source place",
+        ),
+        (
+            runtime.evaluate_vec_method(vector(), "reserve", None, &additional, &mut env),
+            "`reserve` requires a mutable list place",
+        ),
+        (
+            runtime.evaluate_map_method(map(), "set", None, &entry, &mut env),
+            "indexed assignment requires a mutable dict place",
+        ),
+        (
+            runtime.evaluate_map_method(map(), "reserve", None, &additional, &mut env),
+            "`reserve` requires a mutable dict place",
+        ),
+        (
+            runtime.evaluate_set_method(set(), "clear", None, &index, &mut env),
+            "`clear` does not take arguments",
+        ),
+        (
+            runtime.evaluate_set_method(set(), "clear", None, &[], &mut env),
+            "`clear` requires a mutable set place",
+        ),
+        (
+            runtime.evaluate_set_method(set(), "reserve", None, &additional, &mut env),
+            "`reserve` requires a mutable set place",
+        ),
+        (
+            runtime.evaluate_set_method(set(), "__take_index_option", None, &index, &mut env),
+            "owned set iteration requires its private source place",
+        ),
+        (
+            runtime.evaluate_string_method("ab".to_string(), "byte_len", &index, &mut env),
+            "`byte_len` does not take arguments",
+        ),
+    ];
+    for (result, expected) in cases {
+        assert_eq!(
+            result
+                .expect_err("place-less owned methods are rejected")
+                .message,
+            expected
+        );
+    }
+    assert_eq!(
+        runtime
+            .evaluate_string_method(
+                "ab".to_string(),
+                "add",
+                &[mir_arg(Some("other"), Operand::String("cd".to_string()))],
+                &mut env,
+            )
+            .expect("str.add concatenates"),
+        Value::String("abcd".to_string())
+    );
+}
+
+#[test]
+fn list_index_conversions_reject_non_integers_and_unsigned_overflow() {
+    let runtime = test_runtime();
+    let huge = Value::Int(IntegerValue::from_literal(u128::MAX));
+    assert_eq!(
+        runtime
+            .mir_index_from_value(huge.clone())
+            .expect_err("unsigned overflow is rejected")
+            .message,
+        "list index is outside the supported signed range"
+    );
+    assert_eq!(
+        runtime
+            .mir_vec_index_from_value(huge, 1)
+            .expect_err("unsigned overflow is rejected")
+            .message,
+        "list index is outside the supported signed range"
+    );
+    assert_eq!(
+        runtime
+            .mir_vec_index_from_value(Value::Float(1.0), 1)
+            .expect_err("floats are not indices")
+            .message,
+        "list indices must be integers"
+    );
+}
+
+#[test]
+fn mir_binary_arithmetic_covers_float_powers_duration_scalars_and_unspanned_errors() {
+    use crate::ast::BinaryOp;
+    let runtime = test_runtime();
+    let int32 = |value: i32| Value::Int(IntegerValue::from_i32(value));
+    let int64 = |value: i64| Value::Int(IntegerValue::from_i64(value));
+    let huge = || Value::Int(IntegerValue::from_literal(u128::MAX));
+
+    assert_eq!(
+        runtime
+            .eval_binary(BinaryOp::Pow, Value::Float(2.0), Value::Float(3.0), None)
+            .expect("float powers evaluate"),
+        Value::Float(8.0)
+    );
+    let overflow = runtime
+        .eval_binary(BinaryOp::Pow, Value::Float(1e308), Value::Float(2.0), None)
+        .expect_err("float power overflow is diagnosed");
+    assert_eq!(overflow.code, "AU4002");
+    assert!(overflow.span.is_none());
+
+    let unspanned = runtime
+        .eval_binary(BinaryOp::FloorDiv, int64(1), int64(0), None)
+        .expect_err("division by zero is diagnosed");
+    assert!(
+        unspanned.message.contains("division by zero"),
+        "{}",
+        unspanned.message
+    );
+    assert!(unspanned.span.is_none());
+
+    let scalar = runtime
+        .eval_binary(BinaryOp::Mul, Value::Duration(10), huge(), None)
+        .expect_err("duration scalars must fit int64");
+    assert_eq!(
+        scalar.message,
+        "Duration multiplication requires an int64 scalar"
+    );
+    let divisor = runtime
+        .eval_binary(BinaryOp::FloorDiv, Value::Duration(10), huge(), None)
+        .expect_err("duration divisors must fit int64");
+    assert_eq!(
+        divisor.message,
+        "Duration floor division requires an int64 divisor"
+    );
+    let mismatch = runtime
+        .eval_binary(BinaryOp::FloorDiv, Value::Float(1.0), int64(2), None)
+        .expect_err("mixed floor division operands are rejected");
+    assert_eq!(mismatch.message, super::MIR_FLOOR_DIVISION_OPERANDS_ERROR);
+
+    let power_kinds = runtime
+        .eval_binary(BinaryOp::Pow, int32(2), int64(3), None)
+        .expect_err("integer power kinds must match");
+    assert_eq!(power_kinds.code, "AU2002");
+    assert_eq!(
+        power_kinds.message,
+        "integer power operand types must match"
+    );
+    assert!(power_kinds.span.is_none());
+    let shift_kinds = runtime
+        .eval_binary(BinaryOp::Shl, int32(2), int64(3), None)
+        .expect_err("shift kinds must match");
+    assert_eq!(shift_kinds.code, "AU2002");
+    assert_eq!(shift_kinds.message, "shift operand types must match");
+}
+
+#[test]
+fn ffi_conversions_reject_union_params_and_decode_nullable_results() {
+    use crate::ffi::{FfiValue, OpaqueHandle};
+    let nullable = coverage_union(vec![Type::named("Handle"), Type::Unit]);
+    let union_param = MirExternParam {
+        name: "value".to_string(),
+        passing: MirReceiverKind::Value,
+        ty: Type::Union(Box::new(nullable.clone())),
+    };
+    let error = super::ffi_type_for_extern_param(&union_param)
+        .expect_err("union parameters never reach FFI marshalling");
+    assert_eq!(error.code, "AU4005");
+    assert!(
+        error.message.contains("union FFI parameter type"),
+        "{}",
+        error.message
+    );
+
+    let unsupported = super::ffi_value_from_runtime(&Value::Unit, &Type::Tuple(Vec::new()))
+        .expect_err("tuples have no FFI representation");
+    assert_eq!(unsupported.code, "AU4005");
+
+    let none =
+        super::runtime_value_from_ffi(FfiValue::Unit, &Type::Union(Box::new(nullable.clone())))
+            .expect("a null handle result becomes the None member");
+    assert!(matches!(none, Value::Union(union) if union.payload == Value::Unit));
+
+    let mut marker = 0u8;
+    let handle = OpaqueHandle::new(&mut marker as *mut u8 as *mut c_void).expect("non-null");
+    let some = super::runtime_value_from_ffi(
+        FfiValue::OpaqueHandle(handle),
+        &Type::Union(Box::new(nullable)),
+    )
+    .expect("a non-null handle becomes the handle member");
+    assert!(matches!(
+        some,
+        Value::Union(union)
+            if matches!(&union.payload, Value::FfiHandle(handle) if handle.type_name() == "Handle")
+    ));
+
+    let no_unit = coverage_union(vec![Type::named("Handle"), Type::named("int64")]);
+    let error = super::runtime_value_from_ffi(FfiValue::Unit, &Type::Union(Box::new(no_unit)))
+        .expect_err("unions without None reject null results");
+    assert!(
+        error.message.contains("does not match source return type"),
+        "{}",
+        error.message
+    );
+    let no_handle = coverage_union(vec![Type::Tuple(vec![Type::named("int64")]), Type::Unit]);
+    let handle = OpaqueHandle::new(&mut marker as *mut u8 as *mut c_void).expect("non-null");
+    let error = super::runtime_value_from_ffi(
+        FfiValue::OpaqueHandle(handle),
+        &Type::Union(Box::new(no_handle)),
+    )
+    .expect_err("unions without a handle member reject handle results");
+    assert!(
+        error.message.contains("does not match source return type"),
+        "{}",
+        error.message
+    );
+}
+
+#[test]
+fn divmod_builtin_infers_operand_types_for_untyped_places() {
+    let mut env = Env::default();
+    env.values
+        .insert("left".to_string(), Value::Int(IntegerValue::from_i32(7)));
+    env.values
+        .insert("right".to_string(), Value::Int(IntegerValue::from_i32(2)));
+    env.values.insert("ratio".to_string(), Value::Float(7.5));
+    env.values
+        .insert("text".to_string(), Value::String("x".to_string()));
+    let args = |left: &str, right: &str| {
+        vec![
+            mir_arg(None, Operand::Place(left.to_string())),
+            mir_arg(None, Operand::Place(right.to_string())),
+        ]
+    };
+    let Value::Tuple(quotient) =
+        super::evaluate_divmod_builtin(&args("left", "right"), &mut env).expect("int32 divmod")
+    else {
+        panic!("divmod returns a tuple");
+    };
+    assert!(matches!(
+        quotient.elements.as_slice(),
+        [Value::Int(quotient), Value::Int(remainder)]
+            if quotient.as_i128() == Some(3)
+                && remainder.as_i128() == Some(1)
+                && quotient.runtime_kind() == Some(IntegerKind::Int32)
+    ));
+    assert!(matches!(
+        super::evaluate_divmod_builtin(&args("ratio", "ratio"), &mut env).expect("float divmod"),
+        Value::Tuple(_)
+    ));
+    let error = super::evaluate_divmod_builtin(&args("text", "text"), &mut env)
+        .expect_err("non-numeric divmod is rejected");
+    assert_eq!(error.code, "AU4001");
+}
+
+#[test]
+fn builtin_argument_binding_skips_slots_taken_by_named_arguments() {
+    let arg = |name: Option<&str>, value: i64| EvaluatedMirArg {
+        name: name.map(str::to_string),
+        value: Value::Int(IntegerValue::from_i64(value)),
+        ty: None,
+        writeback_place: None,
+    };
+    let bound = bind_builtin_args(
+        &["first", "second"],
+        vec![arg(Some("first"), 1), arg(None, 2)],
+    )
+    .expect("positional arguments fill the next free slot");
+    assert_eq!(bound[0].value, Value::Int(IntegerValue::from_i64(1)));
+    assert_eq!(bound[1].value, Value::Int(IntegerValue::from_i64(2)));
+}
+
+#[test]
+fn owned_argument_decoders_accept_unknown_byte_lists_and_option_strings() {
+    let unknown_bytes = Value::Vec(VecValue {
+        element_type: Type::named("Unknown"),
+        elements: vec![Value::Int(IntegerValue::from_literal(7))],
+    });
+    assert_eq!(
+        super::expect_owned_bytes_value(unknown_bytes, "demo")
+            .expect("unknown-typed byte lists decode"),
+        vec![7]
+    );
+    let error =
+        super::expect_owned_bytes_value(Value::Unit, "demo").expect_err("non-lists are rejected");
+    assert!(
+        error
+            .message
+            .starts_with("`demo` expects `list[uint8]`, found"),
+        "{}",
+        error.message
+    );
+    let oversized = Value::Vec(VecValue {
+        element_type: Type::named("Unknown"),
+        elements: vec![Value::Int(IntegerValue::from_literal(u128::MAX))],
+    });
+    assert_eq!(
+        super::expect_bytes_value(&oversized, "demo")
+            .expect_err("oversized elements are rejected")
+            .message,
+        "`demo` expects `list[uint8]`"
+    );
+    assert_eq!(
+        super::expect_owned_bytes_value(oversized, "demo")
+            .expect_err("oversized elements are rejected")
+            .message,
+        "`demo` expects `list[uint8]`"
+    );
+    assert_eq!(
+        super::expect_i32_value(&Value::Int(IntegerValue::from_literal(u128::MAX)), "demo")
+            .expect_err("oversized int32 arguments are rejected")
+            .message,
+        "`demo` expects `int32`"
+    );
+    assert_eq!(
+        super::expect_owned_optional_string_value(option_none(), "demo").expect("None decodes"),
+        None
+    );
+    assert_eq!(
+        super::expect_owned_optional_string_value(
+            option_some(Value::String("x".to_string())),
+            "demo"
+        )
+        .expect("Some decodes"),
+        Some("x".to_string())
+    );
+    let error = super::random_resource_error_to_diagnostic(SecureRandomError::InvalidRange, None);
+    assert_eq!(error.code, "AU4003");
+    assert_eq!(error.message, "random bounds require `lo < hi`");
+}
+
+#[test]
+fn type_parameter_collection_walks_unions_views_callables_and_closures() {
+    use crate::sema::{
+        CallableType, ClosureCallKind, ClosureCapture, ClosureCaptureMode, ReturnedViewType,
+    };
+    let union = Type::Union(Box::new(crate::sema::UnionType {
+        members: vec![Type::TypeParam("U".to_string()), Type::Unit],
+        keys: vec!["U".to_string(), "None".to_string()],
+        module_name: "main".to_string(),
+    }));
+    let view = Type::ReturnedView(Box::new(ReturnedViewType {
+        mutable: false,
+        pointee: Type::TypeParam("V".to_string()),
+        origin: 0,
+    }));
+    let callable = Type::Callable(Box::new(CallableType {
+        task: false,
+        call_kind: ClosureCallKind::Repeatable,
+        params: vec![coverage_param("x", Type::TypeParam("C".to_string()))],
+        return_type: Type::TypeParam("R".to_string()),
+    }));
+    let closure = Type::Closure {
+        params: Box::new(vec![coverage_param("y", Type::TypeParam("P".to_string()))]),
+        return_type: Box::new(Type::TypeParam("Q".to_string())),
+        captures: Box::new(vec![ClosureCapture {
+            name: "cap".to_string(),
+            ty: Type::TypeParam("K".to_string()),
+            mode: ClosureCaptureMode::Copy,
+            span: Span::new(1, 1),
+            mutated: false,
+        }]),
+        call_kind: ClosureCallKind::Repeatable,
+    };
+    let mut collected = BTreeSet::new();
+    for ty in [&union, &view, &callable, &closure] {
+        collect_type_params_from_type(ty, &mut collected);
+    }
+    assert_eq!(
+        collected.into_iter().collect::<Vec<_>>(),
+        ["C", "K", "P", "Q", "R", "U", "V"]
+    );
+}
+
+#[test]
+fn runtime_type_substitution_stops_at_shape_mismatches() {
+    use crate::sema::{CallableType, ClosureCallKind, FunctionParamContract};
+    let int64 = Type::named("int64");
+    let type_param = || Type::TypeParam("T".to_string());
+    let function = |params: Vec<FunctionParamContract>, ret: Type| Type::Function {
+        params,
+        return_type: Box::new(ret),
+    };
+    let borrow_param = |name: &str, ty: Type| {
+        let mut param = coverage_param(name, ty);
+        param.passing = crate::ast::ReceiverKind::Borrow;
+        param
+    };
+    let callable = |params: Vec<FunctionParamContract>, ret: Type| {
+        Type::Callable(Box::new(CallableType {
+            task: false,
+            call_kind: ClosureCallKind::Repeatable,
+            params,
+            return_type: ret,
+        }))
+    };
+    let closure = |params: Vec<FunctionParamContract>, ret: Type| Type::Closure {
+        params: Box::new(params),
+        return_type: Box::new(ret),
+        captures: Box::new(Vec::new()),
+        call_kind: ClosureCallKind::Repeatable,
+    };
+    let generic = function(vec![coverage_param("x", type_param())], type_param());
+    let generic_callable = callable(vec![coverage_param("x", type_param())], type_param());
+    let generic_closure = closure(vec![coverage_param("x", type_param())], type_param());
+
+    let mut substitutions = HashMap::new();
+    for (pattern, actual) in [
+        (generic.clone(), int64.clone()),
+        (generic.clone(), function(Vec::new(), int64.clone())),
+        (
+            generic.clone(),
+            function(vec![borrow_param("x", int64.clone())], int64.clone()),
+        ),
+        (
+            generic_callable.clone(),
+            callable(Vec::new(), int64.clone()),
+        ),
+        (generic_closure.clone(), int64.clone()),
+        (generic_closure.clone(), closure(Vec::new(), int64.clone())),
+        (
+            generic_closure.clone(),
+            closure(vec![borrow_param("x", int64.clone())], int64.clone()),
+        ),
+    ] {
+        collect_runtime_type_substitutions(&pattern, &actual, &mut substitutions);
+        assert!(
+            substitutions.is_empty(),
+            "{pattern} against {actual} must not bind T"
+        );
+    }
+    collect_runtime_type_substitutions(
+        &generic,
+        &function(vec![coverage_param("x", int64.clone())], int64.clone()),
+        &mut substitutions,
+    );
+    assert_eq!(substitutions.get("T"), Some(&int64));
+}
+
+#[test]
+fn value_type_inference_covers_arrays_rngs_handles_and_immediate_operands() {
+    let runtime = test_runtime();
+    let env = Env::default();
+    let array = ArrayValue::zeros(
+        crate::runtime_value::ArrayDType::Int64,
+        vec![2].into_boxed_slice(),
+    )
+    .expect("zeros");
+    assert_eq!(
+        MirRuntime::infer_value_type(&Value::Array(array)),
+        Some(Type::Named("Array".to_string(), vec![Type::named("int64")]))
+    );
+    assert_eq!(
+        MirRuntime::infer_value_type(&Value::Rng(crate::runtime_value::RngValue::from_seed(1))),
+        Some(Type::named("random.Rng"))
+    );
+    let mut marker = 0u8;
+    let handle = FfiHandleValue::new("Handle".to_string(), &mut marker as *mut u8 as *mut c_void)
+        .expect("non-null");
+    assert_eq!(
+        MirRuntime::infer_value_type(&Value::FfiHandle(handle)),
+        Some(Type::named("Handle"))
+    );
+    assert_eq!(
+        runtime.resolve_operand_type(&Operand::Float(1.0), &env),
+        Some(Type::named("float64"))
+    );
+    assert_eq!(
+        runtime.resolve_operand_type(&Operand::Unit, &env),
+        Some(Type::Unit)
+    );
+    let function = test_function_operand("helper", Vec::new(), Type::Unit);
+    let Operand::Function { signature, .. } = &function else {
+        unreachable!("test operand is a function");
+    };
+    assert_eq!(
+        runtime.resolve_operand_type(&function, &env),
+        Some(signature.as_ref().clone())
+    );
+}
+
+#[test]
+fn builtin_constructors_reject_malformed_duration_and_capacity_arguments() {
+    let mut runtime = test_runtime();
+    let mut env = Env::default();
+    let call = |name: &str, args: Vec<MirArg>| Rvalue::Call {
+        callee: CallTarget::Name(name.to_string()),
+        args,
+    };
+    let error = runtime
+        .evaluate_rvalue(
+            &call(
+                "Duration.seconds",
+                vec![mir_arg(None, Operand::String("x".to_string()))],
+            ),
+            &mut env,
+        )
+        .coverage_err("Duration constructors need integers");
+    assert!(
+        error.message.contains("expects `int64`"),
+        "{}",
+        error.message
+    );
+    let error = runtime
+        .evaluate_rvalue(
+            &call(
+                "list.with_capacity",
+                vec![mir_arg(None, Operand::String("x".to_string()))],
+            ),
+            &mut env,
+        )
+        .coverage_err("capacity must be an integer");
+    assert!(error.message.contains("with_capacity"), "{}", error.message);
+    let error = runtime
+        .evaluate_rvalue(
+            &call("set.with_capacity", vec![mir_arg(None, Operand::Int(4))]),
+            &mut env,
+        )
+        .coverage_err("capacity constructors need a checked result type");
+    assert_eq!(error.message, "invalid collection capacity constructor");
+}
+
+#[test]
+fn union_rvalues_reject_non_union_types_and_missing_layout_plans() {
+    let mut runtime = test_runtime();
+    let mut env = Env::default();
+    let target = coverage_union(vec![Type::named("int64"), Type::Unit]);
+    let union_type = Type::Union(Box::new(target.clone()));
+    let int_index = target
+        .members
+        .iter()
+        .position(|member| *member == Type::named("int64"))
+        .expect("int64 member");
+    let unit_index = 1 - int_index;
+    env.define_typed(
+        "value",
+        union_type.clone(),
+        Value::Union(Box::new(crate::runtime_value::UnionValue {
+            union_type: union_type.clone(),
+            member_index: int_index,
+            payload: Value::Int(IntegerValue::from_i64(1)),
+        })),
+    );
+    let cases = vec![
+        (
+            Rvalue::UnionTagTest {
+                place: "value".to_string(),
+                union_type: Type::named("int64"),
+                member_index: 0,
+            },
+            "union tag test requires a union type".to_string(),
+        ),
+        (
+            Rvalue::UnionTakePayload {
+                place: "value".to_string(),
+                union_type: Type::named("int64"),
+                member_type: Type::named("int64"),
+                member_index: 0,
+            },
+            "union take requires a union type".to_string(),
+        ),
+        (
+            Rvalue::UnionTakePayload {
+                place: "value".to_string(),
+                union_type: union_type.clone(),
+                member_type: Type::Unit,
+                member_index: unit_index,
+            },
+            "union take member or type identity mismatch".to_string(),
+        ),
+        (
+            Rvalue::UnionInject {
+                value: Operand::Int(1),
+                union_type: Type::named("int64"),
+                member_type: Type::named("int64"),
+                member_index: 0,
+            },
+            "union injection requires a union type".to_string(),
+        ),
+        (
+            Rvalue::UnionInject {
+                value: Operand::Int(1),
+                union_type: union_type.clone(),
+                member_type: Type::named("int64"),
+                member_index: int_index,
+            },
+            format!("union `{union_type}` has no layout plan in this module"),
+        ),
+    ];
+    for (rvalue, expected) in cases {
+        let error = runtime
+            .evaluate_rvalue(&rvalue, &mut env)
+            .coverage_err("malformed union rvalues are rejected");
+        assert_eq!(error.message, expected);
+    }
+}
+
+#[test]
+fn json_host_calls_reject_non_json_values_and_extra_arguments() {
+    let mut env = Env::default();
+    let error = super::evaluate_json_mir_host_call(
+        "json::is_null",
+        &[mir_arg(None, Operand::Int(1))],
+        &mut env,
+    )
+    .expect("json builtins are recognized")
+    .expect_err("non-json values are rejected");
+    assert_eq!(error.code, "AU4001");
+    let error = super::evaluate_json_mir_host_call(
+        "json::as_bool",
+        &[
+            mir_arg(None, Operand::Int(1)),
+            mir_arg(None, Operand::Int(2)),
+        ],
+        &mut env,
+    )
+    .expect("json builtins are recognized")
+    .expect_err("extra arguments are rejected");
+    assert!(error.message.contains("argument"), "{}", error.message);
+}
+
+#[test]
+fn process_run_materialization_and_loan_expansion_ignore_task_starts_and_safepoints() {
+    assert!(!super::rvalue_materializes_process_run(
+        &Rvalue::StartTask {
+            returns_handle: false,
+            result_is_copy: true,
+            stack_size: None,
+            task_group: Operand::Unit,
+            function: test_function_operand("process::run", Vec::new(), Type::Unit),
+            args: Vec::new(),
+            span: Span::new(1, 1),
+        }
+    ));
+    let safepoint = Instruction::Safepoint;
+    let mut definitions = BTreeMap::new();
+    definitions.insert("loan", vec![&safepoint]);
+    let mut memo = BTreeMap::new();
+    let mut visiting = BTreeSet::new();
+    let expansion =
+        super::runtime_loan_expansion_for_name("loan", &definitions, &mut memo, &mut visiting);
+    assert_eq!(expansion.alternatives, 0);
+    assert_eq!(expansion.path_bytes, 0);
+}
+
+#[test]
+fn websocket_listener_and_socket_methods_cover_unsupported_members_and_closed_peers() {
+    let mut runtime = test_runtime();
+    let mut env = Env::default();
+    let listener =
+        WebSocketListenerValue::bind("127.0.0.1:0").expect("websocket listener should bind");
+    let address = listener
+        .local_addr()
+        .expect("websocket listener address should be available");
+    let unsupported = runtime
+        .evaluate_websocket_listener_method(listener.clone(), "bogus", &[], &mut env)
+        .expect_err("unknown listener members are diagnosed");
+    assert_eq!(
+        unsupported.message,
+        "unsupported MIR websocket listener method `bogus`"
+    );
+    assert_result_err(
+        runtime
+            .evaluate_websocket_listener_method(
+                listener.clone(),
+                "accept",
+                &[mir_arg(Some("timeout"), Operand::Duration(20_000_000))],
+                &mut env,
+            )
+            .expect("accept without a client times out"),
+    );
+
+    let server = {
+        let listener = listener.clone();
+        thread::spawn(move || {
+            let socket = listener
+                .accept(Some(StdDuration::from_secs(5)))
+                .expect("websocket server should accept");
+            assert_eq!(
+                socket
+                    .recv_text(Some(StdDuration::from_secs(5)))
+                    .expect("websocket server recv_text should succeed")
+                    .as_deref(),
+                Some("hello")
+            );
+            socket
+                .close()
+                .expect("websocket server close should succeed");
+        })
+    };
+    let Value::WebSocket(client) = result_ok_payload(
+        runtime
+            .evaluate_builtin_io_call(
+                "net::websocket_connect",
+                vec![coverage_string_arg("url", &format!("ws://{address}"))],
+            )
+            .expect("websocket_connect evaluates"),
+    ) else {
+        panic!("websocket_connect returns a websocket");
+    };
+    let timeout = mir_arg(Some("timeout"), Operand::Duration(5_000_000_000));
+    assert_eq!(
+        result_ok_payload(
+            runtime
+                .evaluate_websocket_method(
+                    client.clone(),
+                    "send_text",
+                    &[
+                        mir_arg(Some("text"), Operand::String("hello".to_string())),
+                        timeout.clone(),
+                    ],
+                    &mut env,
+                )
+                .expect("send_text evaluates")
+        ),
+        Value::Unit
+    );
+    server.join().expect("websocket server should join");
+    let unsupported = runtime
+        .evaluate_websocket_method(client.clone(), "bogus", &[], &mut env)
+        .expect_err("unknown websocket members are diagnosed");
+    assert_eq!(
+        unsupported.message,
+        "unsupported MIR websocket method `bogus`"
+    );
+    assert_option_none(result_ok_payload(
+        runtime
+            .evaluate_websocket_method(client.clone(), "recv_text", &[timeout.clone()], &mut env)
+            .expect("recv_text after the peer closed evaluates"),
+    ));
+    // The peer's TCP half may already be gone by the second read, so only
+    // the absence of a payload is pinned here.
+    match runtime
+        .evaluate_websocket_method(client.clone(), "recv_bytes", &[timeout.clone()], &mut env)
+        .expect("recv_bytes after the peer closed evaluates")
+    {
+        Value::EnumVariant(variant) if variant.variant_name == "Ok" => {
+            assert_option_none(variant.payloads.into_iter().next().expect("payload"));
+        }
+        Value::EnumVariant(variant) => assert_eq!(variant.variant_name, "Err"),
+        other => panic!("unexpected recv_bytes result {other:?}"),
+    }
+    env.define_typed(
+        "bytes",
+        Type::Named("list".to_string(), vec![Type::named("uint8")]),
+        bytes_vec_value(b"late".to_vec()),
+    );
+    // The close handshake has completed, so the protocol layer itself
+    // refuses further frames before the local socket is closed.
+    assert_result_err(
+        runtime
+            .evaluate_websocket_method(
+                client.clone(),
+                "send_text",
+                &[
+                    mir_arg(Some("text"), Operand::String("late".to_string())),
+                    timeout.clone(),
+                ],
+                &mut env,
+            )
+            .expect("send_text after the peer closed evaluates"),
+    );
+    assert_eq!(
+        runtime
+            .evaluate_websocket_method(client.clone(), "close", &[], &mut env)
+            .expect("close evaluates"),
+        Value::Unit
+    );
+    assert_result_err(
+        runtime
+            .evaluate_websocket_method(
+                client,
+                "send_bytes",
+                &[
+                    mir_arg(Some("bytes"), Operand::Place("bytes".to_string())),
+                    timeout,
+                ],
+                &mut env,
+            )
+            .expect("send_bytes on a closed socket evaluates"),
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn unix_listener_and_stream_methods_cover_close_eof_and_unsupported_members() {
+    let mut runtime = test_runtime();
+    let mut env = Env::default();
+    let socket_path =
+        std::env::temp_dir().join(format!("aura-cov-{}.sock", coverage_unique_suffix()));
+    let socket_text = socket_path.to_str().expect("utf-8 socket path").to_string();
+    let _ = std::fs::remove_file(&socket_path);
+    let listener = UnixListenerValue::bind(&socket_text).expect("unix listener should bind");
+    let unsupported = runtime
+        .evaluate_unix_listener_method(listener.clone(), "bogus", &[], &mut env)
+        .expect_err("unknown listener members are diagnosed");
+    assert_eq!(
+        unsupported.message,
+        "unsupported MIR unix listener method `bogus`"
+    );
+    let server = {
+        let listener = listener.clone();
+        thread::spawn(move || {
+            let stream = listener
+                .accept(
+                    Some(StdDuration::from_secs(5)),
+                    Some(&CancellationContext::default()),
+                )
+                .expect("unix server should accept");
+            stream.close();
+        })
+    };
+    let client = UnixStreamValue::connect(
+        &socket_text,
+        Some(StdDuration::from_secs(5)),
+        Some(&CancellationContext::default()),
+    )
+    .expect("unix client should connect");
+    server.join().expect("unix server should join");
+    let unsupported = runtime
+        .evaluate_unix_stream_method(client.clone(), "bogus", &[], &mut env)
+        .expect_err("unknown stream members are diagnosed");
+    assert_eq!(
+        unsupported.message,
+        "unsupported MIR unix stream method `bogus`"
+    );
+    assert_option_none(result_ok_payload(
+        runtime
+            .evaluate_unix_stream_method(
+                client.clone(),
+                "read_line",
+                &[mir_arg(Some("timeout"), Operand::Duration(5_000_000_000))],
+                &mut env,
+            )
+            .expect("read_line at EOF evaluates"),
+    ));
+    client.close();
+    assert_eq!(
+        runtime
+            .evaluate_unix_listener_method(listener, "close", &[], &mut env)
+            .expect("listener close evaluates"),
+        Value::Unit
+    );
+    let _ = std::fs::remove_file(&socket_path);
+}
+
+#[test]
+fn tcp_stream_methods_cover_eof_shutdowns_and_timed_writes_on_closed_streams() {
+    let mut runtime = test_runtime();
+    let mut env = Env::default();
+    let listener = TcpListenerValue::bind("127.0.0.1:0").expect("tcp listener should bind");
+    let address = listener
+        .local_addr()
+        .expect("tcp listener address should be available");
+    let server = {
+        let listener = listener.clone();
+        thread::spawn(move || {
+            for _ in 0..2 {
+                let stream = listener
+                    .accept(
+                        Some(StdDuration::from_secs(5)),
+                        Some(&CancellationContext::default()),
+                    )
+                    .expect("tcp server should accept");
+                let request = stream
+                    .read_line(
+                        Some(StdDuration::from_secs(5)),
+                        Some(&CancellationContext::default()),
+                    )
+                    .expect("tcp server read_line should observe the client shutdown");
+                assert_eq!(request, None);
+                stream.close();
+            }
+        })
+    };
+    let connect = || {
+        TcpStreamValue::connect(
+            &address,
+            Some(StdDuration::from_secs(5)),
+            Some(&CancellationContext::default()),
+        )
+        .expect("tcp client should connect")
+    };
+    let ok = |value: Value, label: &str| match value {
+        Value::EnumVariant(variant) if variant.variant_name == "Ok" => {
+            variant.payloads.into_iter().next().expect("Ok payload")
+        }
+        other => panic!("{label} should succeed, found {other:?}"),
+    };
+    let timeout = mir_arg(Some("timeout"), Operand::Duration(5_000_000_000));
+
+    let half_closed = connect();
+    assert_eq!(
+        ok(
+            runtime
+                .evaluate_tcp_stream_method(half_closed.clone(), "shutdown_read", &[], &mut env)
+                .expect("shutdown_read evaluates"),
+            "shutdown_read"
+        ),
+        Value::Unit
+    );
+    assert_option_none(ok(
+        runtime
+            .evaluate_tcp_stream_method(
+                half_closed.clone(),
+                "read_line",
+                &[timeout.clone()],
+                &mut env,
+            )
+            .expect("read_line after shutdown_read evaluates"),
+        "read_line",
+    ));
+    half_closed.close();
+
+    let fully_closed = connect();
+    assert_eq!(
+        ok(
+            runtime
+                .evaluate_tcp_stream_method(fully_closed.clone(), "shutdown_both", &[], &mut env)
+                .expect("shutdown_both evaluates"),
+            "shutdown_both"
+        ),
+        Value::Unit
+    );
+    server.join().expect("tcp server should join");
+    fully_closed.close();
+    assert_result_err(
+        runtime
+            .evaluate_tcp_stream_method(
+                fully_closed,
+                "write_all",
+                &[
+                    mir_arg(Some("text"), Operand::String("late".to_string())),
+                    timeout,
+                ],
+                &mut env,
+            )
+            .expect("write_all on a closed stream evaluates"),
+    );
+    listener.close();
+}
+
+#[test]
+fn udp_socket_methods_cover_empty_datagrams_idle_timeouts_and_unresolvable_targets() {
+    let mut runtime = test_runtime();
+    let mut env = Env::default();
+    let socket = UdpSocketValue::bind("127.0.0.1:0").expect("udp socket should bind");
+    let address = socket.local_addr().expect("udp address");
+    env.define_typed(
+        "empty",
+        Type::Named("list".to_string(), vec![Type::named("uint8")]),
+        bytes_vec_value(Vec::new()),
+    );
+    let timeout = mir_arg(Some("timeout"), Operand::Duration(2_000_000_000));
+    assert_eq!(
+        result_ok_payload(
+            runtime
+                .evaluate_udp_socket_method(
+                    socket.clone(),
+                    "send_bytes",
+                    &[
+                        mir_arg(Some("address"), Operand::String(address.clone())),
+                        mir_arg(Some("bytes"), Operand::Place("empty".to_string())),
+                        timeout.clone(),
+                    ],
+                    &mut env,
+                )
+                .expect("send_bytes evaluates")
+        ),
+        Value::Unit
+    );
+    assert_option_none(result_ok_payload(
+        runtime
+            .evaluate_udp_socket_method(
+                socket.clone(),
+                "recv",
+                &[
+                    mir_arg(Some("max_bytes"), Operand::Int(16)),
+                    timeout.clone(),
+                ],
+                &mut env,
+            )
+            .expect("recv of an empty datagram evaluates"),
+    ));
+    assert_option_none(result_ok_payload(
+        runtime
+            .evaluate_udp_socket_method(
+                socket.clone(),
+                "recv_from",
+                &[
+                    mir_arg(Some("max_bytes"), Operand::Int(16)),
+                    mir_arg(Some("timeout"), Operand::Duration(20_000_000)),
+                ],
+                &mut env,
+            )
+            .expect("recv_from on an idle socket evaluates"),
+    ));
+    assert_result_err(
+        runtime
+            .evaluate_udp_socket_method(
+                socket.clone(),
+                "send_text",
+                &[
+                    mir_arg(
+                        Some("address"),
+                        Operand::String("256.256.256.256:9".to_string()),
+                    ),
+                    mir_arg(Some("text"), Operand::String("x".to_string())),
+                    timeout.clone(),
+                ],
+                &mut env,
+            )
+            .expect("send_text to an unresolvable address evaluates"),
+    );
+    let extra = vec![mir_arg(None, Operand::Unit); 4];
+    for field in ["send_text", "send_bytes"] {
+        assert_eq!(
+            runtime
+                .evaluate_udp_socket_method(socket.clone(), field, &extra, &mut env)
+                .expect_err("extra arguments are rejected")
+                .message,
+            "too many MIR arguments"
+        );
+    }
+    socket.close();
+}
+
+#[test]
+fn http_exchange_and_response_methods_report_invalid_utf8_and_closed_exchanges() {
+    let listener = HttpListenerValue::bind("127.0.0.1:0").expect("http listener should bind");
+    let address = listener
+        .local_addr()
+        .expect("http listener address should be available");
+    let server = {
+        let listener = listener.clone();
+        thread::spawn(move || {
+            let mut runtime = test_runtime();
+            let mut env = Env::default();
+            env.define_typed(
+                "headers",
+                Type::Named(
+                    "dict".to_string(),
+                    vec![Type::named("str"), Type::named("str")],
+                ),
+                Value::Map(MapValue {
+                    key_type: Type::named("str"),
+                    value_type: Type::named("str"),
+                    entries: Vec::new(),
+                }),
+            );
+            env.define_typed(
+                "bytes",
+                Type::Named("list".to_string(), vec![Type::named("uint8")]),
+                bytes_vec_value(vec![0xff]),
+            );
+            let exchange = listener
+                .accept(
+                    Some(StdDuration::from_secs(5)),
+                    Some(&CancellationContext::default()),
+                )
+                .expect("http server should accept");
+            assert_result_err(
+                runtime
+                    .evaluate_http_exchange_method(exchange.clone(), "body_text", &[], &mut env)
+                    .expect("body_text evaluates"),
+            );
+            let status = mir_arg(Some("status"), Operand::Int(200));
+            let headers = mir_arg(Some("headers"), Operand::Place("headers".to_string()));
+            let bytes = mir_arg(Some("bytes"), Operand::Place("bytes".to_string()));
+            let text = mir_arg(Some("text"), Operand::String("again".to_string()));
+            assert_eq!(
+                result_ok_payload(
+                    runtime
+                        .evaluate_http_exchange_method(
+                            exchange.clone(),
+                            "respond_bytes",
+                            &[status.clone(), bytes.clone(), headers.clone()],
+                            &mut env,
+                        )
+                        .expect("respond_bytes evaluates")
+                ),
+                Value::Unit
+            );
+            assert_result_err(
+                runtime
+                    .evaluate_http_exchange_method(
+                        exchange.clone(),
+                        "respond_text",
+                        &[status.clone(), text.clone(), headers.clone()],
+                        &mut env,
+                    )
+                    .expect("respond_text on a finished exchange evaluates"),
+            );
+            assert_result_err(
+                runtime
+                    .evaluate_http_exchange_method(
+                        exchange.clone(),
+                        "respond_bytes",
+                        &[status.clone(), bytes, headers.clone()],
+                        &mut env,
+                    )
+                    .expect("respond_bytes on a finished exchange evaluates"),
+            );
+            assert_eq!(
+                runtime
+                    .evaluate_http_exchange_method(
+                        exchange,
+                        "respond_text",
+                        &[status, text, headers, mir_arg(None, Operand::Unit)],
+                        &mut env,
+                    )
+                    .expect_err("extra respond_text arguments are rejected")
+                    .message,
+                "too many MIR arguments"
+            );
+        })
+    };
+    let response = HttpResponseValue::request_bytes(
+        "POST",
+        &format!("http://{address}/raw"),
+        &[0xff],
+        Vec::new(),
+        Some(StdDuration::from_secs(5)),
+        Some(&CancellationContext::default()),
+    )
+    .expect("http request should succeed");
+    server.join().expect("http server should join");
+    let mut runtime = test_runtime();
+    let mut env = Env::default();
+    assert_result_err(
+        runtime
+            .evaluate_http_response_method(response.clone(), "text", &[], &mut env)
+            .expect("text on a non-UTF-8 body evaluates"),
+    );
+    assert_eq!(
+        runtime
+            .evaluate_http_response_method(response, "bytes", &[], &mut env)
+            .expect("bytes evaluates"),
+        bytes_vec_value(vec![0xff])
+    );
+    listener.close();
+}
+
+#[test]
+fn http_listener_reassembles_chunked_request_bodies_split_across_reads() {
+    let listener = HttpListenerValue::bind("127.0.0.1:0").expect("http listener should bind");
+    let address = listener
+        .local_addr()
+        .expect("http listener address should be available");
+    let client = thread::spawn(move || {
+        let mut stream = std::net::TcpStream::connect(&address).expect("raw client connects");
+        stream
+            .write_all(
+                b"POST /chunks HTTP/1.1\r\nHost: localhost\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n",
+            )
+            .expect("first chunk writes");
+        stream.flush().expect("first chunk flushes");
+        thread::sleep(StdDuration::from_millis(50));
+        stream
+            .write_all(b"6\r\n world\r\n0\r\n\r\n")
+            .expect("last chunk writes");
+        stream.flush().expect("last chunk flushes");
+        stream
+            .set_read_timeout(Some(StdDuration::from_secs(5)))
+            .expect("read timeout applies");
+        let mut response = vec![0u8; 256];
+        let read = io::Read::read(&mut stream, &mut response).unwrap_or(0);
+        response.truncate(read);
+        response
+    });
+    let exchange = listener
+        .accept(
+            Some(StdDuration::from_secs(5)),
+            Some(&CancellationContext::default()),
+        )
+        .expect("http server should accept the chunked request");
+    assert_eq!(
+        exchange.body_text().expect("chunked body decodes"),
+        "hello world"
+    );
+    exchange
+        .respond_text(200, "ok", Vec::new())
+        .expect("respond_text succeeds");
+    let response = client.join().expect("raw client should join");
+    assert!(
+        String::from_utf8_lossy(&response).starts_with("HTTP/1.1 200"),
+        "{}",
+        String::from_utf8_lossy(&response)
+    );
+    listener.close();
+}
+
+#[test]
+fn tls_listener_and_stream_methods_cover_close_eof_and_partial_lines() {
+    let suffix = coverage_unique_suffix();
+    let certificate =
+        generate_simple_self_signed(vec!["localhost".to_string()]).expect("cert generation");
+    let cert_path = std::env::temp_dir().join(format!("aura-cov-tls-{suffix}-cert.pem"));
+    let key_path = std::env::temp_dir().join(format!("aura-cov-tls-{suffix}-key.pem"));
+    std::fs::write(&cert_path, certificate.cert.pem()).expect("cert should be written");
+    std::fs::write(&key_path, certificate.key_pair.serialize_pem()).expect("key should be written");
+    let cert_text = cert_path
+        .to_str()
+        .expect("cert path should be utf-8")
+        .to_string();
+    let listener = TlsListenerValue::bind(
+        "127.0.0.1:0",
+        &cert_text,
+        key_path.to_str().expect("key path should be utf-8"),
+    )
+    .expect("tls listener should bind");
+    let address = listener.local_addr().expect("tls listener address");
+
+    let server = {
+        let listener = listener.clone();
+        thread::spawn(move || {
+            let cancellation = CancellationContext::default();
+            let first = listener
+                .accept(Some(StdDuration::from_secs(5)), Some(&cancellation))
+                .expect("first tls accept");
+            first
+                .write_all(
+                    "partial",
+                    Some(StdDuration::from_secs(5)),
+                    Some(&cancellation),
+                )
+                .expect("partial line writes");
+            first.close();
+            let second = listener
+                .accept(Some(StdDuration::from_secs(5)), Some(&cancellation))
+                .expect("second tls accept");
+            let line = second
+                .read_line(Some(StdDuration::from_secs(5)), Some(&cancellation))
+                .expect("second tls read_line");
+            assert_eq!(line.as_deref(), Some("ping"));
+            second.close();
+        })
+    };
+
+    let mut runtime = test_runtime();
+    let mut env = Env::default();
+    env.define_typed(
+        "negative",
+        Type::named("int32"),
+        Value::Int(IntegerValue::from_i32(-1)),
+    );
+    let timeout = mir_arg(Some("timeout"), Operand::Duration(5_000_000_000));
+    let Value::TlsStream(first) = result_ok_payload(
+        runtime
+            .evaluate_builtin_io_call(
+                "net::tls_connect",
+                vec![
+                    coverage_string_arg("address", &address),
+                    coverage_string_arg("server_name", "localhost"),
+                    coverage_string_arg("ca_pem_path", &cert_text),
+                ],
+            )
+            .expect("tls_connect evaluates"),
+    ) else {
+        panic!("tls_connect returns a tls stream");
+    };
+    let partial = result_ok_payload(
+        runtime
+            .evaluate_tls_stream_method(first.clone(), "read_line", &[timeout.clone()], &mut env)
+            .expect("read_line of a partial line evaluates"),
+    );
+    assert_eq!(
+        enum_payloads(partial, "Option", "Some"),
+        vec![Value::String("partial".to_string())]
+    );
+    assert_option_none(result_ok_payload(
+        runtime
+            .evaluate_tls_stream_method(first.clone(), "read_line", &[timeout.clone()], &mut env)
+            .expect("read_line at EOF evaluates"),
+    ));
+    assert_result_err(
+        runtime
+            .evaluate_tls_stream_method(
+                first.clone(),
+                "read_exact",
+                &[mir_arg(Some("count"), Operand::Int(4)), timeout.clone()],
+                &mut env,
+            )
+            .expect("read_exact at EOF evaluates"),
+    );
+    assert!(runtime
+        .evaluate_tls_stream_method(
+            first.clone(),
+            "read_exact",
+            &[
+                mir_arg(Some("count"), Operand::Place("negative".to_string())),
+                timeout.clone(),
+            ],
+            &mut env,
+        )
+        .expect_err("negative counts are rejected")
+        .message
+        .contains("requires a non-negative count"));
+    first.close();
+    first.close();
+    assert_result_err(
+        runtime
+            .evaluate_tls_stream_method(
+                first,
+                "write_all",
+                &[
+                    mir_arg(Some("text"), Operand::String("late".to_string())),
+                    timeout.clone(),
+                ],
+                &mut env,
+            )
+            .expect("write_all on a closed stream evaluates"),
+    );
+
+    let second = TlsStreamValue::connect(
+        &address,
+        "localhost",
+        Some(&cert_text),
+        Some(StdDuration::from_secs(5)),
+        Some(&CancellationContext::default()),
+    )
+    .expect("second tls client connects");
+    assert_eq!(
+        result_ok_payload(
+            runtime
+                .evaluate_tls_stream_method(
+                    second.clone(),
+                    "write_all",
+                    &[
+                        mir_arg(Some("text"), Operand::String("ping\n".to_string())),
+                        timeout.clone(),
+                    ],
+                    &mut env,
+                )
+                .expect("write_all evaluates")
+        ),
+        Value::Unit
+    );
+    server.join().expect("tls server should join");
+    second.close();
+
+    assert_eq!(
+        runtime
+            .evaluate_tls_listener_method(listener.clone(), "close", &[], &mut env)
+            .expect("listener close evaluates"),
+        Value::Unit
+    );
+    assert_result_err(
+        runtime
+            .evaluate_tls_listener_method(listener.clone(), "local_addr", &[], &mut env)
+            .expect("local_addr on a closed listener evaluates"),
+    );
+    assert_result_err(
+        runtime
+            .evaluate_tls_listener_method(listener, "accept", &[timeout], &mut env)
+            .expect("accept on a closed listener evaluates"),
+    );
+    let too_many = runtime
+        .evaluate_builtin_io_call(
+            "net::tls_connect_timeout",
+            vec![coverage_string_arg("address", &address); 5],
+        )
+        .expect_err("extra tls_connect_timeout arguments are rejected");
+    assert!(
+        too_many.message.contains("argument"),
+        "{}",
+        too_many.message
+    );
+    let _ = std::fs::remove_file(&cert_path);
+    let _ = std::fs::remove_file(&key_path);
+}
+
+#[test]
+fn file_methods_report_io_errors_for_wrong_open_modes_and_closed_files() {
+    let mut runtime = test_runtime();
+    let mut env = Env::default();
+    let path = std::env::temp_dir().join(format!("aura-cov-file-{}.txt", coverage_unique_suffix()));
+    let path_text = path.to_str().expect("utf-8 path").to_string();
+    let created = FileValue::create(&path_text).expect("file should be created");
+    assert_result_err(
+        runtime
+            .evaluate_file_method(created.clone(), "read_all", &[], &mut env)
+            .expect("read_all on a write-only file evaluates"),
+    );
+    assert_result_err(
+        runtime
+            .evaluate_file_method(created.clone(), "read_bytes", &[], &mut env)
+            .expect("read_bytes on a write-only file evaluates"),
+    );
+    created.close();
+    assert_result_err(
+        runtime
+            .evaluate_file_method(created, "flush", &[], &mut env)
+            .expect("flush on a closed file evaluates"),
+    );
+    let read_only = FileValue::open(&path_text).expect("file should open");
+    env.define_typed(
+        "bytes",
+        Type::Named("list".to_string(), vec![Type::named("uint8")]),
+        bytes_vec_value(b"x".to_vec()),
+    );
+    assert_result_err(
+        runtime
+            .evaluate_file_method(
+                read_only.clone(),
+                "write_all",
+                &[mir_arg(Some("text"), Operand::String("x".to_string()))],
+                &mut env,
+            )
+            .expect("write_all on a read-only file evaluates"),
+    );
+    assert_result_err(
+        runtime
+            .evaluate_file_method(
+                read_only.clone(),
+                "write_bytes",
+                &[mir_arg(Some("bytes"), Operand::Place("bytes".to_string()))],
+                &mut env,
+            )
+            .expect("write_bytes on a read-only file evaluates"),
+    );
+    read_only.close();
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn process_child_and_supervisor_methods_cover_optional_waits_and_missing_arguments() {
+    let mut runtime = test_runtime();
+    let mut env = Env::default();
+    let spawn = |command: &[&str]| {
+        ProcessChildValue::spawn(
+            command.iter().map(|part| part.to_string()).collect(),
+            None,
+            Vec::new(),
+            ProcessStdioConfig::Null,
+            ProcessStdioConfig::Null,
+            ProcessStdioConfig::Null,
+            false,
+        )
+        .expect("child should spawn")
+    };
+    let quick = spawn(&["true"]);
+    let exited = result_ok_payload(
+        runtime
+            .evaluate_process_child_method(
+                quick,
+                "wait_or_none",
+                &[mir_arg(Some("timeout"), Operand::Duration(5_000_000_000))],
+                &mut env,
+            )
+            .expect("wait_or_none evaluates"),
+    );
+    assert_eq!(enum_payloads(exited, "Option", "Some").len(), 1);
+    let slow = spawn(&["sleep", "5"]);
+    assert_option_none(result_ok_payload(
+        runtime
+            .evaluate_process_child_method(
+                slow.clone(),
+                "wait_or_none",
+                &[mir_arg(Some("timeout"), Operand::Duration(10_000_000))],
+                &mut env,
+            )
+            .expect("wait_or_none on a running child evaluates"),
+    ));
+    slow.close();
+
+    env.define_typed(
+        "command",
+        Type::Named("list".to_string(), vec![Type::named("str")]),
+        Value::Vec(VecValue {
+            element_type: Type::named("str"),
+            elements: vec![Value::String("true".to_string())],
+        }),
+    );
+    let supervisor = ProcessSupervisorValue::new();
+    let missing_name = runtime
+        .evaluate_process_supervisor_method(
+            supervisor.clone(),
+            "start",
+            &[mir_arg(
+                Some("command"),
+                Operand::Place("command".to_string()),
+            )],
+            &mut env,
+        )
+        .expect_err("start needs a name");
+    assert_eq!(
+        missing_name.message,
+        "missing MIR argument `name` for `start(...)`"
+    );
+    let missing_command = runtime
+        .evaluate_process_supervisor_method(
+            supervisor.clone(),
+            "start",
+            &[mir_arg(Some("name"), Operand::String("svc".to_string()))],
+            &mut env,
+        )
+        .expect_err("start needs a command");
+    assert_eq!(
+        missing_command.message,
+        "missing MIR argument `command` for `start(...)`"
+    );
+    assert!(runtime
+        .evaluate_process_supervisor_method(
+            supervisor.clone(),
+            "start",
+            &[
+                mir_arg(Some("name"), Operand::Int(1)),
+                mir_arg(Some("command"), Operand::Place("command".to_string())),
+            ],
+            &mut env,
+        )
+        .is_err());
+    assert_eq!(
+        runtime
+            .evaluate_process_supervisor_method(
+                supervisor,
+                "start",
+                &vec![mir_arg(None, Operand::Unit); 12],
+                &mut env,
+            )
+            .expect_err("extra start arguments are rejected")
+            .message,
+        "too many MIR arguments"
+    );
+
+    let extra = vec![
+        EvaluatedMirArg {
+            name: None,
+            value: Value::Unit,
+            ty: None,
+            writeback_place: None,
+        };
+        9
+    ];
+    for name in ["process::start", "process::run"] {
+        assert_eq!(
+            runtime
+                .evaluate_builtin_io_call(name, extra.clone())
+                .expect_err("extra process arguments are rejected")
+                .message,
+            "too many MIR arguments"
+        );
+    }
+}
+
+trait CoverageExpectErr {
+    fn coverage_err(self, context: &str) -> Diagnostic;
+}
+
+impl CoverageExpectErr for std::result::Result<super::RvalueOutcome, Diagnostic> {
+    fn coverage_err(self, context: &str) -> Diagnostic {
+        match self {
+            Ok(_) => panic!("{context}"),
+            Err(error) => error,
+        }
+    }
+}
+
+#[test]
+fn https_requests_complete_against_a_local_tls_listener_with_a_pinned_ca() {
+    let suffix = coverage_unique_suffix();
+    let certificate =
+        generate_simple_self_signed(vec!["localhost".to_string()]).expect("cert generation");
+    let cert_path = std::env::temp_dir().join(format!("aura-cov-https-{suffix}-cert.pem"));
+    let key_path = std::env::temp_dir().join(format!("aura-cov-https-{suffix}-key.pem"));
+    std::fs::write(&cert_path, certificate.cert.pem()).expect("cert should be written");
+    std::fs::write(&key_path, certificate.key_pair.serialize_pem()).expect("key should be written");
+    let cert_text = cert_path
+        .to_str()
+        .expect("cert path should be utf-8")
+        .to_string();
+    let listener = TlsListenerValue::bind(
+        "127.0.0.1:0",
+        &cert_text,
+        key_path.to_str().expect("key path should be utf-8"),
+    )
+    .expect("tls listener should bind");
+    let address = listener.local_addr().expect("tls listener address");
+    let port = address
+        .rsplit(':')
+        .next()
+        .expect("listener address carries a port")
+        .to_string();
+
+    let server = thread::spawn(move || {
+        let cancellation = CancellationContext::default();
+        let stream = listener
+            .accept(Some(StdDuration::from_secs(5)), Some(&cancellation))
+            .expect("tls accept");
+        let mut request_lines = Vec::new();
+        loop {
+            let line = stream
+                .read_line(Some(StdDuration::from_secs(5)), Some(&cancellation))
+                .expect("request line reads")
+                .expect("request line arrives before EOF");
+            if line.is_empty() {
+                break;
+            }
+            request_lines.push(line);
+        }
+        assert!(
+            request_lines
+                .first()
+                .is_some_and(|line| line.starts_with("GET ")),
+            "{request_lines:?}"
+        );
+        stream
+            .write_all(
+                "HTTP/1.1 200 OK\r\nContent-Length: 5\r\nContent-Type: text/plain\r\n\r\n",
+                Some(StdDuration::from_secs(5)),
+                Some(&cancellation),
+            )
+            .expect("response head writes");
+        thread::sleep(StdDuration::from_millis(30));
+        stream
+            .write_all(
+                "hello",
+                Some(StdDuration::from_secs(5)),
+                Some(&cancellation),
+            )
+            .expect("response body writes");
+        stream.close();
+        listener.close();
+    });
+
+    let response = HttpResponseValue::request_text_with_ca(
+        "GET",
+        &format!("https://localhost:{port}/"),
+        "",
+        Vec::new(),
+        Some(StdDuration::from_secs(5)),
+        Some(&CancellationContext::default()),
+        &cert_text,
+    )
+    .expect("https request should succeed");
+    server.join().expect("https server should join");
+    assert_eq!(response.text().expect("body decodes"), "hello");
+    let mut runtime = test_runtime();
+    let mut env = Env::default();
+    assert_eq!(
+        runtime
+            .evaluate_http_response_method(response, "status", &[], &mut env)
+            .expect("status evaluates"),
+        Value::Int(IntegerValue::from_signed(200))
+    );
+    let _ = std::fs::remove_file(&cert_path);
+    let _ = std::fs::remove_file(&key_path);
+}
+
+#[test]
+fn network_listen_and_request_builtins_report_bind_and_connect_failures() {
+    let mut runtime = test_runtime();
+    for name in ["net::http_listen", "net::websocket_listen"] {
+        assert_result_err(
+            runtime
+                .evaluate_builtin_io_call(
+                    name,
+                    vec![coverage_string_arg("address", "300.300.300.300:0")],
+                )
+                .expect("listen builtins evaluate"),
+        );
+    }
+    let listener = TcpListenerValue::bind("127.0.0.1:0").expect("tcp listener should bind");
+    let address = listener.local_addr().expect("tcp listener address");
+    listener.close();
+    let headers = EvaluatedMirArg {
+        name: Some("headers".to_string()),
+        value: Value::Map(MapValue {
+            key_type: Type::named("str"),
+            value_type: Type::named("str"),
+            entries: Vec::new(),
+        }),
+        ty: Some(Type::Named(
+            "dict".to_string(),
+            vec![Type::named("str"), Type::named("str")],
+        )),
+        writeback_place: None,
+    };
+    assert_result_err(
+        runtime
+            .evaluate_builtin_io_call(
+                "net::http_request_text",
+                vec![
+                    coverage_string_arg("method", "GET"),
+                    coverage_string_arg("url", &format!("http://{address}/")),
+                    coverage_string_arg("body", ""),
+                    headers,
+                ],
+            )
+            .expect("request builtins evaluate"),
+    );
+}
+
+#[test]
+fn member_calls_fall_through_length_and_byte_helpers_for_other_receivers() {
+    let mut runtime = test_runtime();
+    let mut env = Env::default();
+    env.define_typed(
+        "number",
+        Type::named("int64"),
+        Value::Int(IntegerValue::from_i64(3)),
+    );
+    env.define_typed(
+        "items",
+        Type::Named("list".to_string(), vec![Type::named("int64")]),
+        Value::Vec(VecValue {
+            element_type: Type::named("int64"),
+            elements: (1..=4)
+                .map(|value| Value::Int(IntegerValue::from_i64(value)))
+                .collect(),
+        }),
+    );
+    for field in ["len", "to_bytes"] {
+        let error = runtime
+            .evaluate_rvalue(&coverage_member_call("number", field, Vec::new()), &mut env)
+            .coverage_err("integers have neither len nor to_bytes");
+        assert!(error.message.contains(field), "{}", error.message);
+    }
+    let slice = Rvalue::Call {
+        callee: CallTarget::Member {
+            object: Operand::MovePlace("items".to_string()),
+            field: "__slice".to_string(),
+            receiver_place: None,
+        },
+        args: [
+            Operand::Int(1),
+            Operand::Bool(true),
+            Operand::Int(3),
+            Operand::Bool(true),
+            Operand::Int(1),
+            Operand::Int(1),
+        ]
+        .into_iter()
+        .map(|operand| mir_arg(None, operand))
+        .collect(),
+    };
+    match runtime.evaluate_rvalue(&slice, &mut env) {
+        Ok(super::RvalueOutcome::Value(Value::Vec(sliced))) => {
+            assert_eq!(
+                sliced.elements,
+                vec![
+                    Value::Int(IntegerValue::from_i64(2)),
+                    Value::Int(IntegerValue::from_i64(3)),
+                ]
+            );
+        }
+        Ok(_) => panic!("owned slices produce lists"),
+        Err(error) => panic!("owned slices evaluate: {}", error.message),
+    }
+    let bitnot = runtime
+        .evaluate_rvalue(
+            &Rvalue::Unary {
+                op: crate::ast::UnaryOp::BitNot,
+                value: Operand::Int(1),
+                span: Span::new(1, 1),
+            },
+            &mut env,
+        )
+        .coverage_err("untyped literals cannot be complemented");
+    assert_eq!(bitnot.code, "AU4001");
+    assert_eq!(bitnot.message, "invalid typed integer for unary `~`");
 }

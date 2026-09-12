@@ -425,7 +425,7 @@ def invalid_worker(value: int32) -> Result[int32, str]:
 "#,
             "invalid_worker",
             "expected `def() -> Result[T, E]`",
-            "def(int32) -> Result[int32, str]",
+            "def(value: int32) -> Result[int32, str]",
         ),
         (
             "defaulted-argument-worker",
@@ -435,7 +435,7 @@ def invalid_worker(value: int32 = 1) -> Result[int32, str]:
 "#,
             "invalid_worker",
             "expected `def() -> Result[T, E]`",
-            "def(int32) -> Result[int32, str]",
+            "def(value: int32 = ...) -> Result[int32, str]",
         ),
         (
             "mutable-argument-worker",
@@ -449,7 +449,7 @@ def invalid_worker(counter: mut Counter) -> Result[int32, str]:
 "#,
             "invalid_worker",
             "expected `def() -> Result[T, E]`",
-            "def(mut Counter) -> Result[int32, str]",
+            "def(counter: mut Counter) -> Result[int32, str]",
         ),
         (
             "owned-argument-worker",
@@ -459,7 +459,7 @@ def invalid_worker(value: own str) -> Result[int32, str]:
 "#,
             "invalid_worker",
             "expected `def() -> Result[T, E]`",
-            "def(own str) -> Result[int32, str]",
+            "def(value: own str) -> Result[int32, str]",
         ),
         (
             "non-result-worker",

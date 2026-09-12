@@ -1,0 +1,5 @@
+error[AU2010]: 'int64' is not a member of 'float64 | str'
+ --> crates/aura-compiler/tests/fixtures/check-fail/union_injection_typed_numeric_conversion.au:3:28
+  |
+3 |     value: float64 | str = source
+  |                            ^

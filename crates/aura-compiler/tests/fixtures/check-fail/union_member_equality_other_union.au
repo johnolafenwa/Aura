@@ -1,0 +1,4 @@
+def main():
+    left: int64 | str = 1
+    right: int64 | None = 1
+    print(left == right)

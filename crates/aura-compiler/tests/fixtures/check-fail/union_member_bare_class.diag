@@ -1,0 +1,5 @@
+error[AU2010]: invalid or incomplete union member `Box`
+ --> crates/aura-compiler/tests/fixtures/check-fail/union_member_bare_class.au:3:15
+  |
+3 | type Broken = Box | None
+  |               ^

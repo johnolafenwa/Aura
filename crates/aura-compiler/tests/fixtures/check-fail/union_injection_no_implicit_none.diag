@@ -1,0 +1,5 @@
+error[AU2999]: function `make` is missing a return
+ --> crates/aura-compiler/tests/fixtures/check-fail/union_injection_no_implicit_none.au:1:1
+  |
+1 | def make() -> int64 | None:
+  | ^

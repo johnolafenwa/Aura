@@ -1,0 +1,14 @@
+def show(value: int64 | str):
+    match value:
+        case int64 as number:
+            print(number)
+        case str as text:
+            print(text)
+def main():
+    handlers: list[def(int64 | str) -> None] = [show]
+    match handlers.get(0):
+        case Option.Some(handler):
+            handler(41)
+            handler("text")
+        case Option.None:
+            print("none")

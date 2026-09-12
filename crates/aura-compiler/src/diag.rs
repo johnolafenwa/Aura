@@ -50,6 +50,7 @@ pub struct DiagnosticDetails {
     pub render_source: Option<String>,
     pub partial_stdout: Option<String>,
     runtime_frames_captured: bool,
+    compile_time_capacity: bool,
 }
 
 impl Deref for Diagnostic {
@@ -139,6 +140,36 @@ pub const DIAGNOSTIC_CODE_REGISTRY: &[DiagnosticCodeInfo] = &[
         code: "AU2008",
         band: "names/types",
         title: "equality unavailable",
+    },
+    DiagnosticCodeInfo {
+        code: "AU2010",
+        band: "names/types",
+        title: "union member or context",
+    },
+    DiagnosticCodeInfo {
+        code: "AU2011",
+        band: "names/types",
+        title: "ambiguous union injection",
+    },
+    DiagnosticCodeInfo {
+        code: "AU2012",
+        band: "names/types",
+        title: "cyclic type alias",
+    },
+    DiagnosticCodeInfo {
+        code: "AU2013",
+        band: "names/types",
+        title: "union pattern coverage",
+    },
+    DiagnosticCodeInfo {
+        code: "AU2014",
+        band: "names/types",
+        title: "invalidated narrowing",
+    },
+    DiagnosticCodeInfo {
+        code: "AU2015",
+        band: "names/types",
+        title: "callable contract mismatch",
     },
     DiagnosticCodeInfo {
         code: "AU2999",
@@ -422,6 +453,7 @@ impl Diagnostic {
                 render_source: None,
                 partial_stdout: None,
                 runtime_frames_captured: false,
+                compile_time_capacity: false,
             }),
         }
     }
@@ -449,6 +481,19 @@ impl Diagnostic {
         let mut diagnostic = Self::coded(code, message);
         diagnostic.span = Some(span);
         diagnostic
+    }
+
+    /// Internal control flow for speculative checking. AU2999 also covers
+    /// legacy unsupported typing cases, so its public code alone cannot say
+    /// whether another candidate may safely be tried.
+    pub(crate) fn capacity_at(span: Span, message: impl Into<String>) -> Self {
+        let mut diagnostic = Self::coded_at("AU2999", span, message);
+        diagnostic.details.compile_time_capacity = true;
+        diagnostic
+    }
+
+    pub(crate) fn is_compile_time_capacity(&self) -> bool {
+        self.details.compile_time_capacity
     }
 
     /// Normalize a diagnostic at the runtime boundary. Legacy runtime helpers

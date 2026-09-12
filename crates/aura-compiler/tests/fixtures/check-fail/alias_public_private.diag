@@ -1,0 +1,5 @@
+error[AU2005]: public type alias `Visible` exposes private type `Secret`
+ --> crates/aura-compiler/tests/fixtures/check-fail/alias_public_private.au:3:28
+  |
+3 | public type Visible = list[Secret]
+  |                            ^

@@ -1,0 +1,15 @@
+def bump(counter: mut int64 | None):
+    if counter is not None:
+        counter += 1
+        print(counter)
+    else:
+        print("absent")
+
+def main():
+    mut value: int64 | None = 41
+    bump(value)
+    print(value)
+    mut empty: int64 | None = None
+    bump(empty)
+    if empty is None:
+        print("still none")

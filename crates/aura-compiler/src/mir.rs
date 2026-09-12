@@ -229,6 +229,7 @@ fn is_float_literal_expr(expr: &Expr) -> bool {
 
 fn type_contains_unknown(ty: &Type) -> bool {
     match ty {
+        Type::Union(union) => union.members.iter().any(type_contains_unknown),
         Type::Named(name, args) => name == "Unknown" || args.iter().any(type_contains_unknown),
         Type::Tuple(elements) => elements.iter().any(type_contains_unknown),
         Type::Function {
@@ -238,6 +239,13 @@ fn type_contains_unknown(ty: &Type) -> bool {
         } => {
             params.iter().any(|param| type_contains_unknown(&param.ty))
                 || type_contains_unknown(return_type.as_ref())
+        }
+        Type::Callable(callable) => {
+            callable
+                .params
+                .iter()
+                .any(|param| type_contains_unknown(&param.ty))
+                || type_contains_unknown(&callable.return_type)
         }
         Type::Closure {
             params,
@@ -252,6 +260,7 @@ fn type_contains_unknown(ty: &Type) -> bool {
                 || type_contains_unknown(return_type.as_ref())
         }
         Type::TypeParam(_) | Type::Unit | Type::Module(_) => false,
+        Type::ReturnedView(view) => type_contains_unknown(&view.pointee),
     }
 }
 
@@ -276,6 +285,11 @@ fn contextual_float_literal_operand(
 
 fn collect_type_params_from_type(ty: &Type, collected: &mut BTreeSet<String>) {
     match ty {
+        Type::Union(union) => {
+            for member in &union.members {
+                collect_type_params_from_type(member, collected);
+            }
+        }
         Type::TypeParam(name) => {
             collected.insert(name.clone());
         }
@@ -298,6 +312,13 @@ fn collect_type_params_from_type(ty: &Type, collected: &mut BTreeSet<String>) {
                 collect_type_params_from_type(&param.ty, collected);
             }
             collect_type_params_from_type(return_type, collected);
+        }
+        Type::ReturnedView(view) => collect_type_params_from_type(&view.pointee, collected),
+        Type::Callable(callable) => {
+            for param in &callable.params {
+                collect_type_params_from_type(&param.ty, collected);
+            }
+            collect_type_params_from_type(&callable.return_type, collected);
         }
         Type::Closure {
             params,
@@ -565,6 +586,13 @@ fn return_view_projections(function: &crate::ast::FunctionDecl) -> Vec<String> {
 pub struct MirModule {
     pub functions: Vec<MirFunction>,
     pub classes: Vec<MirClass>,
+    #[serde(default)]
+    pub enums: Vec<MirEnum>,
+    /// Explicit-tag layout and drop plans for every union the module uses
+    /// (ADR-0052 A9); the validator refuses a module whose union operations
+    /// lack a plan or whose plans disagree with the layout rule.
+    #[serde(default)]
+    pub unions: Vec<crate::union_layout::MirUnionLayout>,
     pub trait_impls: Vec<MirTraitImpl>,
     #[serde(default)]
     pub constants: Vec<MirConstant>,
@@ -614,6 +642,19 @@ pub struct MirClassField {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct MirEnum {
+    pub name: String,
+    pub type_params: Vec<String>,
+    pub variants: Vec<MirEnumVariant>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct MirEnumVariant {
+    pub name: String,
+    pub payloads: Vec<Type>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MirMethod {
     pub name: String,
     pub function_name: String,
@@ -644,6 +685,10 @@ pub struct MirParam {
     /// parameter's declared default for runtime-selected function calls.
     #[serde(default)]
     pub default_function: Option<String>,
+    /// Declared after the `*` boundary: a call binds this slot by name only,
+    /// and no stored contract may expose it positionally.
+    #[serde(default)]
+    pub keyword_only: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -717,6 +762,29 @@ pub enum Instruction {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Rvalue {
     Use(Operand),
+    UnionTagTest {
+        place: String,
+        union_type: Type,
+        member_index: usize,
+    },
+    UnionTakePayload {
+        place: String,
+        union_type: Type,
+        member_type: Type,
+        member_index: usize,
+    },
+    UnionInject {
+        value: Operand,
+        union_type: Type,
+        member_type: Type,
+        member_index: usize,
+    },
+    /// `value is None` on a value whose static type is a type parameter or a
+    /// union whose only `None` can come from a type parameter: `true` when
+    /// the runtime value is unit `None` or a union holding it (ADR-0052 A7).
+    NoneTest {
+        value: Operand,
+    },
     /// Read a once-initialized immutable module value. The initializer thunk
     /// is shared by MIR and direct execution and guarded against re-entry.
     ModuleConstant {
@@ -731,6 +799,11 @@ pub enum Rvalue {
         signature: Type,
         captures: Vec<MirClosureCapture>,
         consuming: bool,
+        /// The closure mutates closure-owned or mutably borrowed captured
+        /// state on each call (Mutable kind); the validator keeps this
+        /// authoritative so no boundary can weaken it to Shared.
+        #[serde(default)]
+        mutable: bool,
     },
     FormatString {
         parts: Vec<MirFormatPart>,
@@ -820,6 +893,11 @@ pub struct MirClosureCapture {
     pub value: Operand,
     pub ty: Type,
     pub passing: MirReceiverKind,
+    /// An environment-owned capture the closure body mutates: the closure
+    /// function takes it mutably and the runtime writes the updated value
+    /// back into the environment after each call.
+    #[serde(default)]
+    pub mutated: bool,
     #[serde(default)]
     pub source_place: Option<String>,
     /// Resolve a loan-backed source to its selected concrete place when the
@@ -1407,6 +1485,12 @@ fn function_returned_view_contract(
         }
         mutable = Some(contract.mutable);
         for source in contract.sources {
+            if mir_place_has_payload_projection(&source) {
+                return Err(format!(
+                    "invalid returned MIR loan `{loan}` in `{}` returns an arm-local payload projection",
+                    function.name
+                ));
+            }
             let projection = if source.as_ref() == declared_origin {
                 String::new()
             } else {
@@ -1454,14 +1538,246 @@ fn function_returned_view_contract(
     }))
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CallableContractSite {
+    Argument,
+    Return,
+}
+
 struct MirLoanValidationContext<'a> {
     classes: BTreeMap<&'a str, &'a MirClass>,
+    enums: BTreeMap<&'a str, &'a MirEnum>,
     functions: BTreeMap<&'a str, &'a MirFunction>,
     trait_impls: &'a [MirTraitImpl],
     returned_views: BTreeMap<&'a str, ValidatedReturnedViewContract>,
+    /// Validated explicit-tag layout plans keyed by canonical union identity.
+    unions: BTreeMap<String, &'a crate::union_layout::MirUnionLayout>,
 }
 
 impl<'a> MirLoanValidationContext<'a> {
+    fn validate_callable_argument_contract(
+        &self,
+        caller: &MirFunction,
+        expected: &Type,
+        value: &Operand,
+        state: &ValidatedLoanState,
+    ) -> std::result::Result<(), String> {
+        self.validate_callable_value_contract(
+            caller,
+            expected,
+            value,
+            state,
+            CallableContractSite::Argument,
+        )
+    }
+
+    /// Checks that a callable value carries the contract its destination
+    /// declares. Authoritative identities win over declared metadata; a place
+    /// without identity falls back to its boundary-checked declared type.
+    fn validate_callable_value_contract(
+        &self,
+        caller: &MirFunction,
+        expected: &Type,
+        value: &Operand,
+        state: &ValidatedLoanState,
+        site: CallableContractSite,
+    ) -> std::result::Result<(), String> {
+        if !matches!(
+            expected,
+            Type::Function { .. } | Type::Closure { .. } | Type::Callable(_)
+        ) {
+            return Ok(());
+        }
+        let site_name = match site {
+            CallableContractSite::Argument => "call",
+            CallableContractSite::Return => "return",
+        };
+        // Declared local metadata is never trusted for a callable value: the
+        // value must carry an authoritative identity established by a
+        // function operand, a literal, or a boundary-checked declaration.
+        let (actual, function_identity) = match value {
+            Operand::Function { name, signature } => ((**signature).clone(), Some(name.as_str())),
+            Operand::Place(place) | Operand::MovePlace(place) => {
+                let Some(callable) = state.authoritative_callables.get(place) else {
+                    return Err(format!(
+                        "invalid MIR {site_name} from `{}` has no authoritative callable contract for `{place}`",
+                        caller.name
+                    ));
+                };
+                (callable.signature.clone(), callable.function.as_deref())
+            }
+            _ => {
+                return Err(format!(
+                    "invalid MIR {site_name} from `{}` passes a non-callable value for a callable contract",
+                    caller.name
+                ));
+            }
+        };
+        self.check_callable_contract(caller, &actual, function_identity, expected, site_name)
+    }
+
+    /// Compares an authoritative callable contract with the contract its
+    /// destination declares. Type parameters of the destination are matched
+    /// structurally with one consistent substitution.
+    fn check_callable_contract(
+        &self,
+        caller: &MirFunction,
+        actual: &Type,
+        function_identity: Option<&str>,
+        expected: &Type,
+        site_name: &str,
+    ) -> std::result::Result<(), String> {
+        // (params, return, call kind, erased): an erased destination admits a
+        // weaker-or-equal source kind; a concrete closure contract is exact.
+        let parts = |ty: &Type| match ty {
+            Type::Function {
+                params,
+                return_type,
+            } => Some((params.clone(), (**return_type).clone(), None, false)),
+            Type::Closure {
+                params,
+                return_type,
+                call_kind,
+                ..
+            } => Some((
+                params.as_ref().clone(),
+                (**return_type).clone(),
+                Some(*call_kind),
+                false,
+            )),
+            Type::Callable(callable) => Some((
+                callable.params.clone(),
+                callable.return_type.clone(),
+                Some(callable.call_kind),
+                true,
+            )),
+            _ => None,
+        };
+        let Some((mut actual_params, actual_return, actual_kind, _)) = parts(actual) else {
+            return Err(format!(
+                "invalid MIR {site_name} from `{}` passes a non-callable value for a callable contract",
+                caller.name
+            ));
+        };
+        let Some((expected_params, expected_return, expected_kind, expected_erased)) =
+            parts(expected)
+        else {
+            return Err(format!(
+                "invalid MIR {site_name} from `{}` expects a non-callable contract",
+                caller.name
+            ));
+        };
+        if let Some(declaration) = function_identity.and_then(|name| self.functions.get(name)) {
+            for (contract, declared) in actual_params.iter_mut().zip(&declaration.params) {
+                contract.name = declared.name.clone();
+                contract.has_default = declared.default_function.is_some();
+                contract.keyword_only = declared.keyword_only;
+            }
+        }
+        let kinds_match = match (actual_kind, expected_kind) {
+            (Some(actual), Some(expected)) if expected_erased => expected.admits(actual),
+            (Some(actual), Some(expected)) => actual == expected,
+            (Some(ClosureCallKind::Consuming), None) => false,
+            _ => true,
+        };
+        let mut type_params = BTreeSet::new();
+        collect_type_params_from_type(expected, &mut type_params);
+        let mut substitutions = HashMap::new();
+        let params_match = actual_params.len() == expected_params.len()
+            && actual_params.iter().zip(&expected_params).enumerate().all(
+                |(index, (actual, expected))| {
+                    crate::sema::type_pattern_matches(
+                        &expected.ty,
+                        &actual.ty,
+                        &type_params,
+                        &mut substitutions,
+                    ) && actual.passing == expected.passing
+                        && crate::sema::callable_slot_admission(expected, actual, index).is_ok()
+                },
+            );
+        let return_matches = crate::sema::type_pattern_matches(
+            &expected_return,
+            &actual_return,
+            &type_params,
+            &mut substitutions,
+        );
+        if !params_match || !return_matches || !kinds_match {
+            return Err(format!(
+                "invalid MIR {site_name} from `{}` changes an authoritative callable contract",
+                caller.name
+            ));
+        }
+        Ok(())
+    }
+
+    /// Checks every callable position that `expected` declares (through
+    /// tuples, class fields, enum payloads, optionals, unions, and container
+    /// elements) against the authoritative identities recorded under `value`.
+    /// A declared position without an identity is rejected unless the
+    /// container is provably empty; a poisoned identity is rejected.
+    fn validate_callable_identities_against_type(
+        &self,
+        caller: &MirFunction,
+        expected: &Type,
+        value: &Operand,
+        state: &ValidatedLoanState,
+        site_name: &str,
+    ) -> std::result::Result<(), String> {
+        let positions = callable_identities_in_type(expected, self)
+            .into_iter()
+            .filter(|(suffix, _)| !suffix.is_empty())
+            .collect::<Vec<_>>();
+        if positions.is_empty() {
+            return Ok(());
+        }
+        let actual = match value {
+            Operand::Place(place) | Operand::MovePlace(place) => {
+                rebase_authoritative_callables(place, "", state)
+            }
+            _ => Vec::new(),
+        };
+        let place_name = match value {
+            Operand::Place(place) | Operand::MovePlace(place) => place.as_str(),
+            _ => "<value>",
+        };
+        for (suffix, expected_callable) in positions {
+            let mut matched = 0usize;
+            let mut container_known_empty = false;
+            for (actual_suffix, callable) in &actual {
+                if callable_container_is_empty_marker(callable) {
+                    if callable_suffix_covers(actual_suffix, &suffix) {
+                        container_known_empty = true;
+                    }
+                    continue;
+                }
+                if !callable_suffix_matches(actual_suffix, &suffix) {
+                    continue;
+                }
+                matched += 1;
+                if callable.signature == Type::named("Unknown") {
+                    return Err(format!(
+                        "invalid MIR {site_name} from `{}` passes `{place_name}` whose callable at `{suffix}` has no single authoritative contract",
+                        caller.name
+                    ));
+                }
+                self.check_callable_contract(
+                    caller,
+                    &callable.signature,
+                    callable.function.as_deref(),
+                    &expected_callable.signature,
+                    site_name,
+                )?;
+            }
+            if matched == 0 && !container_known_empty {
+                return Err(format!(
+                    "invalid MIR {site_name} from `{}` passes `{place_name}` with no authoritative callable contract at `{suffix}`",
+                    caller.name
+                ));
+            }
+        }
+        Ok(())
+    }
+
     fn new(module: &'a MirModule) -> std::result::Result<Self, String> {
         let mut classes = BTreeMap::new();
         for class in &module.classes {
@@ -1472,7 +1788,54 @@ impl<'a> MirLoanValidationContext<'a> {
                 ));
             }
         }
+        let mut unions = BTreeMap::new();
+        for plan in &module.unions {
+            crate::union_layout::validate_union_layout(plan)
+                .map_err(|reason| format!("invalid MIR module {reason}"))?;
+            if unions
+                .insert(crate::union_layout::union_plan_key(&plan.union_type), plan)
+                .is_some()
+            {
+                return Err(format!(
+                    "invalid MIR module has duplicate union layout plan for `{}`",
+                    plan.union_type
+                ));
+            }
+        }
         let mut functions = BTreeMap::new();
+        let mut enums = BTreeMap::new();
+        for enum_decl in &module.enums {
+            if classes.contains_key(enum_decl.name.as_str()) {
+                return Err(format!(
+                    "invalid MIR module declares both class and enum `{}`",
+                    enum_decl.name
+                ));
+            }
+            if enums.insert(enum_decl.name.as_str(), enum_decl).is_some() {
+                return Err(format!(
+                    "invalid MIR module has duplicate enum `{}`",
+                    enum_decl.name
+                ));
+            }
+            let mut type_params = BTreeSet::new();
+            for type_param in &enum_decl.type_params {
+                if !type_params.insert(type_param.as_str()) {
+                    return Err(format!(
+                        "invalid MIR enum `{}` has duplicate type parameter `{type_param}`",
+                        enum_decl.name
+                    ));
+                }
+            }
+            let mut variants = BTreeSet::new();
+            for variant in &enum_decl.variants {
+                if !variants.insert(variant.name.as_str()) {
+                    return Err(format!(
+                        "invalid MIR enum `{}` has duplicate variant `{}`",
+                        enum_decl.name, variant.name
+                    ));
+                }
+            }
+        }
         for function in module.functions.iter().chain(module.top_level.iter()) {
             if functions.insert(function.name.as_str(), function).is_some() {
                 return Err(format!(
@@ -1489,10 +1852,30 @@ impl<'a> MirLoanValidationContext<'a> {
         }
         Ok(Self {
             classes,
+            enums,
             functions,
             trait_impls: &module.trait_impls,
             returned_views,
+            unions,
         })
+    }
+
+    /// The validated layout plan for a union operation's type; a module that
+    /// operates on a union without planning it is stale or forged.
+    fn union_plan(
+        &self,
+        function: &MirFunction,
+        union_type: &Type,
+    ) -> std::result::Result<&'a crate::union_layout::MirUnionLayout, String> {
+        self.unions
+            .get(&crate::union_layout::union_plan_key(union_type))
+            .copied()
+            .ok_or_else(|| {
+                format!(
+                    "invalid MIR union `{union_type}` in `{}` has no layout plan",
+                    function.name
+                )
+            })
     }
 
     fn root_type(&self, function: &MirFunction, root: &str) -> Option<Type> {
@@ -1510,6 +1893,84 @@ impl<'a> MirLoanValidationContext<'a> {
             })
     }
 
+    fn type_is_definitely_noncopy(&self, ty: &Type) -> bool {
+        fn visit(
+            context: &MirLoanValidationContext<'_>,
+            ty: &Type,
+            visiting: &mut BTreeSet<String>,
+        ) -> bool {
+            match ty {
+                Type::Union(_) | Type::Closure { .. } | Type::Callable(_) | Type::Module(_) => true,
+                Type::Tuple(elements) => elements
+                    .iter()
+                    .any(|element| visit(context, element, visiting)),
+                Type::Named(name, _)
+                    if matches!(name.as_str(), "list" | "dict" | "set" | "str") =>
+                {
+                    true
+                }
+                Type::Named(name, args) => {
+                    let key = ty.to_string();
+                    if !visiting.insert(key.clone()) {
+                        return false;
+                    }
+                    let result = if let Some(enum_decl) = context.enums.get(name.as_str()) {
+                        if args.len() != enum_decl.type_params.len() {
+                            false
+                        } else {
+                            let substitutions = enum_decl
+                                .type_params
+                                .iter()
+                                .cloned()
+                                .zip(args.iter().cloned())
+                                .collect::<HashMap<_, _>>();
+                            enum_decl.variants.iter().any(|variant| {
+                                variant.payloads.iter().any(|payload| {
+                                    visit(
+                                        context,
+                                        &substitute_type(payload, &substitutions),
+                                        visiting,
+                                    )
+                                })
+                            })
+                        }
+                    } else if let Some(class) = context.classes.get(name.as_str()) {
+                        if args.len() != class.type_params.len() {
+                            false
+                        } else {
+                            let substitutions = class
+                                .type_params
+                                .iter()
+                                .cloned()
+                                .zip(args.iter().cloned())
+                                .collect::<HashMap<_, _>>();
+                            class.fields.iter().any(|field| {
+                                visit(
+                                    context,
+                                    &substitute_type(&field.ty, &substitutions),
+                                    visiting,
+                                )
+                            })
+                        }
+                    } else if matches!(name.as_str(), "Option" | "Task") && args.len() == 1 {
+                        visit(context, &args[0], visiting)
+                    } else if matches!(name.as_str(), "Result" | "SendError") {
+                        args.iter().any(|arg| visit(context, arg, visiting))
+                    } else {
+                        false
+                    };
+                    visiting.remove(&key);
+                    result
+                }
+                Type::Unit | Type::TypeParam(_) | Type::Function { .. } | Type::ReturnedView(_) => {
+                    false
+                }
+            }
+        }
+
+        visit(self, ty, &mut BTreeSet::new())
+    }
+
     fn place_type(
         &self,
         function: &MirFunction,
@@ -1523,6 +1984,11 @@ impl<'a> MirLoanValidationContext<'a> {
         };
         for segment in segments {
             ty = match ty {
+                Type::ReturnedView(_) => {
+                    return Err(format!(
+                        "invalid MIR place `{place}` projects through a returned-view contract"
+                    ));
+                }
                 Type::Tuple(elements) => {
                     let index = segment.parse::<usize>().map_err(|_| {
                         format!(
@@ -1538,6 +2004,38 @@ impl<'a> MirLoanValidationContext<'a> {
                     })?
                 }
                 Type::Named(class_name, args) => {
+                    if let Some(enum_decl) = self.enums.get(class_name.as_str()) {
+                        if args.len() != enum_decl.type_params.len() {
+                            return Err(format!(
+                                "invalid MIR enum type `{class_name}` in `{place}` in `{}` has {} arguments, expected {}",
+                                function.name,
+                                args.len(),
+                                enum_decl.type_params.len()
+                            ));
+                        }
+                        let Some((variant_name, index)) = enum_payload_projection(segment) else {
+                            return Err(format!(
+                                "invalid MIR projection `{segment}` in `{place}` traverses enum `{class_name}` without a canonical payload projection"
+                            ));
+                        };
+                        let variant = enum_decl
+                            .variants
+                            .iter()
+                            .find(|variant| variant.name == variant_name)
+                            .ok_or_else(|| format!(
+                                "invalid MIR enum payload projection `{segment}` in `{place}` names unknown variant `{variant_name}`"
+                            ))?;
+                        let payload = variant.payloads.get(index).ok_or_else(|| format!(
+                            "invalid MIR enum payload projection `{segment}` in `{place}` is out of bounds"
+                        ))?;
+                        let substitutions = enum_decl
+                            .type_params
+                            .iter()
+                            .cloned()
+                            .zip(args)
+                            .collect::<HashMap<_, _>>();
+                        substitute_type(payload, &substitutions)
+                    } else {
                     let Some(class) = self.classes.get(class_name.as_str()) else {
                         // Opaque built-ins and downstream types do not expose enough
                         // metadata for static field validation. Their paths remain
@@ -1569,10 +2067,20 @@ impl<'a> MirLoanValidationContext<'a> {
                         .zip(args)
                         .collect::<std::collections::HashMap<_, _>>();
                     substitute_type(&field.ty, &substitutions)
+                    }
+                }
+                Type::Union(union) => {
+                    let Some(index) = union_payload_projection_index(segment) else {
+                        return Err(format!("invalid MIR projection `{segment}` in `{place}` traverses a union without a canonical payload projection"));
+                    };
+                    union.members.get(index).cloned().ok_or_else(|| {
+                        format!("invalid MIR union payload projection `{segment}` in `{place}` in `{}` is out of bounds", function.name)
+                    })?
                 }
                 Type::TypeParam(_) => return Ok(None),
                 Type::Function { .. }
                 | Type::Closure { .. }
+                | Type::Callable(_)
                 | Type::Module(_)
                 | Type::Unit => {
                     return Err(format!(
@@ -1620,6 +2128,16 @@ impl<'a> MirLoanValidationContext<'a> {
             return param.passing != MirReceiverKind::Borrow;
         }
         function.local_types.iter().any(|local| local.name == root)
+    }
+
+    fn root_allows_owned_take(&self, function: &MirFunction, root: &str) -> bool {
+        if root == "self" {
+            return function.receiver == Some(MirReceiverKind::Value);
+        }
+        if let Some(param) = function.params.iter().find(|param| param.name == root) {
+            return param.passing == MirReceiverKind::Value;
+        }
+        function.local_types.iter().any(|local| local.name == root) || root.starts_with("%t")
     }
 
     fn validate_named_function_operand(
@@ -1676,12 +2194,18 @@ impl<'a> MirLoanValidationContext<'a> {
                 &type_params,
                 &mut candidate_substitutions,
             );
-            let retains_named_default_contract = !actual.default_erased;
-            if (retains_named_default_contract && actual.name != expected.name)
-                || actual.passing != expected_passing
-                || (retains_named_default_contract
-                    && actual.has_default != expected.default_function.is_some())
+            // The operand's declared contract is the destination; the
+            // declaration is the source it must admit.
+            let declared = FunctionParamContract {
+                keyword_only: expected.keyword_only,
+                name: expected.name.clone(),
+                ty: expected.ty.clone(),
+                passing: expected_passing,
+                has_default: expected.default_function.is_some(),
+            };
+            if actual.passing != expected_passing
                 || !type_matches
+                || crate::sema::callable_slot_admission(actual, &declared, index).is_err()
             {
                 return Err(format!(
                     "invalid MIR function operand `{name}` in `{}` has parameter {} that does not match declaration",
@@ -1690,13 +2214,50 @@ impl<'a> MirLoanValidationContext<'a> {
             }
             substitutions = candidate_substitutions;
         }
+        // A view-returning declaration exposes its contract in the operand's
+        // result position (C9); the operand may neither invent nor drop it.
+        let declared_view = self.returned_views.get(name);
+        let return_type: &Type = match (return_type.as_ref(), declared_view) {
+            (Type::ReturnedView(view), Some(contract)) => {
+                let origin_matches = matches!(
+                    contract.origin,
+                    ReturnedViewOriginSlot::Param(index) if index == view.origin
+                );
+                if !origin_matches || contract.mutable != view.mutable {
+                    return Err(format!(
+                        "invalid MIR function operand `{name}` in `{}` has a returned-view contract that does not match declaration",
+                        caller.name
+                    ));
+                }
+                &view.pointee
+            }
+            (Type::ReturnedView(_), None) | (_, Some(_)) => {
+                return Err(format!(
+                    "invalid MIR function operand `{name}` in `{}` has a returned-view contract that does not match declaration",
+                    caller.name
+                ));
+            }
+            (other, None) => other,
+        };
         let mut candidate_substitutions = substitutions;
-        if !crate::sema::type_pattern_matches(
+        let return_matches = crate::sema::type_pattern_matches(
             &callee.return_type,
             return_type,
             &type_params,
             &mut candidate_substitutions,
-        ) {
+        ) || match (&callee.return_type, return_type, name.split_once("::")) {
+            (
+                Type::Named(expected, expected_args),
+                Type::Named(actual, actual_args),
+                Some((owner, _)),
+            ) => {
+                expected_args == actual_args
+                    && !actual.contains('.')
+                    && *expected == format!("{owner}.{actual}")
+            }
+            _ => false,
+        };
+        if !return_matches {
             return Err(format!(
                 "invalid MIR function operand `{name}` in `{}` has a return type that does not match declaration",
                 caller.name
@@ -1837,6 +2398,12 @@ impl<'a> MirLoanValidationContext<'a> {
         args: &'b [MirArg],
     ) -> std::result::Result<Vec<Option<&'b MirArg>>, String> {
         let bound = self.bind_call_args(callee, args)?;
+        let mut callee_type_params = BTreeSet::new();
+        for param in &callee.params {
+            collect_type_params_from_type(&param.ty, &mut callee_type_params);
+        }
+        collect_type_params_from_type(&callee.return_type, &mut callee_type_params);
+        let mut union_substitutions = HashMap::new();
         for (index, (param, arg)) in callee.params.iter().zip(&bound).enumerate() {
             let Some(arg) = arg else {
                 if param.default_function.is_none() {
@@ -1847,6 +2414,27 @@ impl<'a> MirLoanValidationContext<'a> {
                 }
                 continue;
             };
+            // A union parameter admits exactly its declared union, or the
+            // specialization of a generic callee's symbolic union that the
+            // supplied arguments determine consistently (ADR-0052 A7).
+            if matches!(param.ty, Type::Union(_))
+                && !self
+                    .operand_type(caller, &arg.value)?
+                    .as_ref()
+                    .is_some_and(|actual| {
+                        union_argument_specializes(
+                            &param.ty,
+                            actual,
+                            &callee_type_params,
+                            &mut union_substitutions,
+                        )
+                    })
+            {
+                return Err(format!(
+                    "invalid MIR call to `{}` in `{}` requires exact union type '{}' for parameter `{}`",
+                    callee.name, caller.name, param.ty, param.name
+                ));
+            }
             match param.passing {
                 MirReceiverKind::BorrowMut => {
                     let Operand::Place(place) = &arg.value else {
@@ -1882,6 +2470,207 @@ impl<'a> MirLoanValidationContext<'a> {
             }
         }
         Ok(bound)
+    }
+
+    fn validate_owned_call_args(
+        &self,
+        caller: &MirFunction,
+        callee: &MirFunction,
+        args: &[MirArg],
+        state: &ValidatedLoanState,
+    ) -> std::result::Result<(), String> {
+        for (param, arg) in callee
+            .params
+            .iter()
+            .zip(self.bind_and_validate_call_args(caller, callee, args)?)
+        {
+            let Some(arg) = arg else {
+                continue;
+            };
+            self.validate_callable_argument_contract(caller, &param.ty, &arg.value, state)?;
+            self.validate_callable_identities_against_type(
+                caller, &param.ty, &arg.value, state, "call",
+            )?;
+            let place = match &arg.value {
+                Operand::Place(place) | Operand::MovePlace(place) => place,
+                _ => continue,
+            };
+            if place_has_task_borrowed_closure(place, state) {
+                return Err(format!(
+                    "invalid MIR call from `{}` passes borrowed closure capture `{place}` across a call boundary without owned authority",
+                    caller.name
+                ));
+            }
+            if param.passing == MirReceiverKind::Value
+                && (self.type_is_definitely_noncopy(&param.ty)
+                    || self
+                        .operand_type(caller, &arg.value)?
+                        .is_some_and(|ty| self.type_is_definitely_noncopy(&ty)))
+            {
+                validate_resolved_root_authority(
+                    caller,
+                    place,
+                    self,
+                    state,
+                    ProjectedPlaceAuthority::Owned,
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_owned_typed_call_args(
+        &self,
+        caller: &MirFunction,
+        params: &[FunctionParamContract],
+        args: &[MirArg],
+        state: &ValidatedLoanState,
+    ) -> std::result::Result<(), String> {
+        let mut bound = vec![None; params.len()];
+        let mut next_positional = 0usize;
+        for arg in args {
+            let index = if let Some(name) = arg.name.as_deref() {
+                // A contract keeps its declared parameter names even when the
+                // default metadata was erased at a type boundary; only an
+                // unnamed contract slot cannot be bound by name.
+                params
+                    .iter()
+                    .position(|param| !param.name.is_empty() && param.name == name)
+                    .ok_or_else(|| {
+                        format!(
+                            "invalid MIR indirect call from `{}` has unknown argument `{name}`",
+                            caller.name
+                        )
+                    })?
+            } else {
+                while next_positional < bound.len()
+                    && (bound[next_positional].is_some() || params[next_positional].keyword_only)
+                {
+                    next_positional += 1;
+                }
+                if next_positional >= bound.len() {
+                    return Err(format!(
+                        "invalid MIR indirect call from `{}` has too many positional arguments",
+                        caller.name
+                    ));
+                }
+                let index = next_positional;
+                next_positional += 1;
+                index
+            };
+            if bound[index].replace(arg).is_some() {
+                return Err(format!(
+                    "invalid MIR indirect call from `{}` binds parameter `{}` more than once",
+                    caller.name, params[index].name
+                ));
+            }
+        }
+        for (index, (param, arg)) in params.iter().zip(bound).enumerate() {
+            let Some(arg) = arg else {
+                if !param.has_default {
+                    return Err(format!(
+                        "invalid MIR indirect call from `{}` omits required parameter {} `{}`",
+                        caller.name,
+                        index + 1,
+                        param.name
+                    ));
+                }
+                continue;
+            };
+            match param.passing {
+                ReceiverKind::BorrowMut => {
+                    let Operand::Place(place) = &arg.value else {
+                        return Err(format!(
+                            "invalid MIR indirect call from `{}` binds mutable parameter `{}` to a non-place operand",
+                            caller.name, param.name
+                        ));
+                    };
+                    if arg.writeback_place.as_deref() != Some(place) {
+                        return Err(format!(
+                            "invalid MIR indirect call from `{}` requires exact mutable writeback for parameter `{}`",
+                            caller.name, param.name
+                        ));
+                    }
+                }
+                ReceiverKind::Value | ReceiverKind::Borrow => {
+                    if arg.writeback_place.is_some() {
+                        return Err(format!(
+                            "invalid MIR indirect call from `{}` supplies writeback for non-mutable parameter `{}`",
+                            caller.name, param.name
+                        ));
+                    }
+                }
+            }
+            self.validate_callable_argument_contract(caller, &param.ty, &arg.value, state)?;
+            self.validate_callable_identities_against_type(
+                caller, &param.ty, &arg.value, state, "call",
+            )?;
+            let place = match &arg.value {
+                Operand::Place(place) | Operand::MovePlace(place) => place,
+                _ => continue,
+            };
+            if place_has_task_borrowed_closure(place, state) {
+                return Err(format!(
+                    "invalid MIR call from `{}` passes borrowed closure capture `{place}` across a call boundary without owned authority",
+                    caller.name
+                ));
+            }
+            if param.passing == ReceiverKind::Value
+                && (self.type_is_definitely_noncopy(&param.ty)
+                    || self
+                        .place_type(caller, place)?
+                        .is_some_and(|ty| self.type_is_definitely_noncopy(&ty)))
+            {
+                validate_resolved_root_authority(
+                    caller,
+                    place,
+                    self,
+                    state,
+                    ProjectedPlaceAuthority::Owned,
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_owned_extern_call_args(
+        &self,
+        caller: &MirFunction,
+        params: &[MirExternParam],
+        args: &[MirArg],
+        state: &ValidatedLoanState,
+    ) -> std::result::Result<(), String> {
+        for (param, arg) in params.iter().zip(args) {
+            self.validate_callable_argument_contract(caller, &param.ty, &arg.value, state)?;
+            self.validate_callable_identities_against_type(
+                caller, &param.ty, &arg.value, state, "call",
+            )?;
+            let place = match &arg.value {
+                Operand::Place(place) | Operand::MovePlace(place) => place,
+                _ => continue,
+            };
+            if place_has_task_borrowed_closure(place, state) {
+                return Err(format!(
+                    "invalid MIR extern call from `{}` passes borrowed closure capture `{place}` across a call boundary without owned authority",
+                    caller.name
+                ));
+            }
+            if param.passing == MirReceiverKind::Value
+                && (self.type_is_definitely_noncopy(&param.ty)
+                    || self
+                        .place_type(caller, place)?
+                        .is_some_and(|ty| self.type_is_definitely_noncopy(&ty)))
+            {
+                validate_resolved_root_authority(
+                    caller,
+                    place,
+                    self,
+                    state,
+                    ProjectedPlaceAuthority::Owned,
+                )?;
+            }
+        }
+        Ok(())
     }
 
     fn bound_returned_view_for_function(
@@ -1932,6 +2721,7 @@ impl<'a> MirLoanValidationContext<'a> {
             origin: origin.to_string(),
             mutable: contract.mutable,
             projections: contract.projections.clone(),
+            pointee: None,
         }))
     }
 
@@ -2009,6 +2799,76 @@ impl<'a> MirLoanValidationContext<'a> {
             .collect()
     }
 
+    fn validate_indirect_union_args(
+        &self,
+        caller: &MirFunction,
+        target: &Operand,
+        args: &[MirArg],
+    ) -> std::result::Result<(), String> {
+        let signature = self.operand_type(caller, target)?;
+        let params = match signature.as_ref() {
+            Some(Type::Function { params, .. }) => params.as_slice(),
+            Some(Type::Closure { params, .. }) => params.as_slice(),
+            _ => return Ok(()),
+        };
+        if !params
+            .iter()
+            .any(|param| matches!(param.ty, Type::Union(_)))
+        {
+            return Ok(());
+        }
+        let mut bound = vec![false; params.len()];
+        let mut next = 0;
+        for arg in args {
+            let index = if let Some(name) = &arg.name {
+                params
+                    .iter()
+                    .position(|param| &param.name == name)
+                    .ok_or_else(|| {
+                        format!(
+                            "invalid MIR indirect call in `{}` has unknown argument `{name}`",
+                            caller.name
+                        )
+                    })?
+            } else {
+                while next < bound.len() && bound[next] {
+                    next += 1;
+                }
+                if next == bound.len() {
+                    return Err(format!(
+                        "invalid MIR indirect call in `{}` has too many arguments",
+                        caller.name
+                    ));
+                }
+                let index = next;
+                next += 1;
+                index
+            };
+            let param = &params[index];
+            if std::mem::replace(&mut bound[index], true) {
+                return Err(format!(
+                    "invalid MIR indirect call in `{}` binds parameter {} more than once",
+                    caller.name,
+                    index + 1
+                ));
+            }
+            if matches!(param.ty, Type::Union(_))
+                && self.operand_type(caller, &arg.value)?.as_ref() != Some(&param.ty)
+            {
+                let label = if param.name.is_empty() {
+                    (index + 1).to_string()
+                } else {
+                    format!("{} `{}`", index + 1, param.name)
+                };
+                return Err(format!(
+                    "invalid MIR indirect call in `{}` requires exact union type '{}' for parameter {label}",
+                    caller.name, param.ty
+                ));
+            }
+        }
+        Ok(())
+    }
+
     fn pending_call(
         &self,
         caller: &MirFunction,
@@ -2037,7 +2897,10 @@ impl<'a> MirLoanValidationContext<'a> {
                     None,
                 )
             }
-            CallTarget::Value(_) => ("<indirect>".to_string(), Vec::new(), None),
+            CallTarget::Value(value) => {
+                self.validate_indirect_union_args(caller, value, args)?;
+                ("<indirect>".to_string(), Vec::new(), None)
+            }
             CallTarget::Extern(call) => (format!("extern {}", call.symbol), Vec::new(), None),
             CallTarget::Member {
                 object,
@@ -2181,6 +3044,7 @@ impl<'a> MirLoanValidationContext<'a> {
                 origin: bound_origin,
                 mutable,
                 projections: projections.into(),
+                pointee: None,
             }),
         })
     }
@@ -2192,6 +3056,100 @@ struct BoundReturnedViewContract {
     origin: String,
     mutable: bool,
     projections: std::sync::Arc<[String]>,
+    /// Set for a call through a callable value (C9): the callee is opaque,
+    /// so any projection set is admitted as long as every projection has
+    /// this pointee type, which the loan type check enforces.
+    pointee: Option<Type>,
+}
+
+/// The returned-view contract of a call through a callable value (C9): the
+/// authoritative signature names the origin parameter by ordinal, the bound
+/// argument at that ordinal must be an addressable place (with its own
+/// writeback for a `view mut` result), and the footprint is the whole origin
+/// because the callee body is opaque at this site.
+fn indirect_returned_view_contract(
+    caller: &MirFunction,
+    callee: &CallTarget,
+    args: &[MirArg],
+    state: &ValidatedLoanState,
+) -> std::result::Result<Option<BoundReturnedViewContract>, String> {
+    let CallTarget::Value(Operand::Place(place) | Operand::MovePlace(place)) = callee else {
+        return Ok(None);
+    };
+    let Some(callable) = state.authoritative_callables.get(place) else {
+        return Ok(None);
+    };
+    let (params, return_type) = match &callable.signature {
+        Type::Function {
+            params,
+            return_type,
+        } => (params.as_slice(), return_type.as_ref()),
+        Type::Closure {
+            params,
+            return_type,
+            ..
+        } => (params.as_slice(), return_type.as_ref()),
+        Type::Callable(erased) => (erased.params.as_slice(), &erased.return_type),
+        _ => return Ok(None),
+    };
+    let Type::ReturnedView(view) = return_type else {
+        return Ok(None);
+    };
+    let origin_param = params.get(view.origin).ok_or_else(|| {
+        format!(
+            "invalid MIR indirect call in `{}` names returned-view origin {} beyond its contract",
+            caller.name, view.origin
+        )
+    })?;
+    // Bind positional arguments in order and named arguments by contract name.
+    let mut positional = 0usize;
+    let mut origin_arg = None;
+    for arg in args {
+        let slot = match &arg.name {
+            Some(name) => params.iter().position(|param| param.name == *name),
+            None => {
+                let slot = positional;
+                positional += 1;
+                Some(slot)
+            }
+        };
+        if slot == Some(view.origin) {
+            origin_arg = Some(arg);
+        }
+    }
+    let Some(origin_arg) = origin_arg else {
+        return Err(format!(
+            "invalid MIR indirect call in `{}` omits returned-view origin parameter `{}`",
+            caller.name, origin_param.name
+        ));
+    };
+    let Operand::Place(origin) = &origin_arg.value else {
+        return Err(format!(
+            "invalid MIR indirect call in `{}` binds its returned-view origin to a non-place operand",
+            caller.name
+        ));
+    };
+    if view.mutable
+        && (origin_param.passing != ReceiverKind::BorrowMut
+            || origin_arg.writeback_place.as_deref() != Some(origin.as_str()))
+    {
+        return Err(format!(
+            "invalid MIR indirect call in `{}` returns a mutable view of `{origin}` without a matching mutable writeback place",
+            caller.name
+        ));
+    }
+    validate_canonical_mir_place(caller, origin)?;
+    Ok(Some(BoundReturnedViewContract {
+        callees: vec![callable
+            .function
+            .clone()
+            .unwrap_or_else(|| "<indirect>".to_string())]
+        .into(),
+        origin: origin.clone(),
+        mutable: view.mutable,
+        projections: Vec::new().into(),
+        pointee: Some(view.pointee.clone()),
+    }))
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -2211,8 +3169,156 @@ struct ValidatedLoanState {
     loans: ValidatedLoans,
     ended: BTreeSet<String>,
     pending_handoff: Option<PendingLoanHandoff>,
+    tag_tests: BTreeMap<String, ValidatedUnionTagFact>,
+    active_union_tags: Vec<ValidatedUnionTagFact>,
+    active_enum_variants: Vec<ValidatedEnumVariantFact>,
+    taken_union_places: BTreeSet<String>,
+    taken_enum_payloads: Vec<ValidatedTakenEnumPayload>,
+    derived_value_origins: BTreeMap<String, std::sync::Arc<[String]>>,
+    borrowed_value_origins: BTreeMap<String, std::sync::Arc<[String]>>,
+    task_borrowed_closures: BTreeSet<String>,
+    authoritative_callables: BTreeMap<String, ValidatedCallable>,
     active_path_bytes: usize,
     active_name_bytes: usize,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ValidatedCallable {
+    function: Option<String>,
+    signature: Type,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ValidatedUnionTagFact {
+    sources: std::sync::Arc<[String]>,
+    union_type: Type,
+    member_index: usize,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ValidatedEnumVariantFact {
+    sources: std::sync::Arc<[String]>,
+    enum_type: Type,
+    variant_name: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ValidatedTakenEnumPayload {
+    sources: std::sync::Arc<[String]>,
+    enum_type: Type,
+    variant_name: String,
+    index: usize,
+}
+
+const UNION_PAYLOAD_PROJECTION_PREFIX: &str = "__union_payload_";
+
+/// Whether an argument union is the declared union parameter itself or a
+/// specialization of a generic callee's symbolic union (ADR-0052 A7). Every
+/// concrete member of the parameter must be a member of the argument after
+/// the substitutions already fixed by earlier arguments; the remaining
+/// argument members belong to the parameter's type-parameter members. A
+/// single type-parameter member binds to that remainder so later arguments
+/// stay consistent; several cannot be told apart here, which is the
+/// checker's explicit-specialization rule rather than a MIR shape defect.
+fn union_argument_specializes(
+    param_ty: &Type,
+    actual: &Type,
+    callee_type_params: &BTreeSet<String>,
+    substitutions: &mut HashMap<String, Type>,
+) -> bool {
+    if param_ty == actual {
+        return true;
+    }
+    let Type::Union(pattern) = param_ty else {
+        return false;
+    };
+    let substituted = crate::sema::substitute_type(param_ty, substitutions);
+    if !crate::sema::has_unresolved_type_params(&substituted)
+        || !pattern.members.iter().any(|member| {
+            matches!(member, Type::TypeParam(name) if callee_type_params.contains(name) && !substitutions.contains_key(name))
+        })
+    {
+        return substituted == *actual;
+    }
+    let mut params = Vec::new();
+    let mut concrete = Vec::new();
+    for member in &pattern.members {
+        match member {
+            Type::TypeParam(name)
+                if callee_type_params.contains(name) && !substitutions.contains_key(name) =>
+            {
+                if !params.contains(name) {
+                    params.push(name.clone());
+                }
+            }
+            other => match crate::sema::substitute_type(other, substitutions) {
+                Type::Union(inner) => concrete.extend(inner.members.iter().cloned()),
+                resolved => concrete.push(resolved),
+            },
+        }
+    }
+    let actual_members: Vec<Type> = match actual {
+        Type::Union(actual_union) => actual_union.members.clone(),
+        other => vec![other.clone()],
+    };
+    if !concrete
+        .iter()
+        .all(|member| actual_members.contains(member))
+    {
+        return false;
+    }
+    let remainder: Vec<Type> = actual_members
+        .into_iter()
+        .filter(|member| !concrete.contains(member))
+        .collect();
+    if remainder.is_empty() {
+        return false;
+    }
+    if params.len() == 1 {
+        let bound = if remainder.len() == 1 {
+            remainder[0].clone()
+        } else {
+            match actual {
+                Type::Union(actual_union) => {
+                    let keys = actual_union
+                        .members
+                        .iter()
+                        .zip(&actual_union.keys)
+                        .filter(|(member, _)| remainder.contains(member))
+                        .map(|(_, key)| key.clone())
+                        .collect();
+                    Type::Union(Box::new(crate::sema::UnionType {
+                        members: remainder,
+                        keys,
+                        module_name: actual_union.module_name.clone(),
+                    }))
+                }
+                _ => return false,
+            }
+        };
+        substitutions.insert(params.remove(0), bound);
+    }
+    true
+}
+const ENUM_PAYLOAD_PROJECTION_PREFIX: &str = "__variant_payload_";
+
+pub(crate) fn union_payload_projection_index(segment: &str) -> Option<usize> {
+    let index = segment.strip_prefix(UNION_PAYLOAD_PROJECTION_PREFIX)?;
+    if index.is_empty() || !index.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    let parsed = index.parse::<usize>().ok()?;
+    (parsed.to_string() == index).then_some(parsed)
+}
+
+pub(crate) fn enum_payload_projection(segment: &str) -> Option<(&str, usize)> {
+    let payload = segment.strip_prefix(ENUM_PAYLOAD_PROJECTION_PREFIX)?;
+    let (variant, index) = payload.rsplit_once('_')?;
+    if variant.is_empty() || index.is_empty() || !index.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    let parsed = index.parse::<usize>().ok()?;
+    (parsed.to_string() == index).then_some((variant, parsed))
 }
 
 pub(crate) fn mir_place_paths_overlap(left: &str, right: &str) -> bool {
@@ -2291,6 +3397,1474 @@ fn validated_loan_sources(
     sources.sort();
     sources.dedup();
     Ok(sources)
+}
+
+fn validated_physical_sources(
+    place: &str,
+    state: &ValidatedLoanState,
+) -> std::result::Result<Vec<String>, String> {
+    validated_mapped_sources(place, state, &state.derived_value_origins)
+}
+
+fn validated_authority_sources(
+    place: &str,
+    state: &ValidatedLoanState,
+) -> std::result::Result<Vec<String>, String> {
+    validated_mapped_sources(place, state, &state.borrowed_value_origins)
+}
+
+fn place_has_borrowed_value_origin(place: &str, state: &ValidatedLoanState) -> bool {
+    let root = place.split('.').next().unwrap_or_default();
+    state.loans.contains_key(root)
+        || state.borrowed_value_origins.keys().any(|target| {
+            place == target
+                || place
+                    .strip_prefix(target)
+                    .is_some_and(|suffix| suffix.starts_with('.'))
+                || target
+                    .strip_prefix(place)
+                    .is_some_and(|suffix| suffix.starts_with('.'))
+        })
+}
+
+fn place_has_task_borrowed_closure(place: &str, state: &ValidatedLoanState) -> bool {
+    state.task_borrowed_closures.iter().any(|target| {
+        place == target
+            || place
+                .strip_prefix(target)
+                .is_some_and(|suffix| suffix.starts_with('.'))
+            || target
+                .strip_prefix(place)
+                .is_some_and(|suffix| suffix.starts_with('.'))
+    })
+}
+
+fn rvalue_has_task_borrowed_closure(value: &Rvalue, state: &ValidatedLoanState) -> bool {
+    let operand_has = |operand: &Operand| match operand {
+        Operand::Place(place) | Operand::MovePlace(place) => {
+            place_has_task_borrowed_closure(place, state)
+        }
+        _ => false,
+    };
+    match value {
+        Rvalue::Closure { captures, .. } => captures.iter().any(|capture| {
+            capture.passing != MirReceiverKind::Value || operand_has(&capture.value)
+        }),
+        Rvalue::Use(value)
+        | Rvalue::Try { value }
+        | Rvalue::Cast { value, .. }
+        | Rvalue::TupleElement { tuple: value, .. }
+        | Rvalue::UnionInject { value, .. }
+        | Rvalue::Member { object: value, .. }
+        | Rvalue::VariantPayload {
+            scrutinee: value, ..
+        } => operand_has(value),
+        Rvalue::TupleTakeElement { place, index, .. } => {
+            place_has_task_borrowed_closure(&format!("{place}.{index}"), state)
+        }
+        Rvalue::UnionTakePayload { place, .. } => place_has_task_borrowed_closure(place, state),
+        Rvalue::VecLiteral { elements, .. }
+        | Rvalue::TupleLiteral { elements, .. }
+        | Rvalue::SetLiteral { elements, .. }
+        | Rvalue::EnumVariant {
+            payloads: elements, ..
+        } => elements.iter().any(operand_has),
+        Rvalue::MapLiteral { entries, .. } => entries
+            .iter()
+            .any(|entry| operand_has(&entry.key) || operand_has(&entry.value)),
+        Rvalue::Construct { fields, .. } => fields.iter().any(|field| operand_has(&field.value)),
+        Rvalue::Call {
+            callee: CallTarget::Member { object, .. } | CallTarget::TraitMember { object, .. },
+            ..
+        } => operand_has(object),
+        _ => false,
+    }
+}
+
+/// The authoritative identity of an rvalue that `rebase_callable_rvalue`
+/// does not derive from an existing place: only closure values carry one.
+/// A closure value carries the exposed contract of its lowered body:
+/// `validate_loan_rvalue` rejects any closure whose signature disagrees
+/// with the declared body parameters, so the recorded signature is the
+/// body's authoritative contract (captures excluded).
+fn authoritative_callable_for_rvalue(value: &Rvalue) -> Option<ValidatedCallable> {
+    let Rvalue::Closure {
+        signature,
+        consuming,
+        mutable,
+        ..
+    } = value
+    else {
+        return None;
+    };
+    let (params, return_type, captures) = match signature {
+        Type::Function {
+            params,
+            return_type,
+        } => (params.clone(), return_type.clone(), Vec::new()),
+        Type::Closure {
+            params,
+            return_type,
+            captures,
+            ..
+        } => (
+            params.as_ref().clone(),
+            return_type.clone(),
+            captures.as_ref().clone(),
+        ),
+        _ => return None,
+    };
+    Some(ValidatedCallable {
+        function: None,
+        signature: Type::Closure {
+            params: Box::new(params),
+            return_type,
+            captures: Box::new(captures),
+            call_kind: if *consuming {
+                ClosureCallKind::Consuming
+            } else if *mutable {
+                ClosureCallKind::MutableRepeatable
+            } else {
+                ClosureCallKind::Repeatable
+            },
+        },
+    })
+}
+
+fn rebase_authoritative_callables(
+    source: &str,
+    target: &str,
+    state: &ValidatedLoanState,
+) -> Vec<(String, ValidatedCallable)> {
+    state
+        .authoritative_callables
+        .iter()
+        .filter_map(|(place, callable)| {
+            if place == source {
+                Some((target.to_owned(), callable.clone()))
+            } else {
+                place.strip_prefix(source).and_then(|suffix| {
+                    suffix
+                        .starts_with('.')
+                        .then(|| (format!("{target}{suffix}"), callable.clone()))
+                })
+            }
+        })
+        .collect()
+}
+
+fn rebase_callable_operand(
+    operand: &Operand,
+    target: &str,
+    state: &ValidatedLoanState,
+) -> Vec<(String, ValidatedCallable)> {
+    match operand {
+        Operand::Function { name, signature } => vec![(
+            target.to_owned(),
+            ValidatedCallable {
+                function: Some(name.clone()),
+                signature: (**signature).clone(),
+            },
+        )],
+        Operand::Place(place) | Operand::MovePlace(place) => {
+            rebase_authoritative_callables(place, target, state)
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn rebase_callable_rvalue(
+    function: &MirFunction,
+    value: &Rvalue,
+    target: &str,
+    context: &MirLoanValidationContext<'_>,
+    state: &ValidatedLoanState,
+) -> Vec<(String, ValidatedCallable)> {
+    let indexed = |elements: &[Operand]| {
+        elements
+            .iter()
+            .enumerate()
+            .flat_map(|(index, element)| {
+                rebase_callable_operand(element, &format!("{target}.{index}"), state)
+            })
+            .collect::<Vec<_>>()
+    };
+    match value {
+        Rvalue::VecLiteral { elements, .. } if elements.is_empty() => {
+            vec![empty_container_marker(target)]
+        }
+        Rvalue::SetLiteral { elements, .. } if elements.is_empty() => {
+            vec![empty_container_marker(target)]
+        }
+        Rvalue::MapLiteral { entries, .. } if entries.is_empty() => {
+            vec![empty_container_marker(target)]
+        }
+        Rvalue::TupleLiteral { elements, .. } | Rvalue::VecLiteral { elements, .. } => {
+            indexed(elements)
+        }
+        Rvalue::SetLiteral { elements, .. } => elements
+            .iter()
+            .enumerate()
+            .flat_map(|(index, element)| {
+                rebase_callable_operand(element, &format!("{target}.__set_element_{index}"), state)
+            })
+            .collect(),
+        Rvalue::MapLiteral { entries, .. } => entries
+            .iter()
+            .enumerate()
+            .flat_map(|(index, entry)| {
+                rebase_callable_operand(&entry.key, &format!("{target}.__map_key_{index}"), state)
+                    .into_iter()
+                    .chain(rebase_callable_operand(
+                        &entry.value,
+                        &format!("{target}.__map_value_{index}"),
+                        state,
+                    ))
+            })
+            .collect(),
+        Rvalue::Construct { fields, .. } => fields
+            .iter()
+            .flat_map(|field| {
+                rebase_callable_operand(&field.value, &format!("{target}.{}", field.name), state)
+            })
+            .collect(),
+        Rvalue::EnumVariant {
+            variant_name,
+            payloads,
+            ..
+        } => payloads
+            .iter()
+            .enumerate()
+            .flat_map(|(index, payload)| {
+                rebase_callable_operand(
+                    payload,
+                    &format!("{target}.{ENUM_PAYLOAD_PROJECTION_PREFIX}{variant_name}_{index}"),
+                    state,
+                )
+            })
+            .collect(),
+        Rvalue::Use(operand) | Rvalue::Cast { value: operand, .. } => {
+            rebase_callable_operand(operand, target, state)
+        }
+        // `try` yields the `Ok` payload: carry that payload's identities.
+        Rvalue::Try {
+            value: Operand::Place(place) | Operand::MovePlace(place),
+        } => rebase_authoritative_callables(
+            &format!("{place}.{ENUM_PAYLOAD_PROJECTION_PREFIX}Ok_0"),
+            target,
+            state,
+        ),
+        Rvalue::Try { .. } => Vec::new(),
+        Rvalue::UnionInject {
+            value: operand,
+            member_index,
+            ..
+        } => rebase_callable_operand(
+            operand,
+            &format!("{target}.{UNION_PAYLOAD_PROJECTION_PREFIX}{member_index}"),
+            state,
+        ),
+        Rvalue::ModuleConstant { initializer, .. } => context
+            .functions
+            .get(initializer.as_str())
+            .map(|function| {
+                callable_identities_in_type(&function.return_type, context)
+                    .into_iter()
+                    .map(|(suffix, callable)| (format!("{target}{suffix}"), callable))
+                    .collect()
+            })
+            .unwrap_or_default(),
+        Rvalue::TupleTakeElement { place, index, .. } => {
+            rebase_authoritative_callables(&format!("{place}.{index}"), target, state)
+        }
+        Rvalue::TupleElement { tuple, index, .. } => match tuple {
+            Operand::Place(place) | Operand::MovePlace(place) => {
+                rebase_authoritative_callables(&format!("{place}.{index}"), target, state)
+            }
+            _ => Vec::new(),
+        },
+        Rvalue::Member { object, field } => match object {
+            Operand::Place(place) | Operand::MovePlace(place) => {
+                rebase_authoritative_callables(&format!("{place}.{field}"), target, state)
+            }
+            _ => Vec::new(),
+        },
+        Rvalue::UnionTakePayload {
+            place,
+            member_index,
+            ..
+        } => rebase_authoritative_callables(
+            &format!("{place}.{UNION_PAYLOAD_PROJECTION_PREFIX}{member_index}"),
+            target,
+            state,
+        ),
+        Rvalue::VariantPayload {
+            scrutinee,
+            variant_name,
+            index,
+        } => match scrutinee {
+            Operand::Place(place) | Operand::MovePlace(place) => rebase_authoritative_callables(
+                &format!("{place}.{ENUM_PAYLOAD_PROJECTION_PREFIX}{variant_name}_{index}"),
+                target,
+                state,
+            ),
+            _ => Vec::new(),
+        },
+        Rvalue::Call {
+            callee:
+                CallTarget::Member { object, field, .. } | CallTarget::TraitMember { object, field, .. },
+            args,
+        } => {
+            let container = match object {
+                Operand::Place(receiver) | Operand::MovePlace(receiver) => {
+                    rebase_container_result_callables(
+                        function, receiver, field, args, target, context, state,
+                    )
+                }
+                _ => Vec::new(),
+            };
+            if !container.is_empty() {
+                return container;
+            }
+            let Rvalue::Call { callee, .. } = value else {
+                unreachable!()
+            };
+            call_result_callable_identities(function, callee, target, context, state)
+        }
+        Rvalue::Call { callee, .. } => {
+            call_result_callable_identities(function, callee, target, context, state)
+        }
+        Rvalue::StartTask {
+            returns_handle: true,
+            function: started,
+            ..
+        } => {
+            let return_type = match started {
+                Operand::Function { name, .. } => context
+                    .functions
+                    .get(name.as_str())
+                    .map(|callee| callee.return_type.clone()),
+                Operand::Place(place) | Operand::MovePlace(place) => state
+                    .authoritative_callables
+                    .get(place)
+                    .and_then(|callable| match &callable.signature {
+                        Type::Function { return_type, .. } | Type::Closure { return_type, .. } => {
+                            Some((**return_type).clone())
+                        }
+                        _ => None,
+                    }),
+                _ => None,
+            };
+            return_type
+                .map(|ty| {
+                    callable_identities_in_type(&ty, context)
+                        .into_iter()
+                        .map(|(suffix, callable)| {
+                            (
+                                format!("{target}.{TASK_RESULT_PROJECTION}{suffix}"),
+                                callable,
+                            )
+                        })
+                        .collect()
+                })
+                .unwrap_or_default()
+        }
+        _ => authoritative_callable_for_rvalue(value)
+            .map(|callable| vec![(target.to_owned(), callable)])
+            .unwrap_or_default(),
+    }
+}
+
+/// Authoritative identities implied by a declared contract: every callable
+/// reachable through fixed tuple positions, class fields, enum payloads,
+/// optionals, and container elements carries the declared contract without a
+/// specific function identity. These identities make boundary-checked
+/// declared contracts authoritative inside a function, so forged local
+/// metadata for derived places is never trusted.
+fn callable_identities_in_type(
+    ty: &Type,
+    context: &MirLoanValidationContext<'_>,
+) -> Vec<(String, ValidatedCallable)> {
+    fn walk(
+        ty: &Type,
+        prefix: &str,
+        context: &MirLoanValidationContext<'_>,
+        visiting: &mut Vec<String>,
+        out: &mut Vec<(String, ValidatedCallable)>,
+    ) {
+        if visiting.len() > 8 {
+            return;
+        }
+        match ty {
+            Type::Function { .. } | Type::Closure { .. } | Type::Callable(_) => out.push((
+                prefix.to_owned(),
+                ValidatedCallable {
+                    function: None,
+                    signature: ty.clone(),
+                },
+            )),
+            Type::Tuple(elements) => {
+                for (index, element) in elements.iter().enumerate() {
+                    walk(
+                        element,
+                        &format!("{prefix}.{index}"),
+                        context,
+                        visiting,
+                        out,
+                    );
+                }
+            }
+            Type::Union(union) => {
+                for (index, member) in union.members.iter().enumerate() {
+                    walk(
+                        member,
+                        &format!("{prefix}.{UNION_PAYLOAD_PROJECTION_PREFIX}{index}"),
+                        context,
+                        visiting,
+                        out,
+                    );
+                }
+            }
+            Type::Named(name, args) => match (name.as_str(), args.as_slice()) {
+                ("list" | "set", [element]) => {
+                    walk(
+                        element,
+                        &format!("{prefix}.{ANY_ELEMENT_PROJECTION}"),
+                        context,
+                        visiting,
+                        out,
+                    );
+                }
+                ("dict", [_, value]) => {
+                    walk(
+                        value,
+                        &format!("{prefix}.{ANY_ELEMENT_PROJECTION}"),
+                        context,
+                        visiting,
+                        out,
+                    );
+                }
+                ("Option", [payload]) => {
+                    walk(
+                        payload,
+                        &format!("{prefix}.{ENUM_PAYLOAD_PROJECTION_PREFIX}Some_0"),
+                        context,
+                        visiting,
+                        out,
+                    );
+                }
+                _ => {
+                    if visiting.iter().any(|seen| seen == name) {
+                        return;
+                    }
+                    if let Some(class) = context.classes.get(name.as_str()) {
+                        if class.type_params.len() != args.len() {
+                            return;
+                        }
+                        let substitutions = class
+                            .type_params
+                            .iter()
+                            .cloned()
+                            .zip(args.iter().cloned())
+                            .collect::<HashMap<_, _>>();
+                        visiting.push(name.clone());
+                        for field in &class.fields {
+                            walk(
+                                &substitute_type(&field.ty, &substitutions),
+                                &format!("{prefix}.{}", field.name),
+                                context,
+                                visiting,
+                                out,
+                            );
+                        }
+                        visiting.pop();
+                    } else if let Some(enum_decl) = context.enums.get(name.as_str()) {
+                        if enum_decl.type_params.len() != args.len() {
+                            return;
+                        }
+                        let substitutions = enum_decl
+                            .type_params
+                            .iter()
+                            .cloned()
+                            .zip(args.iter().cloned())
+                            .collect::<HashMap<_, _>>();
+                        visiting.push(name.clone());
+                        for variant in &enum_decl.variants {
+                            for (index, payload) in variant.payloads.iter().enumerate() {
+                                walk(
+                                    &substitute_type(payload, &substitutions),
+                                    &format!(
+                                        "{prefix}.{ENUM_PAYLOAD_PROJECTION_PREFIX}{}_{index}",
+                                        variant.name
+                                    ),
+                                    context,
+                                    visiting,
+                                    out,
+                                );
+                            }
+                        }
+                        visiting.pop();
+                    }
+                }
+            },
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    walk(ty, "", context, &mut Vec::new(), &mut out);
+    out
+}
+
+/// The identities a call result carries: the callee's declared return
+/// contract, resolved structurally. Container member calls are handled by
+/// [`rebase_container_result_callables`]; user method calls resolve through
+/// the same member candidates the call validation uses.
+fn call_result_callable_identities(
+    function: &MirFunction,
+    callee: &CallTarget,
+    target: &str,
+    context: &MirLoanValidationContext<'_>,
+    state: &ValidatedLoanState,
+) -> Vec<(String, ValidatedCallable)> {
+    let return_type = match callee {
+        CallTarget::Name(name) => context
+            .functions
+            .get(name.as_str())
+            .map(|callee| callee.return_type.clone()),
+        CallTarget::Value(operand) => {
+            let signature = match operand {
+                Operand::Function { signature, .. } => Some((**signature).clone()),
+                Operand::Place(place) | Operand::MovePlace(place) => state
+                    .authoritative_callables
+                    .get(place)
+                    .map(|callable| callable.signature.clone()),
+                _ => None,
+            };
+            signature.and_then(|signature| match signature {
+                Type::Function { return_type, .. } | Type::Closure { return_type, .. } => {
+                    Some((*return_type).clone())
+                }
+                Type::Callable(callable) => Some(callable.return_type.clone()),
+                _ => None,
+            })
+        }
+        CallTarget::Member { object, field, .. }
+        | CallTarget::TraitMember { object, field, .. } => {
+            let trait_name = match callee {
+                CallTarget::TraitMember { trait_name, .. } => Some(trait_name.as_str()),
+                _ => None,
+            };
+            let Ok(candidates) =
+                context.member_function_candidates(function, object, trait_name, field)
+            else {
+                return Vec::new();
+            };
+            let Some(first) = candidates.first() else {
+                return Vec::new();
+            };
+            if candidates
+                .iter()
+                .all(|candidate| candidate.return_type == first.return_type)
+            {
+                Some(first.return_type.clone())
+            } else {
+                // Candidates disagree: every callable position any of them
+                // declares is poisoned rather than silently unknown.
+                let mut poisoned = BTreeMap::new();
+                for candidate in &candidates {
+                    for (suffix, _) in callable_identities_in_type(&candidate.return_type, context)
+                    {
+                        poisoned.insert(format!("{target}{suffix}"), unknown_validated_callable());
+                    }
+                }
+                return poisoned.into_iter().collect();
+            }
+        }
+        CallTarget::Extern(_) => None,
+    };
+    return_type
+        .map(|ty| {
+            callable_identities_in_type(&ty, context)
+                .into_iter()
+                .map(|(suffix, callable)| (format!("{target}{suffix}"), callable))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Whether any instruction or terminator in `function` moves a place rooted at
+/// `root`. Moves are explicit `MovePlace` operands in MIR, so a structural scan
+/// is exact.
+fn function_body_moves_root(function: &MirFunction, root: &str) -> bool {
+    fn operand_moves(operand: &Operand, root: &str) -> bool {
+        match operand {
+            Operand::MovePlace(place) => place.split('.').next() == Some(root),
+            _ => false,
+        }
+    }
+    fn rvalue_moves(value: &Rvalue, root: &str) -> bool {
+        match value {
+            Rvalue::Use(operand)
+            | Rvalue::NoneTest { value: operand }
+            | Rvalue::UnionInject { value: operand, .. }
+            | Rvalue::Unary { value: operand, .. }
+            | Rvalue::Cast { value: operand, .. }
+            | Rvalue::Try { value: operand }
+            | Rvalue::TupleElement { tuple: operand, .. }
+            | Rvalue::VariantPayload {
+                scrutinee: operand, ..
+            }
+            | Rvalue::Member {
+                object: operand, ..
+            } => operand_moves(operand, root),
+            Rvalue::UnionTakePayload { place, .. } | Rvalue::TupleTakeElement { place, .. } => {
+                place.split('.').next() == Some(root)
+            }
+            Rvalue::UnionTagTest { .. } | Rvalue::ModuleConstant { .. } => false,
+            Rvalue::Closure { captures, .. } => captures
+                .iter()
+                .any(|capture| operand_moves(&capture.value, root)),
+            Rvalue::FormatString { parts } => parts.iter().any(|part| match part {
+                MirFormatPart::Literal(_) => false,
+                MirFormatPart::Value(operand) | MirFormatPart::Formatted { value: operand, .. } => {
+                    operand_moves(operand, root)
+                }
+            }),
+            Rvalue::StartTask {
+                stack_size,
+                task_group,
+                function,
+                args,
+                ..
+            } => {
+                stack_size
+                    .as_ref()
+                    .is_some_and(|operand| operand_moves(operand, root))
+                    || operand_moves(task_group, root)
+                    || operand_moves(function, root)
+                    || args.iter().any(|arg| operand_moves(&arg.value, root))
+            }
+            Rvalue::Binary { left, right, .. } => {
+                operand_moves(left, root) || operand_moves(right, root)
+            }
+            Rvalue::Call { callee, args } => {
+                let callee_moves = match callee {
+                    CallTarget::Value(operand) => operand_moves(operand, root),
+                    CallTarget::Member { object, .. } | CallTarget::TraitMember { object, .. } => {
+                        operand_moves(object, root)
+                    }
+                    CallTarget::Name(_) | CallTarget::Extern(_) => false,
+                };
+                callee_moves || args.iter().any(|arg| operand_moves(&arg.value, root))
+            }
+            Rvalue::VecLiteral { elements, .. }
+            | Rvalue::TupleLiteral { elements, .. }
+            | Rvalue::SetLiteral { elements, .. }
+            | Rvalue::EnumVariant {
+                payloads: elements, ..
+            } => elements.iter().any(|element| operand_moves(element, root)),
+            Rvalue::MapLiteral { entries, .. } => entries
+                .iter()
+                .any(|entry| operand_moves(&entry.key, root) || operand_moves(&entry.value, root)),
+            Rvalue::Construct { fields, .. } => {
+                fields.iter().any(|field| operand_moves(&field.value, root))
+            }
+        }
+    }
+    function.blocks.iter().any(|block| {
+        block
+            .instructions
+            .iter()
+            .any(|instruction| match instruction {
+                Instruction::Assign { value, .. } | Instruction::WriteLoan { value, .. } => {
+                    rvalue_moves(value, root)
+                }
+                Instruction::Eval { value } => operand_moves(value, root),
+                _ => false,
+            })
+            || match &block.terminator {
+                Terminator::Return(operand)
+                | Terminator::Branch {
+                    condition: operand, ..
+                }
+                | Terminator::ForRange {
+                    iterable: operand, ..
+                }
+                | Terminator::Match {
+                    scrutinee: operand, ..
+                } => operand_moves(operand, root),
+                Terminator::AssertFail {
+                    message, captures, ..
+                } => {
+                    message
+                        .as_ref()
+                        .is_some_and(|operand| operand_moves(operand, root))
+                        || captures
+                            .iter()
+                            .any(|capture| operand_moves(&capture.value, root))
+                }
+                Terminator::Goto(_) | Terminator::Unreachable => false,
+            }
+    })
+}
+
+/// Projection segment recording a callable identity shared by every element
+/// of a container whose exact elements are known only collectively, such as
+/// the result of `keys`/`values` or a list mutated by `append`.
+const ANY_ELEMENT_PROJECTION: &str = "__any_element";
+
+fn unknown_validated_callable() -> ValidatedCallable {
+    ValidatedCallable {
+        function: None,
+        signature: Type::named("Unknown"),
+    }
+}
+
+/// Merges the authoritative identities of every candidate element that a
+/// runtime selection may produce. Equal identities stay exact; distinct
+/// functions with one contract keep that contract without a name; differing
+/// contracts poison the result so a later call cannot trust forged metadata.
+fn merge_validated_callables<'a>(
+    candidates: impl Iterator<Item = &'a ValidatedCallable>,
+) -> ValidatedCallable {
+    let mut markers = 0usize;
+    let mut candidates = candidates.filter(|candidate| {
+        let marker = callable_container_is_empty_marker(candidate);
+        markers += usize::from(marker);
+        !marker
+    });
+    let Some(first) = candidates.next() else {
+        return if markers > 0 {
+            ValidatedCallable {
+                function: None,
+                signature: Type::named(EMPTY_CONTAINER_MARKER),
+            }
+        } else {
+            unknown_validated_callable()
+        };
+    };
+    let mut same_identity = true;
+    let mut erased: Option<&ValidatedCallable> =
+        matches!(first.signature, Type::Callable(_)).then_some(first);
+    for candidate in candidates {
+        if candidate.signature != first.signature {
+            // Values admitted into one erased callable storage type keep
+            // that contract as their common identity: each of them was
+            // validated against it when it entered the storage.
+            if matches!(candidate.signature, Type::Callable(_)) && erased.is_none() {
+                erased = Some(candidate);
+            }
+            match erased {
+                Some(contract)
+                    if callable_admitted_by_erased(&contract.signature, &candidate.signature)
+                        && callable_admitted_by_erased(&contract.signature, &first.signature) =>
+                {
+                    same_identity = false;
+                    continue;
+                }
+                _ => return unknown_validated_callable(),
+            }
+        }
+        if candidate.function != first.function {
+            same_identity = false;
+        }
+    }
+    if let Some(contract) = erased.filter(|_| !same_identity) {
+        return ValidatedCallable {
+            function: None,
+            signature: contract.signature.clone(),
+        };
+    }
+    if same_identity {
+        first.clone()
+    } else {
+        ValidatedCallable {
+            function: None,
+            signature: first.signature.clone(),
+        }
+    }
+}
+
+/// Whether a function, closure, or erased callable signature may stand
+/// where `erased` (an erased callable contract) is the declared storage.
+fn callable_admitted_by_erased(erased: &Type, signature: &Type) -> bool {
+    let Type::Callable(contract) = erased else {
+        return false;
+    };
+    let (params, return_type, kind): (&[FunctionParamContract], &Type, Option<ClosureCallKind>) =
+        match signature {
+            Type::Callable(other) => {
+                return other.task == contract.task
+                    && other.call_kind == contract.call_kind
+                    && erased == signature;
+            }
+            Type::Function {
+                params,
+                return_type,
+            } => (params.as_slice(), return_type.as_ref(), None),
+            Type::Closure {
+                params,
+                return_type,
+                call_kind,
+                ..
+            } => (params.as_slice(), return_type.as_ref(), Some(*call_kind)),
+            _ => return false,
+        };
+    kind.is_none_or(|kind| contract.call_kind.admits(kind))
+        && params.len() == contract.params.len()
+        && params
+            .iter()
+            .zip(&contract.params)
+            .all(|(actual, expected)| {
+                actual.ty == expected.ty && actual.passing == expected.passing
+            })
+        && *return_type == contract.return_type
+}
+
+/// Splits an authoritative place under `receiver` into its element key and
+/// the descendant suffix relative to that element.
+fn container_element_key_and_suffix<'a>(
+    place: &'a str,
+    receiver: &str,
+) -> Option<(&'a str, &'a str)> {
+    let suffix = place.strip_prefix(receiver)?.strip_prefix('.')?;
+    Some(match suffix.find('.') {
+        Some(position) => (&suffix[..position], &suffix[position..]),
+        None => (suffix, ""),
+    })
+}
+
+fn container_element_key_may_be_result(field: &str, key: &str) -> bool {
+    let ordinary = key.parse::<usize>().is_ok() || key == ANY_ELEMENT_PROJECTION;
+    let map_value = key.starts_with("__map_value_");
+    let map_key = key.starts_with("__map_key_");
+    let set_element = key.starts_with("__set_element_");
+    match field {
+        "keys" => map_key,
+        "items" => map_key || map_value || ordinary,
+        "copy" => map_key || map_value || set_element || ordinary,
+        "get" | "values" | "setdefault" => map_value || ordinary,
+        "pop" | "popitem" | "remove" => map_value || set_element || ordinary,
+        _ if field == INTERNAL_VEC_INDEX_FIELD || field == INTERNAL_MAP_INDEX_FIELD => {
+            map_value || ordinary
+        }
+        _ => ordinary,
+    }
+}
+
+/// Rebases the callable identities reachable through a container member call
+/// onto its result, preserving every descendant suffix. An exact literal index
+/// selects that element; a runtime selection merges every possible element and
+/// poisons any suffix that some possible element lacks.
+fn rebase_container_result_callables(
+    function: &MirFunction,
+    receiver: &str,
+    field: &str,
+    args: &[MirArg],
+    target: &str,
+    context: &MirLoanValidationContext<'_>,
+    state: &ValidatedLoanState,
+) -> Vec<(String, ValidatedCallable)> {
+    let exact_index = args.first().and_then(|arg| match arg.value {
+        Operand::Int(index) => usize::try_from(index).ok(),
+        _ => None,
+    });
+    let mut elements = BTreeSet::new();
+    let mut by_suffix: BTreeMap<String, BTreeMap<String, ValidatedCallable>> = BTreeMap::new();
+    for (place, callable) in &state.authoritative_callables {
+        let Some((key, rest)) = container_element_key_and_suffix(place, receiver) else {
+            continue;
+        };
+        if !container_element_key_may_be_result(field, key) {
+            continue;
+        }
+        elements.insert(key.to_owned());
+        by_suffix
+            .entry(rest.to_owned())
+            .or_default()
+            .insert(key.to_owned(), callable.clone());
+    }
+    if elements.is_empty() {
+        return task_result_callables(receiver, field, args, target, state);
+    }
+    if field == "copy" {
+        // A copy carries every element identity verbatim, key/value sides and
+        // the empty-container marker included.
+        return state
+            .authoritative_callables
+            .iter()
+            .filter_map(|(place, callable)| {
+                let (key, rest) = container_element_key_and_suffix(place, receiver)?;
+                container_element_key_may_be_result(field, key)
+                    .then(|| (format!("{target}.{key}{rest}"), callable.clone()))
+            })
+            .collect();
+    }
+    let selected = match exact_index {
+        Some(index) if elements.contains(&index.to_string()) => BTreeSet::from([index.to_string()]),
+        Some(_) if elements.contains(ANY_ELEMENT_PROJECTION) => {
+            BTreeSet::from([ANY_ELEMENT_PROJECTION.to_owned()])
+        }
+        _ => elements,
+    };
+    if field == "map" {
+        // The result elements are whatever the callback returns.
+        let Some(callback) = args.first() else {
+            return Vec::new();
+        };
+        let signature = match &callback.value {
+            Operand::Function { signature, .. } => Some((**signature).clone()),
+            Operand::Place(place) | Operand::MovePlace(place) => state
+                .authoritative_callables
+                .get(place)
+                .map(|callable| callable.signature.clone()),
+            _ => None,
+        };
+        let return_type = match signature {
+            Some(Type::Function { return_type, .. }) | Some(Type::Closure { return_type, .. }) => {
+                *return_type
+            }
+            _ => return Vec::new(),
+        };
+        return callable_identities_in_type(&return_type, context)
+            .into_iter()
+            .map(|(suffix, callable)| {
+                (
+                    format!("{target}.{ANY_ELEMENT_PROJECTION}{suffix}"),
+                    callable,
+                )
+            })
+            .collect();
+    }
+    // Empty containers yield no element; results still carry the declared
+    // element contract so an unreachable match arm remains checkable.
+    if selected.len() == 1 && selected.contains(ANY_ELEMENT_PROJECTION) {
+        if let Some(per_key) = by_suffix.get("") {
+            if per_key
+                .get(ANY_ELEMENT_PROJECTION)
+                .is_some_and(callable_container_is_empty_marker)
+            {
+                return empty_container_result_callables(
+                    function, receiver, field, target, context,
+                );
+            }
+        }
+    }
+    let mut results = Vec::new();
+    if field == "items" {
+        // Key/value tuples: keys land at `.0`, values at `.1`. Each side is
+        // merged independently so a suffix only one side carries is not
+        // poisoned by the other.
+        let (key_group, value_group): (BTreeSet<String>, BTreeSet<String>) = selected
+            .into_iter()
+            .partition(|key| key.starts_with("__map_key_"));
+        for (group, position) in [(key_group, 0), (value_group, 1)] {
+            if group.is_empty() {
+                continue;
+            }
+            for (rest, per_key) in &by_suffix {
+                let candidates = group
+                    .iter()
+                    .filter_map(|key| per_key.get(key))
+                    .collect::<Vec<_>>();
+                if candidates.is_empty() {
+                    continue;
+                }
+                let callable = if candidates.len() != group.len() {
+                    unknown_validated_callable()
+                } else {
+                    merge_validated_callables(candidates.into_iter())
+                };
+                results.push((
+                    format!("{target}.{ANY_ELEMENT_PROJECTION}.{position}{rest}"),
+                    callable,
+                ));
+            }
+        }
+        return results;
+    }
+    for (rest, per_key) in &by_suffix {
+        let candidates = selected
+            .iter()
+            .filter_map(|key| per_key.get(key))
+            .collect::<Vec<_>>();
+        let callable = if candidates.len() != selected.len() {
+            unknown_validated_callable()
+        } else {
+            merge_validated_callables(candidates.into_iter())
+        };
+        let prefixes: Vec<String> = match field {
+            "keys" | "values" | "filter" => {
+                vec![format!("{target}.{ANY_ELEMENT_PROJECTION}")]
+            }
+            _ => vec![
+                target.to_owned(),
+                format!("{target}.{ENUM_PAYLOAD_PROJECTION_PREFIX}Some_0"),
+            ],
+        };
+        for prefix in prefixes {
+            results.push((format!("{prefix}{rest}"), callable.clone()));
+        }
+    }
+    results
+}
+
+/// Result identities of a member call on a task handle whose started
+/// function's return contract was recorded at `__task_result`.
+fn task_result_callables(
+    receiver: &str,
+    field: &str,
+    args: &[MirArg],
+    target: &str,
+    state: &ValidatedLoanState,
+) -> Vec<(String, ValidatedCallable)> {
+    let recorded =
+        rebase_authoritative_callables(&format!("{receiver}.{TASK_RESULT_PROJECTION}"), "", state);
+    if recorded.is_empty() {
+        return Vec::new();
+    }
+    let mut results = Vec::new();
+    match field {
+        "result" | "result_with_timeout" | "wait" => {
+            for (suffix, callable) in recorded {
+                results.push((
+                    format!("{target}.{ENUM_PAYLOAD_PROJECTION_PREFIX}Ready_0{suffix}"),
+                    callable,
+                ));
+            }
+        }
+        "result_or_none" | "poll" => {
+            for (suffix, callable) in recorded {
+                results.push((
+                    format!("{target}.{ENUM_PAYLOAD_PROJECTION_PREFIX}Some_0{suffix}"),
+                    callable.clone(),
+                ));
+                results.push((
+                    format!("{target}.{ENUM_PAYLOAD_PROJECTION_PREFIX}Ready_0{suffix}"),
+                    callable,
+                ));
+            }
+        }
+        "result_or" => {
+            let fallback = args
+                .first()
+                .map(|arg| rebase_callable_operand(&arg.value, "", state))
+                .unwrap_or_default();
+            for (suffix, callable) in recorded {
+                let fallback_callable = fallback
+                    .iter()
+                    .find(|(fallback_suffix, _)| *fallback_suffix == suffix)
+                    .map(|(_, callable)| callable.clone());
+                let merged = match fallback_callable {
+                    Some(fallback_callable) => {
+                        merge_validated_callables([&callable, &fallback_callable].into_iter())
+                    }
+                    None => unknown_validated_callable(),
+                };
+                results.push((format!("{target}{suffix}"), merged));
+            }
+        }
+        _ => {}
+    }
+    results
+}
+
+/// The declared element contract of a provably empty container, used so
+/// that reads from it keep a checkable (never actually invoked) identity.
+fn empty_container_result_callables(
+    function: &MirFunction,
+    receiver: &str,
+    field: &str,
+    target: &str,
+    context: &MirLoanValidationContext<'_>,
+) -> Vec<(String, ValidatedCallable)> {
+    let Ok(Some(receiver_type)) = context.place_type(function, receiver) else {
+        return Vec::new();
+    };
+    let element_type = match &receiver_type {
+        Type::Named(name, args) if (name == "list" || name == "set") && args.len() == 1 => {
+            args[0].clone()
+        }
+        Type::Named(name, args) if name == "dict" && args.len() == 2 => match field {
+            "keys" => args[0].clone(),
+            "items" => Type::Tuple(vec![args[0].clone(), args[1].clone()]),
+            _ => args[1].clone(),
+        },
+        _ => return Vec::new(),
+    };
+    let prefixes = match field {
+        "keys" | "values" | "items" | "copy" | "filter" => {
+            vec![format!("{target}.{ANY_ELEMENT_PROJECTION}")]
+        }
+        _ => vec![
+            target.to_owned(),
+            format!("{target}.{ENUM_PAYLOAD_PROJECTION_PREFIX}Some_0"),
+        ],
+    };
+    let mut results = Vec::new();
+    for prefix in prefixes {
+        for (suffix, callable) in callable_identities_in_type(&element_type, context) {
+            results.push((format!("{prefix}{suffix}"), callable));
+        }
+    }
+    results
+}
+
+/// Marker identity recorded at `place.__any_element` for a container that
+/// is provably empty at that point. It is identity-neutral in merges and
+/// satisfies a declared element position without a real callable.
+const EMPTY_CONTAINER_MARKER: &str = "__empty_container";
+/// Projection recording a started task's declared result contract.
+const TASK_RESULT_PROJECTION: &str = "__task_result";
+
+fn empty_container_marker(target: &str) -> (String, ValidatedCallable) {
+    (
+        format!("{target}.{ANY_ELEMENT_PROJECTION}"),
+        ValidatedCallable {
+            function: None,
+            signature: Type::named(EMPTY_CONTAINER_MARKER),
+        },
+    )
+}
+
+fn callable_container_is_empty_marker(callable: &ValidatedCallable) -> bool {
+    callable.signature == Type::named(EMPTY_CONTAINER_MARKER)
+}
+
+fn callable_segment_is_element_key(segment: &str) -> bool {
+    segment.parse::<usize>().is_ok()
+        || segment == ANY_ELEMENT_PROJECTION
+        || segment.starts_with("__map_value_")
+        || segment.starts_with("__map_key_")
+        || segment.starts_with("__set_element_")
+}
+
+/// Whether an actual identity suffix denotes the position an expected
+/// (declared) suffix names; a declared wildcard matches any element key.
+fn callable_suffix_matches(actual: &str, expected: &str) -> bool {
+    let actual = actual.split('.').skip(1).collect::<Vec<_>>();
+    let expected = expected.split('.').skip(1).collect::<Vec<_>>();
+    actual.len() == expected.len()
+        && actual.iter().zip(&expected).all(|(actual, expected)| {
+            actual == expected
+                || (*expected == ANY_ELEMENT_PROJECTION && callable_segment_is_element_key(actual))
+        })
+}
+
+/// Whether an empty-container marker at `marker_suffix` covers the declared
+/// position `expected` (the position lies within that container).
+fn callable_suffix_covers(marker_suffix: &str, expected: &str) -> bool {
+    let container = marker_suffix
+        .strip_suffix(&format!(".{ANY_ELEMENT_PROJECTION}"))
+        .unwrap_or(marker_suffix);
+    expected == marker_suffix
+        || expected
+            .strip_prefix(container)
+            .is_some_and(|rest| rest.starts_with('.'))
+}
+
+/// Merges the callable identities of two control-flow predecessors. Equal
+/// identities survive; distinct identities merge by contract or poison; an
+/// identity present on only one side is poisoned unless the other side
+/// proves that container empty at that position.
+fn merge_authoritative_callable_maps(
+    left: &BTreeMap<String, ValidatedCallable>,
+    right: &BTreeMap<String, ValidatedCallable>,
+) -> BTreeMap<String, ValidatedCallable> {
+    let empties = |map: &BTreeMap<String, ValidatedCallable>| {
+        map.iter()
+            .filter(|(_, callable)| callable_container_is_empty_marker(callable))
+            .map(|(place, _)| place.clone())
+            .collect::<Vec<_>>()
+    };
+    let left_empties = empties(left);
+    let right_empties = empties(right);
+    let covered = |place: &str, empties: &[String]| {
+        empties
+            .iter()
+            .any(|marker| callable_suffix_covers(marker, place))
+    };
+    let mut merged = BTreeMap::new();
+    for place in left.keys().chain(right.keys()) {
+        if merged.contains_key(place) {
+            continue;
+        }
+        let callable = match (left.get(place), right.get(place)) {
+            (Some(l), Some(r)) => {
+                if callable_container_is_empty_marker(l) && callable_container_is_empty_marker(r) {
+                    l.clone()
+                } else if callable_container_is_empty_marker(l) {
+                    r.clone()
+                } else if callable_container_is_empty_marker(r) {
+                    l.clone()
+                } else {
+                    merge_validated_callables([l, r].into_iter())
+                }
+            }
+            (Some(l), None) => {
+                if callable_container_is_empty_marker(l) {
+                    continue;
+                } else if covered(place, &right_empties) {
+                    l.clone()
+                } else {
+                    unknown_validated_callable()
+                }
+            }
+            (None, Some(r)) => {
+                if callable_container_is_empty_marker(r) {
+                    continue;
+                } else if covered(place, &left_empties) {
+                    r.clone()
+                } else {
+                    unknown_validated_callable()
+                }
+            }
+            (None, None) => continue,
+        };
+        merged.insert(place.clone(), callable);
+    }
+    merged
+}
+
+/// The element identities a container mutation leaves behind. `None` means
+/// the call does not mutate a container's element set.
+struct ContainerMutation {
+    receivers: Vec<String>,
+    replacements: Vec<(String, ValidatedCallable)>,
+}
+
+/// Computes how a mutating container member call changes the receiver's
+/// element identities. Exact element keys collapse into one merged wildcard
+/// identity per descendant suffix, because insertion, removal, and reordering
+/// move elements between indexes at runtime. An operand without authoritative
+/// identity clears the receiver's identities so later reads fall back to the
+/// boundary-checked declared contracts instead of a stale element.
+fn container_mutation_callables(
+    value: &Rvalue,
+    state: &ValidatedLoanState,
+) -> std::result::Result<Option<ContainerMutation>, String> {
+    let Rvalue::Call {
+        callee:
+            CallTarget::Member { object, field, .. } | CallTarget::TraitMember { object, field, .. },
+        args,
+    } = value
+    else {
+        return Ok(None);
+    };
+    let (Operand::Place(receiver) | Operand::MovePlace(receiver)) = object else {
+        return Ok(None);
+    };
+    let inserted_operand = match field.as_str() {
+        "append" | "add" | "extend" | "update" => args.first(),
+        "insert" | "set" | "setdefault" => args.get(1),
+        _ if field == INTERNAL_VEC_SET_INDEX_FIELD || field == INTERNAL_MAP_SET_INDEX_FIELD => {
+            args.get(1)
+        }
+        "pop" | "popitem" | "remove" | "discard" | "clear" | "reverse" | "sort" | "swap"
+        | "shuffle" | "truncate" | "retain" | "drain" => None,
+        _ => return Ok(None),
+    };
+    let inserts_operand = matches!(
+        field.as_str(),
+        "append" | "add" | "extend" | "update" | "insert" | "set" | "setdefault"
+    ) || field == INTERNAL_VEC_SET_INDEX_FIELD
+        || field == INTERNAL_MAP_SET_INDEX_FIELD;
+    let mut receivers = vec![receiver.clone()];
+    let root = receiver.split('.').next().unwrap_or_default();
+    if state.loans.contains_key(root) {
+        for source in validated_loan_sources(receiver, &state.loans)? {
+            if !receivers.contains(&source) {
+                receivers.push(source);
+            }
+        }
+    }
+    let mut existing: BTreeMap<String, Vec<ValidatedCallable>> = BTreeMap::new();
+    let mut receiver_known_empty = false;
+    for receiver in &receivers {
+        for (place, callable) in &state.authoritative_callables {
+            let Some((_, rest)) = container_element_key_and_suffix(place, receiver) else {
+                continue;
+            };
+            if callable_container_is_empty_marker(callable) && rest.is_empty() {
+                receiver_known_empty = true;
+                continue;
+            }
+            existing
+                .entry(rest.to_owned())
+                .or_default()
+                .push(callable.clone());
+        }
+    }
+    if field == "clear" {
+        return Ok(Some(ContainerMutation {
+            receivers,
+            replacements: vec![(
+                format!(".{ANY_ELEMENT_PROJECTION}"),
+                ValidatedCallable {
+                    function: None,
+                    signature: Type::named(EMPTY_CONTAINER_MARKER),
+                },
+            )],
+        }));
+    }
+    let mut incoming: BTreeMap<String, Vec<ValidatedCallable>> = BTreeMap::new();
+    if inserts_operand {
+        let Some(operand) = inserted_operand else {
+            let replacements = existing
+                .keys()
+                .map(|rest| {
+                    (
+                        format!(".{ANY_ELEMENT_PROJECTION}{rest}"),
+                        unknown_validated_callable(),
+                    )
+                })
+                .collect();
+            return Ok(Some(ContainerMutation {
+                receivers,
+                replacements,
+            }));
+        };
+        let whole_container = matches!(field.as_str(), "extend" | "update");
+        match &operand.value {
+            Operand::Function { name, signature } => {
+                incoming
+                    .entry(String::new())
+                    .or_default()
+                    .push(ValidatedCallable {
+                        function: Some(name.clone()),
+                        signature: (**signature).clone(),
+                    });
+            }
+            Operand::Place(place) | Operand::MovePlace(place) if whole_container => {
+                for (source, callable) in &state.authoritative_callables {
+                    let Some((_, rest)) = container_element_key_and_suffix(source, place) else {
+                        continue;
+                    };
+                    if callable_container_is_empty_marker(callable) && rest.is_empty() {
+                        // Extending with a provably empty container changes
+                        // nothing; record neutrality so nothing is poisoned.
+                        incoming
+                            .entry(String::new())
+                            .or_default()
+                            .push(callable.clone());
+                        continue;
+                    }
+                    incoming
+                        .entry(rest.to_owned())
+                        .or_default()
+                        .push(callable.clone());
+                }
+            }
+            Operand::Place(place) | Operand::MovePlace(place) => {
+                for (rest, callable) in rebase_authoritative_callables(place, "", state) {
+                    incoming.entry(rest).or_default().push(callable);
+                }
+            }
+            _ => {}
+        }
+        let operand_type_may_hold_callable = matches!(
+            &operand.value,
+            Operand::Place(_) | Operand::MovePlace(_) | Operand::Function { .. }
+        );
+        if incoming.is_empty() && operand_type_may_hold_callable && !existing.is_empty() {
+            // The inserted element has no authoritative identity: every
+            // element position is poisoned rather than attributed to a
+            // stale identity or forgotten.
+            let replacements = existing
+                .keys()
+                .map(|rest| {
+                    (
+                        format!(".{ANY_ELEMENT_PROJECTION}{rest}"),
+                        unknown_validated_callable(),
+                    )
+                })
+                .collect();
+            return Ok(Some(ContainerMutation {
+                receivers,
+                replacements,
+            }));
+        }
+    }
+    let incoming_is_neutral = !incoming.is_empty()
+        && incoming
+            .values()
+            .flatten()
+            .all(callable_container_is_empty_marker);
+    if incoming_is_neutral {
+        incoming.clear();
+    }
+    let suffixes = existing
+        .keys()
+        .chain(incoming.keys())
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let mut replacements = Vec::new();
+    for rest in suffixes {
+        let callable = match (existing.get(&rest), incoming.get(&rest)) {
+            (Some(kept), Some(added)) => merge_validated_callables(kept.iter().chain(added)),
+            (Some(kept), None) if incoming.is_empty() => merge_validated_callables(kept.iter()),
+            (None, Some(added)) if existing.is_empty() => merge_validated_callables(added.iter()),
+            _ => unknown_validated_callable(),
+        };
+        replacements.push((format!(".{ANY_ELEMENT_PROJECTION}{rest}"), callable));
+    }
+    if replacements.is_empty() && receiver_known_empty && !inserts_operand {
+        replacements.push((
+            format!(".{ANY_ELEMENT_PROJECTION}"),
+            ValidatedCallable {
+                function: None,
+                signature: Type::named(EMPTY_CONTAINER_MARKER),
+            },
+        ));
+    }
+    Ok(Some(ContainerMutation {
+        receivers,
+        replacements,
+    }))
+}
+
+fn apply_container_mutation(mutation: ContainerMutation, state: &mut ValidatedLoanState) {
+    for receiver in &mutation.receivers {
+        state
+            .authoritative_callables
+            .retain(|place, _| container_element_key_and_suffix(place, receiver).is_none());
+        for (suffix, callable) in &mutation.replacements {
+            state
+                .authoritative_callables
+                .insert(format!("{receiver}{suffix}"), callable.clone());
+        }
+    }
+}
+
+fn validated_mapped_sources(
+    place: &str,
+    state: &ValidatedLoanState,
+    origins_by_place: &BTreeMap<String, std::sync::Arc<[String]>>,
+) -> std::result::Result<Vec<String>, String> {
+    let mut expanded = Vec::new();
+    for source in validated_loan_sources(place, &state.loans)? {
+        let mapped = origins_by_place
+            .iter()
+            .filter_map(|(target, origins)| {
+                (source == *target
+                    || source
+                        .strip_prefix(target)
+                        .is_some_and(|suffix| suffix.starts_with('.')))
+                .then_some((target, origins))
+            })
+            .max_by_key(|(target, _)| target.len());
+        if let Some((target, origins)) = mapped {
+            let suffix = source.strip_prefix(target).unwrap_or_default();
+            for origin in origins.iter() {
+                expanded.push(format!("{origin}{suffix}"));
+            }
+        } else {
+            expanded.push(source);
+        }
+    }
+    expanded.sort();
+    expanded.dedup();
+    Ok(expanded)
 }
 
 fn validate_active_loan_path_budget(
@@ -2382,6 +4956,243 @@ fn validated_loan_has_child(loan: &str, state: &ValidatedLoans) -> bool {
 
 fn validated_loan_is_suspended(loan: &str, state: &ValidatedLoans) -> bool {
     state.get(loan).is_some_and(|loan| loan.mutable) && validated_loan_has_child(loan, state)
+}
+
+fn union_payload_bases(place: &str) -> Vec<(String, usize)> {
+    let segments = place.split('.').collect::<Vec<_>>();
+    segments
+        .iter()
+        .enumerate()
+        .skip(1)
+        .filter_map(|(position, segment)| {
+            union_payload_projection_index(segment)
+                .map(|index| (segments[..position].join("."), index))
+        })
+        .collect()
+}
+
+fn enum_payload_bases(place: &str) -> Vec<(String, String, usize)> {
+    let segments = place.split('.').collect::<Vec<_>>();
+    segments
+        .iter()
+        .enumerate()
+        .skip(1)
+        .filter_map(|(position, segment)| {
+            enum_payload_projection(segment)
+                .map(|(variant, index)| (segments[..position].join("."), variant.to_owned(), index))
+        })
+        .collect()
+}
+
+fn validated_union_tag_fact(
+    place: &str,
+    union_type: &Type,
+    member_index: usize,
+    state: &ValidatedLoanState,
+) -> std::result::Result<ValidatedUnionTagFact, String> {
+    let sources = validated_physical_sources(place, state)?;
+    Ok(ValidatedUnionTagFact {
+        sources: sources.into(),
+        union_type: union_type.clone(),
+        member_index,
+    })
+}
+
+fn validate_active_union_payload_projection(
+    function: &MirFunction,
+    place: &str,
+    context: &MirLoanValidationContext<'_>,
+    state: &ValidatedLoanState,
+) -> std::result::Result<(), String> {
+    for (base, member_index) in union_payload_bases(place) {
+        let sources = validated_physical_sources(&base, state)?;
+        let union_type = context.place_type(function, &base)?;
+        if !state.active_union_tags.iter().any(|fact| {
+            fact.member_index == member_index
+                && fact.sources.as_ref() == sources.as_slice()
+                && union_type.as_ref() == Some(&fact.union_type)
+        }) {
+            return Err(format!(
+                "invalid MIR union payload projection `{place}` in `{}` has no active matching tag proof",
+                function.name
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validated_enum_variant_fact(
+    place: &str,
+    enum_type: &Type,
+    variant_name: &str,
+    state: &ValidatedLoanState,
+) -> std::result::Result<ValidatedEnumVariantFact, String> {
+    let sources = validated_physical_sources(place, state)?;
+    Ok(ValidatedEnumVariantFact {
+        sources: sources.into(),
+        enum_type: enum_type.clone(),
+        variant_name: variant_name.to_owned(),
+    })
+}
+
+fn validate_active_enum_payload_projection(
+    function: &MirFunction,
+    place: &str,
+    context: &MirLoanValidationContext<'_>,
+    state: &ValidatedLoanState,
+) -> std::result::Result<(), String> {
+    for (base, variant_name, _) in enum_payload_bases(place) {
+        let sources = validated_physical_sources(&base, state)?;
+        let enum_type = context.place_type(function, &base)?;
+        if !state.active_enum_variants.iter().any(|fact| {
+            fact.variant_name == variant_name
+                && fact.sources.as_ref() == sources.as_slice()
+                && enum_type.as_ref() == Some(&fact.enum_type)
+        }) {
+            return Err(format!(
+                "invalid MIR enum payload projection `{place}` in `{}` has no active matching variant proof",
+                function.name
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn mir_place_has_payload_projection(place: &str) -> bool {
+    place.split('.').skip(1).any(|segment| {
+        union_payload_projection_index(segment).is_some()
+            || enum_payload_projection(segment).is_some()
+    })
+}
+
+#[derive(Copy, Clone)]
+enum ProjectedPlaceAuthority {
+    Mutable,
+    Owned,
+}
+
+fn validate_projected_place_access(
+    function: &MirFunction,
+    place: &str,
+    context: &MirLoanValidationContext<'_>,
+    state: &ValidatedLoanState,
+    authority: Option<ProjectedPlaceAuthority>,
+) -> std::result::Result<(), String> {
+    validate_active_union_payload_projection(function, place, context, state)?;
+    validate_active_enum_payload_projection(function, place, context, state)?;
+    if !mir_place_has_payload_projection(place) {
+        return match authority {
+            Some(authority) => {
+                validate_resolved_root_authority(function, place, context, state, authority)
+            }
+            None => Ok(()),
+        };
+    }
+    for source in validated_physical_sources(place, state)? {
+        if context.place_type(function, &source)?.is_none() {
+            return Err(format!(
+                "invalid MIR payload projection `{place}` in `{}` has no concrete payload layout",
+                function.name
+            ));
+        }
+    }
+    let Some(authority) = authority else {
+        return Ok(());
+    };
+    validate_resolved_root_authority(function, place, context, state, authority)
+}
+
+fn validate_resolved_root_authority(
+    function: &MirFunction,
+    place: &str,
+    context: &MirLoanValidationContext<'_>,
+    state: &ValidatedLoanState,
+    authority: ProjectedPlaceAuthority,
+) -> std::result::Result<(), String> {
+    if matches!(authority, ProjectedPlaceAuthority::Owned)
+        && place_has_borrowed_value_origin(place, state)
+    {
+        return Err(format!(
+            "invalid MIR payload projection `{place}` in `{}` requires owned authority over a borrowed value",
+            function.name
+        ));
+    }
+    for source in validated_authority_sources(place, state)? {
+        let root = source.split('.').next().unwrap_or_default();
+        let allowed = match authority {
+            ProjectedPlaceAuthority::Mutable => context.root_allows_mutable_loan(function, root),
+            ProjectedPlaceAuthority::Owned => context.root_allows_owned_take(function, root),
+        };
+        if !allowed {
+            let required = match authority {
+                ProjectedPlaceAuthority::Mutable => "mutable authority",
+                ProjectedPlaceAuthority::Owned => "owned authority",
+            };
+            return Err(format!(
+                "invalid MIR payload projection `{place}` in `{}` requires {required} over root `{root}`",
+                function.name
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn invalidate_union_facts_for_place(place: &str, state: &mut ValidatedLoanState) {
+    let resolved =
+        validated_loan_sources(place, &state.loans).unwrap_or_else(|_| vec![place.to_owned()]);
+    state.active_union_tags.retain(|fact| {
+        !fact.sources.iter().any(|source| {
+            resolved.iter().any(|changed| {
+                // Writing inside the proven payload cannot change the tag:
+                // a narrowed compound assignment keeps its proof.
+                let inside_payload = changed
+                    .strip_prefix(source.as_str())
+                    .and_then(|rest| rest.strip_prefix('.'))
+                    .is_some_and(|rest| {
+                        rest.strip_prefix(UNION_PAYLOAD_PROJECTION_PREFIX)
+                            .and_then(|index| {
+                                index
+                                    .split('.')
+                                    .next()
+                                    .and_then(|index| index.parse::<usize>().ok())
+                            })
+                            == Some(fact.member_index)
+                    });
+                mir_place_paths_overlap(source, changed) && !inside_payload
+            })
+        })
+    });
+    state.active_enum_variants.retain(|fact| {
+        !fact.sources.iter().any(|source| {
+            resolved
+                .iter()
+                .any(|changed| mir_place_paths_overlap(source, changed))
+        })
+    });
+    state.taken_enum_payloads.retain(|taken| {
+        !taken.sources.iter().any(|source| {
+            resolved
+                .iter()
+                .any(|changed| mir_place_paths_overlap(source, changed))
+        })
+    });
+    state.derived_value_origins.retain(|target, _| {
+        !resolved
+            .iter()
+            .any(|changed| mir_place_paths_overlap(target, changed))
+    });
+    let overwritten = |target: &str, changed: &str| {
+        target == changed
+            || target
+                .strip_prefix(changed)
+                .is_some_and(|suffix| suffix.starts_with('.'))
+    };
+    state
+        .borrowed_value_origins
+        .retain(|target, _| !resolved.iter().any(|changed| overwritten(target, changed)));
+    state
+        .task_borrowed_closures
+        .retain(|target| !resolved.iter().any(|changed| overwritten(target, changed)));
 }
 
 fn validated_loan_has_returned_ancestor(loan: &str, state: &ValidatedLoans) -> bool {
@@ -2497,6 +5308,28 @@ fn validate_canonical_mir_place(
     let mut segments = place.split('.');
     validate_canonical_mir_identifier(function, segments.next().unwrap_or_default(), true)?;
     for segment in segments {
+        if segment == ANY_ELEMENT_PROJECTION || segment == TASK_RESULT_PROJECTION {
+            return Err(format!(
+                "non-canonical MIR place segment `{segment}` in `{place}` in `{}`",
+                function.name
+            ));
+        }
+        if segment.starts_with(UNION_PAYLOAD_PROJECTION_PREFIX)
+            && union_payload_projection_index(segment).is_none()
+        {
+            return Err(format!(
+                "non-canonical MIR union payload projection `{segment}` in `{place}` in `{}`",
+                function.name
+            ));
+        }
+        if segment.starts_with(ENUM_PAYLOAD_PROJECTION_PREFIX)
+            && enum_payload_projection(segment).is_none()
+        {
+            return Err(format!(
+                "non-canonical MIR enum payload projection `{segment}` in `{place}` in `{}`",
+                function.name
+            ));
+        }
         if segment.bytes().all(|byte| byte.is_ascii_digit()) {
             let canonical = segment
                 .parse::<usize>()
@@ -2585,18 +5418,88 @@ fn validate_loan_place_access(
     Ok(())
 }
 
+fn validate_checked_loan_place_access(
+    function: &MirFunction,
+    place: &str,
+    access: LoanPlaceAccess,
+    context: &MirLoanValidationContext<'_>,
+    state: &ValidatedLoanState,
+    projected_authority: Option<ProjectedPlaceAuthority>,
+) -> std::result::Result<(), String> {
+    let authority = projected_authority.or(match access {
+        LoanPlaceAccess::Read => None,
+        LoanPlaceAccess::Mutate => Some(ProjectedPlaceAuthority::Mutable),
+        LoanPlaceAccess::Move => Some(ProjectedPlaceAuthority::Owned),
+    });
+    let projected_or_explicit_authority = (projected_authority.is_some()
+        || mir_place_has_payload_projection(place))
+    .then_some(authority)
+    .flatten();
+    validate_projected_place_access(
+        function,
+        place,
+        context,
+        state,
+        if matches!(
+            projected_or_explicit_authority,
+            Some(ProjectedPlaceAuthority::Owned)
+        ) {
+            None
+        } else {
+            projected_or_explicit_authority
+        },
+    )?;
+    validate_loan_place_access(function, place, access, state)?;
+    if matches!(authority, Some(ProjectedPlaceAuthority::Owned)) {
+        validate_resolved_root_authority(
+            function,
+            place,
+            context,
+            state,
+            ProjectedPlaceAuthority::Owned,
+        )?;
+    }
+    Ok(())
+}
+
 fn validate_loan_operand(
     function: &MirFunction,
     operand: &Operand,
-    _context: &MirLoanValidationContext<'_>,
-    state: &ValidatedLoanState,
+    context: &MirLoanValidationContext<'_>,
+    state: &mut ValidatedLoanState,
 ) -> std::result::Result<(), String> {
     match operand {
-        Operand::Place(place) => {
-            validate_loan_place_access(function, place, LoanPlaceAccess::Read, state)
-        }
+        Operand::Place(place) => validate_checked_loan_place_access(
+            function,
+            place,
+            LoanPlaceAccess::Read,
+            context,
+            state,
+            None,
+        ),
         Operand::MovePlace(place) => {
-            validate_loan_place_access(function, place, LoanPlaceAccess::Move, state)
+            let task_borrowed_closure = place_has_task_borrowed_closure(place, state);
+            validate_checked_loan_place_access(
+                function,
+                place,
+                LoanPlaceAccess::Move,
+                context,
+                state,
+                None,
+            )?;
+            if matches!(context.place_type(function, place)?, Some(Type::Union(_))) {
+                for source in validated_loan_sources(place, &state.loans)? {
+                    state.taken_union_places.insert(source);
+                }
+            }
+            invalidate_union_facts_for_place(place, state);
+            if task_borrowed_closure {
+                state.task_borrowed_closures.insert(place.clone());
+            }
+            Ok(())
+        }
+        Operand::Function { name, signature } => {
+            context.validate_named_function_operand(function, name, signature)
         }
         _ => Ok(()),
     }
@@ -2606,32 +5509,339 @@ fn validate_loan_rvalue(
     function: &MirFunction,
     value: &Rvalue,
     context: &MirLoanValidationContext<'_>,
-    state: &ValidatedLoanState,
+    state: &mut ValidatedLoanState,
 ) -> std::result::Result<(), String> {
-    let operands = |values: &[Operand]| -> std::result::Result<(), String> {
+    let mut operands = |values: &[Operand]| -> std::result::Result<(), String> {
         for value in values {
             validate_loan_operand(function, value, context, state)?;
         }
         Ok(())
     };
     match value {
+        Rvalue::NoneTest { value } => operands(std::slice::from_ref(value)),
+        Rvalue::UnionTagTest {
+            place,
+            union_type,
+            member_index,
+        } => {
+            let Type::Union(union) = union_type else {
+                return Err("invalid MIR union tag test requires a union type".to_owned());
+            };
+            if union.members.get(*member_index).is_none() {
+                return Err("invalid MIR union tag test member index is out of bounds".to_owned());
+            }
+            context.union_plan(function, union_type)?;
+            if context.place_type(function, place)?.as_ref() != Some(union_type) {
+                return Err(format!(
+                    "invalid MIR union tag test in `{}` does not match place `{place}` type",
+                    function.name
+                ));
+            }
+            validate_checked_loan_place_access(
+                function,
+                place,
+                LoanPlaceAccess::Read,
+                context,
+                state,
+                None,
+            )
+        }
+        Rvalue::UnionTakePayload {
+            place,
+            union_type,
+            member_type,
+            member_index,
+        } => {
+            let Type::Union(union) = union_type else {
+                return Err("invalid MIR union payload take requires a union type".to_owned());
+            };
+            if union.members.get(*member_index) != Some(member_type) {
+                return Err(
+                    "invalid MIR union payload take member index and type disagree".to_owned(),
+                );
+            }
+            context.union_plan(function, union_type)?;
+            if context.place_type(function, place)?.as_ref() != Some(union_type) {
+                return Err(format!(
+                    "invalid MIR union payload take in `{}` does not match place `{place}` type",
+                    function.name
+                ));
+            }
+            validate_projected_place_access(function, place, context, state, None)?;
+            let resolved_sources = validated_loan_sources(place, &state.loans)?;
+            if resolved_sources
+                .iter()
+                .any(|source| state.taken_union_places.contains(source))
+            {
+                return Err(format!(
+                    "invalid MIR union payload take from `{place}` in `{}` consumes an already-taken union place",
+                    function.name
+                ));
+            }
+            let fact = validated_union_tag_fact(place, union_type, *member_index, state)?;
+            if !state.active_union_tags.contains(&fact) {
+                return Err(format!(
+                    "invalid MIR union payload take from `{place}` in `{}` has no active matching tag proof",
+                    function.name
+                ));
+            }
+            validate_checked_loan_place_access(
+                function,
+                place,
+                LoanPlaceAccess::Move,
+                context,
+                state,
+                None,
+            )
+        }
+        Rvalue::UnionInject {
+            value,
+            union_type,
+            member_type,
+            member_index,
+        } => {
+            let Type::Union(union) = union_type else {
+                return Err("invalid MIR union injection requires a union type".to_owned());
+            };
+            if union.members.get(*member_index) != Some(member_type) {
+                return Err("invalid MIR union injection member index and type disagree".to_owned());
+            }
+            context.union_plan(function, union_type)?;
+            let actual = context.operand_type(function, value)?;
+            let literal_matches = match value {
+                Operand::Int(magnitude) => match crate::sema::integer_type_bounds(member_type) {
+                    Some(crate::integer::IntegerBounds::Signed { max, .. }) => {
+                        *magnitude <= max as u128
+                    }
+                    Some(crate::integer::IntegerBounds::Unsigned { max }) => *magnitude <= max,
+                    None => false,
+                },
+                Operand::Float(_) => {
+                    matches!(member_type, Type::Named(name, args) if args.is_empty() && matches!(name.as_str(), "float32" | "float64"))
+                }
+                _ => false,
+            };
+            if !literal_matches && actual.as_ref() != Some(member_type) {
+                return Err(
+                    "invalid MIR union injection operand does not have its selected member type"
+                        .to_owned(),
+                );
+            }
+            validate_loan_operand(function, value, context, state)
+        }
         Rvalue::Use(value)
         | Rvalue::Unary { value, .. }
         | Rvalue::Cast { value, .. }
         | Rvalue::Try { value }
-        | Rvalue::TupleElement { tuple: value, .. }
-        | Rvalue::VariantPayload {
-            scrutinee: value, ..
-        } => validate_loan_operand(function, value, context, state),
+        | Rvalue::TupleElement { tuple: value, .. } => {
+            validate_loan_operand(function, value, context, state)
+        }
+        Rvalue::VariantPayload {
+            scrutinee,
+            variant_name,
+            index,
+        } => {
+            let place = match scrutinee {
+                Operand::Place(place) | Operand::MovePlace(place) => place,
+                _ => {
+                    return Err(format!(
+                        "invalid MIR variant payload in `{}` requires a place scrutinee",
+                        function.name
+                    ))
+                }
+            };
+            let physical_sources = validated_physical_sources(place, state)?;
+            let enum_type = match context.operand_type(function, scrutinee)? {
+                Some(enum_type) => enum_type,
+                None => {
+                    let mut matching = state.active_enum_variants.iter().filter(|fact| {
+                        fact.variant_name == *variant_name
+                            && fact.sources.as_ref() == physical_sources.as_slice()
+                    });
+                    let fact = matching.next().ok_or_else(|| {
+                        format!(
+                            "invalid MIR variant payload from `{place}` in `{}` has no active matching variant proof",
+                            function.name
+                        )
+                    })?;
+                    if matching.next().is_some() {
+                        return Err(format!(
+                            "invalid MIR variant payload from `{place}` in `{}` has ambiguous enum metadata",
+                            function.name
+                        ));
+                    }
+                    fact.enum_type.clone()
+                }
+            };
+            let Type::Named(enum_name, args) = &enum_type else {
+                return Err(format!(
+                    "invalid MIR variant payload in `{}` requires an enum scrutinee",
+                    function.name
+                ));
+            };
+            if let Some(enum_decl) = context.enums.get(enum_name.as_str()) {
+                if args.len() != enum_decl.type_params.len() {
+                    return Err(format!(
+                        "invalid MIR variant payload in `{}` uses enum `{enum_name}` with incorrect type arity",
+                        function.name
+                    ));
+                }
+                let variant = enum_decl
+                    .variants
+                    .iter()
+                    .find(|variant| variant.name == *variant_name)
+                    .ok_or_else(|| {
+                        format!(
+                            "invalid MIR variant payload in `{}` names unknown variant `{variant_name}` of `{enum_name}`",
+                            function.name
+                        )
+                    })?;
+                if variant.payloads.get(*index).is_none() {
+                    return Err(format!(
+                        "invalid MIR variant payload `{variant_name}` index {index} in `{}` is out of bounds",
+                        function.name
+                    ));
+                }
+            } else if context.classes.contains_key(enum_name.as_str()) {
+                return Err(format!(
+                    "invalid MIR variant payload in `{}` requires an enum scrutinee",
+                    function.name
+                ));
+            }
+            let fact = validated_enum_variant_fact(place, &enum_type, variant_name, state)?;
+            if !state.active_enum_variants.contains(&fact) {
+                return Err(format!(
+                    "invalid MIR variant payload from `{place}` in `{}` has no active matching variant proof",
+                    function.name
+                ));
+            }
+            let destructive = matches!(scrutinee, Operand::MovePlace(_));
+            let taken = destructive.then(|| ValidatedTakenEnumPayload {
+                sources: fact.sources.clone(),
+                enum_type: enum_type.clone(),
+                variant_name: variant_name.clone(),
+                index: *index,
+            });
+            if taken
+                .as_ref()
+                .is_some_and(|taken| state.taken_enum_payloads.contains(taken))
+            {
+                return Err(format!(
+                    "invalid MIR variant payload `{variant_name}` index {index} from `{place}` in `{}` consumes an already-taken enum payload",
+                    function.name
+                ));
+            }
+            validate_checked_loan_place_access(
+                function,
+                place,
+                if destructive {
+                    LoanPlaceAccess::Move
+                } else {
+                    LoanPlaceAccess::Read
+                },
+                context,
+                state,
+                None,
+            )?;
+            if let Some(taken) = taken {
+                state.taken_enum_payloads.push(taken);
+            }
+            Ok(())
+        }
         Rvalue::Member { object, field } => {
             validate_canonical_mir_identifier(function, field, false)?;
             validate_loan_operand(function, object, context, state)
         }
         Rvalue::ModuleConstant { .. } => Ok(()),
-        Rvalue::Closure { captures, .. } => {
-            for capture in captures {
+        Rvalue::Closure {
+            function: closure_function,
+            signature,
+            captures,
+            consuming,
+            mutable,
+        } => {
+            let declaration = context
+                .functions
+                .get(closure_function.as_str())
+                .ok_or_else(|| {
+                    format!(
+                        "invalid MIR closure in `{}` names unknown function `{closure_function}`",
+                        function.name
+                    )
+                })?;
+            let (exposed_params, return_type) = match signature {
+                Type::Function {
+                    params,
+                    return_type,
+                } => (params.as_slice(), return_type.as_ref()),
+                Type::Closure {
+                    params,
+                    return_type,
+                    ..
+                } => (params.as_slice(), return_type.as_ref()),
+                _ => {
+                    return Err(format!(
+                        "invalid MIR closure `{closure_function}` in `{}` has a non-function signature",
+                        function.name
+                    ));
+                }
+            };
+            // A closure whose contract returns a view of one exposed parameter
+            // (C9) must be backed by a declaration that returns exactly that
+            // view: same origin (offset by the hidden captures), mutability,
+            // and pointee.
+            let declared_view = context.returned_views.get(closure_function.as_str());
+            let return_contract_matches = match (return_type, declared_view) {
+                (Type::ReturnedView(view), Some(contract)) => {
+                    contract.mutable == view.mutable
+                        && matches!(
+                            contract.origin,
+                            ReturnedViewOriginSlot::Param(index)
+                                if index == captures.len() + view.origin
+                        )
+                        && declaration.return_type == view.pointee
+                }
+                (Type::ReturnedView(_), None) | (_, Some(_)) => false,
+                (other, None) => declaration.return_type == *other,
+            };
+            if !return_contract_matches
+                || declaration.params.len() != captures.len() + exposed_params.len()
+                || declaration
+                    .params
+                    .iter()
+                    .skip(captures.len())
+                    .zip(exposed_params)
+                    .any(|(param, contract)| {
+                        param.ty != contract.ty
+                            || lower_receiver_kind(contract.passing) != param.passing
+                            || contract.name != param.name
+                            || contract.keyword_only != param.keyword_only
+                            || contract.has_default != param.default_function.is_some()
+                    })
+            {
+                return Err(format!(
+                    "invalid MIR closure `{closure_function}` in `{}` changes its declared callable contract",
+                    function.name
+                ));
+            }
+            for (capture_index, capture) in captures.iter().enumerate() {
                 validate_canonical_mir_identifier(function, &capture.name, true)?;
                 validate_loan_operand(function, &capture.value, context, state)?;
+                if let Some(param) = declaration.params.get(capture_index) {
+                    context.validate_callable_argument_contract(
+                        function,
+                        &param.ty,
+                        &capture.value,
+                        state,
+                    )?;
+                    context.validate_callable_identities_against_type(
+                        function,
+                        &param.ty,
+                        &capture.value,
+                        state,
+                        "closure capture",
+                    )?;
+                }
                 match capture.passing {
                     MirReceiverKind::Value => {
                         if capture.resolve_source_at_capture {
@@ -2645,6 +5855,28 @@ fn validate_loan_rvalue(
                                 "invalid MIR value closure capture `{}` in `{}` has a borrowed source place",
                                 capture.name, function.name
                             ));
+                        }
+                        if context.type_is_definitely_noncopy(&capture.ty) {
+                            // A repeatable closure owns its by-value captures but
+                            // must read them on every call; a body that moves a
+                            // non-Copy capture would consume it on the first call.
+                            if !*consuming && function_body_moves_root(declaration, &capture.name) {
+                                return Err(format!(
+                                    "invalid MIR repeatable closure capture `{}` in `{}` is consumed by the closure body",
+                                    capture.name, function.name
+                                ));
+                            }
+                            if let Operand::Place(place) | Operand::MovePlace(place) =
+                                &capture.value
+                            {
+                                validate_resolved_root_authority(
+                                    function,
+                                    place,
+                                    context,
+                                    state,
+                                    ProjectedPlaceAuthority::Owned,
+                                )?;
+                            }
                         }
                     }
                     MirReceiverKind::Borrow | MirReceiverKind::BorrowMut => {
@@ -2710,15 +5942,56 @@ fn validate_loan_rvalue(
                             ));
                         }
                         if source == captured_place {
-                            validate_loan_place_access(
+                            validate_checked_loan_place_access(
                                 function,
                                 source,
                                 LoanPlaceAccess::Read,
+                                context,
                                 state,
+                                None,
                             )?;
                         }
                     }
                 }
+            }
+            if declaration
+                .params
+                .iter()
+                .take(captures.len())
+                .zip(captures)
+                .any(|(param, capture)| {
+                    // An environment-owned capture the body mutates is
+                    // passed by value into the environment and taken mutably
+                    // by the closure function on every call (C2).
+                    let passing_matches = param.passing == capture.passing
+                        || (capture.mutated
+                            && capture.passing == MirReceiverKind::Value
+                            && param.passing == MirReceiverKind::BorrowMut);
+                    param.name != capture.name
+                        || !passing_matches
+                        || param.ty != capture.ty && !matches!(capture.ty, Type::TypeParam(_))
+                })
+            {
+                return Err(format!(
+                    "invalid MIR closure `{closure_function}` in `{}` changes its declared callable contract",
+                    function.name
+                ));
+            }
+            // The rvalue's kind bits are the validator's authoritative call
+            // kind. A closure whose declaration takes any capture mutably
+            // (a mutated environment-owned capture or a mutable loan) is at
+            // least Mutable; claiming Repeatable would let shared storage
+            // mutate the environment (C2, C6).
+            let takes_capture_mutably = declaration
+                .params
+                .iter()
+                .take(captures.len())
+                .any(|param| param.passing == MirReceiverKind::BorrowMut);
+            if takes_capture_mutably && !*mutable && !*consuming {
+                return Err(format!(
+                    "invalid MIR closure `{closure_function}` in `{}` hides its mutable captures behind a Repeatable kind",
+                    function.name
+                ));
             }
             Ok(())
         }
@@ -2743,12 +6016,113 @@ fn validate_loan_rvalue(
             if let Some(stack_size) = stack_size {
                 validate_loan_operand(function, stack_size, context, state)?;
             }
+            if let Operand::Function { name, signature } = task_function {
+                context.validate_named_function_operand(function, name, signature)?;
+            }
             validate_loan_operand(function, task_group, context, state)?;
             validate_loan_operand(function, task_function, context, state)?;
+            if let Operand::Place(place) | Operand::MovePlace(place) = task_function {
+                if place_has_task_borrowed_closure(place, state) {
+                    return Err(format!(
+                        "invalid MIR task closure `{place}` in `{}` requires owned authority and cannot outlive a borrowed capture",
+                        function.name
+                    ));
+                }
+            }
             for arg in args {
                 validate_loan_operand(function, &arg.value, context, state)?;
                 if let Some(place) = &arg.writeback_place {
-                    validate_loan_place_access(function, place, LoanPlaceAccess::Mutate, state)?;
+                    validate_checked_loan_place_access(
+                        function,
+                        place,
+                        LoanPlaceAccess::Mutate,
+                        context,
+                        state,
+                        None,
+                    )?;
+                }
+            }
+            if let Operand::Function { name, .. } = task_function {
+                if let Some(callee) = context.functions.get(name.as_str()) {
+                    context.validate_owned_call_args(function, callee, args, state)?;
+                }
+            } else {
+                let authoritative = match task_function {
+                    Operand::Place(place) | Operand::MovePlace(place) => {
+                        state.authoritative_callables.get(place)
+                    }
+                    _ => None,
+                };
+                if let Some(callable) = authoritative {
+                    if let Some(name) = callable.function.as_deref() {
+                        let callee = context.functions.get(name).ok_or_else(|| {
+                            format!(
+                                "invalid MIR task call in `{}` names unknown function `{name}`",
+                                function.name
+                            )
+                        })?;
+                        context.validate_owned_call_args(function, callee, args, state)?;
+                    } else {
+                        match &callable.signature {
+                            Type::Function { params, .. } => context
+                                .validate_owned_typed_call_args(function, params, args, state)?,
+                            Type::Closure { params, .. } => context
+                                .validate_owned_typed_call_args(
+                                    function,
+                                    params.as_ref(),
+                                    args,
+                                    state,
+                                )?,
+                            Type::Callable(callable) => {
+                                // A stored target must carry the Transfer
+                                // proof of a `TaskCallable`; an ordinary
+                                // erased callable hides its environment (C8).
+                                if !callable.task {
+                                    return Err(format!(
+                                        "invalid MIR task call in `{}` starts an erased callable without a Transfer proof",
+                                        function.name
+                                    ));
+                                }
+                                context.validate_owned_typed_call_args(
+                                    function,
+                                    &callable.params,
+                                    args,
+                                    state,
+                                )?
+                            }
+                            _ => {
+                                return Err(format!(
+                                    "invalid MIR task call in `{}` has no authoritative callable contract",
+                                    function.name
+                                ));
+                            }
+                        }
+                        if matches!(
+                            callable.signature,
+                            Type::Closure {
+                                call_kind: ClosureCallKind::Consuming,
+                                ..
+                            }
+                        ) {
+                            if let Operand::Place(place) | Operand::MovePlace(place) = task_function
+                            {
+                                validate_resolved_root_authority(
+                                    function,
+                                    place,
+                                    context,
+                                    state,
+                                    ProjectedPlaceAuthority::Owned,
+                                )?;
+                            }
+                        }
+                    }
+                } else {
+                    // A callable place without an authoritative identity cannot be
+                    // called: declared local metadata is not evidence of its contract.
+                    return Err(format!(
+                        "invalid MIR task call in `{}` has no authoritative callable contract",
+                        function.name
+                    ));
                 }
             }
             Ok(())
@@ -2781,6 +6155,14 @@ fn validate_loan_rvalue(
                         Operand::Place(place) | Operand::MovePlace(place) => Some(place.as_str()),
                         _ => None,
                     };
+                    if operand_place
+                        .is_some_and(|place| place_has_task_borrowed_closure(place, state))
+                    {
+                        return Err(format!(
+                            "invalid MIR member call `{field}` in `{}` passes a borrowed closure capture across a receiver boundary",
+                            function.name
+                        ));
+                    }
                     if let (Some(receiver_place), Some(operand_place)) =
                         (receiver_place.as_deref(), operand_place)
                     {
@@ -2811,8 +6193,24 @@ fn validate_loan_rvalue(
                             ));
                         }
                     }
+                    if receiver_passing == Some(MirReceiverKind::Value) {
+                        if let Operand::Place(place) = object {
+                            if context
+                                .operand_type(function, object)?
+                                .is_some_and(|ty| context.type_is_definitely_noncopy(&ty))
+                            {
+                                validate_resolved_root_authority(
+                                    function,
+                                    place,
+                                    context,
+                                    state,
+                                    ProjectedPlaceAuthority::Owned,
+                                )?;
+                            }
+                        }
+                    }
                     if let Some(place) = receiver_place.as_deref().or(operand_place) {
-                        validate_loan_place_access(
+                        validate_checked_loan_place_access(
                             function,
                             place,
                             if receiver_passing == Some(MirReceiverKind::BorrowMut) {
@@ -2820,7 +6218,9 @@ fn validate_loan_rvalue(
                             } else {
                                 LoanPlaceAccess::Read
                             },
+                            context,
                             state,
+                            None,
                         )?;
                     }
                 }
@@ -2828,10 +6228,126 @@ fn validate_loan_rvalue(
             for arg in args {
                 validate_loan_operand(function, &arg.value, context, state)?;
                 if let Some(place) = &arg.writeback_place {
-                    validate_loan_place_access(function, place, LoanPlaceAccess::Mutate, state)?;
+                    validate_checked_loan_place_access(
+                        function,
+                        place,
+                        LoanPlaceAccess::Mutate,
+                        context,
+                        state,
+                        None,
+                    )?;
                 }
             }
             let _ = context.pending_call(function, callee, args)?;
+            match callee {
+                CallTarget::Name(name) => {
+                    if let Some(callee) = context.functions.get(name.as_str()) {
+                        context.validate_owned_call_args(function, callee, args, state)?;
+                    }
+                }
+                CallTarget::Value(Operand::Function { name, .. }) => {
+                    if let Some(callee) = context.functions.get(name.as_str()) {
+                        context.validate_owned_call_args(function, callee, args, state)?;
+                    }
+                }
+                CallTarget::Member { object, field, .. } => {
+                    for callee in
+                        context.member_function_candidates(function, object, None, field)?
+                    {
+                        context.validate_owned_call_args(function, callee, args, state)?;
+                    }
+                }
+                CallTarget::TraitMember {
+                    object,
+                    trait_name,
+                    field,
+                    ..
+                } => {
+                    for callee in context.member_function_candidates(
+                        function,
+                        object,
+                        Some(trait_name),
+                        field,
+                    )? {
+                        context.validate_owned_call_args(function, callee, args, state)?;
+                    }
+                }
+                CallTarget::Value(value) => {
+                    let authoritative = match value {
+                        Operand::Place(place) | Operand::MovePlace(place) => {
+                            state.authoritative_callables.get(place)
+                        }
+                        _ => None,
+                    };
+                    if let Some(callable) = authoritative {
+                        if let Some(name) = callable.function.as_deref() {
+                            let callee = context.functions.get(name).ok_or_else(|| {
+                                    format!("invalid MIR indirect call in `{}` names unknown function `{name}`", function.name)
+                                })?;
+                            context.validate_owned_call_args(function, callee, args, state)?;
+                        } else {
+                            match &callable.signature {
+                                Type::Function { params, .. } => context
+                                    .validate_owned_typed_call_args(
+                                        function, params, args, state,
+                                    )?,
+                                Type::Closure { params, .. } => context
+                                    .validate_owned_typed_call_args(
+                                        function,
+                                        params.as_ref(),
+                                        args,
+                                        state,
+                                    )?,
+                                Type::Callable(callable) => context
+                                    .validate_owned_typed_call_args(
+                                        function,
+                                        &callable.params,
+                                        args,
+                                        state,
+                                    )?,
+                                _ => {
+                                    return Err(format!(
+                                            "invalid MIR indirect call in `{}` has no authoritative callable contract",
+                                            function.name
+                                        ));
+                                }
+                            }
+                            if matches!(
+                                callable.signature,
+                                Type::Closure {
+                                    call_kind: ClosureCallKind::Consuming,
+                                    ..
+                                }
+                            ) {
+                                // A synchronous consuming call needs owned authority
+                                // over the closure value itself. Borrowed captures stay
+                                // loans the body receives as borrowed parameters, so
+                                // they do not forbid the call (only escapes and task
+                                // starts do).
+                                if let Operand::Place(place) | Operand::MovePlace(place) = value {
+                                    validate_resolved_root_authority(
+                                        function,
+                                        place,
+                                        context,
+                                        state,
+                                        ProjectedPlaceAuthority::Owned,
+                                    )?;
+                                }
+                            }
+                        }
+                    } else {
+                        // A callable place without an authoritative identity cannot be
+                        // called: declared local metadata is not evidence of its contract.
+                        return Err(format!(
+                            "invalid MIR indirect call in `{}` has no authoritative callable contract",
+                            function.name
+                        ));
+                    }
+                }
+                CallTarget::Extern(call) => {
+                    context.validate_owned_extern_call_args(function, &call.params, args, state)?;
+                }
+            }
             Ok(())
         }
         Rvalue::VecLiteral { elements, .. }
@@ -2840,9 +6356,14 @@ fn validate_loan_rvalue(
         | Rvalue::EnumVariant {
             payloads: elements, ..
         } => operands(elements),
-        Rvalue::TupleTakeElement { place, .. } => {
-            validate_loan_place_access(function, place, LoanPlaceAccess::Move, state)
-        }
+        Rvalue::TupleTakeElement { place, index, .. } => validate_checked_loan_place_access(
+            function,
+            &format!("{place}.{index}"),
+            LoanPlaceAccess::Move,
+            context,
+            state,
+            None,
+        ),
         Rvalue::MapLiteral { entries, .. } => {
             for entry in entries {
                 validate_loan_operand(function, &entry.key, context, state)?;
@@ -2859,23 +6380,311 @@ fn validate_loan_rvalue(
     }
 }
 
+fn borrowed_noncopy_origins_for_rvalue(
+    function: &MirFunction,
+    target: &str,
+    value: &Rvalue,
+    context: &MirLoanValidationContext<'_>,
+    state: &ValidatedLoanState,
+) -> std::result::Result<Option<std::sync::Arc<[String]>>, String> {
+    let mut candidates = Vec::new();
+    let mut projected_places = Vec::new();
+    let mut origins = Vec::new();
+    let result_must_be_noncopy = matches!(
+        value,
+        Rvalue::Member { .. }
+            | Rvalue::TupleElement { .. }
+            | Rvalue::VariantPayload { .. }
+            | Rvalue::UnionTakePayload { .. }
+            | Rvalue::TupleTakeElement { .. }
+            | Rvalue::Try { .. }
+            | Rvalue::Cast { .. }
+            | Rvalue::Call { .. }
+    );
+    match value {
+        Rvalue::Use(value)
+        | Rvalue::Try { value }
+        | Rvalue::Cast { value, .. }
+        | Rvalue::UnionInject { value, .. } => candidates.push(value),
+        Rvalue::TupleElement {
+            tuple: Operand::Place(place) | Operand::MovePlace(place),
+            index,
+            ..
+        } => projected_places.push(format!("{place}.{index}")),
+        Rvalue::TupleTakeElement { place, index, .. } => {
+            projected_places.push(format!("{place}.{index}"));
+        }
+        Rvalue::Member {
+            object: Operand::Place(place) | Operand::MovePlace(place),
+            field,
+        } => projected_places.push(format!("{place}.{field}")),
+        Rvalue::VecLiteral { elements, .. }
+        | Rvalue::SetLiteral { elements, .. }
+        | Rvalue::EnumVariant {
+            payloads: elements, ..
+        } => candidates.extend(elements),
+        Rvalue::MapLiteral { entries, .. } => {
+            for entry in entries {
+                candidates.extend([&entry.key, &entry.value]);
+            }
+        }
+        Rvalue::Construct { fields, .. } => {
+            candidates.extend(fields.iter().map(|field| &field.value));
+        }
+        Rvalue::Closure { captures, .. } => {
+            candidates.extend(
+                captures
+                    .iter()
+                    .filter(|capture| capture.passing == MirReceiverKind::Value)
+                    .map(|capture| &capture.value),
+            );
+        }
+        Rvalue::VariantPayload {
+            scrutinee: Operand::Place(place) | Operand::MovePlace(place),
+            variant_name,
+            index,
+        } => projected_places.push(format!(
+            "{place}.{ENUM_PAYLOAD_PROJECTION_PREFIX}{variant_name}_{index}"
+        )),
+        Rvalue::UnionTakePayload {
+            place,
+            member_index,
+            ..
+        } => projected_places.push(format!(
+            "{place}.{UNION_PAYLOAD_PROJECTION_PREFIX}{member_index}"
+        )),
+        // Ordinary call results are fresh owned values (ADR-0038); only a
+        // builtin element index read can expose a borrowed container's
+        // non-Copy element without cloning or removing it.
+        Rvalue::Call {
+            callee:
+                CallTarget::Member { object, field, .. } | CallTarget::TraitMember { object, field, .. },
+            ..
+        } if field == INTERNAL_VEC_INDEX_FIELD || field == INTERNAL_MAP_INDEX_FIELD => {
+            candidates.push(object);
+        }
+        _ => {}
+    }
+    let result_is_noncopy = if result_must_be_noncopy {
+        context
+            .place_type(function, target)?
+            .is_some_and(|ty| context.type_is_definitely_noncopy(&ty))
+    } else {
+        false
+    };
+    for candidate in candidates {
+        let Operand::Place(place) = candidate else {
+            continue;
+        };
+        let physical = validated_authority_sources(place, state)?;
+        if !place_has_borrowed_value_origin(place, state)
+            && !physical.iter().any(|origin| {
+                let root = origin.split('.').next().unwrap_or_default();
+                !context.root_allows_owned_take(function, root)
+            })
+        {
+            continue;
+        }
+        let operand_is_noncopy = context
+            .operand_type(function, candidate)?
+            .is_some_and(|ty| context.type_is_definitely_noncopy(&ty));
+        if (!matches!(value, Rvalue::Call { .. }) && operand_is_noncopy) || result_is_noncopy {
+            origins.extend(physical);
+        }
+    }
+    for place in projected_places {
+        let physical = validated_authority_sources(&place, state)?;
+        if !place_has_borrowed_value_origin(&place, state)
+            && !physical.iter().any(|origin| {
+                let root = origin.split('.').next().unwrap_or_default();
+                !context.root_allows_owned_take(function, root)
+            })
+        {
+            continue;
+        }
+        let projected_is_noncopy = context
+            .place_type(function, &place)?
+            .is_some_and(|ty| context.type_is_definitely_noncopy(&ty));
+        if projected_is_noncopy || result_is_noncopy {
+            origins.extend(physical);
+        }
+    }
+    origins.sort();
+    origins.dedup();
+    Ok((!origins.is_empty()).then(|| std::sync::Arc::from(origins)))
+}
+
+/// Places written by one rvalue together with the borrowed origins they carry.
+type BorrowedOriginTargets = Vec<(String, std::sync::Arc<[String]>)>;
+
+fn borrowed_noncopy_origin_targets_for_rvalue(
+    function: &MirFunction,
+    target: &str,
+    value: &Rvalue,
+    context: &MirLoanValidationContext<'_>,
+    state: &ValidatedLoanState,
+) -> std::result::Result<BorrowedOriginTargets, String> {
+    if let Rvalue::TupleLiteral { elements, .. } = value {
+        let mut targets = Vec::new();
+        for (index, element) in elements.iter().enumerate() {
+            let element_target = format!("{target}.{index}");
+            if let Some(origins) = borrowed_noncopy_origins_for_rvalue(
+                function,
+                &element_target,
+                &Rvalue::Use(element.clone()),
+                context,
+                state,
+            )? {
+                targets.push((element_target, origins));
+            }
+        }
+        Ok(targets)
+    } else {
+        Ok(
+            borrowed_noncopy_origins_for_rvalue(function, target, value, context, state)?
+                .map(|origins| vec![(target.to_owned(), origins)])
+                .unwrap_or_default(),
+        )
+    }
+}
+
 fn validate_loan_terminator(
     function: &MirFunction,
     terminator: &Terminator,
     context: &MirLoanValidationContext<'_>,
-    state: &ValidatedLoanState,
+    state: &mut ValidatedLoanState,
 ) -> std::result::Result<(), String> {
     match terminator {
-        Terminator::Return(value) => validate_loan_operand(function, value, context, state),
+        Terminator::Return(value) => {
+            validate_loan_operand(function, value, context, state)?;
+            // Lowering leaves a synthetic `Return(Unit)` in the dead
+            // fallthrough block after an exhaustive match; only a value that
+            // could carry a callable is checked against the return contract.
+            if matches!(
+                value,
+                Operand::Place(_) | Operand::MovePlace(_) | Operand::Function { .. }
+            ) {
+                context.validate_callable_value_contract(
+                    function,
+                    &function.return_type,
+                    value,
+                    state,
+                    CallableContractSite::Return,
+                )?;
+                context.validate_callable_identities_against_type(
+                    function,
+                    &function.return_type,
+                    value,
+                    state,
+                    "return",
+                )?;
+            }
+            if let Operand::Place(place) | Operand::MovePlace(place) = value {
+                if place_has_task_borrowed_closure(place, state) {
+                    return Err(format!(
+                        "invalid MIR return `{place}` in `{}` requires owned authority and cannot expose a borrowed closure capture",
+                        function.name
+                    ));
+                }
+            }
+            if let Some((target, _)) = state.borrowed_value_origins.iter().find(|(target, _)| {
+                let root = target.split('.').next().unwrap_or_default();
+                function
+                    .params
+                    .iter()
+                    .any(|param| param.name == root && param.passing == MirReceiverKind::BorrowMut)
+            }) {
+                return Err(format!(
+                    "invalid MIR mutable writeback `{target}` in `{}` requires owned authority and cannot expose a borrowed value",
+                    function.name
+                ));
+            }
+            if let Some(target) = state.task_borrowed_closures.iter().find(|target| {
+                let root = target.split('.').next().unwrap_or_default();
+                function
+                    .params
+                    .iter()
+                    .any(|param| param.name == root && param.passing == MirReceiverKind::BorrowMut)
+            }) {
+                return Err(format!(
+                    "invalid MIR mutable writeback `{target}` in `{}` cannot expose a borrowed closure capture",
+                    function.name
+                ));
+            }
+            if state.pending_handoff != Some(PendingLoanHandoff::OutgoingReturn) {
+                if let Operand::Place(place) = value {
+                    if context.type_is_definitely_noncopy(&function.return_type)
+                        && place_has_borrowed_value_origin(place, state)
+                    {
+                        validate_resolved_root_authority(
+                            function,
+                            place,
+                            context,
+                            state,
+                            ProjectedPlaceAuthority::Owned,
+                        )?;
+                    }
+                }
+            }
+            Ok(())
+        }
         Terminator::Goto(_) | Terminator::Unreachable => Ok(()),
         Terminator::Branch { condition, .. } => {
             validate_loan_operand(function, condition, context, state)
         }
-        Terminator::ForRange { iterable, .. } => {
+        Terminator::ForRange {
+            binding, iterable, ..
+        } => {
+            validate_checked_loan_place_access(
+                function,
+                binding,
+                LoanPlaceAccess::Mutate,
+                context,
+                state,
+                None,
+            )?;
             validate_loan_operand(function, iterable, context, state)
         }
         Terminator::Match { scrutinee, .. } => {
-            validate_loan_operand(function, scrutinee, context, state)
+            validate_loan_operand(function, scrutinee, context, state)?;
+            let Terminator::Match { arms, .. } = terminator else {
+                unreachable!()
+            };
+            if let Some(Type::Named(enum_name, args)) = context.operand_type(function, scrutinee)? {
+                if let Some(enum_decl) = context.enums.get(enum_name.as_str()) {
+                    if args.len() != enum_decl.type_params.len() {
+                        return Err(format!(
+                            "invalid MIR match in `{}` uses enum `{enum_name}` with incorrect type arity",
+                            function.name
+                        ));
+                    }
+                    for arm in arms.iter().filter(|arm| !arm.wildcard) {
+                        if arm.enum_name.as_deref() != Some(enum_name.as_str()) {
+                            return Err(format!(
+                                "invalid MIR match in `{}` has an arm for the wrong enum",
+                                function.name
+                            ));
+                        }
+                        let Some(variant_name) = arm.variant_name.as_deref() else {
+                            return Err(format!(
+                                "invalid MIR match in `{}` has an enum arm without a variant",
+                                function.name
+                            ));
+                        };
+                        if !enum_decl
+                            .variants
+                            .iter()
+                            .any(|variant| variant.name == variant_name)
+                        {
+                            return Err(format!(
+                                "invalid MIR match in `{}` names unknown variant `{variant_name}` of `{enum_name}`",
+                                function.name
+                            ));
+                        }
+                    }
+                }
+            }
+            Ok(())
         }
         Terminator::AssertFail {
             message, captures, ..
@@ -2964,6 +6773,7 @@ fn validate_loan_instruction(
             }
             let sources = vec![source.clone()];
             context.validate_projected_loan_type(function, loan, source)?;
+            validate_projected_place_access(function, source, context, state, None)?;
             validate_active_loan_path_budget(function, loan, state, source.len())?;
             validate_new_loan_overlap(function, loan, &sources, *mutable, None, &state.loans)?;
             state.ended.remove(loan);
@@ -3042,7 +6852,9 @@ fn validate_loan_instruction(
             // is reachable. Narrowing cannot grant access outside the
             // callee's authoritative projection set, while requiring exact
             // equality would reject those legitimate specialized descriptors.
-            if !unique_projections.is_subset(&authoritative_projections) {
+            if authoritative.pointee.is_none()
+                && !unique_projections.is_subset(&authoritative_projections)
+            {
                 return Err(format!(
                     "invalid returned MIR loan `{loan}` in `{}` does not match callee `{}` projection contract",
                     function.name,
@@ -3206,6 +7018,7 @@ fn validate_loan_instruction(
             sources.dedup();
             for source in &sources {
                 context.validate_projected_loan_type(function, loan, source)?;
+                validate_projected_place_access(function, source, context, state, None)?;
             }
             validate_new_loan_overlap(
                 function,
@@ -3243,7 +7056,62 @@ fn validate_loan_instruction(
                     function.name
                 ));
             }
-            validate_loan_place_access(function, target, LoanPlaceAccess::Mutate, state)?;
+            validate_checked_loan_place_access(
+                function,
+                loan,
+                LoanPlaceAccess::Read,
+                context,
+                state,
+                None,
+            )?;
+            validate_checked_loan_place_access(
+                function,
+                target,
+                LoanPlaceAccess::Mutate,
+                context,
+                state,
+                None,
+            )?;
+            let task_borrowed_closure = place_has_task_borrowed_closure(loan, state);
+            let loan_sources = validated_loan_sources(loan, &state.loans)?;
+            let mut grouped: BTreeMap<String, Vec<ValidatedCallable>> = BTreeMap::new();
+            let mut sources_with_identity = BTreeSet::new();
+            for (source_index, source) in loan_sources.iter().enumerate() {
+                for (place, callable) in rebase_authoritative_callables(source, target, state) {
+                    sources_with_identity.insert(source_index);
+                    grouped.entry(place).or_default().push(callable);
+                }
+            }
+            // A returned view may select any of several sources at runtime:
+            // identities merge across sources and a suffix some source lacks
+            // is poisoned.
+            let callable_sources = grouped
+                .into_iter()
+                .map(|(place, callables)| {
+                    let callable = if callables.len() != sources_with_identity.len() {
+                        unknown_validated_callable()
+                    } else {
+                        merge_validated_callables(callables.iter())
+                    };
+                    (place, callable)
+                })
+                .collect::<Vec<_>>();
+            let borrowed_origins = context
+                .place_type(function, target)?
+                .is_some_and(|ty| context.type_is_definitely_noncopy(&ty))
+                .then(|| validated_authority_sources(loan, state))
+                .transpose()?
+                .map(std::sync::Arc::from);
+            invalidate_union_facts_for_place(target, state);
+            if let Some(origins) = borrowed_origins {
+                state.borrowed_value_origins.insert(target.clone(), origins);
+            }
+            if task_borrowed_closure {
+                state.task_borrowed_closures.insert(target.clone());
+            }
+            for (place, callable) in callable_sources {
+                state.authoritative_callables.insert(place, callable);
+            }
         }
         Instruction::WriteLoan { loan, value } => {
             validate_canonical_mir_place(function, loan)?;
@@ -3267,6 +7135,60 @@ fn validate_loan_instruction(
                 ));
             }
             validate_loan_rvalue(function, value, context, state)?;
+            let task_borrowed_closure = rvalue_has_task_borrowed_closure(value, state);
+            let destinations = validated_loan_sources(loan, &state.loans)?;
+            validate_checked_loan_place_access(
+                function,
+                loan,
+                LoanPlaceAccess::Mutate,
+                context,
+                state,
+                None,
+            )?;
+            let destinations_count = destinations.len();
+            for destination in destinations {
+                let callable_writes =
+                    rebase_callable_rvalue(function, value, &destination, context, state);
+                let removed_identities = state
+                    .authoritative_callables
+                    .iter()
+                    .filter(|(place, _)| mir_place_paths_overlap(place, &destination))
+                    .map(|(place, callable)| (place.clone(), callable.clone()))
+                    .collect::<BTreeMap<_, _>>();
+                let borrowed_writes = borrowed_noncopy_origin_targets_for_rvalue(
+                    function,
+                    &destination,
+                    value,
+                    context,
+                    state,
+                )?;
+                invalidate_union_facts_for_place(&destination, state);
+                state
+                    .authoritative_callables
+                    .retain(|place, _| !mir_place_paths_overlap(place, &destination));
+                for (place, origins) in borrowed_writes {
+                    state.borrowed_value_origins.insert(place, origins);
+                }
+                if task_borrowed_closure {
+                    state.task_borrowed_closures.insert(destination);
+                }
+                let multiple_destinations = destinations_count > 1;
+                for (place, callable) in callable_writes {
+                    let merged = if multiple_destinations {
+                        // Only the runtime-selected destination is written;
+                        // every possible destination keeps both identities.
+                        match removed_identities.get(&place) {
+                            Some(previous) => {
+                                merge_validated_callables([previous, &callable].into_iter())
+                            }
+                            None => callable,
+                        }
+                    } else {
+                        callable
+                    };
+                    state.authoritative_callables.insert(place, merged);
+                }
+            }
         }
         Instruction::EndLoan { loan } => {
             if validated_loan_has_child(loan, &state.loans) {
@@ -3309,6 +7231,15 @@ fn validate_loan_instruction(
             }
             let sources = validated_loan_sources(loan, &state.loans)?;
             let origins = validated_loan_sources(origin, &state.loans)?;
+            if sources
+                .iter()
+                .any(|source| mir_place_has_payload_projection(source))
+            {
+                return Err(format!(
+                    "invalid returned MIR loan `{loan}` in `{}` returns an arm-local payload projection",
+                    function.name
+                ));
+            }
             if !sources
                 .iter()
                 .all(|source| validated_source_is_within_origins(source, &origins))
@@ -3332,20 +7263,176 @@ fn validate_loan_instruction(
             state.pending_handoff = Some(PendingLoanHandoff::OutgoingReturn);
         }
         Instruction::Assign { target, value } => {
+            let authoritative_callables =
+                rebase_callable_rvalue(function, value, target, context, state);
+            let container_mutation = container_mutation_callables(value, state)?;
             validate_loan_rvalue(function, value, context, state)?;
-            validate_loan_place_access(function, target, LoanPlaceAccess::Mutate, state)?;
+            let task_borrowed_closure_targets = if let Rvalue::TupleLiteral { elements, .. } = value
+            {
+                elements
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, element)| match element {
+                        Operand::Place(place) | Operand::MovePlace(place)
+                            if place_has_task_borrowed_closure(place, state) =>
+                        {
+                            Some(format!("{target}.{index}"))
+                        }
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+            } else if rvalue_has_task_borrowed_closure(value, state) {
+                vec![target.clone()]
+            } else {
+                Vec::new()
+            };
+            let borrowed_value_origins = borrowed_noncopy_origin_targets_for_rvalue(
+                function, target, value, context, state,
+            )?;
+            let derived_value_origin = if let Rvalue::VariantPayload {
+                scrutinee,
+                variant_name,
+                index,
+            } = value
+            {
+                let place = match scrutinee {
+                    Operand::Place(place) | Operand::MovePlace(place) => place,
+                    _ => unreachable!("validated variant payloads use place operands"),
+                };
+                let mut origins = validated_physical_sources(place, state)?
+                    .into_iter()
+                    .map(|source| {
+                        format!("{source}.{ENUM_PAYLOAD_PROJECTION_PREFIX}{variant_name}_{index}")
+                    })
+                    .collect::<Vec<_>>();
+                origins.sort();
+                origins.dedup();
+                Some(std::sync::Arc::from(origins))
+            } else {
+                None
+            };
+            match value {
+                Rvalue::UnionInject { union_type, .. }
+                    if context.place_type(function, target)?.as_ref() != Some(union_type) =>
+                {
+                    return Err(
+                        "invalid MIR union injection destination does not have its union type"
+                            .to_owned(),
+                    );
+                }
+                Rvalue::UnionTagTest {
+                    place,
+                    union_type,
+                    member_index,
+                } => {
+                    if context.place_type(function, target)?.as_ref() != Some(&Type::named("bool"))
+                    {
+                        return Err(format!(
+                            "invalid MIR union tag test in `{}` must assign to a bool local",
+                            function.name
+                        ));
+                    }
+                    let fact = validated_union_tag_fact(place, union_type, *member_index, state)?;
+                    state.tag_tests.insert(target.clone(), fact);
+                }
+                Rvalue::UnionTakePayload {
+                    place, member_type, ..
+                } => {
+                    if context.place_type(function, target)?.as_ref() != Some(member_type) {
+                        return Err(format!(
+                            "invalid MIR union payload take in `{}` has a destination type mismatch",
+                            function.name
+                        ));
+                    }
+                    // `validate_loan_rvalue` already rejected a take from an
+                    // already-taken place; record the consumed sources here.
+                    for source in validated_loan_sources(place, &state.loans)? {
+                        state.taken_union_places.insert(source);
+                    }
+                    invalidate_union_facts_for_place(place, state);
+                }
+                _ => {}
+            }
+            validate_checked_loan_place_access(
+                function,
+                target,
+                LoanPlaceAccess::Mutate,
+                context,
+                state,
+                None,
+            )?;
+            if !matches!(value, Rvalue::UnionTakePayload { .. })
+                && matches!(context.place_type(function, target)?, Some(Type::Union(_)))
+            {
+                for source in validated_loan_sources(target, &state.loans)? {
+                    state.taken_union_places.remove(&source);
+                }
+            }
+            invalidate_union_facts_for_place(target, state);
+            state
+                .authoritative_callables
+                .retain(|place, _| !mir_place_paths_overlap(place, target));
+            if let Some(origins) = derived_value_origin {
+                state.derived_value_origins.insert(target.clone(), origins);
+            }
+            for (origin_target, origins) in borrowed_value_origins {
+                state.borrowed_value_origins.insert(origin_target, origins);
+            }
+            for task_target in task_borrowed_closure_targets {
+                state.task_borrowed_closures.insert(task_target);
+            }
+            if let Some(mutation) = container_mutation {
+                apply_container_mutation(mutation, state);
+            }
+            for (callable_target, callable) in authoritative_callables {
+                state
+                    .authoritative_callables
+                    .insert(callable_target, callable);
+            }
+            if !matches!(value, Rvalue::UnionTagTest { .. }) {
+                state.tag_tests.remove(target);
+            }
             if let Rvalue::Call { callee, args } = value {
-                state.pending_handoff = Some(PendingLoanHandoff::IncomingCall(
-                    context.pending_call(function, callee, args)?,
-                ));
+                let mut pending = context.pending_call(function, callee, args)?;
+                if pending.returned_view.is_none() {
+                    pending.returned_view =
+                        indirect_returned_view_contract(function, callee, args, state)?;
+                }
+                state.pending_handoff = Some(PendingLoanHandoff::IncomingCall(pending));
             }
         }
         Instruction::Eval { value } => validate_loan_operand(function, value, context, state)?,
         Instruction::PushCleanup { place } => {
-            validate_loan_place_access(function, place, LoanPlaceAccess::Read, state)?;
+            if place_has_borrowed_value_origin(place, state) {
+                return Err(format!(
+                    "invalid MIR cleanup `{place}` in `{}` cannot close a borrowed value",
+                    function.name
+                ));
+            }
+            validate_checked_loan_place_access(
+                function,
+                place,
+                LoanPlaceAccess::Read,
+                context,
+                state,
+                Some(ProjectedPlaceAuthority::Mutable),
+            )?;
         }
         Instruction::PopCleanup { place, .. } => {
-            validate_loan_place_access(function, place, LoanPlaceAccess::Mutate, state)?;
+            if place_has_borrowed_value_origin(place, state) {
+                return Err(format!(
+                    "invalid MIR cleanup `{place}` in `{}` cannot close a borrowed value",
+                    function.name
+                ));
+            }
+            validate_checked_loan_place_access(
+                function,
+                place,
+                LoanPlaceAccess::Mutate,
+                context,
+                state,
+                None,
+            )?;
         }
         Instruction::Safepoint => {}
     }
@@ -3388,21 +7475,14 @@ fn validate_function_loan_flow(
     for local in &function.local_types {
         validate_canonical_mir_identifier(function, &local.name, true)?;
     }
-    let mut blocks = BTreeMap::new();
-    for block in &function.blocks {
-        if blocks.insert(block.label.as_str(), block).is_some() {
-            return Err(format!(
-                "invalid MIR function `{}` has duplicate block label `{}`",
-                function.name, block.label
-            ));
-        }
-    }
-    if !blocks.contains_key(function.entry.as_str()) {
-        return Err(format!(
-            "invalid MIR function `{}` has missing entry block `{}`",
-            function.name, function.entry
-        ));
-    }
+    // Duplicate labels and the entry block were rejected when the context was
+    // built; unreachable blocks are not walked there, so every successor is
+    // still checked here before the flow walk trusts the label index.
+    let blocks = function
+        .blocks
+        .iter()
+        .map(|block| (block.label.as_str(), block))
+        .collect::<BTreeMap<_, _>>();
     for block in &function.blocks {
         for successor in mir_successors(&block.terminator) {
             if !blocks.contains_key(successor) {
@@ -3423,7 +7503,15 @@ fn validate_function_loan_flow(
         known_roots.insert("self".to_string());
     }
     let mut incoming = BTreeMap::<String, ValidatedLoanState>::new();
-    incoming.insert(function.entry.clone(), ValidatedLoanState::default());
+    let mut entry_state = ValidatedLoanState::default();
+    for param in &function.params {
+        for (suffix, callable) in callable_identities_in_type(&param.ty, context) {
+            entry_state
+                .authoritative_callables
+                .insert(format!("{}{suffix}", param.name), callable);
+        }
+    }
+    incoming.insert(function.entry.clone(), entry_state);
     let mut pending = vec![function.entry.clone()];
     let mut budget = ValidatedLoanBudget::default();
     while let Some(label) = pending.pop() {
@@ -3456,7 +7544,7 @@ fn validate_function_loan_flow(
                 function.name
             ));
         }
-        validate_loan_terminator(function, &block.terminator, context, &state)?;
+        validate_loan_terminator(function, &block.terminator, context, &mut state)?;
         if matches!(block.terminator, Terminator::Return(_))
             && context.returned_views.contains_key(function.name.as_str())
             && state.pending_handoff != Some(PendingLoanHandoff::OutgoingReturn)
@@ -3474,16 +7562,105 @@ fn validate_function_loan_flow(
             ));
         }
         for successor in mir_successors(&block.terminator) {
-            if !blocks.contains_key(successor) {
-                return Err(format!(
-                    "invalid MIR function `{}` branches to unknown block `{successor}`",
-                    function.name
-                ));
+            let mut successor_state = state.clone();
+            if let Terminator::Branch {
+                condition: Operand::Place(condition),
+                then_label,
+                else_label,
+            } = &block.terminator
+            {
+                if let Some(fact) = state.tag_tests.get(condition).cloned() {
+                    if successor == then_label {
+                        successor_state
+                            .active_union_tags
+                            .retain(|active| active.sources != fact.sources);
+                        successor_state.active_union_tags.push(fact);
+                    } else if successor == else_label {
+                        successor_state
+                            .active_union_tags
+                            .retain(|active| active != &fact);
+                        // A failed test on a two-member union proves the other
+                        // member, which narrowing relies on for `x is None`
+                        // false edges.
+                        if let Type::Union(union) = &fact.union_type {
+                            if union.members.len() == 2 {
+                                let other = ValidatedUnionTagFact {
+                                    sources: fact.sources.clone(),
+                                    union_type: fact.union_type.clone(),
+                                    member_index: 1 - fact.member_index,
+                                };
+                                successor_state
+                                    .active_union_tags
+                                    .retain(|active| active.sources != other.sources);
+                                successor_state.active_union_tags.push(other);
+                            }
+                        }
+                    }
+                }
+            }
+            if let Terminator::Match {
+                scrutinee: Operand::Place(place) | Operand::MovePlace(place),
+                arms,
+                otherwise,
+            } = &block.terminator
+            {
+                let match_sources = validated_physical_sources(place, &successor_state)?;
+                successor_state
+                    .active_enum_variants
+                    .retain(|fact| fact.sources.as_ref() != match_sources.as_slice());
+                let matching = arms
+                    .iter()
+                    .filter(|arm| arm.label == successor)
+                    .collect::<Vec<_>>();
+                if successor != otherwise && matching.len() == 1 && !matching[0].wildcard {
+                    if let (Some(enum_name), Some(variant_name)) = (
+                        matching[0].enum_name.as_deref(),
+                        matching[0].variant_name.as_deref(),
+                    ) {
+                        let declared_type = context.place_type(function, place)?;
+                        let enum_type = match declared_type {
+                            Some(Type::Named(name, args))
+                                if name == enum_name
+                                    && (context.enums.contains_key(enum_name)
+                                        || !context.classes.contains_key(enum_name)) =>
+                            {
+                                Some(Type::Named(name, args))
+                            }
+                            None => Some(Type::Named(
+                                enum_name.to_owned(),
+                                context
+                                    .enums
+                                    .get(enum_name)
+                                    .map(|decl| {
+                                        decl.type_params
+                                            .iter()
+                                            .cloned()
+                                            .map(Type::TypeParam)
+                                            .collect()
+                                    })
+                                    .unwrap_or_default(),
+                            )),
+                            _ => None,
+                        };
+                        if let Some(enum_type) = enum_type {
+                            let fact = validated_enum_variant_fact(
+                                place,
+                                &enum_type,
+                                variant_name,
+                                &successor_state,
+                            )?;
+                            successor_state
+                                .active_enum_variants
+                                .retain(|active| active.sources != fact.sources);
+                            successor_state.active_enum_variants.push(fact);
+                        }
+                    }
+                }
             }
             match incoming.get(successor).cloned() {
                 Some(existing)
-                    if existing.loans != state.loans
-                        || existing.pending_handoff != state.pending_handoff =>
+                    if existing.loans != successor_state.loans
+                        || existing.pending_handoff != successor_state.pending_handoff =>
                 {
                     return Err(format!(
                         "invalid MIR function `{}` reaches block `{successor}` with inconsistent active loans",
@@ -3492,14 +7669,87 @@ fn validate_function_loan_flow(
                 }
                 Some(mut existing) => {
                     let previous_len = existing.ended.len();
-                    existing.ended.extend(state.ended.iter().cloned());
-                    if existing.ended.len() != previous_len {
+                    existing.ended.extend(successor_state.ended.iter().cloned());
+                    let previous_taken_len = existing.taken_union_places.len();
+                    existing
+                        .taken_union_places
+                        .extend(successor_state.taken_union_places.iter().cloned());
+                    let previous_taken_enum_len = existing.taken_enum_payloads.len();
+                    for taken in &successor_state.taken_enum_payloads {
+                        if !existing.taken_enum_payloads.contains(taken) {
+                            existing.taken_enum_payloads.push(taken.clone());
+                        }
+                    }
+                    let merged_tags = existing
+                        .active_union_tags
+                        .iter()
+                        .filter(|fact| successor_state.active_union_tags.contains(*fact))
+                        .cloned()
+                        .collect();
+                    let merged_tests = existing
+                        .tag_tests
+                        .iter()
+                        .filter(|(name, fact)| successor_state.tag_tests.get(*name) == Some(*fact))
+                        .map(|(name, fact)| (name.clone(), fact.clone()))
+                        .collect();
+                    let merged_variants = existing
+                        .active_enum_variants
+                        .iter()
+                        .filter(|fact| successor_state.active_enum_variants.contains(*fact))
+                        .cloned()
+                        .collect();
+                    let merged_origins = existing
+                        .derived_value_origins
+                        .iter()
+                        .filter(|(name, origins)| {
+                            successor_state.derived_value_origins.get(*name) == Some(*origins)
+                        })
+                        .map(|(name, origins)| (name.clone(), origins.clone()))
+                        .collect();
+                    let mut merged_borrowed_origins = existing.borrowed_value_origins.clone();
+                    for (name, origins) in &successor_state.borrowed_value_origins {
+                        let mut merged = merged_borrowed_origins
+                            .get(name)
+                            .map(|existing| existing.to_vec())
+                            .unwrap_or_default();
+                        merged.extend(origins.iter().cloned());
+                        merged.sort();
+                        merged.dedup();
+                        merged_borrowed_origins.insert(name.clone(), std::sync::Arc::from(merged));
+                    }
+                    let mut merged_task_borrowed_closures = existing.task_borrowed_closures.clone();
+                    merged_task_borrowed_closures
+                        .extend(successor_state.task_borrowed_closures.iter().cloned());
+                    let merged_callables = merge_authoritative_callable_maps(
+                        &existing.authoritative_callables,
+                        &successor_state.authoritative_callables,
+                    );
+                    let facts_changed = merged_tags != existing.active_union_tags
+                        || merged_tests != existing.tag_tests
+                        || merged_variants != existing.active_enum_variants
+                        || merged_origins != existing.derived_value_origins
+                        || merged_borrowed_origins != existing.borrowed_value_origins;
+                    let facts_changed = facts_changed
+                        || merged_task_borrowed_closures != existing.task_borrowed_closures
+                        || merged_callables != existing.authoritative_callables;
+                    existing.active_union_tags = merged_tags;
+                    existing.active_enum_variants = merged_variants;
+                    existing.tag_tests = merged_tests;
+                    existing.derived_value_origins = merged_origins;
+                    existing.borrowed_value_origins = merged_borrowed_origins;
+                    existing.task_borrowed_closures = merged_task_borrowed_closures;
+                    existing.authoritative_callables = merged_callables;
+                    if existing.ended.len() != previous_len
+                        || existing.taken_union_places.len() != previous_taken_len
+                        || existing.taken_enum_payloads.len() != previous_taken_enum_len
+                        || facts_changed
+                    {
                         incoming.insert(successor.to_string(), existing);
                         pending.push(successor.to_string());
                     }
                 }
                 None => {
-                    incoming.insert(successor.to_string(), state.clone());
+                    incoming.insert(successor.to_string(), successor_state);
                     pending.push(successor.to_string());
                 }
             }
@@ -3513,6 +7763,16 @@ fn validate_function_loan_flow(
 /// alike so public MIR cannot manufacture authority unavailable in Aura.
 pub(crate) fn validate_loan_flow(module: &MirModule) -> std::result::Result<(), String> {
     let context = MirLoanValidationContext::new(module)?;
+    for plan in &module.unions {
+        for member in &plan.members {
+            if member.copy && context.type_is_definitely_noncopy(&member.ty) {
+                return Err(format!(
+                    "invalid MIR module union layout plan for `{}` marks non-Copy member `{}` as Copy",
+                    plan.union_type, member.ty
+                ));
+            }
+        }
+    }
     for function in module.functions.iter().chain(module.top_level.iter()) {
         validate_function_loan_flow(function, &context)?;
     }
@@ -3667,13 +7927,93 @@ pub fn lower(program: &Program) -> MirModule {
         Some(top_level)
     };
 
-    MirModule {
+    let mut module = MirModule {
         constants,
         functions,
         classes,
+        enums: lower_enum_layouts(program),
+        unions: Vec::new(),
         trait_impls,
         top_level,
+    };
+    // Every union the module holds or operates on gets one explicit-tag
+    // layout and drop plan (ADR-0052 A9).
+    crate::union_layout::plan_module_unions(&mut module, |member| {
+        type_is_copy_in_program(member, program)
+    });
+    module
+}
+
+fn lower_enum_layouts(program: &Program) -> Vec<MirEnum> {
+    fn visit<'a>(namespace: &'a ModuleNamespace, entries: &mut Vec<&'a crate::sema::EnumInfo>) {
+        entries.extend(namespace.all_enums.values());
+        entries.extend(namespace.enums.values());
+        for child in namespace
+            .modules
+            .values()
+            .chain(namespace.imported_modules.values())
+        {
+            visit(child, entries);
+        }
     }
+    let mut entries = program.enums.values().collect::<Vec<_>>();
+    for namespace in program.imported_modules.values() {
+        visit(namespace, &mut entries);
+    }
+    let mut seen = BTreeSet::new();
+    let mut layouts = entries
+        .into_iter()
+        .filter_map(|info| {
+            let name = mir_runtime_enum_name(program, info);
+            seen.insert(name.clone()).then(|| MirEnum {
+                name,
+                type_params: info.decl.type_params.clone(),
+                variants: info
+                    .variants
+                    .iter()
+                    .map(|(name, variant)| MirEnumVariant {
+                        name: name.clone(),
+                        payloads: variant
+                            .payloads
+                            .iter()
+                            .map(|payload| payload.ty.clone())
+                            .collect(),
+                    })
+                    .collect(),
+            })
+        })
+        .collect::<Vec<_>>();
+    for (name, arity) in [
+        ("Option", 1),
+        ("Result", 2),
+        ("SendError", 1),
+        ("QueueReceive", 1),
+        ("TaskResult", 1),
+        ("WaitAny", 1),
+        ("WaitAll", 1),
+        ("SelectOutcome", 2),
+    ] {
+        if !seen.insert(name.to_string()) {
+            continue;
+        }
+        let type_params = (0..arity)
+            .map(|index| format!("T{index}"))
+            .collect::<Vec<_>>();
+        let ty = Type::Named(
+            name.to_string(),
+            type_params.iter().cloned().map(Type::TypeParam).collect(),
+        );
+        let variants = crate::sema::builtin_enum_variants(&ty).expect("built-in enum layout");
+        layouts.push(MirEnum {
+            name: name.to_string(),
+            type_params,
+            variants: variants
+                .into_iter()
+                .map(|(name, payloads)| MirEnumVariant { name, payloads })
+                .collect(),
+        });
+    }
+    layouts
 }
 
 fn lower_constant_initializer(
@@ -4020,6 +8360,7 @@ fn lower_function(
                 .default
                 .as_ref()
                 .map(|_| format!("{name}::__default_{index}_{}", param.name)),
+            keyword_only: param.keyword_only,
         })
         .collect::<Vec<_>>();
 
@@ -4257,6 +8598,7 @@ struct Lowerer<'a> {
 #[derive(Clone, Debug)]
 enum PatternWriteback {
     Use(Operand),
+    InPlace(Operand),
     Or {
         ty: Type,
         selected: Vec<String>,
@@ -4274,6 +8616,7 @@ enum PatternWriteback {
 struct PatternLoweringOptions {
     collect_writeback: bool,
     consume_payloads: bool,
+    typed_payload_views: bool,
 }
 
 struct TaskStartTarget {
@@ -4311,6 +8654,7 @@ fn task_param_contracts(
         .iter()
         .enumerate()
         .map(|(index, ty)| FunctionParamContract {
+            keyword_only: params.get(index).is_some_and(|param| param.keyword_only),
             name: params
                 .get(index)
                 .map(|param| param.name.clone())
@@ -4323,7 +8667,6 @@ fn task_param_contracts(
             has_default: params
                 .get(index)
                 .is_some_and(|param| param.default.is_some()),
-            default_erased: false,
         })
         .collect()
 }
@@ -4359,6 +8702,14 @@ struct BasicBlockBuilder {
 
 impl<'a> Lowerer<'a> {
     fn trait_info_in_scope(&self, name: &str) -> Option<&crate::sema::TraitInfo> {
+        if let Some((module, item)) = name.rsplit_once('.') {
+            return self.module_namespace(module).and_then(|namespace| {
+                namespace
+                    .all_traits
+                    .get(item)
+                    .or_else(|| namespace.traits.get(item))
+            });
+        }
         self.program.traits.get(name).or_else(|| {
             self.program
                 .module_registry
@@ -4436,6 +8787,310 @@ impl<'a> Lowerer<'a> {
     fn with_view_return_origin(mut self, origin: Option<String>) -> Self {
         self.view_return_origin = origin;
         self
+    }
+
+    /// Closure metadata for a member expression that the checker turned into
+    /// a bound method (C6). Member spans point at the field token, so a lambda
+    /// can never share one; the synthesized single `__receiver` capture is the
+    /// discriminator against ordinary closures.
+    fn bound_method_info_at(&self, expr: &Expr) -> Option<&ClosureInfo> {
+        if !matches!(expr.kind, ExprKind::Member { .. }) {
+            return None;
+        }
+        self.closure_info_at(expr.span).filter(|info| {
+            matches!(
+                info.captures.as_slice(),
+                [capture] if capture.name == crate::sema::BOUND_RECEIVER_CAPTURE
+            )
+        })
+    }
+
+    /// The class and associated method (no receiver) named by
+    /// `Class.method` or `module.Class.method`, whether or not the class is
+    /// generic.
+    fn resolve_associated_method(
+        &self,
+        object: &Expr,
+        field: &str,
+    ) -> Option<(&crate::sema::ClassInfo, &crate::sema::MethodInfo)> {
+        let base_object = match &object.kind {
+            ExprKind::Specialize { expr, .. } => &**expr,
+            _ => object,
+        };
+        let class = match &base_object.kind {
+            ExprKind::Name(name)
+                if !self.local_types.contains_key(&self.render_local_name(name))
+                    && self.scoped_local_name(name).is_none() =>
+            {
+                self.resolve_class_info(name)?
+            }
+            _ => {
+                let (module_path, item_name) = self.qualified_module_item(base_object)?;
+                self.module_namespace(&module_path)?
+                    .classes
+                    .get(&item_name)?
+            }
+        };
+        let method = class.methods.get(field)?;
+        method.decl.receiver.is_none().then_some((class, method))
+    }
+
+    /// `Class.method` naming an associated method is a thin function value
+    /// whose identity is the method's MIR function.
+    fn associated_method_value_operand(&self, object: &Expr, field: &str) -> Option<Operand> {
+        self.associated_method_value_operand_with_args(object, field, &[])
+    }
+
+    /// `Class.method[T, ...]` with explicit method type arguments; an empty
+    /// list keeps the declaration's type parameters for contextual typing.
+    fn associated_method_value_operand_with_args(
+        &self,
+        object: &Expr,
+        field: &str,
+        type_args: &[Type],
+    ) -> Option<Operand> {
+        if matches!(object.kind, ExprKind::Specialize { .. }) {
+            return None;
+        }
+        let (class, method) = self.resolve_associated_method(object, field)?;
+        if !class.decl.type_params.is_empty() {
+            return None;
+        }
+        let substitutions = if type_args.is_empty() {
+            HashMap::new()
+        } else {
+            if type_args.len() != method.decl.type_params.len() {
+                return None;
+            }
+            substitutions_from_decl_type_args(&method.decl.type_params, type_args)
+        };
+        let runtime_name = mir_class_method_name(self.program, class, field);
+        let params = task_param_contracts(
+            &method.decl.params,
+            &method.signature.params,
+            &method.signature.param_passings,
+        )
+        .into_iter()
+        .map(|mut param| {
+            param.ty = substitute_type(&param.ty, &substitutions);
+            param
+        })
+        .collect::<Vec<_>>();
+        let return_type = crate::sema::wrap_returned_view(
+            &params,
+            substitute_type(&method.signature.return_type, &substitutions),
+            method.decl.view_return.as_ref(),
+        );
+        let signature = Type::Function {
+            params,
+            return_type: Box::new(return_type),
+        };
+        Some(Operand::Function {
+            name: runtime_name,
+            signature: Box::new(signature),
+        })
+    }
+
+    /// The MIR function that owns the default-argument helpers of the method
+    /// a bound method forwards to.
+    fn bound_method_function_name(&self, receiver_ty: &Type, field: &str) -> Option<String> {
+        let Type::Named(class_name, _) = receiver_ty else {
+            return None;
+        };
+        if let Some(class) = self.resolve_class_info(class_name) {
+            if class.methods.contains_key(field) {
+                return Some(mir_class_method_name(self.program, class, field));
+            }
+        }
+        let (_, trait_impl) = self
+            .trait_impls_in_scope()
+            .filter_map(|trait_impl| {
+                self.trait_impl_substitutions(trait_impl, receiver_ty)?;
+                trait_impl.methods.get(field)?;
+                Some((crate::sema::trait_impl_specificity(trait_impl), trait_impl))
+            })
+            .max_by_key(|(specificity, _)| *specificity)?;
+        Some(format!(
+            "{}{} for {}.{}",
+            trait_impl.trait_name,
+            format_trait_args(&trait_impl.trait_args),
+            trait_impl.for_type,
+            field
+        ))
+    }
+
+    /// Lowers `receiver.method` into a closure whose body forwards to the
+    /// method call (C6). The receiver is evaluated once into the single
+    /// `__receiver` capture; omitted defaults resolve through the method's own
+    /// default helpers so both backends bind them like a direct call.
+    fn lower_bound_method(
+        &mut self,
+        expr: &Expr,
+        object: &Expr,
+        field: &str,
+        info: ClosureInfo,
+    ) -> Operand {
+        let capture = info
+            .captures
+            .first()
+            .cloned()
+            .expect("bound method metadata keeps its receiver capture");
+        let name = format!(
+            "{}::__bound_{}_{}",
+            self.function_name, expr.span.line, expr.span.column
+        );
+        let default_owner = info
+            .params
+            .iter()
+            .any(|param| param.has_default)
+            .then(|| self.bound_method_function_name(&capture.ty, field))
+            .flatten();
+        let mut mir_params = vec![MirParam {
+            name: capture.name.clone(),
+            passing: if capture.mutated {
+                MirReceiverKind::BorrowMut
+            } else {
+                MirReceiverKind::Value
+            },
+            ty: capture.ty.clone(),
+            default_function: None,
+            keyword_only: false,
+        }];
+        mir_params.extend(info.params.iter().enumerate().map(|(index, param)| {
+            MirParam {
+                name: param.name.clone(),
+                passing: lower_receiver_kind(param.passing),
+                ty: param.ty.clone(),
+                default_function: param
+                    .has_default
+                    .then(|| {
+                        default_owner
+                            .as_ref()
+                            .map(|owner| format!("{owner}::__default_{index}_{}", param.name))
+                    })
+                    .flatten(),
+                keyword_only: param.keyword_only,
+            }
+        }));
+
+        // The forwarding body is synthesized AST at an empty span so no
+        // source-keyed fact (union injections, narrowing) can attach to it.
+        let synthetic = Span::new(0, 0);
+        let callee = Expr {
+            kind: ExprKind::Member {
+                object: Box::new(Expr {
+                    kind: ExprKind::Name(capture.name.clone()),
+                    span: synthetic,
+                }),
+                field: field.to_string(),
+            },
+            span: synthetic,
+        };
+        let args = info
+            .params
+            .iter()
+            .map(|param| crate::ast::Argument {
+                name: param.keyword_only.then(|| param.name.clone()),
+                value: Expr {
+                    kind: ExprKind::Name(param.name.clone()),
+                    span: synthetic,
+                },
+                span: synthetic,
+            })
+            .collect::<Vec<_>>();
+        let body = Expr {
+            kind: ExprKind::Call {
+                callee: Box::new(callee),
+                args,
+            },
+            span: synthetic,
+        };
+
+        // A method returning a view of one of its parameters keeps that
+        // contract in the bound closure (C9): the generated function returns
+        // the view it forwards, declaring the same parameter as its origin.
+        let pointee = crate::sema::returned_view_pointee(&info.return_type).clone();
+        let view_result = match &info.return_type {
+            Type::ReturnedView(view) => info
+                .params
+                .get(view.origin)
+                .map(|param| (param.name.clone(), view.mutable)),
+            _ => None,
+        };
+        let mut lowerer = Lowerer::new(
+            self.program,
+            &name,
+            self.module_name,
+            pointee.clone(),
+            self.type_param_bounds.clone(),
+        );
+        lowerer.metadata_module_name = self.metadata_module_name.clone();
+        lowerer.metadata_owner = self.metadata_owner.clone();
+        lowerer
+            .local_types
+            .insert(capture.name.clone(), capture.ty.clone());
+        if info.call_kind != ClosureCallKind::Consuming {
+            lowerer.non_owning_roots.insert(capture.name.clone());
+        }
+        for param in &info.params {
+            lowerer
+                .local_types
+                .insert(param.name.clone(), param.ty.clone());
+            if param.passing != ReceiverKind::Value {
+                lowerer.non_owning_roots.insert(param.name.clone());
+            }
+        }
+        match view_result {
+            Some((origin, mutable)) => {
+                lowerer.view_return_origin = Some(origin);
+                let stmt = Stmt::Return(crate::ast::ReturnStmt {
+                    value: Some(body),
+                    view: Some(if mutable {
+                        crate::ast::ViewKind::Mutable
+                    } else {
+                        crate::ast::ViewKind::Shared
+                    }),
+                    span: synthetic,
+                });
+                lowerer.lower_stmt(&stmt, &BTreeSet::new());
+            }
+            None => {
+                let result = lowerer.lower_expr_for_owned_value(&body, Some(&pointee));
+                lowerer.terminate(Terminator::Return(result));
+            }
+        }
+        self.generated_functions
+            .extend(lowerer.finish_with_generated(MirFunctionSpec {
+                name: name.clone(),
+                span: expr.span,
+                receiver: None,
+                params: mir_params,
+                return_type: pointee.clone(),
+                default_return: default_return_operand(&pointee),
+            }));
+
+        let receiver = self.lower_expr_for_owned_value(object, Some(&capture.ty));
+        let signature = info.ty();
+        let temp = self.new_typed_temp(signature.clone());
+        self.emit(Instruction::Assign {
+            target: temp.clone(),
+            value: Rvalue::Closure {
+                function: name,
+                signature,
+                captures: vec![MirClosureCapture {
+                    name: capture.name,
+                    value: receiver,
+                    ty: capture.ty,
+                    passing: MirReceiverKind::Value,
+                    mutated: capture.mutated,
+                    source_place: None,
+                    resolve_source_at_capture: false,
+                }],
+                consuming: info.call_kind == ClosureCallKind::Consuming,
+                mutable: info.call_kind == ClosureCallKind::MutableRepeatable,
+            },
+        });
+        Operand::Place(temp)
     }
 
     fn closure_info_at(&self, span: Span) -> Option<&ClosureInfo> {
@@ -4553,38 +9208,47 @@ impl<'a> Lowerer<'a> {
         function: &crate::sema::FunctionInfo,
         substitutions: &std::collections::HashMap<String, Type>,
     ) -> Type {
+        let params = function
+            .signature
+            .params
+            .iter()
+            .enumerate()
+            .map(|(index, param)| FunctionParamContract {
+                keyword_only: function
+                    .decl
+                    .params
+                    .get(index)
+                    .is_some_and(|decl| decl.keyword_only),
+                name: function
+                    .decl
+                    .params
+                    .get(index)
+                    .map(|param| param.name.clone())
+                    .unwrap_or_default(),
+                ty: substitute_type(param, substitutions),
+                passing: function
+                    .signature
+                    .param_passings
+                    .get(index)
+                    .copied()
+                    .unwrap_or(ReceiverKind::Borrow),
+                has_default: function
+                    .decl
+                    .params
+                    .get(index)
+                    .is_some_and(|param| param.default.is_some()),
+            })
+            .collect::<Vec<_>>();
+        // A parameter-origin view result is part of the value's contract
+        // (C9); the validator checks it against the declaration.
+        let return_type = crate::sema::wrap_returned_view(
+            &params,
+            substitute_type(&function.signature.return_type, substitutions),
+            function.decl.view_return.as_ref(),
+        );
         Type::Function {
-            params: function
-                .signature
-                .params
-                .iter()
-                .enumerate()
-                .map(|(index, param)| FunctionParamContract {
-                    name: function
-                        .decl
-                        .params
-                        .get(index)
-                        .map(|param| param.name.clone())
-                        .unwrap_or_default(),
-                    ty: substitute_type(param, substitutions),
-                    passing: function
-                        .signature
-                        .param_passings
-                        .get(index)
-                        .copied()
-                        .unwrap_or(ReceiverKind::Borrow),
-                    has_default: function
-                        .decl
-                        .params
-                        .get(index)
-                        .is_some_and(|param| param.default.is_some()),
-                    default_erased: false,
-                })
-                .collect(),
-            return_type: Box::new(substitute_type(
-                &function.signature.return_type,
-                substitutions,
-            )),
+            params,
+            return_type: Box::new(return_type),
         }
     }
 
@@ -4632,6 +9296,26 @@ impl<'a> Lowerer<'a> {
     fn lower_function_value(&self, expr: &Expr) -> Option<Operand> {
         match &expr.kind {
             ExprKind::Group(inner) => self.lower_function_value(inner),
+            ExprKind::Specialize {
+                expr: inner,
+                type_args,
+            } if matches!(&inner.kind, ExprKind::Member { .. })
+                && self.resolve_function_value_target(inner).is_none() =>
+            {
+                let ExprKind::Member { object, field } = &inner.kind else {
+                    unreachable!("guarded above");
+                };
+                let lowered = type_args
+                    .iter()
+                    .map(|ty| self.lower_type_ref_with_provenance(ty))
+                    .collect::<Vec<_>>();
+                self.associated_method_value_operand_with_args(object, field, &lowered)
+            }
+            ExprKind::Member { object, field }
+                if self.resolve_function_value_target(expr).is_none() =>
+            {
+                self.associated_method_value_operand(object, field)
+            }
             ExprKind::Specialize { expr, type_args } => {
                 let (runtime_name, function) = self.resolve_function_value_target(expr)?;
                 let substitutions = substitutions_from_decl_type_args(
@@ -4647,7 +9331,19 @@ impl<'a> Lowerer<'a> {
                 })
             }
             ExprKind::Index { object, index } => {
-                let (runtime_name, function) = self.resolve_function_value_target(object)?;
+                let Some((runtime_name, function)) = self.resolve_function_value_target(object)
+                else {
+                    let ExprKind::Member {
+                        object: receiver,
+                        field,
+                    } = &object.kind
+                    else {
+                        return None;
+                    };
+                    let type_args = self.task_type_args_from_index_expr(index)?;
+                    return self
+                        .associated_method_value_operand_with_args(receiver, field, &type_args);
+                };
                 let type_args = self.task_type_args_from_index_expr(index)?;
                 if function.decl.type_params.is_empty()
                     || function.decl.type_params.len() != type_args.len()
@@ -4697,10 +9393,16 @@ impl<'a> Lowerer<'a> {
                 passing: match capture.mode {
                     ClosureCaptureMode::SharedView => MirReceiverKind::Borrow,
                     ClosureCaptureMode::MutableView => MirReceiverKind::BorrowMut,
+                    // An owned capture the body mutates is closure-owned
+                    // state taken mutably on every call (C2).
+                    ClosureCaptureMode::Copy | ClosureCaptureMode::Move if capture.mutated => {
+                        MirReceiverKind::BorrowMut
+                    }
                     ClosureCaptureMode::Copy | ClosureCaptureMode::Move => MirReceiverKind::Value,
                 },
                 ty: capture.ty.clone(),
                 default_function: None,
+                keyword_only: false,
             })
             .collect::<Vec<_>>();
         mir_params.extend(info.params.iter().map(|param| MirParam {
@@ -4708,6 +9410,7 @@ impl<'a> Lowerer<'a> {
             passing: lower_receiver_kind(param.passing),
             ty: param.ty.clone(),
             default_function: None,
+            keyword_only: param.keyword_only,
         }));
 
         let mut lowerer = Lowerer::new(
@@ -4792,6 +9495,7 @@ impl<'a> Lowerer<'a> {
                             MirReceiverKind::Value
                         }
                     },
+                    mutated: capture.mutated,
                     source_place,
                     resolve_source_at_capture: returned_source,
                 }
@@ -4805,6 +9509,7 @@ impl<'a> Lowerer<'a> {
                 signature,
                 captures,
                 consuming: info.call_kind == ClosureCallKind::Consuming,
+                mutable: info.call_kind == ClosureCallKind::MutableRepeatable,
             },
         });
         Operand::Place(temp)
@@ -4848,6 +9553,24 @@ impl<'a> Lowerer<'a> {
 
     fn lower_type_ref_with_provenance(&self, type_ref: &crate::ast::TypeRef) -> Type {
         match &type_ref.kind {
+            TypeRefKind::Union(members) => Type::normalize_union(
+                members
+                    .iter()
+                    .map(|member| self.lower_type_ref_with_provenance(member))
+                    .collect(),
+                self.module_name,
+                &self.program.canonical_type_names,
+            )
+            .expect("checked union has members"),
+            TypeRefKind::Callable {
+                task,
+                call_kind,
+                signature,
+            } => lower_callable_type_ref(
+                *task,
+                *call_kind,
+                self.lower_type_ref_with_provenance(signature),
+            ),
             TypeRefKind::Tuple(elements) => Type::Tuple(
                 elements
                     .iter()
@@ -4857,19 +9580,28 @@ impl<'a> Lowerer<'a> {
             TypeRefKind::Function {
                 params,
                 return_type,
-            } => Type::Function {
-                params: params
+                view_return,
+            } => {
+                let params = params
                     .iter()
                     .map(|param| FunctionParamContract {
-                        name: String::new(),
+                        keyword_only: param.keyword_only,
+                        name: param.name.clone().unwrap_or_default(),
                         ty: self.lower_type_ref_with_provenance(&param.ty),
                         passing: resolve_param_passing(param.mode),
-                        has_default: false,
-                        default_erased: true,
+                        has_default: param.has_default,
                     })
-                    .collect(),
-                return_type: Box::new(self.lower_type_ref_with_provenance(return_type)),
-            },
+                    .collect::<Vec<_>>();
+                let return_type = crate::sema::wrap_returned_view(
+                    &params,
+                    self.lower_type_ref_with_provenance(return_type),
+                    view_return.as_ref(),
+                );
+                Type::Function {
+                    params,
+                    return_type: Box::new(return_type),
+                }
+            }
             TypeRefKind::Named {
                 name: source_name,
                 args,
@@ -4882,6 +9614,16 @@ impl<'a> Lowerer<'a> {
                     "int" => "int64",
                     name => name,
                 };
+                let lowered_args = args
+                    .iter()
+                    .map(|arg| self.lower_type_ref_with_provenance(arg))
+                    .collect::<Vec<_>>();
+                if let Some(expanded) =
+                    self.program
+                        .resolve_alias_type(source_name, &lowered_args, self.module_name)
+                {
+                    return expanded;
+                }
                 let name = if let Some(class) = self.resolve_class_info(source_name) {
                     mir_class_type_name(self.program, class, source_name)
                 } else if let Some(enum_info) = self.resolve_enum_info(source_name) {
@@ -6126,19 +10868,30 @@ impl<'a> Lowerer<'a> {
             return;
         }
 
-        let target = self.render_assign_target(&assign.target);
-        let target_ty = match &assign.target {
-            AssignTarget::Name(name) => {
+        let narrowed_target = assign
+            .op
+            .and_then(|_| self.program.narrowed_read(self.module_name, assign.span));
+        let target = match (&assign.target, &narrowed_target) {
+            (AssignTarget::Name(name), Some(read)) => format!(
+                "{}.{UNION_PAYLOAD_PROJECTION_PREFIX}{}",
+                self.render_local_name(name),
+                read.member_index
+            ),
+            _ => self.render_assign_target(&assign.target),
+        };
+        let target_ty = match (&assign.target, &narrowed_target) {
+            (AssignTarget::Name(_), Some(read)) => Some(read.member_type.clone()),
+            (AssignTarget::Name(name), None) => {
                 self.local_types.get(&self.render_local_name(name)).cloned()
             }
-            AssignTarget::Member { object, field } => self.infer_expr_type(&Expr {
+            (AssignTarget::Member { object, field }, _) => self.infer_expr_type(&Expr {
                 kind: ExprKind::Member {
                     object: object.clone(),
                     field: field.clone(),
                 },
                 span: assign.span,
             }),
-            AssignTarget::Index { .. } => None,
+            (AssignTarget::Index { .. }, _) => None,
         };
         if let Some(op) = assign.op {
             let left = match &assign.target {
@@ -6400,13 +11153,49 @@ impl<'a> Lowerer<'a> {
     }
 
     fn returned_view_callee_decl(&self, callee: &Expr) -> Option<ReturnedViewCallee> {
+        if let Some(info) = self.named_returned_view_callee_decl(callee) {
+            return Some(info);
+        }
+        // A callable value with a view-returning contract (C9): a local,
+        // field, or container element whose type names its origin ordinal.
+        let ty = self.infer_expr_type(callee)?;
+        let (params, return_type) = match &ty {
+            Type::Function {
+                params,
+                return_type,
+            } => (params.as_slice(), return_type.as_ref()),
+            Type::Closure {
+                params,
+                return_type,
+                ..
+            } => (params.as_slice(), return_type.as_ref()),
+            Type::Callable(erased) => (erased.params.as_slice(), &erased.return_type),
+            _ => return None,
+        };
+        let Type::ReturnedView(view) = return_type else {
+            return None;
+        };
+        let decl = crate::sema::synthetic_returned_view_decl(&ty, callee.span)?;
+        Some(ReturnedViewCallee {
+            decl,
+            receiver: None,
+            module_name: self.module_name.to_string(),
+            type_param_bounds: BTreeMap::new(),
+            param_types: params.iter().map(|param| param.ty.clone()).collect(),
+            return_type: view.pointee.clone(),
+            receiver_type: None,
+            trait_name: None,
+        })
+    }
+
+    fn named_returned_view_callee_decl(&self, callee: &Expr) -> Option<ReturnedViewCallee> {
         let callee = match &callee.kind {
-            ExprKind::Group(inner) => return self.returned_view_callee_decl(inner),
+            ExprKind::Group(inner) => return self.named_returned_view_callee_decl(inner),
             ExprKind::Specialize {
                 expr: inner,
                 type_args,
             } => {
-                let info = self.returned_view_callee_decl(inner)?;
+                let info = self.named_returned_view_callee_decl(inner)?;
                 let type_args = type_args
                     .iter()
                     .map(|ty| self.lower_type_ref_with_provenance(ty))
@@ -6421,7 +11210,7 @@ impl<'a> Lowerer<'a> {
             // checking has already established that the indexed expression is
             // a callable; normalize that shape for returned-view analysis too.
             ExprKind::Index { object, index } => {
-                let info = self.returned_view_callee_decl(object)?;
+                let info = self.named_returned_view_callee_decl(object)?;
                 let type_args = self.task_type_args_from_index_expr(index)?;
                 if info.decl.type_params.is_empty()
                     || info.decl.type_params.len() != type_args.len()
@@ -6469,6 +11258,39 @@ impl<'a> Lowerer<'a> {
                         receiver_type: None,
                         trait_name: None,
                     });
+                }
+                // `module.Class.associated(...)`: an associated method of an
+                // imported class is a declared callee with its own returned
+                // view contract, exactly like the local `Class.associated`.
+                if let Some((module_path, class_name)) = self.qualified_module_item(object) {
+                    if let Some(namespace) = self.module_namespace(&module_path) {
+                        if let Some(class) = namespace
+                            .classes
+                            .get(&class_name)
+                            .or_else(|| namespace.all_classes.get(&class_name))
+                        {
+                            if let Some(method) = class
+                                .methods
+                                .get(field)
+                                .filter(|method| method.decl.receiver.is_none())
+                            {
+                                if class.decl.type_params.is_empty() {
+                                    let mut type_param_bounds = class.type_param_bounds.clone();
+                                    type_param_bounds.extend(method.type_param_bounds.clone());
+                                    return Some(ReturnedViewCallee {
+                                        decl: method.decl.clone(),
+                                        receiver: None,
+                                        module_name: class.module_name.clone(),
+                                        type_param_bounds,
+                                        param_types: method.signature.params.clone(),
+                                        return_type: method.signature.return_type.clone(),
+                                        receiver_type: None,
+                                        trait_name: None,
+                                    });
+                                }
+                            }
+                        }
+                    }
                 }
                 let receiver_ty = self.infer_expr_type(object)?;
                 let authoritative_trait_name = self.bounded_trait_member_identity(object, field);
@@ -6987,9 +11809,74 @@ impl<'a> Lowerer<'a> {
                     .map(|(origin, _)| origin)
             })?
         };
-        let projections =
-            self.returned_view_projections_for_decl(&callee_info, &mut BTreeSet::new());
+        let projections = if decl.name == crate::sema::SYNTHETIC_CALLABLE_DECL {
+            // The callee behind a callable value is opaque here: it may return
+            // any fixed path within the origin whose type is the pointee (C9).
+            let origin_index = decl
+                .params
+                .iter()
+                .position(|param| param.name == contract.origin)?;
+            let origin_ty = callee_info.param_types.get(origin_index)?;
+            self.projections_with_type(origin_ty, &callee_info.return_type)
+        } else {
+            self.returned_view_projections_for_decl(&callee_info, &mut BTreeSet::new())
+        };
         (!projections.is_empty()).then_some((origin, projections))
+    }
+
+    /// Every fixed class-field path or tuple position within `origin` whose
+    /// type is `target`, including the empty path when `origin` itself is
+    /// `target`. Indirect fields are not stable view identities and are
+    /// skipped; the walk is bounded in depth.
+    fn projections_with_type(&self, origin: &Type, target: &Type) -> Vec<String> {
+        const MAX_PROJECTION_DEPTH: usize = 8;
+        let join = |path: &str, segment: &str| {
+            if path.is_empty() {
+                segment.to_string()
+            } else {
+                format!("{path}.{segment}")
+            }
+        };
+        let mut found = Vec::new();
+        let mut stack = vec![(String::new(), origin.clone(), 0usize)];
+        while let Some((path, ty, depth)) = stack.pop() {
+            if &ty == target {
+                found.push(path.clone());
+            }
+            if depth >= MAX_PROJECTION_DEPTH {
+                continue;
+            }
+            match &ty {
+                Type::Tuple(elements) => {
+                    for (index, element) in elements.iter().enumerate() {
+                        stack.push((join(&path, &index.to_string()), element.clone(), depth + 1));
+                    }
+                }
+                Type::Named(name, args) => {
+                    if let Some(class) = self.resolve_class_info(name) {
+                        let substitutions =
+                            substitutions_from_decl_type_args(&class.decl.type_params, args);
+                        for field_decl in &class.decl.fields {
+                            if field_decl.ty.indirect {
+                                continue;
+                            }
+                            let Some(field) = class.fields.get(&field_decl.name) else {
+                                continue;
+                            };
+                            stack.push((
+                                join(&path, &field_decl.name),
+                                substitute_type(&field.ty, &substitutions),
+                                depth + 1,
+                            ));
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        found.sort();
+        found.dedup();
+        found
     }
 
     fn remember_lowered_returned_view_origin(&mut self, call: &Expr, loan: &str) {
@@ -7141,7 +12028,6 @@ impl<'a> Lowerer<'a> {
 
         for (index, branch) in if_stmt.branches.iter().enumerate() {
             self.switch_to(next_condition_block);
-            let condition = self.lower_expr(&branch.condition);
             let then_block = self.new_block("if_then");
             let is_last = index + 1 == if_stmt.branches.len();
             let else_block = if is_last {
@@ -7158,11 +12044,8 @@ impl<'a> Lowerer<'a> {
                 self.new_block("if_next")
             };
 
-            self.terminate(Terminator::Branch {
-                condition,
-                then_label: self.label(then_block),
-                else_label: self.label(else_block),
-            });
+            let (then_label, else_label) = (self.label(then_block), self.label(else_block));
+            self.lower_condition_branch(&branch.condition, then_label, else_label);
 
             self.switch_to(then_block);
             let body_endings = ending_loans
@@ -7262,6 +12145,14 @@ impl<'a> Lowerer<'a> {
                 value: Rvalue::Use(source),
             });
             Operand::Place(captured)
+        } else if match_stmt
+            .arms
+            .iter()
+            .any(|arm| pattern_contains_type_arm(&arm.pattern))
+        {
+            self.render_place_expr_option(&match_stmt.scrutinee)
+                .map(Operand::Place)
+                .unwrap_or_else(|| self.lower_expr(&match_stmt.scrutinee))
         } else {
             self.lower_expr(&match_stmt.scrutinee)
         };
@@ -7271,9 +12162,29 @@ impl<'a> Lowerer<'a> {
             None
         };
         let after_block = self.new_block("match_end");
+        // A match over a payload view keeps its ancestor loans alive until
+        // every arm-local child has ended. Outer statement/scope cleanup
+        // remains responsible for ending those ancestors afterwards.
+        let mut retained_parents = BTreeSet::new();
+        if match_stmt
+            .arms
+            .iter()
+            .any(|arm| pattern_contains_type_arm(&arm.pattern))
+        {
+            if let Operand::Place(place) = &scrutinee {
+                let mut root = place.split('.').next().unwrap_or(place);
+                while let Some(source) = self.view_sources.get(root) {
+                    if !retained_parents.insert(root.to_string()) {
+                        break;
+                    }
+                    root = source.split('.').next().unwrap_or(source);
+                }
+            }
+        }
         let ending_loans = self
             .view_sources
             .keys()
+            .filter(|loan| !retained_parents.contains(*loan))
             .filter(|loan| !needed_after.contains(*loan))
             .filter(|loan| {
                 let source_name = self
@@ -7298,111 +12209,139 @@ impl<'a> Lowerer<'a> {
         let mut next_case_block = self.current_block;
 
         for (index, arm) in match_stmt.arms.iter().enumerate() {
-            self.switch_to(next_case_block);
-            let arm_block = self.new_block("match_arm");
-            let next_block = if index + 1 == match_stmt.arms.len() {
+            let next_arm = if index + 1 == match_stmt.arms.len() {
                 unmatched_cleanup.unwrap_or(after_block)
             } else {
                 self.new_block("match_next")
             };
-            self.scoped_names.push(std::collections::HashMap::new());
-            let probes_candidates = arm.guard.is_some() || matches!(arm.pattern, Pattern::Or(_));
-            let pattern_writeback = self.lower_pattern(
-                &arm.pattern,
-                scrutinee.clone(),
-                scrutinee_ty.as_ref(),
-                arm_block,
-                next_block,
-                PatternLoweringOptions {
-                    collect_writeback: writeback_root.is_some(),
-                    consume_payloads: consumes_scrutinee && !probes_candidates,
-                },
-            );
-            self.switch_to(arm_block);
-            if let Some(writeback_place) = writeback_root.as_ref() {
-                let skip_place = self.new_typed_temp(Type::named("bool"));
-                self.match_writeback_stack.push(MatchWritebackState {
-                    root: writeback_place.clone(),
-                    skip_place: skip_place.clone(),
-                    writeback: pattern_writeback.clone(),
-                });
-                self.emit(Instruction::Assign {
-                    target: skip_place,
-                    value: Rvalue::Use(Operand::Bool(false)),
-                });
-            }
-            if let Some(guard) = &arm.guard {
-                let selected = self.new_block("match_guard_true");
-                let rejected = self.new_block("match_guard_false");
-                let condition = self.lower_expr(guard);
-                self.terminate(Terminator::Branch {
-                    condition,
-                    then_label: self.label(selected),
-                    else_label: self.label(rejected),
-                });
-                self.switch_to(rejected);
-                if let (Some(writeback_place), Some(writeback)) =
-                    (writeback_root.as_ref(), pattern_writeback.as_ref())
-                {
-                    let updated = self.materialize_pattern_writeback(writeback);
-                    self.emit(Instruction::Assign {
-                        target: writeback_place.clone(),
-                        value: Rvalue::Use(updated),
-                    });
-                }
-                self.terminate(Terminator::Goto(self.label(next_block)));
-                self.switch_to(selected);
-            }
-            if consumes_scrutinee {
-                self.lower_consuming_pattern_bindings(
-                    &arm.pattern,
+            let alternatives = type_pattern_alternatives(&arm.pattern);
+            for (alternative_index, pattern) in alternatives.iter().enumerate() {
+                self.switch_to(next_case_block);
+                let arm_block = self.new_block("match_arm");
+                let next_block = if alternative_index + 1 == alternatives.len() {
+                    next_arm
+                } else {
+                    self.new_block("match_alternative")
+                };
+                self.scoped_names.push(std::collections::HashMap::new());
+                self.loan_scopes.push(Vec::new());
+                let probes_candidates =
+                    arm.guard.is_some() || matches!(arm.pattern, Pattern::Or(_));
+                let pattern_writeback = self.lower_pattern(
+                    pattern,
                     scrutinee.clone(),
                     scrutinee_ty.as_ref(),
+                    arm_block,
+                    next_block,
+                    PatternLoweringOptions {
+                        collect_writeback: writeback_root.is_some(),
+                        consume_payloads: consumes_scrutinee && !probes_candidates,
+                        typed_payload_views: pattern_contains_type_arm(pattern),
+                    },
                 );
-            }
-            let body_endings = ending_loans
-                .iter()
-                .filter(|loan| {
-                    let source_name = self
-                        .loan_source_names
-                        .get(*loan)
-                        .map(String::as_str)
-                        .unwrap_or(loan);
-                    arm.body
-                        .iter()
-                        .any(|stmt| crate::sema::stmt_references_name(stmt, source_name))
-                })
-                .cloned()
-                .collect::<BTreeSet<_>>();
-            for loan in ending_loans
-                .iter()
-                .rev()
-                .filter(|loan| !body_endings.contains(*loan))
-            {
-                self.emit(Instruction::EndLoan { loan: loan.clone() });
-            }
-            self.lower_stmts_with_inherited_endings(&arm.body, body_endings);
-            let writeback_state = writeback_root
-                .as_ref()
-                .and_then(|_| self.match_writeback_stack.pop());
-            if !self.current_terminated() {
-                if let (Some(writeback_place), Some(writeback), Some(state)) = (
-                    writeback_root.as_ref(),
-                    pattern_writeback.as_ref(),
-                    writeback_state.as_ref(),
-                ) {
-                    self.finish_match_arm_with_writeback(
-                        after_block,
-                        writeback_place,
-                        writeback,
-                        &state.skip_place,
-                    );
-                } else {
-                    self.terminate(Terminator::Goto(self.label(after_block)));
+                self.switch_to(arm_block);
+                let pattern_loans = self.loan_scopes.last().cloned().unwrap_or_default();
+                let writeback_root = writeback_root
+                    .as_ref()
+                    .filter(|_| !matches!(pattern_writeback, Some(PatternWriteback::InPlace(_))))
+                    .cloned();
+                if let Some(writeback_place) = writeback_root.as_ref() {
+                    let skip_place = self.new_typed_temp(Type::named("bool"));
+                    self.match_writeback_stack.push(MatchWritebackState {
+                        root: writeback_place.clone(),
+                        skip_place: skip_place.clone(),
+                        writeback: pattern_writeback.clone(),
+                    });
+                    self.emit(Instruction::Assign {
+                        target: skip_place,
+                        value: Rvalue::Use(Operand::Bool(false)),
+                    });
                 }
+                if let Some(guard) = &arm.guard {
+                    let selected = self.new_block("match_guard_true");
+                    let rejected = self.new_block("match_guard_false");
+                    let condition = self.lower_expr(guard);
+                    self.terminate(Terminator::Branch {
+                        condition,
+                        then_label: self.label(selected),
+                        else_label: self.label(rejected),
+                    });
+                    self.switch_to(rejected);
+                    for loan in pattern_loans.iter().rev() {
+                        self.emit(Instruction::EndLoan { loan: loan.clone() });
+                    }
+                    if let (Some(writeback_place), Some(writeback)) =
+                        (writeback_root.as_ref(), pattern_writeback.as_ref())
+                    {
+                        let updated = self.materialize_pattern_writeback(writeback);
+                        self.emit(Instruction::Assign {
+                            target: writeback_place.clone(),
+                            value: Rvalue::Use(updated),
+                        });
+                    }
+                    self.terminate(Terminator::Goto(self.label(next_arm)));
+                    self.switch_to(selected);
+                }
+                if consumes_scrutinee {
+                    for loan in pattern_loans.iter().rev() {
+                        self.emit(Instruction::EndLoan { loan: loan.clone() });
+                    }
+                    self.remove_loans_from_lowering_state(&pattern_loans.iter().cloned().collect());
+                    self.lower_consuming_pattern_bindings(
+                        pattern,
+                        scrutinee.clone(),
+                        scrutinee_ty.as_ref(),
+                    );
+                }
+                let body_endings = ending_loans
+                    .iter()
+                    .filter(|loan| {
+                        let source_name = self
+                            .loan_source_names
+                            .get(*loan)
+                            .map(String::as_str)
+                            .unwrap_or(loan);
+                        arm.body
+                            .iter()
+                            .any(|stmt| crate::sema::stmt_references_name(stmt, source_name))
+                    })
+                    .cloned()
+                    .collect::<BTreeSet<_>>();
+                for loan in ending_loans
+                    .iter()
+                    .rev()
+                    .filter(|loan| !body_endings.contains(*loan))
+                {
+                    self.emit(Instruction::EndLoan { loan: loan.clone() });
+                }
+                self.lower_stmts_with_inherited_endings(&arm.body, body_endings);
+                if !self.current_terminated() {
+                    self.emit_loan_cleanup_from(self.loan_scopes.len() - 1, None);
+                }
+                self.remove_loans_from_lowering_state(&pattern_loans.iter().cloned().collect());
+                self.loan_scopes.pop();
+                let writeback_state = writeback_root
+                    .as_ref()
+                    .and_then(|_| self.match_writeback_stack.pop());
+                if !self.current_terminated() {
+                    if let (Some(writeback_place), Some(writeback), Some(state)) = (
+                        writeback_root.as_ref(),
+                        pattern_writeback.as_ref(),
+                        writeback_state.as_ref(),
+                    ) {
+                        self.finish_match_arm_with_writeback(
+                            after_block,
+                            writeback_place,
+                            writeback,
+                            &state.skip_place,
+                        );
+                    } else {
+                        self.terminate(Terminator::Goto(self.label(after_block)));
+                    }
+                }
+                self.scoped_names.pop();
+                next_case_block = next_block;
             }
-            self.scoped_names.pop();
-            next_case_block = next_block;
         }
 
         if let Some(cleanup_block) = unmatched_cleanup {
@@ -7416,6 +12355,96 @@ impl<'a> Lowerer<'a> {
         self.remove_loans_from_lowering_state(&ending_loans);
     }
 
+    fn pattern_failure_cleanup(&mut self, failure: usize, first_loan: usize) -> usize {
+        let loans = self
+            .loan_scopes
+            .last()
+            .map(|scope| scope[first_loan..].to_vec())
+            .unwrap_or_default();
+        if loans.is_empty() {
+            return failure;
+        }
+        let current = self.current_block;
+        let cleanup = self.new_block("match_partial_cleanup");
+        self.switch_to(cleanup);
+        for loan in loans.into_iter().rev() {
+            self.emit(Instruction::EndLoan { loan });
+        }
+        self.terminate(Terminator::Goto(self.label(failure)));
+        self.switch_to(current);
+        cleanup
+    }
+
+    fn lower_type_pattern_test(
+        &mut self,
+        scrutinee: Operand,
+        scrutinee_ty: &Type,
+        member: &Type,
+        failure_block: usize,
+    ) -> String {
+        let place = match scrutinee {
+            Operand::Place(place) | Operand::MovePlace(place) => place,
+            value => {
+                let place = self.new_typed_temp(scrutinee_ty.clone());
+                self.emit(Instruction::Assign {
+                    target: place.clone(),
+                    value: Rvalue::Use(value),
+                });
+                place
+            }
+        };
+        if let Type::Union(union) = scrutinee_ty {
+            let index = union
+                .members
+                .iter()
+                .position(|ty| ty == member)
+                .expect("checked direct member");
+            let condition = self.new_typed_temp(Type::named("bool"));
+            self.emit(Instruction::Assign {
+                target: condition.clone(),
+                value: Rvalue::UnionTagTest {
+                    place: place.clone(),
+                    union_type: scrutinee_ty.clone(),
+                    member_index: index,
+                },
+            });
+            let selected = self.new_block("match_union_member");
+            self.terminate(Terminator::Branch {
+                condition: Operand::Place(condition),
+                then_label: self.label(selected),
+                else_label: self.label(failure_block),
+            });
+            self.switch_to(selected);
+            format!("{place}.__union_payload_{index}")
+        } else {
+            place
+        }
+    }
+
+    fn begin_pattern_view(&mut self, target: &str, source: &str, mutable: bool) {
+        let root = source.split('.').next().unwrap_or(source);
+        if self.view_sources.contains_key(root) {
+            self.emit(Instruction::Reborrow {
+                loan: target.to_string(),
+                parent: root.to_string(),
+                projection: source[root.len()..].trim_start_matches('.').to_string(),
+                mutable,
+            });
+        } else {
+            self.emit(Instruction::BeginLoan {
+                loan: target.to_string(),
+                source: source.to_string(),
+                mutable,
+            });
+        }
+        self.view_sources
+            .insert(target.to_string(), source.to_string());
+        self.loan_scopes
+            .last_mut()
+            .expect("match loan scope")
+            .push(target.to_string());
+    }
+
     fn lower_pattern(
         &mut self,
         pattern: &Pattern,
@@ -7425,7 +12454,74 @@ impl<'a> Lowerer<'a> {
         failure_block: usize,
         options: PatternLoweringOptions,
     ) -> Option<PatternWriteback> {
+        let first_loan = self.loan_scopes.last().map_or(0, Vec::len);
         match pattern {
+            Pattern::Type(pattern) => {
+                let member = self.lower_type_ref_with_provenance(&pattern.ty);
+                let target = self
+                    .scoped_names
+                    .last()
+                    .and_then(|scope| scope.get(&pattern.binding.name))
+                    .cloned()
+                    .unwrap_or_else(|| {
+                        let target = self.new_typed_temp(member.clone());
+                        self.scoped_names
+                            .last_mut()
+                            .expect("match scope")
+                            .insert(pattern.binding.name.clone(), target.clone());
+                        target
+                    });
+                let source = self.lower_type_pattern_test(
+                    scrutinee.clone(),
+                    scrutinee_ty.expect("checked type pattern"),
+                    &member,
+                    failure_block,
+                );
+                if !options.consume_payloads {
+                    let root = source.split('.').next().unwrap_or(&source);
+                    if self.view_sources.contains_key(root) {
+                        self.emit(Instruction::Reborrow {
+                            loan: target.clone(),
+                            parent: root.to_string(),
+                            projection: source[root.len()..].trim_start_matches('.').to_string(),
+                            mutable: options.collect_writeback,
+                        });
+                    } else {
+                        self.emit(Instruction::BeginLoan {
+                            loan: target.clone(),
+                            source: source.clone(),
+                            mutable: options.collect_writeback,
+                        });
+                    }
+                    self.view_sources.insert(target.clone(), source);
+                    self.loan_source_names
+                        .insert(target.clone(), pattern.binding.name.clone());
+                    self.loan_scopes
+                        .last_mut()
+                        .expect("match loan scope")
+                        .push(target);
+                }
+                self.terminate(Terminator::Goto(self.label(success_block)));
+                options
+                    .collect_writeback
+                    .then_some(PatternWriteback::InPlace(scrutinee))
+            }
+            Pattern::Variant(pattern)
+                if scrutinee_ty.is_some_and(|ty| matches!(ty, Type::Union(_) | Type::Unit))
+                    && pattern.variant_name == "None"
+                    && pattern.subpatterns.is_empty() =>
+            {
+                self.lower_type_pattern_test(
+                    scrutinee.clone(),
+                    scrutinee_ty.expect("checked None pattern"),
+                    &Type::Unit,
+                    failure_block,
+                );
+                self.terminate(Terminator::Goto(self.label(success_block)));
+                options
+                    .collect_writeback
+                    .then_some(PatternWriteback::InPlace(scrutinee))
+            }
             Pattern::Or(pattern) => {
                 let mut next = self.current_block;
                 let selected = (0..pattern.alternatives.len())
@@ -7496,16 +12592,27 @@ impl<'a> Lowerer<'a> {
                             .insert(binding.name.clone(), target.clone());
                         target
                     });
-                if !options.consume_payloads {
+                if !options.consume_payloads && options.typed_payload_views {
+                    let Operand::Place(source) = &scrutinee else {
+                        unreachable!("typed payload patterns use captured places");
+                    };
+                    self.begin_pattern_view(&target, source, options.collect_writeback);
+                    self.loan_source_names
+                        .insert(target.clone(), binding.name.clone());
+                } else if !options.consume_payloads {
                     self.emit(Instruction::Assign {
                         target: target.clone(),
-                        value: Rvalue::Use(scrutinee),
+                        value: Rvalue::Use(scrutinee.clone()),
                     });
                 }
                 self.terminate(Terminator::Goto(self.label(success_block)));
                 options
                     .collect_writeback
-                    .then_some(PatternWriteback::Use(Operand::Place(target)))
+                    .then_some(if options.typed_payload_views {
+                        PatternWriteback::InPlace(scrutinee)
+                    } else {
+                        PatternWriteback::Use(Operand::Place(target))
+                    })
             }
             Pattern::Literal(pattern) => {
                 let condition = self.lower_literal_pattern_condition(
@@ -7553,15 +12660,17 @@ impl<'a> Lowerer<'a> {
                                 element_type: element_ty.clone(),
                             },
                         });
+                        let child_failure = self.pattern_failure_cleanup(failure_block, first_loan);
                         self.lower_pattern(
                             element_pattern,
                             Operand::Place(element),
                             Some(element_ty),
                             element_success,
-                            failure_block,
+                            child_failure,
                             PatternLoweringOptions {
                                 collect_writeback: false,
                                 consume_payloads: options.consume_payloads,
+                                typed_payload_views: options.typed_payload_views,
                             },
                         );
                     }
@@ -7597,6 +12706,11 @@ impl<'a> Lowerer<'a> {
                 }
                 if pattern.subpatterns.is_empty() {
                     self.terminate(Terminator::Goto(self.label(success_block)));
+                    if options.typed_payload_views {
+                        return options
+                            .collect_writeback
+                            .then_some(PatternWriteback::InPlace(scrutinee));
+                    }
                     return options
                         .collect_writeback
                         .then(|| PatternWriteback::Variant {
@@ -7613,31 +12727,45 @@ impl<'a> Lowerer<'a> {
                 for (index, subpattern) in pattern.subpatterns.iter().enumerate() {
                     self.switch_to(next_block);
                     let payload_ty = payload_types[index].clone();
-                    let payload_target = self.new_typed_temp(payload_ty.clone());
-                    self.emit(Instruction::Assign {
-                        target: payload_target.clone(),
-                        value: Rvalue::VariantPayload {
-                            scrutinee: scrutinee.clone(),
-                            variant_name: pattern.variant_name.clone(),
-                            index,
-                        },
-                    });
+                    let payload_target = if options.typed_payload_views {
+                        let Operand::Place(root) = &scrutinee else {
+                            unreachable!("typed enum patterns use captured places");
+                        };
+                        format!("{root}.__variant_payload_{}_{index}", pattern.variant_name)
+                    } else {
+                        let target = self.new_typed_temp(payload_ty.clone());
+                        self.emit(Instruction::Assign {
+                            target: target.clone(),
+                            value: Rvalue::VariantPayload {
+                                scrutinee: scrutinee.clone(),
+                                variant_name: pattern.variant_name.clone(),
+                                index,
+                            },
+                        });
+                        target
+                    };
                     let subpattern_success = if index + 1 == pattern.subpatterns.len() {
                         success_block
                     } else {
                         self.new_block("match_payload")
                     };
+                    let child_failure = self.pattern_failure_cleanup(failure_block, first_loan);
                     if let Some(writeback) = self.lower_pattern(
                         subpattern,
                         Operand::Place(payload_target),
                         Some(&payload_ty),
                         subpattern_success,
-                        failure_block,
+                        child_failure,
                         options,
                     ) {
                         payload_writebacks.push(writeback);
                     }
                     next_block = subpattern_success;
+                }
+                if options.typed_payload_views {
+                    return options
+                        .collect_writeback
+                        .then_some(PatternWriteback::InPlace(scrutinee));
                 }
                 options
                     .collect_writeback
@@ -7655,6 +12783,13 @@ impl<'a> Lowerer<'a> {
 
     fn register_consuming_pattern_bindings(&mut self, pattern: &Pattern, pattern_ty: &Type) {
         match pattern {
+            Pattern::Type(pattern) => {
+                let member = self.lower_type_ref_with_provenance(&pattern.ty);
+                self.register_consuming_pattern_bindings(
+                    &Pattern::Binding(pattern.binding.clone()),
+                    &member,
+                );
+            }
             Pattern::Or(pattern) => {
                 if let Some(first) = pattern.alternatives.first() {
                     self.register_consuming_pattern_bindings(first, pattern_ty);
@@ -7692,6 +12827,65 @@ impl<'a> Lowerer<'a> {
         scrutinee_ty: Option<&Type>,
     ) {
         match pattern {
+            Pattern::Type(pattern) => {
+                let member = self.lower_type_ref_with_provenance(&pattern.ty);
+                let target = self.new_typed_temp(member.clone());
+                self.scoped_names
+                    .last_mut()
+                    .expect("match scope")
+                    .insert(pattern.binding.name.clone(), target.clone());
+                if let Some(Type::Union(union)) = scrutinee_ty {
+                    let place = match scrutinee {
+                        Operand::Place(place) | Operand::MovePlace(place) => place,
+                        _ => unreachable!("owned union match captures a place"),
+                    };
+                    let index = union
+                        .members
+                        .iter()
+                        .position(|ty| ty == &member)
+                        .expect("checked direct member");
+                    // A nominal payload may have moved into a fresh private
+                    // owner after the guard. Establish this owner's tag fact
+                    // before consuming it; the probe's old-place fact cannot
+                    // authorize a take from a different storage generation.
+                    let rejected = self.new_block("match_commit_invalid_tag");
+                    let current = self.current_block;
+                    self.switch_to(rejected);
+                    self.terminate(Terminator::AssertFail {
+                        message: Some(Operand::String(
+                            "owned pattern payload changed after selection".to_string(),
+                        )),
+                        captures: Vec::new(),
+                        span: pattern.span,
+                    });
+                    self.switch_to(current);
+                    self.lower_type_pattern_test(
+                        Operand::Place(place.clone()),
+                        &Type::Union(union.clone()),
+                        &member,
+                        rejected,
+                    );
+                    self.emit(Instruction::Assign {
+                        target,
+                        value: Rvalue::UnionTakePayload {
+                            place,
+                            union_type: Type::Union(union.clone()),
+                            member_type: member,
+                            member_index: index,
+                        },
+                    });
+                } else {
+                    self.lower_consuming_pattern_bindings(
+                        &Pattern::Binding(pattern.binding.clone()),
+                        scrutinee,
+                        Some(&member),
+                    );
+                }
+            }
+            Pattern::Variant(pattern)
+                if scrutinee_ty.is_some_and(|ty| matches!(ty, Type::Union(_) | Type::Unit))
+                    && pattern.variant_name == "None"
+                    && pattern.subpatterns.is_empty() => {}
             Pattern::Or(pattern) => {
                 // Selection populated non-consuming candidate slots so a
                 // guard could inspect them. Re-probe the private owner after
@@ -7716,6 +12910,7 @@ impl<'a> Lowerer<'a> {
                         PatternLoweringOptions {
                             collect_writeback: false,
                             consume_payloads: true,
+                            typed_payload_views: pattern_contains_type_arm(alternative),
                         },
                     );
                     self.switch_to(selected);
@@ -7733,7 +12928,20 @@ impl<'a> Lowerer<'a> {
             }
             Pattern::Wildcard(_) | Pattern::Literal(_) => {}
             Pattern::Binding(binding) => {
-                let target = self.render_local_name(&binding.name);
+                let previous_target = self.render_local_name(&binding.name);
+                let target = if self.loan_source_names.contains_key(&previous_target) {
+                    let target = match scrutinee_ty {
+                        Some(ty) => self.new_typed_temp(ty.clone()),
+                        None => self.new_temp(),
+                    };
+                    self.scoped_names
+                        .last_mut()
+                        .expect("match scope")
+                        .insert(binding.name.clone(), target.clone());
+                    target
+                } else {
+                    previous_target
+                };
                 let value = match (scrutinee, scrutinee_ty) {
                     (Operand::Place(place), Some(ty))
                         if !type_is_copy_in_program(ty, self.program) =>
@@ -8633,12 +13841,8 @@ impl<'a> Lowerer<'a> {
         self.terminate(Terminator::Goto(self.label(condition_block)));
 
         self.switch_to(condition_block);
-        let condition = self.lower_expr(&while_stmt.condition);
-        self.terminate(Terminator::Branch {
-            condition,
-            then_label: self.label(body_block),
-            else_label: self.label(after_block),
-        });
+        let (body_label, after_label) = (self.label(body_block), self.label(after_block));
+        self.lower_condition_branch(&while_stmt.condition, body_label, after_label);
 
         self.loop_stack.push(LoopLabels {
             break_label: self.label(after_block),
@@ -8874,11 +14078,303 @@ impl<'a> Lowerer<'a> {
         }
     }
 
+    /// The checker's single-member refinement recorded for this expression.
+    fn narrowed_read(&self, expr: &Expr) -> Option<crate::sema::NarrowedRead> {
+        if !matches!(
+            expr.kind,
+            ExprKind::Name(_) | ExprKind::Member { .. } | ExprKind::Index { .. }
+        ) {
+            return None;
+        }
+        self.program.narrowed_read(self.module_name, expr.span)
+    }
+
+    /// The union place a narrowed expression tests or reads: a stable local
+    /// place, or a view descriptor (with its stable child projection) whose
+    /// loan resolves to the tested physical place.
+    fn narrowed_base_place(&mut self, expr: &Expr) -> Option<String> {
+        let place = self.render_stable_place_expr_option(expr)?;
+        let root = place.split('.').next().unwrap_or(&place);
+        if !self.local_types.contains_key(root)
+            && self.scoped_local_name(root).is_none()
+            && !self.view_sources.contains_key(root)
+        {
+            return None;
+        }
+        Some(place)
+    }
+
+    /// A value read the checker proved to hold one member lowers to that
+    /// member's payload projection; the CFG carries the tag proof from the
+    /// test. A view root is read through a child loan of its descriptor, the
+    /// same way a type-pattern binding reads a payload through a view.
+    fn lower_narrowed_read(&mut self, expr: &Expr) -> Option<Operand> {
+        let read = self.narrowed_read(expr)?;
+        let base = self.narrowed_base_place(expr)?;
+        let projected = format!(
+            "{base}.{UNION_PAYLOAD_PROJECTION_PREFIX}{}",
+            read.member_index
+        );
+        let root = base.split('.').next().unwrap_or(&base).to_string();
+        if !self.view_sources.contains_key(&root) {
+            return Some(Operand::Place(projected));
+        }
+        let loan = self.new_typed_temp(read.member_type.clone());
+        self.emit(Instruction::Reborrow {
+            loan: loan.clone(),
+            parent: root.clone(),
+            projection: projected[root.len()..].trim_start_matches('.').to_string(),
+            mutable: false,
+        });
+        self.view_sources.insert(loan.clone(), projected);
+        self.loan_source_names.insert(loan.clone(), loan.clone());
+        if let Some(scope) = self.loan_scopes.last_mut() {
+            scope.push(loan.clone());
+        }
+        let value = self.new_typed_temp(read.member_type.clone());
+        self.emit(Instruction::ReadLoan {
+            target: value.clone(),
+            loan,
+        });
+        Some(Operand::Place(value))
+    }
+
+    /// Whether `value is None` must be decided at runtime because the
+    /// operand's static type is a type parameter, or a union whose `None` can
+    /// only arrive through a type-parameter member (ADR-0052 A7).
+    fn none_test_is_dynamic(declared: Option<&Type>) -> bool {
+        match declared {
+            Some(Type::TypeParam(_)) => true,
+            Some(Type::Union(union)) => {
+                union
+                    .members
+                    .iter()
+                    .any(|member| matches!(member, Type::TypeParam(_)))
+                    && !union
+                        .members
+                        .iter()
+                        .any(|member| matches!(member, Type::Unit))
+            }
+            _ => false,
+        }
+    }
+
+    /// Whether a condition contains an `is None` leaf that should lower as a
+    /// tag-test branch rather than a boolean value.
+    fn condition_has_none_test(condition: &Expr) -> bool {
+        match &condition.kind {
+            ExprKind::IsNone { .. } => true,
+            ExprKind::Group(inner) => Self::condition_has_none_test(inner),
+            ExprKind::Unary {
+                op: UnaryOp::Not,
+                expr: inner,
+            } => Self::condition_has_none_test(inner),
+            ExprKind::Binary {
+                op: BinaryOp::And | BinaryOp::Or,
+                left,
+                right,
+            } => Self::condition_has_none_test(left) || Self::condition_has_none_test(right),
+            _ => false,
+        }
+    }
+
+    /// Lowers `value is None` / `value is not None` used as a `bool` value.
+    /// A union operand is tested by its tag once; a place whose type cannot
+    /// hold `None` is a constant test that still evaluates its operand once.
+    fn lower_none_test_value(
+        &mut self,
+        expr: &Expr,
+        value: &Expr,
+        negated: bool,
+        operator_span: Span,
+    ) -> Operand {
+        let declared = self.infer_expr_type(value);
+        let none_index = match &declared {
+            Some(Type::Union(union)) => union
+                .members
+                .iter()
+                .position(|member| matches!(member, Type::Unit)),
+            _ => None,
+        };
+        let (Some(union_type @ Type::Union(_)), Some(member_index)) = (&declared, none_index)
+        else {
+            if Self::none_test_is_dynamic(declared.as_ref()) {
+                let operand = self.lower_expr(value);
+                let test = self.new_typed_temp(Type::named("bool"));
+                self.emit(Instruction::Assign {
+                    target: test.clone(),
+                    value: Rvalue::NoneTest { value: operand },
+                });
+                if !negated {
+                    return Operand::Place(test);
+                }
+                let result = self.new_typed_temp(Type::named("bool"));
+                self.emit(Instruction::Assign {
+                    target: result.clone(),
+                    value: Rvalue::Unary {
+                        op: UnaryOp::Not,
+                        value: Operand::Place(test),
+                        span: operator_span,
+                    },
+                });
+                return Operand::Place(result);
+            }
+            let is_none = declared == Some(Type::Unit);
+            self.lower_expr(value);
+            return Operand::Bool(is_none != negated);
+        };
+        let union_type = union_type.clone();
+        let place = match self.narrowed_base_place(value) {
+            Some(place) => place,
+            None => {
+                let tested = self.new_typed_temp(union_type.clone());
+                let operand = self.lower_expr_for_owned_value(value, Some(&union_type));
+                self.emit(Instruction::Assign {
+                    target: tested.clone(),
+                    value: Rvalue::Use(operand),
+                });
+                tested
+            }
+        };
+        let test = self.new_typed_temp(Type::named("bool"));
+        self.emit(Instruction::Assign {
+            target: test.clone(),
+            value: Rvalue::UnionTagTest {
+                place,
+                union_type,
+                member_index,
+            },
+        });
+        if !negated {
+            return Operand::Place(test);
+        }
+        let _ = expr;
+        let result = self.new_typed_temp(Type::named("bool"));
+        self.emit(Instruction::Assign {
+            target: result.clone(),
+            value: Rvalue::Unary {
+                op: UnaryOp::Not,
+                value: Operand::Place(test),
+                span: operator_span,
+            },
+        });
+        Operand::Place(result)
+    }
+
+    /// Lowers a condition as a branch chain so every `is None` leaf is its own
+    /// tag test whose proof flows into the selected successor (ADR-0052 A4).
+    fn lower_condition_branch(&mut self, condition: &Expr, then_label: String, else_label: String) {
+        match &condition.kind {
+            ExprKind::Group(inner) => self.lower_condition_branch(inner, then_label, else_label),
+            ExprKind::Unary {
+                op: UnaryOp::Not,
+                expr: inner,
+            } => self.lower_condition_branch(inner, else_label, then_label),
+            ExprKind::Binary {
+                op: op @ (BinaryOp::And | BinaryOp::Or),
+                left,
+                right,
+            } => {
+                let rest = self.new_block(if *op == BinaryOp::And {
+                    "cond_and"
+                } else {
+                    "cond_or"
+                });
+                let rest_label = self.label(rest);
+                if *op == BinaryOp::And {
+                    self.lower_condition_branch(left, rest_label, else_label.clone());
+                } else {
+                    self.lower_condition_branch(left, then_label.clone(), rest_label);
+                }
+                self.switch_to(rest);
+                self.lower_condition_branch(right, then_label, else_label);
+            }
+            ExprKind::IsNone { value, negated, .. } => {
+                let declared = self.infer_expr_type(value);
+                let none_index = match &declared {
+                    Some(Type::Union(union)) => union
+                        .members
+                        .iter()
+                        .position(|member| matches!(member, Type::Unit)),
+                    _ => None,
+                };
+                let tested = match (&declared, none_index) {
+                    (Some(union_type @ Type::Union(_)), Some(index)) => self
+                        .narrowed_base_place(value)
+                        .map(|place| (place, union_type.clone(), index)),
+                    _ => None,
+                };
+                let (true_label, false_label) = if *negated {
+                    (else_label, then_label)
+                } else {
+                    (then_label, else_label)
+                };
+                match tested {
+                    Some((place, union_type, member_index)) => {
+                        let test = self.new_typed_temp(Type::named("bool"));
+                        self.emit(Instruction::Assign {
+                            target: test.clone(),
+                            value: Rvalue::UnionTagTest {
+                                place,
+                                union_type,
+                                member_index,
+                            },
+                        });
+                        self.terminate(Terminator::Branch {
+                            condition: Operand::Place(test),
+                            then_label: true_label,
+                            else_label: false_label,
+                        });
+                    }
+                    None if Self::none_test_is_dynamic(declared.as_ref()) => {
+                        let operand = self.lower_expr(value);
+                        let test = self.new_typed_temp(Type::named("bool"));
+                        self.emit(Instruction::Assign {
+                            target: test.clone(),
+                            value: Rvalue::NoneTest { value: operand },
+                        });
+                        self.terminate(Terminator::Branch {
+                            condition: Operand::Place(test),
+                            then_label: true_label,
+                            else_label: false_label,
+                        });
+                    }
+                    None => {
+                        // A constant test still evaluates its operand once.
+                        let is_none = declared == Some(Type::Unit);
+                        self.lower_expr(value);
+                        self.terminate(Terminator::Branch {
+                            condition: Operand::Bool(is_none),
+                            then_label: true_label,
+                            else_label: false_label,
+                        });
+                    }
+                }
+            }
+            _ => {
+                let condition = self.lower_expr(condition);
+                self.terminate(Terminator::Branch {
+                    condition,
+                    then_label,
+                    else_label,
+                });
+            }
+        }
+    }
+
     fn lower_expr(&mut self, expr: &Expr) -> Operand {
         if let Some(function) = self.lower_function_value(expr) {
             return function;
         }
+        if let Some(narrowed) = self.lower_narrowed_read(expr) {
+            return narrowed;
+        }
         match &expr.kind {
+            ExprKind::IsNone {
+                value,
+                negated,
+                operator_span,
+            } => self.lower_none_test_value(expr, value, *negated, *operator_span),
             ExprKind::Name(name) if name == "None" => Operand::Unit,
             ExprKind::BuiltinOmitted => Operand::Unit,
             ExprKind::Lambda { params, body, .. } => self.lower_lambda(expr, params, body),
@@ -9174,6 +14670,12 @@ impl<'a> Lowerer<'a> {
                 Operand::Place(temp)
             }
             ExprKind::Member { object, field } => {
+                if let Some(info) = self.bound_method_info_at(expr).cloned() {
+                    return self.lower_bound_method(expr, object, field, info);
+                }
+                if let Some(function) = self.associated_method_value_operand(object, field) {
+                    return function;
+                }
                 if let Some(module_path) = self.infer_module_path(object) {
                     if let Some(constant) = self
                         .module_namespace(&module_path)
@@ -9243,6 +14745,12 @@ impl<'a> Lowerer<'a> {
                 Operand::Place(temp)
             }
             ExprKind::Index { object, index } => {
+                // `receiver.method[T]`: the checker registered the bound
+                // method's closure at the member; the index only fixed its
+                // type arguments.
+                if self.bound_method_info_at(object).is_some() {
+                    return self.lower_expr(object);
+                }
                 if let Some(Type::Tuple(element_types)) = self.infer_expr_type(object) {
                     let tuple_index = tuple_constant_index(index)
                         .expect("tuple indices are validated as constant integers by sema");
@@ -9400,7 +14908,7 @@ impl<'a> Lowerer<'a> {
                 scrutinee,
                 capability,
                 arms,
-            } => self.lower_match_expr(expr, scrutinee, *capability, arms),
+            } => self.lower_match_expr(expr, scrutinee, *capability, arms, None),
             ExprKind::Membership {
                 value,
                 container,
@@ -9455,18 +14963,9 @@ impl<'a> Lowerer<'a> {
                         .expect("checked list.sort key should have a function type");
                     let callback =
                         self.lower_expr_at_sequence_point(&argument.value, Some(&callback_ty));
-                    let (Type::Function {
-                        return_type: key_ty,
-                        ..
-                    }
-                    | Type::Closure {
-                        return_type: key_ty,
-                        ..
-                    }) = callback_ty
-                    else {
-                        unreachable!("checked list.sort key should have a function type");
-                    };
-                    (callback, *key_ty)
+                    let key_ty = callback_result_type(callback_ty)
+                        .expect("checked list.sort key should have a callable type");
+                    (callback, key_ty)
                 });
                 let reverse = ordered[1]
                     .map(|argument| {
@@ -10579,6 +16078,9 @@ impl<'a> Lowerer<'a> {
     }
 
     fn lower_expr_with_expected(&mut self, expr: &Expr, expected: Option<&Type>) -> Operand {
+        if let Some(value) = self.lower_union_injection(expr, expected, false) {
+            return value;
+        }
         if let Some(expected @ Type::Function { .. }) = expected {
             if let Some(Operand::Function { name, .. }) = self.lower_function_value(expr) {
                 // Contextual typing is what gives a generic named function
@@ -10619,6 +16121,7 @@ impl<'a> Lowerer<'a> {
         }
         match &expr.kind {
             ExprKind::Group(inner) => self.lower_expr_with_expected(inner, expected),
+            ExprKind::Match { scrutinee, capability, arms } => self.lower_match_expr(expr, scrutinee, *capability, arms, expected),
             ExprKind::Tuple(elements) => match expected {
                 Some(Type::Tuple(element_types)) if element_types.len() == elements.len() => {
                     self.lower_tuple_literal(elements, Some(element_types))
@@ -10652,6 +16155,9 @@ impl<'a> Lowerer<'a> {
                 op: UnaryOp::Neg,
                 expr: inner,
             } => match &inner.kind {
+                ExprKind::Float(value) if expected.is_some_and(|ty| matches!(ty, Type::Named(name, args) if args.is_empty() && matches!(name.as_str(), "float32" | "float64"))) => {
+                    Operand::Float(-value)
+                }
                 ExprKind::Int(value) => {
                     if let Some(value) = expected.and_then(|expected| {
                         contextual_float_literal_operand(*value, true, expected)
@@ -10763,6 +16269,9 @@ impl<'a> Lowerer<'a> {
         passing: ReceiverKind,
     ) -> Operand {
         if matches!(passing, ReceiverKind::Borrow | ReceiverKind::BorrowMut) {
+            if let Some(value) = self.lower_union_injection(expr, expected, false) {
+                return value;
+            }
             if let Some(place) = self.render_place_expr_option(expr) {
                 let root = place.split('.').next().unwrap_or_default();
                 if self.view_sources.contains_key(root) {
@@ -10770,6 +16279,13 @@ impl<'a> Lowerer<'a> {
                     // stable child projection) through unchanged. Reading it
                     // into a temporary would sever the call origin from the
                     // mutable writeback place and manufacture owned storage.
+                    // A narrowed view borrows the proven payload projection.
+                    if let Some(read) = self.narrowed_read(expr) {
+                        return Operand::Place(format!(
+                            "{place}.{UNION_PAYLOAD_PROJECTION_PREFIX}{}",
+                            read.member_index
+                        ));
+                    }
                     return Operand::Place(place);
                 }
             }
@@ -10801,6 +16317,9 @@ impl<'a> Lowerer<'a> {
     }
 
     fn lower_expr_for_owned_value(&mut self, expr: &Expr, expected: Option<&Type>) -> Operand {
+        if let Some(value) = self.lower_union_injection(expr, expected, true) {
+            return value;
+        }
         if let ExprKind::Conditional {
             then_expr,
             condition,
@@ -10839,6 +16358,25 @@ impl<'a> Lowerer<'a> {
         if self.is_non_owning_place_expr(expr) {
             return self.lower_expr_at_sequence_point(expr, expected);
         }
+        if let Some(read) = self.narrowed_read(expr) {
+            if !type_is_copy_in_program(&read.member_type, self.program) {
+                if let Some(place) = self.render_addressable_place_expr_option(expr) {
+                    // Consuming a narrowed owned root moves the whole union
+                    // through its checked payload take (ADR-0052 A3).
+                    let target = self.new_typed_temp(read.member_type.clone());
+                    self.emit(Instruction::Assign {
+                        target: target.clone(),
+                        value: Rvalue::UnionTakePayload {
+                            place,
+                            union_type: read.union_type,
+                            member_type: read.member_type,
+                            member_index: read.member_index,
+                        },
+                    });
+                    return Operand::MovePlace(target);
+                }
+            }
+        }
         if let (Some(place), Some(value_type)) = (
             self.render_addressable_place_expr_option(expr),
             value_type.as_ref(),
@@ -10867,6 +16405,41 @@ impl<'a> Lowerer<'a> {
         }
     }
 
+    fn lower_union_injection(
+        &mut self,
+        expr: &Expr,
+        expected: Option<&Type>,
+        owned: bool,
+    ) -> Option<Operand> {
+        let expected = expected.filter(|expected| matches!(expected, Type::Union(_)))?;
+        if let ExprKind::Group(inner) = &expr.kind {
+            return self.lower_union_injection(inner, Some(expected), owned);
+        }
+        let injection = self
+            .program
+            .union_injection(self.module_name, expr.span, expected)?;
+        let value = if owned {
+            self.lower_expr_for_owned_value(expr, Some(&injection.member_type))
+        } else {
+            self.lower_expr_with_expected(expr, Some(&injection.member_type))
+        };
+        let target = self.new_typed_temp(injection.union_type.clone());
+        self.emit(Instruction::Assign {
+            target: target.clone(),
+            value: Rvalue::UnionInject {
+                value,
+                union_type: injection.union_type,
+                member_type: injection.member_type,
+                member_index: injection.member_index,
+            },
+        });
+        Some(if owned {
+            self.move_place_for_type(target, expected)
+        } else {
+            Operand::Place(target)
+        })
+    }
+
     fn is_contextual_none_expr(expr: &Expr) -> bool {
         match &expr.kind {
             ExprKind::Name(name) => name == "None",
@@ -10881,6 +16454,7 @@ impl<'a> Lowerer<'a> {
         scrutinee_expr: &Expr,
         borrow_mode: ReceiverKind,
         arms: &[crate::ast::MatchExprArm],
+        expected: Option<&Type>,
     ) -> Operand {
         let scrutinee_ty = self.infer_expr_type(scrutinee_expr);
         let consumes_scrutinee = borrow_mode == ReceiverKind::Value
@@ -10898,6 +16472,13 @@ impl<'a> Lowerer<'a> {
                 value: Rvalue::Use(source),
             });
             Operand::Place(captured)
+        } else if arms
+            .iter()
+            .any(|arm| pattern_contains_type_arm(&arm.pattern))
+        {
+            self.render_place_expr_option(scrutinee_expr)
+                .map(Operand::Place)
+                .unwrap_or_else(|| self.lower_expr(scrutinee_expr))
         } else {
             self.lower_expr(scrutinee_expr)
         };
@@ -10906,100 +16487,133 @@ impl<'a> Lowerer<'a> {
         } else {
             None
         };
-        let result = self.new_temp_for_expr(expr);
+        let result = match expected {
+            Some(expected) => self.new_typed_temp(expected.clone()),
+            None => self.new_temp_for_expr(expr),
+        };
         let after_block = self.new_block("match_expr_end");
         let mut next_case_block = self.current_block;
 
         for (index, arm) in arms.iter().enumerate() {
-            self.switch_to(next_case_block);
-            let arm_block = self.new_block("match_expr_arm");
-            let next_block = if index + 1 == arms.len() {
+            let next_arm = if index + 1 == arms.len() {
                 after_block
             } else {
                 self.new_block("match_expr_next")
             };
-            self.scoped_names.push(std::collections::HashMap::new());
-            let probes_candidates = arm.guard.is_some() || matches!(arm.pattern, Pattern::Or(_));
-            let pattern_writeback = self.lower_pattern(
-                &arm.pattern,
-                scrutinee.clone(),
-                scrutinee_ty.as_ref(),
-                arm_block,
-                next_block,
-                PatternLoweringOptions {
-                    collect_writeback: writeback_root.is_some(),
-                    consume_payloads: consumes_scrutinee && !probes_candidates,
-                },
-            );
-            self.switch_to(arm_block);
-            if let Some(writeback_place) = writeback_root.as_ref() {
-                let skip_place = self.new_typed_temp(Type::named("bool"));
-                self.match_writeback_stack.push(MatchWritebackState {
-                    root: writeback_place.clone(),
-                    skip_place: skip_place.clone(),
-                    writeback: pattern_writeback.clone(),
-                });
-                self.emit(Instruction::Assign {
-                    target: skip_place,
-                    value: Rvalue::Use(Operand::Bool(false)),
-                });
-            }
-            if let Some(guard) = &arm.guard {
-                let selected = self.new_block("match_expr_guard_true");
-                let rejected = self.new_block("match_expr_guard_false");
-                let condition = self.lower_expr(guard);
-                self.terminate(Terminator::Branch {
-                    condition,
-                    then_label: self.label(selected),
-                    else_label: self.label(rejected),
-                });
-                self.switch_to(rejected);
-                if let (Some(writeback_place), Some(writeback)) =
-                    (writeback_root.as_ref(), pattern_writeback.as_ref())
-                {
-                    let updated = self.materialize_pattern_writeback(writeback);
-                    self.emit(Instruction::Assign {
-                        target: writeback_place.clone(),
-                        value: Rvalue::Use(updated),
-                    });
-                }
-                self.terminate(Terminator::Goto(self.label(next_block)));
-                self.switch_to(selected);
-            }
-            if consumes_scrutinee {
-                self.lower_consuming_pattern_bindings(
-                    &arm.pattern,
+            let alternatives = type_pattern_alternatives(&arm.pattern);
+            for (alternative_index, pattern) in alternatives.iter().enumerate() {
+                self.switch_to(next_case_block);
+                let arm_block = self.new_block("match_expr_arm");
+                let next_block = if alternative_index + 1 == alternatives.len() {
+                    next_arm
+                } else {
+                    self.new_block("match_expr_alternative")
+                };
+                self.scoped_names.push(std::collections::HashMap::new());
+                self.loan_scopes.push(Vec::new());
+                let probes_candidates =
+                    arm.guard.is_some() || matches!(arm.pattern, Pattern::Or(_));
+                let pattern_writeback = self.lower_pattern(
+                    pattern,
                     scrutinee.clone(),
                     scrutinee_ty.as_ref(),
+                    arm_block,
+                    next_block,
+                    PatternLoweringOptions {
+                        collect_writeback: writeback_root.is_some(),
+                        consume_payloads: consumes_scrutinee && !probes_candidates,
+                        typed_payload_views: pattern_contains_type_arm(pattern),
+                    },
                 );
-            }
-            let arm_type = self.infer_expr_type(&arm.value);
-            let value = self.lower_expr_for_owned_value(&arm.value, arm_type.as_ref());
-            self.emit(Instruction::Assign {
-                target: result.clone(),
-                value: Rvalue::Use(value),
-            });
-            let writeback_state = writeback_root
-                .as_ref()
-                .and_then(|_| self.match_writeback_stack.pop());
-            if !self.current_terminated() {
-                if let (Some(writeback_place), Some(writeback), Some(state)) = (
-                    writeback_root.as_ref(),
-                    pattern_writeback.as_ref(),
-                    writeback_state.as_ref(),
-                ) {
-                    self.finish_match_arm_with_writeback(
-                        after_block,
-                        writeback_place,
-                        writeback,
-                        &state.skip_place,
-                    );
-                } else {
-                    self.terminate(Terminator::Goto(self.label(after_block)));
+                self.switch_to(arm_block);
+                let pattern_loans = self.loan_scopes.last().cloned().unwrap_or_default();
+                let writeback_root = writeback_root
+                    .as_ref()
+                    .filter(|_| !matches!(pattern_writeback, Some(PatternWriteback::InPlace(_))))
+                    .cloned();
+                if let Some(writeback_place) = writeback_root.as_ref() {
+                    let skip_place = self.new_typed_temp(Type::named("bool"));
+                    self.match_writeback_stack.push(MatchWritebackState {
+                        root: writeback_place.clone(),
+                        skip_place: skip_place.clone(),
+                        writeback: pattern_writeback.clone(),
+                    });
+                    self.emit(Instruction::Assign {
+                        target: skip_place,
+                        value: Rvalue::Use(Operand::Bool(false)),
+                    });
                 }
+                if let Some(guard) = &arm.guard {
+                    let selected = self.new_block("match_expr_guard_true");
+                    let rejected = self.new_block("match_expr_guard_false");
+                    let condition = self.lower_expr(guard);
+                    self.terminate(Terminator::Branch {
+                        condition,
+                        then_label: self.label(selected),
+                        else_label: self.label(rejected),
+                    });
+                    self.switch_to(rejected);
+                    for loan in pattern_loans.iter().rev() {
+                        self.emit(Instruction::EndLoan { loan: loan.clone() });
+                    }
+                    if let (Some(writeback_place), Some(writeback)) =
+                        (writeback_root.as_ref(), pattern_writeback.as_ref())
+                    {
+                        let updated = self.materialize_pattern_writeback(writeback);
+                        self.emit(Instruction::Assign {
+                            target: writeback_place.clone(),
+                            value: Rvalue::Use(updated),
+                        });
+                    }
+                    self.terminate(Terminator::Goto(self.label(next_arm)));
+                    self.switch_to(selected);
+                }
+                if consumes_scrutinee {
+                    for loan in pattern_loans.iter().rev() {
+                        self.emit(Instruction::EndLoan { loan: loan.clone() });
+                    }
+                    self.remove_loans_from_lowering_state(&pattern_loans.iter().cloned().collect());
+                    self.lower_consuming_pattern_bindings(
+                        pattern,
+                        scrutinee.clone(),
+                        scrutinee_ty.as_ref(),
+                    );
+                }
+                let arm_type = expected
+                    .cloned()
+                    .or_else(|| self.infer_expr_type(&arm.value));
+                let value = self.lower_expr_for_owned_value(&arm.value, arm_type.as_ref());
+                self.emit(Instruction::Assign {
+                    target: result.clone(),
+                    value: Rvalue::Use(value),
+                });
+                if !self.current_terminated() {
+                    self.emit_loan_cleanup_from(self.loan_scopes.len() - 1, None);
+                }
+                self.remove_loans_from_lowering_state(&pattern_loans.iter().cloned().collect());
+                self.loan_scopes.pop();
+                let writeback_state = writeback_root
+                    .as_ref()
+                    .and_then(|_| self.match_writeback_stack.pop());
+                if !self.current_terminated() {
+                    if let (Some(writeback_place), Some(writeback), Some(state)) = (
+                        writeback_root.as_ref(),
+                        pattern_writeback.as_ref(),
+                        writeback_state.as_ref(),
+                    ) {
+                        self.finish_match_arm_with_writeback(
+                            after_block,
+                            writeback_place,
+                            writeback,
+                            &state.skip_place,
+                        );
+                    } else {
+                        self.terminate(Terminator::Goto(self.label(after_block)));
+                    }
+                }
+                self.scoped_names.pop();
+                next_case_block = next_block;
             }
-            self.scoped_names.pop();
-            next_case_block = next_block;
         }
 
         self.switch_to(after_block);
@@ -11008,7 +16622,7 @@ impl<'a> Lowerer<'a> {
 
     fn materialize_pattern_writeback(&mut self, writeback: &PatternWriteback) -> Operand {
         match writeback {
-            PatternWriteback::Use(operand) => operand.clone(),
+            PatternWriteback::Use(operand) | PatternWriteback::InPlace(operand) => operand.clone(),
             PatternWriteback::Or {
                 ty,
                 selected,
@@ -11133,13 +16747,21 @@ impl<'a> Lowerer<'a> {
         let else_block = self.new_block("conditional_else");
         let join_block = self.new_block("conditional_join");
 
-        let condition =
-            self.lower_expr_at_sequence_point(condition_expr, Some(&Type::named("bool")));
-        self.terminate(Terminator::Branch {
-            condition,
-            then_label: self.label(then_block),
-            else_label: self.label(else_block),
-        });
+        if Self::condition_has_none_test(condition_expr) {
+            // `is None` leaves branch on their tag tests so each arm carries
+            // the narrowing proof the checker relied on (ADR-0052 A4).
+            let then_label = self.label(then_block);
+            let else_label = self.label(else_block);
+            self.lower_condition_branch(condition_expr, then_label, else_label);
+        } else {
+            let condition =
+                self.lower_expr_at_sequence_point(condition_expr, Some(&Type::named("bool")));
+            self.terminate(Terminator::Branch {
+                condition,
+                then_label: self.label(then_block),
+                else_label: self.label(else_block),
+            });
+        }
 
         self.switch_to(then_block);
         let then_value = if arms_owned {
@@ -11233,6 +16855,25 @@ impl<'a> Lowerer<'a> {
                             type_params: Vec::new(),
                             substitutions: std::collections::HashMap::new(),
                             display_name: "function value".to_string(),
+                        }),
+                        Type::Callable(callable) => Some(TaskStartTarget {
+                            function_name: None,
+                            params: Vec::new(),
+                            param_types: callable
+                                .params
+                                .iter()
+                                .map(|param| param.ty.clone())
+                                .collect(),
+                            param_passings: callable
+                                .params
+                                .iter()
+                                .map(|param| param.passing)
+                                .collect(),
+                            param_contracts: callable.params.clone(),
+                            return_type: callable.return_type.clone(),
+                            type_params: Vec::new(),
+                            substitutions: std::collections::HashMap::new(),
+                            display_name: "stored task target".to_string(),
                         }),
                         _ => None,
                     })
@@ -11416,6 +17057,21 @@ impl<'a> Lowerer<'a> {
                     substitutions: std::collections::HashMap::new(),
                     display_name: "function value".to_string(),
                 }),
+                Type::Callable(callable) => Some(TaskStartTarget {
+                    function_name: None,
+                    params: Vec::new(),
+                    param_types: callable
+                        .params
+                        .iter()
+                        .map(|param| param.ty.clone())
+                        .collect(),
+                    param_passings: callable.params.iter().map(|param| param.passing).collect(),
+                    param_contracts: callable.params.clone(),
+                    return_type: callable.return_type.clone(),
+                    type_params: Vec::new(),
+                    substitutions: std::collections::HashMap::new(),
+                    display_name: "stored task target".to_string(),
+                }),
                 _ => None,
             }),
         }
@@ -11570,6 +17226,79 @@ impl<'a> Lowerer<'a> {
         target
     }
 
+    fn expanded_alias_callee(&self, callee: &Expr) -> Option<Expr> {
+        let checked_lowering_budget = self
+            .program
+            .type_definitions
+            .expansion_budget()
+            .for_checked_lowering();
+        crate::sema::expand_alias_callee(
+            callee,
+            &|expr| match &expr.kind {
+                ExprKind::Name(name)
+                    if !self.local_types.contains_key(&self.render_local_name(name)) =>
+                {
+                    self.program.alias_info(name, self.module_name)
+                }
+                ExprKind::Member { object, field } => self
+                    .infer_module_path(object)
+                    .and_then(|module| self.module_namespace(&module))
+                    .and_then(|namespace| namespace.aliases.get(field)),
+                _ => None,
+            },
+            &|ty| Ok(self.lower_type_ref_with_provenance(ty)),
+            &|_, _, _| Ok(()),
+            self.module_name,
+            &self.program.canonical_type_names,
+            &checked_lowering_budget,
+        )
+        .expect("checked alias callee")
+    }
+
+    /// A non-generic alias of a thin `def(...)` type used as a callee is the
+    /// explicit contract adapter `Alias(value)`; it lowers to the adapted
+    /// value in a temporary carrying the alias contract.
+    fn thin_callable_alias_target(&self, callee: &Expr) -> Option<Type> {
+        let alias = match &callee.kind {
+            ExprKind::Name(name)
+                if !self.local_types.contains_key(&self.render_local_name(name)) =>
+            {
+                self.program.alias_info(name, self.module_name)
+            }
+            ExprKind::Member { object, field } => self
+                .infer_module_path(object)
+                .and_then(|module| self.module_namespace(&module))
+                .and_then(|namespace| namespace.aliases.get(field)),
+            _ => None,
+        }?;
+        (alias.decl.type_params.is_empty() && matches!(alias.target, Type::Function { .. }))
+            .then(|| alias.target.clone())
+    }
+
+    /// A non-generic alias of an owned callable type used as a callee is the
+    /// packing constructor `Alias(value)`; the packed value keeps the
+    /// closure's own environment and only its static type is erased.
+    fn callable_alias_target(&self, callee: &Expr) -> Option<(Type, Type)> {
+        let alias = match &callee.kind {
+            ExprKind::Name(name)
+                if !self.local_types.contains_key(&self.render_local_name(name)) =>
+            {
+                self.program.alias_info(name, self.module_name)
+            }
+            ExprKind::Member { object, field } => self
+                .infer_module_path(object)
+                .and_then(|module| self.module_namespace(&module))
+                .and_then(|namespace| namespace.aliases.get(field)),
+            _ => None,
+        }?;
+        match &alias.target {
+            Type::Callable(callable) if alias.decl.type_params.is_empty() => {
+                Some((alias.target.clone(), callable.contract()))
+            }
+            _ => None,
+        }
+    }
+
     fn lower_call(
         &mut self,
         expr: &Expr,
@@ -11577,6 +17306,56 @@ impl<'a> Lowerer<'a> {
         args: &[Argument],
         expected: Option<&Type>,
     ) -> Operand {
+        if let Some(alias_ty) = self.thin_callable_alias_target(callee) {
+            let [argument] = args else {
+                unreachable!("checked thin alias adapters take one callable value")
+            };
+            let value = self.lower_expr_with_expected(&argument.value, Some(&alias_ty));
+            let temp = self.new_typed_temp(alias_ty);
+            self.emit(Instruction::Assign {
+                target: temp.clone(),
+                value: Rvalue::Use(value),
+            });
+            return Operand::Place(temp);
+        }
+        if let Some((alias_ty, contract)) = self.callable_alias_target(callee) {
+            let [argument] = args else {
+                unreachable!("checked callable packing takes one callable value")
+            };
+            let value =
+                self.lower_expr_for_passing(&argument.value, Some(&contract), ReceiverKind::Value);
+            let temp = self.new_typed_temp(alias_ty);
+            self.emit(Instruction::Assign {
+                target: temp.clone(),
+                value: Rvalue::Use(value),
+            });
+            return Operand::Place(temp);
+        }
+        if let Some(expanded) = self.expanded_alias_callee(callee) {
+            let expanded_expr = Expr {
+                kind: ExprKind::Call {
+                    callee: Box::new(expanded.clone()),
+                    args: args.to_vec(),
+                },
+                span: expr.span,
+            };
+            return self.lower_call(&expanded_expr, &expanded, args, expected);
+        }
+        // A grouped explicit specialization such as `(Wrapped[int64])(...)`
+        // keeps its parentheses through alias expansion; the checker already
+        // looked through the group, so lowering does the same.
+        if let ExprKind::Group(inner) = &callee.kind {
+            if matches!(inner.kind, ExprKind::Specialize { .. }) {
+                let ungrouped = Expr {
+                    kind: ExprKind::Call {
+                        callee: inner.clone(),
+                        args: args.to_vec(),
+                    },
+                    span: expr.span,
+                };
+                return self.lower_call(&ungrouped, inner, args, expected);
+            }
+        }
         let temp = expected
             .cloned()
             .map(|ty| self.new_typed_temp(ty))
@@ -11592,20 +17371,23 @@ impl<'a> Lowerer<'a> {
                     && (self.resolve_function_info(name).is_some()
                         || self.resolve_extern_function_info(name).is_some())
             }
-            ExprKind::Member { object, field } => self
-                .infer_module_path(object)
-                .and_then(|module_path| self.module_namespace(&module_path))
-                .is_some_and(|namespace| {
-                    namespace.functions.contains_key(field)
-                        || namespace.all_functions.contains_key(field)
-                        || namespace.extern_functions.contains_key(field)
-                }),
+            ExprKind::Member { object, field } => {
+                self.infer_module_path(object)
+                    .and_then(|module_path| self.module_namespace(&module_path))
+                    .is_some_and(|namespace| {
+                        namespace.functions.contains_key(field)
+                            || namespace.all_functions.contains_key(field)
+                            || namespace.extern_functions.contains_key(field)
+                    })
+                    || self.resolve_associated_method(object, field).is_some()
+            }
             _ => false,
         };
         if !direct_decl_callee {
             if let Some(params) = self.infer_expr_type(callee).and_then(|ty| match ty {
                 Type::Function { params, .. } => Some(params),
                 Type::Closure { params, .. } => Some(*params),
+                Type::Callable(callable) => Some(callable.params),
                 _ => None,
             }) {
                 let function = self.lower_expr_at_sequence_point(callee, None);
@@ -13011,6 +18793,11 @@ impl<'a> Lowerer<'a> {
         {
             return method.decl.receiver;
         }
+        if let Type::Union(union) = &receiver_type {
+            return self
+                .union_trait_member(union, field)
+                .and_then(|(_, receiver)| receiver);
+        }
         self.trait_method_for_receiver(&receiver_type, field)
             .and_then(|(method, _)| method.decl.receiver)
     }
@@ -13048,7 +18835,7 @@ impl<'a> Lowerer<'a> {
             );
             if let Some(method) = trait_info.methods.get(field) {
                 matches.push((
-                    bound.trait_name.clone(),
+                    trait_info.decl.name.clone(),
                     trait_info,
                     method,
                     substitutions.clone(),
@@ -13070,8 +18857,48 @@ impl<'a> Lowerer<'a> {
         let receiver_type = self
             .specialized_bound_receiver_type(object_expr)
             .or_else(|| self.infer_expr_type(object_expr))?;
+        if let Type::Union(union) = &receiver_type {
+            return self
+                .union_trait_member(union, field)
+                .map(|(trait_name, _)| trait_name);
+        }
         self.bounded_trait_method_for_receiver(&receiver_type, field)
             .map(|(trait_name, _, _, _)| trait_name)
+    }
+
+    /// The trait every member of a union implements for `field`, with the
+    /// receiver mode of that method; the checker has already required one
+    /// contract across members (ADR-0052 A8), so dispatch keys on the trait
+    /// and the active member at run time.
+    fn union_trait_member(
+        &self,
+        union: &crate::sema::UnionType,
+        field: &str,
+    ) -> Option<(String, Option<ReceiverKind>)> {
+        let mut identity: Option<(String, Option<ReceiverKind>)> = None;
+        for member in &union.members {
+            let (trait_impl, method) = self
+                .trait_impls_in_scope()
+                .filter_map(|trait_impl| {
+                    let substitutions = self.trait_impl_substitutions(trait_impl, member)?;
+                    let method = trait_impl.methods.get(field)?;
+                    Some((
+                        crate::sema::trait_impl_specificity(trait_impl),
+                        trait_impl,
+                        method,
+                        substitutions,
+                    ))
+                })
+                .max_by_key(|(specificity, _, _, _)| *specificity)
+                .map(|(_, trait_impl, method, _)| (trait_impl, method))?;
+            let candidate = (trait_impl.trait_name.clone(), method.decl.receiver);
+            match &identity {
+                Some(existing) if *existing != candidate => return None,
+                Some(_) => {}
+                None => identity = Some(candidate),
+            }
+        }
+        identity
     }
 
     fn specialized_bound_receiver_type(&self, object_expr: &Expr) -> Option<Type> {
@@ -13213,6 +19040,7 @@ impl<'a> Lowerer<'a> {
             .map(|param| CallableParam {
                 name: &param.name,
                 required: !param.has_default,
+                keyword_only: param.keyword_only,
             })
             .collect::<Vec<_>>();
         let ordered = bind_call_arguments(
@@ -13258,6 +19086,63 @@ impl<'a> Lowerer<'a> {
         }
     }
 
+    /// Infers a generic enum's type arguments for a variant constructor call
+    /// from the lowered types of its payload arguments, mirroring the
+    /// checker's payload-driven inference for `Enum.Variant(...)` calls that
+    /// spell no explicit type arguments.
+    fn infer_enum_variant_type_args(
+        &self,
+        enum_info: &crate::sema::EnumInfo,
+        variant_name: &str,
+        args: &[Argument],
+    ) -> Option<Vec<Type>> {
+        if enum_info.decl.type_params.is_empty() {
+            return Some(Vec::new());
+        }
+        let variant = enum_info.variants.get(variant_name)?;
+        let type_params = enum_info
+            .decl
+            .type_params
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        let mut substitutions = std::collections::HashMap::new();
+        for (index, argument) in args.iter().enumerate() {
+            let slot = if variant.named_payloads {
+                argument
+                    .name
+                    .as_ref()
+                    .and_then(|name| {
+                        variant
+                            .payloads
+                            .iter()
+                            .position(|payload| payload.name.as_deref() == Some(name.as_str()))
+                    })
+                    .unwrap_or(index)
+            } else {
+                index
+            };
+            let Some(payload) = variant.payloads.get(slot) else {
+                continue;
+            };
+            let Some(actual) = self.infer_expr_type(&argument.value) else {
+                continue;
+            };
+            let _ = crate::sema::type_pattern_matches(
+                &payload.ty,
+                &actual,
+                &type_params,
+                &mut substitutions,
+            );
+        }
+        enum_info
+            .decl
+            .type_params
+            .iter()
+            .map(|type_param| substitutions.get(type_param).cloned())
+            .collect()
+    }
+
     fn builtin_enum_variant_type(&self, receiver_type: &Type, field: &str) -> Option<Type> {
         match receiver_type {
             Type::Named(name, args) if name == "Option" && args.len() == 1 => {
@@ -13284,10 +19169,41 @@ impl<'a> Lowerer<'a> {
     }
 
     fn infer_expr_type(&self, expr: &Expr) -> Option<Type> {
-        match &expr.kind {
-            ExprKind::Membership { .. } | ExprKind::CompareChain { .. } => {
-                Some(Type::named("bool"))
+        if let Some(read) = self.narrowed_read(expr) {
+            return Some(read.member_type);
+        }
+        if let ExprKind::Call { callee, args } = &expr.kind {
+            if let Some(alias_ty) = self.thin_callable_alias_target(callee) {
+                return Some(alias_ty);
             }
+            if let Some((alias_ty, _)) = self.callable_alias_target(callee) {
+                return Some(alias_ty);
+            }
+            if let Some(expanded) = self.expanded_alias_callee(callee) {
+                return self.infer_expr_type(&Expr {
+                    kind: ExprKind::Call {
+                        callee: Box::new(expanded),
+                        args: args.clone(),
+                    },
+                    span: expr.span,
+                });
+            }
+            if let ExprKind::Group(inner) = &callee.kind {
+                if matches!(inner.kind, ExprKind::Specialize { .. }) {
+                    return self.infer_expr_type(&Expr {
+                        kind: ExprKind::Call {
+                            callee: inner.clone(),
+                            args: args.clone(),
+                        },
+                        span: expr.span,
+                    });
+                }
+            }
+        }
+        match &expr.kind {
+            ExprKind::IsNone { .. }
+            | ExprKind::Membership { .. }
+            | ExprKind::CompareChain { .. } => Some(Type::named("bool")),
             ExprKind::Lambda { .. } => self.closure_info_at(expr.span).map(ClosureInfo::ty),
             ExprKind::Name(name) if name == "None" => Some(Type::Unit),
             ExprKind::Name(name) => {
@@ -13380,6 +19296,17 @@ impl<'a> Lowerer<'a> {
                     );
                     return Some(self.function_type(function, &substitutions));
                 }
+                if let ExprKind::Member { object, field } = &expr.kind {
+                    let lowered = type_args
+                        .iter()
+                        .map(|ty| self.lower_type_ref_with_provenance(ty))
+                        .collect::<Vec<_>>();
+                    if let Some(Operand::Function { signature, .. }) =
+                        self.associated_method_value_operand_with_args(object, field, &lowered)
+                    {
+                        return Some(*signature);
+                    }
+                }
                 match &expr.kind {
                     ExprKind::Name(name)
                         if matches!(
@@ -13436,21 +19363,32 @@ impl<'a> Lowerer<'a> {
                         !self.local_types.contains_key(&self.render_local_name(name))
                             && self.resolve_function_info(name).is_some()
                     }
-                    ExprKind::Member { object, field } => self
-                        .infer_module_path(object)
-                        .and_then(|module_path| self.module_namespace(&module_path))
-                        .is_some_and(|namespace| {
-                            namespace.functions.contains_key(field)
-                                || namespace.all_functions.contains_key(field)
-                        }),
+                    ExprKind::Member { object, field } => {
+                        self.infer_module_path(object)
+                            .and_then(|module_path| self.module_namespace(&module_path))
+                            .is_some_and(|namespace| {
+                                namespace.functions.contains_key(field)
+                                    || namespace.all_functions.contains_key(field)
+                            })
+                            || self.resolve_associated_method(object, field).is_some()
+                    }
                     _ => false,
                 };
                 if !direct_decl_callee {
-                    if let Some(
-                        Type::Function { return_type, .. } | Type::Closure { return_type, .. },
-                    ) = self.infer_expr_type(callee)
-                    {
-                        return Some(*return_type);
+                    // A call through a callable value has the contract's
+                    // pointee type when the contract returns a view (C9).
+                    match self.infer_expr_type(callee) {
+                        Some(
+                            Type::Function { return_type, .. } | Type::Closure { return_type, .. },
+                        ) => {
+                            return Some(crate::sema::returned_view_pointee(&return_type).clone());
+                        }
+                        Some(Type::Callable(callable)) => {
+                            return Some(
+                                crate::sema::returned_view_pointee(&callable.return_type).clone(),
+                            )
+                        }
+                        _ => {}
                     }
                 }
                 match &base_callee.kind {
@@ -13728,10 +19666,13 @@ impl<'a> Lowerer<'a> {
                                 }
                                 if let Some(enum_info) = namespace.enums.get(&item_name) {
                                     if enum_info.variants.contains_key(field) {
-                                        return Some(Type::named(mir_runtime_enum_name(
-                                            self.program,
-                                            enum_info,
-                                        )));
+                                        let type_args = self
+                                            .infer_enum_variant_type_args(enum_info, field, args)
+                                            .unwrap_or_default();
+                                        return Some(Type::Named(
+                                            mir_runtime_enum_name(self.program, enum_info),
+                                            type_args,
+                                        ));
                                     }
                                 }
                             }
@@ -13865,9 +19806,21 @@ impl<'a> Lowerer<'a> {
                         if let Type::Named(class_name, class_args) = &receiver_type {
                             if let Some(enum_info) = self.resolve_enum_info(class_name) {
                                 if enum_info.variants.contains_key(field) {
+                                    // A bare generic enum name carries no type
+                                    // arguments; the checker inferred them from
+                                    // the payload arguments, so the lowered
+                                    // local type must carry the same arity.
+                                    let type_args = if class_args.is_empty()
+                                        && !enum_info.decl.type_params.is_empty()
+                                    {
+                                        self.infer_enum_variant_type_args(enum_info, field, args)
+                                            .unwrap_or_default()
+                                    } else {
+                                        class_args.clone()
+                                    };
                                     return Some(Type::Named(
                                         mir_runtime_enum_name(self.program, enum_info),
-                                        class_args.clone(),
+                                        type_args,
                                     ));
                                 }
                             }
@@ -13930,15 +19883,15 @@ impl<'a> Lowerer<'a> {
                                             .bind_args(args, callee.span)
                                             .ok()
                                             .and_then(|ordered| ordered[0]);
-                                        if let Some(
-                                            Type::Function { return_type, .. }
-                                            | Type::Closure { return_type, .. },
-                                        ) = callback.and_then(|argument| {
-                                            self.infer_expr_type(&argument.value)
-                                        }) {
+                                        if let Some(output) = callback
+                                            .and_then(|argument| {
+                                                self.infer_expr_type(&argument.value)
+                                            })
+                                            .and_then(callback_result_type)
+                                        {
                                             return Some(Type::Named(
                                                 "list".to_string(),
-                                                vec![*return_type],
+                                                vec![output],
                                             ));
                                         }
                                     }
@@ -13950,16 +19903,11 @@ impl<'a> Lowerer<'a> {
                                     .bind_args(args, callee.span)
                                     .ok()
                                     .and_then(|ordered| ordered[0]);
-                                if let Some(
-                                    Type::Function { return_type, .. }
-                                    | Type::Closure { return_type, .. },
-                                ) = callback
+                                if let Some(output) = callback
                                     .and_then(|argument| self.infer_expr_type(&argument.value))
+                                    .and_then(callback_result_type)
                                 {
-                                    return Some(Type::Named(
-                                        "Array".to_string(),
-                                        vec![*return_type],
-                                    ));
+                                    return Some(Type::Named("Array".to_string(), vec![output]));
                                 }
                             }
                         }
@@ -13978,6 +19926,14 @@ impl<'a> Lowerer<'a> {
                 }
             }
             ExprKind::Member { object, field } => {
+                if let Some(info) = self.bound_method_info_at(expr) {
+                    return Some(info.ty());
+                }
+                if let Some(Operand::Function { signature, .. }) =
+                    self.associated_method_value_operand(object, field)
+                {
+                    return Some(*signature);
+                }
                 if let Some(module_path) = self.infer_module_path(object) {
                     if let Some(constant) = self
                         .module_namespace(&module_path)
@@ -14051,6 +20007,26 @@ impl<'a> Lowerer<'a> {
                     .map(|field| substitute_type(&field.ty, &substitutions))
             }
             ExprKind::Index { object, index } => {
+                if let Some(info) = self.bound_method_info_at(object) {
+                    return Some(info.ty());
+                }
+                if let ExprKind::Member {
+                    object: receiver,
+                    field,
+                } = &object.kind
+                {
+                    if self.resolve_function_value_target(object).is_none() {
+                        if let Some(type_args) = self.task_type_args_from_index_expr(index) {
+                            if let Some(Operand::Function { signature, .. }) = self
+                                .associated_method_value_operand_with_args(
+                                    receiver, field, &type_args,
+                                )
+                            {
+                                return Some(*signature);
+                            }
+                        }
+                    }
+                }
                 if let Some((_runtime_name, function)) = self.resolve_function_value_target(object)
                 {
                     if let Some(type_args) = self.task_type_args_from_index_expr(index) {
@@ -14539,73 +20515,13 @@ impl<'a> Lowerer<'a> {
         variant_name: &str,
     ) -> Option<Vec<Type>> {
         if let Some(enum_ty) = enum_ty {
+            if let Some(variants) = crate::sema::builtin_enum_variants(enum_ty) {
+                return variants
+                    .into_iter()
+                    .find(|(name, _)| name == variant_name)
+                    .map(|(_, payloads)| payloads);
+            }
             match enum_ty {
-                Type::Named(name, args) if name == "Option" && args.len() == 1 => {
-                    return Some(match variant_name {
-                        "Some" => vec![args[0].clone()],
-                        "None" => Vec::new(),
-                        _ => return None,
-                    });
-                }
-                Type::Named(name, args) if name == "Result" && args.len() == 2 => {
-                    return Some(match variant_name {
-                        "Ok" => vec![args[0].clone()],
-                        "Err" => vec![args[1].clone()],
-                        _ => return None,
-                    });
-                }
-                Type::Named(name, args) if name == "SendError" && args.len() == 1 => {
-                    return Some(match variant_name {
-                        "Closed" | "Cancelled" | "TimedOut" | "Full" => vec![args[0].clone()],
-                        _ => return None,
-                    });
-                }
-                Type::Named(name, args) if name == "QueueReceive" && args.len() == 1 => {
-                    return Some(match variant_name {
-                        "Item" => vec![args[0].clone()],
-                        "Closed" | "TimedOut" | "Cancelled" => Vec::new(),
-                        _ => return None,
-                    });
-                }
-                Type::Named(name, args) if name == "TaskResult" && args.len() == 1 => {
-                    return Some(match variant_name {
-                        "Ready" => vec![args[0].clone()],
-                        "Error" => vec![Type::named("str")],
-                        "TimedOut" | "Cancelled" => Vec::new(),
-                        _ => return None,
-                    });
-                }
-                Type::Named(name, args) if name == "WaitAny" && args.len() == 1 => {
-                    return Some(match variant_name {
-                        "Ready" => vec![Type::named("int64"), args[0].clone()],
-                        "Error" => vec![Type::named("int64"), Type::named("str")],
-                        "TimedOut" | "Cancelled" => Vec::new(),
-                        _ => return None,
-                    });
-                }
-                Type::Named(name, args) if name == "WaitAll" && args.len() == 1 => {
-                    return Some(match variant_name {
-                        "Ready" => vec![Type::Named("list".to_string(), vec![args[0].clone()])],
-                        "Error" => vec![Type::named("int64"), Type::named("str")],
-                        "TimedOut" | "Cancelled" => Vec::new(),
-                        _ => return None,
-                    });
-                }
-                Type::Named(name, args) if name == "SelectOutcome" && args.len() == 2 => {
-                    return Some(match variant_name {
-                        "Queue" => vec![
-                            Type::named("int64"),
-                            Type::Named("QueueReceive".to_string(), vec![args[0].clone()]),
-                        ],
-                        "Task" => vec![
-                            Type::named("int64"),
-                            Type::Named("TaskResult".to_string(), vec![args[1].clone()]),
-                        ],
-                        "Deadline" => vec![Type::named("int64")],
-                        "Cancelled" => Vec::new(),
-                        _ => return None,
-                    });
-                }
                 Type::Named(name, args) if name == enum_name => {
                     let enum_info = self.resolve_enum_info(name)?;
                     let variant = enum_info.variants.get(variant_name)?;
@@ -14862,6 +20778,9 @@ impl<'a> Lowerer<'a> {
                 "Option".to_string(),
                 vec![args.first().cloned().unwrap_or(Type::Unit)],
             )),
+            // `result_or` yields the task's own result type, so a local bound
+            // from a function-valued task result keeps its callable type.
+            ("Task", "result_or") => args.first().cloned(),
             ("TaskGroup", "start") | ("TaskGroup", "start_with_stack") => Some(Type::Named(
                 "Task".to_string(),
                 vec![Type::named("Unknown")],
@@ -15077,7 +20996,8 @@ impl<'a> Lowerer<'a> {
         match &expr.kind {
             ExprKind::Name(name) => Some(self.render_local_name(name)),
             ExprKind::Group(inner) => self.render_place_expr_option(inner),
-            ExprKind::Member { object, field } => self
+            // A bound method is a closure value, never a field place (C6).
+            ExprKind::Member { object, field } if self.bound_method_info_at(expr).is_none() => self
                 .render_place_expr_option(object)
                 .map(|object| format!("{object}.{field}")),
             ExprKind::Index { object, index } => {
@@ -15101,7 +21021,8 @@ impl<'a> Lowerer<'a> {
         match &expr.kind {
             ExprKind::Name(name) => Some(self.render_local_name(name)),
             ExprKind::Group(inner) => self.render_stable_place_expr_option(inner),
-            ExprKind::Member { object, field } => self
+            // A bound method is a closure value, never a field place (C6).
+            ExprKind::Member { object, field } if self.bound_method_info_at(expr).is_none() => self
                 .render_stable_place_expr_option(object)
                 .map(|object| format!("{object}.{field}")),
             ExprKind::Index { object, index }
@@ -15128,7 +21049,8 @@ impl<'a> Lowerer<'a> {
                 Some(self.render_local_name(name))
             }
             ExprKind::Group(inner) => self.render_addressable_place_expr_option(inner),
-            ExprKind::Member { object, field } => self
+            // A bound method is a closure value, never a field place (C6).
+            ExprKind::Member { object, field } if self.bound_method_info_at(expr).is_none() => self
                 .render_addressable_place_expr_option(object)
                 .map(|object| format!("{object}.{field}")),
             ExprKind::Index { object, index } => {
@@ -15436,23 +21358,38 @@ fn array_coordinate_type(expr: &Expr) -> Type {
 #[cfg(test)]
 fn lower_type_ref(type_ref: &crate::ast::TypeRef) -> Type {
     match &type_ref.kind {
+        TypeRefKind::Union(_) => Type::named("Unknown"),
+        TypeRefKind::Callable {
+            task,
+            call_kind,
+            signature,
+        } => lower_callable_type_ref(*task, *call_kind, lower_type_ref(signature)),
         TypeRefKind::Tuple(elements) => Type::Tuple(elements.iter().map(lower_type_ref).collect()),
         TypeRefKind::Function {
             params,
             return_type,
-        } => Type::Function {
-            params: params
+            view_return,
+        } => {
+            let params = params
                 .iter()
                 .map(|param| FunctionParamContract {
-                    name: String::new(),
+                    keyword_only: param.keyword_only,
+                    name: param.name.clone().unwrap_or_default(),
                     ty: lower_type_ref(&param.ty),
                     passing: resolve_param_passing(param.mode),
-                    has_default: false,
-                    default_erased: true,
+                    has_default: param.has_default,
                 })
-                .collect(),
-            return_type: Box::new(lower_type_ref(return_type)),
-        },
+                .collect::<Vec<_>>();
+            let return_type = crate::sema::wrap_returned_view(
+                &params,
+                lower_type_ref(return_type),
+                view_return.as_ref(),
+            );
+            Type::Function {
+                params,
+                return_type: Box::new(return_type),
+            }
+        }
         TypeRefKind::Named { name, args } => {
             if name == "None" {
                 return Type::Unit;
@@ -15469,6 +21406,7 @@ fn lower_type_ref(type_ref: &crate::ast::TypeRef) -> Type {
 
 fn pattern_contains_binding(pattern: &Pattern) -> bool {
     match pattern {
+        Pattern::Type(_) => true,
         Pattern::Or(pattern) => pattern.alternatives.iter().any(pattern_contains_binding),
         Pattern::Binding(_) => true,
         Pattern::Variant(pattern) => pattern.subpatterns.iter().any(pattern_contains_binding),
@@ -15477,8 +21415,33 @@ fn pattern_contains_binding(pattern: &Pattern) -> bool {
     }
 }
 
+fn pattern_contains_type_arm(pattern: &Pattern) -> bool {
+    match pattern {
+        Pattern::Type(_) => true,
+        Pattern::Or(pattern) => pattern.alternatives.iter().any(pattern_contains_type_arm),
+        Pattern::Variant(pattern) => pattern.subpatterns.iter().any(pattern_contains_type_arm),
+        Pattern::Tuple(pattern) => pattern.elements.iter().any(pattern_contains_type_arm),
+        _ => false,
+    }
+}
+
+fn type_pattern_alternatives(pattern: &Pattern) -> Vec<&Pattern> {
+    if !pattern_contains_type_arm(pattern) {
+        return vec![pattern];
+    }
+    match pattern {
+        Pattern::Or(pattern) => pattern
+            .alternatives
+            .iter()
+            .flat_map(type_pattern_alternatives)
+            .collect(),
+        pattern => vec![pattern],
+    }
+}
+
 fn pattern_requires_runtime_test(pattern: &Pattern) -> bool {
     match pattern {
+        Pattern::Type(_) => true,
         Pattern::Or(pattern) => pattern
             .alternatives
             .iter()
@@ -15558,3 +21521,36 @@ fn mir_class_type_name(
 #[cfg(test)]
 #[path = "mir_tests.rs"]
 mod tests;
+
+/// Lowers a written `Callable[...]`/`TaskCallable[...]` reference around an
+/// already lowered `def(...)` signature; any other signature stays unknown.
+fn lower_callable_type_ref(
+    task: bool,
+    call_kind: crate::ast::ReceiverKind,
+    signature: Type,
+) -> Type {
+    match signature {
+        Type::Function {
+            params,
+            return_type,
+        } => Type::Callable(Box::new(crate::sema::CallableType {
+            task,
+            call_kind: crate::sema::closure_call_kind_for(call_kind),
+            params,
+            return_type: *return_type,
+        })),
+        _ => Type::named("Unknown"),
+    }
+}
+
+/// The result type a compiler-known callback site sees for a callback of
+/// `ty`: a function, a closure, or a packed Shared value (C10).
+fn callback_result_type(ty: Type) -> Option<Type> {
+    match ty {
+        Type::Function { return_type, .. } | Type::Closure { return_type, .. } => {
+            Some(*return_type)
+        }
+        Type::Callable(callable) => Some(callable.return_type),
+        _ => None,
+    }
+}

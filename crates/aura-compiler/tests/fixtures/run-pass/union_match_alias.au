@@ -1,0 +1,9 @@
+type Count = int64
+type Choice = str | Count
+def main():
+    value: Choice = 42
+    match value:
+        case Count as number:
+            print(number)
+        case str as text:
+            print(text)

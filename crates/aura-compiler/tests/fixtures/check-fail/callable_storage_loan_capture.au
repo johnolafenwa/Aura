@@ -1,0 +1,6 @@
+type Tool = Callable[def(value: int64) -> int64]
+
+def main():
+    values: list[int64] = [1, 2]
+    tool = Tool(lambda [values] value: value + values.len())
+    print(tool(1))

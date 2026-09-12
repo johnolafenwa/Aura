@@ -1,0 +1,8 @@
+def reset(target: mut str | None):
+    target = None
+
+def main():
+    mut value: str | None = "aura"
+    if value is not None:
+        reset(value)
+        print(value.len())

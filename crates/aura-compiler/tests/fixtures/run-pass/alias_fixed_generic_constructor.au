@@ -1,0 +1,6 @@
+class Box[T]:
+    value: T
+type NumberBox = Box[int64]
+def main():
+    value = NumberBox(value=42)
+    print(value.value)

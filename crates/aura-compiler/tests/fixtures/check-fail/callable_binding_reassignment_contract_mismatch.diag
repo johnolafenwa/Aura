@@ -1,0 +1,6 @@
+error[AU2015]: callable contract mismatch: parameter `amount` would be renamed to `value`; renaming requires an explicit wrapper
+ --> crates/aura-compiler/tests/fixtures/check-fail/callable_binding_reassignment_contract_mismatch.au:9:12
+  |
+9 |     step = double
+  |            ^
+  = help: annotate the destination with a contract every value satisfies, or adapt a value explicitly through a thin callable alias call such as `Alias(function)`

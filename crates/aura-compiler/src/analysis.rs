@@ -299,7 +299,8 @@ impl<'a> AnalysisBuilder<'a> {
                         self.visit_stmts(&method.body, &mut scope);
                     }
                 }
-                Item::Enum(_)
+                Item::TypeAlias(_)
+                | Item::Enum(_)
                 | Item::ExternFunction(_)
                 | Item::ExternOpaqueClass(_)
                 | Item::Trait(_)
@@ -844,6 +845,7 @@ impl<'a> AnalysisBuilder<'a> {
             | ExprKind::Specialize { expr: object, .. }
             | ExprKind::Cast { expr: object, .. }
             | ExprKind::Unary { expr: object, .. }
+            | ExprKind::IsNone { value: object, .. }
             | ExprKind::Try(object)
             | ExprKind::Group(object) => {
                 self.extend_lambda_scope_from_expr(object, target_line, character, scope);
@@ -2152,6 +2154,11 @@ impl<'a> AnalysisBuilder<'a> {
         bindings: &mut Vec<(String, Type, usize)>,
     ) {
         match pattern {
+            Pattern::Type(pattern) => bindings.push((
+                pattern.binding.name.clone(),
+                self.lower_analysis_type_ref(&pattern.ty),
+                pattern.binding.span.line,
+            )),
             Pattern::Or(pattern) => {
                 // Every alternative has the same checked binding set. Record
                 // the first once so completion/hover expose one logical arm
@@ -2202,6 +2209,7 @@ impl<'a> AnalysisBuilder<'a> {
 
     fn visit_match_pattern_occurrences(&mut self, pattern: &Pattern, expected_type: Option<&Type>) {
         match pattern {
+            Pattern::Type(_) => {}
             Pattern::Or(pattern) => {
                 for alternative in &pattern.alternatives {
                     self.visit_match_pattern_occurrences(alternative, expected_type);
@@ -2487,9 +2495,10 @@ impl<'a> AnalysisBuilder<'a> {
             }
             ExprKind::Name(name) => {
                 if let Some(resolved) = self.resolve_name(name, scope) {
+                    let hover = self.narrowed_hover(expr.span, resolved.hover);
                     self.push_occurrence(
                         range_from_span(expr.span, name.len()),
-                        resolved.hover,
+                        hover,
                         resolved.definition,
                     );
                 }
@@ -2497,9 +2506,10 @@ impl<'a> AnalysisBuilder<'a> {
             ExprKind::Member { object, field } => {
                 self.visit_expr(object, scope);
                 if let Some(resolved) = self.resolve_member_expr(object, field, scope) {
+                    let hover = self.narrowed_hover(expr.span, resolved.hover);
                     self.push_occurrence(
                         range_from_span(expr.span, field.len()),
-                        resolved.hover,
+                        hover,
                         resolved.definition,
                     );
                 }
@@ -2607,7 +2617,9 @@ impl<'a> AnalysisBuilder<'a> {
                 self.visit_expr(body, &lambda_scope);
             }
             ExprKind::Cast { expr, .. } => self.visit_expr(expr, scope),
-            ExprKind::Unary { expr, .. } => self.visit_expr(expr, scope),
+            ExprKind::IsNone { value: expr, .. } | ExprKind::Unary { expr, .. } => {
+                self.visit_expr(expr, scope)
+            }
             ExprKind::Try(inner) | ExprKind::Group(inner) => self.visit_expr(inner, scope),
             ExprKind::Tuple(elements) | ExprKind::List(elements) | ExprKind::Set(elements) => {
                 for element in elements {
@@ -2981,11 +2993,11 @@ impl<'a> AnalysisBuilder<'a> {
                             .zip(&function.signature.params)
                             .zip(&function.signature.param_passings)
                             .map(|((decl, ty), passing)| FunctionParamContract {
+                                keyword_only: decl.keyword_only,
                                 name: decl.name.clone(),
                                 ty: ty.clone(),
                                 passing: *passing,
                                 has_default: decl.default.is_some(),
-                                default_erased: false,
                             })
                             .collect(),
                         return_type: Box::new(function.signature.return_type.clone()),
@@ -3004,11 +3016,11 @@ impl<'a> AnalysisBuilder<'a> {
                             .zip(&function.signature.params)
                             .zip(&function.signature.param_passings)
                             .map(|((decl, ty), passing)| FunctionParamContract {
+                                keyword_only: decl.keyword_only,
                                 name: decl.name.clone(),
                                 ty: ty.clone(),
                                 passing: *passing,
                                 has_default: false,
-                                default_erased: false,
                             })
                             .collect(),
                         return_type: Box::new(function.signature.return_type.clone()),
@@ -3861,6 +3873,22 @@ impl<'a> AnalysisBuilder<'a> {
 
     fn lower_analysis_type_ref(&self, ty: &TypeRef) -> Type {
         match &ty.kind {
+            crate::ast::TypeRefKind::Union(members) => Type::normalize_union(
+                members
+                    .iter()
+                    .map(|member| self.lower_analysis_type_ref(member))
+                    .collect(),
+                &self.program.module_name,
+                &self.program.canonical_type_names,
+            )
+            .expect("checked union has members"),
+            crate::ast::TypeRefKind::Callable {
+                task,
+                call_kind,
+                signature,
+            } => {
+                lower_callable_type_ref(*task, *call_kind, self.lower_analysis_type_ref(signature))
+            }
             crate::ast::TypeRefKind::Tuple(elements) => Type::Tuple(
                 elements
                     .iter()
@@ -3870,19 +3898,28 @@ impl<'a> AnalysisBuilder<'a> {
             crate::ast::TypeRefKind::Function {
                 params,
                 return_type,
-            } => Type::Function {
-                params: params
+                view_return,
+            } => {
+                let params = params
                     .iter()
                     .map(|param| FunctionParamContract {
-                        name: String::new(),
+                        keyword_only: param.keyword_only,
+                        name: param.name.clone().unwrap_or_default(),
                         ty: self.lower_analysis_type_ref(&param.ty),
                         passing: resolve_param_passing(param.mode),
-                        has_default: false,
-                        default_erased: true,
+                        has_default: param.has_default,
                     })
-                    .collect(),
-                return_type: Box::new(self.lower_analysis_type_ref(return_type)),
-            },
+                    .collect::<Vec<_>>();
+                let return_type = crate::sema::wrap_returned_view(
+                    &params,
+                    self.lower_analysis_type_ref(return_type),
+                    view_return.as_ref(),
+                );
+                Type::Function {
+                    params,
+                    return_type: Box::new(return_type),
+                }
+            }
             crate::ast::TypeRefKind::Named { name, args } => {
                 if name == "None" {
                     return Type::Unit;
@@ -3896,6 +3933,12 @@ impl<'a> AnalysisBuilder<'a> {
                     .iter()
                     .map(|arg| self.lower_analysis_type_ref(arg))
                     .collect::<Vec<_>>();
+                if let Some(expanded) =
+                    self.program
+                        .resolve_alias_type(name, &args, &self.program.module_name)
+                {
+                    return expanded;
+                }
                 self.program
                     .classes
                     .get(name)
@@ -3936,11 +3979,59 @@ impl<'a> AnalysisBuilder<'a> {
         Type::Named(name, args)
     }
 
+    /// The function type of `Class.method` or `module.Class.method` naming an
+    /// associated method of a non-generic class (C6); `None` for instance
+    /// receivers, generic owners, and receiver methods.
+    fn associated_method_value_type(
+        &self,
+        object: &Expr,
+        field: &str,
+        scope: &BTreeMap<String, BindingInfo>,
+    ) -> Option<Type> {
+        let class_info = match &object.kind {
+            ExprKind::Name(name) if !scope.contains_key(name) => self.program.classes.get(name)?,
+            ExprKind::Member {
+                object: module,
+                field: class_name,
+            } => {
+                let Type::Module(path) = self.infer_expr_type(module, scope)? else {
+                    return None;
+                };
+                self.module_namespace(&path)?.classes.get(class_name)?
+            }
+            _ => return None,
+        };
+        if !class_info.decl.type_params.is_empty() {
+            return None;
+        }
+        let method = class_info.methods.get(field)?;
+        if method.decl.receiver.is_some() {
+            return None;
+        }
+        Some(Type::Function {
+            params: method
+                .decl
+                .params
+                .iter()
+                .zip(&method.signature.params)
+                .zip(&method.signature.param_passings)
+                .map(|((decl, ty), passing)| FunctionParamContract {
+                    keyword_only: decl.keyword_only,
+                    name: decl.name.clone(),
+                    ty: ty.clone(),
+                    passing: *passing,
+                    has_default: decl.default.is_some(),
+                })
+                .collect(),
+            return_type: Box::new(method.signature.return_type.clone()),
+        })
+    }
+
     fn infer_expr_type(&self, expr: &Expr, scope: &BTreeMap<String, BindingInfo>) -> Option<Type> {
         match &expr.kind {
-            ExprKind::Membership { .. } | ExprKind::CompareChain { .. } => {
-                Some(Type::named("bool"))
-            }
+            ExprKind::IsNone { .. }
+            | ExprKind::Membership { .. }
+            | ExprKind::CompareChain { .. } => Some(Type::named("bool")),
             ExprKind::Int(_) => Some(Type::named("int64")),
             ExprKind::DurationNanos(_) => Some(Type::named("Duration")),
             ExprKind::BuiltinOmitted => None,
@@ -4090,11 +4181,11 @@ impl<'a> AnalysisBuilder<'a> {
                             .zip(&function.signature.params)
                             .zip(&function.signature.param_passings)
                             .map(|((decl, ty), passing)| FunctionParamContract {
+                                keyword_only: decl.keyword_only,
                                 name: decl.name.clone(),
                                 ty: ty.clone(),
                                 passing: *passing,
                                 has_default: decl.default.is_some(),
-                                default_erased: false,
                             })
                             .collect(),
                         return_type: Box::new(function.signature.return_type.clone()),
@@ -4102,10 +4193,27 @@ impl<'a> AnalysisBuilder<'a> {
                 }
                 builtin_function_return_type(name)
             }
-            ExprKind::Member { object, field } => self
-                .resolve_member_expr(object, field, scope)
-                .and_then(|member| member.ty),
+            ExprKind::Member { object, field } => {
+                // Batch 1 phase 1 (C6): outside call position a receiver
+                // method is the checker's closure over its receiver, and
+                // `Class.method` is a thin function value.
+                if let Some(info) = self.closure_info(expr) {
+                    return Some(info.ty());
+                }
+                if let Some(function_type) = self.associated_method_value_type(object, field, scope)
+                {
+                    return Some(function_type);
+                }
+                self.resolve_member_expr(object, field, scope)
+                    .and_then(|member| member.ty)
+            }
             ExprKind::Index { object, index } => {
+                // `receiver.method[T]` binds the checker's closure (C6).
+                if matches!(object.kind, ExprKind::Member { .. }) {
+                    if let Some(info) = self.closure_info(object) {
+                        return Some(info.ty());
+                    }
+                }
                 self.infer_expr_type(object, scope)
                     .and_then(|ty| match &ty {
                         Type::Tuple(elements) => match &index.kind {
@@ -4840,6 +4948,18 @@ impl<'a> AnalysisBuilder<'a> {
             .collect()
     }
 
+    /// Appends the checker's narrowing fact to a hover when this use reads a
+    /// union place through an `is None` / `is not None` refinement.
+    fn narrowed_hover(&self, span: Span, hover: String) -> String {
+        match self.program.narrowed_read(&self.program.module_name, span) {
+            Some(read) => format!(
+                "{hover}\n\nNarrowed to `{}` from `{}` at this use.",
+                read.member_type, read.union_type
+            ),
+            None => hover,
+        }
+    }
+
     fn push_occurrence(
         &mut self,
         range: AnalysisRange,
@@ -5046,6 +5166,15 @@ fn symbols_from_module(module: &Module) -> Vec<AnalysisSymbol> {
         .collect::<Vec<_>>();
     for item in &module.items {
         match item {
+            Item::TypeAlias(alias) => symbols.push(AnalysisSymbol {
+                name: alias.name.clone(),
+                kind: "type".to_string(),
+                detail: String::new(),
+                line: alias.span.line.saturating_sub(1),
+                start_character: alias.span.column.saturating_sub(1),
+                end_character: alias.span.column.saturating_sub(1) + alias.name.len(),
+                children: Vec::new(),
+            }),
             Item::Class(class_decl) => {
                 symbols.push(AnalysisSymbol {
                     name: class_decl.name.clone(),
@@ -5294,25 +5423,45 @@ fn is_identifier_continue(ch: char) -> bool {
 
 fn lower_type_ref(ty: &TypeRef) -> Type {
     match &ty.kind {
+        crate::ast::TypeRefKind::Union(members) => Type::normalize_union(
+            members.iter().map(lower_type_ref).collect(),
+            "<main>",
+            &BTreeMap::new(),
+        )
+        .unwrap_or_else(|_| Type::named("Unknown")),
+        crate::ast::TypeRefKind::Callable {
+            task,
+            call_kind,
+            signature,
+        } => lower_callable_type_ref(*task, *call_kind, lower_type_ref(signature)),
         crate::ast::TypeRefKind::Tuple(elements) => {
             Type::Tuple(elements.iter().map(lower_type_ref).collect())
         }
         crate::ast::TypeRefKind::Function {
             params,
             return_type,
-        } => Type::Function {
-            params: params
+            view_return,
+        } => {
+            let params = params
                 .iter()
                 .map(|param| FunctionParamContract {
-                    name: String::new(),
+                    keyword_only: param.keyword_only,
+                    name: param.name.clone().unwrap_or_default(),
                     ty: lower_type_ref(&param.ty),
                     passing: resolve_param_passing(param.mode),
-                    has_default: false,
-                    default_erased: true,
+                    has_default: param.has_default,
                 })
-                .collect(),
-            return_type: Box::new(lower_type_ref(return_type)),
-        },
+                .collect::<Vec<_>>();
+            let return_type = crate::sema::wrap_returned_view(
+                &params,
+                lower_type_ref(return_type),
+                view_return.as_ref(),
+            );
+            Type::Function {
+                params,
+                return_type: Box::new(return_type),
+            }
+        }
         crate::ast::TypeRefKind::Named { name, args } if name == "None" => Type::Unit,
         crate::ast::TypeRefKind::Named { name, args } => {
             let name = match name.as_str() {
@@ -5327,12 +5476,21 @@ fn lower_type_ref(ty: &TypeRef) -> Type {
 
 fn base_type_name(ty: &Type) -> &str {
     match ty {
+        Type::Union(_) => "union",
         Type::Unit => "None",
+        Type::ReturnedView(_) => "view",
         Type::Module(name) => name.as_str(),
         Type::TypeParam(name) => name.as_str(),
         Type::Tuple(_) => "tuple",
         Type::Function { .. } => "function",
         Type::Closure { .. } => "closure",
+        Type::Callable(callable) => {
+            if callable.task {
+                "TaskCallable"
+            } else {
+                "Callable"
+            }
+        }
         Type::Named(name, _) => name.as_str(),
     }
 }
@@ -5346,7 +5504,8 @@ fn expression_start_span(expr: &Expr) -> Span {
         | ExprKind::Cast { expr: object, .. }
         | ExprKind::Try(object)
         | ExprKind::Group(object)
-        | ExprKind::Unary { expr: object, .. } => Some(object.as_ref()),
+        | ExprKind::Unary { expr: object, .. }
+        | ExprKind::IsNone { value: object, .. } => Some(object.as_ref()),
         ExprKind::Call { callee, .. } => Some(callee.as_ref()),
         ExprKind::Binary { left, .. } => Some(left.as_ref()),
         ExprKind::Conditional { then_expr, .. } => Some(then_expr.as_ref()),
@@ -5389,6 +5548,7 @@ fn expression_end_line(expr: &Expr) -> usize {
         | ExprKind::Specialize { expr: object, .. }
         | ExprKind::Cast { expr: object, .. }
         | ExprKind::Unary { expr: object, .. }
+        | ExprKind::IsNone { value: object, .. }
         | ExprKind::Try(object)
         | ExprKind::Group(object) => expression_end_line(object),
         ExprKind::Lambda { body, .. } => expression_end_line(body),
@@ -5574,12 +5734,14 @@ trait TypeExt {
 impl TypeExt for Type {
     fn type_arguments(&self) -> &[Type] {
         match self {
+            Type::Union(_) => &[],
             Type::Unit => &[],
+            Type::ReturnedView(_) => &[],
             Type::Module(_) => &[],
             Type::TypeParam(_) => &[],
             Type::Tuple(elements) => elements.as_slice(),
             Type::Function { .. } => &[],
-            Type::Closure { .. } => &[],
+            Type::Closure { .. } | Type::Callable(_) => &[],
             Type::Named(_, args) => args.as_slice(),
         }
     }
@@ -7222,3 +7384,24 @@ fn is_identifier_char(ch: char) -> bool {
 #[cfg(test)]
 #[path = "analysis_tests.rs"]
 mod tests;
+
+/// Lowers a written `Callable[...]`/`TaskCallable[...]` reference around an
+/// already lowered `def(...)` signature; any other signature stays unknown.
+fn lower_callable_type_ref(
+    task: bool,
+    call_kind: crate::ast::ReceiverKind,
+    signature: Type,
+) -> Type {
+    match signature {
+        Type::Function {
+            params,
+            return_type,
+        } => Type::Callable(Box::new(crate::sema::CallableType {
+            task,
+            call_kind: crate::sema::closure_call_kind_for(call_kind),
+            params,
+            return_type: *return_type,
+        })),
+        _ => Type::named("Unknown"),
+    }
+}

@@ -208,7 +208,8 @@ fn manifest_aware_cli_commands_support_path_dependencies() {
     );
     assert_eq!(String::from_utf8_lossy(&check.stdout), "ok\n");
 
-    for command in ["run"] {
+    {
+        let command = "run";
         let output = Command::new(aura_bin())
             .arg(command)
             .arg(&main_path)
@@ -479,7 +480,8 @@ def main() -> int32:
     );
     assert_eq!(String::from_utf8_lossy(&check.stdout), "ok\n");
 
-    for command in ["run"] {
+    {
+        let command = "run";
         let output = Command::new(aura_bin())
             .arg(command)
             .arg(&main_path)

@@ -1,0 +1,4 @@
+def main():
+    handler: def(int64) -> int64 | None = None
+    other: def(int64) -> int64 | None = None
+    print(handler == other)

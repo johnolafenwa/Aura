@@ -1,0 +1,6 @@
+def keyed(*, value: int64) -> int64:
+    return value
+
+def main():
+    step: def(value: int64) -> int64 = keyed
+    print(step(1))

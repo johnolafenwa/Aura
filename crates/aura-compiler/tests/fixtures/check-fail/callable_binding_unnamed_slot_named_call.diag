@@ -1,0 +1,6 @@
+error[AU2004]: this function value's contract has no parameter named `value`
+ --> crates/aura-compiler/tests/fixtures/check-fail/callable_binding_unnamed_slot_named_call.au:6:16
+  |
+6 |     print(step(value=1))
+  |                ^
+  = help: a positional-only slot of a written `def(...)` type is called positionally; name the slot in the type to call it by name

@@ -1,0 +1,6 @@
+error[AU2015]: callable contract mismatch: lambda parameter `other` must be named `value` to meet the expected contract
+ --> crates/aura-compiler/tests/fixtures/check-fail/callable_binding_lambda_name_mismatch.au:2:47
+  |
+2 |     step: def(value: int64) -> int64 = lambda other: other + 1
+  |                                               ^
+  = help: annotate the destination with a contract every value satisfies, or adapt a value explicitly through a thin callable alias call such as `Alias(function)`

@@ -1,0 +1,11 @@
+enum Event[T]:
+    Value(T)
+    Empty
+type Choice = Event[int64]
+def main():
+    value = Choice.Value(42)
+    match value:
+        case Event.Value(payload):
+            print(payload)
+        case Event.Empty:
+            print(0)

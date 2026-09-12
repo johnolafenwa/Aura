@@ -1,0 +1,6 @@
+error[AU2999]: method `name` is not implemented by every member of `Dog | Rock`: `Rock` has no implementation
+ --> crates/aura-compiler/tests/fixtures/check-fail/union_properties_trait_partial.au:16:17
+   |
+16 |     print(thing.name())
+   |                 ^
+  = help: select the member with a type pattern first, or implement the trait for every member

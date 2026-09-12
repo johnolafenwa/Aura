@@ -1,0 +1,11 @@
+enum Packet:
+    Data(list[int64] | None)
+def main():
+    value = Packet.Data([41, 42])
+    match own value:
+        case Packet.Data(list[int64] as values) if false:
+            print(0)
+        case Packet.Data(list[int64] as values):
+            print(values.len())
+        case Packet.Data(None):
+            print(0)

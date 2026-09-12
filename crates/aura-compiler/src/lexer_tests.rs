@@ -41,7 +41,7 @@ fn lexes_keywords_operators_and_delimiters() {
     assert!(tokens.contains(&TokenKind::KwCase));
     assert!(tokens.contains(&TokenKind::KwFor));
     assert!(tokens.contains(&TokenKind::KwIn));
-    assert!(tokens.contains(&TokenKind::KwIs));
+    assert!(tokens.contains(&TokenKind::Identifier("is".to_string())));
     assert!(tokens.contains(&TokenKind::KwWhile));
     assert!(tokens.contains(&TokenKind::KwBreak));
     assert!(tokens.contains(&TokenKind::KwContinue));
@@ -1012,4 +1012,25 @@ fn lexer_covers_extended_escape_brace_float_and_identifier_edges() {
             error.message
         );
     }
+}
+
+#[test]
+fn delimited_match_layout_islands_reject_inconsistent_dedents() {
+    let error = lex([
+        "consume(",
+        "    match value:",
+        "            case 1:",
+        "                    1",
+        "              case 2: 2",
+        ")",
+    ]
+    .join("\n")
+    .as_str())
+    .expect_err("a dedent that matches no island level must fail");
+    assert_eq!(error.code, "AU1001");
+    assert!(
+        error.message.contains("inconsistent indentation"),
+        "unexpected message {:?}",
+        error.message
+    );
 }

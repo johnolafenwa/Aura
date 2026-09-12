@@ -1,0 +1,5 @@
+def replace(value: mut (int64 | str)):
+    value = "text"
+def main():
+    mut value: int64 = 1
+    replace(value=value)

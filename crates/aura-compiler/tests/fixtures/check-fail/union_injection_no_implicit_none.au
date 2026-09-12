@@ -1,0 +1,2 @@
+def make() -> int64 | None:
+    pass

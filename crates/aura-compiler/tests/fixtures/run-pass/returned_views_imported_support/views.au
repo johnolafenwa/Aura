@@ -1,0 +1,22 @@
+public trait Named:
+    def label(self) -> view str from self
+
+public class User:
+    public name: str
+    public pair: (int64, str)
+
+    public def title(self) -> view str from self:
+        return view self.name
+
+    public def first(self) -> view int64 from self:
+        return view self.pair[0]
+
+impl Named for User:
+    def label(self) -> view str from self:
+        return view self.name
+
+public def name(user: User) -> view str from user:
+    return view user.name
+
+public def first_of(user: User) -> view int64 from user:
+    return view user.pair[0]

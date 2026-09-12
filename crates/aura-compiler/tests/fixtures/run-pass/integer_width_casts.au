@@ -1,0 +1,7 @@
+def main():
+    narrow: int32 = 7
+    wide = narrow as int64
+    print(wide + 1)
+    small = 300 as int64
+    print(small as int32)
+    print((narrow as int64) * 2)

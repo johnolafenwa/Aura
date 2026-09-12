@@ -1,0 +1,18 @@
+enum Packet:
+    Data(int64 | str)
+def main():
+    mut value = Packet.Data(0)
+    mut step = 0
+    while step < 3:
+        step += 1
+        match mut value:
+            case Packet.Data(int64 as number):
+                number += 1
+                continue
+            case Packet.Data(str as text):
+                break
+    match value:
+        case Packet.Data(int64 as number):
+            print(number)
+        case Packet.Data(str as text):
+            print(text)

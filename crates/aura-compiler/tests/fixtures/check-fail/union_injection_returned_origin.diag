@@ -1,0 +1,6 @@
+error[AU2010]: returned view origin requires exact union storage 'int64 | None', found 'int64'
+ --> crates/aura-compiler/tests/fixtures/check-fail/union_injection_returned_origin.au:5:34
+  |
+5 |     view result = preserve(value=number)
+  |                                  ^
+  = help: construct a union local first and pass that local as the returned view origin

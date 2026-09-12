@@ -1,0 +1,7 @@
+error[AU3002]: cannot mutate `value` while shared view `text` remains live
+ --> crates/aura-compiler/tests/fixtures/check-fail/union_narrow_view_overlap.au:5:9
+  |
+5 |         value = None
+  |         ^
+  = related crates/aura-compiler/tests/fixtures/check-fail/union_narrow_view_overlap.au:4:9: view `text` starts here
+  = related crates/aura-compiler/tests/fixtures/check-fail/union_narrow_view_overlap.au:6:15: last use of view `text` keeps this loan live

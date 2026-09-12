@@ -1,0 +1,5 @@
+error[AU2002]: type `Missing` does not implement trait `Named`
+ --> crates/aura-compiler/tests/fixtures/check-fail/alias_bound_erased.au:6:19
+  |
+6 | def accept(value: Marker[Missing]):
+  |                   ^
