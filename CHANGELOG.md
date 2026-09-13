@@ -7,6 +7,23 @@ in this file.
 
 ## 0.3.4 — Unreleased (technical preview)
 
+- Fix the task boundary for stored `TaskCallable` targets: every argument
+  slot, including an omitted default or a keyword-bound slot, must be
+  Transfer, and a target whose result is a view of its arguments is refused
+  (`AU3008`); the shared MIR validator enforces both independently.
+- Fix generic enum inference for named payloads and explicit imported type
+  arguments, repeated parentheses around a specialized constructor, generic
+  imported associated view calls, stored task targets returning callables,
+  loop-guard narrowing on every iteration, union values satisfying generic
+  trait bounds, trait-method values exposing the trait's contract, binding a
+  method through a Copy view, and `control.retry` with a packed worker.
+- Reject bare tuple trait-implementation targets, as documented, and make
+  named `Array` constructors a shared validator contract on both backends.
+- Measure the interpreter's task-stack headroom against the writable stack:
+  the probe excludes the guard page and reserves a profile-dependent margin,
+  and the documented child stack default is 768 KiB everywhere.
+- Resolve type aliases and packed `Callable` calls in editor analysis and
+  tokenize aliases, `|`, contextual `is`, and `Callable` in the extension.
 - Add first-class union types under the ratified Batch 1 phase 1 checkpoint
   (ADR-0052): `A | B` annotations normalize and deduplicate their members,
   transparent `type` aliases expand at every use, values inject into a union

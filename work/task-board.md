@@ -2,7 +2,7 @@
 
 Last updated: 2026-09-12
 
-## Batch 1 phase 1 (complete)
+## Batch 1 phase 1 (complete; review fixes in hosted integration)
 
 - Target: implement the ratified foundations and owned callables, complete
   extraction and feature commits in the prescribed order, and merge after
@@ -170,8 +170,18 @@ Last updated: 2026-09-12
   raised the limit to 180 minutes and merged as `d38381c4`; main CI
   `34698888164` is green on both platforms. Tutorial Examples `34681069450`
   and Docs `34681069559` passed at the phase merge commit.
-- Phase 1 is complete. Phase 2 (Option removal, H2) starts from the work
-  note's handoff section; this completion commit changes work records only.
+- Independent review (2026-09-13, `work/2026-09-13-batch-1-phase-1-review.md`):
+  one blocker (a stored `TaskCallable` target skipped Transfer on omitted
+  defaults and keyword-bound slots), 22 should-fix findings, 3 notes; verdict
+  "do not start H2 yet". Fixes on `codex/batch-1-phase-1-review-fixes`:
+  blocker and findings 1–9, 12 (analysis), 13–26 fixed with checker fixtures,
+  forced MIR/direct parity, and tests at both validator boundaries. Complete
+  local CI passed at `93167a28`: compiler coverage 96.4738% lines /
+  97.3631% functions / 95.2973% regions; LSP coverage 100%. Findings 10
+  (implicit contract restriction), 11 (boxed union/closure storage), and the
+  LSP protocol half of 12 are held for ratification.
+- Next: hosted integration of the review fixes (PR, green branch CI, merge,
+  green main CI), then the three held decisions, then phase 2 (H2).
 - Option removal and all phase 2 signature changes remain excluded; protected
   user files remain unchanged, and the coverage floors were raised to
   96.46 / 97.33 / 95.23 in the phase-end ratchet.
