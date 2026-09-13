@@ -2,7 +2,7 @@
 
 Last updated: 2026-09-13
 
-## Batch 1 phase 1 (complete; review fixes in hosted integration)
+## Batch 1 phase 1 (complete; review fixes merged)
 
 - Target: implement the ratified foundations and owned callables, complete
   extraction and feature commits in the prescribed order, and merge after
