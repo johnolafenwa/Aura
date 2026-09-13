@@ -657,3 +657,48 @@ test("Aura newline indentation recognizes multiline block headers", () => {
     "closing a continued expression returns to the logical line's base indent"
   );
 });
+
+// Batch 1 review finding 12: the grammar tokenizes contextual `type` alias
+// declarations, union `|`, contextual `is [not] None`, and owned callable
+// storage without treating the contextual words as keywords elsewhere.
+test("TextMate tokenization covers alias declarations, unions, contextual is, and callable storage", async () => {
+  const source = [
+    "public type Scalar[T: Eq] = int64 | str | None",
+    "type Doubler = Callable[mut def(value: int64) -> int64]",
+    "type = 1",
+    "def is(type: int64) -> int64:",
+    "    return type",
+    "def main(value: int64 | None) -> bool:",
+    "    return value is not None",
+    "    flags |= 1",
+    "    worker: TaskCallable[def() -> int64] = Doubler(is)"
+  ].join("\n");
+  const tokenized = await tokenizeAura(source);
+
+  assert.ok(scopesAt(tokenized, 0, "public").includes("storage.modifier.aura"));
+  assert.ok(scopesAt(tokenized, 0, "type").includes("keyword.declaration.aura"));
+  assert.ok(scopesAt(tokenized, 0, "Scalar").includes("entity.name.type.aura"));
+  assert.ok(scopesAt(tokenized, 0, "int64").includes("support.type.primitive.aura"));
+  assert.ok(scopesAt(tokenized, 0, "|").includes("keyword.operator.aura"));
+  assert.ok(scopesAt(tokenized, 0, "|", 1).includes("keyword.operator.aura"));
+
+  assert.ok(scopesAt(tokenized, 1, "type").includes("keyword.declaration.aura"));
+  assert.ok(scopesAt(tokenized, 1, "Doubler").includes("entity.name.type.aura"));
+  assert.ok(scopesAt(tokenized, 1, "Callable").includes("support.type.primitive.aura"));
+  assert.ok(scopesAt(tokenized, 1, "mut").includes("storage.modifier.aura"));
+  assert.ok(scopesAt(tokenized, 1, "->").includes("keyword.operator.aura"));
+
+  assert.equal(scopesAt(tokenized, 2, "type").includes("keyword.declaration.aura"), false);
+  assert.equal(scopesAt(tokenized, 3, "is").includes("keyword.control.aura"), false);
+  assert.equal(scopesAt(tokenized, 3, "type").includes("keyword.declaration.aura"), false);
+  assert.equal(scopesAt(tokenized, 4, "type").includes("keyword.declaration.aura"), false);
+
+  assert.ok(scopesAt(tokenized, 5, "|").includes("keyword.operator.aura"));
+  assert.ok(scopesAt(tokenized, 5, "None").includes("constant.language.aura"));
+  assert.ok(scopesAt(tokenized, 6, "is").includes("keyword.control.aura"));
+  assert.ok(scopesAt(tokenized, 6, "not").includes("keyword.control.aura"));
+  assert.ok(scopesAt(tokenized, 6, "None").includes("constant.language.aura"));
+  assert.ok(scopesAt(tokenized, 7, "|=").includes("keyword.operator.aura"));
+  assert.ok(scopesAt(tokenized, 8, "TaskCallable").includes("support.type.primitive.aura"));
+  assert.equal(scopesAt(tokenized, 8, "is").includes("keyword.control.aura"), false);
+});

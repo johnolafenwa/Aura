@@ -1,0 +1,12 @@
+class Box[T]:
+    value: T
+
+type Wrapped[T] = Box[T]
+
+def main():
+    single = (Wrapped[int64])(value=1)
+    print(single.value)
+    double = ((Wrapped[int64]))(value=2)
+    print(double.value)
+    triple = (((Wrapped[str])))(value="three")
+    print(triple.value)

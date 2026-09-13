@@ -1,0 +1,24 @@
+trait Twin:
+    def twin(self) -> Self
+
+class A:
+    value: int64
+
+class B:
+    value: int64
+
+impl Twin for A:
+    def twin(self) -> A:
+        return A(value=self.value)
+
+impl Twin for B:
+    def twin(self) -> B:
+        return B(value=self.value)
+
+def dup[T: Twin](item: T) -> T:
+    return item.twin()
+
+def main():
+    item: A | B = A(value=1)
+    copied = dup(item)
+    print(1)

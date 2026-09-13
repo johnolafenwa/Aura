@@ -1,0 +1,3 @@
+public enum Slot[T]:
+    Filled(T)
+    Empty

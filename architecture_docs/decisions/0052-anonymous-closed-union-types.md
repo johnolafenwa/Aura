@@ -1,10 +1,11 @@
 # ADR-0052: Anonymous closed union types
 
-- Status: Accepted; detailed design ratified 2026-09-08; implementation in Batch 1
+- Status: Accepted; detailed design ratified 2026-09-08; phase 1 implemented in Batch 1
 - Ratified direction: 2026-09-06, user approval of the priority roadmap
 - Date: 2026-08-02
 - Version target: Aura 0.4
-- Implementation: Phase 1 in progress; Option removal remains phase 2
+- Implementation: Phase 1 implemented (merged as `1b130a03`, completion
+  recorded at `bb41ef5f`); Option removal remains phase 2
 - Roadmap decision: Batch 1, phase 1
 - Related: ADR-0001, ADR-0011, ADR-0022, ADR-0026, ADR-0028, ADR-0033,
   ADR-0034, ADR-0038, ADR-0039, and ADR-0044
@@ -30,7 +31,7 @@ retained baseline below differs. The answers are:
 - Q23: A — Lookup/Poll preserve generic presence; Batch 2 revisits app-facing optional dict.get ([design section](../16-batch-1-design-checkpoint.md#library-and-diagnostic-rules--q23q24)).
 - Q24: A — AU2010–AU2015 plus the existing diagnostic families ([design section](../16-batch-1-design-checkpoint.md#library-and-diagnostic-rules--q23q24)).
 
-Phase 1 implements the type and owned-callable foundations. Existing Option
+Phase 1 implemented the type and owned-callable foundations. Existing Option
 library signatures, `T?`, and `*_or_none` names remain until phase 2. Stored
 loan captures and captured-self result origins remain outside phase 1.
 
@@ -38,7 +39,12 @@ loan captures and captured-self result origins remain outside phase 1.
 
 The user approved explicit closed unions, replacement of `Option[T]` by
 `T | None`, type aliases, safe narrowing, and deterministic normalization.
-These features are not implemented. The ratification section distinguishes
+Explicit closed unions, type aliases, safe narrowing, and deterministic
+normalization are implemented by Batch 1 phase 1. The replacement of
+`Option[T]` by `T | None` (H2) is not implemented: existing Option library
+signatures, `T?`, and `*_or_none` names remain until phase 2, and stored
+loan captures and captured-self result origins stay outside phase 1. The
+ratification section distinguishes
 settled behavior from retained alternatives; the detailed answers above now
 govern implementation. See the [approved roadmap](../14-priority-roadmap.md).
 

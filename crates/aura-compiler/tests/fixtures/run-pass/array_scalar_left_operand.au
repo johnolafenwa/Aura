@@ -1,0 +1,7 @@
+def main():
+    values = Array[int64].from_list([1, 2, 3], [3])
+    doubled = 2 * values
+    print(doubled.get([2]))
+    floats = Array[float64].from_list([1.5, 2.5], [2])
+    scaled = 2.0 * floats
+    print(scaled.get([1]))

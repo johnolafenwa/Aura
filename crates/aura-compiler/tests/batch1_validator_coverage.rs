@@ -46,20 +46,25 @@ fn find_block<'a>(function: &'a mut Value, matches: impl Fn(&Value) -> bool) -> 
         .expect("expected block not found")
 }
 
-fn assert_rejected(encoded: Value, expected: &str) {
+/// Both public boundaries must refuse the forged module for the same shared
+/// validator reason: the interpreter reports it as `invalid MIR loan flow: …`
+/// and the direct backend reports the bare validator message. Returns the
+/// shared message so callers can pin further details.
+fn assert_rejected(encoded: Value, expected: &str) -> String {
     let mir: MirModule = serde_json::from_value(encoded).expect("forged MIR should deserialize");
     let interpreted = run_mir(&mir).expect_err("interpreter must reject the forged module");
-    assert!(
-        interpreted.message.contains(expected),
-        "interpreter rejection `{}` should mention `{expected}`",
-        interpreted.message
-    );
     let native =
         emit_host_native_object(&mir).expect_err("native emission must reject the forged module");
+    assert_eq!(
+        interpreted.message.strip_prefix("invalid MIR loan flow: "),
+        Some(native.as_str()),
+        "both boundaries must report the same shared validator reason"
+    );
     assert!(
         native.contains(expected),
-        "native rejection `{native}` should mention `{expected}`"
+        "shared rejection `{native}` should mention `{expected}`"
     );
+    native
 }
 
 fn rvalue_kind(instruction: &Value) -> Option<&str> {
@@ -660,22 +665,76 @@ fn container_insert_without_an_identity_poisons_the_container() {
     assert_rejected(encoded, "authoritative");
 }
 
-#[test]
-fn container_insert_without_an_operand_poisons_every_element() {
-    let source = format!(
+fn container_insert_source() -> String {
+    format!(
         "{}def main():\n    mut callbacks: list[def(own Holder) -> None] = [consume]\n    callbacks.append(consume)\n    match callbacks.get(0):\n        case Option.Some(callback):\n            callback(Holder(values=[]))\n        case Option.None:\n            print(\"none\")\n",
         holder_prelude()
-    );
-    let mut encoded = encode(&source);
-    let main = function_mut(&mut encoded, "main");
-    let call = find_instruction(main, |instruction| {
+    )
+}
+
+fn append_call_mut(function: &mut Value) -> &mut Value {
+    &mut find_instruction(function, |instruction| {
         rvalue_kind(instruction) == Some("Call")
             && instruction["Assign"]["value"]["Call"]["callee"]["Member"]["field"]
                 == json!("append")
-    });
-    call["Assign"]["value"]["Call"]["args"] = json!([]);
-    let mir: MirModule = serde_json::from_value(encoded).unwrap();
-    run_mir(&mir).expect_err("an append without an operand must not run");
+    })["Assign"]["value"]["Call"]
+}
+
+#[test]
+fn container_insert_without_an_operand_poisons_every_element() {
+    // Arity corruption: an `append` with no operand cannot attribute an
+    // identity to any element, so the validator poisons every element
+    // position and the later indirect call through `callbacks.get(0)` has no
+    // authoritative contract. Both boundaries refuse the module for exactly
+    // that reason before anything executes.
+    let mut encoded = encode(&container_insert_source());
+    append_call_mut(function_mut(&mut encoded, "main"))["args"] = json!([]);
+    let shared = assert_rejected(encoded, "no authoritative callable contract");
+    assert!(
+        shared.contains("indirect call in `main`"),
+        "the poisoned element must surface at the indirect call: {shared}"
+    );
+}
+
+#[test]
+fn container_insert_with_a_well_arity_unknown_operand_poisons_every_element() {
+    // Same poisoning boundary with the arity intact: the operand is a
+    // well-typed place that carries no authoritative callable identity, so
+    // the element positions are poisoned rather than attributed to the
+    // stale `consume` identity that the literal established.
+    let mut encoded = encode(&container_insert_source());
+    let main = function_mut(&mut encoded, "main");
+    let contract = main["local_types"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["name"] == "callbacks")
+        .map(|entry| entry["ty"]["Named"][1][0].clone())
+        .expect("callbacks should be typed");
+    main["local_types"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({ "name": "%t91", "ty": contract }));
+    let call = append_call_mut(main);
+    assert_eq!(call["args"].as_array().map(Vec::len), Some(1));
+    call["args"][0]["value"] = json!({ "Place": "%t91" });
+    let shared = assert_rejected(encoded, "no authoritative callable contract");
+    assert!(
+        shared.contains("indirect call in `main`"),
+        "the poisoned element must surface at the indirect call: {shared}"
+    );
+}
+
+#[test]
+fn container_insert_of_a_known_function_keeps_every_element_callable() {
+    // Positive pair: the unforged module inserts a function operand with a
+    // recorded identity, so both boundaries accept it and the interpreter
+    // observes the appended callback running.
+    let mir: MirModule = serde_json::from_value(encode(&container_insert_source()))
+        .expect("lowered MIR should deserialize");
+    let output = run_mir(&mir).expect("the interpreter accepts the recorded insert");
+    assert_eq!(output.stdout, "");
+    emit_host_native_object(&mir).expect("the direct backend accepts the recorded insert");
 }
 
 const RETURNED_VIEW: &str = "class User:\n    name: str\ndef name(user: User) -> view str from user:\n    return view user.name\ndef main():\n    user = User(name=\"aura\")\n    view current = name(user)\n    print(current.len())\n";
@@ -893,7 +952,6 @@ fn variant_payload_from_a_tuple_typed_scrutinee_is_rejected() {
 fn callable_argument_without_an_identity_is_rejected() {
     let source = "def apply(callback: def(int64) -> int64) -> int64:\n    return callback(1)\ndef twice(value: int64) -> int64:\n    return value * 2\ndef main():\n    print(apply(twice))\n";
     let mut encoded = encode(source);
-    let main = function_mut(&mut encoded, "main");
     let contract = encoded["functions"]
         .as_array()
         .unwrap()

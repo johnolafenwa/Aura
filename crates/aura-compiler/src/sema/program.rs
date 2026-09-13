@@ -154,6 +154,28 @@ impl Program {
                 .and_then(|namespace| namespace.all_aliases.get(name))
         }
     }
+    /// The nominal constructor an `Alias(...)` or `Alias[T](...)` call expands
+    /// to, for tooling that mirrors the checker's call resolution. A fresh
+    /// default budget applies; capacity failures and non-constructor targets
+    /// yield `None`.
+    pub(crate) fn expand_alias_constructor(
+        &self,
+        alias: &AliasInfo,
+        type_args: Option<&[Type]>,
+        span: crate::diag::Span,
+    ) -> Option<Expr> {
+        alias
+            .constructor_callee(
+                type_args,
+                span,
+                &self.module_name,
+                &self.canonical_type_names,
+                &super::type_budget::ExpansionBudget::default(),
+            )
+            .ok()
+            .flatten()
+    }
+
     pub(crate) fn resolve_alias_type(
         &self,
         name: &str,
@@ -1347,7 +1369,10 @@ pub(crate) fn check_with_context(module: Module, context: ModuleContext) -> Resu
             &canonical_type_names,
             &impl_type_param_scope,
         )?;
-        if matches!(for_type, Type::TypeParam(_)) {
+        // The target must be a named outer type (`Box[T]`): a bare type
+        // parameter has no nominal identity, and a bare tuple has no nominal
+        // dispatch table on the direct backend.
+        if matches!(for_type, Type::TypeParam(_) | Type::Tuple(_)) {
             return Err(Diagnostic::at(
                 impl_decl.span,
                 "trait impl target must name a concrete or generic outer type",

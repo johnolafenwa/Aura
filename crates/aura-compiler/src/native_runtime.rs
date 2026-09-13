@@ -7245,6 +7245,16 @@ pub extern "C-unwind" fn aura_direct_none_test(value: *mut OpaqueValue) -> i64 {
     })
 }
 
+/// Whether a value reached through an erased receiver (a generic body's
+/// `T`) currently holds a union, whose active member then carries the
+/// dispatched method (ADR-0052 A8).
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_value_is_union(value: *mut OpaqueValue) -> i64 {
+    task_runtime_boundary(|| unsafe {
+        with_value(value, |value| i64::from(matches!(value, Value::Union(_))))
+    })
+}
+
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_union_take_payload(
     value: *mut OpaqueValue,
@@ -12798,6 +12808,22 @@ pub extern "C-unwind" fn aura_direct_fail_division_by_zero(line: i64, column: i6
     task_runtime_boundary(|| match runtime_span(line, column) {
         Some(span) => runtime_error_at(span, "division by zero"),
         None => runtime_error("division by zero"),
+    })
+}
+
+/// A mutable trait method reached through a generic receiver that holds a
+/// union at run time: the direct backend has no static write-back path for
+/// the active payload, so the call is refused with a diagnostic instead of
+/// mutating a detached copy.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_fail_erased_union_mutable_receiver(
+    line: i64,
+    column: i64,
+) -> ! {
+    const MESSAGE: &str = "the direct backend cannot call a mutable trait method through a generic receiver holding a union; narrow the union to its member before the call";
+    task_runtime_boundary(|| match runtime_span(line, column) {
+        Some(span) => runtime_error_at(span, MESSAGE),
+        None => runtime_error(MESSAGE),
     })
 }
 

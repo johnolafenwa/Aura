@@ -1351,7 +1351,7 @@ test("compiler bridge exposes guarded TaskGroup stack override completion and ho
       );
       assert.ok(
         hover.value.includes(
-          "The 256 KiB minimum is opt-in for a measured shallow task; ordinary starts use the safe 512 KiB default."
+          "The 256 KiB minimum is opt-in for a measured shallow task; ordinary starts use the safe 768 KiB default."
         ),
         `${name} hover should distinguish the opt-in minimum from the safe default`
       );
@@ -6190,6 +6190,82 @@ test("compiler bridge exposes the global numeric Array surface and result types"
     assert.equal(rejected.diagnostics.length, 1);
     assert.equal(rejected.diagnostics[0].code, "AU2003");
     assert.equal(rejected.diagnostics[0].message, "integer Array `/` is not supported");
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+// Batch 1 review finding 12: alias calls, alias hover/definitions, alias and
+// member completion, and packed-callable call results are compiler-owned.
+test("compiler bridge resolves type alias calls, hover, definitions, and completions", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aura-lsp-type-alias-"));
+  const source = [
+    "class Box:",
+    "    value: int64",
+    "type Wrapped = Box",
+    "type Doubler = Callable[def(value: int64) -> int64]",
+    "def double(value: int64) -> int64:",
+    "    return value * 2",
+    "def main():",
+    "    box = Wrapped(value=1)",
+    "    callback: Callable[def(value: int64) -> int64] = Doubler(double)",
+    "    result = callback(21)",
+    "    print(box.value + result)",
+    ""
+  ].join("\n");
+
+  try {
+    setWorkspaceRoots([repoRoot, tempRoot]);
+    const mainPath = path.join(tempRoot, "main.au");
+    const mainUri = `file://${mainPath}`;
+    const analysis = await analyzeWithCompiler(mainUri, source);
+
+    assert.ok(analysis);
+    assert.deepEqual(analysis.diagnostics, []);
+    const aliasUse = analysis.occurrences.find(
+      (occurrence) => occurrence.line === 7 && occurrence.start_character === 10
+    );
+    assert.ok(aliasUse, "the alias call should have an occurrence");
+    assert.equal(aliasUse.hover, "```aura\ntype Wrapped = Box\n```");
+    assert.equal(aliasUse.definition?.line, 2);
+    assert.ok(
+      analysis.occurrences.some(
+        (occurrence) => occurrence.line === 7 && occurrence.hover.includes("binding box: Box")
+      )
+    );
+    assert.ok(
+      analysis.occurrences.some(
+        (occurrence) =>
+          occurrence.line === 9 && occurrence.hover.includes("binding result: int64")
+      )
+    );
+    const fieldUse = analysis.occurrences.find(
+      (occurrence) => occurrence.line === 10 && occurrence.hover.includes("field value: int64")
+    );
+    assert.ok(fieldUse, "the member use through the alias should resolve");
+    assert.equal(fieldUse.definition?.line, 1);
+
+    const topLevel = await completeWithCompiler(mainUri, source, 7, 10, null);
+    assert.ok(topLevel);
+    assert.ok(
+      topLevel.some(
+        (item) => item.name === "Wrapped" && item.kind === "type" && item.detail === "type Wrapped = Box"
+      )
+    );
+    assert.ok(topLevel.some((item) => item.name === "Doubler" && item.kind === "type"));
+
+    const memberLine = "    box.";
+    const memberSource = source.replace("    print(box.value + result)", memberLine);
+    const memberIndex = memberSource.split("\n").indexOf(memberLine);
+    const members = await completeWithCompiler(
+      mainUri,
+      memberSource,
+      memberIndex,
+      memberLine.length,
+      "."
+    );
+    assert.ok(members);
+    assert.ok(members.some((item) => item.name === "value" && item.kind === "field"));
   } finally {
     fs.rmSync(tempRoot, { recursive: true, force: true });
   }

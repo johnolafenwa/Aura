@@ -3,7 +3,7 @@
 //! reads, loan writes that materialize module constants, floating powers, and
 //! forged member calls on union receivers.
 
-use aura_compiler::{lower_source_to_mir, run_mir, run_source, MirModule};
+use aura_compiler::{emit_host_native_object, lower_source_to_mir, run_mir, run_source, MirModule};
 use serde_json::Value;
 
 fn run_stdout(source: &str) -> String {
@@ -133,7 +133,7 @@ def main():
 }
 
 #[test]
-fn interpreter_panics_from_forged_array_constructors_become_diagnostics() {
+fn forged_array_constructor_operands_are_rejected_before_either_backend_runs() {
     let source = r#"
 def main():
     values = Array[int64].from_list([1, 2], [2])
@@ -147,9 +147,21 @@ def main():
     });
     constructor["Assign"]["value"]["Call"]["args"][0]["value"] = serde_json::json!({ "Int": 1 });
     let forged: MirModule = serde_json::from_value(encoded).expect("forged MIR deserializes");
+    // The shared validator's named-builtin contract table refuses the
+    // operand on both public boundaries with one reason; neither backend
+    // reaches the operand shape the checker guaranteed, so no interpreter
+    // panic is contained and no native object is produced.
+    let expected = "invalid MIR call to builtin `Array.from_list` in `main` binds argument `values` to an operand that is not `list[int64]`";
     let error = run_mir(&forged).expect_err("a non-list source must not construct an Array");
-    assert_eq!(
-        error.message,
-        "Aura MIR runtime panicked while executing the program"
+    assert!(
+        error.message.contains(expected),
+        "interpreter rejection `{}` should mention `{expected}`",
+        error.message
+    );
+    let native = emit_host_native_object(&forged)
+        .expect_err("native emission must reject the forged constructor");
+    assert!(
+        native.contains(expected),
+        "native rejection `{native}` should mention `{expected}`"
     );
 }

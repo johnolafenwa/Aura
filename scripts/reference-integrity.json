@@ -312,7 +312,7 @@
       "reason": "Long-running documentation development server command."
     },
     "docs/manual/cli-and-tooling.md#json-1": {
-      "sha256": "40e1e2746a98715043ae7483f4df7fe8e4559f4e77f3b3611b5bb2aba192a856",
+      "sha256": "0a4d1173ba634326469af559cd990f04bacef38271743abbdf3d240b1c4a360e",
       "mode": "illustrative",
       "reason": "Two-line analysis-service request transcript, not a single executable JSON document."
     },
@@ -1062,12 +1062,12 @@
       "reason": "Normative module-and-import EBNF fragment interpreted by the grammar prose, not Aura source."
     },
     "docs/manual/grammar.md#ebnf-3": {
-      "sha256": "421b4a630ec25c1267c3cf88c5d78e5f51f129698c1154e35dae43f5fbfed4dd",
+      "sha256": "a9fa0a0e119eb76b326dc6f183af05b652d2360e7409863af969efd107bdecc7",
       "mode": "illustrative",
       "reason": "Normative item-declaration EBNF fragment interpreted by the grammar prose, not Aura source."
     },
     "docs/manual/grammar.md#ebnf-4": {
-      "sha256": "febc4303c6de8bfadf1eff77c5678af8a5fe56158caa1d3a66567bdde30e7daa",
+      "sha256": "6fe845d371892125644392f1d6b6ae2ffde502007a5872f8111cea6ac0961bd7",
       "mode": "illustrative",
       "reason": "Normative type-and-type-parameter EBNF fragment interpreted by the grammar prose, not Aura source."
     },

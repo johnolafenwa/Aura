@@ -1,0 +1,29 @@
+import generic_imported_associated_view_support.api as api
+
+class Holder:
+    box: api.Box[int64]
+
+    def left(self) -> view int64 from self:
+        return view api.Box[int64].associated(self.box)
+
+    def inferred(self) -> view int64 from self:
+        return view api.Box.associated(self.box)
+
+def left(box: api.Box[int64]) -> view int64 from box:
+    return view api.Box.associated(box)
+
+def text(box: api.Box[str]) -> view str from box:
+    return view api.Box[str].associated(box)
+
+def main():
+    box = api.Box[int64](left=1, right=2)
+    view chosen = left(box)
+    print(chosen)
+    holder = Holder(box=api.Box[int64](left=3, right=4))
+    view explicit = holder.left()
+    print(explicit)
+    view inferred = holder.inferred()
+    print(inferred)
+    words = api.Box[str](left="ada", right=5)
+    view word = text(words)
+    print(word)

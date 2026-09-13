@@ -1,0 +1,14 @@
+type Job = TaskCallable[def(count: int64 = ..., *, label: str) -> str]
+
+def worker(count: int64 = 2, *, label: str) -> str:
+    return f"{label}:{count}"
+
+def main():
+    target = Job(worker)
+    with TaskGroup() as group:
+        task = group.start(target, label="a")
+        print(task.result_or("fallback", timeout=1s))
+    second = Job(worker)
+    with TaskGroup() as group:
+        task = group.start(second, 5, label="b")
+        print(task.result_or("fallback", timeout=1s))

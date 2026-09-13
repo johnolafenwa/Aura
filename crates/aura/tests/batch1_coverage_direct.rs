@@ -121,6 +121,31 @@ fn assert_backends_agree(prefix: &str, source: &str, expected_stdout: &str) {
 }
 
 #[test]
+fn direct_backend_refuses_a_mutable_trait_method_through_an_erased_union_receiver() {
+    // The interpreter writes the mutation back through the union's active
+    // payload; the direct backend has no write-back path for a payload behind
+    // an erased place and reports the documented diagnostic instead of
+    // mutating a detached copy (see Current Limits).
+    let source = include_str!(
+        "../../aura-compiler/tests/fixtures/check-pass/union_member_bound_mutable_dispatch.au"
+    );
+    let (_build, run) = build_and_run_direct_source("aura-erased-union-mutable", source);
+    assert!(
+        !run.status.success(),
+        "the direct binary must refuse the erased union mutation, stdout was:\n{}",
+        String::from_utf8_lossy(&run.stdout)
+    );
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(
+        stderr.contains(
+            "cannot call a mutable trait method through a generic receiver holding a union"
+        ),
+        "unexpected direct diagnostic:\n{stderr}"
+    );
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "2\n");
+}
+
+#[test]
 fn direct_backend_dispatches_trait_methods_on_union_receivers() {
     assert_backends_agree(
         "aura-cov-union-dispatch",

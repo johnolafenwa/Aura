@@ -1003,7 +1003,7 @@ pub(super) fn map_key_value_types(ty: &Type) -> Option<(&Type, &Type)> {
     }
 }
 
-pub(super) fn is_builtin_io_resource_type(name: &str, args: &[Type]) -> bool {
+pub(crate) fn is_builtin_io_resource_type(name: &str, args: &[Type]) -> bool {
     args.is_empty()
         && matches!(
             name,

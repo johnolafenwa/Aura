@@ -243,8 +243,13 @@ The condition must have type `bool`. A false first condition executes the body z
 
 A `while` condition that tests a union place with `is None` or
 `is not None` narrows the place inside the body, and a body `continue` after
-such a test narrows the rest of that iteration. A fact established before the
-loop survives into the body only when no iteration can invalidate it.
+such a test narrows the rest of that iteration. Because the condition runs
+before every iteration, its narrowing holds in the body on every pass, even
+when the body itself assigns the place later. A fact established before the
+loop survives into the condition and the body only when no iteration can
+invalidate it: the loop header is a fixed point over the entry and every
+backedge, so a body that assigns such a place is checked again without the
+entry fact.
 
 Moving a non-copy outer value for the first time inside a repeatable loop is rejected when it could make a later iteration invalid. Reinitialize the place on every continuing path or restructure ownership explicitly.
 
@@ -269,7 +274,9 @@ the body does not switch or truncate that active iteration.
 
 Every target leaf is local to the body, does not escape, and cannot shadow a
 name already visible in the same scope. A tuple target must match the yielded
-tuple shape exactly.
+tuple shape exactly. As for `while`, a narrowing fact established before the
+loop survives into the body only when no iteration can invalidate it; test
+the place again inside the body when the body assigns it.
 
 Maintained iterable forms include:
 

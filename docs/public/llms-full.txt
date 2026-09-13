@@ -1758,7 +1758,7 @@ See [Concurrency](/manual/concurrency) for structured-concurrency semantics.
 | `Task.result_or_none` | `result_or_none(timeout: Duration = ...) -> Option[T]` | `Some(value)` or `None` for failure, timeout, cancellation, or immediate absence; consumes the observation right when `T` is non-repeatable, including on `None`. |
 | `Task.result_or` | `result_or(default: own T, timeout: Duration = ...) -> T` | Value or fallback; consumes the observation right when `T` is non-repeatable. |
 | `TaskGroup()` | `TaskGroup()` | Task group resource constructor. |
-| `TaskGroup.start` | `start(function, own ...) -> Task[T]` | Requires every capture and result to be `Transfer`; accepts inferred or explicit `function[Types]` / `Type.associated_method[Types]` targets; starts the child on the guarded 512 KiB default stack. |
+| `TaskGroup.start` | `start(function, own ...) -> Task[T]` | Requires every capture and result to be `Transfer`; accepts inferred or explicit `function[Types]` / `Type.associated_method[Types]` targets; starts the child on the guarded 768 KiB default stack. |
 | `TaskGroup.start_soon` | `start_soon(function, own ...) -> None` | Applies the same Transfer and target-specialization rules without returning a handle. |
 | `TaskGroup.start_with_stack` | `start_with_stack(bytes: int64, function, own ...) -> Task[T]` | Applies the same Transfer and target-specialization rules with an explicit guarded 256 KiB..64 MiB request; 256 KiB is for measured shallow tasks, not the default; Provisional under ADR-0032. |
 | `TaskGroup.start_soon_with_stack` | `start_soon_with_stack(bytes: int64, function, own ...) -> None` | Applies the same rules and explicit guarded range without retaining a handle; 256 KiB is for measured shallow tasks, not the default; Provisional under ADR-0032. |
@@ -2939,8 +2939,8 @@ The JSON result is an array of `{ "name": str, "kind": str, "detail": str }` obj
 are:
 
 ```json
-{"id":1,"semantic_interface_version":6,"method":"analyze","path":"/absolute/app.au","source":"print(1)\n"}
-{"id":2,"semantic_interface_version":6,"method":"complete","path":"/absolute/app.au","source":"value.\n","line":0,"character":6,"trigger":"."}
+{"id":1,"semantic_interface_version":14,"method":"analyze","path":"/absolute/app.au","source":"print(1)\n"}
+{"id":2,"semantic_interface_version":14,"method":"complete","path":"/absolute/app.au","source":"value.\n","line":0,"character":6,"trigger":"."}
 ```
 
 Each response is one line containing the same `id`,
@@ -3472,12 +3472,16 @@ entry requires a mutable outer capability. When an independent snapshot is
 needed, make the outer parameter `own` and use an `own` capture, or pass the
 value to a named helper that creates the owned closure.
 
-An ordinary by-value closure environment is read-only. A body may mutate only
-a `mut` entry from an explicit capture list. Such a closure is
-mutable-repeatable: it must be stored in a `mut` local and called sequentially
-through that mutable place. A shared-loan closure is shared-repeatable. A body
-that consumes a non-Copy `own` capture remains a consuming, single-use closure,
-even when the environment also contains loans.
+A by-value closure environment is read-only unless the body mutates one of
+its captures: a `mut` operation on an owned capture, whether it moved or
+copied into the environment implicitly or through `own name`, or a write
+through a `mut` entry from an explicit capture list. Such a closure is
+Mutable (mutable-repeatable): it must be held in a `mut` local or called
+through a mutable place, and calls run sequentially through that place. A
+closure whose body only reads its captures, including a shared-loan closure,
+is Shared (shared-repeatable). A body that consumes a non-Copy `own` capture
+remains a consuming, single-use closure, even when the environment also
+contains loans.
 
 A by-value closure is Transfer exactly when all of its captures are Transfer. Moving a
 qualifying closure into `TaskGroup.start`, `start_soon`, or an explicit-stack
@@ -3561,14 +3565,22 @@ capability: a `self` method binds a Repeatable closure, a `mut self` method
 binds a Mutable closure whose receiver is environment-owned state updated on
 every call, and an `own self` method binds a Consuming closure. The receiver
 is acquired exactly once when the bound method is created. A `copy class`
-receiver is snapshotted, so later calls never change the original. Any other
-receiver must be an owned local, which moves into the closure, or a fresh
-temporary. A shared or mutable parameter and a view cannot be bound by this
-spelling; clone the value into an owned local first. Trait methods selected
-for the concrete receiver type bind the same way and dispatch statically. An
-omitted argument with a declaration default is supplied by the method's own
-default expression, evaluated at the call. Bound methods store, pack, and
-start like any closure with the same call kind.
+receiver is snapshotted wherever it is reached — an owned local, a shared or
+mutable parameter, or a `view` — so the closure is an independent owned
+value and later calls never change the original. Any other receiver must be
+an owned local, which moves into the closure, or a fresh temporary. A
+non-Copy shared or mutable parameter and a view of a non-Copy value cannot be
+bound by this spelling; clone the value into an owned local first. Trait
+methods selected for the concrete receiver type bind the same way and
+dispatch statically, but their contract is the trait's public one: the
+trait's parameter names, keyword-only boundary, and default availability,
+never the implementation's local parameter names. Each slot, including a
+returned-view origin, forwards to the implementation by ordinal, so an
+implementation may name its parameters, keyword-only ones included, as it
+likes. An omitted argument with a declaration
+default is supplied by the method's own default expression, evaluated at the
+call. Bound methods store, pack, and start like any closure with the same
+call kind.
 
 ```aura
 class Counter:
@@ -3601,9 +3613,9 @@ wrong type-argument count or an unsatisfiable bound reports `AU2002`, and an
 associated method of a generic class still needs a call (`AU2005`). A
 `view ... from self` method cannot be bound (`AU3010`), while a method
 returning a view of one of its other parameters keeps that contract in the
-bound closure (see Stored View Contracts). Binding a shared or mutable
-parameter reports `AU3002`, binding a
-view reports `AU3004`, and a later use of the moved receiver reports `AU3001`
+bound closure (see Stored View Contracts). Binding a non-Copy shared or
+mutable parameter reports `AU3002`, binding a view of a non-Copy value
+reports `AU3004`, and a later use of the moved receiver reports `AU3001`
 pointing at the binding site. Calling a Mutable bound method through an
 immutable local reports `AU3003`.
 
@@ -3679,8 +3691,10 @@ Mutable callbacks. Task start accepts a qualifying closure by move for one
 invocation.
 
 Conditional and `match` expressions cannot merge capturing closures from
-multiple branches. This is an explicit closure-union boundary, not an
-implementation-defined coercion.
+multiple branches unless the destination carries an explicit common
+`Callable` contract, in which case each reached branch packs its own value
+(see the merge rule above). This is an explicit closure-union boundary, not
+an implementation-defined coercion.
 
 The capture, callability, ownership, and Transfer rules are language-defined;
 the implementation does not choose a reference-versus-value capture mode.
@@ -4174,7 +4188,13 @@ kind is Shared, Mutable, or Consuming; a Mutable target's captures are
 child-owned state with no parent writeback. An ordinary erased `Callable`
 target is rejected with `AU3008` because its environment is hidden, and a
 `TaskCallable[...]` contract cannot return a view (`AU3008`) because the
-child's result must be an owned value. Existing
+child's result must be an owned value; a named function or function value
+whose result is `view ... from` a parameter is refused for the same reason.
+Every argument slot crosses the boundary with its declared type, so a slot
+bound by name or filled by an omitted default must be Transfer exactly like a
+positional one (`AU3008`), and the shared MIR validator independently refuses
+a start whose contract carries a host resource, a returned view, or a
+non-Transfer capture. Existing
 direct named-function and
 associated-method-without-`self` targets remain accepted, including explicit
 generic targets written as `function[Types]` or
@@ -4190,7 +4210,7 @@ arguments evaluate the runtime-selected target's own default expression. Task
 start therefore follows the same default-binding rule as an ordinary indirect
 call.
 
-Ordinary `start` and `start_soon` request the 524,288-byte (512 KiB) default.
+Ordinary `start` and `start_soon` request the 786,432-byte (768 KiB) default.
 The two `_with_stack` methods take an exact `int64` byte count before the
 callable target. Accepted requests are 262,144 through 67,108,864 bytes
 inclusive (256 KiB through 64 MiB). Values outside that range are rejected,
@@ -4203,12 +4223,35 @@ surface is Provisional under ADR-0032.
 The 256 KiB lower bound is an opt-in minimum for a task whose shallow stack use
 has been measured; it is not the generally safe default. During integration,
 the complete compiled Aura HTTP example faulted when 256 KiB was used as the
-global task default and succeeded with the 512 KiB default. An isolated
+global task default and succeeded with the then-current 512 KiB default;
+the maintained default has since been raised to 768 KiB. An isolated
 runtime-level HTTP regression does succeed when only its protocol-calling
 children are forced to 256 KiB: that test proves deep host protocol frames
 stay on the service workers, but it excludes the compiled program's
 MIR/direct language-execution frames. Keep the ordinary default unless
 measurement of the complete task justifies a custom size.
+
+The MIR interpreter probes the running task's writable coroutine stack before
+every Aura call. Headroom is measured from the first writable byte above the
+allocator's guard page, not from the start of the mapping, so the guard page
+is never counted as usable space. A call that would leave less than the
+interpreter's headroom reserve traps with `AU4005` ("task stack exhausted
+while calling ..."), naming the callee and the writable bytes that remain,
+before any frame can reach the guard page. The reserve exceeds the stack one
+interpreter call transition consumes, which depends on how the interpreter
+itself was compiled: an optimized build keeps 128 KiB in reserve and a
+debug-assertion build keeps 224 KiB, because an unoptimized interpreter spends
+roughly 170-190 KiB of stack per Aura call. Both values stay below the
+first-call headroom of the 256 KiB opt-in minimum, so that minimum can always
+run one call; how many nested calls a given capacity holds beyond that is
+likewise profile dependent. The root task that executes the program entry
+reserves a lazily mapped 16 MiB coroutine stack and is probed the same way;
+whether deep root recursion reports `AU4005` or the 256-call depth diagnostic
+first depends on that per-call cost, and both are diagnostics rather than
+faults. A program that starts no task runs its entry on the 64 MiB runtime
+thread, where only the depth limit applies. The direct backend has only its
+256-call depth guard: it performs no headroom probe and never reports the
+`AU4005` stack-exhaustion diagnostic.
 
 ```aura
 with group = TaskGroup():
@@ -4453,7 +4496,7 @@ leave the loop without taking that check. A single long loop body or long
 straight-line CPU work can still delay siblings pinned to that worker. The
 inserted check does not inspect cancellation; tasks that must stop on request
 still call `cancelled()`. Each ordinary lightweight task requests a guarded
-512 KiB coroutine stack; the two explicit stack-start methods may request up
+768 KiB coroutine stack; the two explicit stack-start methods may request up
 to 64 MiB. When a worker has no ready task, its event reactor blocks until a
 notification, descriptor event, or deadline; it does not wake on a periodic
 scheduler tick.
@@ -4693,7 +4736,7 @@ defaults to the available parallelism reported by the host and may be selected
 provisionally with a positive `AURA_WORKERS` value. Assignments never migrate
 and work is not stolen.
 Aura exposes no worker-index or affinity-introspection API. Ordinary
-lightweight tasks request 512 KiB of writable coroutine stack; an explicit
+lightweight tasks request 768 KiB of writable coroutine stack; an explicit
 request is limited to 64 MiB. Requests are page-rounded and guard-protected.
 The MIR/direct entry thread reserves
 64 MiB. The scheduler
@@ -4728,7 +4771,8 @@ deadlines, and direct Queue, task-completion, and blocking-pool wakeups; Phase
 5.3 adds the automatic loop checks. Phase 5.4 moves deep HTTP, TLS, and
 maintained Unix WebSocket library steps to a distinct bounded protocol service
 with two named 2 MiB-stack workers and a 64-job queue, then makes ordinary
-coroutine stacks guarded 512 KiB requests and adds the Accepted ADR-0032
+coroutine stacks guarded 512 KiB requests (raised to 768 KiB on 2 August
+2026) and adds the Accepted ADR-0032
 override methods. HTTP URL/request/response construction, head parsing, and
 chunk decoding; rustls construction, handshake, I/O, and close notification;
 and Unix WebSocket construction, handshake, framing, and close run there.
@@ -4831,7 +4875,7 @@ Exact diagnostic prose is normative only where a fixture or this Manual explicit
 | persistent descriptor registrations, heap-ordered deadlines, direct Queue/task-completion/blocking-pool wakeups, wait-epoch race containment, one-winner cleanup, and event-or-deadline idle blocking without a periodic tick | `runtime_reactor` unit tests including `timers_fire_at_the_earliest_deadline_and_preserve_equal_deadline_order`, `one_persistent_fd_registration_aggregates_waiters_and_narrows_interest`, and `waker_coalescing_does_not_lose_inbox_entries_and_ready_is_deduplicated`; runtime-value direct-wakeup and cleanup tests; `scheduler_model` lost-wake/stale-epoch/one-winner state-space tests; `scheduler_mixed_wakeups_complete_in_mir_and_direct_backends`; `scripts/stress-scheduler.sh`; the contractual `scripts/bench-scalable-runtime.py` after-reactor run; and the MIR/direct parity matrix |
 | `yield_now` cooperative scheduling, zero-argument typing, explicit ready-set requeue, unit result, and backend parity | focused call-surface, semantic, MIR-runtime, native-codegen, analysis, language-server, and extension tests; the `yield_now` check/run fixtures; `examples/concurrency/yield_now.au`; and the forced MIR/direct parity matrix |
 | compiler-inserted scheduling checks on every ordinary and `continue` loop backedge; exit-path bypass; no implicit cancellation check; amortized function-local MIR/native fuel; sequential-program elision; and timer/Queue/socket progress on both backends | focused MIR lowering, MIR-runtime, native-codegen, and validation tests; `loop_backedge_safepoints_prevent_timer_and_queue_starvation`; the loopback-socket safepoint regression; the `sleeper_vs_hot_loop.au` scalable-runtime workload; the contractual starvation benchmark; and the forced MIR/direct parity matrix |
-| Accepted ADR-0032 guarded 512 KiB default task stacks, exact `int64` 256 KiB..64 MiB collision-free overrides with 256 KiB reserved for measured shallow tasks, page rounding without clamping, and off-coroutine HTTP/TLS/WebSocket protocol steps | focused call-surface, semantic, MIR, native-codegen, scheduler-allocation, protocol-service, recursion, language-server, and both-backend CLI tests; maintained loopback HTTP, TLS, and WebSocket round trips; the scalable-runtime same-process baseline/parked-task measurements; and the MIR/direct parity matrix |
+| Accepted ADR-0032 guarded default task stacks (768 KiB since 2 August 2026), exact `int64` 256 KiB..64 MiB collision-free overrides with 256 KiB reserved for measured shallow tasks, page rounding without clamping, and off-coroutine HTTP/TLS/WebSocket protocol steps | focused call-surface, semantic, MIR, native-codegen, scheduler-allocation, protocol-service, recursion, language-server, and both-backend CLI tests; maintained loopback HTTP, TLS, and WebSocket round trips; the scalable-runtime same-process baseline/parked-task measurements; and the MIR/direct parity matrix |
 | unique mutable scheduler ownership; owned nested-start admission with synchronous preparation failure and safe immediate waits; internal FIFO admission without a public scheduling-order promise; teardown cancellation and observer wakeup; MIR/Rust unwind; and exact-once direct child/root stack-reset containment | `nested_spawns_are_fifo_and_an_immediate_child_wait_is_safe`, `nested_stack_allocation_failure_is_synchronous_and_does_not_enqueue_a_task`, `lightweight_scheduler_teardown_cancels_abandoned_tasks_and_runs_cleanup_once`, `pure_rust_abandoned_task_unwinds_owned_values_once_at_teardown`, `direct_cleanup_can_spawn_a_child_before_the_parent_is_retired`, and `generated_root_cleanup_runs_once_on_forced_exit_and_not_on_normal_return` in `runtime_value_tests`; the direct-root, unstarted-task, started-task, and normal-completion ownership tests in `native_runtime_tests`; the event-multiset oracle in `scheduler_nested_spawns.au`; `nested_scheduler_spawns_preserve_outcomes_cleanup_and_backend_parity`; and the raw-scheduler-alias rejection in `scripts/check-hygiene.sh` |
 | Accepted ADR-0033 structural Transfer, owned Copy snapshots, explicit/concrete generic task targets, Queue constructor/send payload enforcement, conditional Task Copy, static single-consumer observation, `AU3008` boundary diagnostics, `AU3009` duplication diagnostics, and atomic one-winner runtime defense | `task_boundaries_accept_structurally_transferable_values_and_results`, `task_boundary_diagnostics_explain_the_exact_nested_non_transfer_reason`, `task_transfer_checks_use_the_concrete_generic_specialization`, `queue_transport_requires_transfer_payloads_but_handle_only_methods_do_not`, `owned_builtin_snapshots_are_transfer_but_live_authority_is_not`, `task_target_explicit_specialization_and_contextual_defaults_are_concrete`, `task_capture_materializes_copy_snapshots_but_not_noncopy_shared_views`, `task_result_observation_rights_follow_repeatability`, and `clone_producing_operations_cannot_duplicate_task_observation_rights`; runtime-value, MIR-runtime, and native-runtime claim tests; the `task_transfer_*`, `queue_transfer_*`, and `task_result_*` check fixtures; `task_transfer_runtime_matrix.au`; its MIR/direct CLI parity test; compiler-service/LSP evidence; and the forced backend parity matrix |
 | Pinned-worker multicore task execution, available-core default, provisional positive `AURA_WORKERS` override and exact `AU4006` rejection, stable spawn-time affinity across yield/timer/Queue waits, no migration or work stealing, cross-worker Queue/Task wakeups, per-task cancellation/diagnostic isolation, and MIR/direct parity with unspecified scheduling/output order | `lightweight_worker_count_defaults_and_rejects_invalid_overrides`, `lightweight_tasks_are_pinned_across_yield_timer_and_queue_waits`, `lightweight_workers_make_cpu_progress_concurrently`, task-context isolation tests, the `multicore_queue_task_matrix` run fixture, its MIR/direct CLI parity test, and the forced backend parity matrix |
@@ -5113,9 +5157,13 @@ uses twice the preceding delay. A zero delay skips sleeping. Once the final perm
 attempt returns `Err`, that exact error is returned without another sleep or
 delay multiplication.
 
-The worker may be a capture-free function value or a repeatable
-value-capturing closure. A consuming closure is rejected because retry may
-invoke the worker more than once. Traps from the worker, delay overflow, and
+The worker may be a capture-free function value, a repeatable (Shared)
+value-capturing closure, or a packed Shared `Callable[def() -> Result[T, E]]`
+or `TaskCallable[def() -> Result[T, E]]` value, which the helper borrows for
+the operation with its ABI-equal contract. A consuming closure or `own def`
+value is rejected because retry may invoke the worker more than once, and a
+Mutable closure or `mut def` value is rejected because the helper holds the
+worker through a shared read; both report `AU2002`. Traps from the worker, delay overflow, and
 invalid runtime operations are not converted to `E`. Current-task
 cancellation propagates through the retry operation instead of returning the
 most recent `Err`.
@@ -5194,10 +5242,12 @@ Call arguments are evaluated left to right. Inputs to these host helpers are sha
 
 Telemetry emission and metric updates are observable side effects and occur at the call's position in source evaluation order. Concurrent tasks share standard error and the metric dictionary. Each individual metric operation is synchronized, but a sequence such as `get` followed by `increment` is not one atomic transaction.
 
-The retry helper reads a capture-free function value or repeatable capturing
-closure and invokes it under ordinary call rules.
-The helper can therefore reuse one repeatable capturing closure across all
-attempts without consuming its environment. Each `Result.Ok` or `Result.Err`
+The retry helper reads a capture-free function value, a repeatable
+capturing closure, or a packed Shared callable value and invokes it under
+ordinary call rules; a packed value is borrowed for the operation and is
+never cloned, moved, or erased.
+The helper can therefore reuse one repeatable worker across all attempts
+without consuming its environment. Each `Result.Ok` or `Result.Err`
 owns its payload.
 Intermediate errors are consumed by the retry decision; the final error is
 returned without cloning. Attempt calls and delay waits occur in the stated
@@ -5294,6 +5344,12 @@ This page documents known current limits of the Aura compiler and runtime.
   parameter place.
 - Empty list, dictionary, and set literals need an expected collection type.
 - Class field defaults cannot call user-defined functions in the current compiler. Compute the value before construction and pass it as an explicit field argument.
+- A union value passed through a generic bound dispatches its shared and
+  consuming trait methods on the active member on both backends; a `mut self`
+  trait method reached that way runs on the interpreter but the direct
+  backend reports `AU4001` at the call because it has no write-back path for
+  the active payload behind an erased place. Narrow the union to its member
+  before a mutable call.
 - `str(...)` is not a constructor; use string literals and string methods.
 - Ordinary and triple-quoted strings may use single or double quotes. Raw
   strings are single-line. Raw triple strings, raw f-strings, and byte-string
@@ -5455,17 +5511,23 @@ This page documents known current limits of the Aura compiler and runtime.
   Work stealing, preemption, and detached tasks are unavailable. Parallel
   speedup depends on the workload, and automatic parallelism applies only to
   task execution.
-- Ordinary lightweight tasks request 512 KiB of writable coroutine stack.
+- Ordinary lightweight tasks request 768 KiB of writable coroutine stack.
   `TaskGroup.start_with_stack` and `start_soon_with_stack` accept exact
   `int64` requests from 256 KiB through 64 MiB inclusive. Accepted requests
   are rounded upward to the host page size and guard-protected; smaller and
   larger requests are rejected rather than clamped. The MIR/direct runtime
   entry thread reserves 64 MiB, and maintained execution paths stop with a
-  friendly recursion-depth diagnostic after 256 nested Aura calls. The
+  friendly recursion-depth diagnostic after 256 nested Aura calls. On the
+  MIR backend a call that would leave less than the interpreter's headroom
+  reserve on the task's writable stack (128 KiB in optimized builds,
+  224 KiB in debug-assertion builds, measured above the guard page) traps
+  with `AU4005` first; the direct backend has only the depth limit. The
   override API is Provisional under ADR-0032. The 256 KiB lower bound is an
   opt-in minimum for measured shallow tasks, not the generally safe default;
   the complete compiled Aura HTTP example faulted when 256 KiB was the
-  global default and succeeds at 512 KiB. An isolated runtime protocol
+  global default and succeeded at the then-current 512 KiB default; the
+  maintained default has since been raised to 768 KiB. An isolated runtime
+  protocol
   round trip succeeds with 256 KiB callers because it excludes compiled
   language-execution frames; it proves the service offload boundary, not a
   256 KiB whole-program default.
@@ -5555,7 +5617,9 @@ This page documents known current limits of the Aura compiler and runtime.
 - Metrics are process-global counters within one running program; log and trace APIs emit structured stderr records and do not yet include exporters or scoped spans.
 - `control.retry` is a sequential eager helper for a repeatable
   `def() -> Result[T, E]` worker. The worker may be a capture-free function
-  value or a repeatable capturing closure. Every `Err` is retryable. It has no
+  value, a repeatable capturing closure, or a packed Shared `Callable` or
+  `TaskCallable` value; Mutable and Consuming workers are rejected
+  (`AU2002`). Every `Err` is retryable. It has no
   error classifier, jitter, attempt hook, shared retry budget, or
   detached/parallel mode. Attempt budgets below one and negative or
   host-unrepresentable backoffs trap before the worker runs. Backoff overflow
@@ -5817,6 +5881,15 @@ an owned clone. `AU3003` covers mutation through a shared view and calling a
 mutable-repeatable closure through an immutable place. `AU3004` covers
 non-place sources, immutable mutable-view targets, and unsupported projections
 such as collection indexes.
+
+For bound methods, `AU3002` rejects binding a non-Copy shared or mutable
+parameter and `AU3004` rejects binding a view of a non-Copy value; a Copy
+receiver reached either way is snapshotted and reports nothing. Binding a
+trait method whose implementation names a keyword-only parameter differently
+from the trait reports `AU2005`, because the bound closure exposes the trait's
+names and cannot yet forward such a slot. A union type argument that does not
+satisfy a trait bound reports `AU2002` when a member lacks the
+implementation and `AU2999` when the members' contracts are not coherent.
 
 For `select(...)`, `AU3009` also rejects the same statically visible
 non-repeatable Task source appearing twice in one call. `AU3002` explains that
@@ -6134,6 +6207,14 @@ checking. A dynamic value outside that range and a stack-allocation or
 platform-size failure trap with `AU4005`; Aura never clamps the request or
 silently substitutes the default.
 
+On the MIR backend, an Aura call that would leave less than the interpreter's
+headroom reserve on the running task's writable coroutine stack also traps
+with `AU4005` ("task stack exhausted while calling ..."), naming the callee
+and the writable bytes that remain; the guard page below the requested
+capacity is excluded from that headroom. The reserve is 128 KiB in an
+optimized interpreter build and 224 KiB in a debug-assertion build. The direct
+backend performs no headroom probe and has only its 256-call depth limit.
+
 `AU4006` reports invalid process runtime configuration.
 `AURA_WORKERS`, `AURA_BLOCKING_WORKERS`, and
 `AURA_BLOCKING_QUEUE_CAPACITY` each require a positive decimal integer.
@@ -6294,8 +6375,9 @@ fact. A branch that ends with `return`, `break`, or `continue` leaves its
 complement on the continuing path, so `if value is None: return` narrows the
 rest of the function, and `if value is None: continue` narrows the rest of
 the loop iteration. Where paths join, only facts present on every reachable
-path survive. A fact established before a `while` loop survives into the body
-only when no iteration can invalidate it.
+path survive. A fact established before a `while` or `for` loop survives into
+the loop only when no iteration can invalidate it; a `while` condition's own
+fact is re-established before every iteration.
 
 A fact ends when the place or an enclosing place is assigned, matched with
 `match mut`, or passed to a call with `mut` access. A later member use
@@ -7188,7 +7270,7 @@ loop fuel. Direct native code uses 4,096 units and replenishes the fuel after
 yielding. A program proven to have no possible sibling Aura task elides the
 runtime check entirely. These backend strategies may produce different valid
 interleavings; scheduling order is not observable language order. An ordinary
-lightweight task requests 512 KiB of writable coroutine stack. The
+lightweight task requests 768 KiB of writable coroutine stack. The
 `TaskGroup.start_with_stack` and `start_soon_with_stack` methods accept an
 exact `int64` request from 256 KiB through 64 MiB inclusive. Accepted requests
 are rounded upward to the host page size and guard-protected; out-of-range
@@ -7196,7 +7278,8 @@ requests are rejected rather than clamped. This surface is Provisional under
 ADR-0032. The 256 KiB lower bound is an explicit minimum for measured shallow
 tasks, not the general default. The complete compiled Aura HTTP example,
 including its MIR/direct language-execution frames, proved unsafe when
-256 KiB was the global task default and succeeds with the 512 KiB default.
+256 KiB was the global task default and succeeded with the then-current
+512 KiB default; the maintained default has since been raised to 768 KiB.
 The separate isolated runtime round trip that forces protocol callers to
 256 KiB proves that service workers own the deep host protocol frames; it
 does not measure the full compiled task stack.
@@ -9710,6 +9793,14 @@ differ per member is not one contract; match the member and declare the
 result union explicitly. There is no duck typing over common method names,
 no `impl` for an anonymous union, and no inferred trait intersection.
 
+The same all-member rule decides whether a union satisfies a trait bound: a
+union type argument satisfies `T: Named` when every member implements that
+specialization and every method the bound exposes, supertraits included,
+has one coherent contract across the members. A member without the
+implementation reports `AU2002`; members whose contracts differ report the
+same `AU2999` as a direct call on the union. A bounded callee then dispatches
+each trait call on the active member, exactly as the direct call would.
+
 ## Implementation Method Conformance
 
 An implementation may define only methods belonging to the trait. It must provide every signature-only required method; a trait method with a default body is inherited when omitted. An implementation may override a default method.
@@ -10178,7 +10269,11 @@ continue pass try with as true false
 `from` is contextual: it introduces a from-import at module level, completes a
 returned-view annotation, and may also be used as an identifier where the
 grammar expects one. `view` is contextual in complete local-view,
-returned-view, and `return view` forms. `lambda` is lexed as
+returned-view, and `return view` forms. `type` is contextual: at module
+level, `type` followed by an identifier, optional type parameters, and `=`
+declares a type alias, and elsewhere it is an ordinary identifier. `is` is
+contextual: after a comparison operand it forms the `is [not] None` test,
+and elsewhere it is an ordinary identifier. `lambda` is lexed as
 an identifier but introduces a lambda at the start of an expression; member
 and named-argument positions may still use that spelling. `copy`, `self`,
 `None`, `set`, `Self`, and `_` are lexed as identifiers and acquire special
@@ -10330,11 +10425,15 @@ trailing import commas are not part of the grammar.
 item
     = [ "public" ], class-declaration
     | [ "public" ], enum-declaration
+    | [ "public" ], type-alias-declaration
     | [ "public" ], function-declaration
     | [ "public" ], extern-function-declaration
     | [ "public" ], extern-opaque-declaration
     | [ "public" ], trait-declaration
     | impl-declaration ;
+
+type-alias-declaration
+    = "type", identifier, [ bounded-type-parameters ], "=", type, NEWLINE ;
 
 extern-function-declaration
     = "extern", STRING, "def", identifier,
@@ -10345,6 +10444,11 @@ extern-opaque-declaration
 ```
 
 `public` is not allowed on an implementation block. Item declarations are module-level; they are not statements and cannot appear inside function/control-flow suites.
+A type alias is recognized contextually: a module-level line that reads
+`type`, an identifier, optional bounded type parameters, and `=` declares a
+transparent alias for the written target type, which may use the alias's own
+type parameters. Anywhere else `type` is an ordinary identifier. Alias
+expansion cycles are rejected statically (`AU2012`).
 Parsing requires the extern ABI string to be exactly `"C"`.
 Extern declarations are bodyless and non-generic. Their parameter modes and
 types are restricted by [FFI v0](/manual/ffi).
@@ -10353,14 +10457,20 @@ types are restricted by [FFI v0](/manual/ffi).
 
 ```ebnf
 type
+    = type-atom, { "|", type-atom } ;
+
+type-atom
     = [ "indirect" ], type-primary,
       [ "?" ] ;
 
 type-primary
     = identifier-path, [ "[", type-list, "]" ]
+    | grouped-type
     | tuple-type
     | function-type
     | owned-callable-type ;
+
+grouped-type = "(", type, ")" ;
 
 owned-callable-type
     = ( "Callable" | "TaskCallable" ), "[",
@@ -10376,8 +10486,8 @@ function-type
     = "def", "(", [ function-type-parameters ], ")", "->", function-type-result ;
 
 function-type-result
-    = type
-    | "view", [ "mut" ], type, "from", identifier ;
+    = type-atom
+    | "view", [ "mut" ], type-atom, "from", identifier ;
 
 function-type-parameters
     = function-type-parameter, { ",", function-type-parameter },
@@ -10421,11 +10531,25 @@ Consuming, and `mut def`/`own def` are not valid outside those brackets.
 
 `T?` denotes `Option[T]`, including when `T` is a tuple type. Type and
 type-parameter lists are nonempty when brackets are present and do not accept
-trailing commas. `(T,)` is a singleton tuple type; `(T)` is not a type. `()`
-and a trailing comma on a multi-element tuple type are rejected. Although the
-grammar places `indirect` before any type primary, it is statically valid only
-on the complete named type reference where recursive-field rules permit it;
-an `indirect` tuple type is rejected.
+trailing commas. `(T,)` is a singleton tuple type; `(T)` is a grouped type
+that denotes `T` itself and exists for precedence. `()` and a trailing comma
+on a multi-element tuple type are rejected. Although the grammar places
+`indirect` before any type primary, it is statically valid only on the
+complete named type reference where recursive-field rules permit it; an
+`indirect` tuple type is rejected.
+
+`A | B` is an anonymous closed union of its written members (ADR-0052). `|`
+binds more loosely than `?` and `indirect`, so `int64 | str?` has the members
+`int64` and `Option[str]`, while `(int64 | str)?` is an optional union. A
+union may appear wherever `type` appears, including type-argument lists,
+tuple elements, and function-type parameters. A function-type result is one
+type atom, so a union result is grouped, as in `def() -> (int64 | str)`, and
+a function type that is itself a union member is grouped, as in
+`(def() -> int64) | None`. A missing member before or after `|` is a parse
+error. Written members normalize statically: nested unions flatten,
+duplicate and reordered spellings name the same type, and a union with one
+distinct member is that member; `None` is the unit member. The member rules
+are in [Types](/manual/types).
 
 ## Classes
 
@@ -15492,8 +15616,13 @@ The condition must have type `bool`. A false first condition executes the body z
 
 A `while` condition that tests a union place with `is None` or
 `is not None` narrows the place inside the body, and a body `continue` after
-such a test narrows the rest of that iteration. A fact established before the
-loop survives into the body only when no iteration can invalidate it.
+such a test narrows the rest of that iteration. Because the condition runs
+before every iteration, its narrowing holds in the body on every pass, even
+when the body itself assigns the place later. A fact established before the
+loop survives into the condition and the body only when no iteration can
+invalidate it: the loop header is a fixed point over the entry and every
+backedge, so a body that assigns such a place is checked again without the
+entry fact.
 
 Moving a non-copy outer value for the first time inside a repeatable loop is rejected when it could make a later iteration invalid. Reinitialize the place on every continuing path or restructure ownership explicitly.
 
@@ -15518,7 +15647,9 @@ the body does not switch or truncate that active iteration.
 
 Every target leaf is local to the body, does not escape, and cannot shadow a
 name already visible in the same scope. A tuple target must match the yielded
-tuple shape exactly.
+tuple shape exactly. As for `while`, a narrowing fact established before the
+loop survives into the body only when no iteration can invalidate it; test
+the place again inside the body when the body assigns it.
 
 Maintained iterable forms include:
 
@@ -16126,8 +16257,12 @@ not apply general truthiness conversion to strings, collections, resources, or
 user types.
 
 `place is None` and `place is not None` on a stable place of a union type
-establish narrowing facts: the place has the effective type `None` where the
-test holds and the union of its remaining members where it fails. Facts
+establish complementary narrowing facts. Where `place is None` holds, the
+place has the effective type `None`; where it fails, the place has the union
+of its remaining members. `place is not None` selects the same two facts in
+the opposite branches: its true branch removes `None`, so the place has the
+union of its remaining members there, and its false branch has the effective
+type `None`. Facts
 compose through `not`, parentheses, and short-circuit `and`/`or`, and a
 right operand of `and`/`or` is checked under the left operand's fact. An
 `if` branch, `while` body, or conditional-expression arm is checked under the
@@ -16641,7 +16776,8 @@ Aura 0.3 uses structured concurrency:
 - `TaskGroup()` owns child tasks inside `with`
 - `TaskGroup.start(...)` returns a `Task[T]`
 - `TaskGroup.start_soon(...)` starts a child whose result is not retained
-- Accepted ADR-0032 adds guarded 512 KiB default task stacks plus
+- Accepted ADR-0032 adds guarded default task stacks (512 KiB at acceptance,
+  768 KiB since 2 August 2026) plus
   `TaskGroup.start_with_stack(...)` and `start_soon_with_stack(...)` overrides
   from the measured-shallow-task 256 KiB minimum through 64 MiB
 - `Queue[T]` provides bounded or unbounded task-aware communication
@@ -16666,7 +16802,7 @@ starving ready timers, Queue operations, and sockets assigned to the same
 worker indefinitely. Ordinary loop tails and `continue` participate; `break`
 and `return` bypass the backedge. The checks do not inspect cancellation, and
 one long loop body can still delay same-worker siblings. Ordinary tasks request
-a guarded 512 KiB coroutine stack; explicit requests may range through 64 MiB.
+a guarded 768 KiB coroutine stack; explicit requests may range through 64 MiB.
 Waits
 use persistent descriptor registrations, heap-managed deadlines, and direct
 Queue, task-completion, and blocking-pool notifications; an idle worker blocks
@@ -17473,9 +17609,14 @@ contains a backend surface that cannot preserve the same behavior.
 
 ## Limits And Implementation-Defined Behavior
 
-`int` is an alias for `int64`; method-value types, user-defined numeric casts,
-and non-numeric casts are unavailable, and recursive value fields require
-`indirect`. Capture-free named function values use
+`int` is an alias for `int64`; user-defined numeric casts and non-numeric
+casts are unavailable, and recursive value fields require `indirect`. Method
+values have no separate type: `receiver.method` is a bound method, a closure
+over the receiver with the method's complete contract, and `Class.method` on
+a non-generic class is a capture-free function value; a generic method's
+type arguments must be explicit or supplied by an expected contract, and a
+`view ... from self` result cannot be bound (see
+[Closures](/manual/closures#bound-methods)). Capture-free named function values use
 `def(T1, mut T2, own T3) -> R`; bare parameters are shared and the written
 `mut`/`own` modes are part of the type. Contextually typed lambdas use that
 same source-level callable signature; a capturing closure additionally owns
@@ -17516,7 +17657,8 @@ but a view descriptor is not an owned or structural `def(...) -> R` type and
 cannot be stored in fields or collections. Capture-free function types and
 by-value expression closures are implemented. FFI v0 fixed-width declarations, byte/string views,
 and opaque handle types are implemented; extern functions do not become
-first-class function values. Method-value types are unavailable.
+first-class function values. Bound and associated method values are closure
+and function values rather than a distinct method-value type.
 Structural tuple types
 and their Batch 3 B3.0-c equality amendment are Accepted under ADR-0026.
 `str` is the owned UTF-8 text type. A distinct borrowed text-view type is
@@ -18058,7 +18200,7 @@ with group = TaskGroup():
 
 ## Choosing A Custom Task Stack
 
-Ordinary tasks use a guarded 512 KiB stack. That is the safe default for
+Ordinary tasks use a guarded 768 KiB stack. That is the safe default for
 application code and keeps large task populations economical. If measurement
 shows that one child has a different task-local stack requirement, use a
 collision-free stack override:
@@ -18079,8 +18221,9 @@ guard-protected.
 
 Treat 256 KiB as an opt-in minimum only for a measured shallow task. It is not
 the ordinary default: Aura's complete compiled HTTP example faulted when
-256 KiB was the global task default during integration and succeeds with the
-512 KiB default. The lower-level runtime round trip that succeeds with
+256 KiB was the global task default during integration and succeeded with the
+then-current 512 KiB default; the maintained default is now 768 KiB. The
+lower-level runtime round trip that succeeds with
 256 KiB protocol callers intentionally omits compiled Aura execution
 frames; it proves that deep protocol frames run on service workers, not that
 every complete Aura task is safe at 256 KiB.
@@ -18315,7 +18458,7 @@ and `continue` take the check; `break` and `return` leave without it. This
 keeps a tight loop from freezing timers, queues, and sockets assigned to the
 same worker indefinitely, but one long loop body or long straight-line
 computation can still delay same-worker siblings. Ordinary tasks request a
-guarded 512 KiB coroutine stack, with an explicit per-child override available
+guarded 768 KiB coroutine stack, with an explicit per-child override available
 through the two `_with_stack` methods. Scheduler waits are event-driven:
 descriptors stay registered, deadlines are kept in a timer heap, and Queue,
 task-completion, and blocking-pool events notify the responsible worker
@@ -18334,7 +18477,7 @@ Deep HTTP, TLS, and maintained Unix WebSocket library frames run on a bounded
 protocol-step service with deep native worker stacks. Each step is bounded and
 nonblocking; the child gets ownership of its protocol state back before
 observing cancellation or returning to reactor readiness waiting. Ordinary
-application tasks use the guarded 512 KiB default stack; protocol workers
+application tasks use the guarded 768 KiB default stack; protocol workers
 carry the deepest maintained third-party library frames.
 
 The protocol-step pool starts lazily and lives until the Aura process exits;
@@ -24679,7 +24822,7 @@ unresolved type parameter at the task boundary.
 
 ### Per-task Stack Overrides
 
-`TaskGroup.start(...)` and `start_soon(...)` use Aura's guarded 512 KiB
+`TaskGroup.start(...)` and `start_soon(...)` use Aura's guarded 768 KiB
 default task stack. A child with a measured task-local stack requirement can
 request a custom capacity without changing its target arguments:
 
@@ -24699,7 +24842,8 @@ need for a custom capacity.
 The lower 256 KiB bound is also available for an explicitly measured shallow
 task, but it is not the generally safe default. Aura's complete compiled
 HTTP example faulted when 256 KiB was used as the global task default during
-integration and succeeds with the 512 KiB default. A separate runtime-only
+integration and succeeded with the then-current 512 KiB default (the
+maintained default is now 768 KiB). A separate runtime-only
 round trip succeeds with forced 256 KiB protocol callers because the deep
 host frames execute on service workers; that narrower check does not include
 the compiled program's MIR/direct execution frames.
@@ -24881,7 +25025,7 @@ timers, Queue operations, or socket work assigned to the same worker to
 proceed. `break` and `return` leave the loop without taking that check.
 One long loop body or straight-line computation can still delay same-worker
 siblings, and the check does not inspect cancellation. Each ordinary
-lightweight task requests a guarded 512 KiB coroutine stack; the explicit
+lightweight task requests a guarded 768 KiB coroutine stack; the explicit
 stack-start methods accept requests through 64 MiB. Descriptor registrations
 persist across waits, deadlines use a timer heap, and Queue, task-completion,
 and blocking-pool events notify the responsible worker directly. With nothing
@@ -25868,12 +26012,12 @@ ordinary body tail and `continue`; `break` and `return` bypass it. Tight loops
 therefore allow ready timers, queues, or sockets assigned to the same worker
 to proceed, although a single long loop body can still delay
 same-worker siblings. The check does not inspect cancellation. Ordinary tasks
-request a guarded 512 KiB coroutine stack. The two explicit stack-start
+request a guarded 768 KiB coroutine stack. The two explicit stack-start
 methods accept an exact `int64` byte request from 256 KiB through 64 MiB
 inclusive, reject out-of-range values without clamping, and page-round
 accepted requests. The 256 KiB lower bound is for measured shallow tasks, not
-the generally safe default. The complete compiled Aura HTTP example requires
-the 512 KiB default; an isolated runtime round trip can use 256 KiB protocol
+the generally safe default. The complete compiled Aura HTTP example faulted at
+256 KiB and succeeds with the 768 KiB default; an isolated runtime round trip can use 256 KiB protocol
 callers because it excludes the compiled program's language-execution frames
 and keeps deep host protocol frames on service workers.
 Scheduler waits use persistent descriptor

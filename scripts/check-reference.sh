@@ -509,8 +509,8 @@ grep -Fq 'A dynamic value outside that range and a stack-allocation or' docs/man
 grep -Fq '## Choosing A Custom Task Stack' docs/learn/concurrency.md
 grep -Fq '### Per-task Stack Overrides' tutorials/13-concurrency.md
 grep -Fq 'compiler bridge exposes guarded TaskGroup stack override completion and hover' tools/aura-language-server/test/compiler_bridge.test.js
-grep -Fq 'ordinary starts use the safe 512 KiB default' crates/aura-compiler/src/call.rs
-grep -Fq 'Accepted ADR-0032 guarded 512 KiB default task stacks' docs/manual/conformance.md
+grep -Fq 'ordinary starts use the safe 768 KiB default' crates/aura-compiler/src/call.rs
+grep -Fq 'Accepted ADR-0032 guarded default task stacks (768 KiB since 2 August 2026)' docs/manual/conformance.md
 grep -Fq 'consuming a bare shared parameter reports that parameter `x` is' docs/manual/diagnostics.md
 grep -Fq 'the current compiler emits at most one' docs/manual/diagnostics.md
 grep -Fq 'constant tuple indexing that selects a non-copy element' docs/manual/diagnostics.md
@@ -826,8 +826,8 @@ fi
 
 # Batch 6 B6.0-c keeps the callable documentation aligned with the implemented
 # repeatable-closure contract at the two compiler-known callback families.
-rg -U -q 'The worker may be a capture-free function value or a repeatable\s+value-capturing closure\.' docs/manual/control-plane.md
-rg -U -q 'The helper can therefore reuse one repeatable capturing closure across all\s+attempts without consuming its environment\.' docs/manual/control-plane.md
+rg -U -q 'The worker may be a capture-free function value, a repeatable \(Shared\)\s+value-capturing closure, or a packed Shared' docs/manual/control-plane.md
+rg -U -q 'The helper can therefore reuse one repeatable worker across all attempts\s+without consuming its environment\.' docs/manual/control-plane.md
 grep -Fq 'The callback must be repeatable.' docs/manual/collections.md
 rg -U -q 'An inner lambda without a list cannot capture a bare parameter of its enclosing\s+lambda\. An explicit bare entry creates a shared contained reborrow' docs/manual/closures.md
 

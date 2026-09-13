@@ -1,0 +1,15 @@
+type Step = Callable[def(value: int64) -> int64]
+
+def first(value: int64) -> int64:
+    return value + 1
+
+def second(value: int64) -> int64:
+    return value + 2
+
+def pick(index: int64) -> int64:
+    return index
+
+def main():
+    steps: list[Step] = [Step(first), Step(second)]
+    print(steps[pick(1)](7))
+    print(steps[pick(0)](7))

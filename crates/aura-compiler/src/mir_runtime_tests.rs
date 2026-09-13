@@ -22168,7 +22168,7 @@ fn http_listener_reassembles_chunked_request_bodies_split_across_reads() {
     let address = listener
         .local_addr()
         .expect("http listener address should be available");
-    let client = thread::spawn(move || {
+    let client = thread::spawn(move || -> io::Result<Vec<u8>> {
         let mut stream = std::net::TcpStream::connect(&address).expect("raw client connects");
         stream
             .write_all(
@@ -22184,10 +22184,23 @@ fn http_listener_reassembles_chunked_request_bodies_split_across_reads() {
         stream
             .set_read_timeout(Some(StdDuration::from_secs(5)))
             .expect("read timeout applies");
-        let mut response = vec![0u8; 256];
-        let read = io::Read::read(&mut stream, &mut response).unwrap_or(0);
-        response.truncate(read);
-        response
+        // A TCP read may return any prefix of the response, so keep reading
+        // until the status line terminator has arrived; a read error or an
+        // early EOF is reported as such instead of masquerading as an empty
+        // response.
+        let mut response = Vec::new();
+        let mut chunk = [0u8; 256];
+        while !response.windows(2).any(|window| window == b"\r\n") {
+            let read = io::Read::read(&mut stream, &mut chunk)?;
+            if read == 0 {
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "the response ended before its status line terminator",
+                ));
+            }
+            response.extend_from_slice(&chunk[..read]);
+        }
+        Ok(response)
     });
     let exchange = listener
         .accept(
@@ -22202,12 +22215,12 @@ fn http_listener_reassembles_chunked_request_bodies_split_across_reads() {
     exchange
         .respond_text(200, "ok", Vec::new())
         .expect("respond_text succeeds");
-    let response = client.join().expect("raw client should join");
-    assert!(
-        String::from_utf8_lossy(&response).starts_with("HTTP/1.1 200"),
-        "{}",
-        String::from_utf8_lossy(&response)
-    );
+    let response = client
+        .join()
+        .expect("raw client should join")
+        .expect("raw client should read through the status line");
+    let status_line = String::from_utf8_lossy(&response);
+    assert!(status_line.starts_with("HTTP/1.1 200"), "{status_line}");
     listener.close();
 }
 

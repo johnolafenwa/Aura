@@ -1,0 +1,31 @@
+import generic_enum_imported_explicit_args_support.api
+
+def describe(slot: generic_enum_imported_explicit_args_support.api.Slot[int32]):
+    match slot:
+        case generic_enum_imported_explicit_args_support.api.Slot.Filled(value):
+            print(value)
+        case generic_enum_imported_explicit_args_support.api.Slot.Empty:
+            print("empty")
+
+def main():
+    slot = generic_enum_imported_explicit_args_support.api.Slot[int64].Empty()
+    match slot:
+        case generic_enum_imported_explicit_args_support.api.Slot.Filled(value):
+            print(value)
+        case generic_enum_imported_explicit_args_support.api.Slot.Empty:
+            print("empty")
+    filled = generic_enum_imported_explicit_args_support.api.Slot[int32].Filled(7)
+    describe(filled)
+    small: int32 = 9
+    inferred = generic_enum_imported_explicit_args_support.api.Slot.Filled(small)
+    describe(inferred)
+    boxed: generic_enum_imported_explicit_args_support.api.Slot[int64] | None = generic_enum_imported_explicit_args_support.api.Slot[int64].Filled(3)
+    match boxed:
+        case generic_enum_imported_explicit_args_support.api.Slot[int64] as inner:
+            match inner:
+                case generic_enum_imported_explicit_args_support.api.Slot.Filled(value):
+                    print(value)
+                case generic_enum_imported_explicit_args_support.api.Slot.Empty:
+                    print("empty")
+        case None:
+            print("none")

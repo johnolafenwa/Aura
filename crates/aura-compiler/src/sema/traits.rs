@@ -905,7 +905,90 @@ impl<'a> FunctionChecker<'a> {
         Type::Named(name, bound.trait_args.clone()).canonical_key(module, self.canonical_type_names)
     }
 
+    /// The trait an implementation provides, resolved in the
+    /// implementation's own module so an imported implementation's trait
+    /// name is not confused with a same-named local trait.
+    pub(super) fn trait_info_for_impl(&self, trait_impl: &TraitImplInfo) -> Option<&TraitInfo> {
+        if trait_impl.module_name != self.module_name {
+            if let Some(info) = self
+                .module_registry
+                .get(&trait_impl.module_name)
+                .and_then(|namespace| namespace.all_traits.get(&trait_impl.trait_name))
+            {
+                return Some(info);
+            }
+        }
+        self.traits.get(&trait_impl.trait_name)
+    }
+
+    /// The public contract of a trait method an implementation provides:
+    /// the trait's own declaration of `method_name`, whose parameter names
+    /// and keyword-only boundary bounded callers and method values use
+    /// (Q19 A). `None` when the trait is not in scope.
+    pub(super) fn trait_method_contract(
+        &self,
+        trait_impl: &TraitImplInfo,
+        method_name: &str,
+    ) -> Option<&FunctionDecl> {
+        self.trait_info_for_impl(trait_impl)
+            .and_then(|info| info.methods.get(method_name))
+            .map(|method| &method.decl)
+    }
+
+    /// The trait a bound written in the current module names.
+    fn trait_info_for_bound(&self, bound: &TraitBound) -> Option<&TraitInfo> {
+        self.traits.get(&bound.trait_name).or_else(|| {
+            self.module_registry
+                .get(self.module_name)
+                .and_then(|namespace| namespace.all_traits.get(&bound.trait_name))
+        })
+    }
+
+    /// A union satisfies an ordinary trait obligation when every member
+    /// satisfies that same specialization and every method the obligation
+    /// exposes resolves to one coherent contract across the members
+    /// (ADR-0052 A8). This is the all-member resolution a direct method
+    /// call on the union uses, so a bounded callee dispatches through the
+    /// specialization exactly as the direct call would. `Ok(false)` when a
+    /// member lacks the specialization; `Err` when the members implement it
+    /// with contracts that cannot dispatch as one.
+    pub(super) fn union_satisfies_trait_bound(
+        &self,
+        union: &super::UnionType,
+        ty: &Type,
+        bound: &TraitBound,
+        span: crate::diag::Span,
+    ) -> Result<bool> {
+        if !union
+            .members
+            .iter()
+            .all(|member| self.type_implements_trait_bound(member, bound))
+        {
+            return Ok(false);
+        }
+        for exposed in self.trait_bound_closure(bound, ty) {
+            let Some(trait_info) = self.trait_info_for_bound(&exposed) else {
+                continue;
+            };
+            for method_name in trait_info.methods.keys() {
+                if self
+                    .union_trait_method(union, ty, method_name, span)?
+                    .is_none()
+                {
+                    return Ok(false);
+                }
+            }
+        }
+        Ok(true)
+    }
+
     pub(super) fn type_implements_trait_bound(&self, ty: &Type, bound: &TraitBound) -> bool {
+        if let Type::Union(union) = ty {
+            return matches!(
+                self.union_satisfies_trait_bound(union, ty, bound, crate::diag::Span::new(0, 0)),
+                Ok(true)
+            );
+        }
         self.trait_impls_in_scope().any(|trait_impl| {
             let Some(substitutions) = self.trait_impl_substitutions(trait_impl, ty) else {
                 return false;
@@ -969,6 +1052,17 @@ impl<'a> FunctionChecker<'a> {
                                 "type parameter `{}` does not satisfy trait bound `{}`",
                                 name, presentation
                             ),
+                        ));
+                    }
+                }
+                Type::Union(union) => {
+                    if !self.union_satisfies_trait_bound(union, ty, bound, span)? {
+                        return Err(Diagnostic::at(
+                            span,
+                            format!("type `{}` does not implement trait `{}`", ty, presentation),
+                        )
+                        .with_help(
+                            "a union satisfies a trait bound only when every member implements the same specialization with one coherent contract",
                         ));
                     }
                 }

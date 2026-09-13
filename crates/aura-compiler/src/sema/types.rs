@@ -742,6 +742,98 @@ impl Type {
         Self::Named(name.into(), Vec::new())
     }
 
+    /// Complete-contract identity (C5, Q17 A, Q19 A): ABI equality plus,
+    /// at every callable position reachable through the type, equal slot
+    /// names, keyword-only boundaries, default availability, capabilities,
+    /// closure captures and call kinds, and the task flag of an erased
+    /// contract. `PartialEq` deliberately stays ABI-only for the runtimes;
+    /// the shared validator uses this comparison wherever runtime-selected
+    /// candidates merge, so a disagreement in any part of the contract
+    /// poisons the merged identity instead of silently adopting one side.
+    pub(crate) fn identical_contract(&self, other: &Self) -> bool {
+        fn params_identical(
+            left: &[FunctionParamContract],
+            right: &[FunctionParamContract],
+        ) -> bool {
+            left.len() == right.len()
+                && left.iter().zip(right).all(|(left, right)| {
+                    left.name == right.name
+                        && left.keyword_only == right.keyword_only
+                        && left.has_default == right.has_default
+                        && left.passing == right.passing
+                        && left.ty.identical_contract(&right.ty)
+                })
+        }
+        fn all_identical(left: &[Type], right: &[Type]) -> bool {
+            left.len() == right.len()
+                && left
+                    .iter()
+                    .zip(right)
+                    .all(|(left, right)| left.identical_contract(right))
+        }
+        if self != other {
+            return false;
+        }
+        match (self, other) {
+            (
+                Self::Function {
+                    params: left_params,
+                    return_type: left_return,
+                },
+                Self::Function {
+                    params: right_params,
+                    return_type: right_return,
+                },
+            ) => {
+                params_identical(left_params, right_params)
+                    && left_return.identical_contract(right_return)
+            }
+            (
+                Self::Closure {
+                    params: left_params,
+                    return_type: left_return,
+                    captures: left_captures,
+                    call_kind: left_call_kind,
+                },
+                Self::Closure {
+                    params: right_params,
+                    return_type: right_return,
+                    captures: right_captures,
+                    call_kind: right_call_kind,
+                },
+            ) => {
+                left_call_kind == right_call_kind
+                    && params_identical(left_params, right_params)
+                    && left_return.identical_contract(right_return)
+                    && left_captures.len() == right_captures.len()
+                    && left_captures
+                        .iter()
+                        .zip(right_captures.iter())
+                        .all(|(left, right)| {
+                            left.name == right.name
+                                && left.mode == right.mode
+                                && left.mutated == right.mutated
+                                && left.ty.identical_contract(&right.ty)
+                        })
+            }
+            (Self::Callable(left), Self::Callable(right)) => {
+                left.task == right.task
+                    && left.call_kind == right.call_kind
+                    && params_identical(&left.params, &right.params)
+                    && left.return_type.identical_contract(&right.return_type)
+            }
+            (Self::Named(_, left_args), Self::Named(_, right_args)) => {
+                all_identical(left_args, right_args)
+            }
+            (Self::Tuple(left), Self::Tuple(right)) => all_identical(left, right),
+            (Self::Union(left), Self::Union(right)) => all_identical(&left.members, &right.members),
+            (Self::ReturnedView(left), Self::ReturnedView(right)) => {
+                left.pointee.identical_contract(&right.pointee)
+            }
+            _ => true,
+        }
+    }
+
     pub fn is_copy(&self) -> bool {
         match self {
             Type::Union(_) => false,

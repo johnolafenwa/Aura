@@ -1,9 +1,36 @@
 //! Union injection must not relabel borrowed member storage as union storage.
+//!
+//! Source-level cases pin the checker; forged-MIR cases pin the shared
+//! validator, which must refuse the same module for the same reason on both
+//! public boundaries (the interpreter and the direct backend).
 
-use aura_compiler::{check_source, lower_source_to_mir, run_mir, MirModule};
+use aura_compiler::{
+    check_source, emit_host_native_object, lower_source_to_mir, run_mir, MirModule,
+};
 use serde_json::Value;
 
 const VIEW_HELPER: &str = "class Profile:\n    name: str\ndef profile_name(profile: Profile) -> view str from profile:\n    return view profile.name\n";
+
+/// Both boundaries must refuse a forged module for the same shared validator
+/// reason: the interpreter reports `invalid MIR loan flow: …` and the direct
+/// backend reports the bare validator message. Returns the shared message.
+fn assert_rejected_on_both_boundaries(encoded: Value, expected: &str) -> String {
+    let mir: MirModule =
+        serde_json::from_value(encoded).expect("forged call remains syntactically valid MIR");
+    let interpreted = run_mir(&mir).expect_err("the interpreter must reject the forged module");
+    let native =
+        emit_host_native_object(&mir).expect_err("native emission must reject the forged module");
+    assert_eq!(
+        interpreted.message.strip_prefix("invalid MIR loan flow: "),
+        Some(native.as_str()),
+        "both boundaries must report the same shared validator reason"
+    );
+    assert!(
+        native.contains(expected),
+        "shared rejection `{native}` should mention `{expected}`"
+    );
+    native
+}
 
 #[test]
 fn shared_member_view_cannot_be_passed_as_a_borrowed_union() {
@@ -38,18 +65,27 @@ fn argument_origin_union_view_cannot_derive_from_member_layout() {
 }
 
 #[test]
-fn checked_mir_does_not_execute_a_member_place_as_union_storage() {
+fn forged_mir_cannot_pass_a_member_view_place_as_union_storage() {
+    // The checker refuses `accept(value=name)` at the source level (above),
+    // so no checked program ever lowers it. A forged module that binds the
+    // `str` member view `name` to the exact-union parameter must be refused
+    // by the shared validator on both boundaries before anything executes.
     let source = format!(
-        "{VIEW_HELPER}def accept(value: str | None) -> int64:\n    return 42\ndef main():\n    profile = Profile(name=\"Ada\")\n    view name = profile_name(profile)\n    print(accept(value=name))\n"
+        "{VIEW_HELPER}def accept(value: str | None) -> int64:\n    return 42\ndef main():\n    profile = Profile(name=\"Ada\")\n    view name = profile_name(profile)\n    wrapped: str | None = \"Ada\"\n    print(accept(value=wrapped))\n    print(name)\n"
     );
-    if let Ok(mir) = lower_source_to_mir(&source) {
-        let error = run_mir(&mir)
-            .expect_err("MIR validation must contain any checker gap before execution");
-        assert!(
-            error.message.contains("type") || error.message.contains("loan"),
-            "{error}"
-        );
-    }
+    let mir = lower_source_to_mir(&source).expect("the exact-union call must lower");
+    let mut encoded = serde_json::to_value(mir).expect("MIR must serialize");
+    let call = find_accept_call(&mut encoded).expect("lowered MIR must call accept");
+    let args = call["args"].as_array_mut().expect("call args are an array");
+    assert_eq!(args.len(), 1, "accept takes exactly one argument");
+    eprintln!("original operand: {}", args[0]["value"]);
+    args[0]["value"] = serde_json::json!({ "Place": "name" });
+
+    let shared = assert_rejected_on_both_boundaries(encoded, "exact union type");
+    assert!(
+        shared.contains("parameter `value`"),
+        "the rejection should name the union parameter: {shared}"
+    );
 }
 
 #[test]
@@ -72,6 +108,7 @@ fn copy_member_local_borrow_materializes_a_real_union_wrapper() {
     let mir = lower_source_to_mir(source).expect("Copy injection must lower");
     let output = run_mir(&mir).expect("the borrowed call must observe real union storage");
     assert_eq!(output.stdout, "42\n");
+    emit_host_native_object(&mir).expect("the direct backend accepts the same Copy injection");
 }
 
 #[test]
@@ -81,6 +118,7 @@ fn exact_union_view_can_be_passed_to_a_borrowed_union() {
     let mir = lower_source_to_mir(source).expect("exact-union view must lower unchanged");
     let output = run_mir(&mir).expect("exact-union view must pass validation");
     assert_eq!(output.stdout, "42\n");
+    emit_host_native_object(&mir).expect("the direct backend accepts the same exact-union view");
 }
 
 #[test]
@@ -139,16 +177,11 @@ fn malformed_mir_rejects_member_operand_for_exact_union_parameter() {
     let call = find_accept_call(&mut encoded).expect("lowered MIR must call accept");
     let args = call["args"].as_array_mut().expect("call args are an array");
     args[0]["value"] = serde_json::json!({ "Int": 1 });
-    let forged: MirModule =
-        serde_json::from_value(encoded).expect("forged call remains syntactically valid MIR");
 
-    let error = run_mir(&forged)
-        .expect_err("common MIR validation must reject member layout for a union parameter");
+    let shared = assert_rejected_on_both_boundaries(encoded, "exact union type");
     assert!(
-        error.message.contains("exact union type")
-            && error.message.contains("parameter")
-            && error.message.contains("value"),
-        "{error}"
+        shared.contains("parameter `value`"),
+        "the rejection should name the union parameter: {shared}"
     );
 }
 
@@ -160,16 +193,11 @@ fn malformed_mir_rejects_member_operand_for_indirect_union_parameter() {
     let call = find_indirect_call(&mut encoded).expect("lowered MIR must contain an indirect call");
     let args = call["args"].as_array_mut().expect("call args are an array");
     args[0]["value"] = serde_json::json!({ "Int": 1 });
-    let forged: MirModule =
-        serde_json::from_value(encoded).expect("forged call remains syntactically valid MIR");
 
-    let error = run_mir(&forged)
-        .expect_err("common MIR validation must enforce the indirect function signature");
+    let shared = assert_rejected_on_both_boundaries(encoded, "exact union type");
     assert!(
-        error.message.contains("exact union type")
-            && error.message.contains("indirect")
-            && error.message.contains("parameter 1"),
-        "{error}"
+        shared.contains("indirect") && shared.contains("parameter 1"),
+        "the rejection should identify the indirect signature slot: {shared}"
     );
 }
 
@@ -181,15 +209,10 @@ fn malformed_mir_rejects_member_operand_for_method_union_parameter() {
     let call = find_accept_call(&mut encoded).expect("lowered MIR must call the method");
     let args = call["args"].as_array_mut().expect("call args are an array");
     args[0]["value"] = serde_json::json!({ "Int": 1 });
-    let forged: MirModule =
-        serde_json::from_value(encoded).expect("forged call remains syntactically valid MIR");
 
-    let error = run_mir(&forged)
-        .expect_err("common MIR validation must enforce the method declaration contract");
+    let shared = assert_rejected_on_both_boundaries(encoded, "exact union type");
     assert!(
-        error.message.contains("exact union type")
-            && error.message.contains("Acceptor.accept")
-            && error.message.contains("value"),
-        "{error}"
+        shared.contains("Acceptor.accept") && shared.contains("parameter `value`"),
+        "the rejection should name the method contract and parameter: {shared}"
     );
 }

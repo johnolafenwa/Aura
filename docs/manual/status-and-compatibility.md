@@ -169,7 +169,8 @@ Aura 0.3 uses structured concurrency:
 - `TaskGroup()` owns child tasks inside `with`
 - `TaskGroup.start(...)` returns a `Task[T]`
 - `TaskGroup.start_soon(...)` starts a child whose result is not retained
-- Accepted ADR-0032 adds guarded 512 KiB default task stacks plus
+- Accepted ADR-0032 adds guarded default task stacks (512 KiB at acceptance,
+  768 KiB since 2 August 2026) plus
   `TaskGroup.start_with_stack(...)` and `start_soon_with_stack(...)` overrides
   from the measured-shallow-task 256 KiB minimum through 64 MiB
 - `Queue[T]` provides bounded or unbounded task-aware communication
@@ -194,7 +195,7 @@ starving ready timers, Queue operations, and sockets assigned to the same
 worker indefinitely. Ordinary loop tails and `continue` participate; `break`
 and `return` bypass the backedge. The checks do not inspect cancellation, and
 one long loop body can still delay same-worker siblings. Ordinary tasks request
-a guarded 512 KiB coroutine stack; explicit requests may range through 64 MiB.
+a guarded 768 KiB coroutine stack; explicit requests may range through 64 MiB.
 Waits
 use persistent descriptor registrations, heap-managed deadlines, and direct
 Queue, task-completion, and blocking-pool notifications; an idle worker blocks

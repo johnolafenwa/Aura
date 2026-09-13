@@ -227,6 +227,31 @@ fn is_float_literal_expr(expr: &Expr) -> bool {
     }
 }
 
+/// The explicit specialization inside one or more layers of grouping
+/// parentheses, such as `((Wrapped[int64]))`. Repeated parentheses are one
+/// grouped callee to the checker, so lowering peels every layer.
+fn grouped_specialization(callee: &Expr) -> Option<&Expr> {
+    let ExprKind::Group(inner) = &callee.kind else {
+        return None;
+    };
+    let mut inner: &Expr = inner;
+    while let ExprKind::Group(next) = &inner.kind {
+        inner = next;
+    }
+    matches!(inner.kind, ExprKind::Specialize { .. }).then_some(inner)
+}
+
+/// The explicit type arguments written on a specialized expression, looking
+/// through grouping parentheses: `api.Slot[int64]` and `(api.Slot[int64])`
+/// both spell `[int64]`.
+fn explicit_specialization_type_args(expr: &Expr) -> Option<&[crate::ast::TypeRef]> {
+    match &expr.kind {
+        ExprKind::Specialize { type_args, .. } => Some(type_args.as_slice()),
+        ExprKind::Group(inner) => explicit_specialization_type_args(inner),
+        _ => None,
+    }
+}
+
 fn type_contains_unknown(ty: &Type) -> bool {
     match ty {
         Type::Union(union) => union.members.iter().any(type_contains_unknown),
@@ -3751,6 +3776,11 @@ fn rebase_callable_rvalue(
                         Type::Function { return_type, .. } | Type::Closure { return_type, .. } => {
                             Some((**return_type).clone())
                         }
+                        // A stored `TaskCallable` target carries its result
+                        // contract in the erased signature (Q21); a callable
+                        // result keeps its identity through the task handle
+                        // exactly like a named or closure target's result.
+                        Type::Callable(callable) => Some(callable.return_type.clone()),
                         _ => None,
                     }),
                 _ => None,
@@ -3962,11 +3992,17 @@ fn call_result_callable_identities(
             let Some(first) = candidates.first() else {
                 return Vec::new();
             };
-            if candidates
-                .iter()
-                .all(|candidate| candidate.return_type == first.return_type)
-            {
-                Some(first.return_type.clone())
+            // Candidates agree only when their complete result contracts
+            // are identical or one is a written restriction of the others
+            // (C5); ABI-equal results whose callable positions otherwise
+            // differ in names, keyword-only boundaries, or defaults disagree.
+            let mut common = Some(&first.return_type);
+            for candidate in &candidates {
+                common = common
+                    .and_then(|common| common_callable_contract(common, &candidate.return_type));
+            }
+            if let Some(common) = common {
+                Some(common.clone())
             } else {
                 // Candidates disagree: every callable position any of them
                 // declares is poisoned rather than silently unknown.
@@ -4122,8 +4158,10 @@ fn unknown_validated_callable() -> ValidatedCallable {
 
 /// Merges the authoritative identities of every candidate element that a
 /// runtime selection may produce. Equal identities stay exact; distinct
-/// functions with one contract keep that contract without a name; differing
-/// contracts poison the result so a later call cannot trust forged metadata.
+/// functions with one complete contract keep that contract without a name;
+/// contracts that differ anywhere (types, names, keyword-only boundaries,
+/// defaults, closure captures or kinds) poison the result so a later call
+/// cannot trust forged metadata on either backend.
 fn merge_validated_callables<'a>(
     candidates: impl Iterator<Item = &'a ValidatedCallable>,
 ) -> ValidatedCallable {
@@ -4144,30 +4182,45 @@ fn merge_validated_callables<'a>(
         };
     };
     let mut same_identity = true;
+    // The running common contract: a candidate every other candidate is
+    // admitted by, never an invented one.
+    let mut common = first;
     let mut erased: Option<&ValidatedCallable> =
         matches!(first.signature, Type::Callable(_)).then_some(first);
     for candidate in candidates {
-        if candidate.signature != first.signature {
-            // Values admitted into one erased callable storage type keep
-            // that contract as their common identity: each of them was
-            // validated against it when it entered the storage.
-            if matches!(candidate.signature, Type::Callable(_)) && erased.is_none() {
-                erased = Some(candidate);
+        if candidate.signature.identical_contract(&common.signature) {
+            if candidate.function != common.function {
+                same_identity = false;
             }
-            match erased {
-                Some(contract)
-                    if callable_admitted_by_erased(&contract.signature, &candidate.signature)
-                        && callable_admitted_by_erased(&contract.signature, &first.signature) =>
-                {
-                    same_identity = false;
-                    continue;
-                }
-                _ => return unknown_validated_callable(),
+            continue;
+        }
+        // Values admitted into one erased callable storage type keep
+        // that contract as their common identity: each of them was
+        // validated against it when it entered the storage.
+        if matches!(candidate.signature, Type::Callable(_)) && erased.is_none() {
+            erased = Some(candidate);
+        }
+        if let Some(contract) = erased {
+            if callable_admitted_by_erased(&contract.signature, &candidate.signature)
+                && callable_admitted_by_erased(&contract.signature, &common.signature)
+            {
+                same_identity = false;
+                continue;
             }
         }
-        if candidate.function != first.function {
+        // Complete contracts that differ keep the one that is a written
+        // restriction of the other (a hidden name, a dropped default, a
+        // keyword-only boundary); any other disagreement is poisoned.
+        if callable_contract_restricts(&candidate.signature, &common.signature) {
+            common = candidate;
             same_identity = false;
+            continue;
         }
+        if callable_contract_restricts(&common.signature, &candidate.signature) {
+            same_identity = false;
+            continue;
+        }
+        return unknown_validated_callable();
     }
     if let Some(contract) = erased.filter(|_| !same_identity) {
         return ValidatedCallable {
@@ -4180,8 +4233,68 @@ fn merge_validated_callables<'a>(
     } else {
         ValidatedCallable {
             function: None,
-            signature: first.signature.clone(),
+            signature: common.signature.clone(),
         }
+    }
+}
+
+/// The parameter slots and result of a function, closure, or erased
+/// callable signature.
+fn callable_signature_slots(ty: &Type) -> Option<(&[FunctionParamContract], &Type)> {
+    match ty {
+        Type::Function {
+            params,
+            return_type,
+        } => Some((params.as_slice(), return_type.as_ref())),
+        Type::Closure {
+            params,
+            return_type,
+            ..
+        } => Some((params.as_slice(), return_type.as_ref())),
+        Type::Callable(callable) => Some((callable.params.as_slice(), &callable.return_type)),
+        _ => None,
+    }
+}
+
+/// Whether `restricted` is a written restriction of `source` under the
+/// checker's admission rules (Q17 A): the same ABI, kind, and captures,
+/// every slot of `restricted` admitting the corresponding slot of `source`
+/// (it may hide a name, drop a default, or make a named slot keyword-only,
+/// never rename, invent a default, or expose a keyword-only slot
+/// positionally), and an identical result contract.
+fn callable_contract_restricts(restricted: &Type, source: &Type) -> bool {
+    if restricted != source {
+        return false;
+    }
+    let (Some((restricted_params, restricted_return)), Some((source_params, source_return))) = (
+        callable_signature_slots(restricted),
+        callable_signature_slots(source),
+    ) else {
+        return false;
+    };
+    restricted_params.len() == source_params.len()
+        && restricted_params.iter().zip(source_params).enumerate().all(
+            |(index, (expected, actual))| {
+                expected.passing == actual.passing
+                    && expected.ty.identical_contract(&actual.ty)
+                    && crate::sema::callable_slot_admission(expected, actual, index).is_ok()
+            },
+        )
+        && restricted_return.identical_contract(source_return)
+}
+
+/// The common contract of two candidate types: the identical contract, or
+/// the one that is a written restriction of the other. `None` when neither
+/// admits the other, so no common contract is invented.
+fn common_callable_contract<'a>(left: &'a Type, right: &'a Type) -> Option<&'a Type> {
+    if left.identical_contract(right) {
+        Some(left)
+    } else if callable_contract_restricts(right, left) {
+        Some(right)
+    } else if callable_contract_restricts(left, right) {
+        Some(left)
+    } else {
+        None
     }
 }
 
@@ -4196,7 +4309,7 @@ fn callable_admitted_by_erased(erased: &Type, signature: &Type) -> bool {
             Type::Callable(other) => {
                 return other.task == contract.task
                     && other.call_kind == contract.call_kind
-                    && erased == signature;
+                    && erased.identical_contract(signature);
             }
             Type::Function {
                 params,
@@ -4210,13 +4323,19 @@ fn callable_admitted_by_erased(erased: &Type, signature: &Type) -> bool {
             } => (params.as_slice(), return_type.as_ref(), Some(*call_kind)),
             _ => return false,
         };
+    // Admission into erased storage follows the checker's slot rules: the
+    // storage may hide a name or drop a default, never rename a slot, invent
+    // a default, or expose a keyword-only slot positionally.
     kind.is_none_or(|kind| contract.call_kind.admits(kind))
         && params.len() == contract.params.len()
         && params
             .iter()
             .zip(&contract.params)
-            .all(|(actual, expected)| {
-                actual.ty == expected.ty && actual.passing == expected.passing
+            .enumerate()
+            .all(|(index, (actual, expected))| {
+                actual.ty == expected.ty
+                    && actual.passing == expected.passing
+                    && crate::sema::callable_slot_admission(expected, actual, index).is_ok()
             })
         && *return_type == contract.return_type
 }
@@ -5021,6 +5140,201 @@ fn validate_active_union_payload_projection(
     Ok(())
 }
 
+/// Rejects a task start whose target contract carries a value the shared
+/// validator can prove is not Transfer (C8): every parameter slot, supplied or
+/// defaulted, the result, and a closure target's captured environment. The
+/// checker keeps the positive Transfer proof; this mirrors its compiler-known
+/// non-Transfer shapes on MIR metadata so a forged module cannot smuggle a
+/// host resource across the boundary.
+fn validate_task_boundary_contract(
+    function: &MirFunction,
+    task_function: &Operand,
+    context: &MirLoanValidationContext<'_>,
+    state: &ValidatedLoanState,
+) -> std::result::Result<(), String> {
+    let signature = match task_function {
+        Operand::Function { signature, .. } => Some(signature.as_ref()),
+        Operand::Place(place) | Operand::MovePlace(place) => state
+            .authoritative_callables
+            .get(place)
+            .map(|callable| &callable.signature),
+        _ => None,
+    };
+    let Some(signature) = signature else {
+        return Ok(());
+    };
+    let (param_types, return_type): (Vec<&Type>, &Type) = match signature {
+        Type::Function {
+            params,
+            return_type,
+        } => (params.iter().map(|param| &param.ty).collect(), return_type),
+        Type::Closure {
+            params,
+            return_type,
+            ..
+        } => (params.iter().map(|param| &param.ty).collect(), return_type),
+        Type::Callable(callable) => (
+            callable.params.iter().map(|param| &param.ty).collect(),
+            &callable.return_type,
+        ),
+        _ => return Ok(()),
+    };
+    if let Some(reason) = validated_transfer_failure(signature, context, &mut Vec::new()) {
+        return Err(format!(
+            "invalid MIR task call in `{}` starts a target whose environment is not Transfer: {reason}",
+            function.name
+        ));
+    }
+    for (index, ty) in param_types.iter().enumerate() {
+        if let Some(reason) = validated_transfer_failure(ty, context, &mut Vec::new()) {
+            return Err(format!(
+                "invalid MIR task call in `{}` passes parameter {} whose type is not Transfer: {reason}",
+                function.name,
+                index + 1
+            ));
+        }
+    }
+    if matches!(return_type, Type::ReturnedView(_)) {
+        return Err(format!(
+            "invalid MIR task call in `{}` starts a target that returns a view of its arguments",
+            function.name
+        ));
+    }
+    if let Some(reason) = validated_transfer_failure(return_type, context, &mut Vec::new()) {
+        return Err(format!(
+            "invalid MIR task call in `{}` returns a result whose type is not Transfer: {reason}",
+            function.name
+        ));
+    }
+    Ok(())
+}
+
+/// The first compiler-known reason a MIR type cannot cross a task boundary,
+/// or `None` when the validator cannot refute Transfer. Type parameters and
+/// nominals absent from the module are left to the checker's proof; opaque
+/// FFI handles carry no MIR metadata and are likewise the checker's.
+fn validated_transfer_failure(
+    ty: &Type,
+    context: &MirLoanValidationContext<'_>,
+    visiting: &mut Vec<String>,
+) -> Option<String> {
+    match ty {
+        Type::Unit | Type::Function { .. } | Type::TypeParam(_) => None,
+        Type::ReturnedView(_) => Some("a returned view borrows the parent's data".to_string()),
+        Type::Module(name) => Some(format!("`module {name}` is a module capability")),
+        Type::Callable(callable) => {
+            (!callable.task).then(|| "an erased `Callable` hides its environment".to_string())
+        }
+        Type::Closure { captures, .. } => captures.iter().find_map(|capture| {
+            if matches!(
+                capture.mode,
+                ClosureCaptureMode::SharedView | ClosureCaptureMode::MutableView
+            ) {
+                return Some(format!("capture `{}` is a live loan", capture.name));
+            }
+            validated_transfer_failure(&capture.ty, context, visiting)
+                .map(|reason| format!("capture `{}`: {reason}", capture.name))
+        }),
+        Type::Tuple(elements) => elements
+            .iter()
+            .find_map(|element| validated_transfer_failure(element, context, visiting)),
+        Type::Union(union) => union
+            .members
+            .iter()
+            .find_map(|member| validated_transfer_failure(member, context, visiting)),
+        Type::Named(name, args) => {
+            if args.is_empty()
+                && matches!(
+                    name.as_str(),
+                    "process.Completed" | "net.HttpResponse" | "net.UdpDatagram"
+                )
+            {
+                return None;
+            }
+            if crate::sema::is_builtin_io_resource_type(name, args)
+                || (name == "random.Rng" && args.is_empty())
+            {
+                return Some(format!("`{ty}` is a host resource"));
+            }
+            if matches!(name.as_str(), "Queue" | "Task") && args.len() == 1 {
+                return None;
+            }
+            if matches!(
+                name.as_str(),
+                "list"
+                    | "set"
+                    | "Array"
+                    | "dict"
+                    | "Option"
+                    | "SendError"
+                    | "QueueReceive"
+                    | "TaskResult"
+                    | "WaitAny"
+                    | "WaitAll"
+                    | "Result"
+                    | "SelectOutcome"
+            ) {
+                return args
+                    .iter()
+                    .find_map(|arg| validated_transfer_failure(arg, context, visiting));
+            }
+            if let Some(class) = context.classes.get(name.as_str()) {
+                let key = format!("class:{name}");
+                if visiting.contains(&key) {
+                    return None;
+                }
+                visiting.push(key);
+                let substitutions = substitutions_from_decl_type_args(&class.type_params, args);
+                let failure = class.fields.iter().find_map(|field| {
+                    validated_transfer_failure(
+                        &substitute_type(&field.ty, &substitutions),
+                        context,
+                        visiting,
+                    )
+                    .map(|reason| format!("field `{}` of `{ty}`: {reason}", field.name))
+                });
+                visiting.pop();
+                return failure;
+            }
+            if let Some(enum_decl) = context.enums.get(name.as_str()) {
+                let key = format!("enum:{name}");
+                if visiting.contains(&key) {
+                    return None;
+                }
+                visiting.push(key);
+                let substitutions = substitutions_from_decl_type_args(&enum_decl.type_params, args);
+                let failure = enum_decl.variants.iter().find_map(|variant| {
+                    variant.payloads.iter().find_map(|payload| {
+                        validated_transfer_failure(
+                            &substitute_type(payload, &substitutions),
+                            context,
+                            visiting,
+                        )
+                        .map(|reason| format!("payload of `{}.{}`: {reason}", name, variant.name))
+                    })
+                });
+                visiting.pop();
+                return failure;
+            }
+            None
+        }
+    }
+}
+
+/// A packed `Callable`/`TaskCallable` admitted where a function contract is
+/// expected (C10) unifies through its contract, exactly as the checker
+/// unified it, so the callee's type parameters resolve from the packed
+/// value's result type.
+fn inference_shape(actual: Type, pattern: &Type) -> Type {
+    match (actual, pattern) {
+        (Type::Callable(callable), Type::Function { .. }) => Type::Function {
+            params: callable.params.clone(),
+            return_type: Box::new(callable.return_type.clone()),
+        },
+        (actual, _) => actual,
+    }
+}
+
 fn validated_enum_variant_fact(
     place: &str,
     enum_type: &Type,
@@ -5503,6 +5817,127 @@ fn validate_loan_operand(
         }
         _ => Ok(()),
     }
+}
+
+/// Checks a call the backends dispatch by builtin name against the shared
+/// contract table of named builtins that have no MIR declaration to bind
+/// against. The table mirrors the checker's associated-function signatures
+/// (`Array.zeros(shape)`, `Array.full(shape, value)`,
+/// `Array.from_list(values, shape)`), so a forged arity, argument name,
+/// operand type, or result type is refused here with one reason on both
+/// public boundaries instead of reaching the operand shapes each backend
+/// assumes after checking.
+fn validate_named_builtin_call(
+    function: &MirFunction,
+    name: &str,
+    args: &[MirArg],
+    result_type: Option<&Type>,
+    context: &MirLoanValidationContext<'_>,
+) -> std::result::Result<(), String> {
+    let Some(associated) = name
+        .strip_prefix("Array.")
+        .and_then(|member| BuiltinAssociatedFunction::resolve("Array", member))
+    else {
+        return Ok(());
+    };
+    let dtype = match result_type {
+        Some(Type::Named(owner, arguments))
+            if owner == "Array"
+                && arguments.len() == 1
+                && crate::runtime_value::ArrayDType::from_type(&arguments[0]).is_some() =>
+        {
+            arguments[0].clone()
+        }
+        _ => {
+            return Err(format!(
+                "invalid MIR call to builtin `{name}` in `{}` requires an `Array` result type with a numeric dtype",
+                function.name
+            ));
+        }
+    };
+    let shape = Type::Named("list".to_string(), vec![Type::named("int64")]);
+    let contract: Vec<(&str, Type)> = match associated {
+        BuiltinAssociatedFunction::ArrayZeros => vec![("shape", shape)],
+        BuiltinAssociatedFunction::ArrayFull => vec![("shape", shape), ("value", dtype)],
+        BuiltinAssociatedFunction::ArrayFromVec => vec![
+            ("values", Type::Named("list".to_string(), vec![dtype])),
+            ("shape", shape),
+        ],
+        _ => return Ok(()),
+    };
+    // Bind names and positions exactly as both backends' builtin binders do.
+    let mut bound: Vec<Option<&MirArg>> = vec![None; contract.len()];
+    let mut next_positional = 0usize;
+    for arg in args {
+        let index = if let Some(arg_name) = arg.name.as_deref() {
+            contract
+                .iter()
+                .position(|(slot, _)| *slot == arg_name)
+                .ok_or_else(|| {
+                    format!(
+                        "invalid MIR call to builtin `{name}` in `{}` has unknown argument `{arg_name}`",
+                        function.name
+                    )
+                })?
+        } else {
+            while next_positional < bound.len() && bound[next_positional].is_some() {
+                next_positional += 1;
+            }
+            if next_positional >= bound.len() {
+                return Err(format!(
+                    "invalid MIR call to builtin `{name}` in `{}` has too many arguments",
+                    function.name
+                ));
+            }
+            let index = next_positional;
+            next_positional += 1;
+            index
+        };
+        if bound[index].replace(arg).is_some() {
+            return Err(format!(
+                "invalid MIR call to builtin `{name}` in `{}` binds argument `{}` more than once",
+                function.name, contract[index].0
+            ));
+        }
+    }
+    for ((slot, expected), arg) in contract.iter().zip(bound) {
+        let Some(arg) = arg else {
+            return Err(format!(
+                "invalid MIR call to builtin `{name}` in `{}` omits argument `{slot}`",
+                function.name
+            ));
+        };
+        if arg.writeback_place.is_some() {
+            return Err(format!(
+                "invalid MIR call to builtin `{name}` in `{}` supplies writeback for argument `{slot}`",
+                function.name
+            ));
+        }
+        let matches = match (&arg.value, expected) {
+            // A numeric literal fills a scalar dtype slot; the runtimes
+            // convert it exactly like the checked source literal.
+            (Operand::Int(_), Type::Named(dtype_name, arguments)) => {
+                arguments.is_empty()
+                    && matches!(
+                        dtype_name.as_str(),
+                        "int32" | "int64" | "float32" | "float64"
+                    )
+            }
+            (Operand::Float(_), Type::Named(dtype_name, arguments)) => {
+                arguments.is_empty() && matches!(dtype_name.as_str(), "float32" | "float64")
+            }
+            (operand, expected) => {
+                context.operand_type(function, operand)?.as_ref() == Some(expected)
+            }
+        };
+        if !matches {
+            return Err(format!(
+                "invalid MIR call to builtin `{name}` in `{}` binds argument `{slot}` to an operand that is not `{expected}`",
+                function.name
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn validate_loan_rvalue(
@@ -6125,7 +6560,7 @@ fn validate_loan_rvalue(
                     ));
                 }
             }
-            Ok(())
+            validate_task_boundary_contract(function, task_function, context, state)
         }
         Rvalue::Binary { left, right, .. } => operands(&[left.clone(), right.clone()]),
         Rvalue::Call { callee, args } => {
@@ -7137,6 +7572,19 @@ fn validate_loan_instruction(
             validate_loan_rvalue(function, value, context, state)?;
             let task_borrowed_closure = rvalue_has_task_borrowed_closure(value, state);
             let destinations = validated_loan_sources(loan, &state.loans)?;
+            if let Rvalue::Call {
+                callee: CallTarget::Name(name),
+                args,
+            } = value
+            {
+                // The written value takes the loan's pointee type, which is
+                // the type of every place the loan may select.
+                let result_type = match destinations.first() {
+                    Some(destination) => context.place_type(function, destination)?,
+                    None => context.place_type(function, loan)?,
+                };
+                validate_named_builtin_call(function, name, args, result_type.as_ref(), context)?;
+            }
             validate_checked_loan_place_access(
                 function,
                 loan,
@@ -7267,6 +7715,14 @@ fn validate_loan_instruction(
                 rebase_callable_rvalue(function, value, target, context, state);
             let container_mutation = container_mutation_callables(value, state)?;
             validate_loan_rvalue(function, value, context, state)?;
+            if let Rvalue::Call {
+                callee: CallTarget::Name(name),
+                args,
+            } = value
+            {
+                let result_type = context.place_type(function, target)?;
+                validate_named_builtin_call(function, name, args, result_type.as_ref(), context)?;
+            }
             let task_borrowed_closure_targets = if let Rvalue::TupleLiteral { elements, .. } = value
             {
                 elements
@@ -8919,6 +9375,48 @@ impl<'a> Lowerer<'a> {
         ))
     }
 
+    /// The implementation's own parameter names, by ordinal, for the method
+    /// a bound-method closure forwards to: a trait method's public contract
+    /// may name its slots differently from the selected implementation, and
+    /// the forwarding call binds keyword-only slots by the callee's names.
+    fn bound_method_local_param_names(
+        &self,
+        receiver_ty: &Type,
+        field: &str,
+    ) -> Option<Vec<String>> {
+        let Type::Named(class_name, _) = receiver_ty else {
+            return None;
+        };
+        if let Some(class) = self.resolve_class_info(class_name) {
+            if let Some(method) = class.methods.get(field) {
+                return Some(
+                    method
+                        .decl
+                        .params
+                        .iter()
+                        .map(|param| param.name.clone())
+                        .collect(),
+                );
+            }
+        }
+        let (_, method) = self
+            .trait_impls_in_scope()
+            .filter_map(|trait_impl| {
+                self.trait_impl_substitutions(trait_impl, receiver_ty)?;
+                let method = trait_impl.methods.get(field)?;
+                Some((crate::sema::trait_impl_specificity(trait_impl), method))
+            })
+            .max_by_key(|(specificity, _)| *specificity)?;
+        Some(
+            method
+                .decl
+                .params
+                .iter()
+                .map(|param| param.name.clone())
+                .collect(),
+        )
+    }
+
     /// Lowers `receiver.method` into a closure whose body forwards to the
     /// method call (C6). The receiver is evaluated once into the single
     /// `__receiver` capture; omitted defaults resolve through the method's own
@@ -8986,11 +9484,21 @@ impl<'a> Lowerer<'a> {
             },
             span: synthetic,
         };
+        // A keyword-only slot forwards under the implementation's local name
+        // at the same ordinal: the closure's parameters carry the public
+        // (trait) contract names, which the implementation may not share.
+        let local_names = self.bound_method_local_param_names(&capture.ty, field);
         let args = info
             .params
             .iter()
-            .map(|param| crate::ast::Argument {
-                name: param.keyword_only.then(|| param.name.clone()),
+            .enumerate()
+            .map(|(index, param)| crate::ast::Argument {
+                name: param.keyword_only.then(|| {
+                    local_names
+                        .as_ref()
+                        .and_then(|names| names.get(index).cloned())
+                        .unwrap_or_else(|| param.name.clone())
+                }),
                 value: Expr {
                     kind: ExprKind::Name(param.name.clone()),
                     span: synthetic,
@@ -11274,20 +11782,44 @@ impl<'a> Lowerer<'a> {
                                 .get(field)
                                 .filter(|method| method.decl.receiver.is_none())
                             {
-                                if class.decl.type_params.is_empty() {
-                                    let mut type_param_bounds = class.type_param_bounds.clone();
-                                    type_param_bounds.extend(method.type_param_bounds.clone());
-                                    return Some(ReturnedViewCallee {
-                                        decl: method.decl.clone(),
-                                        receiver: None,
-                                        module_name: class.module_name.clone(),
-                                        type_param_bounds,
-                                        param_types: method.signature.params.clone(),
-                                        return_type: method.signature.return_type.clone(),
-                                        receiver_type: None,
-                                        trait_name: None,
+                                // A generic imported class substitutes the
+                                // explicit arguments written on the receiver
+                                // (`api.Box[int64].associated(...)`) into the
+                                // view contract; an unspecialized receiver
+                                // leaves the class parameters for the call's
+                                // arguments to resolve.
+                                let mut type_param_bounds = class.type_param_bounds.clone();
+                                type_param_bounds.extend(method.type_param_bounds.clone());
+                                let callee_info = ReturnedViewCallee {
+                                    decl: method.decl.clone(),
+                                    receiver: None,
+                                    module_name: class.module_name.clone(),
+                                    type_param_bounds,
+                                    param_types: method.signature.params.clone(),
+                                    return_type: method.signature.return_type.clone(),
+                                    receiver_type: None,
+                                    trait_name: None,
+                                };
+                                let explicit = explicit_specialization_type_args(object)
+                                    .filter(|type_args| {
+                                        type_args.len() == class.decl.type_params.len()
+                                    })
+                                    .map(|type_args| {
+                                        type_args
+                                            .iter()
+                                            .map(|ty| self.lower_type_ref_with_provenance(ty))
+                                            .collect::<Vec<_>>()
                                     });
-                                }
+                                return Some(match explicit {
+                                    Some(type_args) => Self::specialize_returned_view_callee(
+                                        callee_info,
+                                        &substitutions_from_decl_type_args(
+                                            &class.decl.type_params,
+                                            &type_args,
+                                        ),
+                                    ),
+                                    None => callee_info,
+                                });
                             }
                         }
                     }
@@ -11430,44 +11962,30 @@ impl<'a> Lowerer<'a> {
         args: &[Argument],
         span: Span,
     ) -> ReturnedViewCallee {
-        if callee.decl.type_params.is_empty() {
-            return callee;
-        }
-        let Ok(ordered) = bind_call_arguments(
-            &format!("callable `{}`", callee.decl.name),
-            &callable_params_from_decl(&callee.decl.params),
-            args,
-            span,
-            CallConvention::PositionalOrNamed,
-        ) else {
-            return callee;
-        };
-        let type_params = callee
+        // The method's own type parameters and any owning-class parameters
+        // still unresolved in its contract (an unspecialized generic
+        // associated call such as `api.Box.associated(box)`) are resolved
+        // from the arguments alike.
+        let mut type_params = callee
             .decl
             .type_params
             .iter()
             .cloned()
             .collect::<BTreeSet<_>>();
-        let mut substitutions = HashMap::new();
-        for literal_pass in [false, true] {
-            for (argument, pattern) in ordered.iter().zip(callee.param_types.iter()) {
-                let Some(argument) = argument else {
-                    continue;
-                };
-                if is_integer_literal_expr(&argument.value) != literal_pass {
-                    continue;
-                }
-                let Some(actual) = self.infer_expr_type(&argument.value) else {
-                    continue;
-                };
-                let _ = crate::sema::type_pattern_matches(
-                    pattern,
-                    &actual,
-                    &type_params,
-                    &mut substitutions,
-                );
-            }
+        for ty in &callee.param_types {
+            collect_type_params_from_type(ty, &mut type_params);
         }
+        if type_params.is_empty() {
+            return callee;
+        }
+        let substitutions = self.infer_call_substitutions(
+            &callee.decl,
+            &callee.param_types,
+            &type_params,
+            args,
+            span,
+            HashMap::new(),
+        );
         Self::specialize_returned_view_callee(callee, &substitutions)
     }
 
@@ -15111,6 +15629,7 @@ impl<'a> Lowerer<'a> {
                 let Some(actual) = self.infer_expr_type(&argument.value) else {
                     continue;
                 };
+                let actual = inference_shape(actual, param);
                 let _ = crate::sema::type_pattern_matches(
                     param,
                     &actual,
@@ -17206,6 +17725,7 @@ impl<'a> Lowerer<'a> {
                 let Some(actual) = self.infer_expr_type(value) else {
                     continue;
                 };
+                let actual = inference_shape(actual, param_type);
                 let _ = crate::sema::type_pattern_matches(
                     param_type,
                     &actual,
@@ -17342,19 +17862,18 @@ impl<'a> Lowerer<'a> {
             return self.lower_call(&expanded_expr, &expanded, args, expected);
         }
         // A grouped explicit specialization such as `(Wrapped[int64])(...)`
-        // keeps its parentheses through alias expansion; the checker already
-        // looked through the group, so lowering does the same.
-        if let ExprKind::Group(inner) = &callee.kind {
-            if matches!(inner.kind, ExprKind::Specialize { .. }) {
-                let ungrouped = Expr {
-                    kind: ExprKind::Call {
-                        callee: inner.clone(),
-                        args: args.to_vec(),
-                    },
-                    span: expr.span,
-                };
-                return self.lower_call(&ungrouped, inner, args, expected);
-            }
+        // or `((Wrapped[int64]))(...)` keeps every layer of parentheses
+        // through alias expansion; the checker already looked through the
+        // groups, so lowering peels all of them the same way.
+        if let Some(inner) = grouped_specialization(callee) {
+            let ungrouped = Expr {
+                kind: ExprKind::Call {
+                    callee: Box::new(inner.clone()),
+                    args: args.to_vec(),
+                },
+                span: expr.span,
+            };
+            return self.lower_call(&ungrouped, inner, args, expected);
         }
         let temp = expected
             .cloned()
@@ -18450,6 +18969,7 @@ impl<'a> Lowerer<'a> {
                                     let Some(actual) = self.infer_expr_type(&argument.value) else {
                                         continue;
                                     };
+                                    let actual = inference_shape(actual, param);
                                     let _ = crate::sema::type_pattern_matches(
                                         param,
                                         &actual,
@@ -19089,7 +19609,10 @@ impl<'a> Lowerer<'a> {
     /// Infers a generic enum's type arguments for a variant constructor call
     /// from the lowered types of its payload arguments, mirroring the
     /// checker's payload-driven inference for `Enum.Variant(...)` calls that
-    /// spell no explicit type arguments.
+    /// spell no explicit type arguments: every supplied argument is bound to
+    /// its declaration slot first, the slots are visited in declaration
+    /// order, and a literal adopts a parameter already resolved by an earlier
+    /// slot instead of fixing it to the literal's standalone default.
     fn infer_enum_variant_type_args(
         &self,
         enum_info: &crate::sema::EnumInfo,
@@ -19106,26 +19629,39 @@ impl<'a> Lowerer<'a> {
             .iter()
             .cloned()
             .collect::<BTreeSet<_>>();
-        let mut substitutions = std::collections::HashMap::new();
-        for (index, argument) in args.iter().enumerate() {
-            let slot = if variant.named_payloads {
-                argument
-                    .name
-                    .as_ref()
-                    .and_then(|name| {
-                        variant
-                            .payloads
-                            .iter()
-                            .position(|payload| payload.name.as_deref() == Some(name.as_str()))
-                    })
-                    .unwrap_or(index)
-            } else {
-                index
+        let mut bound: Vec<Option<&Argument>> = vec![None; variant.payloads.len()];
+        let mut next_positional = 0usize;
+        for argument in args {
+            let slot = match argument.name.as_deref().filter(|_| variant.named_payloads) {
+                Some(name) => variant
+                    .payloads
+                    .iter()
+                    .position(|payload| payload.name.as_deref() == Some(name)),
+                None => {
+                    while next_positional < bound.len() && bound[next_positional].is_some() {
+                        next_positional += 1;
+                    }
+                    (next_positional < bound.len()).then_some(next_positional)
+                }
             };
-            let Some(payload) = variant.payloads.get(slot) else {
+            if let Some(slot) = slot {
+                if bound[slot].is_none() {
+                    bound[slot] = Some(argument);
+                }
+            }
+        }
+        let mut substitutions = std::collections::HashMap::new();
+        for (argument, payload) in bound.iter().zip(&variant.payloads) {
+            let Some(argument) = argument else {
                 continue;
             };
-            let Some(actual) = self.infer_expr_type(&argument.value) else {
+            let hinted = substitute_type(&payload.ty, &substitutions);
+            let actual = if crate::sema::has_unresolved_type_params(&hinted) {
+                self.infer_expr_type(&argument.value)
+            } else {
+                self.infer_expr_type_with_hint(&argument.value, &hinted)
+            };
+            let Some(actual) = actual else {
                 continue;
             };
             let _ = crate::sema::type_pattern_matches(
@@ -19168,6 +19704,106 @@ impl<'a> Lowerer<'a> {
         Some(Type::Named("Option".to_string(), vec![payload]))
     }
 
+    /// The type the checker gives `expr` against a resolved contextual hint:
+    /// a numeric literal adopts a concrete numeric hint, and an expression
+    /// lowering cannot type on its own (such as an empty literal) takes the
+    /// hint; everything else keeps its own inferred type.
+    fn infer_expr_type_with_hint(&self, expr: &Expr, hint: &Type) -> Option<Type> {
+        if is_integer_literal_expr(expr)
+            && (crate::sema::integer_type_bounds(hint).is_some() || is_float_type(hint))
+        {
+            return Some(hint.clone());
+        }
+        if is_float_literal_expr(expr) && is_float_type(hint) {
+            return Some(hint.clone());
+        }
+        self.infer_expr_type(expr).or_else(|| Some(hint.clone()))
+    }
+
+    /// Substitutions for a generic declaration inferred from a call's
+    /// arguments the way the checker resolves them: the arguments are bound
+    /// to their declaration slots, non-literal arguments are matched first,
+    /// and integer literals then adopt a parameter established by another
+    /// argument instead of prematurely fixing it to their standalone default.
+    fn infer_call_substitutions(
+        &self,
+        decl: &crate::ast::FunctionDecl,
+        param_types: &[Type],
+        type_params: &BTreeSet<String>,
+        args: &[Argument],
+        span: Span,
+        mut substitutions: HashMap<String, Type>,
+    ) -> HashMap<String, Type> {
+        let Ok(ordered) = bind_call_arguments(
+            &format!("callable `{}`", decl.name),
+            &callable_params_from_decl(&decl.params),
+            args,
+            span,
+            CallConvention::PositionalOrNamed,
+        ) else {
+            return substitutions;
+        };
+        for literal_pass in [false, true] {
+            for (argument, pattern) in ordered.iter().zip(param_types.iter()) {
+                let Some(argument) = argument else {
+                    continue;
+                };
+                if is_integer_literal_expr(&argument.value) != literal_pass {
+                    continue;
+                }
+                let Some(actual) = self.infer_expr_type(&argument.value) else {
+                    continue;
+                };
+                let actual = inference_shape(actual, pattern);
+                let _ = crate::sema::type_pattern_matches(
+                    pattern,
+                    &actual,
+                    type_params,
+                    &mut substitutions,
+                );
+            }
+        }
+        substitutions
+    }
+
+    /// Substitutions for an imported class's associated method call
+    /// `module.Class.method(...)` or `module.Class[T...].method(...)`: the
+    /// explicit class arguments written on the receiver expression win, and
+    /// an unspecialized receiver infers them from the arguments.
+    fn imported_associated_method_substitutions(
+        &self,
+        class: &crate::sema::ClassInfo,
+        method: &crate::sema::MethodInfo,
+        object: &Expr,
+        args: &[Argument],
+        span: Span,
+    ) -> HashMap<String, Type> {
+        if let Some(type_args) = explicit_specialization_type_args(object) {
+            if type_args.len() == class.decl.type_params.len() {
+                let type_args = type_args
+                    .iter()
+                    .map(|ty| self.lower_type_ref_with_provenance(ty))
+                    .collect::<Vec<_>>();
+                return substitutions_from_decl_type_args(&class.decl.type_params, &type_args);
+            }
+        }
+        let type_params = class
+            .decl
+            .type_params
+            .iter()
+            .chain(&method.decl.type_params)
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        self.infer_call_substitutions(
+            &method.decl,
+            &method.signature.params,
+            &type_params,
+            args,
+            span,
+            HashMap::new(),
+        )
+    }
+
     fn infer_expr_type(&self, expr: &Expr) -> Option<Type> {
         if let Some(read) = self.narrowed_read(expr) {
             return Some(read.member_type);
@@ -19188,16 +19824,14 @@ impl<'a> Lowerer<'a> {
                     span: expr.span,
                 });
             }
-            if let ExprKind::Group(inner) = &callee.kind {
-                if matches!(inner.kind, ExprKind::Specialize { .. }) {
-                    return self.infer_expr_type(&Expr {
-                        kind: ExprKind::Call {
-                            callee: inner.clone(),
-                            args: args.clone(),
-                        },
-                        span: expr.span,
-                    });
-                }
+            if let Some(inner) = grouped_specialization(callee) {
+                return self.infer_expr_type(&Expr {
+                    kind: ExprKind::Call {
+                        callee: Box::new(inner.clone()),
+                        args: args.clone(),
+                    },
+                    span: expr.span,
+                });
             }
         }
         match &expr.kind {
@@ -19626,6 +20260,7 @@ impl<'a> Lowerer<'a> {
                                         else {
                                             continue;
                                         };
+                                        let actual_ty = inference_shape(actual_ty, expected);
                                         let _ = crate::sema::type_pattern_matches(
                                             expected,
                                             &actual_ty,
@@ -19661,14 +20296,47 @@ impl<'a> Lowerer<'a> {
                             if let Some(namespace) = self.module_namespace(&module_path) {
                                 if let Some(class) = namespace.classes.get(&item_name) {
                                     if let Some(method) = class.methods.get(field) {
-                                        return Some(method.signature.return_type.clone());
+                                        let substitutions = self
+                                            .imported_associated_method_substitutions(
+                                                class,
+                                                method,
+                                                object,
+                                                args,
+                                                callee.span,
+                                            );
+                                        return Some(substitute_type(
+                                            &method.signature.return_type,
+                                            &substitutions,
+                                        ));
                                     }
                                 }
                                 if let Some(enum_info) = namespace.enums.get(&item_name) {
                                     if enum_info.variants.contains_key(field) {
-                                        let type_args = self
-                                            .infer_enum_variant_type_args(enum_info, field, args)
-                                            .unwrap_or_default();
+                                        // Explicit type arguments written on
+                                        // the imported enum (`api.Slot[int64]`)
+                                        // are the constructor's specialization;
+                                        // only an unspecialized constructor
+                                        // infers them from its payloads.
+                                        let explicit = explicit_specialization_type_args(object)
+                                            .filter(|type_args| {
+                                                type_args.len() == enum_info.decl.type_params.len()
+                                            })
+                                            .map(|type_args| {
+                                                type_args
+                                                    .iter()
+                                                    .map(|ty| {
+                                                        self.lower_type_ref_with_provenance(ty)
+                                                    })
+                                                    .collect::<Vec<_>>()
+                                            });
+                                        let type_args = match explicit {
+                                            Some(type_args) => type_args,
+                                            None => self
+                                                .infer_enum_variant_type_args(
+                                                    enum_info, field, args,
+                                                )
+                                                .unwrap_or_default(),
+                                        };
                                         return Some(Type::Named(
                                             mir_runtime_enum_name(self.program, enum_info),
                                             type_args,
@@ -19720,6 +20388,7 @@ impl<'a> Lowerer<'a> {
                                                 else {
                                                     continue;
                                                 };
+                                                let actual = inference_shape(actual, param);
                                                 let _ = crate::sema::type_pattern_matches(
                                                     param,
                                                     &actual,

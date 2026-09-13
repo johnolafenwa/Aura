@@ -505,9 +505,14 @@ contains a backend surface that cannot preserve the same behavior.
 
 ## Limits And Implementation-Defined Behavior
 
-`int` is an alias for `int64`; method-value types, user-defined numeric casts,
-and non-numeric casts are unavailable, and recursive value fields require
-`indirect`. Capture-free named function values use
+`int` is an alias for `int64`; user-defined numeric casts and non-numeric
+casts are unavailable, and recursive value fields require `indirect`. Method
+values have no separate type: `receiver.method` is a bound method, a closure
+over the receiver with the method's complete contract, and `Class.method` on
+a non-generic class is a capture-free function value; a generic method's
+type arguments must be explicit or supplied by an expected contract, and a
+`view ... from self` result cannot be bound (see
+[Closures](/manual/closures#bound-methods)). Capture-free named function values use
 `def(T1, mut T2, own T3) -> R`; bare parameters are shared and the written
 `mut`/`own` modes are part of the type. Contextually typed lambdas use that
 same source-level callable signature; a capturing closure additionally owns
@@ -548,7 +553,8 @@ but a view descriptor is not an owned or structural `def(...) -> R` type and
 cannot be stored in fields or collections. Capture-free function types and
 by-value expression closures are implemented. FFI v0 fixed-width declarations, byte/string views,
 and opaque handle types are implemented; extern functions do not become
-first-class function values. Method-value types are unavailable.
+first-class function values. Bound and associated method values are closure
+and function values rather than a distinct method-value type.
 Structural tuple types
 and their Batch 3 B3.0-c equality amendment are Accepted under ADR-0026.
 `str` is the owned UTF-8 text type. A distinct borrowed text-view type is

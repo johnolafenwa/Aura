@@ -383,8 +383,19 @@ capture writeback covers it. The MIR closure rvalue carries a `mutable` bit
 so the validator's authoritative identity is the closure's real kind; the
 validator admits an erased destination only when its kind is no weaker than
 the value's, checks erased contracts for top-level arguments, call results,
-task starts, and function operands, and merges disagreeing identities under
-one erased element type into that contract. Runtime type patterns admit a
+task starts, and function operands, and merges the identities a runtime
+selection may produce (container elements, dictionary values, control-flow
+joins, member-call result candidates) by their complete contracts:
+`Type::identical_contract` compares slot names, keyword-only boundaries,
+default availability, capabilities, closure captures and call kinds, and
+the task flag at every callable position, distinct functions with one
+complete contract keep that contract without a name, values admitted under
+one erased element type keep that erased contract, a candidate that is a
+written restriction of the others under the checker's admission rules (a
+hidden name, a dropped default, a keyword-only boundary on a named slot)
+becomes the common contract, and any other disagreement poisons the merged
+identity so a later call through the selection is refused on both
+boundaries; no common contract is ever invented. Runtime type patterns admit a
 function or closure signature for an erased declared type when the ABI
 matches and the kind is admitted. The semantic interface schema is 13.
 
@@ -399,6 +410,10 @@ environment-owned captures are child-owned: the interpreter's startable
 check skips them, and the direct runtime releases the child's claim on
 those handles after the single invocation, so a normally completed task
 retains nothing. Parent-evaluated defaults and task ancestry are unchanged.
+A stored target's result contract is read from its erased signature exactly
+like a named or closure target's declared result, so a `TaskCallable` whose
+result is itself a callable keeps that callable's identity through the task
+handle and its result helpers.
 
 ## Batch 1 phase 1: bound methods
 
@@ -459,6 +474,20 @@ the only runtime surface involved. Mutable and Consuming packed values,
 keyword-only element parameters, and view-returning callback contracts are
 refused at the checker; the validator needs no new rule because builtin
 member callees have no MIR candidates to bind.
+
+## Batch 1 phase 1: named builtin contracts
+
+Builtins the backends dispatch by name without a MIR declaration to bind
+against (`Array.zeros(shape)`, `Array.full(shape, value)`, and
+`Array.from_list(values, shape)`) have a shared contract table in the common
+validator that mirrors the checker's associated-function signatures. The
+validator binds the call's names and positions exactly as both backends'
+builtin binders do and refuses a forged arity, argument name, duplicate or
+omitted argument, writeback, operand type (`list[int64]` shapes, `list[T]`
+values, and a `T` fill value for the result's dtype), or a result type that
+is not `Array[T]` with a numeric dtype, with one reason on `run_mir` and
+`emit_host_native_object` alike, before either backend relies on the operand
+shapes the checker guaranteed.
 The interpreter's root task, which executes the program entry, reserves a
 lazily mapped 16 MiB coroutine stack; child tasks keep the 768 KiB default.
 A debug build's interpreter frames for packed-closure calls are large enough

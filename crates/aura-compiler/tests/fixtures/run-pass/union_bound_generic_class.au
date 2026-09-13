@@ -1,0 +1,32 @@
+trait Named:
+    def name(self) -> str
+
+trait Describe:
+    def describe(self) -> str
+
+class Dog:
+    tag: str
+
+class Cat:
+    tag: str
+
+impl Named for Dog:
+    def name(self) -> str:
+        return self.tag.clone()
+
+impl Named for Cat:
+    def name(self) -> str:
+        return self.tag.clone()
+
+class Box[T: Named]:
+    value: T
+
+impl[T: Named] Describe for Box[T]:
+    def describe(self) -> str:
+        return f"box of {self.value.name()}"
+
+def main():
+    pet: Dog | Cat = Cat(tag="tom")
+    boxed = Box[Dog | Cat](value=pet)
+    print(boxed.describe())
+    print(boxed.value.name())

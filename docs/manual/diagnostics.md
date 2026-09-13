@@ -187,6 +187,15 @@ mutable-repeatable closure through an immutable place. `AU3004` covers
 non-place sources, immutable mutable-view targets, and unsupported projections
 such as collection indexes.
 
+For bound methods, `AU3002` rejects binding a non-Copy shared or mutable
+parameter and `AU3004` rejects binding a view of a non-Copy value; a Copy
+receiver reached either way is snapshotted and reports nothing. Binding a
+trait method whose implementation names a keyword-only parameter differently
+from the trait reports `AU2005`, because the bound closure exposes the trait's
+names and cannot yet forward such a slot. A union type argument that does not
+satisfy a trait bound reports `AU2002` when a member lacks the
+implementation and `AU2999` when the members' contracts are not coherent.
+
 For `select(...)`, `AU3009` also rejects the same statically visible
 non-repeatable Task source appearing twice in one call. `AU3002` explains that
 each non-repeatable Task must arrive through owned access because `select`
@@ -502,6 +511,14 @@ An explicit task-stack request has exact type `int64` and an inclusive
 checking. A dynamic value outside that range and a stack-allocation or
 platform-size failure trap with `AU4005`; Aura never clamps the request or
 silently substitutes the default.
+
+On the MIR backend, an Aura call that would leave less than the interpreter's
+headroom reserve on the running task's writable coroutine stack also traps
+with `AU4005` ("task stack exhausted while calling ..."), naming the callee
+and the writable bytes that remain; the guard page below the requested
+capacity is excluded from that headroom. The reserve is 128 KiB in an
+optimized interpreter build and 224 KiB in a debug-assertion build. The direct
+backend performs no headroom probe and has only its 256-call depth limit.
 
 `AU4006` reports invalid process runtime configuration.
 `AURA_WORKERS`, `AURA_BLOCKING_WORKERS`, and

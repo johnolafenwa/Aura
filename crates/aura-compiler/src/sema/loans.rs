@@ -2113,6 +2113,30 @@ impl<'a> FunctionChecker<'a> {
                 .map(|view| view.kind)),
             ExprKind::Call { .. } => self.returned_view_call_kind(expr, locals),
             ExprKind::Member { object, .. } | ExprKind::Index { object, .. } => {
+                // A bound method selected through a view (`view.method`,
+                // optionally specialized with `[T]`) is an owned closure
+                // over an independent snapshot of its Copy receiver (C6),
+                // not a projection of the view; a non-Copy receiver is
+                // refused when the method binds. The closure type is not
+                // Copy, so it must not be mistaken for a borrowed
+                // projection below.
+                let bound_member = match &expr.kind {
+                    ExprKind::Member { .. } => Some(expr),
+                    ExprKind::Index { object, .. }
+                        if matches!(object.kind, ExprKind::Member { .. }) =>
+                    {
+                        Some(object.as_ref())
+                    }
+                    _ => None,
+                };
+                let binds_method = |checker: &Self| {
+                    bound_member.is_some_and(|member| {
+                        checker.bound_method_closure_at(member.span).is_some()
+                    })
+                };
+                if binds_method(self) {
+                    return Ok(None);
+                }
                 let kind = self.direct_view_value_kind(object, locals)?;
                 let Some(kind) = kind else {
                     return Ok(None);
@@ -2123,7 +2147,7 @@ impl<'a> FunctionChecker<'a> {
                 // and must stay within view-aware contexts.
                 let mut type_locals = locals.clone();
                 let projected_ty = self.type_of_expr(expr, &mut type_locals)?;
-                if self.is_copy_type(&projected_ty) {
+                if binds_method(self) || self.is_copy_type(&projected_ty) {
                     Ok(None)
                 } else {
                     Ok(Some(kind))

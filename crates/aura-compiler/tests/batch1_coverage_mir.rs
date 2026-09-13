@@ -92,19 +92,22 @@ fn decode(encoded: Value) -> MirModule {
     serde_json::from_value(encoded).expect("forged MIR should deserialize")
 }
 
+/// Both public boundaries must refuse the forged module for the same shared
+/// validator reason: the interpreter reports it as `invalid MIR loan flow: …`
+/// and the direct backend reports the bare validator message.
 fn assert_rejected(encoded: Value, expected: &str) {
     let mir = decode(encoded);
     let interpreted = run_mir(&mir).expect_err("interpreter must reject the forged module");
-    assert!(
-        interpreted.message.contains(expected),
-        "interpreter rejection `{}` should mention `{expected}`",
-        interpreted.message
-    );
     let native =
         emit_host_native_object(&mir).expect_err("native emission must reject the forged module");
+    assert_eq!(
+        interpreted.message.strip_prefix("invalid MIR loan flow: "),
+        Some(native.as_str()),
+        "both boundaries must report the same shared validator reason"
+    );
     assert!(
         native.contains(expected),
-        "native rejection `{native}` should mention `{expected}`"
+        "shared rejection `{native}` should mention `{expected}`"
     );
 }
 
@@ -179,7 +182,7 @@ fn keyword_only_callable_contracts_bind_named_arguments() {
 
 #[test]
 fn closure_locals_and_bound_methods_start_tasks() {
-    let source = "class Counter:\n    total: int64\n    def bump(mut self) -> int64:\n        self.total = self.total + 1\n        return self.total\ndef main():\n    counter = Counter(total=1)\n    worker = lambda [own counter]: counter.bump()\n    other = Counter(total=10)\n    with TaskGroup() as group:\n        task = group.start(worker)\n        print(task.result_or(-1, timeout=1s))\n        bound = group.start(other.bump)\n        print(bound.result_or(-1, timeout=1s))\n";
+    let source = "class Counter:\n    total: int64\n    def bump(mut self) -> int64:\n        self.total = self.total + 1\n        return self.total\ndef main():\n    counter = Counter(total=1)\n    worker = lambda [own counter]: counter.bump()\n    other = Counter(total=10)\n    with TaskGroup() as group:\n        task = group.start(worker)\n        print(task.result_or(-1, timeout=30s))\n        bound = group.start(other.bump)\n        print(bound.result_or(-1, timeout=30s))\n";
     let encoded = assert_runs(source, "2\n11\n");
     assert!(module_text(&encoded).contains("StartTask"));
 }
@@ -400,19 +403,28 @@ fn duration_literal_receivers_type_as_durations() {
 }
 
 #[test]
-fn callables_nested_beyond_the_identity_walk_depth_fail_closed() {
-    // The validator's callable-identity walk stops eight class levels deep;
-    // a checked program storing a callable deeper than that is rejected
-    // rather than trusted (recorded as a suspected defect, see the coverage
-    // report), so this pins the current fail-closed boundary.
+fn checker_valid_callable_nine_class_levels_deep_is_rejected_by_both_backends_not_executed() {
+    // Documented limit, not desired behaviour: the validator's
+    // callable-identity walk stops eight class levels deep, so a program the
+    // checker accepts that stores a callable nine levels down has no recorded
+    // identity at the call. Both public boundaries refuse the lowered module
+    // for that one reason before execution instead of trusting the forgeable
+    // declared contract (recorded as a suspected defect in the coverage
+    // report). If the walk depth changes, this pin must change with it.
     let source = "type Reader = Callable[def() -> int64]\nclass C1:\n    f: Reader\nclass C2:\n    c: C1\nclass C3:\n    c: C2\nclass C4:\n    c: C3\nclass C5:\n    c: C4\nclass C6:\n    c: C5\nclass C7:\n    c: C6\nclass C8:\n    c: C7\nclass C9:\n    c: C8\nclass C10:\n    c: C9\ndef use(value: C10) -> int64:\n    return value.c.c.c.c.c.c.c.c.c.f()\ndef main():\n    print(use(C10(c=C9(c=C8(c=C7(c=C6(c=C5(c=C4(c=C3(c=C2(c=C1(f=Reader(lambda: 5)))))))))))))\n";
-    let error = run_source(source).expect_err("the nested callable has no recorded identity");
+    let mir = lower_source_to_mir(source).expect("the checker accepts the deep callable");
+    let interpreted = run_mir(&mir).expect_err("the interpreter refuses the unrecorded identity");
+    let native = emit_host_native_object(&mir)
+        .expect_err("the direct backend refuses the unrecorded identity");
+    assert_eq!(
+        interpreted.message.strip_prefix("invalid MIR loan flow: "),
+        Some(native.as_str()),
+        "both boundaries must report the same shared validator reason"
+    );
     assert!(
-        error
-            .message
+        native
             .contains("invalid MIR indirect call in `use` has no authoritative callable contract"),
-        "{}",
-        error.message
+        "{native}"
     );
 }
 
@@ -743,4 +755,23 @@ fn member_calls_on_untyped_locals_are_tolerated() {
     let output = run_mir(&mir).expect("an untyped receiver falls back to runtime dispatch");
     assert_eq!(output.stdout, "1\n");
     emit_host_native_object(&mir).expect("the direct backend accepts the untyped receiver");
+}
+
+#[test]
+fn union_argument_satisfies_a_generic_bound_and_dispatches_on_its_active_member() {
+    // A coherent all-member union satisfies `T: Named` (ADR-0052 A8); the
+    // erased generic body dispatches the trait call through the union's
+    // active member exactly as a direct call on the union does.
+    let source = include_str!("fixtures/run-pass/union_member_bound_dispatch.au");
+    assert_runs(source, "rex\nrex\ntom\n");
+}
+
+#[test]
+fn union_argument_through_a_generic_bound_writes_a_mutable_method_back_on_the_interpreter() {
+    // The interpreter writes a `mut self` trait method back through the
+    // union's active payload; the direct backend refuses the same call with a
+    // diagnostic (see Current Limits), so this is pinned per backend rather
+    // than as a parity fixture.
+    let source = include_str!("fixtures/check-pass/union_member_bound_mutable_dispatch.au");
+    assert_runs(source, "2\n12\n");
 }

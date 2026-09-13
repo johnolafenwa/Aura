@@ -17870,11 +17870,48 @@ fn native_runtime_internal_diagnostic_channels_are_hidden_cloexec_and_one_shot()
     );
 }
 
+/// The internal diagnostic channels are one process-global transaction
+/// (install, emit, take). Cargo runs tests concurrently and the runtime's own
+/// mutex only serializes individual operations, so every in-process test that
+/// installs or drains the channels holds this guard for its whole sequence.
+#[cfg(unix)]
+static INTERNAL_DIAGNOSTIC_CHANNEL_TEST_GUARD: Mutex<()> = Mutex::new(());
+
+/// Serializes a channel-owning test and starts it from the documented
+/// precondition (no channel installed), even if an earlier test panicked
+/// part-way through its own transaction.
+#[cfg(unix)]
+fn hold_internal_diagnostic_channels() -> std::sync::MutexGuard<'static, ()> {
+    let guard = INTERNAL_DIAGNOSTIC_CHANNEL_TEST_GUARD
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    *super::lock_internal_diagnostic_channels() = None;
+    guard
+}
+
+/// A descriptor number no open file can hold: open descriptors are always
+/// below the soft `RLIMIT_NOFILE` limit, so the limit itself (or `i32::MAX`
+/// when it is unrepresentable) is never open and cannot be recycled by a
+/// concurrent test the way a freshly closed number can.
+#[cfg(unix)]
+fn never_open_descriptor() -> i32 {
+    let mut limit = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    assert_eq!(
+        unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) },
+        0
+    );
+    i32::try_from(limit.rlim_cur).unwrap_or(i32::MAX)
+}
+
 #[cfg(unix)]
 #[test]
 fn native_runtime_internal_diagnostic_signal_precedes_failed_record_encoding() {
     use std::os::fd::FromRawFd;
 
+    let _channels = hold_internal_diagnostic_channels();
     let mut diagnostic_descriptors = [0; 2];
     let mut signal_descriptors = [0; 2];
     assert_eq!(
@@ -22362,6 +22399,7 @@ fn wide_integer_overflow_messages_cover_division_and_unsigned_products() {
 #[cfg(unix)]
 #[test]
 fn internal_diagnostic_channels_reject_shared_descriptors_and_recover_from_poison() {
+    let _channels = hold_internal_diagnostic_channels();
     let mut fds = [0i32; 2];
     assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
     super::install_internal_diagnostic_channels(fds[0], fds[0]);
@@ -22371,9 +22409,11 @@ fn internal_diagnostic_channels_reject_shared_descriptors_and_recover_from_poiso
     );
     assert!(super::inherited_internal_diagnostic_file(-1).is_none());
     assert_eq!(unsafe { libc::close(fds[1]) }, 0);
+    // Another thread may reuse `fds[1]` the moment it is closed, so probe a
+    // number no open file can hold rather than the recycled one.
     assert!(
-        super::inherited_internal_diagnostic_file(fds[1]).is_none(),
-        "a closed descriptor number is rejected before ownership is assumed"
+        super::inherited_internal_diagnostic_file(never_open_descriptor()).is_none(),
+        "an unopened descriptor number is rejected before ownership is assumed"
     );
 
     let mut signal_pipe = [0i32; 2];
@@ -23037,4 +23077,44 @@ fn direct_process_pipe_reads_report_end_of_stream_as_none() {
         release_value(pipe_ptr);
         release_value(child_ptr);
     }
+}
+
+#[test]
+fn direct_value_is_union_distinguishes_unions_from_plain_values() {
+    let target = coverage_union(vec![Type::named("int64"), Type::Unit]);
+    let int_index = coverage_union_member_index(&target, &Type::named("int64"));
+    let union_name = super::canonical_runtime_type_name(&Type::Union(Box::new(target.clone())));
+    let payload = int_value(4);
+    let union =
+        super::aura_direct_union_inject(union_name.as_ptr(), union_name.len(), int_index, payload);
+    let plain = int_value(4);
+    let text = string_value("plain");
+    assert_eq!(super::aura_direct_value_is_union(union), 1);
+    assert_eq!(super::aura_direct_value_is_union(plain), 0);
+    assert_eq!(super::aura_direct_value_is_union(text), 0);
+    unsafe {
+        release_value(union);
+        release_value(plain);
+        release_value(text);
+    }
+}
+
+#[test]
+fn direct_erased_union_mutable_receiver_failure_reports_the_documented_diagnostic() {
+    let message = capture_direct_boundary_error_message(|| {
+        super::aura_direct_fail_erased_union_mutable_receiver(0, 0);
+    });
+    assert!(
+        message.contains(
+            "cannot call a mutable trait method through a generic receiver holding a union"
+        ),
+        "{message}"
+    );
+    let located = capture_direct_boundary_error_message(|| {
+        super::aura_direct_fail_erased_union_mutable_receiver(3, 5);
+    });
+    assert!(
+        located.contains("narrow the union to its member before the call"),
+        "{located}"
+    );
 }

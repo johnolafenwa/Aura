@@ -103,9 +103,13 @@ uses twice the preceding delay. A zero delay skips sleeping. Once the final perm
 attempt returns `Err`, that exact error is returned without another sleep or
 delay multiplication.
 
-The worker may be a capture-free function value or a repeatable
-value-capturing closure. A consuming closure is rejected because retry may
-invoke the worker more than once. Traps from the worker, delay overflow, and
+The worker may be a capture-free function value, a repeatable (Shared)
+value-capturing closure, or a packed Shared `Callable[def() -> Result[T, E]]`
+or `TaskCallable[def() -> Result[T, E]]` value, which the helper borrows for
+the operation with its ABI-equal contract. A consuming closure or `own def`
+value is rejected because retry may invoke the worker more than once, and a
+Mutable closure or `mut def` value is rejected because the helper holds the
+worker through a shared read; both report `AU2002`. Traps from the worker, delay overflow, and
 invalid runtime operations are not converted to `E`. Current-task
 cancellation propagates through the retry operation instead of returning the
 most recent `Err`.
@@ -184,10 +188,12 @@ Call arguments are evaluated left to right. Inputs to these host helpers are sha
 
 Telemetry emission and metric updates are observable side effects and occur at the call's position in source evaluation order. Concurrent tasks share standard error and the metric dictionary. Each individual metric operation is synchronized, but a sequence such as `get` followed by `increment` is not one atomic transaction.
 
-The retry helper reads a capture-free function value or repeatable capturing
-closure and invokes it under ordinary call rules.
-The helper can therefore reuse one repeatable capturing closure across all
-attempts without consuming its environment. Each `Result.Ok` or `Result.Err`
+The retry helper reads a capture-free function value, a repeatable
+capturing closure, or a packed Shared callable value and invokes it under
+ordinary call rules; a packed value is borrowed for the operation and is
+never cloned, moved, or erased.
+The helper can therefore reuse one repeatable worker across all attempts
+without consuming its environment. Each `Result.Ok` or `Result.Err`
 owns its payload.
 Intermediate errors are consumed by the retry decision; the final error is
 returned without cloning. Attempt calls and delay waits occur in the stated

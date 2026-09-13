@@ -1,0 +1,5 @@
+error[AU2002]: trait impl target must name a concrete or generic outer type
+ --> crates/aura-compiler/tests/fixtures/check-fail/trait_impl_tuple_target.au:4:1
+  |
+4 | impl Show for (int64, str):
+  | ^

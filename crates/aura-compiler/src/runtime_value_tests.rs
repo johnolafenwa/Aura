@@ -18018,6 +18018,13 @@ fn tls_listeners_skip_failed_handshakes_and_serialize_concurrent_stream_operatio
                 .accept(Some(StdDuration::from_secs(10)), Some(&cancellation))
                 .expect("the listener should skip the failed handshake and accept the TLS client");
             let _ = release_receiver.recv();
+            stream
+                .write_all(
+                    "released\n",
+                    Some(StdDuration::from_secs(10)),
+                    Some(&cancellation),
+                )
+                .expect("the server writes the release line");
             stream.close();
             listener.close();
         })
@@ -18042,36 +18049,52 @@ fn tls_listeners_skip_failed_handshakes_and_serialize_concurrent_stream_operatio
     )
     .expect("tls client should connect");
 
-    // Two reads race for the stream's single protocol slot: whichever loses
-    // spins on the host thread until its own deadline passes. The server
-    // never writes, so both reads time out.
+    // Two reads contend for the stream's single protocol slot. The contender
+    // is started first and the test waits until the stream reports the slot
+    // busy, so the main read provably never reaches the socket: it spins on
+    // the host thread until its own deadline passes while the contender still
+    // owns the slot. The server then writes one line, which only the slot
+    // owner can observe; the losing read consumed nothing.
     let contender = {
         let client = client.clone();
         thread::spawn(move || {
             client.read_line(
-                Some(StdDuration::from_millis(400)),
+                Some(StdDuration::from_secs(10)),
                 Some(&CancellationContext::default()),
             )
         })
     };
-    thread::sleep(StdDuration::from_millis(50));
+    let waiting_since = Instant::now();
+    while !client.inner.busy.load(Ordering::Acquire) {
+        assert!(
+            waiting_since.elapsed() < StdDuration::from_secs(10),
+            "the contending read should take the protocol slot"
+        );
+        thread::yield_now();
+    }
     let main_read = client.read_line(
         Some(StdDuration::from_millis(200)),
         Some(&CancellationContext::default()),
     );
     assert_eq!(
-        main_read.expect_err("no data arrives").kind(),
+        main_read
+            .expect_err("the slot is held by the contender")
+            .kind(),
         io::ErrorKind::TimedOut
     );
+    assert!(
+        client.inner.busy.load(Ordering::Acquire),
+        "the contender must still own the protocol slot when the losing read times out"
+    );
+    let _ = release_sender.send(());
     assert_eq!(
         contender
             .join()
             .expect("contending read joins")
-            .expect_err("no data arrives")
-            .kind(),
-        io::ErrorKind::TimedOut
+            .expect("the slot owner reads the released line")
+            .as_deref(),
+        Some("released")
     );
-    let _ = release_sender.send(());
     server.join().expect("tls server should join");
     client.close();
     let _ = fs::remove_file(&cert_path);

@@ -95,14 +95,15 @@ pub(crate) use types::{
 pub use types::{ReturnedViewType, TraitBound, Type, TypeDefinitions};
 mod properties;
 pub(crate) use properties::integer_type_bounds;
+pub(crate) use properties::is_builtin_io_resource_type;
 use properties::{
-    array_element_type, is_array_dtype, is_builtin_copy_named_type, is_builtin_io_resource_type,
-    is_builtin_type, is_float_type, is_integer_type, is_numeric_type, is_option_type,
-    is_string_type, map_key_value_types, preserves_qualified_builtin_type_name,
-    rng_clone_obligation_params_in_context_with_modules, rng_clone_safety_in_context_with_modules,
-    set_element_type, type_contains_closure_value, type_contains_loan_closure, type_contains_named,
-    type_is_copy_in_context_with_modules, type_reaches_class_through_non_indirect_fields,
-    vec_element_type, RngCloneSafety, TaskObservationSummary,
+    array_element_type, is_array_dtype, is_builtin_copy_named_type, is_builtin_type, is_float_type,
+    is_integer_type, is_numeric_type, is_option_type, is_string_type, map_key_value_types,
+    preserves_qualified_builtin_type_name, rng_clone_obligation_params_in_context_with_modules,
+    rng_clone_safety_in_context_with_modules, set_element_type, type_contains_closure_value,
+    type_contains_loan_closure, type_contains_named, type_is_copy_in_context_with_modules,
+    type_reaches_class_through_non_indirect_fields, vec_element_type, RngCloneSafety,
+    TaskObservationSummary,
 };
 
 use std::cell::RefCell;
@@ -2465,10 +2466,11 @@ impl<'a> FunctionChecker<'a> {
         .with_secondary(stale.invalidated_at, "invalidated here"))
     }
 
-    /// Refinements of a loop body's entry state that the body itself can
-    /// invalidate must not be assumed on later iterations: the paths whose
-    /// facts did not survive one pass are removed before the body is checked
-    /// again from the same entry.
+    /// Loop-header refinements that the body itself can invalidate must not
+    /// be assumed on later iterations: the header paths whose facts did not
+    /// survive one pass are removed from the header before the guard and the
+    /// body are checked again. A `while` guard's own facts are not header
+    /// facts; the guard re-establishes them before every iteration.
     fn narrowing_killed_by_body(
         entry: &HashMap<String, LocalBinding>,
         after: &HashMap<String, LocalBinding>,
@@ -4136,7 +4138,6 @@ impl<'a> FunctionChecker<'a> {
                     {
                         self.consume_value_expr(&for_stmt.iterable, locals)?;
                     }
-                    let mut body_locals = locals.clone();
                     let effective_borrow_mode = match &iterable_ty {
                         Type::Named(name, args) if name == "Queue" && args.len() == 1 => None,
                         _ => match for_stmt.borrow_mode {
@@ -4145,41 +4146,53 @@ impl<'a> FunctionChecker<'a> {
                             None => Some(ReceiverKind::Borrow),
                         },
                     };
-                    if let Some(borrow_mode) = effective_borrow_mode {
-                        if let Some(place) =
-                            self.borrowed_iterable_place(&for_stmt.iterable, locals)?
-                        {
-                            let root = place.root.clone();
-                            if let Some(binding) = body_locals.get_mut(&root) {
-                                if place.is_root() {
-                                    binding.assignable = false;
-                                    binding.mutable_place = false;
-                                    if binding.passing == ReceiverKind::Value {
-                                        binding.passing = borrow_mode;
-                                        binding.borrow_origin = Some(root);
+                    // The body is checked under the loop-header state, a
+                    // fixed point over the entry and every backedge
+                    // (ADR-0052 A4): an entry fact that some iteration
+                    // invalidates does not hold on the next one.
+                    let body_locals = loop {
+                        let mut body_locals = locals.clone();
+                        if let Some(borrow_mode) = effective_borrow_mode {
+                            if let Some(place) =
+                                self.borrowed_iterable_place(&for_stmt.iterable, locals)?
+                            {
+                                let root = place.root.clone();
+                                if let Some(binding) = body_locals.get_mut(&root) {
+                                    if place.is_root() {
+                                        binding.assignable = false;
+                                        binding.mutable_place = false;
+                                        if binding.passing == ReceiverKind::Value {
+                                            binding.passing = borrow_mode;
+                                            binding.borrow_origin = Some(root);
+                                        }
                                     }
+                                    binding
+                                        .frozen_places
+                                        .insert(place.clone(), for_stmt.iterable.span);
                                 }
-                                binding
-                                    .frozen_places
-                                    .insert(place.clone(), for_stmt.iterable.span);
                             }
                         }
-                    }
-                    self.bind_target(
-                        &for_stmt.target,
-                        &binding_ty,
-                        binding_passing,
-                        binding_mutable_place,
-                        &mut body_locals,
-                        "loop",
-                    )?;
-                    self.check_block(
-                        &for_stmt.body,
-                        &mut body_locals,
-                        return_type,
-                        loop_depth + 1,
-                        allow_return,
-                    )?;
+                        self.bind_target(
+                            &for_stmt.target,
+                            &binding_ty,
+                            binding_passing,
+                            binding_mutable_place,
+                            &mut body_locals,
+                            "loop",
+                        )?;
+                        self.check_block(
+                            &for_stmt.body,
+                            &mut body_locals,
+                            return_type,
+                            loop_depth + 1,
+                            allow_return,
+                        )?;
+                        let killed = Self::narrowing_killed_by_body(locals, &body_locals);
+                        if killed.is_empty() {
+                            break body_locals;
+                        }
+                        Self::forget_narrowing(&killed, locals);
+                    };
                     self.reject_loop_carried_moves(locals, &body_locals, "for", for_stmt.span)?;
                     let baseline_locals = locals.clone();
                     self.merge_control_flow_moves(locals, &[&baseline_locals, &body_locals]);
@@ -4193,36 +4206,29 @@ impl<'a> FunctionChecker<'a> {
                     }
                 }
                 Stmt::While(while_stmt) => {
-                    let condition_ty = self.type_of_expr(&while_stmt.condition, locals)?;
                     self.reject_mutable_returned_view_value(&while_stmt.condition, locals, false)?;
-                    if condition_ty != Type::named("bool") {
-                        return Err(Diagnostic::at(
-                            while_stmt.span,
-                            format!(
-                                "`while` condition must have type `bool`, found `{}`",
-                                condition_ty
-                            ),
-                        ));
-                    }
-                    let (when_true, when_false) =
-                        self.condition_narrowing(&while_stmt.condition, locals)?;
-                    let mut body_entry = locals.clone();
-                    self.apply_narrowing(&when_true, &mut body_entry);
-                    let mut body_locals = body_entry.clone();
-                    self.check_block(
-                        &while_stmt.body,
-                        &mut body_locals,
-                        return_type,
-                        loop_depth + 1,
-                        allow_return,
-                    )?;
-                    let killed = Self::narrowing_killed_by_body(&body_entry, &body_locals);
-                    if !killed.is_empty() {
-                        // The body invalidates facts it was checked under; a
-                        // later iteration enters without them, so check again.
-                        Self::forget_narrowing(&killed, locals);
-                        Self::forget_narrowing(&killed, &mut body_entry);
-                        body_locals = body_entry.clone();
+                    // The condition and the body are checked under the
+                    // loop-header state: a fixed point over the entry and
+                    // every backedge (ADR-0052 A4). A fact that held on entry
+                    // but that some iteration invalidates is removed from the
+                    // header, and the guard is evaluated before every
+                    // iteration, so its own true-successor facts are
+                    // re-established for the body on each pass.
+                    let (when_false, body_locals) = loop {
+                        let condition_ty = self.type_of_expr(&while_stmt.condition, locals)?;
+                        if condition_ty != Type::named("bool") {
+                            return Err(Diagnostic::at(
+                                while_stmt.span,
+                                format!(
+                                    "`while` condition must have type `bool`, found `{}`",
+                                    condition_ty
+                                ),
+                            ));
+                        }
+                        let (when_true, when_false) =
+                            self.condition_narrowing(&while_stmt.condition, locals)?;
+                        let mut body_locals = locals.clone();
+                        self.apply_narrowing(&when_true, &mut body_locals);
                         self.check_block(
                             &while_stmt.body,
                             &mut body_locals,
@@ -4230,7 +4236,12 @@ impl<'a> FunctionChecker<'a> {
                             loop_depth + 1,
                             allow_return,
                         )?;
-                    }
+                        let killed = Self::narrowing_killed_by_body(locals, &body_locals);
+                        if killed.is_empty() {
+                            break (when_false, body_locals);
+                        }
+                        Self::forget_narrowing(&killed, locals);
+                    };
                     if self.const_bool_value(&while_stmt.condition) != Some(false) {
                         self.reject_loop_carried_moves(
                             locals,
@@ -12224,6 +12235,20 @@ impl<'a> FunctionChecker<'a> {
                                                 has_default: param.has_default,
                                             })
                                             .collect::<Vec<_>>();
+                                        // A view result borrows the child's arguments; the
+                                        // child's result must be an owned value (C8).
+                                        if matches!(return_type.as_ref(), Type::ReturnedView(_)) {
+                                            return Err(Diagnostic::coded_at(
+                                                "AU3008",
+                                                args[target_index].span,
+                                                format!(
+                                                    "task target of type `{target_ty}` returns a view of its arguments; the child's result must be an owned value"
+                                                ),
+                                            )
+                                            .with_help(
+                                                "return an owned value or a clone from the task target",
+                                            ));
+                                        }
                                         let checked_return = self.type_check_function_value_args(
                                             &capture_params,
                                             &return_type,
@@ -12232,17 +12257,51 @@ impl<'a> FunctionChecker<'a> {
                                             locals,
                                             None,
                                         )?;
+                                        // Bind the supplied arguments to their contract slots
+                                        // first: a named argument proves Transfer for the slot
+                                        // it binds, and an omitted default still crosses the
+                                        // boundary with its declared type.
+                                        let contract_slots = params
+                                            .iter()
+                                            .map(|param| {
+                                                let slot = if param.has_default {
+                                                    crate::call::CallableParam::optional(
+                                                        &param.name,
+                                                    )
+                                                } else {
+                                                    crate::call::CallableParam::required(
+                                                        &param.name,
+                                                    )
+                                                };
+                                                if param.keyword_only {
+                                                    slot.keyword_only()
+                                                } else {
+                                                    slot
+                                                }
+                                            })
+                                            .collect::<Vec<_>>();
+                                        let bound_slots = bind_call_arguments(
+                                            "function value",
+                                            &contract_slots,
+                                            spawn_args,
+                                            span,
+                                            CallConvention::PositionalOrNamed,
+                                        )?;
                                         for (index, (param, argument)) in
-                                            params.iter().zip(spawn_args).enumerate()
+                                            params.iter().zip(bound_slots).enumerate()
                                         {
-                                            self.require_transfer(
-                                                &param.ty,
+                                            let label = if param.name.is_empty() {
                                                 format!(
                                                     "task argument {} for function value",
                                                     index + 1
-                                                ),
-                                                argument.span,
-                                            )?;
+                                                )
+                                            } else {
+                                                format!("task argument `{}`", param.name)
+                                            };
+                                            let value_span = argument
+                                                .map(|argument| argument.span)
+                                                .unwrap_or(args[target_index].span);
+                                            self.require_transfer(&param.ty, label, value_span)?;
                                         }
                                         self.require_transfer(
                                             &checked_return,
@@ -12296,6 +12355,23 @@ impl<'a> FunctionChecker<'a> {
                                             "pass an explicit owned copy or clone whose lifetime is independent of the view",
                                         ));
                                     }
+                                }
+                                if callable.decl.view_return.is_some() {
+                                    return Err(Diagnostic::coded_at(
+                                        "AU3008",
+                                        args[target_index].span,
+                                        format!(
+                                            "task target `{}` returns a view of its arguments; the child's result must be an owned value",
+                                            callable.display_name
+                                        ),
+                                    )
+                                    .with_secondary(
+                                        callable.decl.return_type.span,
+                                        "task target return type is declared here",
+                                    )
+                                    .with_help(
+                                        "return an owned value or a clone from the task target",
+                                    ));
                                 }
                                 let capture_passings = vec![
                                     ReceiverKind::Value;

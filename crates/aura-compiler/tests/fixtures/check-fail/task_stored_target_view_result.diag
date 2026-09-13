@@ -1,0 +1,6 @@
+error[AU3008]: task target of type `def(pair: Pair) -> view str from pair` returns a view of its arguments; the child's result must be an owned value
+ --> crates/aura-compiler/tests/fixtures/check-fail/task_stored_target_view_result.au:11:28
+   |
+11 |         task = group.start(target, pair)
+   |                            ^
+  = help: return an owned value or a clone from the task target

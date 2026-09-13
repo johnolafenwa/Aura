@@ -1,0 +1,7 @@
+error[AU3008]: task target `pick_left` returns a view of its arguments; the child's result must be an owned value
+ --> crates/aura-compiler/tests/fixtures/check-fail/task_target_view_result.au:10:28
+   |
+10 |         task = group.start(pick_left, pair)
+   |                            ^
+  = related crates/aura-compiler/tests/fixtures/check-fail/task_target_view_result.au:4:35: task target return type is declared here
+  = help: return an owned value or a clone from the task target

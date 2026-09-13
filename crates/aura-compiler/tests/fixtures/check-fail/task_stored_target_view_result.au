@@ -1,0 +1,12 @@
+class Pair:
+    left: str
+
+def pick_left(pair: Pair) -> view str from pair:
+    return view pair.left
+
+def main():
+    target = pick_left
+    with TaskGroup() as group:
+        pair = Pair(left="ada")
+        task = group.start(target, pair)
+        print(task.result_or("fallback", timeout=1s))
