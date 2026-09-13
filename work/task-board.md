@@ -1,6 +1,6 @@
 # Task Board
 
-Last updated: 2026-09-12
+Last updated: 2026-09-13
 
 ## Batch 1 phase 1 (complete; review fixes in hosted integration)
 
@@ -173,15 +173,23 @@ Last updated: 2026-09-12
 - Independent review (2026-09-13, `work/2026-09-13-batch-1-phase-1-review.md`):
   one blocker (a stored `TaskCallable` target skipped Transfer on omitted
   defaults and keyword-bound slots), 22 should-fix findings, 3 notes; verdict
-  "do not start H2 yet". Fixes on `codex/batch-1-phase-1-review-fixes`:
+  "do not start H2 yet". The review fixes are merged through
+  [PR #11](https://github.com/johnolafenwa/Aura/pull/11) as `998423ef`:
   blocker and findings 1–9, 12 (analysis), 13–26 fixed with checker fixtures,
   forced MIR/direct parity, and tests at both validator boundaries. Complete
   local CI passed at `93167a28`: compiler coverage 96.4738% lines /
   97.3631% functions / 95.2973% regions; LSP coverage 100%. Findings 10
   (implicit contract restriction), 11 (boxed union/closure storage), and the
   LSP protocol half of 12 are held for ratification.
-- Next: hosted integration of the review fixes (PR, green branch CI, merge,
-  green main CI), then the three held decisions, then phase 2 (H2).
+- Review-fix integration complete: branch CI `34729810146` passed both
+  platforms at `a3020bf9`; main CI `34733744800` passed both platforms at
+  `998423ef`. Main macOS needed one job rerun after a shared runtime archive
+  was missing during test linking; the rerun passed without source changes.
+  Main Docs `34733744793` and Tutorial Examples `34733744802` passed.
+  Hosted coverage totals and remaining harness/validator follow-ups are in
+  the work-note evidence table.
+- Next: the owner's rulings on findings 10, 11, and 12-LSP. H2 and Option
+  removal remain blocked until all three held decisions are resolved.
 - Option removal and all phase 2 signature changes remain excluded; protected
   user files remain unchanged, and the coverage floors were raised to
   96.46 / 97.33 / 95.23 in the phase-end ratchet.
