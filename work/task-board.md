@@ -188,8 +188,15 @@ Last updated: 2026-09-13
   Main Docs `34733744793` and Tutorial Examples `34733744802` passed.
   Hosted coverage totals and remaining harness/validator follow-ups are in
   the work-note evidence table.
-- Next: the owner's rulings on findings 10, 11, and 12-LSP. H2 and Option
-  removal remain blocked until all three held decisions are resolved.
+- Rulings (2026-09-13): finding 10 implement the ratified C5 explicit-adapter
+  rule (`AU2015` on differing bare assignment); finding 11 accept the boxed
+  union/closure representation as a disclosed interim and schedule the
+  ratified layout as its own phase after H2 (gate: no ABI claim or 0.4
+  release before it); finding 12-LSP implement signature help, rename, and
+  references. Details in the work note "Rulings on the held findings".
+- Next: pre-H2 closeout branch (finding 10 + LSP protocol handlers +
+  checkpoint/roadmap record of the rulings), then H2 (Option removal), then
+  the representation phase.
 - Option removal and all phase 2 signature changes remain excluded; protected
   user files remain unchanged, and the coverage floors were raised to
   96.46 / 97.33 / 95.23 in the phase-end ratchet.
