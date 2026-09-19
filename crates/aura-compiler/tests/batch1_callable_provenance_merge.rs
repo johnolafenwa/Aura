@@ -344,3 +344,282 @@ fn merged_candidates_with_identical_tuple_contracts_call_on_both_boundaries() {
     let source = "def first(pair: (int64, str)) -> int64:\n    return pair[0] + 1\ndef second(pair: (int64, str)) -> int64:\n    return pair[0] + 2\ndef pick(index: int64) -> int64:\n    return index\ndef main():\n    tools = [first, second]\n    tool = tools[pick(1)]\n    print(tool((7, \"a\")))\n";
     assert_accepted_on_both_boundaries(source, "9\n");
 }
+
+// ---------------------------------------------------------------------------
+// Companions for the exact-contract closeout. The forged declaration changes
+// above are now caught when the candidates enter typed storage. These tests
+// take the same forgeries past that check by stripping every callable
+// contract from `main`'s declared local metadata (a forged module may claim
+// any local types it likes; the validator trusts only recorded identities),
+// so the disagreement reaches the merge, poisons it, and the later call is
+// refused on both boundaries with the same reason.
+// ---------------------------------------------------------------------------
+
+const POISONED_CALL: &str =
+    "invalid MIR indirect call in `main` has no authoritative callable contract";
+
+/// Replaces every `Function`/`Closure`/`Callable` contract inside `main`'s
+/// declared local types with `int64`, leaving the assignment check no
+/// declared callable positions to compare.
+fn strip_declared_callable_metadata(function: &mut Value) {
+    fn strip(value: &mut Value) {
+        match value {
+            Value::Object(object) => {
+                if ["Function", "Closure", "Callable"]
+                    .iter()
+                    .any(|kind| object.contains_key(*kind))
+                {
+                    *value = json!({ "Named": ["int64", []] });
+                } else {
+                    for child in object.values_mut() {
+                        strip(child);
+                    }
+                }
+            }
+            Value::Array(items) => {
+                for item in items {
+                    strip(item);
+                }
+            }
+            _ => {}
+        }
+    }
+    for entry in function["local_types"].as_array_mut().unwrap() {
+        strip(&mut entry["ty"]);
+    }
+}
+
+/// Control first: stripping alone leaves the shared validator satisfied, so
+/// the interpreter runs the program (the direct backend refuses the stripped
+/// module later in codegen, where it needs the declared indirect function
+/// type; that is a backend refusal after validation, not a silent
+/// divergence). Then the forgery plus the stripping must poison the merge.
+fn assert_stripped_merge_is_poisoned(source: &str, stdout: &str, forge: impl Fn(&mut Value)) {
+    let mut control = encode(source);
+    strip_declared_callable_metadata(function_mut(&mut control, "main"));
+    let control: MirModule =
+        serde_json::from_value(control).expect("stripped MIR should deserialize");
+    assert_eq!(
+        run_mir(&control)
+            .expect("stripping the declared metadata alone passes shared validation")
+            .stdout,
+        stdout
+    );
+    let native = emit_host_native_object(&control)
+        .expect_err("the direct backend needs the declared indirect function type");
+    assert!(
+        native.contains("expected an indirect function value"),
+        "the stripped control is refused by codegen, not by the validator: {native}"
+    );
+    let mut encoded = encode(source);
+    forge(&mut encoded);
+    strip_declared_callable_metadata(function_mut(&mut encoded, "main"));
+    assert_rejected_on_both_boundaries(encoded, POISONED_CALL);
+}
+
+#[test]
+fn stripped_metadata_lets_a_slot_name_disagreement_poison_the_list_merge() {
+    assert_stripped_merge_is_poisoned(&list_selection("first, second"), "9\n", |encoded| {
+        forge_declaration_and_operands(
+            encoded,
+            "first",
+            &|param| param["name"] = json!("other"),
+            &|slot| slot["name"] = json!("other"),
+        );
+    });
+}
+
+#[test]
+fn stripped_metadata_lets_a_keyword_only_disagreement_poison_the_list_merge() {
+    let source = "def first(value: int64) -> int64:\n    return value + 1\ndef second(value: int64) -> int64:\n    return value + 2\ndef pick(index: int64) -> int64:\n    return index\ndef main():\n    tools = [first, second]\n    tool = tools[pick(1)]\n    print(tool(7))\n";
+    assert_stripped_merge_is_poisoned(source, "9\n", |encoded| {
+        forge_declaration_and_operands(
+            encoded,
+            "second",
+            &|param| param["keyword_only"] = json!(true),
+            &|slot| slot["keyword_only"] = json!(true),
+        );
+    });
+}
+
+#[test]
+fn stripped_metadata_lets_a_keyword_only_and_name_disagreement_poison_the_list_merge() {
+    let source = "def first(*, value: int64) -> int64:\n    return value + 1\ndef second(*, value: int64) -> int64:\n    return value + 2\ndef pick(index: int64) -> int64:\n    return index\ndef main():\n    tools = [first, second]\n    tool = tools[pick(1)]\n    print(tool(value=7))\n";
+    assert_stripped_merge_is_poisoned(source, "9\n", |encoded| {
+        forge_declaration_and_operands(
+            encoded,
+            "second",
+            &|param| {
+                param["keyword_only"] = json!(false);
+                param["name"] = json!("other");
+            },
+            &|slot| {
+                slot["keyword_only"] = json!(false);
+                slot["name"] = json!("other");
+            },
+        );
+    });
+}
+
+#[test]
+fn stripped_metadata_lets_a_default_disagreement_poison_the_list_merge() {
+    let source = "def first(value: int64 = 1) -> int64:\n    return value + 1\ndef second(value: int64 = 1) -> int64:\n    return value + 2\ndef pick(index: int64) -> int64:\n    return index\ndef main():\n    tools = [first, second]\n    tool = tools[pick(1)]\n    print(tool(value=7))\n    print(tool())\n";
+    assert_stripped_merge_is_poisoned(source, "9\n3\n", |encoded| {
+        forge_declaration_and_operands(
+            encoded,
+            "second",
+            &|param| param["default_function"] = Value::Null,
+            &|slot| slot["has_default"] = json!(false),
+        );
+    });
+}
+
+#[test]
+fn stripped_metadata_lets_a_default_and_name_disagreement_poison_the_list_merge() {
+    let source = "def first(value: int64 = 1) -> int64:\n    return value + 1\ndef second(value: int64 = 1) -> int64:\n    return value + 2\ndef pick(index: int64) -> int64:\n    return index\ndef main():\n    tools = [first, second]\n    tool = tools[pick(1)]\n    print(tool(value=7))\n";
+    assert_stripped_merge_is_poisoned(source, "9\n", |encoded| {
+        forge_declaration_and_operands(
+            encoded,
+            "second",
+            &|param| {
+                param["default_function"] = Value::Null;
+                param["name"] = json!("other");
+            },
+            &|slot| {
+                slot["has_default"] = json!(false);
+                slot["name"] = json!("other");
+            },
+        );
+    });
+}
+
+#[test]
+fn stripped_metadata_lets_a_slot_name_disagreement_poison_the_dictionary_merge() {
+    let source = "def first(value: int64) -> int64:\n    return value + 1\ndef second(value: int64) -> int64:\n    return value + 2\ndef key(name: own str) -> str:\n    return name\ndef main():\n    tools: dict[str, def(value: int64) -> int64] = {\"a\": first, \"b\": second}\n    tool = tools[key(\"b\")]\n    print(tool(value=7))\n";
+    assert_stripped_merge_is_poisoned(source, "9\n", |encoded| {
+        forge_declaration_and_operands(
+            encoded,
+            "second",
+            &|param| param["name"] = json!("other"),
+            &|slot| slot["name"] = json!("other"),
+        );
+    });
+}
+
+#[test]
+fn stripped_metadata_lets_a_slot_name_disagreement_poison_the_control_flow_join() {
+    let source = "def first(value: int64) -> int64:\n    return value + 1\ndef second(value: int64) -> int64:\n    return value + 2\ndef pick(index: int64) -> int64:\n    return index\ndef main():\n    mut tool = first\n    if pick(1) == 1:\n        tool = second\n    print(tool(value=7))\n";
+    assert_stripped_merge_is_poisoned(source, "9\n", |encoded| {
+        forge_declaration_and_operands(
+            encoded,
+            "second",
+            &|param| param["name"] = json!("other"),
+            &|slot| slot["name"] = json!("other"),
+        );
+    });
+}
+
+#[test]
+fn stripped_metadata_lets_a_slot_name_disagreement_poison_the_capture_free_lambda_merge() {
+    let source = "def pick(index: int64) -> int64:\n    return index\ndef main():\n    tools: list[def(value: int64) -> int64] = [lambda value: value + 1, lambda value: value + 2]\n    tool = tools[pick(1)]\n    print(tool(value=7))\n";
+    assert_stripped_merge_is_poisoned(source, "9\n", |encoded| {
+        let lambdas = lambda_functions(encoded, "main");
+        assert_eq!(lambdas.len(), 2, "both lambdas lower to closure functions");
+        forge_declaration_and_operands(
+            encoded,
+            &lambdas[1],
+            &|param| param["name"] = json!("other"),
+            &|slot| slot["name"] = json!("other"),
+        );
+    });
+}
+
+#[test]
+fn stripped_metadata_lets_a_keyword_only_disagreement_on_either_side_poison_the_merge() {
+    for (elements, stdout) in [("[first, second]", "9\n"), ("[second, first]", "8\n")] {
+        let source = format!(
+            "def first(value: int64) -> int64:\n    return value + 1\ndef second(value: int64) -> int64:\n    return value + 2\ndef pick(index: int64) -> int64:\n    return index\ndef main():\n    tools = {elements}\n    tool = tools[pick(1)]\n    print(tool(7))\n"
+        );
+        assert_stripped_merge_is_poisoned(&source, stdout, |encoded| {
+            forge_declaration_and_operands(
+                encoded,
+                "first",
+                &|param| param["keyword_only"] = json!(true),
+                &|slot| slot["keyword_only"] = json!(true),
+            );
+        });
+    }
+}
+
+/// Forges one contract change consistently into both declarations, every
+/// operand, and every signature in `main` (declared locals and literal
+/// element types), so operand authentication, the typed assignment, and the
+/// merge all accept it and only the indirect-call binder can refuse the call
+/// shape the source wrote.
+fn forge_consistently(
+    encoded: &mut Value,
+    declaration: &dyn Fn(&mut Value),
+    slot: &dyn Fn(&mut Value),
+) {
+    fn visit(value: &mut Value, slot: &dyn Fn(&mut Value)) {
+        match value {
+            Value::Object(object) => {
+                for kind in ["Function", "Closure", "Callable"] {
+                    if let Some(first) = object
+                        .get_mut(kind)
+                        .and_then(|signature| signature.get_mut("params"))
+                        .and_then(Value::as_array_mut)
+                        .and_then(|params| params.first_mut())
+                    {
+                        if first["name"] == json!("value") {
+                            slot(first);
+                        }
+                    }
+                }
+                for child in object.values_mut() {
+                    visit(child, slot);
+                }
+            }
+            Value::Array(items) => {
+                for item in items {
+                    visit(item, slot);
+                }
+            }
+            _ => {}
+        }
+    }
+    for name in ["first", "second"] {
+        declaration(&mut function_mut(encoded, name)["params"][0]);
+    }
+    visit(function_mut(encoded, "main"), slot);
+}
+
+#[test]
+fn consistently_keyword_only_contracts_refuse_a_positional_call_on_both_boundaries() {
+    let source = "def first(value: int64) -> int64:\n    return value + 1\ndef second(value: int64) -> int64:\n    return value + 2\ndef pick(index: int64) -> int64:\n    return index\ndef main():\n    tools = [first, second]\n    tool = tools[pick(1)]\n    print(tool(7))\n";
+    let mut encoded = encode(source);
+    forge_consistently(
+        &mut encoded,
+        &|param| param["keyword_only"] = json!(true),
+        &|slot| slot["keyword_only"] = json!(true),
+    );
+    assert_rejected_on_both_boundaries(
+        encoded,
+        "invalid MIR indirect call from `main` has too many positional arguments",
+    );
+}
+
+#[test]
+fn consistently_required_contracts_refuse_an_omitted_argument_on_both_boundaries() {
+    let source = "def first(value: int64 = 1) -> int64:\n    return value + 1\ndef second(value: int64 = 1) -> int64:\n    return value + 2\ndef pick(index: int64) -> int64:\n    return index\ndef main():\n    tools = [first, second]\n    tool = tools[pick(1)]\n    print(tool(value=7))\n    print(tool())\n";
+    let mut encoded = encode(source);
+    forge_consistently(
+        &mut encoded,
+        &|param| param["default_function"] = Value::Null,
+        &|slot| slot["has_default"] = json!(false),
+    );
+    assert_rejected_on_both_boundaries(
+        encoded,
+        "invalid MIR indirect call from `main` omits required parameter 1 `value`",
+    );
+}

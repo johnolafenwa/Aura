@@ -371,3 +371,75 @@ fn named_target_result_typed_as_an_erased_callable_is_rejected_on_both_boundarie
         "returns a result whose type is not Transfer: an erased `Callable` hides its environment",
     );
 }
+
+// ---------------------------------------------------------------------------
+// Companions for the exact-contract closeout. The partial forgeries above are
+// now caught by function-operand authentication. These forge the parameter
+// type consistently into the declaration, its default supplier, every
+// operand signature, the packing adapter's destination, and every declared
+// local of `main`, so authentication, the adapter, and the stored assignment
+// all agree and only the task boundary's Transfer proof can refuse the start.
+// ---------------------------------------------------------------------------
+
+fn forge_stored_target_parameter_type(encoded: &mut Value, ty: Value) {
+    fn visit(value: &mut Value, ty: &Value) {
+        match value {
+            Value::Object(object) => {
+                for kind in ["Function", "Closure", "Callable"] {
+                    if let Some(first) = object
+                        .get_mut(kind)
+                        .and_then(|signature| signature.get_mut("params"))
+                        .and_then(Value::as_array_mut)
+                        .and_then(|params| params.first_mut())
+                    {
+                        if first["name"] == json!("count") {
+                            first["ty"] = ty.clone();
+                        }
+                    }
+                }
+                for child in object.values_mut() {
+                    visit(child, ty);
+                }
+            }
+            Value::Array(items) => {
+                for item in items {
+                    visit(item, ty);
+                }
+            }
+            _ => {}
+        }
+    }
+    function_mut(encoded, "worker")["params"][0]["ty"] = ty.clone();
+    let default_function = function_mut(encoded, "worker")["params"][0]["default_function"]
+        .as_str()
+        .map(str::to_owned);
+    if let Some(default_function) = default_function {
+        function_mut(encoded, &default_function)["return_type"] = ty.clone();
+    }
+    visit(function_mut(encoded, "main"), &ty);
+}
+
+#[test]
+fn consistently_forged_stored_target_host_resource_parameter_is_rejected_at_the_task_boundary() {
+    let mut encoded = encode(STORED_TARGET);
+    forge_stored_target_parameter_type(&mut encoded, task_group_type());
+    assert_rejected(
+        encoded,
+        "passes parameter 1 whose type is not Transfer: `TaskGroup` is a host resource",
+    );
+}
+
+#[test]
+fn consistently_forged_stored_target_returned_view_parameter_is_rejected_at_the_task_boundary() {
+    let mut encoded = encode(STORED_TARGET);
+    forge_stored_target_parameter_type(
+        &mut encoded,
+        json!({
+            "ReturnedView": { "mutable": false, "pointee": { "Named": ["int64", []] }, "origin": 0 }
+        }),
+    );
+    assert_rejected(
+        encoded,
+        "passes parameter 1 whose type is not Transfer: a returned view borrows the parent's data",
+    );
+}
