@@ -23,13 +23,13 @@ fn function_mut<'a>(encoded: &'a mut Value, name: &str) -> &'a mut Value {
 fn assert_rejected(encoded: Value, expected: &str) {
     let mir: MirModule = serde_json::from_value(encoded).expect("forged MIR should deserialize");
     let interpreted = run_mir(&mir).expect_err("interpreter must reject the forged module");
-    assert!(
-        interpreted.message.contains(expected),
-        "interpreter rejection `{}` should mention `{expected}`",
-        interpreted.message
-    );
     let native =
         emit_host_native_object(&mir).expect_err("native emission must reject the forged module");
+    assert_eq!(
+        interpreted.message.strip_prefix("invalid MIR loan flow: "),
+        Some(native.as_str()),
+        "both boundaries must report the same shared validator reason"
+    );
     assert!(
         native.contains(expected),
         "native rejection `{native}` should mention `{expected}`"
@@ -102,9 +102,9 @@ fn forged_closure_declaration_cannot_change_its_keyword_boundary() {
 }
 
 #[test]
-fn a_written_positional_only_contract_still_admits_a_named_target() {
-    let source = "def twice(value: int64) -> int64:\n    return value * 2\ndef main():\n    step: def(int64) -> int64 = twice\n    print(step(4))\n";
-    let mir = lower_source_to_mir(source).expect("a hidden name is an admitted restriction");
+fn an_explicit_positional_only_adapter_admits_a_named_target() {
+    let source = "type Step = def(int64) -> int64\ndef twice(value: int64) -> int64:\n    return value * 2\ndef main():\n    step = Step(twice)\n    print(step(4))\n";
+    let mir = lower_source_to_mir(source).expect("the explicit adapter hides the name");
     assert_eq!(run_mir(&mir).expect("the program runs").stdout, "8\n");
     emit_host_native_object(&mir).expect("the direct backend accepts the restriction");
 }

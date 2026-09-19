@@ -369,7 +369,7 @@ def second_default(value: int32 = mark("second-default", 22)) -> int32:
     return value
 
 def choose_transform(use_increment: bool) -> def(int32) -> int32:
-    return increment if use_increment else double
+    return Unary(increment) if use_increment else Unary(double)
 
 def main() -> int32:
     selected = choose_transform(false)
@@ -377,7 +377,7 @@ def main() -> int32:
     known_default = first_default
     selected_default = first_default if false else second_default
     pipeline = Pipeline(transform=selected)
-    callbacks: list[def(int32) -> int32] = [double]
+    callbacks: list[def(int32) -> int32] = [Unary(double)]
     stdio_factory: def() -> process.Stdio = process.pipe
 
     print(selected(4))
@@ -400,6 +400,7 @@ def main() -> int32:
         print(index_task.result_or(-1, timeout=1s))
         print(generic_task.result_or(-1, timeout=1s))
     return 0
+type Unary = def(int32) -> int32
 "#;
 
     check_source(source).expect("callable-value integration source should type-check");

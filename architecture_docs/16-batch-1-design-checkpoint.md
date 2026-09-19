@@ -68,6 +68,16 @@ The ratification record is complete. The active Batch 1 phase 1 task covers
 ADR-body reconciliation and compiler, runtime, example, Manual, and editor
 implementation; it leaves phase 2 Option removal for a later task.
 
+On 2026-09-13 the owner confirmed **Q17 A as written**: differing bare
+callable contracts report `AU2015`; safe restrictions require explicit
+adapters, with no implicit restriction by a written destination (finding 10).
+The boxed union payload and `Arc` closure environment remain a disclosed
+interim. The ratified Q9 A / Q15 A / Q16 A representation is scheduled as its
+own phase after H2, with allocation measurements; no FFI/ABI stability claim
+and no 0.4 release precede that phase (finding 11). The owner also confirmed
+that H1 includes compiler-owned signature help, rename, and references
+(finding 12). These rulings preserve the questionnaire answers below.
+
 ## A. Unions and narrowing
 
 ### A1. Identity, normalization, and unit None — Q1

@@ -823,8 +823,9 @@ def increment(value: int32) -> int32:
     return value + 1
 
 def main():
-    applied: int32 = helpers.apply(increment, 4)
+    applied: int32 = helpers.apply(Unary(increment), 4)
     total: int32 = helpers.sum_pair((2, 3))
+type Unary = def(int32) -> int32
 "#,
         true,
     );

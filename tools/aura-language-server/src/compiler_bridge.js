@@ -14,7 +14,7 @@ const COMPILER_REQUEST_TIMEOUT_MS = 15_000;
 const COMPILER_RESPONSE_LIMIT_BYTES = 16 * 1024 * 1024;
 // The compiler owns the canonical identity; this transport declares the one
 // compiler interface it can safely decode.
-const SUPPORTED_SEMANTIC_INTERFACE_SCHEMA_VERSION = 14;
+const SUPPORTED_SEMANTIC_INTERFACE_SCHEMA_VERSION = 15;
 
 function setCompilerSchemaMismatchHandler(handler) {
   compilerSchemaMismatchHandler = typeof handler === "function" ? handler : null;
@@ -68,6 +68,15 @@ async function completeWithCompiler(
     );
   } catch (error) {
     reportCompilerFailure("completion", error);
+    return null;
+  }
+}
+
+async function editorRequestWithCompiler(method, uri, source, position, cancellationToken) {
+  try {
+    return await requestCompiler(method, { path: uriToPath(uri) || uri, source, ...position }, cancellationToken);
+  } catch (error) {
+    reportCompilerFailure(method, error);
     return null;
   }
 }
@@ -473,6 +482,7 @@ function runCommand(cmd, args, input, cwd) {
 }
 
 module.exports = {
+  editorRequestWithCompiler,
   analyzeWithCompiler,
   binaryName,
   CompilerService,

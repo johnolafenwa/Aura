@@ -328,6 +328,46 @@ fn main() {
             }
             write_stdout("\n");
         }
+        "signature-help" | "references" | "prepare-rename" | "rename" => {
+            let mut remaining = args.collect::<Vec<_>>();
+            let mut extra = serde_json::Map::new();
+            let mut index = 0;
+            while index < remaining.len() {
+                match remaining[index].as_str() {
+                    "--new-name" => {
+                        remaining.remove(index);
+                        if index == remaining.len() {
+                            print_usage_and_exit(2);
+                        }
+                        extra.insert(
+                            "new_name".to_owned(),
+                            JsonValue::String(remaining.remove(index)),
+                        );
+                    }
+                    "--include-declaration" => {
+                        remaining.remove(index);
+                        extra.insert("include_declaration".to_owned(), JsonValue::Bool(true));
+                    }
+                    _ => index += 1,
+                }
+            }
+            let (line, character, _, input_args) = parse_complete_args(remaining);
+            let input = read_input(&mut input_args.into_iter());
+            extra.insert("line".to_owned(), serde_json::json!(line));
+            extra.insert("character".to_owned(), serde_json::json!(character));
+            match editor_request(
+                &command,
+                &input.path,
+                &input.source,
+                &JsonValue::Object(extra),
+            ) {
+                Ok(result) => write_stdout(&format!("{result}\n")),
+                Err(error) => {
+                    eprintln!("{error}");
+                    process::exit(1);
+                }
+            }
+        }
         "complete" => {
             let remaining = args.collect::<Vec<_>>();
             let (line, character, trigger, input_args) = parse_complete_args(remaining);
@@ -1595,8 +1635,60 @@ fn lsp_result_for_request(request: &JsonValue) -> Result<JsonValue, String> {
             serde_json::to_value(completions)
                 .map_err(|error| format!("failed to serialize compiler completions: {error}"))
         }
+        "signature-help" | "references" | "prepare-rename" | "rename" => {
+            editor_request(method, path, source, request)
+        }
         _ => Err(format!("unknown LSP compiler request method `{method}`")),
     }
+}
+
+fn editor_request(
+    method: &str,
+    path: &str,
+    source: &str,
+    request: &JsonValue,
+) -> std::result::Result<JsonValue, String> {
+    let position = |field: &str| {
+        request
+            .get(field)
+            .and_then(JsonValue::as_u64)
+            .and_then(|value| usize::try_from(value).ok())
+            .ok_or_else(|| {
+                format!("{method} request requires non-negative integer field `{field}`")
+            })
+    };
+    let line = position("line")?;
+    let character = position("character")?;
+    let path = Path::new(path);
+    match method {
+        "signature-help" => serde_json::to_value(aura_compiler::signature_help_path_source(
+            path, source, line, character,
+        )),
+        "references" => serde_json::to_value(aura_compiler::references_path_source(
+            path,
+            source,
+            line,
+            character,
+            request
+                .get("include_declaration")
+                .and_then(JsonValue::as_bool)
+                .unwrap_or(false),
+        )),
+        "prepare-rename" => serde_json::to_value(aura_compiler::prepare_rename_path_source(
+            path, source, line, character,
+        )),
+        "rename" => {
+            let name = request
+                .get("new_name")
+                .and_then(JsonValue::as_str)
+                .ok_or_else(|| "rename request requires string field `new_name`".to_owned())?;
+            serde_json::to_value(aura_compiler::rename_path_source(
+                path, source, line, character, name,
+            ))
+        }
+        _ => unreachable!("editor verbs are selected before dispatch"),
+    }
+    .map_err(|error| format!("failed to serialize editor response: {error}"))
 }
 
 fn handle_deps_command(args: Vec<String>) -> ! {
@@ -4696,6 +4788,7 @@ fn usage_text() -> &'static str {
        or: aura build -o <output> [--backend auto|direct] [--format human|json] --stdin <virtual-path>\n\
        or: aura complete --line <n> --character <n> [--trigger .] <file.au>\n\
        or: aura complete --line <n> --character <n> [--trigger .] --stdin <virtual-path>\n\
+       or: aura <signature-help|references|prepare-rename|rename> --line <n> --character <n> [--new-name <name>] [--include-declaration] [--stdin] <path>\n\
        or: aura lsp\n\
        or: aura new <project-path>\n\
        or: aura fmt [--check] [path ...]\n\

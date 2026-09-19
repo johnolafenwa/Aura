@@ -23,13 +23,13 @@ fn function_mut<'a>(encoded: &'a mut Value, name: &str) -> &'a mut Value {
 fn assert_rejected(encoded: Value, expected: &str) {
     let mir: MirModule = serde_json::from_value(encoded).expect("forged MIR should deserialize");
     let interpreted = run_mir(&mir).expect_err("interpreter must reject the forged module");
-    assert!(
-        interpreted.message.contains(expected),
-        "interpreter rejection `{}` should mention `{expected}`",
-        interpreted.message
-    );
     let native =
         emit_host_native_object(&mir).expect_err("native emission must reject the forged module");
+    assert_eq!(
+        interpreted.message.strip_prefix("invalid MIR loan flow: "),
+        Some(native.as_str()),
+        "both boundaries must report the same shared validator reason"
+    );
     assert!(
         native.contains(expected),
         "native rejection `{native}` should mention `{expected}`"

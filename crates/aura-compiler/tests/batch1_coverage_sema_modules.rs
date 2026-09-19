@@ -204,7 +204,7 @@ fn consuming_closure_cannot_be_packed_as_a_shared_callable() {
 #[test]
 fn contract_admission_reports_positional_only_slots_made_keyword_only() {
     rejects(
-        "def twice(value: int64) -> int64:\n    return value * 2\ndef main():\n    g: def(int64) -> int64 = twice\n    h: def(*, value: int64) -> int64 = g\n    print(h(value=1))\n",
+        "type Step = def(int64) -> int64\ndef twice(value: int64) -> int64:\n    return value * 2\ndef main():\n    g = Step(twice)\n    h: def(*, value: int64) -> int64 = g\n    print(h(value=1))\n",
         "positional parameter 1 is positional-only, but the destination makes it keyword-only `value`",
     );
 }
@@ -220,7 +220,7 @@ fn contract_admission_reports_keyword_only_renames() {
 #[test]
 fn contract_admission_reports_unnamed_slots_given_a_name() {
     rejects(
-        "def twice(value: int64) -> int64:\n    return value * 2\ndef main():\n    g: def(int64) -> int64 = twice\n    h: def(value: int64) -> int64 = g\n    print(h(1))\n",
+        "type Step = def(int64) -> int64\ndef twice(value: int64) -> int64:\n    return value * 2\ndef main():\n    g = Step(twice)\n    h: def(value: int64) -> int64 = g\n    print(h(1))\n",
         "positional parameter 1 has no exposed name, but the destination names it `value`",
     );
 }
@@ -425,7 +425,7 @@ fn consuming_bound_method_rejects_view_and_borrowed_receivers() {
 fn function_type_capability_mismatch_names_the_mut_capability() {
     rejects(
         "class Counter:\n    total: int64\ndef takes_shared(c: Counter):\n    pass\ndef main():\n    f: def(mut Counter) -> None = takes_shared\n",
-        "has `shared` capability, but `def(mut Counter) -> None` requires `mut`",
+        "positional parameter 1 has a different type or capability",
     );
 }
 
@@ -924,7 +924,7 @@ fn task_results_of_unit_function_and_stored_task_callable_types_transfer() {
         "def make() -> None:\n    pass\ndef main():\n    with TaskGroup() as group:\n        task = group.start(make)\n        task.result_or(None, timeout=30s)\n",
     );
     runs(
-        "def twice(v: int64) -> int64:\n    return v * 2\ndef thrice(v: int64) -> int64:\n    return v * 3\ndef make() -> def(int64) -> int64:\n    return twice\ndef main():\n    with TaskGroup() as group:\n        task = group.start(make)\n        f = task.result_or(thrice, timeout=30s)\n        print(f(2))\n",
+        "type Step = def(int64) -> int64\ndef twice(v: int64) -> int64:\n    return v * 2\ndef thrice(v: int64) -> int64:\n    return v * 3\ndef make() -> Step:\n    return Step(twice)\ndef main():\n    with TaskGroup() as group:\n        task = group.start(make)\n        f = task.result_or(Step(thrice), timeout=30s)\n        print(f(2))\n",
         "4\n",
     );
     runs(

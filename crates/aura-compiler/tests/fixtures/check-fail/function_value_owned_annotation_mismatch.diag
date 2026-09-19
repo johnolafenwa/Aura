@@ -1,5 +1,6 @@
-error[AU2002]: function parameter 1 has `own` capability, but `def(str) -> int64` requires `shared`; update that function type parameter to use the matching bare, `mut`, or `own` prefix
- --> crates/aura-compiler/tests/fixtures/check-fail/function_value_owned_annotation_mismatch.au:5:5
+error[AU2015]: callable contract mismatch: positional parameter 1 has a different type or capability
+ --> crates/aura-compiler/tests/fixtures/check-fail/function_value_owned_annotation_mismatch.au:5:38
   |
 5 |     shared_only: def(str) -> int64 = consume
-  |     ^
+  |                                      ^
+  = help: preserve identical complete contracts at bare destinations; apply safe restrictions through an explicit thin alias or owned callable constructor such as `Alias(function)`

@@ -1,0 +1,6 @@
+error[AU2015]: callable contract mismatch: task obligation differs: expected `Callable[def(value: int64) -> int64]`, found `TaskCallable[def(value: int64) -> int64]`; pack the value through the destination constructor to change its storage kind; use the explicit adapter `Destination(value)`
+ --> crates/aura-compiler/tests/fixtures/check-fail/callable_exact_obligation_parameter.au:11:12
+   |
+11 |     accept(Source(target))
+   |            ^
+  = help: preserve identical complete contracts at bare destinations; apply safe restrictions through an explicit thin alias or owned callable constructor such as `Alias(function)`

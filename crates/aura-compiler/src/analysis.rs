@@ -1,3 +1,9 @@
+mod requests;
+pub use requests::{
+    prepare_rename_path_source, references_path_source, rename_path_source,
+    signature_help_path_source, AnalysisRename, AnalysisSignatureHelp,
+};
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
@@ -249,6 +255,7 @@ struct AnalysisBuilder<'a> {
     source_lines: Vec<&'a str>,
     program: &'a Program,
     output: AnalysisOutput,
+    type_parameters: BTreeSet<String>,
 }
 
 impl<'a> AnalysisBuilder<'a> {
@@ -256,6 +263,7 @@ impl<'a> AnalysisBuilder<'a> {
         Self {
             source_lines: source.lines().collect(),
             program,
+            type_parameters: BTreeSet::new(),
             output: AnalysisOutput {
                 diagnostics: Vec::new(),
                 symbols,
@@ -266,6 +274,7 @@ impl<'a> AnalysisBuilder<'a> {
 
     fn build(mut self) -> AnalysisOutput {
         self.visit_import_aliases();
+        self.visit_declaration_types();
         let mut top_level_scope = BTreeMap::new();
         for constant in &self.program.module.constants {
             self.visit_expr(&constant.value, &top_level_scope);
@@ -286,6 +295,7 @@ impl<'a> AnalysisBuilder<'a> {
         for item in &self.program.module.items {
             match item {
                 Item::Function(function_decl) => {
+                    self.type_parameters = function_decl.type_params.iter().cloned().collect();
                     let function_info = self.program.functions.get(&function_decl.name).unwrap();
                     let mut scope = self.function_scope(function_decl, function_info);
                     self.visit_stmts(&function_decl.body, &mut scope);
@@ -293,6 +303,12 @@ impl<'a> AnalysisBuilder<'a> {
                 Item::Class(class_decl) => {
                     let class_info = self.program.classes.get(&class_decl.name).unwrap();
                     for method in &class_decl.methods {
+                        self.type_parameters = class_decl
+                            .type_params
+                            .iter()
+                            .chain(&method.type_params)
+                            .cloned()
+                            .collect();
                         let method_info = class_info.methods.get(&method.name).unwrap();
                         let mut scope =
                             self.method_scope(class_decl.name.as_str(), method, method_info);
@@ -308,7 +324,153 @@ impl<'a> AnalysisBuilder<'a> {
             }
         }
 
+        for implementation in self
+            .program
+            .trait_impls
+            .iter()
+            .filter(|implementation| implementation.module_name == self.program.module_name)
+        {
+            for method in implementation.methods.values() {
+                self.type_parameters = implementation
+                    .type_params
+                    .iter()
+                    .chain(&method.decl.type_params)
+                    .cloned()
+                    .collect();
+                let mut scope = self.implementation_scope(implementation, method);
+                self.visit_stmts(&method.decl.body, &mut scope);
+            }
+        }
         self.output
+    }
+
+    fn visit_function_types(&mut self, declaration: &FunctionDecl) {
+        let previous = self.type_parameters.clone();
+        self.type_parameters
+            .extend(declaration.type_params.iter().cloned());
+        for parameter in &declaration.params {
+            self.visit_type_reference(&parameter.ty);
+        }
+        self.visit_type_reference(&declaration.return_type);
+        for bound in declaration.type_param_bounds.values().flatten() {
+            self.visit_type_reference(bound);
+        }
+        self.type_parameters = previous;
+    }
+
+    fn visit_declaration_types(&mut self) {
+        for item in &self.program.module.items {
+            self.type_parameters.clear();
+            match item {
+                Item::TypeAlias(alias) => {
+                    self.type_parameters
+                        .extend(alias.type_params.iter().cloned());
+                    self.visit_type_reference(&alias.target);
+                }
+                Item::Function(function) => self.visit_function_types(function),
+                Item::Class(class) => {
+                    self.type_parameters
+                        .extend(class.type_params.iter().cloned());
+                    for field in &class.fields {
+                        self.visit_type_reference(&field.ty);
+                    }
+                    for method in &class.methods {
+                        self.visit_function_types(method);
+                    }
+                }
+                Item::Enum(enumeration) => {
+                    self.type_parameters
+                        .extend(enumeration.type_params.iter().cloned());
+                    for variant in &enumeration.variants {
+                        for payload in &variant.payloads {
+                            self.visit_type_reference(&payload.ty);
+                        }
+                    }
+                }
+                Item::Trait(declaration) => {
+                    self.type_parameters
+                        .extend(declaration.type_params.iter().cloned());
+                    for bound in &declaration.supertraits {
+                        self.visit_type_reference(bound);
+                    }
+                    for method in &declaration.methods {
+                        self.visit_function_types(method);
+                    }
+                }
+                Item::Impl(declaration) => {
+                    self.type_parameters
+                        .extend(declaration.type_params.iter().cloned());
+                    self.visit_type_reference(&declaration.for_type);
+                    for argument in &declaration.trait_args {
+                        self.visit_type_reference(argument);
+                    }
+                    for method in &declaration.methods {
+                        self.visit_function_types(method);
+                    }
+                }
+                Item::ExternFunction(function) => {
+                    for parameter in &function.params {
+                        self.visit_type_reference(&parameter.ty);
+                    }
+                    self.visit_type_reference(&function.return_type);
+                }
+                Item::ExternOpaqueClass(_) => {}
+            }
+        }
+        self.type_parameters.clear();
+    }
+
+    fn visit_type_reference(&mut self, ty: &TypeRef) {
+        use crate::ast::TypeRefKind;
+        match &ty.kind {
+            TypeRefKind::Named { name, args } => {
+                if !self.type_parameters.contains(name) {
+                    let scope = BTreeMap::new();
+                    let resolved = if let Ok(expression) = parser::parse_expression(name) {
+                        match &expression.kind {
+                            ExprKind::Name(name) => self.resolve_name(name, &scope),
+                            ExprKind::Member { object, field } => self
+                                .resolve_member_expr(object, field, &scope)
+                                .map(|member| ResolvedSymbol {
+                                    hover: member.hover,
+                                    definition: member.definition,
+                                }),
+                            _ => None,
+                        }
+                    } else {
+                        None
+                    };
+                    if let Some(symbol) = resolved {
+                        let prefix = name.rfind('.').map_or(0, |offset| offset + 1);
+                        let span = Span::new(ty.span.line, ty.span.column + prefix);
+                        self.push_occurrence(
+                            range_from_span(span, name.len() - prefix),
+                            symbol.hover,
+                            symbol.definition,
+                        );
+                    }
+                }
+                for argument in args {
+                    self.visit_type_reference(argument);
+                }
+            }
+            TypeRefKind::Tuple(elements) | TypeRefKind::Union(elements) => {
+                for element in elements {
+                    self.visit_type_reference(element);
+                }
+            }
+            TypeRefKind::Function {
+                params,
+                return_type,
+                ..
+            } => {
+                for parameter in params {
+                    self.visit_type_reference(&parameter.ty);
+                }
+                self.visit_type_reference(return_type);
+            }
+            TypeRefKind::Callable { signature, .. } => self.visit_type_reference(signature),
+        }
     }
 
     fn visit_import_aliases(&mut self) {
@@ -578,6 +740,59 @@ impl<'a> AnalysisBuilder<'a> {
         scope
     }
 
+    fn implementation_scope(
+        &self,
+        implementation: &crate::sema::TraitImplInfo,
+        method: &crate::sema::TraitImplMethodInfo,
+    ) -> BTreeMap<String, BindingInfo> {
+        let mut bounds = implementation.type_param_bounds.clone();
+        bounds.extend(method.type_param_bounds.clone());
+        let mut scope = self.function_scope(
+            &method.decl,
+            &FunctionInfo {
+                module_name: implementation.module_name.clone(),
+                decl: method.decl.clone(),
+                signature: method.signature.clone(),
+                type_param_bounds: bounds,
+            },
+        );
+        if method.decl.receiver.is_some() {
+            let definition = self
+                .find_identifier_range(method.decl.span.line, "self")
+                .unwrap_or_else(|| range_from_span(method.decl.span, method.decl.name.len()));
+            scope.insert(
+                "self".to_owned(),
+                BindingInfo {
+                    ty: implementation.for_type.clone(),
+                    trait_bounds: Vec::new(),
+                    definition,
+                    hover: format_value_hover("param", "self", &implementation.for_type),
+                },
+            );
+        }
+        scope
+    }
+
+    fn enclosing_implementation_method(
+        &self,
+        line: usize,
+    ) -> Option<(
+        &crate::sema::TraitImplInfo,
+        &crate::sema::TraitImplMethodInfo,
+    )> {
+        self.program
+            .trait_impls
+            .iter()
+            .filter(|implementation| implementation.module_name == self.program.module_name)
+            .flat_map(|implementation| {
+                implementation
+                    .methods
+                    .values()
+                    .map(move |method| (implementation, method))
+            })
+            .find(|(_, method)| callable_contains_line(&method.decl.body, line))
+    }
+
     fn scope_for_line(&self, line: usize) -> BTreeMap<String, BindingInfo> {
         let target_line = line + 1;
 
@@ -590,6 +805,12 @@ impl<'a> AnalysisBuilder<'a> {
         if let Some((class_name, method_decl, method_info)) = self.enclosing_method(target_line) {
             let mut scope = self.method_scope(class_name, method_decl, method_info);
             self.accumulate_scope_from_stmts(&method_decl.body, target_line, &mut scope);
+            return scope;
+        }
+
+        if let Some((implementation, method)) = self.enclosing_implementation_method(target_line) {
+            let mut scope = self.implementation_scope(implementation, method);
+            self.accumulate_scope_from_stmts(&method.decl.body, target_line, &mut scope);
             return scope;
         }
 
@@ -612,6 +833,13 @@ impl<'a> AnalysisBuilder<'a> {
         } else if let Some((_, method_decl, _)) = self.enclosing_method(target_line) {
             self.extend_lambda_scope_from_stmts(
                 &method_decl.body,
+                target_line,
+                character,
+                &mut scope,
+            );
+        } else if let Some((_, method)) = self.enclosing_implementation_method(target_line) {
+            self.extend_lambda_scope_from_stmts(
+                &method.decl.body,
                 target_line,
                 character,
                 &mut scope,
@@ -2091,6 +2319,9 @@ impl<'a> AnalysisBuilder<'a> {
     }
 
     fn visit_assign(&mut self, assign: &AssignStmt, scope: &mut BTreeMap<String, BindingInfo>) {
+        if let Some(annotation) = &assign.annotation {
+            self.visit_type_reference(annotation);
+        }
         self.visit_expr(&assign.value, scope);
 
         match &assign.target {
@@ -2236,7 +2467,7 @@ impl<'a> AnalysisBuilder<'a> {
 
     fn visit_match_pattern_occurrences(&mut self, pattern: &Pattern, expected_type: Option<&Type>) {
         match pattern {
-            Pattern::Type(_) => {}
+            Pattern::Type(pattern) => self.visit_type_reference(&pattern.ty),
             Pattern::Or(pattern) => {
                 for alternative in &pattern.alternatives {
                     self.visit_match_pattern_occurrences(alternative, expected_type);
@@ -2368,6 +2599,57 @@ impl<'a> AnalysisBuilder<'a> {
             },
         );
         self.push_occurrence(declaration, hover, Some(definition));
+    }
+
+    fn keyword_argument_definition(
+        &self,
+        callee: &Expr,
+        args: &[crate::ast::Argument],
+        scope: &BTreeMap<String, BindingInfo>,
+        name: &str,
+    ) -> Option<AnalysisRange> {
+        match &callee.kind {
+            ExprKind::Group(inner) | ExprKind::Specialize { expr: inner, .. } => {
+                return self.keyword_argument_definition(inner, args, scope, name);
+            }
+            _ => {}
+        }
+        if let Some((decl, _)) = self.returned_view_callee_decl(callee, scope) {
+            let symbol = match &callee.kind {
+                ExprKind::Name(name) => self.resolve_name(name, scope),
+                ExprKind::Member { object, field } => self
+                    .resolve_member_expr(object, field, scope)
+                    .map(|member| ResolvedSymbol {
+                        hover: member.hover,
+                        definition: member.definition,
+                    }),
+                _ => None,
+            }?;
+            let owner = symbol.definition?;
+            return decl
+                .params
+                .iter()
+                .find(|param| param.name == name)
+                .map(|param| range_from_span_with_path(param.span, name.len(), owner.file_path));
+        }
+        if matches!(
+            self.infer_expr_type(callee, scope),
+            Some(Type::Function { .. } | Type::Closure { .. } | Type::Callable(_))
+        ) {
+            return None;
+        }
+        // Constructor keywords refer to fields, including alias constructors.
+        self.infer_call_type(callee, args, scope)
+            .and_then(|ty| match ty {
+                Type::Named(name, _) => self.class_info_for_type_name(&name),
+                _ => None,
+            })
+            .and_then(|class| {
+                class
+                    .fields
+                    .get(name)
+                    .map(|field| self.definition_range(&class.module_name, field.span, name.len()))
+            })
     }
 
     fn returned_view_callee_decl(
@@ -2556,10 +2838,26 @@ impl<'a> AnalysisBuilder<'a> {
                     );
                 }
             }
-            ExprKind::Specialize { expr, .. } => self.visit_expr(expr, scope),
+            ExprKind::Specialize { expr, type_args } => {
+                self.visit_expr(expr, scope);
+                for ty in type_args {
+                    self.visit_type_reference(ty);
+                }
+            }
             ExprKind::Call { callee, args } => {
                 self.visit_expr(callee, scope);
                 for arg in args {
+                    if let Some(name) = &arg.name {
+                        if let Some(definition) =
+                            self.keyword_argument_definition(callee, args, scope, name)
+                        {
+                            self.push_occurrence(
+                                range_from_span(arg.span, name.len()),
+                                format!("parameter `{name}`"),
+                                Some(definition),
+                            );
+                        }
+                    }
                     self.visit_expr(&arg.value, scope);
                 }
             }
@@ -2658,7 +2956,10 @@ impl<'a> AnalysisBuilder<'a> {
                 }
                 self.visit_expr(body, &lambda_scope);
             }
-            ExprKind::Cast { expr, .. } => self.visit_expr(expr, scope),
+            ExprKind::Cast { expr, ty } => {
+                self.visit_expr(expr, scope);
+                self.visit_type_reference(ty);
+            }
             ExprKind::IsNone { value: expr, .. } | ExprKind::Unary { expr, .. } => {
                 self.visit_expr(expr, scope)
             }
@@ -3026,6 +3327,13 @@ impl<'a> AnalysisBuilder<'a> {
                     hover: format!("```aura\nmodule {}\n```", child.path),
                     definition: self.find_imported_module_range(&child.path),
                     ty: Some(Type::Module(child.path.clone())),
+                });
+            }
+            if let Some(alias) = namespace.aliases.get(field) {
+                return Some(ResolvedMember {
+                    hover: format_alias_hover(alias),
+                    definition: Some(self.alias_definition(alias)),
+                    ty: Some(alias.target.clone()),
                 });
             }
             if let Some(constant) = namespace.constants.get(field) {
@@ -4812,16 +5120,22 @@ impl<'a> AnalysisBuilder<'a> {
 
     fn analysis_type_arg_expr(&self, expr: &Expr) -> Option<Type> {
         match &expr.kind {
-            ExprKind::Name(name) => Some(Type::named(
-                self.program
-                    .canonical_type_names
-                    .get(name)
-                    .cloned()
-                    .unwrap_or_else(|| match name.as_str() {
-                        "int" => "int64".to_string(),
-                        _ => name.clone(),
-                    }),
-            )),
+            ExprKind::Name(name) => self
+                .program
+                .alias_info(name, &self.program.module_name)
+                .map(|alias| alias.target.clone())
+                .or_else(|| {
+                    Some(Type::named(
+                        self.program
+                            .canonical_type_names
+                            .get(name)
+                            .cloned()
+                            .unwrap_or_else(|| match name.as_str() {
+                                "int" => "int64".to_string(),
+                                _ => name.clone(),
+                            }),
+                    ))
+                }),
             ExprKind::Group(inner) => self.analysis_type_arg_expr(inner),
             ExprKind::Index { object, index } => {
                 let ExprKind::Name(name) = &object.kind else {

@@ -1,4 +1,5 @@
 import helpers.math
+type Unary = def(int32) -> int32
 
 def apply(transform: def(int32) -> int32, value: int32) -> int32:
     return transform(value)
@@ -7,7 +8,7 @@ def main() -> int32:
     imported = helpers.math.double
     imported_empty: def() -> Option[int32] = helpers.math.empty
     print(imported(5))
-    print(apply(imported, 6))
+    print(apply(Unary(imported), 6))
     with group = TaskGroup():
         empty_task = group.start(imported_empty)
         match empty_task.result_or(Option.Some(99), timeout=1s):

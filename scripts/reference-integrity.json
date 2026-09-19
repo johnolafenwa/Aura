@@ -312,7 +312,7 @@
       "reason": "Long-running documentation development server command."
     },
     "docs/manual/cli-and-tooling.md#json-1": {
-      "sha256": "0a4d1173ba634326469af559cd990f04bacef38271743abbdf3d240b1c4a360e",
+      "sha256": "de4b74304a1715cb300ab929bc051295f814ce0133d28253802b3d78470ecc0c",
       "mode": "illustrative",
       "reason": "Two-line analysis-service request transcript, not a single executable JSON document."
     },
@@ -796,7 +796,7 @@
       "reason": "Specialized-call fragment: identity is declared in the preceding generic-function block."
     },
     "docs/manual/functions.md#aura-18": {
-      "sha256": "7171e14ac7524da39a7a53c92a0150e3323b866e3d59931f00f07856f08f15fc",
+      "sha256": "7a3dc9f140e1d8b6fa5afe924c223691785c5a90725806fb6d4af155c684334a",
       "mode": "run",
       "stdout": "value: 4\nn: 4\n5\n",
       "stderr": ""
@@ -1705,6 +1705,11 @@
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""
+    },
+    "docs/manual/cli-and-tooling.md#sh-1": {
+      "sha256": "ab120eaad30c40343e5efce33f946adcfb90497793374eb91a49cee22169ad9f",
+      "mode": "illustrative",
+      "reason": "Editor query commands consume the current document from stdin; subprocess integration tests exercise all four verbs."
     }
   }
 }

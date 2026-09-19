@@ -1,3 +1,6 @@
+type TextConsumer = def(own str) -> str
+type CounterUpdate = def(mut Counter) -> None
+
 class Counter:
     value: int32
 
@@ -18,8 +21,8 @@ def apply_own(callback: def(own str) -> str, value: own str) -> str:
     return callback(value)
 
 def main() -> int32:
-    mutate: def(mut Counter) -> None = increment
-    consume: def(own str) -> str = take
+    mutate: def(mut Counter) -> None = CounterUpdate(increment)
+    consume: def(own str) -> str = TextConsumer(take)
     mutators: list[def(mut Counter) -> None] = [mutate]
     consumers: list[def(own str) -> str] = [consume]
     holder = Holder(mutate=mutate, consume=consume)

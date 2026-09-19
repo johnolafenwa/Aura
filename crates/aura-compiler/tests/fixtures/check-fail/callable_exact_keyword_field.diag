@@ -1,0 +1,6 @@
+error[AU2015]: callable contract mismatch: parameter `value` differs from parameter `value` in its keyword-only boundary; use the explicit adapter `Destination(target)`
+ --> crates/aura-compiler/tests/fixtures/check-fail/callable_exact_keyword_field.au:11:30
+   |
+11 |     holder = Holder(callback=target)
+   |                              ^
+  = help: preserve identical complete contracts at bare destinations; apply safe restrictions through an explicit thin alias or owned callable constructor such as `Alias(function)`

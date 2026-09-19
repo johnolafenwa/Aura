@@ -1,6 +1,6 @@
 error[AU2004]: this function value's contract has no parameter named `value`
- --> crates/aura-compiler/tests/fixtures/check-fail/dynamic_function_value_named_argument_rejected.au:12:20
+ --> crates/aura-compiler/tests/fixtures/check-fail/dynamic_function_value_named_argument_rejected.au:14:20
    |
-12 |     print(selected(value=20))
+14 |     print(selected(value=20))
    |                    ^
   = help: a positional-only slot of a written `def(...)` type is called positionally; name the slot in the type to call it by name

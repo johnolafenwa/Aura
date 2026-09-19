@@ -101,8 +101,9 @@ fn forge_declaration_and_operands(
     forge_function_operands(encoded, function, operand_slot);
 }
 
-const NO_CONTRACT: &str =
-    "invalid MIR indirect call in `main` has no authoritative callable contract";
+// Exact assignment/call checks now reject changed contracts before the
+// downstream merge/binding paths these unchanged inputs previously exercised.
+const CHANGED_CONTRACT: &str = "changes an authoritative callable contract";
 
 const FIRST_SECOND: &str = "def first(value: int64) -> int64:\n    return value + 1\ndef second(value: int64) -> int64:\n    return value + 2\ndef pick(index: int64) -> int64:\n    return index\n";
 
@@ -126,11 +127,11 @@ fn merged_candidates_that_differ_in_a_slot_name_are_poisoned_on_both_boundaries(
         &|param| param["name"] = json!("other"),
         &|slot| slot["name"] = json!("other"),
     );
-    assert_rejected_on_both_boundaries(encoded, NO_CONTRACT);
+    assert_rejected_on_both_boundaries(encoded, CHANGED_CONTRACT);
 }
 
 #[test]
-fn merged_candidates_that_differ_in_a_keyword_only_boundary_keep_the_keyword_only_restriction() {
+fn keyword_only_contract_changes_are_rejected_before_candidates_merge() {
     // A keyword-only slot is a written restriction of the same named
     // positional slot, so the merge keeps it as the common contract: the
     // positional call every candidate accepted before the forgery is now
@@ -145,10 +146,7 @@ fn merged_candidates_that_differ_in_a_keyword_only_boundary_keep_the_keyword_onl
         &|param| param["keyword_only"] = json!(true),
         &|slot| slot["keyword_only"] = json!(true),
     );
-    assert_rejected_on_both_boundaries(
-        encoded,
-        "invalid MIR indirect call from `main` has too many positional arguments",
-    );
+    assert_rejected_on_both_boundaries(encoded, "changes an authoritative callable contract");
 }
 
 #[test]
@@ -169,11 +167,11 @@ fn merged_candidates_that_differ_in_a_keyword_only_boundary_and_name_are_poisone
             slot["name"] = json!("other");
         },
     );
-    assert_rejected_on_both_boundaries(encoded, NO_CONTRACT);
+    assert_rejected_on_both_boundaries(encoded, CHANGED_CONTRACT);
 }
 
 #[test]
-fn merged_candidates_that_differ_in_default_availability_keep_the_dropped_default() {
+fn default_contract_changes_are_rejected_before_candidates_merge() {
     // The inferred element contract keeps both declarations' defaults. A
     // candidate without the default is a written restriction of the others,
     // so the merge drops the default: a call that omits the argument is
@@ -188,10 +186,7 @@ fn merged_candidates_that_differ_in_default_availability_keep_the_dropped_defaul
         &|param| param["default_function"] = Value::Null,
         &|slot| slot["has_default"] = json!(false),
     );
-    assert_rejected_on_both_boundaries(
-        encoded,
-        "invalid MIR indirect call from `main` omits required parameter 1 `value`",
-    );
+    assert_rejected_on_both_boundaries(encoded, "changes an authoritative callable contract");
 }
 
 #[test]
@@ -212,7 +207,7 @@ fn merged_candidates_that_differ_in_default_availability_and_name_are_poisoned_o
             slot["name"] = json!("other");
         },
     );
-    assert_rejected_on_both_boundaries(encoded, NO_CONTRACT);
+    assert_rejected_on_both_boundaries(encoded, CHANGED_CONTRACT);
 }
 
 #[test]
@@ -226,7 +221,7 @@ fn merged_dictionary_values_that_differ_in_a_slot_name_are_poisoned_on_both_boun
         &|param| param["name"] = json!("other"),
         &|slot| slot["name"] = json!("other"),
     );
-    assert_rejected_on_both_boundaries(encoded, NO_CONTRACT);
+    assert_rejected_on_both_boundaries(encoded, CHANGED_CONTRACT);
 }
 
 #[test]
@@ -240,7 +235,7 @@ fn control_flow_joins_that_differ_in_a_slot_name_are_poisoned_on_both_boundaries
         &|param| param["name"] = json!("other"),
         &|slot| slot["name"] = json!("other"),
     );
-    assert_rejected_on_both_boundaries(encoded, NO_CONTRACT);
+    assert_rejected_on_both_boundaries(encoded, CHANGED_CONTRACT);
 }
 
 /// The lowered closure functions of `owner`'s lambdas, in source order.
@@ -272,7 +267,7 @@ fn merged_capture_free_lambdas_that_differ_in_a_slot_name_are_poisoned_on_both_b
         &|param| param["name"] = json!("other"),
         &|slot| slot["name"] = json!("other"),
     );
-    assert_rejected_on_both_boundaries(encoded, NO_CONTRACT);
+    assert_rejected_on_both_boundaries(encoded, CHANGED_CONTRACT);
 }
 
 #[test]
@@ -326,7 +321,7 @@ fn merged_candidates_that_differ_only_in_identity_keep_their_complete_contract()
 }
 
 #[test]
-fn merged_candidates_keep_a_keyword_only_restriction_from_either_side() {
+fn keyword_only_contract_changes_on_either_side_are_rejected_before_merging() {
     // The restriction may sit on either candidate; the merge keeps it as the
     // common contract regardless of element order.
     for (elements, restricted) in [("[first, second]", "first"), ("[second, first]", "first")] {
@@ -340,10 +335,7 @@ fn merged_candidates_keep_a_keyword_only_restriction_from_either_side() {
             &|param| param["keyword_only"] = json!(true),
             &|slot| slot["keyword_only"] = json!(true),
         );
-        assert_rejected_on_both_boundaries(
-            encoded,
-            "invalid MIR indirect call from `main` has too many positional arguments",
-        );
+        assert_rejected_on_both_boundaries(encoded, "changes an authoritative callable contract");
     }
 }
 

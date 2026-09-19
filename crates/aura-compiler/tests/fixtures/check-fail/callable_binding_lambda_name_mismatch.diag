@@ -3,4 +3,4 @@ error[AU2015]: callable contract mismatch: lambda parameter `other` must be name
   |
 2 |     step: def(value: int64) -> int64 = lambda other: other + 1
   |                                               ^
-  = help: annotate the destination with a contract every value satisfies, or adapt a value explicitly through a thin callable alias call such as `Alias(function)`
+  = help: preserve identical complete contracts at bare destinations; apply safe restrictions through an explicit thin alias or owned callable constructor such as `Alias(function)`

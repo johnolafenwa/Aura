@@ -344,6 +344,11 @@ call returns (a null non-optional handle, a missing symbol, an argument
 mismatch) is reported as an `AU4005` diagnostic instead of unwinding
 through generated code that carries no unwind tables.
 
+The 2026-09-13 owner ruling retains the boxed union payload and `Arc`
+closure environment as the disclosed interim. The ratified Q9 A / Q15 A /
+Q16 A layout and allocation measurements form a separate phase after H2.
+No FFI/ABI stability claim and no 0.4 release precede that phase.
+
 ## Batch 1 phase 1: callable contracts
 
 A callable contract is complete (Q17 A, Q19 A): slot names or explicit
@@ -355,14 +360,15 @@ contract comparison (`callable_slot_admission`, `check_callable_positions`,
 destination and the shared validator applies at every callable boundary
 (`check_callable_contract`) and at every function operand, where the
 operand's declared contract is the destination the declaration must satisfy.
-A boundary may hide a name, drop default availability, or restrict a named
-slot to keyword-only; it may never rename, invent a default, or expose a
+Ordinary boundaries require complete-contract identity. Only an explicit
+adapter may hide a name, drop default availability, or restrict a named slot
+to keyword-only; it may never rename, invent a default, or expose a
 keyword-only slot positionally. `MirParam.keyword_only` records the declared
 boundary so closure declarations and function operands can be checked, and
 the shared binder (`call.rs`) refuses a positional argument that reaches a
 keyword-only slot for direct calls, indirect calls, lowering, and both
-backends alike. The thin alias adapter `Alias(value)` lowers to the adapted
-operand in a temporary typed with the alias contract; no runtime
+backends alike. The thin alias adapter `Alias(value)` lowers to a validated `CallableAdapt`
+operation carrying the destination contract; no runtime
 representation changes. The semantic interface schema is 12.
 
 ## Batch 1 phase 1: callable packing and call kinds
@@ -390,14 +396,11 @@ joins, member-call result candidates) by their complete contracts:
 default availability, capabilities, closure captures and call kinds, and
 the task flag at every callable position, distinct functions with one
 complete contract keep that contract without a name, values admitted under
-one erased element type keep that erased contract, a candidate that is a
-written restriction of the others under the checker's admission rules (a
-hidden name, a dropped default, a keyword-only boundary on a named slot)
-becomes the common contract, and any other disagreement poisons the merged
-identity so a later call through the selection is refused on both
+one erased element type keep that erased contract, explicit adapters establish a common exposed contract before a merge,
+and any complete-contract disagreement poisons the merged identity so a later call through the selection is refused on both
 boundaries; no common contract is ever invented. Runtime type patterns admit a
 function or closure signature for an erased declared type when the ABI
-matches and the kind is admitted. The semantic interface schema is 13.
+matches and the kind is admitted. The semantic interface schema is 15.
 
 ## Batch 1 phase 1: stored task targets
 

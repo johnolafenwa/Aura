@@ -7,6 +7,11 @@ in this file.
 
 ## 0.3.4 — Unreleased (technical preview)
 
+- Require identical complete callable contracts at bare destinations (`AU2015`);
+  permitted restrictions now require explicit alias or callable constructors.
+- Add compiler-owned signature help, references, and rename with prepare support
+  to the CLI and language server, including binding-preserving rename checks.
+
 - Fix the task boundary for stored `TaskCallable` targets: every argument
   slot, including an omitted default or a keyword-bound slot, must be
   Transfer, and a target whose result is a view of its arguments is refused

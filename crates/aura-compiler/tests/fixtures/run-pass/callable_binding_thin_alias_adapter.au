@@ -18,8 +18,8 @@ def main():
     unary = Unary(increment)
     print(unary(3))
     print(apply(Unary(triple), 3))
-    print(apply(triple, 4))
-    steps: list[Unary] = [Unary(increment), Unary(double), triple]
+    print(apply(Unary(triple), 4))
+    steps: list[Unary] = [Unary(increment), Unary(double), Unary(triple)]
     print(steps[0](1))
     print(steps[1](1))
     print(steps[2](1))

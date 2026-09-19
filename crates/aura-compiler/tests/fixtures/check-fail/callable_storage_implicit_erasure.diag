@@ -3,4 +3,4 @@ error[AU2015]: callable contract mismatch: implicit erased storage; a lambda bec
   |
 5 |     tool: Tool = lambda value: value + offset
   |                  ^
-  = help: annotate the destination with a contract every value satisfies, or adapt a value explicitly through a thin callable alias call such as `Alias(function)`
+  = help: preserve identical complete contracts at bare destinations; apply safe restrictions through an explicit thin alias or owned callable constructor such as `Alias(function)`

@@ -1,4 +1,4 @@
-error[AU2002]: argument type mismatch for function `apply`: expected `def(int64) -> None`, found `mutable closure def(value: int64) -> None`
+error[AU2002]: argument type mismatch for function `apply`: expected `def(int64) -> None`, found `mutable closure def(int64) -> None`
  --> crates/aura-compiler/tests/fixtures/check-fail/lambda_mutable_capture_access.au:6:11
   |
 6 |     apply(lambda value: values.append(value))

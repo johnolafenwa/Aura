@@ -1,5 +1,5 @@
 error[AU2004]: function value is missing required positional argument 1
- --> crates/aura-compiler/tests/fixtures/check-fail/function_value_field_storage_erases_default.au:9:19
-  |
-9 |     return holder.callback()
-  |                   ^
+ --> crates/aura-compiler/tests/fixtures/check-fail/function_value_field_storage_erases_default.au:11:19
+   |
+11 |     return holder.callback()
+   |                   ^

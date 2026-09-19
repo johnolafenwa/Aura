@@ -24,6 +24,13 @@ This page documents known current limits of the Aura compiler and runtime.
   parameter place.
 - Empty list, dictionary, and set literals need an expected collection type.
 - Class field defaults cannot call user-defined functions in the current compiler. Compute the value before construction and pass it as an explicit field argument.
+- Bare callable destinations require identical complete contracts (`AU2015`).
+  Safe restrictions require a thin alias adapter such as `Unary(function)`
+  or an explicit `Callable[...]`/`TaskCallable[...]` constructor.
+- Union payloads are boxed and closure environments use `Arc` as a disclosed
+  interim. The ratified Q9 A / Q15 A / Q16 A layout and allocation measurements
+  are scheduled after H2. No FFI/ABI stability claim and no 0.4 release precede
+  that representation phase.
 - A union value passed through a generic bound dispatches its shared and
   consuming trait methods on the active member on both backends; a `mut self`
   trait method reached that way runs on the interpreter but the direct

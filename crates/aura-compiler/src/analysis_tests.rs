@@ -7862,9 +7862,10 @@ fn nested_written_function_types_drive_completion_scope_and_json_schema() {
         "    return callback",
         "",
         "def main() -> int32:",
-        "    selected: def(def(mut str, own str) -> (str, int32)) -> def(mut str, own str) -> (str, int32) = passthrough",
+        "    selected: def(def(mut str, own str) -> (str, int32)) -> def(mut str, own str) -> (str, int32) = Higher(passthrough)",
         "    print(selected)",
         "    return 0",
+        "type Higher = def(def(mut str, own str) -> (str, int32)) -> def(mut str, own str) -> (str, int32)",
     ]
     .join("\n");
     let expected_type =
@@ -7920,9 +7921,10 @@ fn written_function_type_aliases_are_canonical_in_completion_scope() {
         "    pass",
         "",
         "def main() -> int32:",
-        "    selected: def(str, int) -> None = report",
+        "    selected: def(str, int) -> None = Reporter(report)",
         "    print(selected)",
         "    return 0",
+        "type Reporter = def(str, int) -> None",
     ]
     .join("\n");
 
@@ -8013,7 +8015,7 @@ fn lambda_analysis_resolves_parameters_captures_and_closure_bindings() {
             occurrence.line == 3
                 && occurrence
                     .hover
-                    .contains("binding add: closure def(value: int32) -> int32")
+                    .contains("binding add: closure def(int32) -> int32")
         }),
         "capturing lambda bindings should retain their closure type"
     );
@@ -9702,4 +9704,56 @@ fn bounded_generic_alias_hover_renders_its_type_parameter_bounds() {
         alias_use.hover,
         "```aura\ntype Wrapped[T: Named] = Box[T]\n```"
     );
+}
+
+#[test]
+fn editor_keyword_references_keep_imported_declarations_in_their_module() {
+    let temp = TempDir::new("aura-editor-imported-keywords");
+    let root = temp.path();
+    fs::create_dir_all(root.join("src/pkg")).unwrap();
+    fs::write(
+        root.join("Aura.toml"),
+        "[package]\nname = \"editor_refs\"\nversion = \"0.1.0\"\nedition = \"2026\"\n",
+    )
+    .unwrap();
+    let dependency = root.join("src/pkg/api.au");
+    fs::write(
+        &dependency,
+        "public type Count = int64\npublic def echo(value: int64) -> int64:\n    return value\n",
+    )
+    .unwrap();
+    let path = root.join("src/main.au");
+    let source = "import pkg.api\ndef main():\n    count: pkg.api.Count = 1\n    print(pkg.api.echo(value=count))\n";
+    fs::write(&path, source).unwrap();
+    let analysis = analyze_path_source(&path, source);
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "{:?}",
+        analysis.diagnostics
+    );
+    let refs = crate::references_path_source(&path, source, 3, 23, true);
+    let declaration = refs
+        .iter()
+        .find(|range| range.file_path.is_some())
+        .expect("imported parameter definition");
+    assert_eq!(
+        declaration.file_path.as_deref(),
+        fs::canonicalize(&dependency).unwrap().to_str()
+    );
+    assert!(crate::prepare_rename_path_source(&path, source, 3, 23).is_none());
+    assert!(crate::rename_path_source(&path, source, 3, 23, "input").is_none());
+    let functions = crate::references_path_source(&path, source, 3, 19, true);
+    let declaration = functions
+        .iter()
+        .find(|range| range.file_path.is_some())
+        .unwrap();
+    assert_eq!(declaration.start_character, 11);
+    assert_eq!(declaration.end_character, 15);
+    let refs = crate::references_path_source(&path, source, 2, 20, false);
+    assert_eq!(refs.len(), 1, "{:?}", analysis.occurrences);
+    assert_eq!(
+        refs[0].start_character, 19,
+        "qualified type reference only spans its final identifier"
+    );
+    assert_eq!(refs[0].end_character, 24);
 }

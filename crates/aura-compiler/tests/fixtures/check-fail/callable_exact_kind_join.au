@@ -1,0 +1,8 @@
+type Destination = Callable[mut def(value: int64) -> int64]
+type Source = Callable[def(value: int64) -> int64]
+
+def target(value: int64) -> int64:
+    return value
+
+def main():
+    callback: Destination = Source(target) if true else Source(target)

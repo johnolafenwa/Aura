@@ -15184,7 +15184,7 @@ def apply_owned(transform: own def(int32) -> int32, value: int32) -> int32:
     return transform(value)
 
 def choose_transform(use_increment: bool) -> def(int32) -> int32:
-    return increment if use_increment else double
+    return Unary(increment) if use_increment else Unary(double)
 
 def publish(values: Queue[int32], value: int32) -> None:
     values.put(value)
@@ -15193,13 +15193,13 @@ def empty[T]() -> Option[T]:
     return None
 
 def main() -> int32:
-    selected: def(int32) -> int32 = increment
+    selected: def(int32) -> int32 = Unary(increment)
     copied = selected
     known_offset = offset
     selected_default = first_default if false else second_default
     known_combine = combine
     pipeline = Pipeline(transform=copied)
-    transforms: list[def(int32) -> int32] = [pipeline.transform, double]
+    transforms: list[def(int32) -> int32] = [pipeline.transform, Unary(double)]
 
     print(selected(1))
     print(apply(pipeline.transform, 2))
@@ -15235,6 +15235,7 @@ def main() -> int32:
         default_task = default_group.start(selected_task_default)
         print(default_task.result_or(-1, timeout=1s))
     return 0
+type Unary = def(int32) -> int32
 "#;
 
     assert_run_and_direct_source_stdout(
@@ -15346,8 +15347,8 @@ def apply_own(callback: def(own str) -> str, value: own str) -> str:
     return callback(value)
 
 def main() -> int32:
-    mutate: def(mut Counter) -> None = increment
-    consume: def(own str) -> str = take
+    mutate: def(mut Counter) -> None = Update(increment)
+    consume: def(own str) -> str = Consume(take)
     mutators: list[def(mut Counter) -> None] = [mutate]
     consumers: list[def(own str) -> str] = [consume]
     holder = Holder(mutate=mutate, consume=consume)
@@ -15365,6 +15366,8 @@ def main() -> int32:
     print(first)
     print(result)
     return 0
+type Update = def(mut Counter) -> None
+type Consume = def(own str) -> str
 "#;
 
     assert_run_and_direct_source_stdout(
@@ -15384,11 +15387,12 @@ def safe(value: int32) -> int32:
     return value
 
 def choose(should_explode: bool) -> def(int32) -> int32:
-    return explode if should_explode else safe
+    return Unary(explode) if should_explode else Unary(safe)
 
 def main() -> int32:
     selected = choose(true)
     return selected(0)
+type Unary = def(int32) -> int32
 "#;
 
     assert_run_and_direct_source_failure_with_timeout(
@@ -15466,13 +15470,14 @@ def safe(value: int32) -> int32:
     return value
 
 def choose(should_explode: bool) -> def(int32) -> int32:
-    return explode if should_explode else safe
+    return Unary(explode) if should_explode else Unary(safe)
 
 def main() -> int32:
     selected = choose(true)
     with group = TaskGroup():
         task = group.start(selected, 0)
     return 0
+type Unary = def(int32) -> int32
 "#;
     let timeout = std::time::Duration::from_secs(20);
     let (_temp, _source_path, mut mir_child) =

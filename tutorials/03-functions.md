@@ -261,6 +261,8 @@ A module-level named function can be stored and passed like any other copy
 value. Write its type in declaration-shaped form:
 
 ```aura check-pass
+type Transform = def(int32) -> int32
+
 class Pipeline:
     transform: def(int32) -> int32
 
@@ -271,21 +273,24 @@ def apply(transform: def(int32) -> int32, value: int32) -> int32:
     return transform(value)
 
 selected = double
-pipeline = Pipeline(transform=selected)
-transforms: list[def(int32) -> int32] = [selected]
+pipeline = Pipeline(transform=Transform(selected))
+transforms: list[def(int32) -> int32] = [Transform(selected)]
 
 print(apply(pipeline.transform, 3))
 print(transforms[0](4))
 ```
 
-`def(T1, mut T2, own T3) -> R` contains parameter modes and types, but no
-parameter names or default expressions. Bare parameters are shared. An
+`def(T1, mut T2, own T3) -> R` exposes unnamed slots without default
+availability. Bare parameters are shared. The `Transform(selected)` adapter
+explicitly hides the source parameter name before storage. An
 inferred binding such as `selected = consume` retains the exact contract, and
 you can also write it explicitly:
 
 ```aura fragment
-mutate: def(mut Counter) -> None = increment
-consume: def(own str) -> str = take
+type Update = def(mut Counter) -> None
+type Consume = def(own str) -> str
+mutate: Update = Update(increment)
+consume: Consume = Consume(take)
 callbacks: list[def(mut Counter) -> None] = [mutate]
 ```
 

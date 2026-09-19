@@ -424,8 +424,8 @@ def invalid_worker(value: int32) -> Result[int32, str]:
     return Result.Ok(value)
 "#,
             "invalid_worker",
-            "expected `def() -> Result[T, E]`",
-            "def(value: int32) -> Result[int32, str]",
+            "expected 0 parameters",
+            "found 1",
         ),
         (
             "defaulted-argument-worker",
@@ -434,8 +434,8 @@ def invalid_worker(value: int32 = 1) -> Result[int32, str]:
     return Result.Ok(value)
 "#,
             "invalid_worker",
-            "expected `def() -> Result[T, E]`",
-            "def(value: int32 = ...) -> Result[int32, str]",
+            "expected 0 parameters",
+            "found 1",
         ),
         (
             "mutable-argument-worker",
@@ -448,8 +448,8 @@ def invalid_worker(counter: mut Counter) -> Result[int32, str]:
     return Result.Ok(counter.value)
 "#,
             "invalid_worker",
-            "expected `def() -> Result[T, E]`",
-            "def(counter: mut Counter) -> Result[int32, str]",
+            "expected 0 parameters",
+            "found 1",
         ),
         (
             "owned-argument-worker",
@@ -458,8 +458,8 @@ def invalid_worker(value: own str) -> Result[int32, str]:
     return Result.Ok(value.len() as int32)
 "#,
             "invalid_worker",
-            "expected `def() -> Result[T, E]`",
-            "def(value: own str) -> Result[int32, str]",
+            "expected 0 parameters",
+            "found 1",
         ),
         (
             "non-result-worker",
@@ -468,7 +468,7 @@ def invalid_worker() -> int32:
     return 1
 "#,
             "invalid_worker",
-            "expected `Result[T, E]`",
+            "expected `Result[int32, str]`",
             "found `int32`",
         ),
     ];
@@ -492,13 +492,14 @@ def main() -> int32:
             .expect("control.retry worker check should run");
         assert_failure(&output, "checker");
         let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("error[AU2015]: callable contract mismatch"));
         assert!(
             stderr.contains(expected_contract),
-            "worker diagnostic should state the reusable zero-argument Result contract:\n{stderr}"
+            "worker diagnostic should state the required callable contract:\n{stderr}"
         );
         assert!(
             stderr.contains(found_type),
-            "worker diagnostic should report the actual function type `{found_type}`:\n{stderr}"
+            "worker diagnostic should describe the actual contract difference `{found_type}`:\n{stderr}"
         );
     }
 }

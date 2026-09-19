@@ -1,5 +1,6 @@
-error[AU2002]: function parameter 1 has `mut` capability, but `def(Counter) -> None` requires `shared`; update that function type parameter to use the matching bare, `mut`, or `own` prefix
- --> crates/aura-compiler/tests/fixtures/check-fail/function_value_mut_annotation_mismatch.au:8:5
+error[AU2015]: callable contract mismatch: positional parameter 1 has a different type or capability
+ --> crates/aura-compiler/tests/fixtures/check-fail/function_value_mut_annotation_mismatch.au:8:41
   |
 8 |     shared_only: def(Counter) -> None = increment
-  |     ^
+  |                                         ^
+  = help: preserve identical complete contracts at bare destinations; apply safe restrictions through an explicit thin alias or owned callable constructor such as `Alias(function)`

@@ -62,6 +62,11 @@ fn assert_rejected(encoded: Value, expected: &str) {
     );
     let native =
         emit_host_native_object(&mir).expect_err("native emission must reject the forged module");
+    assert_eq!(
+        interpreted.message.strip_prefix("invalid MIR loan flow: "),
+        Some(native.as_str()),
+        "both boundaries must report the same shared validator reason"
+    );
     assert!(
         native.contains(expected),
         "native rejection `{native}` should mention `{expected}`"
@@ -96,8 +101,8 @@ const STORED_TARGET: &str = "type Job = TaskCallable[def(count: int64 = ...) -> 
 #[test]
 fn stored_target_defaulted_parameter_typed_as_a_host_resource_is_rejected_on_both_boundaries() {
     let mut encoded = encode(STORED_TARGET);
-    // The omitted default never appears in the argument list; the contract
-    // slot itself must be proved Transfer.
+    // Complete function-operand authentication now rejects this mutation
+    // before the later task Transfer check is reached.
     function_mut(&mut encoded, "worker")["params"][0]["ty"] = task_group_type();
     let default_function = function_mut(&mut encoded, "worker")["params"][0]["default_function"]
         .as_str()
@@ -121,7 +126,7 @@ fn stored_target_defaulted_parameter_typed_as_a_host_resource_is_rejected_on_bot
     }
     assert_rejected(
         encoded,
-        "passes parameter 1 whose type is not Transfer: `TaskGroup` is a host resource",
+        "function operand `worker` in `main` has parameter 1 that does not match declaration",
     );
 }
 
@@ -345,7 +350,7 @@ fn stored_target_parameter_typed_as_a_returned_view_is_rejected_on_both_boundari
     }
     assert_rejected(
         encoded,
-        "passes parameter 1 whose type is not Transfer: a returned view borrows the parent's data",
+        "function operand `worker` in `main` has parameter 1 that does not match declaration",
     );
 }
 
