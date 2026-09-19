@@ -787,6 +787,13 @@ pub enum Instruction {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Rvalue {
     Use(Operand),
+    /// An explicit thin-alias adapter or owned callable packing constructor.
+    /// The shared validator checks the source against `destination` before
+    /// replacing its authoritative exposed contract with that destination.
+    CallableAdapt {
+        value: Operand,
+        destination: Type,
+    },
     UnionTagTest {
         place: String,
         union_type: Type,
@@ -1629,7 +1636,7 @@ impl<'a> MirLoanValidationContext<'a> {
                         caller.name
                     ));
                 };
-                (callable.signature.clone(), callable.function.as_deref())
+                (callable.signature.clone(), callable.declaration_identity())
             }
             _ => {
                 return Err(format!(
@@ -1652,13 +1659,13 @@ impl<'a> MirLoanValidationContext<'a> {
         expected: &Type,
         site_name: &str,
     ) -> std::result::Result<(), String> {
-        // (params, return, call kind, erased): an erased destination admits a
-        // weaker-or-equal source kind; a concrete closure contract is exact.
+        // Ordinary boundaries preserve storage/task/call-kind identity. Kind
+        // weakening is admitted only while validating `CallableAdapt`.
         let parts = |ty: &Type| match ty {
             Type::Function {
                 params,
                 return_type,
-            } => Some((params.clone(), (**return_type).clone(), None, false)),
+            } => Some((params.clone(), (**return_type).clone(), None, None)),
             Type::Closure {
                 params,
                 return_type,
@@ -1668,23 +1675,24 @@ impl<'a> MirLoanValidationContext<'a> {
                 params.as_ref().clone(),
                 (**return_type).clone(),
                 Some(*call_kind),
-                false,
+                None,
             )),
             Type::Callable(callable) => Some((
                 callable.params.clone(),
                 callable.return_type.clone(),
                 Some(callable.call_kind),
-                true,
+                Some(callable.task),
             )),
             _ => None,
         };
-        let Some((mut actual_params, actual_return, actual_kind, _)) = parts(actual) else {
+        let Some((mut actual_params, actual_return, actual_kind, actual_task)) = parts(actual)
+        else {
             return Err(format!(
                 "invalid MIR {site_name} from `{}` passes a non-callable value for a callable contract",
                 caller.name
             ));
         };
-        let Some((expected_params, expected_return, expected_kind, expected_erased)) =
+        let Some((expected_params, expected_return, expected_kind, expected_task)) =
             parts(expected)
         else {
             return Err(format!(
@@ -1700,37 +1708,166 @@ impl<'a> MirLoanValidationContext<'a> {
             }
         }
         let kinds_match = match (actual_kind, expected_kind) {
-            (Some(actual), Some(expected)) if expected_erased => expected.admits(actual),
             (Some(actual), Some(expected)) => actual == expected,
             (Some(ClosureCallKind::Consuming), None) => false,
             _ => true,
-        };
+        } && actual_task == expected_task;
+        let representations_match = matches!(
+            (expected, actual),
+            (
+                Type::Function { .. },
+                Type::Function { .. } | Type::Closure { .. }
+            ) | (Type::Closure { .. }, Type::Closure { .. })
+                | (Type::Callable(_), Type::Callable(_))
+        );
         let mut type_params = BTreeSet::new();
         collect_type_params_from_type(expected, &mut type_params);
         let mut substitutions = HashMap::new();
         let params_match = actual_params.len() == expected_params.len()
-            && actual_params.iter().zip(&expected_params).enumerate().all(
-                |(index, (actual, expected))| {
+            && actual_params
+                .iter()
+                .zip(&expected_params)
+                .all(|(actual, expected)| {
                     crate::sema::type_pattern_matches(
                         &expected.ty,
                         &actual.ty,
                         &type_params,
                         &mut substitutions,
                     ) && actual.passing == expected.passing
-                        && crate::sema::callable_slot_admission(expected, actual, index).is_ok()
-                },
-            );
+                        && actual.name == expected.name
+                        && actual.keyword_only == expected.keyword_only
+                        && actual.has_default == expected.has_default
+                });
         let return_matches = crate::sema::type_pattern_matches(
             &expected_return,
             &actual_return,
             &type_params,
             &mut substitutions,
         );
-        if !params_match || !return_matches || !kinds_match {
+        let nested_contracts_match = params_match
+            && actual_params
+                .iter()
+                .zip(&expected_params)
+                .all(|(actual, expected)| {
+                    let expected = crate::sema::substitute_type(&expected.ty, &substitutions);
+                    expected.identical_contract(&actual.ty)
+                })
+            && {
+                let expected_return =
+                    crate::sema::substitute_type(&expected_return, &substitutions);
+                expected_return.identical_contract(&actual_return)
+            };
+        if !params_match
+            || !return_matches
+            || !nested_contracts_match
+            || !kinds_match
+            || !representations_match
+        {
             return Err(format!(
                 "invalid MIR {site_name} from `{}` changes an authoritative callable contract",
                 caller.name
             ));
+        }
+        Ok(())
+    }
+
+    /// Validates the only MIR operation allowed to restrict an exposed
+    /// callable contract. The destination type comes from the typed local, so
+    /// the serialized marker cannot select a different contract.
+    fn validate_explicit_callable_adapter(
+        &self,
+        function: &MirFunction,
+        value: &Operand,
+        destination: &Type,
+        state: &ValidatedLoanState,
+    ) -> std::result::Result<(), String> {
+        let source = match value {
+            Operand::Function { name, signature } => {
+                let mut signature = (**signature).clone();
+                if let (Some(declaration), Type::Function { params, .. }) =
+                    (self.functions.get(name.as_str()), &mut signature)
+                {
+                    for (contract, declared) in params.iter_mut().zip(&declaration.params) {
+                        contract.name = declared.name.clone();
+                        contract.has_default = declared.default_function.is_some();
+                        contract.keyword_only = declared.keyword_only;
+                    }
+                }
+                signature
+            }
+            Operand::Place(place) | Operand::MovePlace(place) => state
+                .authoritative_callables
+                .get(place)
+                .map(|callable| callable.signature.clone())
+                .ok_or_else(|| {
+                    format!(
+                        "invalid MIR callable adapter in `{}` has no authoritative source contract",
+                        function.name
+                    )
+                })?,
+            _ => {
+                return Err(format!(
+                    "invalid MIR callable adapter in `{}` has a non-callable source",
+                    function.name
+                ))
+            }
+        };
+        match destination {
+            Type::Function { .. } => {
+                if matches!(&source, Type::Closure { captures, .. } if !captures.is_empty()) {
+                    return Err(format!(
+                        "invalid MIR thin callable adapter in `{}` captures an environment",
+                        function.name
+                    ));
+                }
+                if !matches!(source, Type::Function { .. } | Type::Closure { .. })
+                    || !callable_adapter_admits(destination, &source)
+                {
+                    return Err(format!(
+                        "invalid MIR thin callable adapter in `{}` changes an inadmissible contract",
+                        function.name
+                    ));
+                }
+            }
+            Type::Closure { .. } => {
+                if !matches!(source, Type::Closure { .. })
+                    || !callable_adapter_admits(destination, &source)
+                {
+                    return Err(format!(
+                        "invalid MIR contextual lambda adapter in `{}` changes an inadmissible contract",
+                        function.name
+                    ));
+                }
+            }
+            Type::Callable(callable) => {
+                if !callable_admitted_by_erased(destination, &source) {
+                    return Err(format!(
+                        "invalid MIR callable packing in `{}` changes an inadmissible contract or call kind",
+                        function.name
+                    ));
+                }
+                if matches!(&source, Type::Closure { captures, .. } if captures.iter().any(|capture| matches!(capture.mode, ClosureCaptureMode::SharedView | ClosureCaptureMode::MutableView)))
+                {
+                    return Err(format!(
+                        "invalid MIR callable packing in `{}` stores a loan capture",
+                        function.name
+                    ));
+                }
+                if callable.task
+                    && validated_transfer_failure(&source, self, &mut Vec::new()).is_some()
+                {
+                    return Err(format!(
+                        "invalid MIR task-callable packing in `{}` lacks a Transfer environment",
+                        function.name
+                    ));
+                }
+            }
+            _ => {
+                return Err(format!(
+                    "invalid MIR callable adapter in `{}` has a non-callable destination",
+                    function.name
+                ))
+            }
         }
         Ok(())
     }
@@ -1788,7 +1925,7 @@ impl<'a> MirLoanValidationContext<'a> {
                 self.check_callable_contract(
                     caller,
                     &callable.signature,
-                    callable.function.as_deref(),
+                    callable.declaration_identity(),
                     &expected_callable.signature,
                     site_name,
                 )?;
@@ -3211,6 +3348,17 @@ struct ValidatedLoanState {
 struct ValidatedCallable {
     function: Option<String>,
     signature: Type,
+    /// An explicit adapter preserves the executable identity but replaces its
+    /// exposed contract, so declaration metadata must not be restored later.
+    adapted: bool,
+}
+
+impl ValidatedCallable {
+    fn declaration_identity(&self) -> Option<&str> {
+        (!self.adapted)
+            .then_some(self.function.as_deref())
+            .flatten()
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -3541,6 +3689,7 @@ fn authoritative_callable_for_rvalue(value: &Rvalue) -> Option<ValidatedCallable
     };
     Some(ValidatedCallable {
         function: None,
+        adapted: false,
         signature: Type::Closure {
             params: Box::new(params),
             return_type,
@@ -3588,6 +3737,7 @@ fn rebase_callable_operand(
             target.to_owned(),
             ValidatedCallable {
                 function: Some(name.clone()),
+                adapted: false,
                 signature: (**signature).clone(),
             },
         )],
@@ -3670,6 +3820,16 @@ fn rebase_callable_rvalue(
             .collect(),
         Rvalue::Use(operand) | Rvalue::Cast { value: operand, .. } => {
             rebase_callable_operand(operand, target, state)
+        }
+        Rvalue::CallableAdapt { value, destination } => {
+            rebase_callable_operand(value, target, state)
+                .into_iter()
+                .map(|(place, mut callable)| {
+                    callable.signature = destination.clone();
+                    callable.adapted = true;
+                    (place, callable)
+                })
+                .collect()
         }
         // `try` yields the `Ok` payload: carry that payload's identities.
         Rvalue::Try {
@@ -3754,10 +3914,10 @@ fn rebase_callable_rvalue(
             let Rvalue::Call { callee, .. } = value else {
                 unreachable!()
             };
-            call_result_callable_identities(function, callee, target, context, state)
+            call_result_callable_identities(function, callee, args, target, context, state)
         }
-        Rvalue::Call { callee, .. } => {
-            call_result_callable_identities(function, callee, target, context, state)
+        Rvalue::Call { callee, args } => {
+            call_result_callable_identities(function, callee, args, target, context, state)
         }
         Rvalue::StartTask {
             returns_handle: true,
@@ -3830,6 +3990,7 @@ fn callable_identities_in_type(
                 prefix.to_owned(),
                 ValidatedCallable {
                     function: None,
+                    adapted: false,
                     signature: ty.clone(),
                 },
             )),
@@ -3952,15 +4113,46 @@ fn callable_identities_in_type(
 fn call_result_callable_identities(
     function: &MirFunction,
     callee: &CallTarget,
+    args: &[MirArg],
     target: &str,
     context: &MirLoanValidationContext<'_>,
     state: &ValidatedLoanState,
 ) -> Vec<(String, ValidatedCallable)> {
     let return_type = match callee {
-        CallTarget::Name(name) => context
-            .functions
-            .get(name.as_str())
-            .map(|callee| callee.return_type.clone()),
+        CallTarget::Name(name) => context.functions.get(name.as_str()).map(|callee| {
+            let mut type_params = BTreeSet::new();
+            for param in &callee.params {
+                collect_type_params_from_type(&param.ty, &mut type_params);
+            }
+            collect_type_params_from_type(&callee.return_type, &mut type_params);
+            let mut substitutions = HashMap::new();
+            let mut evidence_valid = true;
+            if let Ok(bound) = context.bind_call_args(callee, args) {
+                for (param, argument) in callee.params.iter().zip(bound) {
+                    let Some(argument) = argument else {
+                        continue;
+                    };
+                    if let Ok(Some(actual)) = context.operand_type(function, &argument.value) {
+                        if !crate::sema::type_pattern_matches(
+                            &param.ty,
+                            &actual,
+                            &type_params,
+                            &mut substitutions,
+                        ) {
+                            evidence_valid = false;
+                            break;
+                        }
+                    }
+                }
+            } else {
+                evidence_valid = false;
+            }
+            if evidence_valid {
+                substitute_type(&callee.return_type, &substitutions)
+            } else {
+                callee.return_type.clone()
+            }
+        }),
         CallTarget::Value(operand) => {
             let signature = match operand {
                 Operand::Function { signature, .. } => Some((**signature).clone()),
@@ -4041,6 +4233,7 @@ fn function_body_moves_root(function: &MirFunction, root: &str) -> bool {
     fn rvalue_moves(value: &Rvalue, root: &str) -> bool {
         match value {
             Rvalue::Use(operand)
+            | Rvalue::CallableAdapt { value: operand, .. }
             | Rvalue::NoneTest { value: operand }
             | Rvalue::UnionInject { value: operand, .. }
             | Rvalue::Unary { value: operand, .. }
@@ -4152,6 +4345,7 @@ const ANY_ELEMENT_PROJECTION: &str = "__any_element";
 fn unknown_validated_callable() -> ValidatedCallable {
     ValidatedCallable {
         function: None,
+        adapted: false,
         signature: Type::named("Unknown"),
     }
 }
@@ -4175,6 +4369,7 @@ fn merge_validated_callables<'a>(
         return if markers > 0 {
             ValidatedCallable {
                 function: None,
+                adapted: false,
                 signature: Type::named(EMPTY_CONTAINER_MARKER),
             }
         } else {
@@ -4182,11 +4377,9 @@ fn merge_validated_callables<'a>(
         };
     };
     let mut same_identity = true;
-    // The running common contract: a candidate every other candidate is
-    // admitted by, never an invented one.
-    let mut common = first;
-    let mut erased: Option<&ValidatedCallable> =
-        matches!(first.signature, Type::Callable(_)).then_some(first);
+    // Explicit adapters have already rewritten candidates to their
+    // destination contract. Every ordinary merge is exact.
+    let common = first;
     for candidate in candidates {
         if candidate.signature.identical_contract(&common.signature) {
             if candidate.function != common.function {
@@ -4194,108 +4387,88 @@ fn merge_validated_callables<'a>(
             }
             continue;
         }
-        // Values admitted into one erased callable storage type keep
-        // that contract as their common identity: each of them was
-        // validated against it when it entered the storage.
-        if matches!(candidate.signature, Type::Callable(_)) && erased.is_none() {
-            erased = Some(candidate);
-        }
-        if let Some(contract) = erased {
-            if callable_admitted_by_erased(&contract.signature, &candidate.signature)
-                && callable_admitted_by_erased(&contract.signature, &common.signature)
-            {
-                same_identity = false;
-                continue;
-            }
-        }
-        // Complete contracts that differ keep the one that is a written
-        // restriction of the other (a hidden name, a dropped default, a
-        // keyword-only boundary); any other disagreement is poisoned.
-        if callable_contract_restricts(&candidate.signature, &common.signature) {
-            common = candidate;
-            same_identity = false;
-            continue;
-        }
-        if callable_contract_restricts(&common.signature, &candidate.signature) {
-            same_identity = false;
-            continue;
-        }
         return unknown_validated_callable();
-    }
-    if let Some(contract) = erased.filter(|_| !same_identity) {
-        return ValidatedCallable {
-            function: None,
-            signature: contract.signature.clone(),
-        };
     }
     if same_identity {
         first.clone()
     } else {
         ValidatedCallable {
             function: None,
+            adapted: false,
             signature: common.signature.clone(),
         }
     }
 }
 
-/// The parameter slots and result of a function, closure, or erased
-/// callable signature.
-fn callable_signature_slots(ty: &Type) -> Option<(&[FunctionParamContract], &Type)> {
-    match ty {
-        Type::Function {
-            params,
-            return_type,
-        } => Some((params.as_slice(), return_type.as_ref())),
-        Type::Closure {
-            params,
-            return_type,
-            ..
-        } => Some((params.as_slice(), return_type.as_ref())),
-        Type::Callable(callable) => Some((callable.params.as_slice(), &callable.return_type)),
-        _ => None,
-    }
-}
-
-/// Whether `restricted` is a written restriction of `source` under the
-/// checker's admission rules (Q17 A): the same ABI, kind, and captures,
-/// every slot of `restricted` admitting the corresponding slot of `source`
-/// (it may hide a name, drop a default, or make a named slot keyword-only,
-/// never rename, invent a default, or expose a keyword-only slot
-/// positionally), and an identical result contract.
-fn callable_contract_restricts(restricted: &Type, source: &Type) -> bool {
-    if restricted != source {
-        return false;
-    }
-    let (Some((restricted_params, restricted_return)), Some((source_params, source_return))) = (
-        callable_signature_slots(restricted),
-        callable_signature_slots(source),
-    ) else {
-        return false;
+/// The recursive complete-contract admission used only by an explicit thin
+/// adapter. Unlike ordinary identity, it also accepts a closure signature as
+/// the source of a thin function value when it has no environment.
+fn callable_adapter_admits(destination: &Type, source: &Type) -> bool {
+    let slots_admit = |expected: &[FunctionParamContract], actual: &[FunctionParamContract]| {
+        expected.len() == actual.len()
+            && expected
+                .iter()
+                .zip(actual)
+                .enumerate()
+                .all(|(index, (expected, actual))| {
+                    expected.ty.identical_contract(&actual.ty)
+                        && expected.passing == actual.passing
+                        && crate::sema::callable_slot_admission(expected, actual, index).is_ok()
+                })
     };
-    restricted_params.len() == source_params.len()
-        && restricted_params.iter().zip(source_params).enumerate().all(
-            |(index, (expected, actual))| {
-                expected.passing == actual.passing
-                    && expected.ty.identical_contract(&actual.ty)
-                    && crate::sema::callable_slot_admission(expected, actual, index).is_ok()
+    match (destination, source) {
+        (
+            Type::Function {
+                params: expected,
+                return_type: expected_return,
             },
-        )
-        && restricted_return.identical_contract(source_return)
+            Type::Function {
+                params: actual,
+                return_type: actual_return,
+            },
+        ) => slots_admit(expected, actual) && expected_return.identical_contract(actual_return),
+        (
+            Type::Function {
+                params: expected,
+                return_type: expected_return,
+            },
+            Type::Closure {
+                params: actual,
+                return_type: actual_return,
+                ..
+            },
+        ) => {
+            slots_admit(expected, actual.as_ref())
+                && expected_return.identical_contract(actual_return)
+        }
+        (
+            Type::Closure {
+                params: expected,
+                return_type: expected_return,
+                captures: expected_captures,
+                call_kind: expected_kind,
+            },
+            Type::Closure {
+                params: actual,
+                return_type: actual_return,
+                captures: actual_captures,
+                call_kind: actual_kind,
+            },
+        ) => {
+            expected_kind == actual_kind
+                && expected_captures == actual_captures
+                && slots_admit(expected, actual)
+                && expected_return.identical_contract(actual_return)
+        }
+        (Type::Callable(_), _) => callable_admitted_by_erased(destination, source),
+        _ => destination.identical_contract(source),
+    }
 }
 
-/// The common contract of two candidate types: the identical contract, or
-/// the one that is a written restriction of the other. `None` when neither
-/// admits the other, so no common contract is invented.
+/// Ordinary control-flow results share a contract only when it is exact.
+/// Explicit adapters have already rewritten their authoritative signature.
 fn common_callable_contract<'a>(left: &'a Type, right: &'a Type) -> Option<&'a Type> {
-    if left.identical_contract(right) {
-        Some(left)
-    } else if callable_contract_restricts(right, left) {
-        Some(right)
-    } else if callable_contract_restricts(left, right) {
-        Some(left)
-    } else {
-        None
-    }
+    left.identical_contract(right).then_some(left)
 }
 
 /// Whether a function, closure, or erased callable signature may stand
@@ -4304,40 +4477,51 @@ fn callable_admitted_by_erased(erased: &Type, signature: &Type) -> bool {
     let Type::Callable(contract) = erased else {
         return false;
     };
-    let (params, return_type, kind): (&[FunctionParamContract], &Type, Option<ClosureCallKind>) =
-        match signature {
-            Type::Callable(other) => {
-                return other.task == contract.task
-                    && other.call_kind == contract.call_kind
-                    && erased.identical_contract(signature);
-            }
-            Type::Function {
-                params,
-                return_type,
-            } => (params.as_slice(), return_type.as_ref(), None),
-            Type::Closure {
-                params,
-                return_type,
-                call_kind,
-                ..
-            } => (params.as_slice(), return_type.as_ref(), Some(*call_kind)),
-            _ => return false,
-        };
+    let (params, return_type, kind, source_task_ready): (
+        &[FunctionParamContract],
+        &Type,
+        Option<ClosureCallKind>,
+        bool,
+    ) = match signature {
+        Type::Callable(other) => (
+            &other.params,
+            &other.return_type,
+            Some(other.call_kind),
+            other.task,
+        ),
+        Type::Function {
+            params,
+            return_type,
+        } => (params.as_slice(), return_type.as_ref(), None, true),
+        Type::Closure {
+            params,
+            return_type,
+            call_kind,
+            ..
+        } => (
+            params.as_slice(),
+            return_type.as_ref(),
+            Some(*call_kind),
+            true,
+        ),
+        _ => return false,
+    };
     // Admission into erased storage follows the checker's slot rules: the
     // storage may hide a name or drop a default, never rename a slot, invent
     // a default, or expose a keyword-only slot positionally.
-    kind.is_none_or(|kind| contract.call_kind.admits(kind))
+    (!contract.task || source_task_ready)
+        && kind.is_none_or(|kind| contract.call_kind.admits(kind))
         && params.len() == contract.params.len()
         && params
             .iter()
             .zip(&contract.params)
             .enumerate()
             .all(|(index, (actual, expected))| {
-                actual.ty == expected.ty
+                actual.ty.identical_contract(&expected.ty)
                     && actual.passing == expected.passing
                     && crate::sema::callable_slot_admission(expected, actual, index).is_ok()
             })
-        && *return_type == contract.return_type
+        && return_type.identical_contract(&contract.return_type)
 }
 
 /// Splits an authoritative place under `receiver` into its element key and
@@ -4641,6 +4825,7 @@ fn empty_container_marker(target: &str) -> (String, ValidatedCallable) {
         format!("{target}.{ANY_ELEMENT_PROJECTION}"),
         ValidatedCallable {
             function: None,
+            adapted: false,
             signature: Type::named(EMPTY_CONTAINER_MARKER),
         },
     )
@@ -4821,6 +5006,7 @@ fn container_mutation_callables(
                 format!(".{ANY_ELEMENT_PROJECTION}"),
                 ValidatedCallable {
                     function: None,
+                    adapted: false,
                     signature: Type::named(EMPTY_CONTAINER_MARKER),
                 },
             )],
@@ -4851,6 +5037,7 @@ fn container_mutation_callables(
                     .or_default()
                     .push(ValidatedCallable {
                         function: Some(name.clone()),
+                        adapted: false,
                         signature: (**signature).clone(),
                     });
             }
@@ -4932,6 +5119,7 @@ fn container_mutation_callables(
             format!(".{ANY_ELEMENT_PROJECTION}"),
             ValidatedCallable {
                 function: None,
+                adapted: false,
                 signature: Type::named(EMPTY_CONTAINER_MARKER),
             },
         ));
@@ -6065,6 +6253,7 @@ fn validate_loan_rvalue(
             validate_loan_operand(function, value, context, state)
         }
         Rvalue::Use(value)
+        | Rvalue::CallableAdapt { value, .. }
         | Rvalue::Unary { value, .. }
         | Rvalue::Cast { value, .. }
         | Rvalue::Try { value }
@@ -6838,6 +7027,7 @@ fn borrowed_noncopy_origins_for_rvalue(
     );
     match value {
         Rvalue::Use(value)
+        | Rvalue::CallableAdapt { value, .. }
         | Rvalue::Try { value }
         | Rvalue::Cast { value, .. }
         | Rvalue::UnionInject { value, .. } => candidates.push(value),
@@ -7715,6 +7905,55 @@ fn validate_loan_instruction(
                 rebase_callable_rvalue(function, value, target, context, state);
             let container_mutation = container_mutation_callables(value, state)?;
             validate_loan_rvalue(function, value, context, state)?;
+            if let Rvalue::CallableAdapt {
+                value: source,
+                destination,
+            } = value
+            {
+                let target_type = context.place_type(function, target)?;
+                if !target_type
+                    .as_ref()
+                    .is_some_and(|target| target.identical_contract(destination))
+                {
+                    return Err(format!(
+                        "invalid MIR callable adapter in `{}` does not match its destination type",
+                        function.name
+                    ));
+                }
+                context.validate_explicit_callable_adapter(function, source, destination, state)?;
+            } else if let Some(target_type) = context.place_type(function, target)? {
+                // Validate every callable position when it enters storage,
+                // including descendants of tuples, nominals, unions, and
+                // containers. Later calls must not be the first point that a
+                // differing ordinary assignment is discovered.
+                let mut assigned = state.clone();
+                assigned
+                    .authoritative_callables
+                    .retain(|place, _| !mir_place_paths_overlap(place, target));
+                assigned
+                    .authoritative_callables
+                    .extend(authoritative_callables.iter().cloned());
+                let assigned_value = Operand::Place(target.clone());
+                if matches!(
+                    target_type,
+                    Type::Function { .. } | Type::Closure { .. } | Type::Callable(_)
+                ) {
+                    context.validate_callable_value_contract(
+                        function,
+                        &target_type,
+                        &assigned_value,
+                        &assigned,
+                        CallableContractSite::Argument,
+                    )?;
+                }
+                context.validate_callable_identities_against_type(
+                    function,
+                    &target_type,
+                    &assigned_value,
+                    &assigned,
+                    "assignment",
+                )?;
+            }
             if let Rvalue::Call {
                 callee: CallTarget::Name(name),
                 args,
@@ -9913,13 +10152,18 @@ impl<'a> Lowerer<'a> {
                 keyword_only: false,
             })
             .collect::<Vec<_>>();
-        mir_params.extend(info.params.iter().map(|param| MirParam {
-            name: param.name.clone(),
-            passing: lower_receiver_kind(param.passing),
-            ty: param.ty.clone(),
-            default_function: None,
-            keyword_only: param.keyword_only,
-        }));
+        mir_params.extend(
+            params
+                .iter()
+                .zip(&info.params)
+                .map(|(lexical, param)| MirParam {
+                    name: lexical.name.clone(),
+                    passing: lower_receiver_kind(param.passing),
+                    ty: param.ty.clone(),
+                    default_function: None,
+                    keyword_only: param.keyword_only,
+                }),
+        );
 
         let mut lowerer = Lowerer::new(
             self.program,
@@ -9938,12 +10182,12 @@ impl<'a> Lowerer<'a> {
                 lowerer.non_owning_roots.insert(capture.name.clone());
             }
         }
-        for param in &info.params {
+        for (lexical, param) in params.iter().zip(&info.params) {
             lowerer
                 .local_types
-                .insert(param.name.clone(), param.ty.clone());
+                .insert(lexical.name.clone(), param.ty.clone());
             if param.passing != ReceiverKind::Value {
-                lowerer.non_owning_roots.insert(param.name.clone());
+                lowerer.non_owning_roots.insert(lexical.name.clone());
             }
         }
         let result = lowerer.lower_expr_for_owned_value(body, Some(&info.return_type));
@@ -9958,12 +10202,34 @@ impl<'a> Lowerer<'a> {
                 default_return: default_return_operand(&info.return_type),
             }));
 
-        let signature = info.ty();
+        let public_signature = info.ty();
+        let mut physical_signature = public_signature.clone();
+        let physical_params = match &mut physical_signature {
+            Type::Function { params, .. } => params,
+            Type::Closure { params, .. } => params.as_mut(),
+            _ => unreachable!("checked lambda has a callable signature"),
+        };
+        for (contract, lexical) in physical_params.iter_mut().zip(params) {
+            contract.name = lexical.name.clone();
+        }
         if info.captures.is_empty() {
-            return Operand::Function {
+            let needs_adapter = !physical_signature.identical_contract(&public_signature);
+            let function = Operand::Function {
                 name,
-                signature: Box::new(signature),
+                signature: Box::new(physical_signature),
             };
+            if !needs_adapter {
+                return function;
+            }
+            let temp = self.new_typed_temp(public_signature.clone());
+            self.emit(Instruction::Assign {
+                target: temp.clone(),
+                value: Rvalue::CallableAdapt {
+                    value: function,
+                    destination: public_signature,
+                },
+            });
+            return Operand::Place(temp);
         }
         let captures = info
             .captures
@@ -10009,18 +10275,30 @@ impl<'a> Lowerer<'a> {
                 }
             })
             .collect::<Vec<_>>();
-        let temp = self.new_typed_temp(signature.clone());
+        let temp = self.new_typed_temp(physical_signature.clone());
         self.emit(Instruction::Assign {
             target: temp.clone(),
             value: Rvalue::Closure {
                 function: name,
-                signature,
+                signature: physical_signature.clone(),
                 captures,
                 consuming: info.call_kind == ClosureCallKind::Consuming,
                 mutable: info.call_kind == ClosureCallKind::MutableRepeatable,
             },
         });
-        Operand::Place(temp)
+        if physical_signature.identical_contract(&public_signature) {
+            Operand::Place(temp)
+        } else {
+            let adapted = self.new_typed_temp(public_signature.clone());
+            self.emit(Instruction::Assign {
+                target: adapted.clone(),
+                value: Rvalue::CallableAdapt {
+                    value: Operand::MovePlace(temp),
+                    destination: public_signature,
+                },
+            });
+            Operand::Place(adapted)
+        }
     }
 
     fn resolve_class_info(&self, name: &str) -> Option<&crate::sema::ClassInfo> {
@@ -17831,10 +18109,13 @@ impl<'a> Lowerer<'a> {
                 unreachable!("checked thin alias adapters take one callable value")
             };
             let value = self.lower_expr_with_expected(&argument.value, Some(&alias_ty));
-            let temp = self.new_typed_temp(alias_ty);
+            let temp = self.new_typed_temp(alias_ty.clone());
             self.emit(Instruction::Assign {
                 target: temp.clone(),
-                value: Rvalue::Use(value),
+                value: Rvalue::CallableAdapt {
+                    value,
+                    destination: alias_ty,
+                },
             });
             return Operand::Place(temp);
         }
@@ -17842,12 +18123,26 @@ impl<'a> Lowerer<'a> {
             let [argument] = args else {
                 unreachable!("checked callable packing takes one callable value")
             };
-            let value =
-                self.lower_expr_for_passing(&argument.value, Some(&contract), ReceiverKind::Value);
-            let temp = self.new_typed_temp(alias_ty);
+            // An already packed source retains its storage contract until
+            // this explicit operation performs the permitted restriction.
+            // Function values and lambdas still use the thin contract as
+            // their contextual typing input for initial packing.
+            let source_expected = match self.infer_expr_type(&argument.value) {
+                Some(actual @ Type::Callable(_)) => actual,
+                _ => contract,
+            };
+            let value = self.lower_expr_for_passing(
+                &argument.value,
+                Some(&source_expected),
+                ReceiverKind::Value,
+            );
+            let temp = self.new_typed_temp(alias_ty.clone());
             self.emit(Instruction::Assign {
                 target: temp.clone(),
-                value: Rvalue::Use(value),
+                value: Rvalue::CallableAdapt {
+                    value,
+                    destination: alias_ty,
+                },
             });
             return Operand::Place(temp);
         }
@@ -18585,10 +18880,23 @@ impl<'a> Lowerer<'a> {
                             name: name.clone(),
                             signature: Box::new(function_type.clone()),
                         },
-                        None => self.lower_expr_at_sequence_point(
-                            &args[target_index].value,
-                            Some(&function_type),
-                        ),
+                        None => {
+                            // A factory-produced or otherwise stored task
+                            // target already carries TaskCallable storage and
+                            // its Transfer proof. Preserve that representation
+                            // until StartTask consumes it; the thin function
+                            // contract is only a contextual type for a lambda
+                            // or thin function value.
+                            let source_expected =
+                                match self.infer_expr_type(&args[target_index].value) {
+                                    Some(actual @ Type::Callable(_)) => actual,
+                                    _ => function_type,
+                                };
+                            self.lower_expr_at_sequence_point(
+                                &args[target_index].value,
+                                Some(&source_expected),
+                            )
+                        }
                     };
                     let group = self.lower_expr_at_sequence_point(object, None);
                     let stack_size = has_stack_override.then(|| {

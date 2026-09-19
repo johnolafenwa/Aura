@@ -1,3 +1,5 @@
+type Unary = def(int32) -> int32
+
 def compute(value: int32) -> int32:
     return value * 2
 
@@ -5,7 +7,7 @@ def increment(value: int32) -> int32:
     return value + 1
 
 def choose_worker(use_compute: bool) -> def(int32) -> int32:
-    return compute if use_compute else increment
+    return Unary(compute) if use_compute else Unary(increment)
 
 def publish(values: Queue[int32], value: int32) -> None:
     values.put(value)

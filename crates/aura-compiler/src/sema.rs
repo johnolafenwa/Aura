@@ -6,7 +6,7 @@ pub(crate) use callables::callable_slot_admission;
 pub(crate) use callables::BOUND_RECEIVER_CAPTURE;
 use callables::{
     callable_contract_mismatch, capturing_closure_branch_diagnostic,
-    capturing_closure_branch_mismatch, check_callable_positions,
+    capturing_closure_branch_mismatch, check_callable_adapter_positions, check_callable_positions,
     closure_signature_matches_function, default_argument_references_param,
     function_type_mismatch_message, required_ordered_arg, same_callable_contracts,
     ClosureArgumentPolicy, LambdaTypingRequest,
@@ -5973,22 +5973,19 @@ impl<'a> FunctionChecker<'a> {
             ExprKind::Lambda { .. } | ExprKind::Member { .. } | ExprKind::Specialize { .. }
         )
         .then_some(&contract);
-        let actual = self.type_of_expr_hint(&argument.value, locals, lambda_context)?;
+        let actual =
+            self.type_of_expr_hint_uncontracted(&argument.value, locals, lambda_context)?;
         let (source_kind, source_task_ready) = match &actual {
             Type::Callable(source) => {
-                if actual != alias.target {
-                    let source_contract = source.contract();
-                    if source_contract != contract {
-                        return Err(Diagnostic::coded_at(
-                            "AU2002",
-                            argument.value.span,
-                            function_type_mismatch_message(&contract, &source_contract),
-                        ));
-                    }
-                    check_callable_positions(&contract, &source_contract).map_err(|reason| {
-                        callable_contract_mismatch(argument.value.span, reason)
-                    })?;
+                let source_contract = source.contract();
+                if source_contract != contract {
+                    return Err(callable_contract_mismatch(
+                        argument.value.span,
+                        function_type_mismatch_message(&contract, &source_contract),
+                    ));
                 }
+                check_callable_adapter_positions(&contract, &source_contract)
+                    .map_err(|reason| callable_contract_mismatch(argument.value.span, reason))?;
                 (source.call_kind, source.task)
             }
             Type::Function { .. } => {
@@ -5999,7 +5996,7 @@ impl<'a> FunctionChecker<'a> {
                         function_type_mismatch_message(&contract, &actual),
                     ));
                 }
-                check_callable_positions(&contract, &actual)
+                check_callable_adapter_positions(&contract, &actual)
                     .map_err(|reason| callable_contract_mismatch(argument.value.span, reason))?;
                 (ClosureCallKind::Repeatable, true)
             }
@@ -6015,7 +6012,7 @@ impl<'a> FunctionChecker<'a> {
                         function_type_mismatch_message(&contract, &actual),
                     ));
                 }
-                check_callable_positions(&contract, &actual)
+                check_callable_adapter_positions(&contract, &actual)
                     .map_err(|reason| callable_contract_mismatch(argument.value.span, reason))?;
                 if let Some(capture) = captures.iter().find(|capture| {
                     matches!(
@@ -6137,7 +6134,8 @@ impl<'a> FunctionChecker<'a> {
             ));
         }
         let alias_ty = alias.target.clone();
-        let actual = self.type_of_expr_hint(&argument.value, locals, Some(&alias_ty))?;
+        let actual =
+            self.type_of_expr_hint_uncontracted(&argument.value, locals, Some(&alias_ty))?;
         if actual != alias_ty {
             if let Type::Closure { captures, .. } = &actual {
                 if !captures.is_empty() {
@@ -6157,18 +6155,19 @@ impl<'a> FunctionChecker<'a> {
                     function_type_mismatch_message(&alias_ty, &actual),
                 ));
             }
-            check_callable_positions(&alias_ty, &actual)
+            check_callable_adapter_positions(&alias_ty, &actual)
                 .map_err(|reason| callable_contract_mismatch(argument.value.span, reason))?;
         }
+        check_callable_adapter_positions(&alias_ty, &actual)
+            .map_err(|reason| callable_contract_mismatch(argument.value.span, reason))?;
         self.consume_value_expr(&argument.value, locals)?;
         Ok(alias_ty)
     }
 
     /// Types an expression against an expected destination type. When the
     /// value is ABI-equal to that destination, every callable position must
-    /// also be admitted by the destination's complete contract (Q17 A): a
-    /// written contract may hide names or default availability, never the
-    /// reverse.
+    /// have the identical complete contract (Q17 A). Restrictions require
+    /// an explicit thin alias adapter or owned callable constructor.
     fn type_of_expr_hint(
         &self,
         expr: &Expr,
@@ -6177,9 +6176,127 @@ impl<'a> FunctionChecker<'a> {
     ) -> Result<Type> {
         let actual = self.type_of_expr_hint_uncontracted(expr, locals, expected)?;
         if let Some(expected) = expected {
-            if actual == *expected {
-                check_callable_positions(expected, &actual)
-                    .map_err(|reason| callable_contract_mismatch(expr.span, reason))?;
+            // A structural function annotation supplies a closure's exposed
+            // call contract while the concrete closure retains its captures
+            // and call kind. Existing method values cannot lose slot metadata.
+            let exposed = match (expected, &actual) {
+                (
+                    Type::Function { .. },
+                    Type::Closure {
+                        params,
+                        return_type,
+                        ..
+                    },
+                ) => Some(Type::Function {
+                    params: params.as_ref().clone(),
+                    return_type: return_type.clone(),
+                }),
+                _ => None,
+            };
+            let exposed = exposed.as_ref().unwrap_or(&actual);
+            if exposed == expected
+                || matches!(
+                    (expected, exposed),
+                    (Type::Function { .. }, Type::Function { .. })
+                        | (Type::Callable(_), Type::Callable(_))
+                )
+            {
+                check_callable_positions(expected, exposed).map_err(|reason| {
+                    let admissible = match (expected, &actual) {
+                        (Type::Callable(destination), Type::Callable(source)) => {
+                            destination.call_kind.admits(source.call_kind)
+                                && (!destination.task || source.task)
+                                && check_callable_adapter_positions(
+                                    &destination.contract(),
+                                    &source.contract(),
+                                )
+                                .is_ok()
+                        }
+                        _ => check_callable_adapter_positions(expected, &actual).is_ok(),
+                    };
+                    if !admissible {
+                        return callable_contract_mismatch(expr.span, reason);
+                    }
+                    let adapter_type = match (expected, &actual) {
+                        (
+                            Type::Function {
+                                params,
+                                return_type,
+                            },
+                            Type::Closure {
+                                captures,
+                                call_kind,
+                                ..
+                            },
+                        ) if !captures.is_empty() => {
+                            if captures.iter().any(|capture| {
+                                matches!(
+                                    capture.mode,
+                                    ClosureCaptureMode::SharedView
+                                        | ClosureCaptureMode::MutableView
+                                )
+                            }) {
+                                return callable_contract_mismatch(expr.span, reason);
+                            }
+                            Type::Callable(Box::new(CallableType {
+                                task: false,
+                                call_kind: *call_kind,
+                                params: params.clone(),
+                                return_type: (**return_type).clone(),
+                            }))
+                        }
+                        _ => expected.clone(),
+                    };
+                    let alias = self
+                        .type_names
+                        .checked_aliases
+                        .values()
+                        .chain(self.type_names.imported_aliases.values())
+                        .find(|alias| alias.target.identical_contract(&adapter_type))
+                        .map(|alias| alias.decl.name.as_str());
+                    fn spelling(checker: &FunctionChecker<'_>, expr: &Expr) -> String {
+                        match &expr.kind {
+                            ExprKind::Name(name) => name.clone(),
+                            ExprKind::Member { object, field } => {
+                                format!("{}.{field}", spelling(checker, object))
+                            }
+                            ExprKind::Group(inner) => format!("({})", spelling(checker, inner)),
+                            ExprKind::Index { object, index } => format!(
+                                "{}[{}]",
+                                spelling(checker, object),
+                                checker
+                                    .explicit_type_args_from_index(index)
+                                    .map(|types| types
+                                        .iter()
+                                        .map(ToString::to_string)
+                                        .collect::<Vec<_>>()
+                                        .join(", "))
+                                    .unwrap_or_else(|_| "...".to_owned())
+                            ),
+                            ExprKind::Specialize { expr, type_args } => format!(
+                                "{}[{}]",
+                                spelling(checker, expr),
+                                checker
+                                    .lower_explicit_type_args(type_args)
+                                    .map(|types| types
+                                        .iter()
+                                        .map(ToString::to_string)
+                                        .collect::<Vec<_>>()
+                                        .join(", "))
+                                    .unwrap_or_else(|_| "...".to_owned())
+                            ),
+                            _ => "value".to_owned(),
+                        }
+                    }
+                    let value = spelling(self, expr);
+                    let help = match alias {
+                        Some(alias) => format!("use the explicit adapter `{alias}({value})`"),
+                        None => format!(
+                            "declare `type Adapter = {adapter_type}` and use `Adapter({value})`"
+                        ),
+                    };
+                    callable_contract_mismatch(expr.span, format!("{reason}; {help}"))
+                })?;
             } else if let (Type::Callable(callable), Type::Closure { .. } | Type::Function { .. }) =
                 (expected, &actual)
             {

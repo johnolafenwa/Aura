@@ -457,7 +457,7 @@ fn callable_pack_checks_the_source_contract() {
         &format!(
             "{reader}type Other = Callable[def() -> str]\ndef main():\n    other = Other(lambda: \"x\")\n    reader = Reader(other)\n    print(reader())\n"
         ),
-        "AU2002",
+        "AU2015",
         "expected `def() -> int64`, found `def() -> str`",
     );
     rejects_with_code(

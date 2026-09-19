@@ -1,3 +1,6 @@
+type Keyed = def(*, value: int64) -> int64
+type Unary = def(int64) -> int64
+
 def configure(path: str, *, retries: int64 = 2, verbose: bool = false) -> int64:
     if verbose:
         print(path)
@@ -45,9 +48,9 @@ def main():
     print(combine(left=1, right=2))
     named: def(value: int64) -> int64 = increment
     print(named(value=4))
-    positional: def(int64) -> int64 = increment
+    positional: def(int64) -> int64 = Unary(increment)
     print(positional(5))
-    keyed: def(*, value: int64) -> int64 = increment
+    keyed: def(*, value: int64) -> int64 = Keyed(increment)
     print(keyed(value=6))
     promised: def(value: int64, factor: int64 = ..., *, offset: int64) -> int64 = scale
     print(promised(2, offset=100))

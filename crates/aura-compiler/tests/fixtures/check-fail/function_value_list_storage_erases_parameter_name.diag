@@ -1,6 +1,6 @@
 error[AU2004]: this function value's contract has no parameter named `value`
- --> crates/aura-compiler/tests/fixtures/check-fail/function_value_list_storage_erases_parameter_name.au:6:25
+ --> crates/aura-compiler/tests/fixtures/check-fail/function_value_list_storage_erases_parameter_name.au:8:25
   |
-6 |     return callbacks[0](value=20)
+8 |     return callbacks[0](value=20)
   |                         ^
   = help: a positional-only slot of a written `def(...)` type is called positionally; name the slot in the type to call it by name

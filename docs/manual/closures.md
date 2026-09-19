@@ -453,8 +453,10 @@ Owned callable storage holds owned captures only; loan captures stay in
 local loan closures. A stored callable may return a view of one explicit
 parameter but never of a captured receiver. A packed value keeps the closure's existing environment
 as its storage, so packing allocates no second environment on either
-backend; the checkpoint's inline-buffer plan is the native ABI target this
-representation stands in for. A `TaskCallable[...]` value is a stored task
+backend. The boxed union payload and `Arc` closure environment remain the
+explicitly disclosed interim. The ratified Q9 A / Q15 A / Q16 A layout and
+allocation measurements are a separate phase after H2; no FFI/ABI stability
+claim and no 0.4 release precede that phase. A `TaskCallable[...]` value is a stored task
 target: every `TaskGroup` start method takes it by move for one child call,
 whether Shared, Mutable, or Consuming, and a Mutable target's captures are
 child-owned state with no parent writeback (see

@@ -40,10 +40,10 @@ The server starts one persistent compiler service:
 - `aura lsp`
 
 Requests and responses are newline-delimited JSON and carry compiler-owned
-`semantic_interface_version: 14`. Every request must include the exact field:
+`semantic_interface_version: 15`. Every request must include the exact field:
 
 ```json
-{"id":1,"semantic_interface_version":14,"method":"analyze","path":"/absolute/app.au","source":"print(1)\n"}
+{"id":1,"semantic_interface_version":15,"method":"analyze","path":"/absolute/app.au","source":"print(1)\n"}
 ```
 
 This identity is distinct from the public diagnostic document's numeric schema
@@ -130,3 +130,27 @@ The current direction is:
 
 - keep diagnostics and navigation on compiler-owned analysis
 - keep recovery lexical so semantic behavior has exactly one implementation
+
+## Signature help, references, and rename
+
+The compiler owns these queries. The language server advertises signature
+help, references, and rename with prepare support, forwards the current source,
+and discards cancelled or stale responses. Rename edits include the document
+version. Builtins, keywords, imported-package definitions, and changes that
+would collide or change binding are refused. No lexical rename fallback is used.
+
+```sh
+aura signature-help --line 5 --character 22 --stdin /project/main.au
+aura references --line 4 --character 18 --include-declaration --stdin /project/main.au
+aura prepare-rename --line 5 --character 7 --stdin /project/main.au
+aura rename --line 5 --character 7 --new-name answer --stdin /project/main.au
+```
+
+Each command reads source from stdin and returns JSON. Signature help reports
+the complete rendered contract, parameter labels, and active parameter,
+including stored `Callable`/`TaskCallable` values, keyword-only slots, and
+`= ...` defaults. References return occurrence ranges; rename returns the
+selected range and edits after the compiler rechecks binding preservation.
+A refused signature/rename query returns `null`; an unresolved references
+query returns an empty array. These commands also accept a source file in
+place of `--stdin <virtual-path>` and do not change source or package lockfiles.

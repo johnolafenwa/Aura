@@ -23,6 +23,7 @@ const {
 const {
   analyzeWithCompiler,
   completeWithCompiler,
+  editorRequestWithCompiler,
   compilerDefinitionAtPosition,
   compilerDiagnosticsToLsp,
   compilerHoverAtPosition,
@@ -32,6 +33,8 @@ const {
 } = require("./compiler_bridge");
 const { createDocumentStateCache } = require("./document_state");
 const { uriToPath } = require("./uri");
+
+const { registerEditorHandlers, editorCapabilities } = require("./editor_handlers");
 
 const connection = createConnection(ProposedFeatures.all);
 const documents = new TextDocuments(TextDocument);
@@ -70,10 +73,13 @@ connection.onInitialize((params) => {
       },
       documentSymbolProvider: true,
       hoverProvider: true,
-      definitionProvider: true
+      definitionProvider: true,
+      ...editorCapabilities
     }
   };
 });
+
+registerEditorHandlers(connection, documents, editorRequestWithCompiler);
 
 connection.onCompletion(async (params, cancellationToken) => {
   const document = documents.get(params.textDocument.uri);

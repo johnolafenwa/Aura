@@ -29,7 +29,9 @@ use std::{collections::BTreeMap, collections::BTreeSet, collections::HashMap};
 
 pub use analysis::{
     analyze_path_source, analyze_program, analyze_source, complete_path_source, complete_source,
-    AnalysisCompletion, AnalysisOutput,
+    prepare_rename_path_source, references_path_source, rename_path_source,
+    signature_help_path_source, AnalysisCompletion, AnalysisOutput, AnalysisRename,
+    AnalysisSignatureHelp,
 };
 pub use diag::{
     AssertionOperand, Diagnostic, Result, RuntimeCallFrame, RuntimeSourceSpan, RuntimeTaskFrame,
@@ -86,7 +88,7 @@ pub const MAX_INTERNAL_DIAGNOSTIC_BYTES: usize = 1024 * 1024;
 /// Every persisted artifact or long-lived tooling cache that can contain
 /// compiler semantic metadata must bind this value. Bump it whenever the
 /// meaning or representation of checked source changes incompatibly.
-pub const SEMANTIC_INTERFACE_SCHEMA_VERSION: u32 = 14;
+pub const SEMANTIC_INTERFACE_SCHEMA_VERSION: u32 = 15;
 
 /// Lowercase hexadecimal SHA-256 of `bytes`, for content-addressed identities.
 pub fn sha256_hex(bytes: &[u8]) -> String {

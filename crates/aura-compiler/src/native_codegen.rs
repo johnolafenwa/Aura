@@ -4299,7 +4299,11 @@ fn merge_direct_closure_writebacks(
 
 fn direct_closure_metadata_uses(value: &Rvalue) -> impl Iterator<Item = &str> {
     let transferred = match value {
-        Rvalue::Use(Operand::Place(place) | Operand::MovePlace(place)) => Some(place.as_str()),
+        Rvalue::Use(Operand::Place(place) | Operand::MovePlace(place))
+        | Rvalue::CallableAdapt {
+            value: Operand::Place(place) | Operand::MovePlace(place),
+            ..
+        } => Some(place.as_str()),
         _ => None,
     };
     let called = match value {
@@ -5338,8 +5342,11 @@ impl<'a> FunctionCompiler<'a> {
                     } else {
                         self.closure_capture_writebacks.insert(root, writebacks);
                     }
-                } else if let Rvalue::Use(Operand::Place(source) | Operand::MovePlace(source)) =
-                    value
+                } else if let Rvalue::Use(Operand::Place(source) | Operand::MovePlace(source))
+                | Rvalue::CallableAdapt {
+                    value: Operand::Place(source) | Operand::MovePlace(source),
+                    ..
+                } = value
                 {
                     let source_root = source.split('.').next().unwrap_or(source);
                     let target_root = target.split('.').next().unwrap_or(target).to_string();
@@ -5581,7 +5588,7 @@ impl<'a> FunctionCompiler<'a> {
         target: &DirectType,
     ) -> std::result::Result<ValueRef, String> {
         match rvalue {
-            Rvalue::Use(operand) => {
+            Rvalue::Use(operand) | Rvalue::CallableAdapt { value: operand, .. } => {
                 let integer_hint = target.scalar_kind().filter(|kind| kind.is_integer());
                 self.load_operand_with_integer_hint(operand, integer_hint)
             }
@@ -16397,6 +16404,7 @@ fn validate_rvalue(
     match rvalue {
         Rvalue::UnionTagTest { .. } | Rvalue::UnionTakePayload { .. } => Ok(()),
         Rvalue::Use(operand)
+        | Rvalue::CallableAdapt { value: operand, .. }
         | Rvalue::NoneTest { value: operand }
         | Rvalue::UnionInject { value: operand, .. } => validate_operand(operand),
         Rvalue::ModuleConstant { .. } => Ok(()),
@@ -16854,7 +16862,9 @@ fn infer_rvalue_type(
     classes: &HashMap<String, MirClass>,
 ) -> Option<DirectType> {
     match rvalue {
-        Rvalue::Use(operand) => infer_operand_type(operand, variable_types, classes),
+        Rvalue::Use(operand) | Rvalue::CallableAdapt { value: operand, .. } => {
+            infer_operand_type(operand, variable_types, classes)
+        }
         Rvalue::UnionTagTest { .. } | Rvalue::NoneTest { .. } => {
             direct_type(&Type::named("bool"), classes)
         }

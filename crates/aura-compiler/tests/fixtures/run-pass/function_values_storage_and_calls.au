@@ -1,3 +1,6 @@
+type Printer = def(int32) -> None
+type Unary = def(int32) -> int32
+
 class Pipeline:
     transform: def(int32) -> int32
 
@@ -36,17 +39,17 @@ def invoke_show(callback: def(int32) -> None, value: int32) -> None:
     callback(value)
 
 def choose_transform(use_increment: bool) -> def(int32) -> int32:
-    return increment if use_increment else double
+    return Unary(increment) if use_increment else Unary(double)
 
 def main() -> int32:
-    selected: def(int32) -> int32 = increment
+    selected: def(int32) -> int32 = Unary(increment)
     copied = selected
     specialized = show[int32]
     known_offset = offset
     selected_default = first_default if false else second_default
     known_combine = combine
     pipeline = Pipeline(transform=copied)
-    transforms: list[def(int32) -> int32] = [pipeline.transform, double]
+    transforms: list[def(int32) -> int32] = [pipeline.transform, Unary(double)]
 
     print(selected(1))
     print(copied(2))
@@ -55,7 +58,7 @@ def main() -> int32:
     print(transforms[1](5))
     print(apply_owned(selected, 6))
     print(selected(7))
-    invoke_show(specialized, 9)
+    invoke_show(Printer(specialized), 9)
     runtime_selected = choose_transform(false)
     print(runtime_selected(8))
     print(known_offset())

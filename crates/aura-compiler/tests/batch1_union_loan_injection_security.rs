@@ -187,7 +187,7 @@ fn malformed_mir_rejects_member_operand_for_exact_union_parameter() {
 
 #[test]
 fn malformed_mir_rejects_member_operand_for_indirect_union_parameter() {
-    let source = "def accept(value: int64 | None) -> int64:\n    return 42\ndef main():\n    value: int64 | None = 1\n    selected: def(int64 | None) -> int64 = accept\n    print(selected(value))\n";
+    let source = "type Selected = def(int64 | None) -> int64\ndef accept(value: int64 | None) -> int64:\n    return 42\ndef main():\n    value: int64 | None = 1\n    selected = Selected(accept)\n    print(selected(value))\n";
     let mir = lower_source_to_mir(source).expect("valid indirect union call must lower");
     let mut encoded = serde_json::to_value(mir).expect("MIR must serialize");
     let call = find_indirect_call(&mut encoded).expect("lowered MIR must contain an indirect call");

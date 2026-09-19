@@ -1,0 +1,6 @@
+error[AU2015]: callable contract mismatch: call kind differs: expected `Callable[mut def(value: int64) -> int64]`, found `Callable[def(value: int64) -> int64]`; pack the value through the destination constructor to change its storage kind; use the explicit adapter `Destination(value)`
+ --> crates/aura-compiler/tests/fixtures/check-fail/callable_exact_kind_join.au:8:29
+  |
+8 |     callback: Destination = Source(target) if true else Source(target)
+  |                             ^
+  = help: preserve identical complete contracts at bare destinations; apply safe restrictions through an explicit thin alias or owned callable constructor such as `Alias(function)`

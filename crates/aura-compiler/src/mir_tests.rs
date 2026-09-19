@@ -10920,7 +10920,7 @@ def with_default(value: int32 = mark("fresh-default", 40)) -> int32:
     return value + 2
 
 def choose(use_default: bool) -> def(int32) -> int32:
-    return with_default if use_default else with_default
+    return Unary(with_default) if use_default else Unary(with_default)
 
 def main():
     mut counter = Counter(value=0)
@@ -10933,6 +10933,7 @@ def main():
     print(consumer(text))
     print(selected())
     print(dynamic(1))
+type Unary = def(int32) -> int32
 "#,
     )
     .expect("function-value capabilities and defaults should lower");
@@ -12124,6 +12125,27 @@ def main():
             .map(|local| &local.ty),
         Some(Type::Function { .. })
     ));
+    let contextual_adapters = main
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .filter_map(|instruction| match instruction {
+            Instruction::Assign {
+                value: Rvalue::CallableAdapt { destination, .. },
+                ..
+            } => Some(destination),
+            _ => None,
+        })
+        .filter(|destination| match destination {
+            Type::Function { params, .. } => params.iter().any(|param| param.name.is_empty()),
+            Type::Closure { params, .. } => params.iter().any(|param| param.name.is_empty()),
+            _ => false,
+        })
+        .count();
+    assert_eq!(
+        contextual_adapters, 2,
+        "anonymous public lambda slots must be separated from lexical body bindings"
+    );
     assert!(
         main.blocks
             .iter()
@@ -12142,6 +12164,8 @@ def main():
             >= 3,
         "lambda invocation should reuse ordinary MIR function-value dispatch"
     );
+    let output = crate::run_mir(&module).expect("contextual lambda adapters should execute");
+    assert_eq!(output.stdout, "13\n2\nsingle-use\n");
 }
 
 #[test]
@@ -12559,6 +12583,108 @@ def main() -> int32:
 }
 
 #[test]
+fn explicit_callable_adapters_keep_mir_provenance() {
+    let module = crate::lower_source_to_mir(
+        r#"
+type Unary = def(int64) -> int64
+type Stored = Callable[def(int64) -> int64]
+type Higher = def(def(int64) -> int64) -> def(int64) -> int64
+
+def increment(value: int64 = 1) -> int64:
+    return value + 1
+
+def relay(step: Unary) -> Unary:
+    return step
+
+def forward(step: def(int64) -> int64) -> def(int64) -> int64:
+    return step
+
+def main():
+    thin = Unary(increment)
+    stored = Stored(increment)
+    higher = Higher(forward)
+    returned = relay(thin)
+    values: list[Unary] = [thin, returned]
+    print(values[1](4))
+    print(stored(5))
+    print(higher(thin)(6))
+    pair: (Unary, Stored) = (returned, stored)
+"#,
+    )
+    .expect("explicit thin and stored callable adapters should lower");
+    let main = module
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .expect("main should lower");
+    let adapted = main
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .filter_map(|instruction| match instruction {
+            Instruction::Assign {
+                value: Rvalue::CallableAdapt { destination, .. },
+                ..
+            } => Some(destination),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        adapted.len(),
+        3,
+        "thin, stored, and higher-order constructors retain provenance"
+    );
+    assert!(matches!(adapted[0], Type::Function { .. }));
+    assert!(matches!(adapted[1], Type::Callable(_)));
+    assert!(matches!(adapted[2], Type::Function { .. }));
+
+    let output = crate::run_mir(&module).expect("validated adapters should execute");
+    assert_eq!(output.stdout, "5\n6\n7\n");
+}
+
+#[test]
+fn explicit_callable_common_contract_fixture_crosses_both_public_boundaries() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/run-pass/callable_merge_common_contract.au");
+    let module = crate::lower_path_to_mir(&path)
+        .expect("the explicit callable common-contract fixture should lower");
+    let interpreted = crate::run_mir(&module)
+        .expect("explicit callable adapters should pass shared MIR validation");
+    assert_eq!(interpreted.stdout, "11\n12\n7\n8\n");
+    crate::emit_host_native_object(&module)
+        .expect("explicit callable adapters should pass native shared validation");
+}
+
+#[test]
+fn generic_default_supplier_specializes_callable_result_authority() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/run-pass/function_value_generic_default_supplier.au");
+    let module = crate::lower_path_to_mir(&path)
+        .expect("the generic callable default supplier fixture should lower");
+    let interpreted = crate::run_mir(&module)
+        .expect("materialized generic defaults should specialize callable result authority");
+    assert_eq!(interpreted.stdout, "ordinary-none\ntask-none\n");
+    crate::emit_host_native_object(&module)
+        .expect("specialized callable result authority should pass native validation");
+}
+
+#[test]
+fn stored_task_target_factories_preserve_task_callable_authority() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/run-pass/stored_task_target_all_starts.au");
+    let module =
+        crate::lower_path_to_mir(&path).expect("all stored task-target start forms should lower");
+    let interpreted = crate::run_mir(&module)
+        .expect("factory-produced TaskCallable targets should retain validated authority");
+    assert_eq!(
+        interpreted.stdout,
+        "supplied-value\n42\ndefault-factor\n21\n40\n6\n"
+    );
+    crate::emit_host_native_object(&module)
+        .expect("stored TaskCallable targets should pass native shared validation");
+}
+
+#[test]
 fn closure_body_move_scan_visits_every_rvalue_and_terminator_kind() {
     // One program whose lowered MIR contains every rvalue and terminator shape
     // the scan inspects, so a root that is never moved exercises each arm.
@@ -12812,6 +12938,7 @@ fn batch1_erased_callable_admission_checks_kind_and_shape() {
 fn batch1_merging_callable_identities_without_contracts() {
     let marker = ValidatedCallable {
         function: None,
+        adapted: false,
         signature: Type::named(EMPTY_CONTAINER_MARKER),
     };
     let merged = merge_validated_callables([&marker, &marker].into_iter());

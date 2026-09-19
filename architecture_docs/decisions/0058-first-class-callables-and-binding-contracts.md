@@ -73,10 +73,12 @@ owned transferable environments may qualify.
 
 Callable contracts preserve exposed argument names, default availability,
 keyword-only restrictions, parameter capabilities, and result/view-origin
-contracts. Assignment to a variable cannot silently make a keyword-only
-parameter positionally callable. A future intentionally restricted interface
-must specify its conversions explicitly; there is no implicit loss of a
-declared calling restriction.
+contracts. Bare destinations require identical complete contracts. As confirmed on
+2026-09-13, safe restrictions require an explicit thin alias adapter such as
+`Unary(function)` or a `Callable[...]`/`TaskCallable[...]` constructor. They may
+hide names, drop default availability, or make a slot keyword-only; they may
+not rename slots, invent defaults, make keyword-only slots positional, or
+change parameter or result guarantees.
 
 ## Delivery boundary and detailed design
 

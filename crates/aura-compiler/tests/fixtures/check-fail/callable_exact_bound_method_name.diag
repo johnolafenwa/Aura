@@ -1,0 +1,6 @@
+error[AU2015]: callable contract mismatch: positional parameter 1 differs from parameter `factor` in its name; declare `type Adapter = Callable[def(int64) -> int64]` and use `Adapter(counter.scaled)`
+ --> crates/aura-compiler/tests/fixtures/check-fail/callable_exact_bound_method_name.au:7:45
+  |
+7 |     selected: def(int64) -> int64 = counter.scaled
+  |                                             ^
+  = help: preserve identical complete contracts at bare destinations; apply safe restrictions through an explicit thin alias or owned callable constructor such as `Alias(function)`

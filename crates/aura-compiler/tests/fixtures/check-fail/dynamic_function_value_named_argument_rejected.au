@@ -1,3 +1,5 @@
+type Unary = def(int32) -> int32
+
 def increment(value: int32) -> int32:
     return value + 1
 
@@ -5,7 +7,7 @@ def double(amount: int32) -> int32:
     return amount * 2
 
 def choose(use_increment: bool) -> def(int32) -> int32:
-    return increment if use_increment else double
+    return Unary(increment) if use_increment else Unary(double)
 
 def main() -> int32:
     selected = choose(true)

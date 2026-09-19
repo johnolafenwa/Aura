@@ -1,0 +1,11 @@
+type Destination = def(*, value: int64) -> int64
+type Source = def(value: int64) -> int64
+
+def target(value: int64) -> int64:
+    return value
+
+def accept(callback: own Destination):
+    pass
+
+def main():
+    accept(target)

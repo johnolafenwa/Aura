@@ -378,7 +378,7 @@ def increment(value: int64) -> int64:
 renderer: Renderer = render
 print(renderer(4))
 print(renderer(4, prefix="n"))
-step: Unary = increment
+step: Unary = Unary(increment)
 print(step(4))
 ```
 
@@ -392,16 +392,19 @@ or return type) governs calls through that destination: an unnamed slot is
 called positionally, a named slot may be called by name, and an omitted slot
 must carry `= ...`.
 
-A value may be stored where a written contract *admits* it. A written
-contract may hide an exposed name (an unnamed slot accepts any named
-target), drop default availability (a slot without `= ...` accepts a target
-that declares a default), or restrict a named positional-or-keyword slot to
-keyword-only. It cannot make a keyword-only slot positional, rename a slot,
-promise a default the target does not declare, or change a parameter type,
-capability, or result type; parameter and result types are invariant, and
-there is no general callable subtyping. Passing `double(amount: int64)` to a
-`def(int64) -> int64` parameter is an admitted restriction; passing it where
-`def(value: int64) -> int64` is written is a rename and reports `AU2015`.
+A bare annotation, parameter pass, field or element store, alias binding,
+return, or branch join must preserve the value's complete callable contract.
+A difference reports `AU2015` and describes the differing slot, kind, or
+obligation. A written destination does not implicitly restrict the value.
+
+Safe restrictions require an explicit adapter: for example, declare
+`type Unary = def(int64) -> int64` and write `Unary(double)` to hide
+`double`'s parameter name. An adapter may hide exposed names, drop default
+availability, or restrict a positional-or-keyword slot to keyword-only.
+It cannot rename, invent defaults, make keyword-only slots positional, or
+change parameter types, modes, capabilities, or result guarantees. Owned
+`Callable[...]` and `TaskCallable[...]` constructors retain their capture,
+call-kind, and Transfer admission rules. Thin adapters add no environment.
 
 Inference never invents a common contract. Rebinding a local must satisfy
 the contract the local already has, the arms of a conditional or `match`
@@ -409,8 +412,7 @@ expression without an expected type must share one complete contract, a
 container literal's element contract is its annotation or its first
 element's contract and every later element and insertion must satisfy it,
 and repeated generic evidence must agree with its first observation. Each
-violation reports `AU2015` with the differing slot. Write the common contract
-as an annotation, or adapt a value explicitly: calling a non-generic alias of
+violation reports `AU2015` with the differing slot. Adapt each value explicitly to the common contract: calling a non-generic alias of
 a thin `def` type with one function value or capture-free lambda, such as
 `Unary(increment)`, yields that alias contract when the alias admits the
 value and reports `AU2015` otherwise. No environment is added; a capturing

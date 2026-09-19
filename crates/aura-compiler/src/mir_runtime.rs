@@ -313,6 +313,7 @@ fn rvalue_materializes_process_run(value: &Rvalue) -> bool {
             false
         }
         Rvalue::Use(value)
+        | Rvalue::CallableAdapt { value, .. }
         | Rvalue::UnionInject { value, .. }
         | Rvalue::Unary { value, .. }
         | Rvalue::Cast { value, .. }
@@ -3832,9 +3833,9 @@ impl MirRuntime {
         expected_type: Option<&Type>,
     ) -> Result<RvalueOutcome> {
         match value {
-            Rvalue::Use(operand) => Ok(RvalueOutcome::Value(
-                self.evaluate_owned_operand(operand, env)?,
-            )),
+            Rvalue::Use(operand) | Rvalue::CallableAdapt { value: operand, .. } => Ok(
+                RvalueOutcome::Value(self.evaluate_owned_operand(operand, env)?),
+            ),
             Rvalue::NoneTest { value } => {
                 let is_none = match value {
                     Operand::Place(place) | Operand::MovePlace(place) => {

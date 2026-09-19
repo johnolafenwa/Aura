@@ -23390,6 +23390,7 @@ fn capture_free_function_types_are_copy_values_with_declaration_spelling() {
 fn named_function_values_cover_variables_parameters_fields_and_collections() {
     crate::check_source(
         r#"
+type Unary = def(int32) -> int32
 def increment(value: int32) -> int32:
     return value + 1
 
@@ -23405,10 +23406,10 @@ class Pipeline:
 def main():
     inferred = increment
     copied = inferred
-    annotated: def(int32) -> int32 = increment
+    annotated: def(int32) -> int32 = Unary(increment)
     pipeline = Pipeline(transform=annotated)
-    transforms: list[def(int32) -> int32] = [increment, double]
-    first: int32 = apply(copied, 1)
+    transforms: list[def(int32) -> int32] = [Unary(increment), Unary(double)]
+    first: int32 = apply(Unary(copied), 1)
     second: int32 = pipeline.transform(first)
     third: int32 = transforms[1](second)
     fourth: int32 = inferred(third)
@@ -23456,8 +23457,8 @@ def main():
 #[test]
 fn written_function_types_preserve_nonshared_capabilities_and_reject_mismatches() {
     for source in [
-        "def transform(value: own str) -> str:\n    return value\n\ndef main():\n    callback: def(own str) -> str = transform\n    text = \"value\"\n    result: str = callback(text)\n",
-        "def transform(value: mut str):\n    value += \"!\"\n\ndef main():\n    callback: def(mut str) -> None = transform\n    mut text = \"value\"\n    callback(text)\n",
+        "type Take = def(own str) -> str\ndef transform(value: own str) -> str:\n    return value\n\ndef main():\n    callback: def(own str) -> str = Take(transform)\n    text = \"value\"\n    result: str = callback(text)\n",
+        "type Update = def(mut str) -> None\ndef transform(value: mut str):\n    value += \"!\"\n\ndef main():\n    callback: def(mut str) -> None = Update(transform)\n    mut text = \"value\"\n    callback(text)\n",
     ] {
         crate::check_source(source)
             .expect("written function types should preserve explicit nonshared capabilities");
@@ -23467,13 +23468,8 @@ fn written_function_types_preserve_nonshared_capabilities_and_reject_mismatches(
         "def transform(value: own str) -> str:\n    return value\n\ndef main():\n    callback: def(mut str) -> str = transform\n",
     )
     .expect_err("different written capabilities remain incompatible");
-    assert_eq!(mismatch.code, "AU2002");
-    assert!(mismatch
-        .message
-        .contains("function parameter 1 has `own` capability"));
-    assert!(mismatch
-        .message
-        .contains("matching bare, `mut`, or `own` prefix"));
+    assert_eq!(mismatch.code, "AU2015");
+    assert!(mismatch.message.contains("different type or capability"));
 }
 
 #[test]
@@ -23593,7 +23589,7 @@ def main():
     positional: int32 = selected(3)
 "#,
     )
-    .expect("a written positional-only contract admits both branches");
+    .expect_err("a bare written contract cannot implicitly restrict either branch");
 
     let named = crate::check_source(
         r#"
@@ -23609,14 +23605,15 @@ def main():
 "#,
     )
     .expect_err("a written positional-only contract exposes no names");
-    assert_eq!(named.code, "AU2004");
-    assert!(named.message.contains("has no parameter named `value`"));
+    assert_eq!(named.code, "AU2015");
+    assert!(named.message.contains("default availability"));
 }
 
 #[test]
 fn function_reassignment_must_satisfy_the_local_contract() {
     let names = crate::check_source(
         r#"
+type Unary = def(int32) -> int32
 def first(value: int32 = 1) -> int32:
     return value
 
@@ -23635,6 +23632,7 @@ def main():
 
     let defaults = crate::check_source(
         r#"
+type Unary = def(int32) -> int32
 def first(value: int32 = 1) -> int32:
     return value
 
@@ -23653,6 +23651,7 @@ def main():
 
     crate::check_source(
         r#"
+type Unary = def(int32) -> int32
 def first(value: int32 = 1) -> int32:
     return value
 
@@ -23660,15 +23659,16 @@ def second(number: int32 = 2) -> int32:
     return number
 
 def main():
-    mut selected: def(int32) -> int32 = first
-    selected = second
+    mut selected: def(int32) -> int32 = Unary(first)
+    selected = Unary(second)
     positional: int32 = selected(3)
 "#,
     )
-    .expect("a written positional-only local admits every ABI-equal target");
+    .expect("explicit adapters restrict the contracts before reassignment");
 
     crate::check_source(
         r#"
+type Unary = def(int32) -> int32
 def first(value: int32 = 1) -> int32:
     return value
 
@@ -23958,7 +23958,7 @@ def main():
     from_field: int32 = holder.callback(5)
 "#,
     )
-    .expect("written positional-only storage contracts admit every ABI-equal target");
+    .expect_err("bare storage requires the complete contract without implicit restriction");
 
     crate::check_source(
         r#"
@@ -24451,14 +24451,14 @@ def main():
 "#,
     )
     .expect_err("reassignment cannot change a function parameter capability");
-    assert_eq!(reassignment.code, "AU2002");
+    assert_eq!(reassignment.code, "AU2015");
     assert!(reassignment
         .message
-        .contains("function parameter 1 has `shared` capability"));
-    assert!(reassignment.message.contains("requires `own`"));
+        .contains("different type or capability"));
 
     let member_specialization = crate::check_source(
         r#"
+type Unary = def(int32) -> int32
 class Holder:
     callback: def(int32) -> int32
 
@@ -24466,7 +24466,7 @@ def identity(value: int32) -> int32:
     return value
 
 def main():
-    holder = Holder(callback=identity)
+    holder = Holder(callback=Unary(identity))
     result: int32 = holder.callback[int32](1)
 "#,
     )
@@ -24722,6 +24722,7 @@ def main():
 fn function_types_are_transfer_and_do_not_create_task_observation_rights() {
     crate::check_source(
         r#"
+type Unary = def(int32) -> int32
 class Holder:
     callback: def(int32) -> int32
 
@@ -24741,7 +24742,7 @@ def clone_tasks(
 
 def launch():
     with group = TaskGroup():
-        task: Task[int32] = group.start(apply, identity, 1)
+        task: Task[int32] = group.start(apply, Unary(identity), 1)
 "#,
     )
     .expect(
@@ -24831,6 +24832,7 @@ def main():
 fn vec_algorithm_methods_infer_callback_results_and_accept_existing_order_surface() {
     crate::check_source(
         r#"
+type Labeler = def(int64) -> str
 trait Ord[Rhs]:
     def lt(self, rhs: Rhs) -> bool
 
@@ -24868,7 +24870,7 @@ def main():
     numbers.sort(key=identity)
     numbers.sort(key=ratio_key)
     labels: list[str] = numbers.map(label)
-    generic_labels: list[str] = map_values(numbers, label)
+    generic_labels: list[str] = map_values(numbers, Labeler(label))
     kept: list[int64] = numbers.filter(positive)
 
     mut durations = [2ms, 1ms]
@@ -24961,6 +24963,7 @@ def main():
     let generic = crate::check_source(
         r#"
 import random
+type Predicate = def(random.Rng) -> bool
 
 def retain[T](values: list[T], predicate: def(T) -> bool) -> list[T]:
     return values.filter(predicate)
@@ -24970,7 +24973,7 @@ def keep(value: random.Rng) -> bool:
 
 def main():
     values = [random.Rng(seed=1)]
-    print(retain(values, keep))
+    print(retain(values, Predicate(keep)))
 "#,
     )
     .expect_err("filter clone safety should propagate through a generic helper");
@@ -26239,7 +26242,7 @@ def main():
         .next()
         .expect("default lambda metadata");
     assert!(closure.captures.is_empty());
-    assert_eq!(closure.ty().to_string(), "def(value: int64) -> int64");
+    assert_eq!(closure.ty().to_string(), "def(int64) -> int64");
 
     let diagnostic = crate::check_source(
         r#"
@@ -27954,13 +27957,15 @@ class Sink:
 def value_mut(counter: mut Counter) -> view mut int64 from counter:
     return view mut counter.value
 
+type Update = def(mut int64) -> None
+
 def bump(value: mut int64):
     value += 1
 
 def main():
     mut counter = Counter(value=1)
     sink = Sink()
-    callback: def(mut int64) -> None = bump
+    callback: def(mut int64) -> None = Update(bump)
     bump(value_mut(counter))
     sink.bump(value_mut(counter))
     callback(value_mut(counter))
@@ -30997,4 +31002,74 @@ fn opaque_handle_operands_reach_the_binary_operator_equality_gate() {
         "{}",
         bitwise.message
     );
+}
+
+#[test]
+fn bare_callable_restriction_requires_the_named_explicit_adapter() {
+    let source = r#"
+type Unary = def(int64) -> int64
+def increment(value: int64 = 1) -> int64:
+    return value + 1
+def main():
+    step: Unary = increment
+    print(step(4))
+"#;
+    let error = crate::check_source(source).expect_err("bare restriction must fail");
+    assert_eq!(error.code, "AU2015");
+    assert!(error.message.contains("name"));
+    assert!(error.message.contains("Unary(increment)"));
+    crate::check_source(&source.replace("= increment\n", "= Unary(increment)\n"))
+        .expect("the explicit thin adapter remains valid");
+
+    let specialized = "type Unary = def(own int64) -> int64\ndef identity[T](value: own T) -> T:\n    return value\ndef main():\n    step: Unary = identity[int64]\n    print(step(4))\n";
+    let error = crate::check_source(specialized).expect_err("specialized contracts stay named");
+    assert_eq!(error.code, "AU2015");
+    assert!(error.message.contains("Unary(identity[int64])"));
+    crate::check_source(&specialized.replace("= identity[int64]", "= Unary(identity[int64])"))
+        .expect("the suggested specialized adapter is accepted");
+}
+
+#[test]
+fn bare_bound_method_restrictions_require_owned_callable_adapters() {
+    let source = "class Counter:\n    value: int64\n    def scaled(self, factor: int64) -> int64:\n        return self.value * factor\ndef main():\n    counter = Counter(value=2)\n    selected: def(int64) -> int64 = counter.scaled\n    print(selected(3))\n";
+    let error =
+        crate::check_source(source).expect_err("a bound method keeps its declared parameter name");
+    assert_eq!(error.code, "AU2015");
+    assert!(error
+        .message
+        .contains("type Adapter = Callable[def(int64) -> int64]"));
+    let positive = source.replace(
+        "selected: def(int64) -> int64 = counter.scaled",
+        "selected = Restricted(counter.scaled)",
+    );
+    crate::check_source(&(positive + "type Restricted = Callable[def(int64) -> int64]\n"))
+        .expect("explicit owned callable restriction");
+}
+
+#[test]
+fn explicit_specialization_ast_keeps_the_same_callable_adapter_diagnostic() {
+    let source = "type Step = def(own int64) -> int64\ndef identity[T](value: own T) -> T:\n    return value\ndef main():\n    step: Step = identity[int64]\n    print(step(1))\n";
+    let indexed = crate::check_source(source).expect_err("bare contract restriction");
+    let mut module = crate::parse_source(source).unwrap();
+    let call = crate::parser::parse_expression("identity[int64](1)").unwrap();
+    let ExprKind::Call { callee, .. } = call.kind else {
+        panic!("specialized call")
+    };
+    assert!(matches!(callee.kind, ExprKind::Specialize { .. }));
+    let main = module
+        .items
+        .iter_mut()
+        .find_map(|item| match item {
+            Item::Function(function) if function.name == "main" => Some(function),
+            _ => None,
+        })
+        .unwrap();
+    let Stmt::Assign(assignment) = &mut main.body[0] else {
+        panic!("callable binding")
+    };
+    assignment.value = *callee;
+    let specialized = check(module).expect_err("equivalent explicit specialization contract");
+    assert_eq!(specialized.code, indexed.code);
+    assert_eq!(specialized.message, indexed.message);
+    assert!(specialized.message.contains("Step(identity[int64])"));
 }

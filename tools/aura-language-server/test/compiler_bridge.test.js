@@ -12,6 +12,7 @@ const {
   binaryName,
   CompilerService,
   completeWithCompiler,
+  editorRequestWithCompiler,
   compilerDefinitionAtPosition,
   compilerDefinitionToLspLocation,
   compilerDiagnosticsToLsp,
@@ -689,7 +690,7 @@ test("compiler bridge reuses one persistent compiler process", async () => {
 });
 
 test("persistent compiler service sends and accepts the current semantic schema", async () => {
-  assert.equal(SUPPORTED_SEMANTIC_INTERFACE_SCHEMA_VERSION, 14);
+  assert.equal(SUPPORTED_SEMANTIC_INTERFACE_SCHEMA_VERSION, 15);
   const script = [
     "const readline = require('node:readline');",
     "const lines = readline.createInterface({ input: process.stdin });",
@@ -742,7 +743,7 @@ test("persistent compiler service rejects and disposes a mismatched semantic sch
       path: "/virtual/main.au",
       source: "def main():\n    pass\n"
     }),
-    /semantic schema mismatch.*received `8`.*expected `14`/
+    /semantic schema mismatch.*received `8`.*expected `15`/
   );
   assert.equal(service.closed, true);
   assert.equal(invalidations, 1);
@@ -2402,12 +2403,14 @@ test("compiler bridge exposes capture-free function values and bound method valu
     "def main() -> int32:",
     "    selected = double",
     "    known_offset = offset",
-    "    consume: def(own str) -> str = take",
-    "    print(apply(selected, 21))",
+    "    consume: def(own str) -> str = Consume(take)",
+    "    print(apply(Unary(selected), 21))",
     "    print(apply_owned(consume, \"owned\"))",
     "    print(known_offset())",
     "    print(known_offset(value=20))",
     "    return 0",
+    "type Unary = def(int32) -> int32",
+    "type Consume = def(own str) -> str",
     ""
   ].join("\n");
 
@@ -2527,10 +2530,10 @@ test("compiler bridge exposes capture-free function values and bound method valu
     ].join("\n");
     const capabilityAnalysis = await analyzeWithCompiler(mainUri, invalidCapability);
     assert.equal(capabilityAnalysis.diagnostics.length, 1);
-    assert.equal(capabilityAnalysis.diagnostics[0].code, "AU2002");
+    assert.equal(capabilityAnalysis.diagnostics[0].code, "AU2015");
     assert.match(
       capabilityAnalysis.diagnostics[0].message,
-      /has `own` capability.*requires `shared`/
+      /different type or capability/
     );
 
     const dynamicNamedArgument = [
@@ -2539,10 +2542,11 @@ test("compiler bridge exposes capture-free function values and bound method valu
       "def double(amount: int32) -> int32:",
       "    return amount * 2",
       "def choose(first: bool) -> def(int32) -> int32:",
-      "    return increment if first else double",
+      "    return Unary(increment) if first else Unary(double)",
       "def main() -> int32:",
       "    selected = choose(true)",
       "    return selected(value=20)",
+      "type Unary = def(int32) -> int32",
       ""
     ].join("\n");
     const dynamicAnalysis = await analyzeWithCompiler(mainUri, dynamicNamedArgument);
@@ -5375,7 +5379,7 @@ test("compiler bridge exposes contextual lambda scope, hover, definitions, and c
       (occurrence) =>
         occurrence.line === 3 &&
         occurrence.hover.includes("add") &&
-        occurrence.hover.includes("def(value: int32) -> int32")
+        occurrence.hover.includes("def(int32) -> int32")
     );
     assert.ok(lambdaBinding, "the closure binding should expose its callable contract");
 
@@ -6269,4 +6273,32 @@ test("compiler bridge resolves type alias calls, hover, definitions, and complet
   } finally {
     fs.rmSync(tempRoot, { recursive: true, force: true });
   }
+});
+
+
+test("compiler editor requests provide signatures, references and safe rename", async () => {
+  setWorkspaceRoots([repoRoot]);
+  const uri = `file://${path.join(repoRoot, "editor-query.au")}`;
+  const source = [
+    "type Doubler = Callable[def(value: int64) -> int64]",
+    "def double(value: int64) -> int64:",
+    "    return value * 2",
+    "def main():",
+    "    callback = Doubler(double)",
+    "    result = callback(21)",
+    "    print(result)",
+    ""
+  ].join("\n");
+  const signature = await editorRequestWithCompiler("signature-help", uri, source, { line: 5, character: 23 });
+  assert.match(signature.label, /value: int64/);
+  assert.equal(signature.active_parameter, 0);
+  const references = await editorRequestWithCompiler("references", uri, source, { line: 4, character: 18, include_declaration: true });
+  assert.equal(references.length, 2);
+  const prepare = await editorRequestWithCompiler("prepare-rename", uri, source, { line: 5, character: 7 });
+  assert.equal(prepare.start_character, 4);
+  const rename = await editorRequestWithCompiler("rename", uri, source, { line: 5, character: 7, new_name: "answer" });
+  assert.equal(rename.edits.length, 2);
+  assert.equal(await editorRequestWithCompiler("rename", uri, source, { line: 5, character: 7, new_name: "callback" }), null);
+  assert.equal(await editorRequestWithCompiler("rename", uri, source, { line: 5, character: 7 }, { isCancellationRequested: true }), null);
+  assert.equal(await editorRequestWithCompiler("rename", "untitled:query", source, { line: 5, character: 7, new_name: "return" }), null);
 });

@@ -321,7 +321,7 @@ fn union_payload_taken_twice_is_rejected() {
     assert_rejected(encoded, "already-taken union place");
 }
 
-const CLOSURE: &str = "def main():\n    offset = 5\n    add: def(int64) -> int64 = lambda value: value + offset\n    print(add(1))\n";
+const CLOSURE: &str = "def main():\n    offset = 5\n    add: def(value: int64) -> int64 = lambda value: value + offset\n    print(add(1))\n";
 
 fn closure_mut(function: &mut Value) -> &mut Value {
     &mut find_instruction(function, |instruction| {
@@ -385,7 +385,7 @@ fn repeatable_closure_whose_body_consumes_a_capture_is_rejected() {
     assert_rejected(encoded, "is consumed by the closure body");
 }
 
-const INDIRECT_CALL: &str = "def apply(add: def(int64, int64) -> int64) -> int64:\n    return add(1, 2)\ndef plus(left: int64, right: int64) -> int64:\n    return left + right\ndef main():\n    print(apply(plus))\n";
+const INDIRECT_CALL: &str = "def apply(add: def(left: int64, right: int64) -> int64) -> int64:\n    return add(1, 2)\ndef plus(left: int64, right: int64) -> int64:\n    return left + right\ndef main():\n    print(apply(plus))\n";
 
 fn indirect_call_mut(function: &mut Value) -> &mut Value {
     &mut find_instruction(function, |instruction| {
@@ -432,7 +432,7 @@ fn indirect_call_supplying_writeback_for_a_value_parameter_is_rejected() {
     assert_rejected(encoded, "supplies writeback for non-mutable parameter");
 }
 
-const MUTABLE_INDIRECT_CALL: &str = "def bump(value: mut int64):\n    value += 1\ndef apply(step: def(mut int64) -> None):\n    mut counter = 1\n    step(counter)\n    print(counter)\ndef main():\n    apply(bump)\n";
+const MUTABLE_INDIRECT_CALL: &str = "def bump(value: mut int64):\n    value += 1\ndef apply(step: def(value: mut int64) -> None):\n    mut counter = 1\n    step(counter)\n    print(counter)\ndef main():\n    apply(bump)\n";
 
 #[test]
 fn indirect_call_binding_a_mutable_parameter_to_a_non_place_is_rejected() {
@@ -500,7 +500,7 @@ fn member_call_binding_a_mutable_receiver_to_a_moved_operand_is_rejected() {
 
 #[test]
 fn callable_argument_from_a_non_callable_operand_is_rejected() {
-    let source = "def apply(callback: def(int64) -> int64) -> int64:\n    return callback(1)\ndef twice(value: int64) -> int64:\n    return value * 2\ndef main():\n    print(apply(twice))\n";
+    let source = "def apply(callback: def(value: int64) -> int64) -> int64:\n    return callback(1)\ndef twice(value: int64) -> int64:\n    return value * 2\ndef main():\n    print(apply(twice))\n";
     let mut encoded = encode(source);
     let main = function_mut(&mut encoded, "main");
     let call = find_instruction(main, |instruction| {
@@ -537,7 +537,7 @@ fn holder_prelude() -> &'static str {
 #[test]
 fn task_result_helpers_carry_callable_identities() {
     let source = format!(
-        "{}def make() -> def(own Holder) -> None:\n    return consume\ndef main():\n    with TaskGroup() as group:\n        first = group.start(make)\n        match first.result_or_none(timeout=1s):\n            case Option.Some(callback):\n                callback(Holder(values=[]))\n            case Option.None:\n                print(\"none\")\n        second = group.start(make)\n        fallback: def(own Holder) -> None = second.result_or(consume, timeout=1s)\n        fallback(Holder(values=[1]))\n        third = group.start(make)\n        match third.result(timeout=1s):\n            case TaskResult.Ready(ready):\n                ready(Holder(values=[2]))\n            case _:\n                print(\"not ready\")\n",
+        "{}def make() -> def(item: own Holder) -> None:\n    return consume\ndef main():\n    with TaskGroup() as group:\n        first = group.start(make)\n        match first.result_or_none(timeout=1s):\n            case Option.Some(callback):\n                callback(Holder(values=[]))\n            case Option.None:\n                print(\"none\")\n        second = group.start(make)\n        fallback: def(item: own Holder) -> None = second.result_or(consume, timeout=1s)\n        fallback(Holder(values=[1]))\n        third = group.start(make)\n        match third.result(timeout=1s):\n            case TaskResult.Ready(ready):\n                ready(Holder(values=[2]))\n            case _:\n                print(\"not ready\")\n",
         holder_prelude()
     );
     assert_valid(&source, "task result helpers");
@@ -555,7 +555,7 @@ fn map_results_carry_callback_return_identities() {
 #[test]
 fn extend_with_nested_identities_and_conditional_append_merge() {
     let source = format!(
-        "{}def main():\n    mut pairs: list[(def(own Holder) -> None, int64)] = [(consume, 0)]\n    more: list[(def(own Holder) -> None, int64)] = [(consume, 1)]\n    pairs.extend(more)\n    match pairs.get(1):\n        case Option.Some(pair):\n            pair[0](Holder(values=[]))\n        case Option.None:\n            print(\"none\")\n    mut callbacks: list[def(own Holder) -> None] = []\n    flag = true\n    if flag:\n        callbacks.append(consume)\n    match callbacks.get(0):\n        case Option.Some(callback):\n            callback(Holder(values=[1]))\n        case Option.None:\n            print(\"none\")\n",
+        "{}def main():\n    mut pairs: list[(def(item: own Holder) -> None, int64)] = [(consume, 0)]\n    more: list[(def(item: own Holder) -> None, int64)] = [(consume, 1)]\n    pairs.extend(more)\n    match pairs.get(1):\n        case Option.Some(pair):\n            pair[0](Holder(values=[]))\n        case Option.None:\n            print(\"none\")\n    mut callbacks: list[def(item: own Holder) -> None] = []\n    flag = true\n    if flag:\n        callbacks.append(consume)\n    match callbacks.get(0):\n        case Option.Some(callback):\n            callback(Holder(values=[1]))\n        case Option.None:\n            print(\"none\")\n",
         holder_prelude()
     );
     assert_valid(&source, "extend and conditional append");
@@ -585,36 +585,33 @@ fn list_literal_mut(function: &mut Value) -> &mut Value {
 #[test]
 fn poisoned_callable_identity_cannot_cross_a_callable_parameter_boundary() {
     let source = format!(
-        "{}def invoke(callback: def(own Holder) -> None, value: own Holder):\n    callback(value)\ndef main():\n    callbacks: list[def(own Holder) -> None] = [consume, consume]\n    index = 1\n    match callbacks.get(index):\n        case Option.Some(callback):\n            invoke(callback, Holder(values=[]))\n        case Option.None:\n            print(\"none\")\n",
+        "{}def invoke(callback: def(item: own Holder) -> None, value: own Holder):\n    callback(value)\ndef main():\n    callbacks: list[def(item: own Holder) -> None] = [consume, consume]\n    index = 1\n    match callbacks.get(index):\n        case Option.Some(callback):\n            invoke(callback, Holder(values=[]))\n        case Option.None:\n            print(\"none\")\n",
         holder_prelude()
     );
     let mut encoded = encode(&source);
     let peek = peek_function_operand(&encoded);
     let main = function_mut(&mut encoded, "main");
     list_literal_mut(main)["elements"][1] = peek;
-    assert_rejected(
-        encoded,
-        "passes a non-callable value for a callable contract",
-    );
+    assert_rejected(encoded, "changes an authoritative callable contract");
 }
 
 #[test]
 fn poisoned_nested_callable_identity_cannot_cross_a_tuple_boundary() {
     let source = format!(
-        "{}def invoke(pair: (def(own Holder) -> None, int64), value: own Holder):\n    callback: def(own Holder) -> None = pair[0]\n    callback(value)\ndef main():\n    callbacks: list[def(own Holder) -> None] = [consume, consume]\n    index = 1\n    match callbacks.get(index):\n        case Option.Some(callback):\n            invoke((callback, 0), Holder(values=[]))\n        case Option.None:\n            print(\"none\")\n",
+        "{}def invoke(pair: (def(item: own Holder) -> None, int64), value: own Holder):\n    callback: def(item: own Holder) -> None = pair[0]\n    callback(value)\ndef main():\n    callbacks: list[def(item: own Holder) -> None] = [consume, consume]\n    index = 1\n    match callbacks.get(index):\n        case Option.Some(callback):\n            invoke((callback, 0), Holder(values=[]))\n        case Option.None:\n            print(\"none\")\n",
         holder_prelude()
     );
     let mut encoded = encode(&source);
     let peek = peek_function_operand(&encoded);
     let main = function_mut(&mut encoded, "main");
     list_literal_mut(main)["elements"][1] = peek;
-    assert_rejected(encoded, "no single authoritative contract");
+    assert_rejected(encoded, "changes an authoritative callable contract");
 }
 
 #[test]
 fn nested_callable_without_an_identity_cannot_cross_a_tuple_boundary() {
     let source = format!(
-        "{}def invoke(pair: (def(own Holder) -> None, int64), value: own Holder):\n    callback: def(own Holder) -> None = pair[0]\n    callback(value)\ndef main():\n    pair = (consume, 0)\n    invoke(pair, Holder(values=[]))\n",
+        "{}def invoke(pair: (def(item: own Holder) -> None, int64), value: own Holder):\n    callback: def(item: own Holder) -> None = pair[0]\n    callback(value)\ndef main():\n    pair = (consume, 0)\n    invoke(pair, Holder(values=[]))\n",
         holder_prelude()
     );
     let mut encoded = encode(&source);
@@ -640,7 +637,7 @@ fn nested_callable_without_an_identity_cannot_cross_a_tuple_boundary() {
 #[test]
 fn container_insert_without_an_identity_poisons_the_container() {
     let source = format!(
-        "{}def main():\n    mut callbacks: list[def(own Holder) -> None] = [consume]\n    callbacks.append(consume)\n    match callbacks.get(0):\n        case Option.Some(callback):\n            callback(Holder(values=[]))\n        case Option.None:\n            print(\"none\")\n",
+        "{}def main():\n    mut callbacks: list[def(item: own Holder) -> None] = [consume]\n    callbacks.append(consume)\n    match callbacks.get(0):\n        case Option.Some(callback):\n            callback(Holder(values=[]))\n        case Option.None:\n            print(\"none\")\n",
         holder_prelude()
     );
     let mut encoded = encode(&source);
@@ -667,7 +664,7 @@ fn container_insert_without_an_identity_poisons_the_container() {
 
 fn container_insert_source() -> String {
     format!(
-        "{}def main():\n    mut callbacks: list[def(own Holder) -> None] = [consume]\n    callbacks.append(consume)\n    match callbacks.get(0):\n        case Option.Some(callback):\n            callback(Holder(values=[]))\n        case Option.None:\n            print(\"none\")\n",
+        "{}def main():\n    mut callbacks: list[def(item: own Holder) -> None] = [consume]\n    callbacks.append(consume)\n    match callbacks.get(0):\n        case Option.Some(callback):\n            callback(Holder(values=[]))\n        case Option.None:\n            print(\"none\")\n",
         holder_prelude()
     )
 }
@@ -689,10 +686,10 @@ fn container_insert_without_an_operand_poisons_every_element() {
     // that reason before anything executes.
     let mut encoded = encode(&container_insert_source());
     append_call_mut(function_mut(&mut encoded, "main"))["args"] = json!([]);
-    let shared = assert_rejected(encoded, "no authoritative callable contract");
+    let shared = assert_rejected(encoded, "has no single authoritative contract");
     assert!(
-        shared.contains("indirect call in `main`"),
-        "the poisoned element must surface at the indirect call: {shared}"
+        shared.contains("assignment from `main`"),
+        "the poisoned element must surface at assignment: {shared}"
     );
 }
 
@@ -718,10 +715,10 @@ fn container_insert_with_a_well_arity_unknown_operand_poisons_every_element() {
     let call = append_call_mut(main);
     assert_eq!(call["args"].as_array().map(Vec::len), Some(1));
     call["args"][0]["value"] = json!({ "Place": "%t91" });
-    let shared = assert_rejected(encoded, "no authoritative callable contract");
+    let shared = assert_rejected(encoded, "has no single authoritative contract");
     assert!(
-        shared.contains("indirect call in `main`"),
-        "the poisoned element must surface at the indirect call: {shared}"
+        shared.contains("assignment from `main`"),
+        "the poisoned element must surface at assignment: {shared}"
     );
 }
 
@@ -950,7 +947,7 @@ fn variant_payload_from_a_tuple_typed_scrutinee_is_rejected() {
 
 #[test]
 fn callable_argument_without_an_identity_is_rejected() {
-    let source = "def apply(callback: def(int64) -> int64) -> int64:\n    return callback(1)\ndef twice(value: int64) -> int64:\n    return value * 2\ndef main():\n    print(apply(twice))\n";
+    let source = "def apply(callback: def(value: int64) -> int64) -> int64:\n    return callback(1)\ndef twice(value: int64) -> int64:\n    return value * 2\ndef main():\n    print(apply(twice))\n";
     let mut encoded = encode(source);
     let contract = encoded["functions"]
         .as_array()
@@ -1039,7 +1036,7 @@ fn returned_loan_transferred_without_returning_is_rejected() {
 #[test]
 fn map_over_callable_elements_carries_callback_return_identities() {
     let source = format!(
-        "{}def main():\n    callbacks: list[def(own Holder) -> None] = [consume]\n    mapped = callbacks.map(lambda callback: consume)\n    match mapped.get(0):\n        case Option.Some(handler):\n            handler(Holder(values=[]))\n        case Option.None:\n            print(\"none\")\n",
+        "{}def main():\n    callbacks: list[def(item: own Holder) -> None] = [consume]\n    mapped = callbacks.map(lambda callback: consume)\n    match mapped.get(0):\n        case Option.Some(handler):\n            handler(Holder(values=[]))\n        case Option.None:\n            print(\"none\")\n",
         holder_prelude()
     );
     assert_valid(&source, "map over callable elements");

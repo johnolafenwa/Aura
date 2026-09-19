@@ -1,3 +1,5 @@
+type ValuePrinter = def(int64 | str) -> None
+
 def show(value: int64 | str):
     match value:
         case int64 as number:
@@ -5,7 +7,7 @@ def show(value: int64 | str):
         case str as text:
             print(text)
 def main():
-    handlers: list[def(int64 | str) -> None] = [show]
+    handlers: list[def(int64 | str) -> None] = [ValuePrinter(show)]
     match handlers.get(0):
         case Option.Some(handler):
             handler(41)

@@ -448,7 +448,7 @@ fn contract_slot_label(contract: &FunctionParamContract, index: usize) -> String
 }
 
 /// Explains why a value with the `actual` slot contract cannot stand where
-/// the `expected` slot contract is written (Q17 A). A written destination may
+/// the `expected` adapter contract is written (Q17 A). An explicit adapter may
 /// hide an exposed name, drop default availability, or restrict a named
 /// positional-or-keyword slot to keyword-only. It cannot make a keyword-only
 /// slot positional, rename a slot, or promise a default the source lacks.
@@ -519,7 +519,7 @@ pub(crate) fn callable_contract_admission(
         ));
     }
     for (index, (expected, actual)) in expected.iter().zip(actual).enumerate() {
-        if expected.ty != actual.ty || expected.passing != actual.passing {
+        if !expected.ty.identical_contract(&actual.ty) || expected.passing != actual.passing {
             return Err(format!(
                 "{} has a different type or capability",
                 contract_slot_label(expected, index)
@@ -532,7 +532,7 @@ pub(crate) fn callable_contract_admission(
 
 /// Walks two ABI-equal types and checks every callable position: the value's
 /// complete contract must be admitted by the written destination contract.
-pub(crate) fn check_callable_positions(
+pub(crate) fn check_callable_adapter_positions(
     expected: &Type,
     actual: &Type,
 ) -> std::result::Result<(), String> {
@@ -583,8 +583,13 @@ pub(crate) fn check_callable_positions(
             if expected_callable.task != actual_callable.task
                 || expected_callable.call_kind != actual_callable.call_kind
             {
+                let difference = if expected_callable.task != actual_callable.task {
+                    "task obligation"
+                } else {
+                    "call kind"
+                };
                 return Err(format!(
-                    "expected `{expected}`, found `{actual}`; pack the value through the destination constructor to change its storage kind"
+                    "{difference} differs: expected `{expected}`, found `{actual}`; pack the value through the destination constructor to change its storage kind"
                 ));
             }
             callable_contract_admission(&expected_callable.params, &actual_callable.params)?;
@@ -593,18 +598,59 @@ pub(crate) fn check_callable_positions(
         (Type::Tuple(expected), Type::Tuple(actual)) => expected
             .iter()
             .zip(actual)
-            .try_for_each(|(expected, actual)| check_callable_positions(expected, actual)),
+            .try_for_each(|(expected, actual)| check_callable_adapter_positions(expected, actual)),
         (Type::Named(_, expected), Type::Named(_, actual)) => expected
             .iter()
             .zip(actual)
-            .try_for_each(|(expected, actual)| check_callable_positions(expected, actual)),
+            .try_for_each(|(expected, actual)| check_callable_adapter_positions(expected, actual)),
         (Type::Union(expected), Type::Union(actual)) => expected
             .members
             .iter()
             .zip(&actual.members)
-            .try_for_each(|(expected, actual)| check_callable_positions(expected, actual)),
+            .try_for_each(|(expected, actual)| check_callable_adapter_positions(expected, actual)),
         _ => Ok(()),
     }
+}
+
+/// Ordinary destinations preserve complete callable contracts recursively.
+pub(crate) fn check_callable_positions(
+    expected: &Type,
+    actual: &Type,
+) -> std::result::Result<(), String> {
+    // Preserve the more specific explanations for restrictions that even an
+    // explicit adapter cannot perform.
+    check_callable_adapter_positions(expected, actual)?;
+    if expected.identical_contract(actual) {
+        return Ok(());
+    }
+    same_callable_contracts(expected, actual)?;
+    let difference = if matches!(expected, Type::Closure { .. } | Type::Callable(_))
+        || matches!(actual, Type::Closure { .. } | Type::Callable(_))
+    {
+        "kind or obligation"
+    } else {
+        "type or result guarantee"
+    };
+    Err(format!(
+        "{difference} differs: expected `{expected}`, found `{actual}`"
+    ))
+}
+
+fn callable_slot_difference(left: &FunctionParamContract, right: &FunctionParamContract) -> String {
+    let mut differences = Vec::new();
+    if left.name != right.name {
+        differences.push("name");
+    }
+    if left.keyword_only != right.keyword_only {
+        differences.push("keyword-only boundary");
+    }
+    if left.has_default != right.has_default {
+        differences.push("default availability");
+    }
+    if left.passing != right.passing || left.ty != right.ty {
+        differences.push("type or capability");
+    }
+    differences.join(", ")
 }
 
 /// Requires identical complete contracts at every callable position of two
@@ -631,9 +677,10 @@ pub(crate) fn same_callable_contracts(
                 .find(|(_, (left, right))| left != right)
             {
                 return Err(format!(
-                    "{} differs from {} in its name, keyword-only boundary, or default availability",
+                    "{} differs from {} in its {}",
                     contract_slot_label(left_param, index),
-                    contract_slot_label(right_param, index)
+                    contract_slot_label(right_param, index),
+                    callable_slot_difference(left_param, right_param)
                 ));
             }
             same_callable_contracts(left_return, right_return)
@@ -647,9 +694,10 @@ pub(crate) fn same_callable_contracts(
                 .find(|(_, (left, right))| left != right)
             {
                 return Err(format!(
-                    "{} differs from {} in its name, keyword-only boundary, or default availability",
+                    "{} differs from {} in its {}",
                     contract_slot_label(left_param, index),
-                    contract_slot_label(right_param, index)
+                    contract_slot_label(right_param, index),
+                    callable_slot_difference(left_param, right_param)
                 ));
             }
             same_callable_contracts(&left_callable.return_type, &right_callable.return_type)
@@ -681,7 +729,7 @@ pub(crate) fn callable_contract_mismatch(
         format!("callable contract mismatch: {reason}"),
     )
     .with_help(
-        "annotate the destination with a contract every value satisfies, or adapt a value explicitly through a thin callable alias call such as `Alias(function)`",
+        "preserve identical complete contracts at bare destinations; apply safe restrictions through an explicit thin alias or owned callable constructor such as `Alias(function)`",
     )
 }
 
@@ -1467,7 +1515,11 @@ impl<'a> FunctionChecker<'a> {
             .enumerate()
             .map(|(index, param)| FunctionParamContract {
                 keyword_only: param.keyword_only,
-                name: param.name.clone(),
+                name: expected_params
+                    .and_then(|params| params.get(index))
+                    .filter(|_| callable_context.is_none())
+                    .map(|expected| expected.name.clone())
+                    .unwrap_or_else(|| param.name.clone()),
                 ty: expected_params
                     .and_then(|params| params.get(index))
                     .map(|param| param.ty.clone())

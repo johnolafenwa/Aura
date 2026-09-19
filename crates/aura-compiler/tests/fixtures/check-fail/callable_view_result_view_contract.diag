@@ -1,5 +1,6 @@
-error[AU2002]: expected `def(pair: Pair) -> view str from pair`, found `def(pair: Pair) -> str`
- --> crates/aura-compiler/tests/fixtures/check-fail/callable_view_result_view_contract.au:10:5
+error[AU2015]: callable contract mismatch: type or result guarantee differs: expected `view str from #0`, found `str`
+ --> crates/aura-compiler/tests/fixtures/check-fail/callable_view_result_view_contract.au:10:54
    |
 10 |     chooser: def(pair: Pair) -> view str from pair = left_copy
-   |     ^
+   |                                                      ^
+  = help: preserve identical complete contracts at bare destinations; apply safe restrictions through an explicit thin alias or owned callable constructor such as `Alias(function)`

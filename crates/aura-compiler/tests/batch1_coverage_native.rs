@@ -208,7 +208,7 @@ fn native_backend_rejects_unsupported_array_dtypes_and_operators() {
 // Indirect calls through function values
 // ---------------------------------------------------------------------------
 
-const INDIRECT: &str = "def add(left: int64, right: int64) -> int64:\n    return left + right\ndef apply(function: def(int64, int64) -> int64, left: int64, right: int64) -> int64:\n    return function(left, right)\ndef main():\n    print(apply(add, 1, 2))\n";
+const INDIRECT: &str = "type Binary = def(int64, int64) -> int64\ndef add(left: int64, right: int64) -> int64:\n    return left + right\ndef apply(function: Binary, left: int64, right: int64) -> int64:\n    return function(left, right)\ndef main():\n    print(apply(Binary(add), 1, 2))\n";
 
 #[test]
 fn native_backend_lowers_indirect_calls_through_function_values() {

@@ -44,12 +44,15 @@ where the operation is `assignment`, `a mutable match`, `a call with mutable
 access`, or the mutating operation that exposed the place, and it carries two
 related labels: `narrowed by this test` at the test and `invalidated here` at
 the invalidation. `AU2015` reports a callable contract mismatch: a value whose
-complete contract (exposed names, keyword-only boundary, default availability)
-is not admitted by the written destination, a rebinding, branch join,
+complete contract (exposed names, keyword-only boundary, default availability,
+call kind, and obligations) differs at a bare written destination, a rebinding, branch join,
 container literal, or generic observation that would need an invented common
 contract, a lambda that does not meet its expected contract, an invalid
 thin-alias adaptation, implicit erased storage into `Callable[...]`, or a
-packed call kind that would strengthen; its message names the difference. `AU2004` also
+packed call kind that would strengthen; its message names the difference.
+A safe restriction requires an explicit `Unary(function)` adapter or a
+`Callable[...]`/`TaskCallable[...]` constructor; a bare written contract never
+performs that restriction. `AU2004` also
 reports a positional argument reaching a keyword-only parameter
 (`parameter `x` of function `f` is keyword-only`) and a named argument aimed
 at a positional-only slot of a written callable type.
@@ -323,7 +326,7 @@ imported module is never mislabeled with the entry module's path.
 
 The arrays are an additive schema-version-1 extension. Schema-version-1
 readers MUST ignore unrecognized object members while continuing to validate
-the fields they use. The compiler-service semantic-interface version is `14`.
+the fields they use. The compiler-service semantic-interface version is `15`.
 
 The process exits unsuccessfully after emitting a JSON error report. Tools MUST
 parse standard error as one JSON document in JSON mode and MUST NOT scrape the

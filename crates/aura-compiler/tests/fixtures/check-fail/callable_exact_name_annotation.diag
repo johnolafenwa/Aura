@@ -1,0 +1,6 @@
+error[AU2015]: callable contract mismatch: positional parameter 1 differs from parameter `value` in its name; use the explicit adapter `Destination(target)`
+ --> crates/aura-compiler/tests/fixtures/check-fail/callable_exact_name_annotation.au:8:37
+  |
+8 |     callback: def(int64) -> int64 = target
+  |                                     ^
+  = help: preserve identical complete contracts at bare destinations; apply safe restrictions through an explicit thin alias or owned callable constructor such as `Alias(function)`

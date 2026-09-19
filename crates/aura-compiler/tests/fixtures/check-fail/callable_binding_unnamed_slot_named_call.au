@@ -1,6 +1,8 @@
+type Unary = def(int64) -> int64
+
 def increment(value: int64) -> int64:
     return value + 1
 
 def main():
-    step: def(int64) -> int64 = increment
+    step: def(int64) -> int64 = Unary(increment)
     print(step(value=1))

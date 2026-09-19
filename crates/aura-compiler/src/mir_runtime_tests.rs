@@ -19301,7 +19301,7 @@ def double(value: int32) -> int32:
     return value * 2
 
 def choose(use_double: bool) -> def(int32) -> int32:
-    return double if use_double else with_default
+    return Unary(double) if use_double else Unary(with_default)
 
 def main():
     mut counter = Counter(value=0)
@@ -19323,6 +19323,7 @@ def main():
         print("after-start")
         print(dynamic_task.result_or(-1, timeout=1s))
         print(default_task.result_or(-1, timeout=1s))
+type Unary = def(int32) -> int32
 "#,
     )
     .expect("dynamic function values should lower");
@@ -19345,13 +19346,14 @@ def double(value: int32) -> int32:
     return value * 2
 
 def main():
-    holder = Holder(callback=double)
-    callbacks: list[def(int32) -> int32] = [double]
+    holder = Holder(callback=Unary(double))
+    callbacks: list[def(int32) -> int32] = [Unary(double)]
     with group = TaskGroup():
         field_task = group.start(holder.callback, 5)
         index_task = group.start(callbacks[0], 6)
         print(field_task.result_or(-1, timeout=1s))
         print(index_task.result_or(-1, timeout=1s))
+type Unary = def(int32) -> int32
 "#,
     )
     .expect("stored function values should lower as dynamic task targets");
@@ -19799,7 +19801,7 @@ def identity(value: int32) -> int32:
     return value
 
 def choose(crash_now: bool) -> def(int32) -> int32:
-    return crash if crash_now else identity
+    return Unary(crash) if crash_now else Unary(identity)
 
 def invoke(callback: def(int32) -> int32, value: int32) -> int32:
     return callback(value)
@@ -19807,6 +19809,7 @@ def invoke(callback: def(int32) -> int32, value: int32) -> int32:
 def main():
     selected = choose(true)
     print(invoke(selected, 0))
+type Unary = def(int32) -> int32
 "#,
     )
     .expect("a runtime-selected failing function should lower");

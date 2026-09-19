@@ -1,0 +1,11 @@
+type Destination = Callable[def(value: int64) -> int64]
+type Source = TaskCallable[def(value: int64) -> int64]
+
+def target(value: int64) -> int64:
+    return value
+
+def produce() -> Destination:
+    return Source(target)
+
+def main():
+    pass

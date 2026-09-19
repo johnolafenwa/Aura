@@ -5,8 +5,8 @@ use std::path::PathBuf;
 #[test]
 fn the_current_language_surface_has_a_compiler_owned_semantic_interface_schema() {
     assert_eq!(
-        SEMANTIC_INTERFACE_SCHEMA_VERSION, 14,
-        "stored argument-origin view contracts in callable types require schema 14 across compiler services and native cache keys"
+        SEMANTIC_INTERFACE_SCHEMA_VERSION, 15,
+        "explicit callable adapter provenance and compiler-owned editor requests require schema 15 across compiler services and native cache keys"
     );
 }
 

@@ -1,8 +1,33 @@
 # Task Board
 
-Last updated: 2026-09-13
+Last updated: 2026-09-19
 
-## Batch 1 phase 1 (complete; review fixes merged)
+## Held-finding closeout (local gates green; hosted integration pending)
+
+- Target: exact bare callable contracts and explicit adapters (finding 10),
+  compiler-owned signature help/references/rename (finding 12-LSP), and the
+  post-H2 representation ruling (finding 11). H2 is excluded.
+- Branch: `codex/batch-1-phase-1-closeout`, based on `226c1850`.
+- Implemented: checker/MIR adapter distinction, callable source migrations,
+  compiler editor queries and CLI/LSP bridges, and the ratification/docs updates.
+- Coverage companions (2026-09-19): the eleven existing forged-MIR tests that
+  now reject at contract authentication (nine merge, two stored-task) each
+  gained a companion that carries the forgery past authentication and fails
+  on the former downstream path, plus two consistent-forgery binder cases and
+  eleven `CallableAdapt` validator forgeries; every companion pins the same
+  shared reason at `run_mir` and `emit_host_native_object`.
+- Dependency: `rustls` 0.23.45 (with `rustls-webpki` and `aws-lc-sys`) for
+  RUSTSEC-2026-0285, published 2026-09-14; the audit gate fails on any older
+  lockfile, including `main` as merged on 2026-09-13.
+- Verification: the complete local `npm run ci` chain is green at `a60e93ca`
+  on 2026-09-19. Compiler coverage 96.4906% lines / 97.3606% functions / 95.3133%
+  regions against floors 96.46 / 97.33 / 95.23 (floors unchanged); LSP
+  116/116 tests at 100% coverage; extension 28/28 tests and packaging; forced
+  backend parity, CLI, reference, tutorial, docs, audit, clippy, and hygiene
+  gates pass.
+- Remaining: hosted branch CI, merge, green main CI, and the completion record.
+
+## Batch 1 phase 1 (closeout in progress; prior review fixes merged)
 
 - Target: implement the ratified foundations and owned callables, complete
   extraction and feature commits in the prescribed order, and merge after
@@ -194,8 +219,9 @@ Last updated: 2026-09-13
   ratified layout as its own phase after H2 (gate: no ABI claim or 0.4
   release before it); finding 12-LSP implement signature help, rename, and
   references. Details in the work note "Rulings on the held findings".
-- Next: pre-H2 closeout branch (finding 10 + LSP protocol handlers +
-  checkpoint/roadmap record of the rulings), then H2 (Option removal), then
+- Closeout: `codex/batch-1-phase-1-closeout` (finding 10 + LSP protocol handlers +
+  checkpoint/roadmap record of the rulings) passed the complete local chain
+  at `a60e93ca`; hosted integration pending. Then H2 (Option removal), then
   the representation phase.
 - Option removal and all phase 2 signature changes remain excluded; protected
   user files remain unchanged, and the coverage floors were raised to

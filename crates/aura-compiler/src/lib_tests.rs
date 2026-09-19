@@ -1956,11 +1956,12 @@ fn exported_callable_types_are_qualified_in_imported_analysis_hovers() {
         "",
         "def main() -> int32:",
         "    selected = pkg.api.choose",
-        "    transform = selected(pkg.api.identity)",
+        "    transform = selected(Transform(pkg.api.identity))",
         "    token = pkg.api.Token(value=1)",
         "    result = transform(token)",
         "    print(result.value)",
         "    return 0",
+        "type Transform = def(own pkg.api.Token) -> pkg.api.Token",
     ]
     .join("\n");
     fs::write(&main_path, &source).expect("write callable API consumer");
