@@ -2,7 +2,7 @@
 
 Last updated: 2026-09-19
 
-## Held-finding closeout (local gates green; hosted integration pending)
+## Held-finding closeout (complete)
 
 - Target: exact bare callable contracts and explicit adapters (finding 10),
   compiler-owned signature help/references/rename (finding 12-LSP), and the
@@ -25,9 +25,15 @@ Last updated: 2026-09-19
   116/116 tests at 100% coverage; extension 28/28 tests and packaging; forced
   backend parity, CLI, reference, tutorial, docs, audit, clippy, and hygiene
   gates pass.
-- Remaining: hosted branch CI, merge, green main CI, and the completion record.
+- Hosted integration: [PR #12](https://github.com/johnolafenwa/Aura/pull/12) merged `59cdd7cc` as `185e0d71` after
+  branch CI `35449305648` passed on Ubuntu 24.04 and macOS 15 (Docs
+  `35449305652`, Tutorial Examples `35449305679`); main CI `35456045453`
+  is green on both platforms (Docs `35456045495`, Tutorial Examples
+  `35456045487`). Hosted coverage totals are in the work-note
+  closeout table.
+- Next: H2 (Option removal), then the representation phase.
 
-## Batch 1 phase 1 (closeout in progress; prior review fixes merged)
+## Batch 1 phase 1 (complete; review fixes and closeout merged)
 
 - Target: implement the ratified foundations and owned callables, complete
   extraction and feature commits in the prescribed order, and merge after
@@ -219,10 +225,10 @@ Last updated: 2026-09-19
   ratified layout as its own phase after H2 (gate: no ABI claim or 0.4
   release before it); finding 12-LSP implement signature help, rename, and
   references. Details in the work note "Rulings on the held findings".
-- Closeout: `codex/batch-1-phase-1-closeout` (finding 10 + LSP protocol handlers +
-  checkpoint/roadmap record of the rulings) passed the complete local chain
-  at `a60e93ca`; hosted integration pending. Then H2 (Option removal), then
-  the representation phase.
+- Closeout merged: [PR #12](https://github.com/johnolafenwa/Aura/pull/12) as `185e0d71` (finding 10 + LSP protocol
+  handlers + checkpoint/roadmap record of the rulings); main CI `35456045453`
+  green on both platforms. Next: H2 (Option removal), then the representation
+  phase.
 - Option removal and all phase 2 signature changes remain excluded; protected
   user files remain unchanged, and the coverage floors were raised to
   96.46 / 97.33 / 95.23 in the phase-end ratchet.
