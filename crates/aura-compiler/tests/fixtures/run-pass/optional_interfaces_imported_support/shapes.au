@@ -1,0 +1,15 @@
+public type MaybeText = str | None
+
+public def head(text: str) -> MaybeText:
+    return text.strip_prefix("#")
+
+public def first[T](items: list[T]) -> Lookup[T]:
+    return items.get(0)
+
+public def describe(value: int64 | None = None) -> str:
+    if value is None:
+        return "default"
+    return f"given {value}"
+
+public def poll_first(queue: Queue[int64]) -> Poll[int64]:
+    return queue.poll()

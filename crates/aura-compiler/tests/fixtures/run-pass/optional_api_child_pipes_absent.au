@@ -1,0 +1,42 @@
+import process
+
+def probe() -> Result[None, process.Error]:
+    child = try process.start(["/bin/sh", "-c", "printf err 1>&2"], stdin=process.null(), stdout=process.null(), stderr=process.pipe())
+    print(child.stdin() is None)
+    print(child.stdout() is None)
+    match own child.stderr():
+        case process.Pipe as err:
+            match try err.read_line(timeout=2s):
+                case str as line:
+                    print(line)
+                case None:
+                    print("eof")
+        case None:
+            print("no stderr")
+    print(try child.wait_ok(timeout=2s))
+    quiet = try process.start(["/bin/sh", "-c", "true"], stdin=process.pipe(), stdout=process.pipe(), stderr=process.null())
+    print(quiet.stderr() is None)
+    match own quiet.stdin():
+        case process.Pipe as input:
+            input.close()
+            print("stdin pipe")
+        case None:
+            print("no stdin")
+    match own quiet.stdout():
+        case process.Pipe as output:
+            match try output.read_line(timeout=2s):
+                case str as line:
+                    print(line)
+                case None:
+                    print("stdout eof")
+        case None:
+            print("no stdout")
+    print(try quiet.wait_ok(timeout=2s))
+    return Result.Ok(None)
+
+def main():
+    match probe():
+        case Result.Ok(_):
+            pass
+        case Result.Err(error):
+            print(error)

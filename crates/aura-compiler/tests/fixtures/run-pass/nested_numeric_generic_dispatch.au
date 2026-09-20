@@ -35,17 +35,17 @@ impl Show for Marker[int64]:
     def show(self) -> str:
         return "marker-int64"
 
-impl Show for Option[int32]:
+impl Show for Lookup[int32]:
     def show(self) -> str:
-        return "option-int32"
+        return "lookup-int32"
 
-impl[T] Show for Option[T]:
+impl[T] Show for Lookup[T]:
     def show(self) -> str:
-        return "option-generic"
+        return "lookup-generic"
 
-impl[T] Show for Option[list[T]]:
+impl[T] Show for Lookup[list[T]]:
     def show(self) -> str:
-        return "option-vec"
+        return "lookup-vec"
 
 impl[T] Show for Pair[T, None]:
     def show(self) -> str:
@@ -56,12 +56,12 @@ def render[T: Show](value: T) -> None:
 
 def render_first[T: Show](values: list[T]) -> None:
     match values.get(0):
-        case Option.Some(value):
+        case Lookup.Found(value):
             print(value.show())
-        case Option.None:
+        case Lookup.Missing:
             print("missing")
 
-def identity_option[T](value: own Option[T]) -> Option[T]:
+def identity_lookup[T](value: own Lookup[T]) -> Lookup[T]:
     return value
 
 def main() -> int32:
@@ -69,13 +69,13 @@ def main() -> int32:
     render(Box[int64](value=8))
     render(Marker[int32](label="narrow"))
     render(Marker[int64](label="wide"))
-    narrow: Option[int32] = Option.Some(9)
-    wide: Option[int64] = Option.Some(10)
-    nested: Option[list[int64]] = Option.Some([15])
+    narrow: Lookup[int32] = Lookup.Found(9)
+    wide: Lookup[int64] = Lookup.Found(10)
+    nested: Lookup[list[int64]] = Lookup.Found([15])
     render(narrow)
     render(wide)
     render(nested)
-    missing: Option[int64] = identity_option(value=None)
+    missing: Lookup[int64] = identity_lookup(value=Lookup.Missing)
     render(missing)
     pair: Pair[int64, None] = Pair[int64, None](first=2147483648, second=None)
     render(pair)
@@ -87,8 +87,8 @@ def main() -> int32:
     wide_markers: list[Marker[int64]] = [Marker[int64](label="wide")]
     render_first(narrow_markers)
     render_first(wide_markers)
-    narrow_options: list[Option[int32]] = [Option.Some(13)]
-    wide_options: list[Option[int64]] = [Option.Some(14)]
-    render_first(narrow_options)
-    render_first(wide_options)
+    narrow_lookups: list[Lookup[int32]] = [Lookup.Found(13)]
+    wide_lookups: list[Lookup[int64]] = [Lookup.Found(14)]
+    render_first(narrow_lookups)
+    render_first(wide_lookups)
     return 0

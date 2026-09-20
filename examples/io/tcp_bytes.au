@@ -21,9 +21,9 @@ def run() -> Result[None, io.Error]:
         with client_stream = stream:
             try client_stream.write_bytes([116 as uint8, 101 as uint8, 115 as uint8, 116 as uint8], timeout=5s)
             match try client_stream.read_bytes(8, timeout=5s):
-                case Option.Some(reply):
+                case list[uint8] as reply:
                     print(reply[0])
-                case Option.None:
+                case None:
                     return Result.Ok(None)
 
         match own server.result():

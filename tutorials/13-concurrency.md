@@ -12,9 +12,9 @@ The maintained user-facing model is:
 - `TaskGroup.start(...) -> Task[T]`
 - `TaskGroup.start_soon(...) -> None`
 - `Task[T].result(timeout=...) -> TaskResult[T]`
-- `Task[T].result_or_none(timeout=...) -> Option[T]`
+- `Task[T].poll(timeout=...) -> Poll[T]`
 - `Task[T].result_or(default, timeout=...) -> T`
-- `Queue[T].get_or_none(timeout=...) -> Option[T]`
+- `Queue[T].poll(timeout=...) -> Poll[T]`
 - `Queue[T].get_or(default, timeout=...) -> T`
 - `select(queue_or_task_or_duration, ...) -> SelectOutcome[Q, T]`
 - `wait_any(...)` and `wait_all(...)`
@@ -43,11 +43,11 @@ never grows beyond its configured bound.
 For ordinary code, use the convenience forms:
 
 ```aura fragment
-print(jobs.get_or_none(timeout=100ms))
+print(jobs.poll(timeout=100ms))
 print(jobs.get_or(0, timeout=100ms))
 ```
 
-Without a timeout, `get_or_none()` and `get_or(default)` are immediate non-blocking checks. They return `Option.None` or the fallback value when no item is ready yet.
+Without a timeout, `poll()` and `get_or(default)` are immediate non-blocking checks. They return `Poll.Unavailable` or the fallback value when no item is ready yet; a ready item is `Poll.Ready(value)`, so a queued `None` item stays distinct from absence.
 
 Use `get(timeout=...)` when you need to distinguish all wait states. It returns `QueueReceive[T]`:
 
@@ -229,9 +229,9 @@ recursively repeatable `Task[...]` handles. A task returning
 `str`, `list[...]`, or another non-copy transferable value therefore has a
 move-only task handle.
 
-For a non-repeatable result, each of `result`, `result_or_none`, and
+For a non-repeatable result, each of `result`, `poll`, and
 `result_or` consumes the task handle on its first attempt. Timeout,
-cancellation, task failure, `Option.None`, and a fallback do not restore the
+cancellation, task failure, `Poll.Unavailable`, and a fallback do not restore the
 observation right. Use a repeatable result or a separate Queue protocol when a
 program needs retries or fan-out.
 
@@ -244,13 +244,13 @@ observation is the ordinary moved-value diagnostic `AU3001`.
 For ordinary code, use:
 
 ```aura fragment
-print(task.result_or_none(timeout=100ms))
+print(task.poll(timeout=100ms))
 print(task.result_or(-1, timeout=100ms))
 ```
 
-These convenience forms map task failures to `Option.None` or the caller-provided fallback, alongside timeout and cancellation.
+These convenience forms map task failures to `Poll.Unavailable` or the caller-provided fallback, alongside timeout and cancellation; a finished task is `Poll.Ready(value)`.
 
-Without a timeout, `result_or_none()` and `result_or(default)` are immediate non-blocking checks. They return `Option.None` or the fallback value when the task is not ready yet.
+Without a timeout, `poll()` and `result_or(default)` are immediate non-blocking checks. They return `Poll.Unavailable` or the fallback value when the task is not ready yet.
 
 Use `Task.result(timeout=...)` when you need to distinguish all wait states. It returns `TaskResult[T]`:
 
@@ -533,10 +533,10 @@ def main() -> int32:
         task = group.start(producer, jobs)
 
         while true:
-            match jobs.get_or_none(timeout=50ms):
-                case Option.Some(value):
+            match jobs.poll(timeout=50ms):
+                case Poll.Ready(value):
                     print(value)
-                case Option.None:
+                case Poll.Unavailable:
                     break
 
         print(task.result_or(-1, timeout=50ms))

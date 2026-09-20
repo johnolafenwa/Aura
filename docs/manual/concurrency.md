@@ -175,7 +175,7 @@ duplicate one result right.
 | API | Signature | Contract |
 | --- | --- | --- |
 | `result` | `result(timeout: Duration = ...) -> TaskResult[T]` | Waits for completion and returns a structured outcome; a non-repeatable `T` consumes the observation right on this call. |
-| `result_or_none` | `result_or_none(timeout: Duration = ...) -> Option[T]` | Returns `Some(value)` on success and `None` on task failure, timeout, or cancellation; a non-repeatable `T` consumes the observation right even when `None` is returned. Without an explicit timeout, this helper performs an immediate check. |
+| `poll` | `poll(timeout: Duration = ...) -> Poll[T]` | Returns `Poll.Ready(value)` on success and `Poll.Unavailable` on task failure, timeout, or cancellation; a non-repeatable `T` consumes the observation right even when `Unavailable` is returned. Without an explicit timeout, this helper performs an immediate check. |
 | `result_or` | `result_or(default: own T, timeout: Duration = ...) -> T` | Returns the task value or `default` on task failure, timeout, or cancellation; a non-repeatable `T` consumes the observation right. Without an explicit timeout, this helper performs an immediate check. |
 
 `TaskResult[T]` variants:
@@ -187,14 +187,14 @@ duplicate one result right.
 | `TimedOut` | The wait timed out. |
 | `Cancelled` | The wait was interrupted by cancellation. |
 
-Use `result` when the program needs to distinguish failure, timeout, and cancellation. Use `result_or_none` or `result_or` only when those outcomes are intentionally equivalent.
+Use `result` when the program needs to distinguish failure, timeout, and cancellation. Use `poll` or `result_or` only when those outcomes are intentionally equivalent. `Poll[T]` keeps a ready `None` payload distinct from unavailability: `Poll.Ready(None)` differs from `Poll.Unavailable`.
 
 The completed value is stored by the task. Under Accepted ADR-0033,
 `Task[T]` is copyable only when `T` is copyable, `T` is a `Queue[...]` handle,
 or `T` is a recursively repeatable `Task[...]`. For every
-other transferable result, `result`, `result_or_none`, and `result_or` consume
+other transferable result, `result`, `poll`, and `result_or` consume
 the unique observation right on any outcome. The consumption is conservative:
-timeout, cancellation, failure, and a collapsed `None` do not restore it.
+timeout, cancellation, failure, and a collapsed `Unavailable` do not restore it.
 `wait_any` and `wait_all` consume the whole task list for such a `T`;
 `wait_any` abandons the unchosen observation rights.
 
@@ -213,7 +213,7 @@ bounded = Queue[str](capacity=8)
 | `put` | `put(value: own T, timeout: Duration = ...) -> Result[None, SendError[T]]` | Sends a `Transfer` value, waiting for capacity when needed. Returns the unsent value in the error variant. |
 | `try_put` | `try_put(value: own T) -> Result[None, SendError[T]]` | Attempts to send a `Transfer` value without waiting. Returns `Full(value)` when a bounded queue is full. |
 | `get` | `get(timeout: Duration = ...) -> QueueReceive[T]` | Receives one structured queue outcome. |
-| `get_or_none` | `get_or_none(timeout: Duration = ...) -> Option[T]` | Returns `Some(value)` for an item and `None` for closed, timed-out, or cancelled receives. Without an explicit timeout, this helper performs an immediate check. |
+| `poll` | `poll(timeout: Duration = ...) -> Poll[T]` | Returns `Poll.Ready(value)` for an item and `Poll.Unavailable` for closed, timed-out, or cancelled receives, keeping a queued `None` item distinct from absence. Without an explicit timeout, this helper performs an immediate check. |
 | `get_or` | `get_or(default: own T, timeout: Duration = ...) -> T` | Returns an item or `default` for closed, timed-out, or cancelled receives. Without an explicit timeout, this helper performs an immediate check. |
 | `close` | `close() -> None` | Closes the queue and wakes blocked senders and receivers. |
 

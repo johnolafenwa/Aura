@@ -85,7 +85,9 @@ Builtin scalar and utility type names currently accepted by the compiler:
 
 Builtin generic or runtime-facing types currently accepted:
 
-- `Option[T]`
+- optional unions `T | None`
+- `Lookup[T]`
+- `Poll[T]`
 - `Result[T, E]`
 - `SendError[T]`
 - `Queue[T]`
@@ -418,8 +420,8 @@ Generic functions and methods may use inline trait bounds:
 
 Built-in enum constructor notes:
 
-- `Option.Some(...)` can infer `T` from its payload without a separate annotation
-- `Option.None` still requires an expected `Option[T]` type
+- a bare value or `None` at a `T | None` destination is injected into that union; an unannotated `None` is the unit value
+- `Lookup.Missing` and `Poll.Unavailable` need an expected type or explicit specialization because they carry no payload
 
 ## Builtins
 
@@ -466,7 +468,7 @@ Current builtin `range(...)` notes:
 Current dynamic JSON surface:
 
 - `json.parse(...) -> Result[json.Value, json.Error]`
-- `json.dumps(..., indent=Option.None) -> str`
+- `json.dumps(..., indent=None) -> str`
 - exact inspecting accessors `is_null`, `as_bool`, `as_int`, and `as_float`
 - consuming accessors `into_string`, `into_array`, and `into_object`
 - recursive Null, Boolean, Int, Float, str, Array, and Object variants
@@ -701,11 +703,11 @@ Current builtin member methods include:
 - `Queue.put(...)`
 - `Queue.try_put(...)`
 - `Queue.get(...)`
-- `Queue.get_or_none(...)`
+- `Queue.poll(...)`
 - `Queue.get_or(...)`
 - `Queue.close()`
 - `Task.result(timeout=...)`
-- `Task.result_or_none(timeout=...)`
+- `Task.poll(timeout=...)`
 - `Task.result_or(timeout=...)`
 - `TaskGroup.start(...)`
 - `TaskGroup.start_soon(...)`
@@ -828,7 +830,7 @@ depends on the workload.
 Task results are repeatable only for copy `T`, `Queue[...]`, or recursively
 repeatable `Task[...]`. `Task[T]` is always transferable but is copyable only
 for those repeatable results. For every other transferable `T`, `result`,
-`result_or_none`, and `result_or` consume the handle on their first attempt,
+`poll`, and `result_or` consume the handle on their first attempt,
 including timeout, cancellation, failure, and fallback outcomes. `wait_any`
 and `wait_all` consume the complete task list for such a `T`; `wait_any`
 abandons unchosen observation rights. Boundary failures are `AU3008`,
@@ -926,7 +928,7 @@ Current collection notes:
   require a structurally `Transfer` payload type
 - `Queue.put(...)` returns `Result[None, SendError[T]]`, where `SendError[T]` currently includes `Closed(value)`, `Cancelled(value)`, `TimedOut(value)`, and `Full(value)`
 - `Queue.get(timeout=...)` returns `QueueReceive[T]`, distinguishing `Item(value)`, `Closed`, `TimedOut`, and `Cancelled`
-- `Queue.get_or_none(timeout=...)` returns `Option[T]` for the common case where closed, timed out, and cancelled waits all map to “no value”; without a timeout it performs an immediate non-blocking check
+- `Queue.poll(timeout=...)` returns `Poll[T]`, with `Ready(value)` for an item and `Unavailable` for the common case where closed, timed out, and cancelled waits all map to “no value”; without a timeout it performs an immediate non-blocking check
 - `Queue.get_or(default, timeout=...)` returns either the queued value or a caller-provided fallback; without a timeout it returns the fallback immediately when no item is ready
 - Queue iteration receives owned items and accepts only bare `for value in
   queue:`; the explicit `own` and `mut` modifiers are rejected
@@ -940,10 +942,11 @@ Current collection notes:
 - `wait_all(...)` returns `WaitAll[T]`, distinguishing `Ready(results)`,
   `Error(index, message)`, `TimedOut`, and `Cancelled`; a non-repeatable `T`
   makes the call consume the entire task list
-- `Task.result_or_none(timeout=...)` returns `Option[T]` for the common case
-  where task failure, timeout, and cancellation all map to “no result yet”;
-  without a timeout it performs an immediate non-blocking check, and for
-  non-repeatable `T` even a `None` outcome consumes the handle
+- `Task.poll(timeout=...)` returns `Poll[T]`, with `Ready(value)` for a result
+  and `Unavailable` for the common case where task failure, timeout, and
+  cancellation all map to “no result yet”; without a timeout it performs an
+  immediate non-blocking check, and for non-repeatable `T` even an
+  `Unavailable` outcome consumes the handle
 - `Task.result_or(default, timeout=...)` returns either the task result or a
   caller-provided fallback when the task fails, times out, or is cancelled;
   without a timeout it returns the fallback immediately when the task is not

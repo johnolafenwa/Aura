@@ -642,7 +642,7 @@ fn json_namespace_exposes_dynamic_tree_contract() {
         dumps.signature.params,
         vec![
             Type::named("json.Value"),
-            Type::Named("Option".to_string(), vec![Type::named("int64")])
+            crate::sema::optional_type(Type::named("int64"))
         ]
     );
     // ADR-0022 Q1: the copy-typed `indent` is shared like every other bare
@@ -669,17 +669,11 @@ fn json_namespace_exposes_dynamic_tree_contract() {
 
     for (name, return_type) in [
         ("is_null", Type::named("bool")),
-        (
-            "as_bool",
-            Type::Named("Option".to_string(), vec![Type::named("bool")]),
-        ),
-        (
-            "as_int",
-            Type::Named("Option".to_string(), vec![Type::named("int64")]),
-        ),
+        ("as_bool", crate::sema::optional_type(Type::named("bool"))),
+        ("as_int", crate::sema::optional_type(Type::named("int64"))),
         (
             "as_float",
-            Type::Named("Option".to_string(), vec![Type::named("float64")]),
+            crate::sema::optional_type(Type::named("float64")),
         ),
     ] {
         let function = &namespace.functions[name];
@@ -715,7 +709,7 @@ fn json_namespace_exposes_dynamic_tree_contract() {
         );
         assert_eq!(
             function.signature.return_type,
-            Type::Named("Option".to_string(), vec![inner_type]),
+            crate::sema::optional_type(inner_type),
             "{name}"
         );
     }

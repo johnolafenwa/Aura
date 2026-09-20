@@ -1837,6 +1837,12 @@ fn drop_array_containing_value_iteratively(value: Value, frames: &mut Vec<ArrayC
                 Value::EnumVariant(EnumVariantValue { payloads, .. }) => {
                     Some(ArrayCloneCleanupFrame::Values(payloads.into_iter()))
                 }
+                Value::Union(union) => {
+                    let union = *union;
+                    Some(ArrayCloneCleanupFrame::Values(
+                        vec![union.payload].into_iter(),
+                    ))
+                }
                 _ => None,
             };
             if let Some(mut frame) = frame {
@@ -1902,6 +1908,9 @@ pub(crate) fn try_clone_array_containing_value(value: &Value) -> Result<Value> {
             next_index: usize,
             payloads: Vec<Value>,
         },
+        /// A union's single active payload (an optional link such as
+        /// `next: indirect Node | None` nests through this frame).
+        Union { union: &'a UnionValue },
     }
 
     fn drop_frame_values(frame: CloneFrame<'_>, cleanup_frames: &mut Vec<ArrayCloneCleanupFrame>) {
@@ -1938,6 +1947,7 @@ pub(crate) fn try_clone_array_containing_value(value: &Value) -> Result<Value> {
                     drop_array_containing_value_iteratively(value, cleanup_frames);
                 }
             }
+            CloneFrame::Union { .. } => {}
         }
     }
 
@@ -2122,6 +2132,11 @@ pub(crate) fn try_clone_array_containing_value(value: &Value) -> Result<Value> {
                         None
                     }
                 }
+                Value::Union(union) => {
+                    state.push_frame(CloneFrame::Union { union })?;
+                    next = Some(&union.payload);
+                    None
+                }
                 value => Some(value.clone()),
             };
         } else {
@@ -2280,6 +2295,13 @@ pub(crate) fn try_clone_array_containing_value(value: &Value) -> Result<Value> {
                             payloads,
                         }));
                     }
+                }
+                CloneFrame::Union { union } => {
+                    state.completed = Some(Value::Union(Box::new(UnionValue {
+                        union_type: union.union_type.clone(),
+                        member_index: union.member_index,
+                        payload: cloned,
+                    })));
                 }
             }
         }
@@ -7017,7 +7039,9 @@ impl Value {
                     Value::Function(function) => {
                         rendered.push_str(&format!("<function {}>", function.name));
                     }
-                    Value::Unit => {}
+                    // `None` is the unit value; an absent optional renders by
+                    // name in `print`, `str`, and interpolation like Python.
+                    Value::Unit => rendered.push_str("None"),
                     Value::FfiHandle(handle) => {
                         rendered.push_str(&format!("<opaque {}>", handle.type_name()));
                     }
@@ -14015,11 +14039,107 @@ pub(crate) fn claim_task_result_observations(tasks: &[TaskValue]) -> Result<()> 
     Ok(())
 }
 
-pub(crate) fn option_some(value: Value) -> Value {
+/// Wraps a present builtin optional result in the canonical `member | None`
+/// union (ADR-0052). Both backends build the same runtime value.
+pub(crate) fn optional_present(member: crate::sema::Type, value: Value) -> Value {
+    let union_type = crate::sema::optional_type(member);
+    let crate::sema::Type::Union(union) = &union_type else {
+        unreachable!("an optional union has two members");
+    };
+    let member_index = union
+        .members
+        .iter()
+        .position(|member| !matches!(member, crate::sema::Type::Unit))
+        .expect("an optional union has a present member");
+    Value::Union(Box::new(UnionValue {
+        union_type: union_type.clone(),
+        member_index,
+        payload: value,
+    }))
+}
+
+/// The absent builtin optional result: the `None` member of `member | None`.
+pub(crate) fn optional_absent(member: crate::sema::Type) -> Value {
+    let union_type = crate::sema::optional_type(member);
+    let crate::sema::Type::Union(union) = &union_type else {
+        unreachable!("an optional union has two members");
+    };
+    let member_index = union
+        .members
+        .iter()
+        .position(|member| matches!(member, crate::sema::Type::Unit))
+        .expect("an optional union has a None member");
+    Value::Union(Box::new(UnionValue {
+        union_type: union_type.clone(),
+        member_index,
+        payload: Value::Unit,
+    }))
+}
+
+/// `Some(value)` becomes the present member, `None` the absent member.
+pub(crate) fn optional_value(member: crate::sema::Type, value: Option<Value>) -> Value {
+    match value {
+        Some(value) => optional_present(member, value),
+        None => optional_absent(member),
+    }
+}
+
+/// `str | None` from an optional Rust string.
+pub(crate) fn optional_str_value(value: Option<String>) -> Value {
+    optional_value(crate::sema::Type::named("str"), value.map(Value::String))
+}
+
+/// `list[uint8] | None` from an optional already-built byte list value.
+pub(crate) fn optional_bytes_value(value: Option<Value>) -> Value {
+    optional_value(
+        crate::sema::Type::Named("list".to_string(), vec![crate::sema::Type::named("uint8")]),
+        value,
+    )
+}
+
+/// The present member type of a `json.into_*` result.
+pub(crate) fn json_into_member_type(expected: &str) -> crate::sema::Type {
+    use crate::sema::Type;
+    let text = Type::named("str");
+    let value = Type::named("json.Value");
+    let list_name = "list".to_string();
+    let dict_name = "dict".to_string();
+    match expected {
+        "String" => text,
+        "Array" => Type::Named(list_name, vec![value]),
+        _ => Type::Named(dict_name, vec![text, value]),
+    }
+}
+
+pub(crate) fn lookup_found(value: Value) -> Value {
     Value::EnumVariant(EnumVariantValue {
-        enum_name: "Option".to_string(),
-        variant_name: "Some".to_string(),
+        enum_name: "Lookup".to_string(),
+        variant_name: "Found".to_string(),
         payloads: vec![value],
+    })
+}
+
+pub(crate) fn lookup_missing() -> Value {
+    Value::EnumVariant(EnumVariantValue {
+        enum_name: "Lookup".to_string(),
+        variant_name: "Missing".to_string(),
+        payloads: Vec::new(),
+    })
+}
+
+pub(crate) fn poll_ready(value: Value) -> Value {
+    Value::EnumVariant(EnumVariantValue {
+        enum_name: "Poll".to_string(),
+        variant_name: "Ready".to_string(),
+        payloads: vec![value],
+    })
+}
+
+pub(crate) fn poll_unavailable() -> Value {
+    Value::EnumVariant(EnumVariantValue {
+        enum_name: "Poll".to_string(),
+        variant_name: "Unavailable".to_string(),
+        payloads: Vec::new(),
     })
 }
 
@@ -14172,14 +14292,6 @@ pub(crate) fn task_group_cleanup_should_cancel(
             return false;
         }
     }
-}
-
-pub(crate) fn option_none() -> Value {
-    Value::EnumVariant(EnumVariantValue {
-        enum_name: "Option".to_string(),
-        variant_name: "None".to_string(),
-        payloads: Vec::new(),
-    })
 }
 
 pub(crate) fn result_ok(value: Value) -> Value {
@@ -15672,19 +15784,16 @@ fn host_json_into_exact_payload(
 }
 
 fn host_json_indent_arg(value: &Value) -> Result<Option<i64>> {
-    let Value::EnumVariant(option) = value else {
-        return Err(Diagnostic::coded(
-            "AU4001",
-            "`json::dumps` expects `indent` to be `Option[int64]`",
-        ));
+    let payload = match value {
+        Value::Unit => return Ok(None),
+        Value::Union(union) => match &union.payload {
+            Value::Unit => return Ok(None),
+            payload => payload,
+        },
+        other => other,
     };
-    match (
-        nominal_runtime_base_name(&option.enum_name),
-        option.variant_name.as_str(),
-        option.payloads.as_slice(),
-    ) {
-        ("Option", "None", []) => Ok(None),
-        ("Option", "Some", [Value::Int(value)]) => {
+    match payload {
+        Value::Int(value) => {
             if !json_int_metadata_is_exact(value) {
                 return Err(Diagnostic::coded(
                     "AU4001",
@@ -15699,7 +15808,7 @@ fn host_json_indent_arg(value: &Value) -> Result<Option<i64>> {
         }
         _ => Err(Diagnostic::coded(
             "AU4001",
-            "`json::dumps` expects `indent` to be `Option[int64]`",
+            "`json::dumps` expects `indent` to be `int64 | None`",
         )),
     }
 }
@@ -15878,8 +15987,8 @@ fn evaluate_host_builtin_with_args(
             Ok(std::env::var(name)
                 .ok()
                 .map(Value::String)
-                .map(option_some)
-                .unwrap_or_else(option_none))
+                .map(|text| optional_present(crate::sema::Type::named("str"), text))
+                .unwrap_or_else(|| optional_absent(crate::sema::Type::named("str"))))
         }
         "sys::current_dir" => {
             host_expect_arity(name, &args, 0)?;
@@ -15935,8 +16044,8 @@ fn evaluate_host_builtin_with_args(
             };
             Ok(value
                 .map(Value::String)
-                .map(option_some)
-                .unwrap_or_else(option_none))
+                .map(|text| optional_present(crate::sema::Type::named("str"), text))
+                .unwrap_or_else(|| optional_absent(crate::sema::Type::named("str"))))
         }
         "path::is_absolute" => {
             host_expect_arity(name, &args, 1)?;
@@ -15973,21 +16082,23 @@ fn evaluate_host_builtin_with_args(
         "json::as_bool" => {
             host_expect_arity(name, &args, 1)?;
             Ok(match host_json_exact_payload(&args[0], "Bool", name)? {
-                Some(Value::Bool(value)) => option_some(Value::Bool(value)),
+                Some(Value::Bool(value)) => {
+                    optional_present(crate::sema::Type::named("bool"), Value::Bool(value))
+                }
                 Some(_) => {
                     return Err(Diagnostic::coded(
                         "AU4001",
                         "malformed runtime `json.Value.Bool` payload in `json::as_bool`",
                     ))
                 }
-                None => option_none(),
+                None => optional_absent(crate::sema::Type::named("bool")),
             })
         }
         "json::as_int" => {
             host_expect_arity(name, &args, 1)?;
             Ok(match host_json_exact_payload(&args[0], "Int", name)? {
                 Some(Value::Int(value)) if json_int_metadata_is_exact(&value) => {
-                    option_some(Value::Int(value))
+                    optional_present(crate::sema::Type::named("int64"), Value::Int(value))
                 }
                 Some(_) => {
                     return Err(Diagnostic::coded(
@@ -15995,20 +16106,22 @@ fn evaluate_host_builtin_with_args(
                         "malformed runtime `json.Value.Int` payload in `json::as_int`",
                     ))
                 }
-                None => option_none(),
+                None => optional_absent(crate::sema::Type::named("int64")),
             })
         }
         "json::as_float" => {
             host_expect_arity(name, &args, 1)?;
             Ok(match host_json_exact_payload(&args[0], "Float", name)? {
-                Some(Value::Float(value)) => option_some(Value::Float(value)),
+                Some(Value::Float(value)) => {
+                    optional_present(crate::sema::Type::named("float64"), Value::Float(value))
+                }
                 Some(_) => {
                     return Err(Diagnostic::coded(
                         "AU4001",
                         "malformed runtime `json.Value.Float` payload in `json::as_float`",
                     ))
                 }
-                None => option_none(),
+                None => optional_absent(crate::sema::Type::named("float64")),
             })
         }
         "json::into_string" => {
@@ -16018,14 +16131,16 @@ fn evaluate_host_builtin_with_args(
                 .next()
                 .expect("validated host builtin arity provides one argument");
             Ok(match host_json_into_exact_payload(value, "String", name)? {
-                Some(Value::String(value)) => option_some(Value::String(value)),
+                Some(Value::String(value)) => {
+                    optional_present(json_into_member_type("String"), Value::String(value))
+                }
                 Some(_) => {
                     return Err(Diagnostic::coded(
                         "AU4001",
                         "malformed runtime `json.Value.String` payload in `json::into_string`",
                     ))
                 }
-                None => option_none(),
+                None => optional_absent(json_into_member_type("String")),
             })
         }
         "json::into_array" => {
@@ -16036,7 +16151,7 @@ fn evaluate_host_builtin_with_args(
                 .expect("validated host builtin arity provides one argument");
             Ok(match host_json_into_exact_payload(value, "Array", name)? {
                 Some(Value::Vec(value)) if json_array_metadata_is_exact(&value) => {
-                    option_some(Value::Vec(value))
+                    optional_present(json_into_member_type("Array"), Value::Vec(value))
                 }
                 Some(_) => {
                     return Err(Diagnostic::coded(
@@ -16044,7 +16159,7 @@ fn evaluate_host_builtin_with_args(
                         "malformed runtime `json.Value.Array` payload in `json::into_array`",
                     ))
                 }
-                None => option_none(),
+                None => optional_absent(json_into_member_type("Array")),
             })
         }
         "json::into_object" => {
@@ -16055,7 +16170,7 @@ fn evaluate_host_builtin_with_args(
                 .expect("validated host builtin arity provides one argument");
             Ok(match host_json_into_exact_payload(value, "Object", name)? {
                 Some(Value::Map(value)) if json_object_metadata_is_exact(&value) => {
-                    option_some(Value::Map(value))
+                    optional_present(json_into_member_type("Object"), Value::Map(value))
                 }
                 Some(_) => {
                     return Err(Diagnostic::coded(
@@ -16063,7 +16178,7 @@ fn evaluate_host_builtin_with_args(
                         "malformed runtime `json.Value.Object` payload in `json::into_object`",
                     ))
                 }
-                None => option_none(),
+                None => optional_absent(json_into_member_type("Object")),
             })
         }
         "json::is_valid" => {

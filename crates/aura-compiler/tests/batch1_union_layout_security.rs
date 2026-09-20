@@ -118,7 +118,14 @@ fn a_stale_layout_version_is_rejected() {
 #[test]
 fn a_plan_claiming_a_non_copy_member_is_copy_is_rejected() {
     let mut module = lowered();
-    let plan: &mut MirUnionLayout = &mut module.unions[0];
+    // The module also plans the optional unions of the builtin signatures it
+    // carries; forge the program's own three-member union.
+    let index = module
+        .unions
+        .iter()
+        .position(|plan| plan.members.len() == 3)
+        .expect("the program's `int64 | str | None` union has a plan");
+    let plan: &mut MirUnionLayout = &mut module.unions[index];
     for member in &mut plan.members {
         member.copy = true;
         member.needs_drop = false;

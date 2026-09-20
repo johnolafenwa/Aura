@@ -66,8 +66,8 @@ mixed numeric source.
 | `shape()` | `list[int64]`; owned shape snapshot |
 | `len()` | `int64`; total element count |
 | `clone()` | fresh `Array[T]` |
-| `get(index: list[int64])` | `Option[T]` |
-| `set(index: list[int64], value: T)` | mutable receiver; `Some(T)` replaced value or a coordinate/rank trap |
+| `get(index: list[int64])` | `T \| None`; `None` for an out-of-bounds coordinate or rank mismatch |
+| `set(index: list[int64], value: T)` | mutable receiver; `T \| None` holding the replaced value, or a coordinate/rank trap rather than `None` |
 | `fill(value: T)` | mutable receiver; returns `None` |
 | `map[U](f: def(T) -> U)` | `Array[U]`; `U` is one of the four dtypes |
 | `sum()` | `T` |

@@ -11,24 +11,24 @@ def run_process_examples() -> Result[None, process.Error]:
 
     with child = try process.start(["/bin/cat"], stdin=process.pipe(), stdout=process.pipe(), stderr=process.null()):
         match child.stdin():
-            case Option.Some(stdin_pipe):
+            case process.Pipe as stdin_pipe:
                 try stdin_pipe.write_all("ping\n", timeout=500ms)
                 try stdin_pipe.flush()
                 stdin_pipe.close()
-            case Option.None:
+            case None:
                 print("missing stdin")
                 return Result.Ok(None)
 
         match child.stdout():
-            case Option.Some(stdout_pipe):
+            case process.Pipe as stdout_pipe:
                 line = try stdout_pipe.read_line(timeout=500ms)
                 match own line:
-                    case Option.Some(text):
+                    case str as text:
                         print(text.trim())
-                    case Option.None:
+                    case None:
                         print("missing stdout text")
                         return Result.Ok(None)
-            case Option.None:
+            case None:
                 print("missing stdout")
                 return Result.Ok(None)
 
@@ -44,13 +44,13 @@ def main() -> int32:
     print(jobs.get_or(7, timeout=1ms))
     jobs.put(4)
     print(jobs.get_or(7))
-    print(jobs.get_or_none(timeout=1ms))
+    print(jobs.poll(timeout=1ms))
 
     with TaskGroup() as group:
         slow = group.start(produce)
         print(slow.result_or(8, timeout=1ms))
         print(slow.result_or(8, timeout=50ms))
-        print(slow.result_or_none(timeout=50ms))
+        print(slow.poll(timeout=50ms))
 
     match run_process_examples():
         case Result.Ok(_):

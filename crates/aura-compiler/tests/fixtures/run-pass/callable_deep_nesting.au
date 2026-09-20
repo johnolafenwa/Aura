@@ -20,11 +20,11 @@ def layer_two(value: int64) -> int64:
 def layer_one(value: int64) -> int64:
     mut registry: dict[str, Step] = {"double": make_scaler(2)}
     match own registry.remove("double"):
-        case Option.Some(step):
+        case Lookup.Found(step):
             outcome = step(value=layer_two(value))
             registry["double"] = step
             return outcome
-        case Option.None:
+        case Lookup.Missing:
             return -1
 
 def main():

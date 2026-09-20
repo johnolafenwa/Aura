@@ -29,10 +29,10 @@ def serve_unix(path: str, ready: Queue[bool]) -> Result[None, io.Error]:
         stream = try server_listener.accept(timeout=5s)
         with server_stream = stream:
             match try server_stream.read_line(timeout=5s):
-                case Option.Some(text):
+                case str as text:
                     try server_stream.write_all("unix:" + text, timeout=5s)
                     return Result.Ok(None)
-                case Option.None:
+                case None:
                     return Result.Ok(None)
 
 def serve_tls(cert_path: str, key_path: str, addresses: Queue[str]) -> Result[None, io.Error]:
@@ -77,9 +77,9 @@ def run() -> Result[None, io.Error]:
                 with unix_client = client:
                     try unix_client.write_all("ping\n", timeout=5s)
                     match try unix_client.read_line(timeout=5s):
-                        case Option.Some(text):
+                        case str as text:
                             print(text)
-                        case Option.None:
+                        case None:
                             return Result.Ok(None)
             case QueueReceive.Closed:
                 return Result.Err(io.Error.Other(message="Unix readiness queue closed"))

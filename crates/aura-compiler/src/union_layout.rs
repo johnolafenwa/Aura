@@ -264,7 +264,14 @@ pub fn plan_module_unions(module: &mut crate::mir::MirModule, is_copy: impl Fn(&
 
 /// The stable key a plan table uses for a union type.
 pub fn union_plan_key(ty: &Type) -> String {
-    serde_json::to_string(ty).expect("Aura semantic types must serialize")
+    match ty {
+        // A union's identity is its canonical member keys. The module tag a
+        // spelling carries (a builtin signature's `str | None` versus the
+        // program's own) is not part of that identity, so both spellings
+        // share one plan instead of colliding as duplicates.
+        Type::Union(union) => serde_json::to_string(&union.keys).expect("union keys serialize"),
+        other => serde_json::to_string(other).expect("Aura semantic types must serialize"),
+    }
 }
 
 /// Structural checks a plan must pass regardless of who produced it:

@@ -1,8 +1,0 @@
-def main() -> int32:
-    value = Option[int32].None
-    match own value:
-        case Some(inner):
-            print(inner)
-        case None:
-            print(0)
-    return 0

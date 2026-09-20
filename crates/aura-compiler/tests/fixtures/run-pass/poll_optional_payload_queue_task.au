@@ -1,0 +1,39 @@
+def maybe(value: int64) -> int64 | None:
+    if value > 0:
+        return value
+    return None
+
+def main():
+    queue = Queue[int64 | None]()
+    queue.put(None)
+    queue.put(3)
+    match queue.poll():
+        case Poll.Ready(item):
+            print(f"ready none? {item is None}")
+        case Poll.Unavailable:
+            print("unavailable")
+    match queue.poll(timeout=5ms):
+        case Poll.Ready(item):
+            if item is not None:
+                print(item + 1)
+        case Poll.Unavailable:
+            print("unavailable")
+    match queue.poll(timeout=5ms):
+        case Poll.Ready(item):
+            print("unexpected")
+        case Poll.Unavailable:
+            print("drained")
+    with TaskGroup() as group:
+        first = group.start(maybe, 0)
+        second = group.start(maybe, 5)
+        match first.poll(timeout=1s):
+            case Poll.Ready(value):
+                print(f"task none? {value is None}")
+            case Poll.Unavailable:
+                print("first unavailable")
+        match second.poll(timeout=1s):
+            case Poll.Ready(value):
+                if value is not None:
+                    print(value * 2)
+            case Poll.Unavailable:
+                print("second unavailable")

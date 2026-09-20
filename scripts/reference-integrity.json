@@ -155,7 +155,7 @@
     "docs/manual/bytes.md#aura-1": {
       "sha256": "7372253544a5893db4dcfd2bcf97218842aa6362a19b0815596ea4e25a357f89",
       "mode": "run",
-      "stdout": "4175726120f09f8c8c\nAura 🌌\nAAH+/w==\nba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad\n4175726120f09f8c8c\n",
+      "stdout": "4175726120f09f8c8c\nAura \ud83c\udf0c\nAAH+/w==\nba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad\n4175726120f09f8c8c\n",
       "stderr": ""
     },
     "docs/manual/classes.md#aura-1": {
@@ -189,7 +189,7 @@
       "stderr": ""
     },
     "docs/manual/classes.md#aura-14": {
-      "sha256": "291e91a1c472c827d4c19d519925654a70aa5c5182f01005a50faff3ffeb3cd1",
+      "sha256": "3af3320251b3a31a648445eb862475c96c4841d1615e7c3387c79d49e23af20e",
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""
@@ -312,7 +312,7 @@
       "reason": "Long-running documentation development server command."
     },
     "docs/manual/cli-and-tooling.md#json-1": {
-      "sha256": "de4b74304a1715cb300ab929bc051295f814ce0133d28253802b3d78470ecc0c",
+      "sha256": "a17c847ace4a5eb9e6713e7b176cef3b3ac189bcfc1561aae04ab28b8e08ac73",
       "mode": "illustrative",
       "reason": "Two-line analysis-service request transcript, not a single executable JSON document."
     },
@@ -404,14 +404,14 @@
       "reason": "Map-iteration fragment: counts is the collection introduced by the surrounding example."
     },
     "docs/manual/collections.md#aura-6": {
-      "sha256": "9ea7c7e688d0d3405339d04fa980b3669b9f391b5982992562910fbb9507a5f2",
+      "sha256": "98c9db4b53dff39870266c3d2fe433e8dea70ea608ae24c79c74bd7e6cbef4ce",
       "mode": "illustrative",
       "reason": "Index-lookup fragment: values and index are placeholders supplied by the surrounding prose."
     },
     "docs/manual/collections.md#aura-7": {
       "sha256": "336b883aaf9491c9aad150684dea1c7a76e6c05682700565db990606ac65b912",
       "mode": "run",
-      "stdout": "30\nOption.Some(20)\n",
+      "stdout": "30\nLookup.Found(20)\n",
       "stderr": ""
     },
     "docs/manual/collections.md#aura-8": {
@@ -421,7 +421,7 @@
       "stderr": ""
     },
     "docs/manual/collections.md#aura-9": {
-      "sha256": "bc8b4967bb68492014e5a6106e9a92cf5e55b989869519315366e6dc208f53f2",
+      "sha256": "47e0957592f19909ac7262366cf1d0ccf1c305a1aa20248de708db9a2dfecb03",
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""
@@ -552,13 +552,13 @@
       "reason": "Construction fragment: Status is declared in the preceding enum example."
     },
     "docs/manual/enums-and-match.md#aura-6": {
-      "sha256": "3e08c84ffbd90830b7f4cacad29b7856afbe2942469b82eb7610e8411524e922",
+      "sha256": "06f02e9eb487265f95d41ce80808782fc640c46c1033fc589bfd03a09b0a9119",
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""
     },
     "docs/manual/enums-and-match.md#aura-7": {
-      "sha256": "dbe800e2069dd18eefd1d52d280c1342126b1a0d13b4c10ba0b05b804a39777f",
+      "sha256": "ef28b8a0dcbe68b9d3a3da3a286dc28a93a973082d6f46d89e5627a56e318e43",
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""
@@ -628,7 +628,7 @@
       "stderr": ""
     },
     "docs/manual/expressions.md#aura-19": {
-      "sha256": "7a168043c90676706f86659fe519efa38b6ea95fd1f9a431ad63e1d59c62d222",
+      "sha256": "cbc7ae92eae258e5ead3c79f3332b155df208a39a244bc930f7fdce3a6011991",
       "mode": "illustrative",
       "reason": "Enum-construction catalog: Status is a user enum declared on another feature page."
     },
@@ -1118,20 +1118,20 @@
       "stderr": ""
     },
     "docs/manual/io.md#aura-2": {
-      "sha256": "9225c8d6ce5ca8b30b7db161bc02e37063fdab29349cce56949a2218653c4917",
+      "sha256": "798bf90cb1ab475f3483138983c179164009fa898be6978c596b68e47d83b0fe",
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""
     },
     "docs/manual/io.md#aura-3": {
-      "sha256": "2e9161dc722bc6aac0a0f98008934065edca18530c917afc980ad6a89e49d1bf",
+      "sha256": "ca7a9ffe4b73227137cd5a904d9017b52a6e8212bcea01956e9e594d40a12233",
       "mode": "illustrative",
       "reason": "Standard-input match fragment: it relies on the io import shown earlier and requires host stdin."
     },
     "docs/manual/json.md#aura-1": {
-      "sha256": "88718c7111b387f13524595c0f743a63752adc3a3007c5c632b8d0b885fc3863",
+      "sha256": "39922950204f36332cceebab4912120bdc8f1d48375a67debfa35d515a6cf6f4",
       "mode": "run",
-      "stdout": "{\"tags\":[\"compiler\",\"service\"],\"workers\":3}\nOption.Some(7)\n{\"ready\":true,\"tags\":[\"compiler\",\"service\"],\"workers\":3}\n{\n  \"ready\": true,\n  \"tags\": [\n    \"compiler\",\n    \"service\"\n  ],\n  \"workers\": 3\n}\n",
+      "stdout": "{\"tags\":[\"compiler\",\"service\"],\"workers\":3}\n7\n{\"ready\":true,\"tags\":[\"compiler\",\"service\"],\"workers\":3}\n{\n  \"ready\": true,\n  \"tags\": [\n    \"compiler\",\n    \"service\"\n  ],\n  \"workers\": 3\n}\n",
       "stderr": ""
     },
     "docs/manual/lexical-structure.md#aura-1": {
@@ -1143,7 +1143,7 @@
     "docs/manual/lexical-structure.md#aura-10": {
       "sha256": "9c2610b6a412d0510f9e6cb83ff87cd0ec63863cf5f087feb2b70feeb48a8286",
       "mode": "run",
-      "stdout": "   1,234,567\n+87.50%\n······Aura······\n",
+      "stdout": "   1,234,567\n+87.50%\n\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7Aura\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\n",
       "stderr": ""
     },
     "docs/manual/lexical-structure.md#aura-2": {
@@ -1271,7 +1271,7 @@
       "stderr": ""
     },
     "docs/manual/network.md#aura-2": {
-      "sha256": "59b919a52c9bbc372b6dccd7e91c3b06c58b1499ef2722ec5eca493fd9b366b4",
+      "sha256": "c57c55f9c4e2e16e3eea91113dabbd73e896758974aad143995a77a4cb2c925a",
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""
@@ -1462,7 +1462,7 @@
       "reason": "Process function fragment: it relies on the process import shown in the page-level setup block."
     },
     "docs/manual/process.md#aura-4": {
-      "sha256": "a761643fe2b486d01c72e9426054396d2ab0a0355a3332e4c7f545d1739de662",
+      "sha256": "1d0d0965852c45660a7e862e715a13d8b4f56085422fe39760029dba757ff44a",
       "mode": "illustrative",
       "reason": "Child-pipe fragment: it relies on process types and a child created by the surrounding example."
     },
@@ -1648,13 +1648,13 @@
       "stderr": ""
     },
     "docs/manual/types.md#aura-10": {
-      "sha256": "291e91a1c472c827d4c19d519925654a70aa5c5182f01005a50faff3ffeb3cd1",
+      "sha256": "2e5a2f801efb936dd71602303d815f8d6e7502a08b91d1b16c5186a595f1ffef",
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""
     },
     "docs/manual/types.md#aura-11": {
-      "sha256": "c5c324b3ad893dfe528d5a622c7595469f64d559d7a7b1c55e0a6124ca9370d1",
+      "sha256": "3af3320251b3a31a648445eb862475c96c4841d1615e7c3387c79d49e23af20e",
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""
@@ -1672,36 +1672,36 @@
       "stderr": ""
     },
     "docs/manual/types.md#aura-4": {
-      "sha256": "26c4089f6edf050c45821f1e3a9d0927199bad5a8c2968745f789e070ca401b1",
+      "sha256": "feea48fbb9633edcfcc0e8bdc725852d7ac266d5df1bdc5c92b7fee794af489d",
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""
     },
     "docs/manual/types.md#aura-5": {
-      "sha256": "4c0f11f5d29d568b10570e006409400c778e2e74f0a408766fa04ac250cc4ac1",
+      "sha256": "1e773ba0d422ad452ab338ffba5b8ac3f2d06d0802f462a264ab823d0f335946",
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""
     },
     "docs/manual/types.md#aura-6": {
-      "sha256": "53753d6d347a01a32f3bd83ec7f21d897e3e507a4b098f5517b3eb3f0cd5c15a",
+      "sha256": "d7f02f03dcae0dee82abc06c83370c399a80f2b69cd749c707b3eeefd64e9930",
       "mode": "illustrative",
       "reason": "Result-match fragment: result is an input supplied by the surrounding example."
     },
     "docs/manual/types.md#aura-7": {
-      "sha256": "32ac11124d29931b8362fd65be4372ef60a9ad0e90315ed54d8cd7274e7ba00a",
+      "sha256": "03a75dfe9fb4e2f7fac72f4352df3de407a15e7e311da3f507eb2f4eea373e68",
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""
     },
     "docs/manual/types.md#aura-8": {
-      "sha256": "8f15a8f4d5419673eecf28e0a4c4129652d8112c8e367cafededbe4849efb738",
+      "sha256": "32ac11124d29931b8362fd65be4372ef60a9ad0e90315ed54d8cd7274e7ba00a",
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""
     },
     "docs/manual/types.md#aura-9": {
-      "sha256": "2e5a2f801efb936dd71602303d815f8d6e7502a08b91d1b16c5186a595f1ffef",
+      "sha256": "8f15a8f4d5419673eecf28e0a4c4129652d8112c8e367cafededbe4849efb738",
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""
@@ -1710,6 +1710,12 @@
       "sha256": "ab120eaad30c40343e5efce33f946adcfb90497793374eb91a49cee22169ad9f",
       "mode": "illustrative",
       "reason": "Editor query commands consume the current document from stdin; subprocess integration tests exercise all four verbs."
+    },
+    "docs/manual/types.md#aura-12": {
+      "sha256": "c5c324b3ad893dfe528d5a622c7595469f64d559d7a7b1c55e0a6124ca9370d1",
+      "mode": "check",
+      "stdout": "ok\n",
+      "stderr": ""
     }
   }
 }

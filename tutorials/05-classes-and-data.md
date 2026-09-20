@@ -78,10 +78,10 @@ out-of-line representation and keeps the parent size finite:
 ```aura check-pass
 class Node:
     value: int32
-    next: indirect Node?
+    next: indirect Node | None
 ```
 
-The `?` suffix is shorthand for `Option[...]`, so `indirect Node?` means an optional owned child stored indirectly.
+An optional field is a union with `None`, and `|` binds more loosely than `indirect`, so `indirect Node | None` is an optional owned child stored indirectly; the `indirect` marker on the member marks the whole field.
 
 See [examples/classes/indirect_recursive.au](../examples/classes/indirect_recursive.au).
 

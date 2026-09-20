@@ -10,13 +10,13 @@ def main():
     mut owned_generator = generators.pop(0)
     print(owned_generator.next_int(lo=1, hi=10))
 
-    # `dict.remove(key)` likewise transfers the optional stored value.
+    # `dict.remove(key)` likewise transfers the stored value out of its `Lookup`.
     mut holders = dict[str, Holder]()
     holders["a"] = Holder(generator=random.Rng(seed=7))
     match own holders.remove("a"):
-        case Option.Some(chosen):
+        case Lookup.Found(chosen):
             mut owned_holder = chosen
             print(owned_holder.generator.next_int(lo=1, hi=10))
-        case Option.None:
+        case Lookup.Missing:
             print("none")
     print(holders.len())

@@ -45,9 +45,10 @@ def classify(value: int32) -> str:
 ```
 
 There is no implicit numeric widening or general return coercion. A bare
-`None` in an argument or return position adopts an expected `Option[T]`, and
-grouping does not discard that context. Other contextual literal typing and
-the complete symmetric option-equality rule follow [Static
+`None` or a member value in an argument or return position adopts an expected
+`T | None` union, and grouping does not discard that context; a function
+declared `-> T | None` returns absence with an explicit `return None`. Other
+contextual literal typing and the union equality rule follow [Static
 Semantics](/manual/static-semantics#contextual-inference).
 
 Function names share the module item namespace with classes, enums, traits, and imports. Duplicate items and attempts to redefine maintained builtin function names are rejected. Ordinary parameter names must be unique. A method parameter also cannot be named `self` when the method has a receiver. In a method declaration, `self: Type` is rejected rather than treated as an ordinary first parameter; receivers use `self`, `own self`, or `mut self`. See [Names And Scopes](/manual/names-and-scopes) for the complete namespace rules.
@@ -434,8 +435,14 @@ A generic named function must receive explicit type arguments, for example
 `show_int = show[int32]`, or a concrete expected function type. Expected types
 can specialize a variable annotation, argument, field, collection element, or
 parameter default such as a generic `empty` used where
-`def() -> Option[str]` is required. A generic name with neither source of
+`def() -> (str | None)` is required. A generic name with neither source of
 type arguments does not have one concrete function-value type.
+
+Inside a function type, `|` binds more loosely than `->`, so
+`def() -> int32 | None` is the union of a function type and `None`, that is
+`(def() -> int32) | None`. A function value that returns an optional groups
+its result type, as in `def() -> (int32 | None)`; the parenthesized single
+type is grouping, not a tuple.
 
 An associated method without `self` named as `Class.method` is a thin
 function value carrying the method's complete contract when its class is not

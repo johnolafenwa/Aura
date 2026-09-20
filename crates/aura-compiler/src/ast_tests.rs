@@ -170,7 +170,7 @@ fn tuple_ast_nodes_are_structural_and_keep_binding_spans() {
 fn type_ref_json_preserves_named_tuple_and_function_shapes() {
     let span = Span::new(3, 5);
     let named = TypeRef::named(
-        "Option",
+        "Lookup",
         vec![TypeRef::named("int32", vec![], false, span)],
         false,
         span,
@@ -178,7 +178,7 @@ fn type_ref_json_preserves_named_tuple_and_function_shapes() {
     assert_eq!(
         serde_json::to_value(&named).expect("named type reference should serialize"),
         serde_json::json!({
-            "name": "Option",
+            "name": "Lookup",
             "args": [{
                 "name": "int32",
                 "args": [],

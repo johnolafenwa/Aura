@@ -9,8 +9,8 @@ def main():
     shape: list[int64] = values.shape()
     count: int64 = values.len()
     copied: Array[int32] = values.clone()
-    maybe: Option[int32] = values.get(index=[0, 1])
-    old: Option[int32] = values.set(index=[0, 1], value=9)
+    maybe: int32 | None = values.get(index=[0, 1])
+    old: int32 | None = values.set(index=[0, 1], value=9)
     values.fill(value=0)
     item: int32 = values[0, 1]
     first: int32 = values[0]

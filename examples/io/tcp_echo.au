@@ -7,10 +7,10 @@ def serve(addresses: Queue[str]) -> Result[None, io.Error]:
         with stream = try server.accept():
             message = try stream.read_line()
             match own message:
-                case Option.Some(text):
+                case str as text:
                     try stream.write_all("echo:" + text)
                     try stream.flush()
-                case Option.None:
+                case None:
                     pass
         return Result.Ok(None)
 
@@ -36,9 +36,9 @@ def main() -> int32:
                             match own socket.read_line():
                                 case Result.Ok(message):
                                     match own message:
-                                        case Option.Some(text):
+                                        case str as text:
                                             print(text)
-                                        case Option.None:
+                                        case None:
                                             return 1
                                 case Result.Err(_):
                                     return 1

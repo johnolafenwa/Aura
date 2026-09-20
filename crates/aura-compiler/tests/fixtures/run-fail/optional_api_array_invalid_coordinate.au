@@ -1,0 +1,4 @@
+def main():
+    mut values = Array[int64].from_list([1, 2, 3], [3])
+    replaced = values.set([0, 0], 10)
+    print(replaced is None)

@@ -11,10 +11,10 @@ def serve_http(addresses: Queue[str]) -> Result[None, io.Error]:
             body = try request.body_text()
             headers = request.headers()
             match headers.get("X-Test"):
-                case Option.Some(test_header):
+                case Lookup.Found(test_header):
                     try request.respond_text(200, method + ":" + path + ":" + body + ":" + test_header, {"Content-Type": "text/plain"})
                     return Result.Ok(None)
-                case Option.None:
+                case Lookup.Missing:
                     return Result.Ok(None)
 
 def run() -> Result[None, io.Error]:

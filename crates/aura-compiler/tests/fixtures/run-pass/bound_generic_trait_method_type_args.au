@@ -1,0 +1,14 @@
+trait Convert:
+    def convert[U](self, value: own U) -> U
+
+class Counter:
+    count: int64
+
+impl Convert for Counter:
+    def convert[U](self, value: own U) -> U:
+        return value
+
+def main():
+    counter = Counter(count=1)
+    bound = counter.convert[int64]
+    print(bound(3))

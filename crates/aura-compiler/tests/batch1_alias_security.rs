@@ -79,7 +79,7 @@ fn nested_constructor_alias_cycle_is_still_detected() {
 
 #[test]
 fn aliasing_a_valid_nominal_recursive_type_is_not_an_alias_cycle() {
-    let source = "class Node:\n    next: indirect Node?\n\ntype NodeAlias = Node\n";
+    let source = "class Node:\n    next: indirect Node | None\n\ntype NodeAlias = Node\n";
     check_source(source).expect("nominal indirection must remain a valid recursion boundary");
 }
 

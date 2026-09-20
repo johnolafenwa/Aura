@@ -1,0 +1,5 @@
+error[AU1101]: expected RParen, found Question
+ --> crates/aura-compiler/tests/fixtures/parse-fail/unexpected_question_parameter_suffix.au:1:24
+  |
+1 | def describe(value: str?) -> str:
+  |                        ^

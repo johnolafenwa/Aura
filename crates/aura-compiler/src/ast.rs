@@ -837,10 +837,15 @@ impl Serialize for TypeRef {
 }
 
 impl TypeRef {
+    /// A union type reference. A member written with `indirect` (the
+    /// recursive-field marker, as in `next: indirect Node | None`) marks the
+    /// whole union: the field's recursion is behind indirection exactly as the
+    /// former `indirect Node?` field was.
     pub fn union(members: Vec<TypeRef>, span: Span) -> Self {
+        let indirect = members.iter().any(|member| member.indirect);
         Self {
             kind: TypeRefKind::Union(members),
-            indirect: false,
+            indirect,
             span,
         }
     }

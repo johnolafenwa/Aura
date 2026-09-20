@@ -5,7 +5,7 @@ copy class Color:
 
 class Node:
     value: int32
-    next: indirect Node?
+    next: indirect Node | None
 
 class Box[T]:
     value: T

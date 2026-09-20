@@ -1,5 +1,0 @@
-import process
-
-def main():
-    with supervisor = process.supervisor():
-        supervisor.start(name="job", command=["/bin/true"], cwd=Option.None)

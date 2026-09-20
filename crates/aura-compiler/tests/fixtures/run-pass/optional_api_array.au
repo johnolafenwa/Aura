@@ -1,0 +1,20 @@
+def main():
+    mut values = Array[int64].from_list([1, 2, 3], [3])
+    got = values.get([1])
+    if got is not None:
+        print(got)
+    print(values.get([9]) is None)
+    print(values.get([-1]) is None)
+    replaced = values.set([0], 10)
+    if replaced is not None:
+        print(replaced)
+    print(values.get([0]))
+    mut floats = Array[float64].from_list([0.5, 1.5], [2])
+    scale = floats.get([1])
+    if scale is not None:
+        print(scale * 2.0)
+    match floats.set([1], 4.0):
+        case float64 as old:
+            print(old)
+        case None:
+            print("no old value")

@@ -1,0 +1,22 @@
+def main() -> int32:
+    annotated: int64 | None = 5
+    match own annotated:
+        case int64 as v:
+            print(v)
+        case None:
+            print(-1)
+    plain = 5
+    print(plain + 1)
+    injected: int64 | None = plain
+    match own injected:
+        case int64 as v:
+            print(v + 2)
+        case None:
+            print(-1)
+    absent: int64 | None = None
+    match own absent:
+        case int64 as v:
+            print(v)
+        case None:
+            print(-1)
+    return 0

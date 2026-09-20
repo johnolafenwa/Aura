@@ -343,7 +343,7 @@ fn callable_view_footprints_cover_tuple_positions_and_skip_indirect_fields() {
         .expect("the callable call binds a returned loan")["projections"]
         .clone();
     assert_eq!(projections, json!(["items.0", "items.1", "label"]));
-    let indirect = "class Node:\n    value: int64\n    next: indirect Option[Node] = Option.None\ndef pick(node: Node) -> view int64 from node:\n    return view node.value\ndef main():\n    node = Node(value=3)\n    chooser: def(node: Node) -> view int64 from node = pick\n    view head = chooser(node)\n    print(head)\n";
+    let indirect = "class Node:\n    value: int64\n    next: indirect Node | None = None\ndef pick(node: Node) -> view int64 from node:\n    return view node.value\ndef main():\n    node = Node(value=3)\n    chooser: def(node: Node) -> view int64 from node = pick\n    view head = chooser(node)\n    print(head)\n";
     assert_runs(indirect, "3\n");
 }
 
@@ -362,7 +362,7 @@ fn indexing_and_membership_on_call_results() {
 #[test]
 fn contextual_none_without_an_expected_type() {
     let source = "def main():\n    print(None)\n    x = None\n    print(x)\n";
-    assert_runs(source, "\n\n");
+    assert_runs(source, "None\nNone\n");
 }
 
 #[test]

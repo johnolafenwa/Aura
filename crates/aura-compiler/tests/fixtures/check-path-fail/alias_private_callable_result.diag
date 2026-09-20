@@ -1,0 +1,5 @@
+error[AU2005]: public type alias `Maker` exposes private type `Secret`
+ --> crates/aura-compiler/tests/fixtures/check-path-fail/alias_private_support/maker.au:4:30
+  |
+4 | public type Maker = def() -> Secret
+  |                              ^

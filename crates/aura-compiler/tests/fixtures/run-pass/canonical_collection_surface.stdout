@@ -5,12 +5,12 @@
 4
 [2, 3]
 true
-Option.None
+Lookup.Missing
 [one, two]
 [1, 2]
 [(one, 1), (two, 2)]
 {one: 1, two: 20, three: 3}
-Option.Some(20)
+Lookup.Found(20)
 {one: 1, three: 3}
 true
 {b}

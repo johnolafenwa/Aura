@@ -1,0 +1,16 @@
+enum Option:
+    Some(value: int64)
+    Nothing
+
+def describe(value: Option) -> str:
+    match value:
+        case Option.Some(inner):
+            return f"some {inner}"
+        case Option.Nothing:
+            return "nothing"
+
+def main():
+    print(describe(Option.Some(3)))
+    print(describe(Option.Nothing))
+    boxed: int64 | None = None
+    print(boxed is None)

@@ -169,7 +169,7 @@ See [examples/basics/named_builtin_arguments.au](../examples/basics/named_builti
 
 Functions may return any concrete type accepted in a return annotation,
 including scalars, tuples, strings, collections, numeric arrays, classes,
-enums, generic specializations, function values, `Result[T, E]`, `Option[T]`,
+enums, generic specializations, function values, `Result[T, E]`, optional `T | None` unions,
 `Task[T]`, and `None`. An ordinary `-> T` result is owned. A separate
 `-> view T from source` or `-> view mut T from source` contract returns a
 non-owning view tied to one receiver or parameter.

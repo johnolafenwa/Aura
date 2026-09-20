@@ -1,0 +1,5 @@
+error[AU2001]: unknown type `Option`
+ --> crates/aura-compiler/tests/fixtures/check-fail/unknown_type_option_in_generic_position.au:2:17
+  |
+2 |     items: list[Option[str]] = []
+  |                 ^

@@ -289,7 +289,7 @@ fn completion_inside_comprehension_output_with_tuple_target_sees_both_names() {
 fn completion_scope_walks_is_none_formatted_fstrings_and_match_guards() {
     let source = concat!(
         "def main():\n",
-        "    maybe: Option[int64] = Option.Some(1)\n",
+        "    maybe: int64 | None = 1\n",
         "    missing = maybe is None\n",
         "    count = 3\n",
         "    label = f\"{count:>5}\"\n",

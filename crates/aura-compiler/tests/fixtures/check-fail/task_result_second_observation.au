@@ -4,6 +4,6 @@ def make_text() -> str:
 def main() -> int32:
     with TaskGroup() as group:
         task = group.start(make_text)
-        print(task.result_or_none())
+        print(task.poll())
         print(task.result_or("fallback"))
     return 0

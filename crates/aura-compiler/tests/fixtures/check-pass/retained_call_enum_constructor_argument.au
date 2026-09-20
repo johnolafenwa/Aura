@@ -2,9 +2,9 @@ enum Wrapped[T]:
     Value(T)
 
 def main():
-    mut options: list[Option[int32]] = []
-    options.append(Option.Some(1))
-    options.append(Option.None)
+    mut optionals: list[int32 | None] = []
+    optionals.append(1)
+    optionals.append(None)
 
     mut results: list[Result[int32, str]] = []
     results.append(Result.Ok(2))

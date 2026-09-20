@@ -4,9 +4,9 @@ import net
 
 def read_control(expected: str) -> bool:
     match io.read_line():
-        case Result.Ok(Option.Some(line)):
+        case Result.Ok(str as line):
             return line == expected
-        case Result.Ok(Option.None):
+        case Result.Ok(None):
             return false
         case Result.Err(_):
             return false
@@ -26,10 +26,10 @@ def serve_one(index: int32, addresses: Queue[str]) -> Result[int32, io.Error]:
         stream = try listener.accept(timeout=5s)
         with socket = stream:
             match try socket.read_line(timeout=5s):
-                case Option.Some(payload):
+                case str as payload:
                     if payload != "ping":
                         return Result.Err(io.Error.Other(message="unexpected TCP fan-out payload"))
-                case Option.None:
+                case None:
                     return Result.Err(io.Error.Other(message="TCP fan-out client closed early"))
 
             sleep(100ms)
@@ -44,11 +44,11 @@ def run_client(address: own str) -> Result[int32, io.Error]:
         try socket.write_all("ping\n", timeout=5s)
         try socket.flush()
         match try socket.read_line(timeout=5s):
-            case Option.Some(reply):
+            case str as reply:
                 if reply != "pong":
                     return Result.Err(io.Error.Other(message="unexpected TCP fan-out reply"))
                 return Result.Ok(reply.len() as int32)
-            case Option.None:
+            case None:
                 return Result.Err(io.Error.Other(message="TCP fan-out server closed early"))
 
 

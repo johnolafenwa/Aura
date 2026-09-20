@@ -1,0 +1,8 @@
+type Unary = def(int64) -> int64
+
+def keyword_only(*, value: int64) -> int64:
+    return value + 1
+
+def main():
+    step = Unary(keyword_only)
+    print(step(4))

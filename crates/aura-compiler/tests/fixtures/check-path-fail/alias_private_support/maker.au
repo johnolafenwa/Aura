@@ -1,0 +1,4 @@
+class Secret:
+    value: int64
+
+public type Maker = def() -> Secret

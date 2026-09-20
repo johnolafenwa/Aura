@@ -1,0 +1,4 @@
+def main():
+    print("abc".len())
+    print([1, 2, 3].len())
+    print("a,b".split(","))

@@ -1,3 +1,0 @@
-def main() -> None:
-    missing: Option[int32] = Option.None
-    print(missing)

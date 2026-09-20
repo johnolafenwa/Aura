@@ -2384,10 +2384,25 @@ fn union_payload_wrapper_cannot_erase_an_authoritative_callable_subtree() {
     // The transplanted union brings its explicit-tag layout plan along, so
     // the forged module fails on the callable contract rather than on a
     // missing plan (ADR-0052 A9).
+    // Both modules also plan the optional unions of the builtin signatures
+    // they carry; transplant only the plans this module does not have.
+    let present = encoded["unions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|plan| plan["union_type"]["Union"]["keys"].clone())
+        .collect::<Vec<_>>();
+    let transplanted = union_mir["unions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|plan| !present.contains(&plan["union_type"]["Union"]["keys"]))
+        .cloned()
+        .collect::<Vec<_>>();
     encoded["unions"]
         .as_array_mut()
         .unwrap()
-        .extend(union_mir["unions"].as_array().unwrap().iter().cloned());
+        .extend(transplanted);
     let inspect = &mut encoded["functions"][inspect_index];
     inspect["local_types"].as_array_mut().unwrap().extend([
         json!({ "name": "%t990", "ty": tuple.clone() }),
@@ -2437,7 +2452,7 @@ fn union_payload_wrapper_cannot_erase_an_authoritative_callable_subtree() {
 
 #[test]
 fn list_get_option_payload_preserves_authoritative_callable_identity() {
-    let source = "class Holder:\n    values: list[int64]\ndef consume(item: own Holder):\n    pass\ndef inspect(value: own Holder):\n    callbacks: list[def(item: own Holder) -> None] = [consume]\n    match callbacks.get(0):\n        case Some(callback):\n            callback(value)\n        case None:\n            pass\ndef main():\n    pass\n";
+    let source = "class Holder:\n    values: list[int64]\ndef consume(item: own Holder):\n    pass\ndef inspect(value: own Holder):\n    callbacks: list[def(item: own Holder) -> None] = [consume]\n    match callbacks.get(0):\n        case Lookup.Found(callback):\n            callback(value)\n        case Lookup.Missing:\n            pass\ndef main():\n    pass\n";
     let mut encoded = serde_json::to_value(lower_source_to_mir(source).unwrap()).unwrap();
     let inspect = encoded["functions"]
         .as_array_mut()
@@ -2466,7 +2481,7 @@ fn list_get_option_payload_preserves_authoritative_callable_identity() {
 
 #[test]
 fn nested_list_get_tuple_payload_preserves_authoritative_callable_identity() {
-    let source = "class Holder:\n    values: list[int64]\ndef consume(item: own Holder):\n    pass\ndef inspect(value: own Holder):\n    callbacks: list[(def(item: own Holder) -> None, int64)] = [(consume, 0)]\n    match callbacks.get(0):\n        case Some(entry):\n            callback: def(item: own Holder) -> None = entry[0]\n            callback(value)\n        case None:\n            pass\ndef main():\n    pass\n";
+    let source = "class Holder:\n    values: list[int64]\ndef consume(item: own Holder):\n    pass\ndef inspect(value: own Holder):\n    callbacks: list[(def(item: own Holder) -> None, int64)] = [(consume, 0)]\n    match callbacks.get(0):\n        case Lookup.Found(entry):\n            callback: def(item: own Holder) -> None = entry[0]\n            callback(value)\n        case Lookup.Missing:\n            pass\ndef main():\n    pass\n";
     let mut encoded = serde_json::to_value(lower_source_to_mir(source).unwrap()).unwrap();
     let inspect = encoded["functions"]
         .as_array_mut()
@@ -2494,7 +2509,7 @@ fn nested_list_get_tuple_payload_preserves_authoritative_callable_identity() {
 }
 
 fn dict_get_callable_source() -> &'static str {
-    "class Holder:\n    values: list[int64]\ndef consume(item: own Holder):\n    pass\ndef inspect(value: own Holder):\n    callbacks: dict[str, def(item: own Holder) -> None] = {\"consume\": consume}\n    match callbacks.get(\"consume\"):\n        case Some(callback):\n            callback(value)\n        case None:\n            pass\ndef main():\n    pass\n"
+    "class Holder:\n    values: list[int64]\ndef consume(item: own Holder):\n    pass\ndef inspect(value: own Holder):\n    callbacks: dict[str, def(item: own Holder) -> None] = {\"consume\": consume}\n    match callbacks.get(\"consume\"):\n        case Lookup.Found(callback):\n            callback(value)\n        case Lookup.Missing:\n            pass\ndef main():\n    pass\n"
 }
 
 #[test]
@@ -3198,7 +3213,7 @@ fn weaken_function_callable_metadata_preserving(
 }
 
 fn runtime_index_nested_tuple_get_source() -> &'static str {
-    "class Holder:\n    values: list[int64]\ndef consume(item: own Holder):\n    pass\ndef inspect(value: own Holder, index: int64):\n    callbacks: list[(def(item: own Holder) -> None, int64)] = [(consume, 0)]\n    match callbacks.get(index):\n        case Some(entry):\n            callback: def(item: own Holder) -> None = entry[0]\n            callback(value)\n        case None:\n            pass\ndef main():\n    pass\n"
+    "class Holder:\n    values: list[int64]\ndef consume(item: own Holder):\n    pass\ndef inspect(value: own Holder, index: int64):\n    callbacks: list[(def(item: own Holder) -> None, int64)] = [(consume, 0)]\n    match callbacks.get(index):\n        case Lookup.Found(entry):\n            callback: def(item: own Holder) -> None = entry[0]\n            callback(value)\n        case Lookup.Missing:\n            pass\ndef main():\n    pass\n"
 }
 
 #[test]
@@ -3287,7 +3302,7 @@ fn dict_values_nested_tuple_with_owned_argument_remains_valid() {
 }
 
 fn runtime_index_doubly_nested_list_source() -> &'static str {
-    "class Holder:\n    values: list[int64]\ndef consume(item: own Holder):\n    pass\ndef inspect(value: own Holder, index: int64):\n    callbacks: list[list[(def(item: own Holder) -> None, int64)]] = [[(consume, 0)]]\n    match callbacks.get(index):\n        case Some(inner):\n            match inner.get(index):\n                case Some(entry):\n                    entry[0](value)\n                case None:\n                    pass\n        case None:\n            pass\ndef main():\n    pass\n"
+    "class Holder:\n    values: list[int64]\ndef consume(item: own Holder):\n    pass\ndef inspect(value: own Holder, index: int64):\n    callbacks: list[list[(def(item: own Holder) -> None, int64)]] = [[(consume, 0)]]\n    match callbacks.get(index):\n        case Lookup.Found(inner):\n            match inner.get(index):\n                case Lookup.Found(entry):\n                    entry[0](value)\n                case Lookup.Missing:\n                    pass\n        case Lookup.Missing:\n            pass\ndef main():\n    pass\n"
 }
 
 #[test]
@@ -3310,7 +3325,7 @@ fn runtime_index_doubly_nested_list_with_owned_argument_remains_valid() {
 }
 
 fn runtime_index_direct_tuple_call_source() -> &'static str {
-    "class Holder:\n    values: list[int64]\ndef consume(item: own Holder):\n    pass\ndef inspect(value: own Holder, index: int64):\n    callbacks: list[(def(item: own Holder) -> None, int64)] = [(consume, 0)]\n    match callbacks.get(index):\n        case Some(entry):\n            entry[0](value)\n        case None:\n            pass\ndef main():\n    pass\n"
+    "class Holder:\n    values: list[int64]\ndef consume(item: own Holder):\n    pass\ndef inspect(value: own Holder, index: int64):\n    callbacks: list[(def(item: own Holder) -> None, int64)] = [(consume, 0)]\n    match callbacks.get(index):\n        case Lookup.Found(entry):\n            entry[0](value)\n        case Lookup.Missing:\n            pass\ndef main():\n    pass\n"
 }
 
 #[test]
@@ -3333,7 +3348,7 @@ fn runtime_index_direct_tuple_call_with_owned_argument_remains_valid() {
 }
 
 fn runtime_index_two_functions_source() -> &'static str {
-    "def double(value: int64) -> int64:\n    return value * 2\ndef triple(value: int64) -> int64:\n    return value * 3\ndef pick(index: int64) -> int64:\n    tools: list[def(value: int64) -> int64] = [double, triple]\n    match tools.get(index):\n        case Some(tool):\n            return tool(7)\n        case None:\n            return -1\ndef main():\n    print(pick(0))\n    print(pick(1))\n"
+    "def double(value: int64) -> int64:\n    return value * 2\ndef triple(value: int64) -> int64:\n    return value * 3\ndef pick(index: int64) -> int64:\n    tools: list[def(value: int64) -> int64] = [double, triple]\n    match tools.get(index):\n        case Lookup.Found(tool):\n            return tool(7)\n        case Lookup.Missing:\n            return -1\ndef main():\n    print(pick(0))\n    print(pick(1))\n"
 }
 
 #[test]
@@ -3345,7 +3360,7 @@ fn runtime_index_over_distinct_functions_with_equal_contracts_remains_valid() {
 }
 
 fn runtime_index_task_start_source() -> &'static str {
-    "class Holder:\n    values: list[int64]\ndef consume(item: own Holder):\n    pass\ndef inspect(value: own Holder, index: int64):\n    callbacks: list[(def(item: own Holder) -> None, int64)] = [(consume, 0)]\n    match callbacks.get(index):\n        case Some(entry):\n            callback: def(item: own Holder) -> None = entry[0]\n            with TaskGroup() as group:\n                group.start(callback, value)\n        case None:\n            pass\ndef main():\n    pass\n"
+    "class Holder:\n    values: list[int64]\ndef consume(item: own Holder):\n    pass\ndef inspect(value: own Holder, index: int64):\n    callbacks: list[(def(item: own Holder) -> None, int64)] = [(consume, 0)]\n    match callbacks.get(index):\n        case Lookup.Found(entry):\n            callback: def(item: own Holder) -> None = entry[0]\n            with TaskGroup() as group:\n                group.start(callback, value)\n        case Lookup.Missing:\n            pass\ndef main():\n    pass\n"
 }
 
 #[test]
@@ -3367,7 +3382,7 @@ fn runtime_index_task_start_with_owned_argument_remains_valid() {
 }
 
 fn runtime_index_returned_callable_source() -> &'static str {
-    "class Holder:\n    values: list[int64]\ndef consume(item: own Holder):\n    pass\ndef choose(index: int64) -> def(item: own Holder) -> None:\n    callbacks: list[(def(item: own Holder) -> None, int64)] = [(consume, 0)]\n    match callbacks.get(index):\n        case Some(entry):\n            return entry[0]\n        case None:\n            return consume\ndef inspect(value: own Holder, index: int64):\n    callback = choose(index)\n    callback(value)\ndef main():\n    pass\n"
+    "class Holder:\n    values: list[int64]\ndef consume(item: own Holder):\n    pass\ndef choose(index: int64) -> def(item: own Holder) -> None:\n    callbacks: list[(def(item: own Holder) -> None, int64)] = [(consume, 0)]\n    match callbacks.get(index):\n        case Lookup.Found(entry):\n            return entry[0]\n        case Lookup.Missing:\n            return consume\ndef inspect(value: own Holder, index: int64):\n    callback = choose(index)\n    callback(value)\ndef main():\n    pass\n"
 }
 
 #[test]
@@ -3440,7 +3455,7 @@ fn runtime_index_writeback_with_owned_argument_remains_valid() {
 }
 
 fn appended_element_runtime_index_source() -> &'static str {
-    "class Holder:\n    values: list[int64]\ndef consume(item: own Holder):\n    pass\ndef discard(item: own Holder):\n    pass\ndef inspect(value: own Holder, index: int64):\n    mut callbacks: list[def(item: own Holder) -> None] = [consume]\n    callbacks.append(discard)\n    callbacks.insert(0, consume)\n    match callbacks.get(index):\n        case Some(callback):\n            callback(value)\n        case None:\n            pass\ndef main():\n    pass\n"
+    "class Holder:\n    values: list[int64]\ndef consume(item: own Holder):\n    pass\ndef discard(item: own Holder):\n    pass\ndef inspect(value: own Holder, index: int64):\n    mut callbacks: list[def(item: own Holder) -> None] = [consume]\n    callbacks.append(discard)\n    callbacks.insert(0, consume)\n    match callbacks.get(index):\n        case Lookup.Found(callback):\n            callback(value)\n        case Lookup.Missing:\n            pass\ndef main():\n    pass\n"
 }
 
 #[test]
@@ -3488,7 +3503,7 @@ fn runtime_index_over_mixed_contracts_is_poisoned_and_rejected() {
     // Two functions with different contracts forged into one list: a runtime
     // selection cannot prove which contract applies, so the call is rejected
     // even though the declared element metadata claims a weak contract.
-    let source = "class Holder:\n    values: list[int64]\ndef consume(item: own Holder):\n    pass\ndef peek(item: Holder):\n    pass\ndef inspect(value: Holder, index: int64):\n    callbacks: list[def(item: Holder) -> None] = [peek]\n    others: list[def(item: own Holder) -> None] = [consume]\n    match callbacks.get(index):\n        case Some(callback):\n            callback(value)\n        case None:\n            pass\ndef main():\n    pass\n";
+    let source = "class Holder:\n    values: list[int64]\ndef consume(item: own Holder):\n    pass\ndef peek(item: Holder):\n    pass\ndef inspect(value: Holder, index: int64):\n    callbacks: list[def(item: Holder) -> None] = [peek]\n    others: list[def(item: own Holder) -> None] = [consume]\n    match callbacks.get(index):\n        case Lookup.Found(callback):\n            callback(value)\n        case Lookup.Missing:\n            pass\ndef main():\n    pass\n";
     let mut encoded = serde_json::to_value(lower_source_to_mir(source).unwrap()).unwrap();
     let inspect = encoded["functions"]
         .as_array_mut()
@@ -3776,7 +3791,7 @@ fn closure_capture_with_owned_argument_remains_valid() {
 // Finding 3: a control-flow join must poison, not drop, disagreeing identities.
 fn join_source() -> String {
     format!(
-        "{}def inspect(value: own Holder, flag: bool, index: int64):\n    mut callbacks: list[def(item: own Holder) -> None] = []\n    if flag:\n        callbacks = [consume]\n    match callbacks.get(index):\n        case Some(callback):\n            callback(value)\n        case None:\n            pass\ndef main():\n    pass\n",
+        "{}def inspect(value: own Holder, flag: bool, index: int64):\n    mut callbacks: list[def(item: own Holder) -> None] = []\n    if flag:\n        callbacks = [consume]\n    match callbacks.get(index):\n        case Lookup.Found(callback):\n            callback(value)\n        case Lookup.Missing:\n            pass\ndef main():\n    pass\n",
         holder_prelude()
     )
 }
@@ -3798,7 +3813,7 @@ fn control_flow_join_with_owned_argument_remains_valid() {
 // Finding 4: mutation with an identity-less operand must poison the receiver.
 fn extend_source() -> String {
     format!(
-        "{}def inspect(value: own Holder, index: int64):\n    mut callbacks: list[def(item: own Holder) -> None] = [consume]\n    extra: list[def(item: own Holder) -> None] = []\n    callbacks.extend(extra)\n    match callbacks.get(index):\n        case Some(callback):\n            callback(value)\n        case None:\n            pass\ndef main():\n    pass\n",
+        "{}def inspect(value: own Holder, index: int64):\n    mut callbacks: list[def(item: own Holder) -> None] = [consume]\n    extra: list[def(item: own Holder) -> None] = []\n    callbacks.extend(extra)\n    match callbacks.get(index):\n        case Lookup.Found(callback):\n            callback(value)\n        case Lookup.Missing:\n            pass\ndef main():\n    pass\n",
         holder_prelude()
     )
 }
@@ -3875,7 +3890,7 @@ fn type_parameter_callee_requires_authoritative_contract() {
 // Finding 9: `items` results are key/value tuples.
 fn items_source() -> String {
     format!(
-        "{}def inspect(value: own Holder, index: int64):\n    callbacks: dict[str, (def(item: own Holder) -> None, int64)] = {{\"consume\": (consume, 0)}}\n    entries = callbacks.items()\n    match entries.get(index):\n        case Some(entry):\n            entry[1][0](value)\n        case None:\n            pass\ndef main():\n    pass\n",
+        "{}def inspect(value: own Holder, index: int64):\n    callbacks: dict[str, (def(item: own Holder) -> None, int64)] = {{\"consume\": (consume, 0)}}\n    entries = callbacks.items()\n    match entries.get(index):\n        case Lookup.Found(entry):\n            entry[1][0](value)\n        case Lookup.Missing:\n            pass\ndef main():\n    pass\n",
         holder_prelude()
     )
 }
@@ -3899,7 +3914,7 @@ fn dict_items_nested_tuple_with_owned_argument_remains_valid() {
 // keeps its callable position.
 fn dict_copy_source() -> String {
     format!(
-        "{}def inspect(value: own Holder, index: int64):\n    callbacks: dict[str, (def(item: own Holder) -> None, int64)] = {{\"consume\": (consume, 0)}}\n    copied = callbacks.copy()\n    match copied.get(\"consume\"):\n        case Some(entry):\n            entry[0](value)\n        case None:\n            pass\ndef main():\n    pass\n",
+        "{}def inspect(value: own Holder, index: int64):\n    callbacks: dict[str, (def(item: own Holder) -> None, int64)] = {{\"consume\": (consume, 0)}}\n    copied = callbacks.copy()\n    match copied.get(\"consume\"):\n        case Lookup.Found(entry):\n            entry[0](value)\n        case Lookup.Missing:\n            pass\ndef main():\n    pass\n",
         holder_prelude()
     )
 }
@@ -3940,7 +3955,7 @@ fn consuming_closure_with_view_capture_remains_valid() {
 // Finding 10: module constants and task results carry declared identities.
 fn module_constant_source() -> String {
     format!(
-        "{}TOOLS: list[def(item: own Holder) -> None] = [consume]\ndef inspect(value: own Holder, index: int64):\n    match TOOLS.get(index):\n        case Some(callback):\n            callback(value)\n        case None:\n            pass\ndef main():\n    pass\n",
+        "{}TOOLS: list[def(item: own Holder) -> None] = [consume]\ndef inspect(value: own Holder, index: int64):\n    match TOOLS.get(index):\n        case Lookup.Found(callback):\n            callback(value)\n        case Lookup.Missing:\n            pass\ndef main():\n    pass\n",
         holder_prelude()
     )
 }

@@ -1,0 +1,20 @@
+import process
+
+def run() -> Result[None, process.Error]:
+    with supervisor = process.supervisor():
+        try supervisor.start(name="worker", command=["/bin/sleep", "1"], restart=process.RestartPolicy.Never, group=true)
+        match supervisor.wait_or_none(timeout=500ms):
+            case Result.Ok(process.SupervisorEvent as event):
+                print(event)
+            case Result.Ok(None):
+                print("no event")
+            case Result.Err(error):
+                print(error)
+    return Result.Ok(None)
+
+def main():
+    match run():
+        case Result.Ok(_):
+            pass
+        case Result.Err(error):
+            print(error)

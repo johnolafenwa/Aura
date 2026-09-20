@@ -11,9 +11,9 @@ def main() -> int32:
 
     mut edited = matrix.clone()
     match edited.set([0, 1], 20):
-        case Option.Some(previous):
+        case int32 as previous:
             print(previous)
-        case Option.None:
+        case None:
             print(-1)
 
     wrapped = matrix.wrapping_add(2147483647)

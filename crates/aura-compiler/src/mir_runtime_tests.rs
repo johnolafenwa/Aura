@@ -1,9 +1,9 @@
 use super::{
     bind_args, bind_builtin_args, bind_optional_builtin_args, build_range, bytes_vec_value,
     collect_queue_handles, collect_runtime_type_substitutions, collect_type_params_from_type,
-    eval_ordering, evaluate_named_args, option_none, option_some, render_runtime_error, result_err,
-    result_ok, run_serialized_mir, send_error_closed, task_result_ready, write_stream,
-    CancellationContext, Env, EvaluatedMirArg, MirRuntime, TaskGroupValue, TaskValue,
+    eval_ordering, evaluate_named_args, render_runtime_error, result_err, result_ok,
+    run_serialized_mir, send_error_closed, task_result_ready, write_stream, CancellationContext,
+    Env, EvaluatedMirArg, MirRuntime, TaskGroupValue, TaskValue,
 };
 use crate::diag::{Diagnostic, RuntimeCallFrame, RuntimeSourceSpan, RuntimeTaskFrame, Span};
 use crate::integer::{IntegerKind, IntegerValue};
@@ -14,13 +14,15 @@ use crate::mir::{
 };
 use crate::randomness::SecureRandomError;
 use crate::runtime_value::{
-    ArrayStorage, ArrayValue, ChannelValue, EnumVariantValue, FfiHandleValue, FileValue,
-    HttpListenerValue, HttpResponseValue, InstanceValue, MapValue, ProcessChildValue,
-    ProcessCompletedValue, ProcessStdioConfig, ProcessSupervisorValue, RangeValue, SetValue,
-    TcpListenerValue, TcpStreamValue, TlsListenerValue, TlsStreamValue, TupleValue,
-    UdpDatagramValue, UdpSocketValue, Value, VecValue, WebSocketListenerValue, WebSocketValue,
+    lookup_found, lookup_missing, optional_absent, optional_present, optional_str_value,
+    poll_ready, poll_unavailable, ArrayStorage, ArrayValue, ChannelValue, EnumVariantValue,
+    FfiHandleValue, FileValue, HttpListenerValue, HttpResponseValue, InstanceValue, MapValue,
+    ProcessChildValue, ProcessCompletedValue, ProcessStdioConfig, ProcessSupervisorValue,
+    RangeValue, SetValue, TcpListenerValue, TcpStreamValue, TlsListenerValue, TlsStreamValue,
+    TupleValue, UdpDatagramValue, UdpSocketValue, Value, VecValue, WebSocketListenerValue,
+    WebSocketValue,
 };
-use crate::sema::Type;
+use crate::sema::{optional_type, Type};
 use rcgen::generate_simple_self_signed;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::ffi::c_void;
@@ -1989,10 +1991,10 @@ def main():
         "\
 [2, 2]\n\
 4\n\
-Option.None\n\
-Option.None\n\
-Option.Some(4)\n\
-Option.Some(2)\n\
+None\n\
+None\n\
+4\n\
+2\n\
 6\n\
 4\n\
 Array[int32](shape=[1, 2], values=[1, 6])\n\
@@ -2051,7 +2053,7 @@ shape\n\
 Array[int32](shape=[2], values=[7, 7])\n\
 value\n\
 index\n\
-Option.Some(4)\n\
+4\n\
 Array[int32](shape=[2], values=[4, 7])\n"
     );
 }
@@ -2266,16 +2268,16 @@ fn mir_array_containing_vec_and_map_copies_are_independent() {
         r#"
 def first(values: list[Array[int32]]) -> Array[int32]:
     match own values.get(0):
-        case Option.Some(value):
+        case Lookup.Found(value):
             return value
-        case Option.None:
+        case Lookup.Missing:
             return Array[int32].zeros([1])
 
 def named(values: dict[str, Array[int32]]) -> Array[int32]:
     match own values.get("values"):
-        case Option.Some(value):
+        case Lookup.Found(value):
             return value
-        case Option.None:
+        case Lookup.Missing:
             return Array[int32].zeros([1])
 
 def main():
@@ -4213,6 +4215,25 @@ fn enum_payloads(value: Value, enum_name: &str, variant_name: &str) -> Vec<Value
     }
 }
 
+/// The payload of a `T | None` union value, `None` when the value is absent.
+fn optional_payload(value: Value) -> Option<Value> {
+    match value {
+        Value::Union(union) => match union.payload {
+            Value::Unit => None,
+            payload => Some(payload),
+        },
+        other => panic!("expected a `T | None` union value, found {other:?}"),
+    }
+}
+
+fn expect_present(value: Value) -> Value {
+    optional_payload(value).expect("expected a present `T | None` value")
+}
+
+fn assert_absent(value: Value) {
+    assert_eq!(optional_payload(value), None);
+}
+
 fn result_ok_payload(value: Value) -> Value {
     let mut payloads = enum_payloads(value, "Result", "Ok");
     assert_eq!(payloads.len(), 1);
@@ -4311,8 +4332,7 @@ fn mir_json_into_accessors_move_payload_allocations_and_consume_places() {
         &mut env,
     )
     .expect("json.into_string should succeed");
-    let mut string_payloads = enum_payloads(string_result, "Option", "Some");
-    match string_payloads.remove(0) {
+    match expect_present(string_result) {
         Value::String(value) => assert_eq!(
             value.as_ptr(),
             text_ptr,
@@ -4345,8 +4365,7 @@ fn mir_json_into_accessors_move_payload_allocations_and_consume_places() {
         &mut env,
     )
     .expect("json.into_array should succeed");
-    let mut array_payloads = enum_payloads(array_result, "Option", "Some");
-    match array_payloads.remove(0) {
+    match expect_present(array_result) {
         Value::Vec(value) => assert_eq!(
             value.elements.as_ptr(),
             values_ptr,
@@ -4383,8 +4402,7 @@ fn mir_json_into_accessors_move_payload_allocations_and_consume_places() {
         &mut env,
     )
     .expect("json.into_object should succeed");
-    let mut object_payloads = enum_payloads(object_result, "Option", "Some");
-    match object_payloads.remove(0) {
+    match expect_present(object_result) {
         Value::Map(value) => assert_eq!(
             value.entries.as_ptr(),
             entries_ptr,
@@ -4481,8 +4499,8 @@ fn mir_json_wrong_variant_owned_accessor_still_consumes_the_source() {
             &[mir_arg(None, Operand::MovePlace("value".to_string()))],
             &mut env,
         )
-        .expect("wrong-variant extraction should return Option.None"),
-        option_none()
+        .expect("wrong-variant extraction should return `None`"),
+        optional_absent(Type::named("str"))
     );
     assert!(
         env.place_ref("value").is_err(),
@@ -4518,8 +4536,7 @@ fn mir_json_owned_accessor_moves_a_nested_place_without_cloning_its_payload() {
         &mut env,
     )
     .expect("nested owned json.Value should be extracted");
-    let mut payloads = enum_payloads(result, "Option", "Some");
-    match payloads.remove(0) {
+    match expect_present(result) {
         Value::String(value) => assert_eq!(value.as_ptr(), text_ptr),
         other => panic!("expected str payload, found {other:?}"),
     }
@@ -4546,15 +4563,15 @@ fn mir_place_reads_clone_and_preserve_copy_enum_payload_sources() {
     let outcome = runtime
         .evaluate_rvalue(
             &Rvalue::EnumVariant {
-                enum_name: "Option".to_string(),
-                variant_name: "Some".to_string(),
+                enum_name: "Lookup".to_string(),
+                variant_name: "Found".to_string(),
                 payloads: vec![Operand::Place("timeout".to_string())],
             },
             &mut env,
         )
         .expect("copy enum payload construction should succeed");
     let super::RvalueOutcome::Value(Value::EnumVariant(variant)) = outcome else {
-        panic!("expected Option.Some(Duration)");
+        panic!("expected Lookup.Found(Duration)");
     };
     assert_eq!(variant.payloads, vec![Value::Duration(2_000_000_000)]);
     assert_eq!(
@@ -4654,8 +4671,8 @@ fn mir_json_borrowed_calls_leave_source_allocations_in_place_on_success_and_erro
     );
     env.define_typed(
         "indent",
-        Type::named("Option"),
-        option_some(Value::Int(IntegerValue::from_i64(2))),
+        optional_type(Type::named("int64")),
+        optional_present(Type::named("int64"), Value::Int(IntegerValue::from_i64(2))),
     );
     let value_ptr = env.place_ref("string_value").unwrap() as *const Value;
 
@@ -4695,7 +4712,10 @@ fn mir_json_borrowed_calls_leave_source_allocations_in_place_on_success_and_erro
     }
     assert_eq!(
         env.read_place("indent"),
-        Ok(option_some(Value::Int(IntegerValue::from_i64(2)))),
+        Ok(optional_present(
+            Type::named("int64"),
+            Value::Int(IntegerValue::from_i64(2))
+        )),
         "copy-valued indent must remain available after json.dumps"
     );
 
@@ -4977,8 +4997,8 @@ fn mir_json_adapters_reject_inexact_runtime_metadata() {
 
     env.define_typed(
         "indent",
-        Type::Named("Option".to_string(), vec![Type::named("int64")]),
-        option_some(Value::Int(IntegerValue::from_i32(2))),
+        optional_type(Type::named("int64")),
+        optional_present(Type::named("int64"), Value::Int(IntegerValue::from_i32(2))),
     );
     let indent_error = call_name(
         &mut runtime,
@@ -4992,7 +5012,7 @@ fn mir_json_adapters_reject_inexact_runtime_metadata() {
         ],
         &mut env,
     )
-    .expect_err("an int32-backed indent must not be accepted as Option[int64]");
+    .expect_err("an int32-backed indent must not be accepted as `int64 | None`");
     assert_eq!(indent_error.code, "AU4001");
     assert!(indent_error.message.contains("contain an `int64`"));
 
@@ -5139,19 +5159,15 @@ fn mir_json_host_boundary_reports_malformed_values_without_hiding_consumption() 
         (
             "plain_indent",
             Value::Bool(false),
-            "`json::dumps` expects `indent` to be `Option[int64]`",
+            "`json::dumps` expects `indent` to be `int64 | None`",
         ),
         (
             "malformed_indent",
-            Value::EnumVariant(EnumVariantValue {
-                enum_name: "Option".to_string(),
-                variant_name: "Some".to_string(),
-                payloads: Vec::new(),
-            }),
-            "`json::dumps` expects `indent` to be `Option[int64]`",
+            optional_present(Type::named("int64"), Value::Bool(false)),
+            "`json::dumps` expects `indent` to be `int64 | None`",
         ),
     ] {
-        env.define_typed(place, Type::named("Option"), indent);
+        env.define_typed(place, optional_type(Type::named("int64")), indent);
         let error = call_name(
             &mut runtime,
             "json::dumps",
@@ -5161,7 +5177,7 @@ fn mir_json_host_boundary_reports_malformed_values_without_hiding_consumption() 
             ],
             &mut env,
         )
-        .expect_err("json.dumps must validate the runtime Option[int64] shape");
+        .expect_err("json.dumps must validate the runtime `int64 | None` shape");
         assert_eq!(error.code, "AU4001");
         assert_eq!(error.message, expected_message);
         assert!(env.place_ref(place).is_ok());
@@ -5170,8 +5186,8 @@ fn mir_json_host_boundary_reports_malformed_values_without_hiding_consumption() 
 
     env.define_typed(
         "valid_indent",
-        Type::Named("Option".to_string(), vec![Type::named("int64")]),
-        option_none(),
+        optional_type(Type::named("int64")),
+        optional_absent(Type::named("int64")),
     );
     for (args, expected_message) in [
         (
@@ -5228,12 +5244,8 @@ fn mir_json_host_boundary_reports_malformed_values_without_hiding_consumption() 
         ),
         (
             "owned_wrong_enum",
-            Value::EnumVariant(EnumVariantValue {
-                enum_name: "Option".to_string(),
-                variant_name: "Some".to_string(),
-                payloads: vec![Value::String("text".to_string())],
-            }),
-            "`json::into_string` expected enum `json.Value`, found `Option`",
+            lookup_found(Value::String("text".to_string())),
+            "`json::into_string` expected enum `json.Value`, found `Lookup`",
         ),
         (
             "owned_missing_payload",
@@ -5710,12 +5722,10 @@ fn mir_owned_process_and_http_decoders_transfer_string_allocations() {
 
     let cwd = "/tmp/owned-cwd".repeat(32);
     let cwd_ptr = cwd.as_ptr();
-    let decoded_cwd = super::expect_owned_optional_string_value(
-        option_some(Value::String(cwd)),
-        "start(cwd=...)",
-    )
-    .expect("owned cwd should decode")
-    .expect("cwd should be Some");
+    let decoded_cwd =
+        super::expect_owned_optional_string_value(optional_str_value(Some(cwd)), "start(cwd=...)")
+            .expect("owned cwd should decode")
+            .expect("cwd should be present");
     assert_eq!(decoded_cwd.as_ptr(), cwd_ptr);
 
     let header_name = "X-Owned-Header".repeat(32);
@@ -5796,21 +5806,17 @@ fn mir_owned_runtime_decoders_reject_malformed_values_without_partial_conversion
         None
     );
     assert!(super::expect_owned_optional_string_value(
-        Value::EnumVariant(EnumVariantValue {
-            enum_name: "Option".to_string(),
-            variant_name: "Some".to_string(),
-            payloads: Vec::new(),
-        }),
+        optional_present(Type::named("str"), Value::Bool(false)),
         "cwd",
     )
-    .expect_err("malformed owned Option.Some payloads must fail")
+    .expect_err("present `str | None` payloads that are not strings must fail")
     .message
-    .contains("malformed option payload"));
+    .contains("`cwd` expects `str`"));
     assert!(
         super::expect_owned_optional_string_value(Value::Bool(false), "cwd")
             .expect_err("owned optional strings must reject booleans")
             .message
-            .contains("expects `Option[str]`")
+            .contains("expects `str | None`")
     );
 
     assert!(super::expect_i64_value(&uint128_max(), "count")
@@ -5931,11 +5937,11 @@ fn mir_owned_queue_and_task_fallback_adapters_preserve_allocations() {
 
 #[test]
 fn mir_owned_vec_and_set_iteration_take_elements_from_the_private_source() {
-    fn expect_option_string_ptr(value: Value, expected: *const u8) {
-        let mut payloads = enum_payloads(value, "Option", "Some");
+    fn expect_found_string_ptr(value: Value, expected: *const u8) {
+        let mut payloads = enum_payloads(value, "Lookup", "Found");
         match payloads.remove(0) {
             Value::String(value) => assert_eq!(value.as_ptr(), expected),
-            other => panic!("expected Option.Some(str), found {other:?}"),
+            other => panic!("expected Lookup.Found(str), found {other:?}"),
         }
     }
 
@@ -5963,7 +5969,7 @@ fn mir_owned_vec_and_set_iteration_take_elements_from_the_private_source() {
             &mut env,
         )
         .expect("owned Vec iteration should take its next element");
-    expect_option_string_ptr(value, vector_text_ptr);
+    expect_found_string_ptr(value, vector_text_ptr);
     let Value::Vec(remaining) = env.read_place("vector").expect("vector should be restored") else {
         panic!("expected vector writeback");
     };
@@ -5991,7 +5997,7 @@ fn mir_owned_vec_and_set_iteration_take_elements_from_the_private_source() {
             &mut env,
         )
         .expect("owned Set iteration should take its next element");
-    expect_option_string_ptr(value, set_text_ptr);
+    expect_found_string_ptr(value, set_text_ptr);
     let Value::Set(remaining) = env.read_place("set").expect("set should be restored") else {
         panic!("expected set writeback");
     };
@@ -6136,10 +6142,10 @@ fn run_native_entry(
 }
 
 #[test]
-fn contextual_none_rhs_equality_preserves_the_left_option_snapshot() {
+fn contextual_none_rhs_equality_preserves_the_left_optional_snapshot() {
     let source = r#"
 def main() -> int32:
-    value: Option[int32] = Option.None
+    value: int32 | None = None
     print(value == None)
     print(value != None)
     return 0
@@ -6174,11 +6180,8 @@ def main() -> int32:
                 .iter()
                 .find(|local| local.name == *left)
                 .map(|local| &local.ty),
-            Some(&Type::Named(
-                "Option".to_string(),
-                vec![Type::named("int32")]
-            )),
-            "the sequenced left operand `{left}` should retain its inferred Option type"
+            Some(&optional_type(Type::named("int32"))),
+            "the sequenced left operand `{left}` should retain its inferred optional type"
         );
     }
     let stdout = Arc::new(Mutex::new(String::new()));
@@ -6346,9 +6349,19 @@ fn env_place_helpers_cover_nested_reads_and_writes() {
 }
 
 #[test]
-fn mir_runtime_helper_values_and_streams_cover_option_result_and_diagnostics() {
-    assert_eq!(option_some(Value::Bool(true)).render(), "Option.Some(true)");
-    assert_eq!(option_none().render(), "Option.None");
+fn mir_runtime_helper_values_and_streams_cover_optional_result_and_diagnostics() {
+    assert_eq!(
+        optional_present(Type::named("bool"), Value::Bool(true)).render(),
+        "true"
+    );
+    assert_eq!(optional_absent(Type::named("bool")).render(), "None");
+    assert_eq!(
+        lookup_found(Value::Bool(true)).render(),
+        "Lookup.Found(true)"
+    );
+    assert_eq!(lookup_missing().render(), "Lookup.Missing");
+    assert_eq!(poll_ready(Value::Bool(true)).render(), "Poll.Ready(true)");
+    assert_eq!(poll_unavailable().render(), "Poll.Unavailable");
     assert_eq!(result_ok(Value::Bool(false)).render(), "Result.Ok(false)");
     assert_eq!(
         result_err(Value::String("oops".to_string())).render(),
@@ -6460,36 +6473,32 @@ fn mir_runtime_helper_values_and_streams_cover_option_result_and_diagnostics() {
         None
     );
     assert_eq!(
-        super::expect_optional_string_value(&option_none(), "event")
-            .expect("Option.None should decode as absent optional string"),
+        super::expect_optional_string_value(&optional_str_value(None), "event")
+            .expect("an absent `str | None` should decode as absent optional string"),
         None
     );
     assert_eq!(
         super::expect_optional_string_value(
-            &option_some(Value::String("ready".to_string())),
+            &optional_str_value(Some("ready".to_string())),
             "event"
         )
-        .expect("Option.Some(str) should decode"),
+        .expect("a present `str | None` should decode"),
         Some("ready".to_string())
     );
-    let malformed_option_error = super::expect_optional_string_value(
-        &Value::EnumVariant(EnumVariantValue {
-            enum_name: "Option".to_string(),
-            variant_name: "Some".to_string(),
-            payloads: Vec::new(),
-        }),
+    let malformed_optional_error = super::expect_optional_string_value(
+        &optional_present(Type::named("str"), Value::Bool(false)),
         "event",
     )
-    .expect_err("malformed Option.Some should be rejected");
-    assert!(malformed_option_error
+    .expect_err("a present `str | None` payload that is not a string should be rejected");
+    assert!(malformed_optional_error
         .message
-        .contains("malformed option payload"));
+        .contains("`event` expects `str`"));
     let optional_string_type_error =
         super::expect_optional_string_value(&Value::Bool(false), "event")
             .expect_err("optional string helper should reject booleans");
     assert!(optional_string_type_error
         .message
-        .contains("`event` expects `Option[str]`"));
+        .contains("`event` expects `str | None`"));
 
     assert_eq!(
         super::expect_i32_value(&Value::Int(IntegerValue::from_signed(7)), "count")
@@ -7030,10 +7039,7 @@ fn mir_runtime_infers_resource_value_types_for_runtime_backed_surfaces() {
                     )
                     .expect("tls server read_line should succeed"),
             );
-            assert_eq!(
-                enum_payloads(line, "Option", "Some"),
-                vec![Value::String("secure".to_string())]
-            );
+            assert_eq!(expect_present(line), Value::String("secure".to_string()));
             assert_eq!(
                 result_ok_payload(
                     server_runtime
@@ -7295,26 +7301,20 @@ fn mir_runtime_resource_member_helpers_cover_io_process_and_network_paths() {
         false,
     )
     .expect("process child should spawn");
-    enum_payloads(
+    assert_absent(
         runtime
             .evaluate_process_child_method(child.clone(), "stdin", &[], &mut env)
             .expect("child stdin method should succeed"),
-        "Option",
-        "None",
     );
-    enum_payloads(
+    expect_present(
         runtime
             .evaluate_process_child_method(child.clone(), "stdout", &[], &mut env)
             .expect("child stdout method should succeed"),
-        "Option",
-        "Some",
     );
-    enum_payloads(
+    expect_present(
         runtime
             .evaluate_process_child_method(child.clone(), "stderr", &[], &mut env)
             .expect("child stderr method should succeed"),
-        "Option",
-        "Some",
     );
     let stdout_pipe = child.stdout().expect("child stdout should be piped");
     assert_eq!(
@@ -7459,8 +7459,10 @@ fn mir_runtime_resource_member_helpers_cover_io_process_and_network_paths() {
             )
             .expect("pipe read_bytes should succeed"),
     );
-    let byte_payload = enum_payloads(byte_read, "Option", "Some");
-    assert_eq!(byte_payload, vec![bytes_vec_value(b"-bytes".to_vec())]);
+    assert_eq!(
+        expect_present(byte_read),
+        bytes_vec_value(b"-bytes".to_vec())
+    );
     enum_payloads(
         runtime
             .evaluate_process_child_method(cat_bytes, "wait", &[], &mut env)
@@ -7590,7 +7592,7 @@ fn mir_runtime_resource_member_helpers_cover_io_process_and_network_paths() {
             )
             .expect("udp recv should succeed"),
     );
-    enum_payloads(udp_recv, "Option", "Some");
+    expect_present(udp_recv);
     let udp_recv_from = result_ok_payload(
         runtime
             .evaluate_udp_socket_method(
@@ -7604,7 +7606,7 @@ fn mir_runtime_resource_member_helpers_cover_io_process_and_network_paths() {
             )
             .expect("udp recv_from should succeed"),
     );
-    enum_payloads(udp_recv_from, "Option", "Some");
+    expect_present(udp_recv_from);
     match result_ok_payload(
         runtime
             .evaluate_udp_socket_method(udp_receiver.clone(), "local_addr", &[], &mut env)
@@ -8115,8 +8117,7 @@ fn mir_runtime_stream_and_http_member_helpers_cover_resource_branches() {
             )
             .expect("tcp read_line should succeed"),
     );
-    let line_payloads = enum_payloads(tcp_line, "Option", "Some");
-    assert_eq!(line_payloads, vec![Value::String("pong".to_string())]);
+    assert_eq!(expect_present(tcp_line), Value::String("pong".to_string()));
     assert_eq!(
         result_ok_payload(
             runtime
@@ -8146,7 +8147,7 @@ fn mir_runtime_stream_and_http_member_helpers_cover_resource_branches() {
             )
             .expect("tcp read_bytes should return a Result"),
     );
-    enum_payloads(no_more_tcp, "Option", "None");
+    assert_absent(no_more_tcp);
     assert_eq!(
         runtime
             .evaluate_tcp_stream_method(tcp_client.clone(), "close", &[], &mut env)
@@ -8261,8 +8262,8 @@ fn mir_runtime_stream_and_http_member_helpers_cover_resource_branches() {
                     .expect("websocket recv_text should succeed"),
             );
             assert_eq!(
-                enum_payloads(client_text, "Option", "Some"),
-                vec![Value::String("hello websocket".to_string())]
+                expect_present(client_text),
+                Value::String("hello websocket".to_string())
             );
             assert_eq!(
                 result_ok_payload(
@@ -8291,8 +8292,8 @@ fn mir_runtime_stream_and_http_member_helpers_cover_resource_branches() {
                     .expect("websocket recv_bytes should succeed"),
             );
             assert_eq!(
-                enum_payloads(client_bytes, "Option", "Some"),
-                vec![bytes_vec_value(b"client-bytes".to_vec())]
+                expect_present(client_bytes),
+                bytes_vec_value(b"client-bytes".to_vec())
             );
             assert_eq!(
                 result_ok_payload(
@@ -8354,8 +8355,8 @@ fn mir_runtime_stream_and_http_member_helpers_cover_resource_branches() {
             .expect("websocket client recv_bytes should succeed"),
     );
     assert_eq!(
-        enum_payloads(server_bytes, "Option", "Some"),
-        vec![bytes_vec_value(b"server-bytes".to_vec())]
+        expect_present(server_bytes),
+        bytes_vec_value(b"server-bytes".to_vec())
     );
     assert_eq!(
         result_ok_payload(
@@ -8384,8 +8385,8 @@ fn mir_runtime_stream_and_http_member_helpers_cover_resource_branches() {
             .expect("websocket client recv_text should succeed"),
     );
     assert_eq!(
-        enum_payloads(done, "Option", "Some"),
-        vec![Value::String("server-done".to_string())]
+        expect_present(done),
+        Value::String("server-done".to_string())
     );
     assert_eq!(
         runtime
@@ -10282,20 +10283,16 @@ fn mir_runtime_process_child_methods_cover_timeout_cancel_and_error_edges() {
         "Wait",
         "TimedOut",
     );
-    enum_payloads(
-        result_ok_payload(
-            runtime
-                .evaluate_process_child_method(
-                    sleeper.clone(),
-                    "wait_or_none",
-                    &[mir_arg(Some("timeout"), Operand::Duration(0))],
-                    &mut env,
-                )
-                .expect("wait_or_none should surface timeout as None"),
-        ),
-        "Option",
-        "None",
-    );
+    assert_absent(result_ok_payload(
+        runtime
+            .evaluate_process_child_method(
+                sleeper.clone(),
+                "wait_or_none",
+                &[mir_arg(Some("timeout"), Operand::Duration(0))],
+                &mut env,
+            )
+            .expect("wait_or_none should surface timeout as None"),
+    ));
     assert_eq!(
         result_ok_payload(
             runtime
@@ -10484,37 +10481,29 @@ fn mir_runtime_process_resource_members_cover_completed_errors_and_pipe_edges() 
     )
     .expect("eof process should spawn");
     let eof_stdout = eof_child.stdout().expect("eof stdout should be piped");
-    enum_payloads(
-        result_ok_payload(
-            runtime
-                .evaluate_process_pipe_method(
-                    eof_stdout.clone(),
-                    "read_line",
-                    &[mir_arg(Some("timeout"), Operand::Duration(1_000_000_000))],
-                    &mut env,
-                )
-                .expect("eof read_line should succeed"),
-        ),
-        "Option",
-        "None",
-    );
-    enum_payloads(
-        result_ok_payload(
-            runtime
-                .evaluate_process_pipe_method(
-                    eof_stdout,
-                    "read_bytes",
-                    &[
-                        mir_arg(Some("max_bytes"), Operand::Int(8)),
-                        mir_arg(Some("timeout"), Operand::Duration(1_000_000_000)),
-                    ],
-                    &mut env,
-                )
-                .expect("eof read_bytes should succeed"),
-        ),
-        "Option",
-        "None",
-    );
+    assert_absent(result_ok_payload(
+        runtime
+            .evaluate_process_pipe_method(
+                eof_stdout.clone(),
+                "read_line",
+                &[mir_arg(Some("timeout"), Operand::Duration(1_000_000_000))],
+                &mut env,
+            )
+            .expect("eof read_line should succeed"),
+    ));
+    assert_absent(result_ok_payload(
+        runtime
+            .evaluate_process_pipe_method(
+                eof_stdout,
+                "read_bytes",
+                &[
+                    mir_arg(Some("max_bytes"), Operand::Int(8)),
+                    mir_arg(Some("timeout"), Operand::Duration(1_000_000_000)),
+                ],
+                &mut env,
+            )
+            .expect("eof read_bytes should succeed"),
+    ));
     let _ = runtime.evaluate_process_child_method(eof_child, "wait", &[], &mut env);
 
     let reader_child = ProcessChildValue::spawn(
@@ -10711,10 +10700,8 @@ fn mir_runtime_process_supervisor_methods_cover_start_wait_and_cancel_edges() {
     };
     env.define_typed(
         "supervisor_cwd",
-        Type::named("Option[str]"),
-        option_some(Value::String(
-            std::env::temp_dir().to_string_lossy().into_owned(),
-        )),
+        optional_type(Type::named("str")),
+        optional_str_value(Some(std::env::temp_dir().to_string_lossy().into_owned())),
     );
     env.define_typed(
         "supervisor_env",
@@ -10806,20 +10793,16 @@ fn mir_runtime_process_supervisor_methods_cover_start_wait_and_cancel_edges() {
         "SupervisorWait",
         "Event",
     );
-    enum_payloads(
-        result_ok_payload(
-            runtime
-                .evaluate_process_supervisor_method(
-                    supervisor.clone(),
-                    "wait_or_none",
-                    &[mir_arg(Some("timeout"), Operand::Duration(0))],
-                    &mut env,
-                )
-                .expect("empty supervisor wait_or_none should return Result.Ok"),
-        ),
-        "Option",
-        "None",
-    );
+    assert_absent(result_ok_payload(
+        runtime
+            .evaluate_process_supervisor_method(
+                supervisor.clone(),
+                "wait_or_none",
+                &[mir_arg(Some("timeout"), Operand::Duration(0))],
+                &mut env,
+            )
+            .expect("empty supervisor wait_or_none should return Result.Ok"),
+    ));
     assert_eq!(
         result_ok_payload(
             runtime
@@ -10845,20 +10828,16 @@ fn mir_runtime_process_supervisor_methods_cover_start_wait_and_cancel_edges() {
         ),
         Value::Unit
     );
-    enum_payloads(
-        result_ok_payload(
-            runtime
-                .evaluate_process_supervisor_method(
-                    supervisor.clone(),
-                    "wait_or_none",
-                    &[mir_arg(Some("timeout"), Operand::Duration(5_000_000_000))],
-                    &mut env,
-                )
-                .expect("supervisor wait_or_none should surface ready events"),
-        ),
-        "Option",
-        "Some",
-    );
+    expect_present(result_ok_payload(
+        runtime
+            .evaluate_process_supervisor_method(
+                supervisor.clone(),
+                "wait_or_none",
+                &[mir_arg(Some("timeout"), Operand::Duration(5_000_000_000))],
+                &mut env,
+            )
+            .expect("supervisor wait_or_none should surface ready events"),
+    ));
 
     assert_eq!(
         result_ok_payload(
@@ -11055,7 +11034,11 @@ fn mir_runtime_builtin_io_calls_cover_process_filesystem_and_network_paths() {
         Type::Named("list".to_string(), vec![Type::named("str")]),
         string_vec_value(&["/bin/sh", "-c", "printf child"]),
     );
-    env.define_typed("cwd", Type::named("Option[str]"), option_none());
+    env.define_typed(
+        "cwd",
+        optional_type(Type::named("str")),
+        optional_str_value(None),
+    );
     env.define_typed(
         "env_map",
         Type::Named(
@@ -11892,7 +11875,11 @@ fn mir_runtime_process_run_builtin_captures_stdio_under_scheduler() {
             Type::Named("list".to_string(), vec![Type::named("str")]),
             string_vec_value(&["/bin/sh", "-c", "printf out; printf err >&2"]),
         );
-        env.define_typed("cwd", Type::named("Option[str]"), option_none());
+        env.define_typed(
+            "cwd",
+            optional_type(Type::named("str")),
+            optional_str_value(None),
+        );
         env.define_typed(
             "env_map",
             Type::Named(
@@ -11946,7 +11933,11 @@ fn mir_runtime_process_builtins_cover_spawn_timeout_and_cancelled_edges() {
             Type::Named("list".to_string(), vec![Type::named("str")]),
             string_vec_value(command),
         );
-        env.define_typed("cwd", Type::named("Option[str]"), option_none());
+        env.define_typed(
+            "cwd",
+            optional_type(Type::named("str")),
+            optional_str_value(None),
+        );
         env.define_typed(
             "env_map",
             Type::Named(
@@ -13608,8 +13599,12 @@ fn trait_impl_lookup_and_top_level_run_helpers_cover_runtime_paths() {
         ))
     );
     assert_eq!(
-        MirRuntime::infer_value_type(&option_none()),
-        Some(Type::Named("Option".to_string(), vec![Type::Unit]))
+        MirRuntime::infer_value_type(&optional_absent(Type::named("int64"))),
+        Some(optional_type(Type::named("int64")))
+    );
+    assert_eq!(
+        MirRuntime::infer_value_type(&lookup_missing()),
+        Some(Type::Named("Lookup".to_string(), vec![Type::Unit]))
     );
     assert_eq!(
         MirRuntime::infer_value_type(&result_err(Value::String("oops".to_string()))),
@@ -14151,7 +14146,7 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
         .expect("vec get should succeed");
     assert_eq!(
         vec_get,
-        option_some(Value::Int(IntegerValue::from_signed(1)))
+        lookup_found(Value::Int(IntegerValue::from_signed(1)))
     );
 
     let vec_contains = runtime
@@ -14321,7 +14316,7 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
         .expect("map get should succeed");
     assert_eq!(
         map_get,
-        option_some(Value::Int(IntegerValue::from_signed(1)))
+        lookup_found(Value::Int(IntegerValue::from_signed(1)))
     );
     let map_get_missing = runtime
         .evaluate_map_method(
@@ -14331,8 +14326,8 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
             &[mir_arg(Some("key"), Operand::String("missing".to_string()))],
             &mut env,
         )
-        .expect("missing map get should return Option.None");
-    assert_eq!(map_get_missing, option_none());
+        .expect("missing map get should return Lookup.Missing");
+    assert_eq!(map_get_missing, lookup_missing());
 
     let map_values = runtime
         .evaluate_map_method(
@@ -14504,7 +14499,7 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
             &mut env,
         )
         .expect("set __index_option should succeed");
-    assert_eq!(set_index, option_some(Value::String("ready".to_string())));
+    assert_eq!(set_index, lookup_found(Value::String("ready".to_string())));
 
     let string_len = runtime
         .evaluate_string_method("é🎉e\u{301}".to_string(), "len", &[], &mut env)
@@ -14580,10 +14575,7 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
             &mut env,
         )
         .expect("string strip_suffix should succeed");
-    match suffix {
-        Value::EnumVariant(variant) => assert_eq!(variant.variant_name, "Some"),
-        other => panic!("expected option result, found {other:?}"),
-    }
+    assert_eq!(suffix, optional_str_value(Some("prefix".to_string())));
 
     let trim = runtime
         .evaluate_string_method("  Aura  ".to_string(), "trim", &[], &mut env)
@@ -14723,35 +14715,35 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
     let assert_queue_receive_variant =
         |value: Value, variant_name: &str| enum_payloads(value, "QueueReceive", variant_name);
 
-    let empty_get_or_none = runtime
-        .evaluate_channel_method(ChannelValue::new(), "get_or_none", &[], &mut env)
-        .expect("empty get_or_none should return Option.None immediately");
-    assert_eq!(empty_get_or_none, option_none());
+    let empty_poll = runtime
+        .evaluate_channel_method(ChannelValue::new(), "poll", &[], &mut env)
+        .expect("empty poll should return Poll.Unavailable immediately");
+    assert_eq!(empty_poll, poll_unavailable());
 
-    let queued_for_get_or_none = ChannelValue::new();
-    queued_for_get_or_none
+    let queued_for_poll = ChannelValue::new();
+    queued_for_poll
         .try_send_result(Value::Int(IntegerValue::from_signed(12)))
         .expect("queue should accept a value");
     assert_eq!(
         runtime
-            .evaluate_channel_method(queued_for_get_or_none, "get_or_none", &[], &mut env,)
-            .expect("queued get_or_none should return Option.Some"),
-        option_some(Value::Int(IntegerValue::from_signed(12)))
+            .evaluate_channel_method(queued_for_poll, "poll", &[], &mut env,)
+            .expect("queued poll should return Poll.Ready"),
+        poll_ready(Value::Int(IntegerValue::from_signed(12)))
     );
 
-    let closed_get_or_none = ChannelValue::new();
-    closed_get_or_none.close();
+    let closed_poll = ChannelValue::new();
+    closed_poll.close();
     assert_eq!(
         runtime
-            .evaluate_channel_method(closed_get_or_none, "get_or_none", &[], &mut env)
-            .expect("closed get_or_none should return Option.None"),
-        option_none()
+            .evaluate_channel_method(closed_poll, "poll", &[], &mut env)
+            .expect("closed poll should return Poll.Unavailable"),
+        poll_unavailable()
     );
     assert_eq!(
         cancelled_runtime
-            .evaluate_channel_method(ChannelValue::new(), "get_or_none", &[], &mut env)
-            .expect("cancelled get_or_none should return Option.None"),
-        option_none()
+            .evaluate_channel_method(ChannelValue::new(), "poll", &[], &mut env)
+            .expect("cancelled poll should return Poll.Unavailable"),
+        poll_unavailable()
     );
 
     let queued_for_get_or = ChannelValue::new();
@@ -15004,7 +14996,7 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
         .expect("map set should replace existing keys");
     assert_eq!(
         map_set_existing,
-        option_some(Value::Int(IntegerValue::from_signed(1)))
+        lookup_found(Value::Int(IntegerValue::from_signed(1)))
     );
 
     runtime
@@ -15108,7 +15100,7 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
             &mut env,
         )
         .expect("map set should insert missing keys");
-    assert_eq!(map_set_new, option_none());
+    assert_eq!(map_set_new, lookup_missing());
 
     let map_remove_missing = runtime
         .evaluate_map_method(
@@ -15121,8 +15113,8 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
             &[mir_arg(Some("key"), Operand::String("missing".to_string()))],
             &mut env,
         )
-        .expect("map remove should return Option.None for missing keys");
-    assert_eq!(map_remove_missing, option_none());
+        .expect("map remove should return Lookup.Missing for missing keys");
+    assert_eq!(map_remove_missing, lookup_missing());
 
     let map_remove_existing = runtime
         .evaluate_map_method(
@@ -15138,7 +15130,7 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
         .expect("map remove should return the removed value");
     assert_eq!(
         map_remove_existing,
-        option_some(Value::Int(IntegerValue::from_signed(5)))
+        lookup_found(Value::Int(IntegerValue::from_signed(5)))
     );
 
     let map_set_index = runtime
@@ -15294,10 +15286,7 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
             &mut env,
         )
         .expect("string strip_prefix should succeed");
-    match strip {
-        Value::EnumVariant(variant) => assert_eq!(variant.variant_name, "Some"),
-        other => panic!("expected option result, found {other:?}"),
-    }
+    assert_eq!(strip, optional_str_value(Some("value".to_string())));
 
     let string_error = runtime
         .evaluate_string_method(
@@ -15546,7 +15535,7 @@ fn mir_runtime_normalizes_negative_vec_indices_for_every_indexed_operation() {
         .expect("negative get should normalize");
     assert_eq!(
         gotten,
-        option_some(Value::Int(IntegerValue::from_signed(35)))
+        lookup_found(Value::Int(IntegerValue::from_signed(35)))
     );
     let missing = runtime
         .evaluate_vec_method(
@@ -15556,8 +15545,8 @@ fn mir_runtime_normalizes_negative_vec_indices_for_every_indexed_operation() {
             &[mir_arg(Some("index"), negative(5))],
             &mut env,
         )
-        .expect("too-negative get should preserve Option behavior");
-    assert_eq!(missing, option_none());
+        .expect("too-negative get should preserve Lookup.Missing behavior");
+    assert_eq!(missing, lookup_missing());
 
     let replaced = runtime
         .evaluate_vec_method(
@@ -16591,10 +16580,10 @@ fn mir_runtime_task_result_or_helpers_cover_nonblocking_shortcuts() {
     }
 
     let maybe_ready = runtime
-        .evaluate_task_method(ready_task.clone(), "result_or_none", &[], &mut env)
-        .expect("completed result_or_none should use cached task result");
+        .evaluate_task_method(ready_task.clone(), "poll", &[], &mut env)
+        .expect("completed poll should use cached task result");
     assert_eq!(
-        enum_payloads(maybe_ready, "Option", "Some"),
+        enum_payloads(maybe_ready, "Poll", "Ready"),
         vec![Value::Bool(true)]
     );
     assert_eq!(
@@ -16625,13 +16614,8 @@ fn mir_runtime_task_result_or_helpers_cover_nonblocking_shortcuts() {
         let mut runtime = test_runtime();
         let mut env = Env::default();
         assert_eq!(
-            runtime.evaluate_task_method(
-                cancelled_task.clone(),
-                "result_or_none",
-                &[],
-                &mut env
-            )?,
-            option_none()
+            runtime.evaluate_task_method(cancelled_task.clone(), "poll", &[], &mut env)?,
+            poll_unavailable()
         );
         assert_eq!(
             runtime.evaluate_task_method(
@@ -16672,9 +16656,9 @@ fn mir_runtime_task_result_or_helpers_cover_nonblocking_shortcuts() {
     }));
     assert_eq!(
         cancelled_runtime
-            .evaluate_task_method(pending_task.clone(), "result_or_none", &[], &mut env)
-            .expect("cancelled runtimes should return Option.None"),
-        option_none()
+            .evaluate_task_method(pending_task.clone(), "poll", &[], &mut env)
+            .expect("cancelled runtimes should return Poll.Unavailable"),
+        poll_unavailable()
     );
     assert_eq!(
         cancelled_runtime
@@ -16773,7 +16757,7 @@ fn mir_runtime_single_consumer_task_results_claim_every_observing_attempt() {
         Value::String("fallback".to_string())
     );
     let repeated_default = runtime
-        .evaluate_task_method(default_task, "result_or_none", &[], &mut env)
+        .evaluate_task_method(default_task, "poll", &[], &mut env)
         .expect_err("a default outcome must consume a non-repeatable observation right");
     assert_eq!(repeated_default.code, "AU4001");
     default_blocker.close();
@@ -17914,9 +17898,20 @@ fn mir_runtime_entrypoint_call_and_type_helpers_cover_remaining_edges() {
         None
     );
     assert_eq!(
-        runtime.infer_runtime_value_type(&option_none()),
+        runtime.infer_runtime_value_type(&optional_absent(Type::named("str"))),
+        Some(optional_type(Type::named("str"))),
+    );
+    assert_eq!(
+        runtime.infer_runtime_value_type(&lookup_missing()),
         Some(Type::Named(
-            "Option".to_string(),
+            "Lookup".to_string(),
+            vec![Type::named("Unknown")]
+        )),
+    );
+    assert_eq!(
+        runtime.infer_runtime_value_type(&poll_unavailable()),
+        Some(Type::Named(
+            "Poll".to_string(),
             vec![Type::named("Unknown")]
         )),
     );
@@ -18555,17 +18550,13 @@ fn mir_runtime_cleanup_and_rvalue_helpers_cover_remaining_error_paths() {
         .contains("MIR `try` requires a `Result` value"));
 
     env.define_typed(
-        "option_value",
-        Type::Named("Option".to_string(), vec![Type::named("int32")]),
-        Value::EnumVariant(EnumVariantValue {
-            enum_name: "Option".to_string(),
-            variant_name: "Some".to_string(),
-            payloads: vec![Value::Int(IntegerValue::from_signed(1))],
-        }),
+        "lookup_value",
+        Type::Named("Lookup".to_string(), vec![Type::named("int32")]),
+        lookup_found(Value::Int(IntegerValue::from_signed(1))),
     );
     let try_wrong_enum = match runtime.evaluate_rvalue(
         &Rvalue::Try {
-            value: Operand::Place("option_value".to_string()),
+            value: Operand::Place("lookup_value".to_string()),
         },
         &mut env,
     ) {
@@ -18657,7 +18648,7 @@ fn mir_runtime_cleanup_and_rvalue_helpers_cover_remaining_error_paths() {
     let non_enum_payload = match runtime.evaluate_rvalue(
         &Rvalue::VariantPayload {
             scrutinee: Operand::Int(1),
-            variant_name: "Some".to_string(),
+            variant_name: "Found".to_string(),
             index: 0,
         },
         &mut env,
@@ -20383,10 +20374,10 @@ def main():
         print_task_result(error_task.result(timeout=1s))
 
         optional_error_task = group.start(optional_fail)
-        print(optional_error_task.result_or_none(timeout=1s))
+        print(optional_error_task.poll(timeout=1s))
 
         pending_task = group.start(wait_for_release)
-        print(pending_task.result_or_none())
+        print(pending_task.poll())
         release.put(7)
 
     print("cleanup-complete")
@@ -20398,8 +20389,8 @@ def main():
         .expect("observed task failures and a released pending child should clean up normally");
     assert_eq!(
         output.stdout,
-        "ready:9\ntask-error\nerror:division by zero\noptional-error\nOption.None\nOption.None\ncleanup-complete\n",
-        "task results must preserve ready values and owned errors, map errors and pending polls to None, and await the released closure during group cleanup"
+        "ready:9\ntask-error\nerror:division by zero\noptional-error\nPoll.Unavailable\nPoll.Unavailable\ncleanup-complete\n",
+        "task results must preserve ready values and owned errors, map errors and pending polls to Poll.Unavailable, and await the released closure during group cleanup"
     );
 }
 
@@ -20680,10 +20671,6 @@ fn coverage_unique_suffix() -> String {
     )
 }
 
-fn assert_option_none(value: Value) {
-    assert!(enum_payloads(value, "Option", "None").is_empty());
-}
-
 #[test]
 fn union_payload_projections_check_the_active_member_and_symbolic_layouts() {
     let concrete = coverage_union(vec![Type::named("int64"), Type::Unit]);
@@ -20729,12 +20716,12 @@ fn union_payload_projections_check_the_active_member_and_symbolic_layouts() {
 #[test]
 fn enum_payload_projections_reject_malformed_and_inactive_segments() {
     let variant = EnumVariantValue {
-        enum_name: "Option".to_string(),
-        variant_name: "Some".to_string(),
+        enum_name: "Lookup".to_string(),
+        variant_name: "Found".to_string(),
         payloads: vec![Value::Unit],
     };
     assert_eq!(
-        super::enum_projection_index(&variant, "__variant_payload_Some_0")
+        super::enum_projection_index(&variant, "__variant_payload_Found_0")
             .expect("the active payload projects"),
         0
     );
@@ -21337,15 +21324,16 @@ fn owned_argument_decoders_accept_unknown_byte_lists_and_option_strings() {
         "`demo` expects `int32`"
     );
     assert_eq!(
-        super::expect_owned_optional_string_value(option_none(), "demo").expect("None decodes"),
+        super::expect_owned_optional_string_value(optional_str_value(None), "demo")
+            .expect("an absent `str | None` decodes"),
         None
     );
     assert_eq!(
         super::expect_owned_optional_string_value(
-            option_some(Value::String("x".to_string())),
+            optional_str_value(Some("x".to_string())),
             "demo"
         )
-        .expect("Some decodes"),
+        .expect("a present `str | None` decodes"),
         Some("x".to_string())
     );
     let error = super::random_resource_error_to_diagnostic(SecureRandomError::InvalidRange, None);
@@ -21747,7 +21735,7 @@ fn websocket_listener_and_socket_methods_cover_unsupported_members_and_closed_pe
         unsupported.message,
         "unsupported MIR websocket method `bogus`"
     );
-    assert_option_none(result_ok_payload(
+    assert_absent(result_ok_payload(
         runtime
             .evaluate_websocket_method(client.clone(), "recv_text", &[timeout.clone()], &mut env)
             .expect("recv_text after the peer closed evaluates"),
@@ -21759,7 +21747,7 @@ fn websocket_listener_and_socket_methods_cover_unsupported_members_and_closed_pe
         .expect("recv_bytes after the peer closed evaluates")
     {
         Value::EnumVariant(variant) if variant.variant_name == "Ok" => {
-            assert_option_none(variant.payloads.into_iter().next().expect("payload"));
+            assert_absent(variant.payloads.into_iter().next().expect("payload"));
         }
         Value::EnumVariant(variant) => assert_eq!(variant.variant_name, "Err"),
         other => panic!("unexpected recv_bytes result {other:?}"),
@@ -21848,7 +21836,7 @@ fn unix_listener_and_stream_methods_cover_close_eof_and_unsupported_members() {
         unsupported.message,
         "unsupported MIR unix stream method `bogus`"
     );
-    assert_option_none(result_ok_payload(
+    assert_absent(result_ok_payload(
         runtime
             .evaluate_unix_stream_method(
                 client.clone(),
@@ -21923,7 +21911,7 @@ fn tcp_stream_methods_cover_eof_shutdowns_and_timed_writes_on_closed_streams() {
         ),
         Value::Unit
     );
-    assert_option_none(ok(
+    assert_absent(ok(
         runtime
             .evaluate_tcp_stream_method(
                 half_closed.clone(),
@@ -21993,7 +21981,7 @@ fn udp_socket_methods_cover_empty_datagrams_idle_timeouts_and_unresolvable_targe
         ),
         Value::Unit
     );
-    assert_option_none(result_ok_payload(
+    assert_absent(result_ok_payload(
         runtime
             .evaluate_udp_socket_method(
                 socket.clone(),
@@ -22006,7 +21994,7 @@ fn udp_socket_methods_cover_empty_datagrams_idle_timeouts_and_unresolvable_targe
             )
             .expect("recv of an empty datagram evaluates"),
     ));
-    assert_option_none(result_ok_payload(
+    assert_absent(result_ok_payload(
         runtime
             .evaluate_udp_socket_method(
                 socket.clone(),
@@ -22302,10 +22290,10 @@ fn tls_listener_and_stream_methods_cover_close_eof_and_partial_lines() {
             .expect("read_line of a partial line evaluates"),
     );
     assert_eq!(
-        enum_payloads(partial, "Option", "Some"),
-        vec![Value::String("partial".to_string())]
+        expect_present(partial),
+        Value::String("partial".to_string())
     );
-    assert_option_none(result_ok_payload(
+    assert_absent(result_ok_payload(
         runtime
             .evaluate_tls_stream_method(first.clone(), "read_line", &[timeout.clone()], &mut env)
             .expect("read_line at EOF evaluates"),
@@ -22487,9 +22475,9 @@ fn process_child_and_supervisor_methods_cover_optional_waits_and_missing_argumen
             )
             .expect("wait_or_none evaluates"),
     );
-    assert_eq!(enum_payloads(exited, "Option", "Some").len(), 1);
+    expect_present(exited);
     let slow = spawn(&["sleep", "5"]);
-    assert_option_none(result_ok_payload(
+    assert_absent(result_ok_payload(
         runtime
             .evaluate_process_child_method(
                 slow.clone(),
@@ -22797,4 +22785,30 @@ fn member_calls_fall_through_length_and_byte_helpers_for_other_receivers() {
         .coverage_err("untyped literals cannot be complemented");
     assert_eq!(bitnot.code, "AU4001");
     assert_eq!(bitnot.message, "invalid typed integer for unary `~`");
+}
+
+#[test]
+fn optional_helpers_infer_lookup_and_poll_types_and_decode_bare_payloads() {
+    assert_eq!(
+        MirRuntime::infer_value_type(&crate::runtime_value::lookup_found(Value::Bool(true))),
+        Some(Type::Named("Lookup".to_string(), vec![Type::named("bool")]))
+    );
+    assert_eq!(
+        MirRuntime::infer_value_type(&crate::runtime_value::poll_ready(Value::Bool(false))),
+        Some(Type::Named("Poll".to_string(), vec![Type::named("bool")]))
+    );
+    assert_eq!(
+        super::mir_json_indent(&Value::Unit).expect("a bare `None` indent decodes as absent"),
+        None
+    );
+    assert_eq!(
+        super::expect_optional_string_value(&Value::String("dir".to_string()), "cwd")
+            .expect("a bare `str` decodes as a present optional string"),
+        Some("dir".to_string())
+    );
+    assert_eq!(
+        super::expect_owned_optional_string_value(Value::String("dir".to_string()), "cwd")
+            .expect("a bare owned `str` decodes as a present optional string"),
+        Some("dir".to_string())
+    );
 }

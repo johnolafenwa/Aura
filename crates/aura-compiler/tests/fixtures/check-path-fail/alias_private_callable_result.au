@@ -1,0 +1,7 @@
+import alias_private_support.maker
+
+def make() -> alias_private_support.maker.Maker:
+    return lambda: 1
+
+def main() -> int32:
+    return 0

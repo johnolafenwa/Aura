@@ -1300,16 +1300,6 @@ pub(super) fn lower_type_with_self(
         return Ok(result);
     }
 
-    if type_name == "Option" {
-        if args.len() != 1 {
-            return Err(Diagnostic::at(
-                type_ref.span,
-                "`Option` expects exactly one type argument",
-            ));
-        }
-        return Ok(Type::Named(type_name.to_string(), args));
-    }
-
     if type_name == "Result" {
         if args.len() != 2 {
             return Err(Diagnostic::at(
@@ -1322,6 +1312,8 @@ pub(super) fn lower_type_with_self(
 
     if type_name == "Queue"
         || type_name == "Task"
+        || type_name == "Lookup"
+        || type_name == "Poll"
         || type_name == "SendError"
         || type_name == "QueueReceive"
         || type_name == "TaskResult"
@@ -2291,13 +2283,34 @@ pub(super) fn unify_type_pattern(
     }
 }
 
+/// The canonical optional spelling `member | None` for a builtin result or
+/// parameter (ADR-0052): one normalized union whose second member is `None`.
+pub(crate) fn optional_type(member: Type) -> Type {
+    Type::normalize_union(vec![member, Type::Unit], "<builtin>", &BTreeMap::new())
+        .expect("builtin optional unions normalize")
+}
+
+/// The compiler-provided lookup outcome `Lookup[payload]` (Q23 A).
+pub(crate) fn lookup_type(payload: Type) -> Type {
+    Type::Named("Lookup".to_string(), vec![payload])
+}
+
+/// The compiler-provided poll outcome `Poll[payload]` (Q23 A).
+pub(crate) fn poll_type(payload: Type) -> Type {
+    Type::Named("Poll".to_string(), vec![payload])
+}
+
 /// Payload shapes of the retained built-in nominal enums. Shared by checking
 /// and MIR metadata so backends consume one structural representation.
 pub(crate) fn builtin_enum_variants(ty: &Type) -> Option<Vec<(String, Vec<Type>)>> {
     match ty {
-        Type::Named(name, args) if name == "Option" && args.len() == 1 => Some(vec![
-            ("Some".to_string(), vec![args[0].clone()]),
-            ("None".to_string(), Vec::new()),
+        Type::Named(name, args) if name == "Lookup" && args.len() == 1 => Some(vec![
+            ("Found".to_string(), vec![args[0].clone()]),
+            ("Missing".to_string(), Vec::new()),
+        ]),
+        Type::Named(name, args) if name == "Poll" && args.len() == 1 => Some(vec![
+            ("Ready".to_string(), vec![args[0].clone()]),
+            ("Unavailable".to_string(), Vec::new()),
         ]),
         Type::Named(name, args) if name == "Result" && args.len() == 2 => Some(vec![
             ("Ok".to_string(), vec![args[0].clone()]),

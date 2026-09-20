@@ -1,0 +1,13 @@
+class Counter:
+    count: int64
+
+def bump(counter: mut Counter, *, amount: int64 = 1):
+    counter.count = counter.count + amount
+
+type Bump = def(counter: mut Counter, *, amount: int64) -> None
+
+def main():
+    step = Bump(bump)
+    mut counter = Counter(count=1)
+    step(counter, amount=2)
+    print(counter.count)

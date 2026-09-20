@@ -8,15 +8,15 @@ def print_bool(value: bool):
 def main() -> int32:
     mut names: list[str] = ["Ada", "Grace"]
     match names.get(-2):
-        case Option.Some(value):
+        case Lookup.Found(value):
             print(value)
-        case Option.None:
+        case Lookup.Missing:
             pass
 
     match names.get(-1):
-        case Option.Some(value):
+        case Lookup.Found(value):
             print(value)
-        case Option.None:
+        case Lookup.Missing:
             pass
 
     mut values = [1, 3]

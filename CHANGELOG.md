@@ -7,8 +7,41 @@ in this file.
 
 ## 0.3.4 — Unreleased (technical preview)
 
+- Remove the builtin `Option[T]` type, its `Option.Some`/`Option.None`
+  constructors, and the `T?` type suffix. `T | None` is the sole optional
+  spelling (ADR-0052); `Option[int64]` is now an ordinary unknown type and `T?`
+  an ordinary parse error, with no migration diagnostic. A user may declare an
+  ordinary enum named `Option`.
+- Add the compiler-provided `Lookup[T]` (`Found(value)` / `Missing`) and
+  `Poll[T]` (`Ready(value)` / `Unavailable`) outcome enums. `list.get`,
+  `dict.get`, and `dict.remove` return `Lookup[T]`; `Queue.get_or_none` and
+  `Task.result_or_none` are renamed `poll` and return `Poll[T]`.
+- Convert every other optional library signature to `T | None`: `str.strip_prefix`
+  and `strip_suffix`, `Array.get` and `set`, `io.read_line`, `sys.env`,
+  `path.parent`, `file_name`, and `extension`, the `json.as_*` and `into_*`
+  accessors and the `json.dumps` `indent` parameter, the network stream and
+  socket `read_*`/`recv*` results, `process.start`/`run`/`Supervisor.start`
+  `cwd` parameters, `process.Child.stdin`/`stdout`/`stderr`, and the
+  `wait_or_none`/`read_line`/`read_bytes` results. Both backends agree on every
+  replacement; the semantic-interface schema is now version 16.
+- A recursive optional class field is spelled `next: indirect Node | None`; the
+  `indirect` marker on the member marks the field as the former `indirect Node?`
+  did.
 - Require identical complete callable contracts at bare destinations (`AU2015`);
   permitted restrictions now require explicit alias or callable constructors.
+  A callable value bound into a union destination such as
+  `(def(value: int64) -> int64) | None`, including a generic `T | None`
+  parameter, now meets the same rule at the checker; previously only the MIR
+  validator refused the program.
+- Render the unit value `None` as `None` in `print`, `str`, f-string
+  interpolation, and container rendering; an absent `T | None` value prints
+  `None` (the former `Option.None` spelling printed `Option.None`, while the
+  unit value previously rendered as empty text, giving `[, 1]` and
+  `Result.Ok()`).
+- Refuse reading a bound's method as a member of a type-parameter value
+  (`value: int64 = item.size` where `item: T` and `T: Size`) with `AU2005`;
+  the checker previously typed it as the method's result and both backends
+  trapped at runtime on a missing field.
 - Add compiler-owned signature help, references, and rename with prepare support
   to the CLI and language server, including binding-preserving rename checks.
 - Update `rustls` to 0.23.45 (with `rustls-webpki` and `aws-lc-sys`) for

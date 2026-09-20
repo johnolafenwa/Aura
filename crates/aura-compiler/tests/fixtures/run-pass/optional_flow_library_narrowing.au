@@ -1,0 +1,27 @@
+import path
+
+class Entry:
+    name: str | None
+
+def choose(text: str) -> str | None:
+    return text.strip_prefix("item:")
+
+def main():
+    mut current = choose("item:alpha")
+    if current is not None:
+        print(current.len())
+    current = choose("other")
+    print(current is None)
+    entry = Entry(name=path.extension("notes.md"))
+    if entry.name is not None:
+        print(entry.name)
+    mut total = 0
+    for text in ["item:1", "skip", "item:22"]:
+        found = choose(text)
+        if found is None:
+            continue
+        total += found.len()
+    print(total)
+    view label = entry.name
+    if label is not None:
+        print(label.len())

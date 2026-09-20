@@ -537,7 +537,7 @@ fn holder_prelude() -> &'static str {
 #[test]
 fn task_result_helpers_carry_callable_identities() {
     let source = format!(
-        "{}def make() -> def(item: own Holder) -> None:\n    return consume\ndef main():\n    with TaskGroup() as group:\n        first = group.start(make)\n        match first.result_or_none(timeout=1s):\n            case Option.Some(callback):\n                callback(Holder(values=[]))\n            case Option.None:\n                print(\"none\")\n        second = group.start(make)\n        fallback: def(item: own Holder) -> None = second.result_or(consume, timeout=1s)\n        fallback(Holder(values=[1]))\n        third = group.start(make)\n        match third.result(timeout=1s):\n            case TaskResult.Ready(ready):\n                ready(Holder(values=[2]))\n            case _:\n                print(\"not ready\")\n",
+        "{}def make() -> def(item: own Holder) -> None:\n    return consume\ndef main():\n    with TaskGroup() as group:\n        first = group.start(make)\n        match first.poll(timeout=1s):\n            case Poll.Ready(callback):\n                callback(Holder(values=[]))\n            case Poll.Unavailable:\n                print(\"none\")\n        second = group.start(make)\n        fallback: def(item: own Holder) -> None = second.result_or(consume, timeout=1s)\n        fallback(Holder(values=[1]))\n        third = group.start(make)\n        match third.result(timeout=1s):\n            case TaskResult.Ready(ready):\n                ready(Holder(values=[2]))\n            case _:\n                print(\"not ready\")\n",
         holder_prelude()
     );
     assert_valid(&source, "task result helpers");
@@ -546,7 +546,7 @@ fn task_result_helpers_carry_callable_identities() {
 #[test]
 fn map_results_carry_callback_return_identities() {
     let source = format!(
-        "{}def main():\n    handlers = [1, 2].map(lambda index: consume)\n    match handlers.get(0):\n        case Option.Some(handler):\n            handler(Holder(values=[]))\n        case Option.None:\n            print(\"none\")\n",
+        "{}def main():\n    handlers = [1, 2].map(lambda index: consume)\n    match handlers.get(0):\n        case Lookup.Found(handler):\n            handler(Holder(values=[]))\n        case Lookup.Missing:\n            print(\"none\")\n",
         holder_prelude()
     );
     assert_valid(&source, "map callback identities");
@@ -555,7 +555,7 @@ fn map_results_carry_callback_return_identities() {
 #[test]
 fn extend_with_nested_identities_and_conditional_append_merge() {
     let source = format!(
-        "{}def main():\n    mut pairs: list[(def(item: own Holder) -> None, int64)] = [(consume, 0)]\n    more: list[(def(item: own Holder) -> None, int64)] = [(consume, 1)]\n    pairs.extend(more)\n    match pairs.get(1):\n        case Option.Some(pair):\n            pair[0](Holder(values=[]))\n        case Option.None:\n            print(\"none\")\n    mut callbacks: list[def(item: own Holder) -> None] = []\n    flag = true\n    if flag:\n        callbacks.append(consume)\n    match callbacks.get(0):\n        case Option.Some(callback):\n            callback(Holder(values=[1]))\n        case Option.None:\n            print(\"none\")\n",
+        "{}def main():\n    mut pairs: list[(def(item: own Holder) -> None, int64)] = [(consume, 0)]\n    more: list[(def(item: own Holder) -> None, int64)] = [(consume, 1)]\n    pairs.extend(more)\n    match pairs.get(1):\n        case Lookup.Found(pair):\n            pair[0](Holder(values=[]))\n        case Lookup.Missing:\n            print(\"none\")\n    mut callbacks: list[def(item: own Holder) -> None] = []\n    flag = true\n    if flag:\n        callbacks.append(consume)\n    match callbacks.get(0):\n        case Lookup.Found(callback):\n            callback(Holder(values=[1]))\n        case Lookup.Missing:\n            print(\"none\")\n",
         holder_prelude()
     );
     assert_valid(&source, "extend and conditional append");
@@ -585,7 +585,7 @@ fn list_literal_mut(function: &mut Value) -> &mut Value {
 #[test]
 fn poisoned_callable_identity_cannot_cross_a_callable_parameter_boundary() {
     let source = format!(
-        "{}def invoke(callback: def(item: own Holder) -> None, value: own Holder):\n    callback(value)\ndef main():\n    callbacks: list[def(item: own Holder) -> None] = [consume, consume]\n    index = 1\n    match callbacks.get(index):\n        case Option.Some(callback):\n            invoke(callback, Holder(values=[]))\n        case Option.None:\n            print(\"none\")\n",
+        "{}def invoke(callback: def(item: own Holder) -> None, value: own Holder):\n    callback(value)\ndef main():\n    callbacks: list[def(item: own Holder) -> None] = [consume, consume]\n    index = 1\n    match callbacks.get(index):\n        case Lookup.Found(callback):\n            invoke(callback, Holder(values=[]))\n        case Lookup.Missing:\n            print(\"none\")\n",
         holder_prelude()
     );
     let mut encoded = encode(&source);
@@ -598,7 +598,7 @@ fn poisoned_callable_identity_cannot_cross_a_callable_parameter_boundary() {
 #[test]
 fn poisoned_nested_callable_identity_cannot_cross_a_tuple_boundary() {
     let source = format!(
-        "{}def invoke(pair: (def(item: own Holder) -> None, int64), value: own Holder):\n    callback: def(item: own Holder) -> None = pair[0]\n    callback(value)\ndef main():\n    callbacks: list[def(item: own Holder) -> None] = [consume, consume]\n    index = 1\n    match callbacks.get(index):\n        case Option.Some(callback):\n            invoke((callback, 0), Holder(values=[]))\n        case Option.None:\n            print(\"none\")\n",
+        "{}def invoke(pair: (def(item: own Holder) -> None, int64), value: own Holder):\n    callback: def(item: own Holder) -> None = pair[0]\n    callback(value)\ndef main():\n    callbacks: list[def(item: own Holder) -> None] = [consume, consume]\n    index = 1\n    match callbacks.get(index):\n        case Lookup.Found(callback):\n            invoke((callback, 0), Holder(values=[]))\n        case Lookup.Missing:\n            print(\"none\")\n",
         holder_prelude()
     );
     let mut encoded = encode(&source);
@@ -637,7 +637,7 @@ fn nested_callable_without_an_identity_cannot_cross_a_tuple_boundary() {
 #[test]
 fn container_insert_without_an_identity_poisons_the_container() {
     let source = format!(
-        "{}def main():\n    mut callbacks: list[def(item: own Holder) -> None] = [consume]\n    callbacks.append(consume)\n    match callbacks.get(0):\n        case Option.Some(callback):\n            callback(Holder(values=[]))\n        case Option.None:\n            print(\"none\")\n",
+        "{}def main():\n    mut callbacks: list[def(item: own Holder) -> None] = [consume]\n    callbacks.append(consume)\n    match callbacks.get(0):\n        case Lookup.Found(callback):\n            callback(Holder(values=[]))\n        case Lookup.Missing:\n            print(\"none\")\n",
         holder_prelude()
     );
     let mut encoded = encode(&source);
@@ -664,7 +664,7 @@ fn container_insert_without_an_identity_poisons_the_container() {
 
 fn container_insert_source() -> String {
     format!(
-        "{}def main():\n    mut callbacks: list[def(item: own Holder) -> None] = [consume]\n    callbacks.append(consume)\n    match callbacks.get(0):\n        case Option.Some(callback):\n            callback(Holder(values=[]))\n        case Option.None:\n            print(\"none\")\n",
+        "{}def main():\n    mut callbacks: list[def(item: own Holder) -> None] = [consume]\n    callbacks.append(consume)\n    match callbacks.get(0):\n        case Lookup.Found(callback):\n            callback(Holder(values=[]))\n        case Lookup.Missing:\n            print(\"none\")\n",
         holder_prelude()
     )
 }
@@ -1036,7 +1036,7 @@ fn returned_loan_transferred_without_returning_is_rejected() {
 #[test]
 fn map_over_callable_elements_carries_callback_return_identities() {
     let source = format!(
-        "{}def main():\n    callbacks: list[def(item: own Holder) -> None] = [consume]\n    mapped = callbacks.map(lambda callback: consume)\n    match mapped.get(0):\n        case Option.Some(handler):\n            handler(Holder(values=[]))\n        case Option.None:\n            print(\"none\")\n",
+        "{}def main():\n    callbacks: list[def(item: own Holder) -> None] = [consume]\n    mapped = callbacks.map(lambda callback: consume)\n    match mapped.get(0):\n        case Lookup.Found(handler):\n            handler(Holder(values=[]))\n        case Lookup.Missing:\n            print(\"none\")\n",
         holder_prelude()
     );
     assert_valid(&source, "map over callable elements");

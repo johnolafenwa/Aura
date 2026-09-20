@@ -1,0 +1,11 @@
+def work() -> int64:
+    return 1
+
+def main():
+    with TaskGroup() as group:
+        task = group.start(work)
+        match task.result_or_none(timeout=1s):
+            case Poll.Ready(value):
+                print(value)
+            case Poll.Unavailable:
+                print("unavailable")

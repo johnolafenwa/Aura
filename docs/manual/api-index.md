@@ -77,8 +77,8 @@ backend rules are in [FFI v0](/manual/ffi).
 | `str.replace` | `replace(from: str, to: str) -> str` | Returns a new string with replacements applied. |
 | `str.to_lower` | `to_lower() -> str` | Unicode lowercase conversion. |
 | `str.to_upper` | `to_upper() -> str` | Unicode uppercase conversion. |
-| `str.strip_prefix` | `strip_prefix(text: str) -> Option[str]` | Returns the remainder when the prefix matches. |
-| `str.strip_suffix` | `strip_suffix(text: str) -> Option[str]` | Returns the remainder when the suffix matches. |
+| `str.strip_prefix` | `strip_prefix(text: str) -> str \| None` | Returns the remainder when the prefix matches, or `None`; a matched empty remainder is a present `""`. |
+| `str.strip_suffix` | `strip_suffix(text: str) -> str \| None` | Returns the remainder when the suffix matches, or `None`; a matched empty remainder is a present `""`. |
 | `str.trim` | `trim() -> str` | Removes surrounding Unicode whitespace. |
 | `str.join` | `join(parts: list[str]) -> str` | Joins `parts` using the receiver as separator. |
 | `str.clone` | `clone() -> str` | Returns a new owned string. |
@@ -102,8 +102,8 @@ diagnostic, and backend contracts.
 | `Array.shape` | `shape() -> list[int64]` | Owned shape snapshot. |
 | `Array.len` | `len() -> int64` | Total element count. |
 | `Array.clone` | `clone() -> Array[T]` | Explicit fresh full-buffer copy. |
-| `Array.get` | `get(index: list[int64]) -> Option[T]` | Optional coordinate read. |
-| `Array.set` | `set(index: list[int64], value: T) -> Option[T]` | Mutable replacement; returns old scalar or traps on invalid coordinate/rank. |
+| `Array.get` | `get(index: list[int64]) -> T \| None` | Coordinate read; `None` for an out-of-bounds coordinate or rank mismatch. |
+| `Array.set` | `set(index: list[int64], value: T) -> T \| None` | Mutable replacement; returns the old scalar and traps on an invalid coordinate/rank rather than returning `None`. |
 | `Array.fill` | `fill(value: T) -> None` | Mutable row-major fill. |
 | `Array.map` | `map[U](f: def(T) -> U) -> Array[U]` | Eager row-major repeatable callback. |
 | `Array.sum` | `sum() -> T` | Deterministic dtype reduction; empty returns zero. |
@@ -199,7 +199,7 @@ See [Collections](/manual/collections) for ownership and iteration details.
 | `list.copy` | `copy() -> list[T]` | Returns independent owned storage; requires clone-safe `T`. |
 | `list.append` | `append(value: own T) -> None` | Transfers `value` to the end. |
 | `list.pop` | `pop(index: int64 = -1) -> T` | Removes and transfers the normalized position; invalid positions trap. |
-| `list.get` | `get(index: int64) -> Option[T]` | Cloned element after negative-index normalization, or `None` when out of bounds; requires clone-safe `T`. |
+| `list.get` | `get(index: int64) -> Lookup[T]` | `Lookup.Found(value)` with a cloned element after negative-index normalization, or `Lookup.Missing` when out of bounds; requires clone-safe `T`. |
 | `list.set` | `set(index: int64, value: own T) -> T` | Replaces and transfers out the old element; invalid positions trap. |
 | `list.remove` | `remove(value: T) -> None` | Removes the first equal value; absence traps with `AU4008`. |
 | `list.index` | `index(value: T) -> int64` | Returns the first equal position; absence traps with `AU4008`. |
@@ -224,8 +224,8 @@ See [Collections](/manual/collections) for ownership and iteration details.
 | `dict.len` | `len() -> int64` | Entry count. |
 | `dict.is_empty` | `is_empty() -> bool` | `true` when empty. |
 | `dict.copy` | `copy() -> dict[K, V]` | Returns independent owned storage; requires clone-safe `K` and `V`. |
-| `dict.get` | `get(key: K) -> Option[V]` | Cloned value or `None` when absent; requires clone-safe `V`. |
-| `dict.remove` | `remove(key: K) -> Option[V]` | Removes an entry and returns the previous value. |
+| `dict.get` | `get(key: K) -> Lookup[V]` | `Lookup.Found(value)` with a cloned value, or `Lookup.Missing` when the key is absent; a present `None` value is `Found(None)`; requires clone-safe `V`. |
+| `dict.remove` | `remove(key: K) -> Lookup[V]` | Removes an entry and transfers its value into `Lookup.Found(value)`, or returns `Lookup.Missing`; no clone requirement. |
 | `dict.keys` | `keys() -> list[K]` | Cloned keys in insertion order; requires clone-safe `K`. |
 | `dict.values` | `values() -> list[V]` | Cloned values in insertion order; requires clone-safe `V`. |
 | `dict.items` | `items() -> list[(K, V)]` | Cloned key/value tuples in insertion order; requires clone-safe `K` and `V`. |
@@ -259,11 +259,11 @@ See [Concurrency](/manual/concurrency) for structured-concurrency semantics.
 | `Queue.put` | `put(value: own T, timeout: Duration = ...) -> Result[None, SendError[T]]` | Sends a value or returns the unsent value in the error; Accepted ADR-0033 requires `T: Transfer`. |
 | `Queue.try_put` | `try_put(value: own T) -> Result[None, SendError[T]]` | Sends without waiting; Accepted ADR-0033 requires `T: Transfer`. |
 | `Queue.get` | `get(timeout: Duration = ...) -> QueueReceive[T]` | Receives an item, close, timeout, or cancellation outcome; does not itself recheck payload Transfer. |
-| `Queue.get_or_none` | `get_or_none(timeout: Duration = ...) -> Option[T]` | `Some(value)` or `None` for closed, timeout, cancellation, or immediate absence. |
+| `Queue.poll` | `poll(timeout: Duration = ...) -> Poll[T]` | `Poll.Ready(value)` or `Poll.Unavailable` for closed, timeout, cancellation, or immediate absence. |
 | `Queue.get_or` | `get_or(default: own T, timeout: Duration = ...) -> T` | Value or fallback. |
 | `Queue.close` | `close() -> None` | Closes the queue and wakes waiters. |
 | `Task.result` | `result(timeout: Duration = ...) -> TaskResult[T]` | Waits for task outcome; consumes the observation right when `T` is non-repeatable. |
-| `Task.result_or_none` | `result_or_none(timeout: Duration = ...) -> Option[T]` | `Some(value)` or `None` for failure, timeout, cancellation, or immediate absence; consumes the observation right when `T` is non-repeatable, including on `None`. |
+| `Task.poll` | `poll(timeout: Duration = ...) -> Poll[T]` | `Poll.Ready(value)` or `Poll.Unavailable` for failure, timeout, cancellation, or immediate absence; consumes the observation right when `T` is non-repeatable, including on `Unavailable`. |
 | `Task.result_or` | `result_or(default: own T, timeout: Duration = ...) -> T` | Value or fallback; consumes the observation right when `T` is non-repeatable. |
 | `TaskGroup()` | `TaskGroup()` | Task group resource constructor. |
 | `TaskGroup.start` | `start(function, own ...) -> Task[T]` | Requires every capture and result to be `Transfer`; accepts inferred or explicit `function[Types]` / `Type.associated_method[Types]` targets; starts the child on the guarded 768 KiB default stack. |
@@ -280,7 +280,7 @@ See [I/O Module](/manual/io) and [Filesystem Module](/manual/filesystem).
 | --- | --- | --- |
 | `io.write` | `write(text: str) -> Result[None, io.Error]` | Writes text without a newline. |
 | `io.flush` | `flush() -> Result[None, io.Error]` | Flushes standard output. |
-| `io.read_line` | `read_line() -> Result[Option[str], io.Error]` | Reads strict UTF-8 without trailing LF/CRLF; `Ok(None)` on EOF. |
+| `io.read_line` | `read_line() -> Result[str \| None, io.Error]` | Reads strict UTF-8 without trailing LF/CRLF; `Ok(None)` only on clean EOF. |
 | `fs.exists` | `exists(path: str) -> bool` | Path existence check. |
 | `fs.read_to_string` | `read_to_string(path: str) -> Result[str, io.Error]` | Reads UTF-8 text, capped at 256 MiB. |
 | `fs.read_bytes` | `read_bytes(path: str) -> Result[list[uint8], io.Error]` | Reads bytes, capped at 256 MiB. |
@@ -308,24 +308,24 @@ See [Control-Plane Modules](/manual/control-plane).
 | API | Signature |
 | --- | --- |
 | `sys.args` | `args() -> list[str]` |
-| `sys.env` | `env(name: str) -> Option[str]` |
+| `sys.env` | `env(name: str) -> str \| None` |
 | `sys.current_dir` | `current_dir() -> Result[str, io.Error]` |
 | `sys.unix_time_ms` | `unix_time_ms() -> int64` |
 | `sys.monotonic_time_ms` | `monotonic_time_ms() -> int64` |
 | `path.join` | `join(base: str, child: str) -> str` |
-| `path.parent` | `parent(path: str) -> Option[str]` |
-| `path.file_name` | `file_name(path: str) -> Option[str]` |
-| `path.extension` | `extension(path: str) -> Option[str]` |
+| `path.parent` | `parent(path: str) -> str \| None` |
+| `path.file_name` | `file_name(path: str) -> str \| None` |
+| `path.extension` | `extension(path: str) -> str \| None` |
 | `path.is_absolute` | `is_absolute(path: str) -> bool` |
 | `json.parse` | `parse(text: str) -> Result[json.Value, json.Error]` |
-| `json.dumps` | `dumps(value: json.Value, indent: Option[int64] = None) -> str` |
+| `json.dumps` | `dumps(value: json.Value, indent: int64 \| None = None) -> str` |
 | `json.is_null` | `is_null(value: json.Value) -> bool` |
-| `json.as_bool` | `as_bool(value: json.Value) -> Option[bool]` |
-| `json.as_int` | `as_int(value: json.Value) -> Option[int64]` |
-| `json.as_float` | `as_float(value: json.Value) -> Option[float64]` |
-| `json.into_string` | `into_string(value: own json.Value) -> Option[str]` |
-| `json.into_array` | `into_array(value: own json.Value) -> Option[list[json.Value]]` |
-| `json.into_object` | `into_object(value: own json.Value) -> Option[dict[str, json.Value]]` |
+| `json.as_bool` | `as_bool(value: json.Value) -> bool \| None` |
+| `json.as_int` | `as_int(value: json.Value) -> int64 \| None` |
+| `json.as_float` | `as_float(value: json.Value) -> float64 \| None` |
+| `json.into_string` | `into_string(value: own json.Value) -> str \| None` |
+| `json.into_array` | `into_array(value: own json.Value) -> list[json.Value] \| None` |
+| `json.into_object` | `into_object(value: own json.Value) -> dict[str, json.Value] \| None` |
 | `json.is_valid` / `toml.is_valid` | `is_valid(text: str) -> bool` |
 | `json.stringify_map` / `toml.stringify_map` | `stringify_map(value: dict[str, str]) -> Result[str, str]` |
 | `json.parse_string_map` / `toml.parse_string_map` | `parse_string_map(text: str) -> Result[dict[str, str], str]` |
@@ -384,8 +384,8 @@ Bounded stream read counts are `1..=67108864`; UDP receive counts are `1..=65535
 | `net.TcpListener` | `local_addr` | `local_addr() -> Result[str, io.Error]` |
 | `net.TcpListener` | `close` | `close() -> None` |
 | `net.TcpStream` | `read_all` | `read_all(timeout: Duration = ...) -> Result[str, io.Error]` |
-| `net.TcpStream` | `read_line` | `read_line(timeout: Duration = ...) -> Result[Option[str], io.Error]` |
-| `net.TcpStream` | `read_bytes` | `read_bytes(max_bytes: int32, timeout: Duration = ...) -> Result[Option[list[uint8]], io.Error]` |
+| `net.TcpStream` | `read_line` | `read_line(timeout: Duration = ...) -> Result[str \| None, io.Error]` |
+| `net.TcpStream` | `read_bytes` | `read_bytes(max_bytes: int32, timeout: Duration = ...) -> Result[list[uint8] \| None, io.Error]` |
 | `net.TcpStream` | `read_exact` | `read_exact(count: int32, timeout: Duration = ...) -> Result[list[uint8], io.Error]` |
 | `net.TcpStream` | `write_all` | `write_all(text: str, timeout: Duration = ...) -> Result[None, io.Error]` |
 | `net.TcpStream` | `write_bytes` | `write_bytes(bytes: list[uint8], timeout: Duration = ...) -> Result[None, io.Error]` |
@@ -398,8 +398,8 @@ Bounded stream read counts are `1..=67108864`; UDP receive counts are `1..=65535
 | `net.TcpStream` | `close` | `close() -> None` |
 | `net.UdpSocket` | `send_text` | `send_text(address: str, text: str, timeout: Duration = ...) -> Result[None, io.Error]` |
 | `net.UdpSocket` | `send_bytes` | `send_bytes(address: str, bytes: list[uint8], timeout: Duration = ...) -> Result[None, io.Error]` |
-| `net.UdpSocket` | `recv` | `recv(max_bytes: int32, timeout: Duration = ...) -> Result[Option[list[uint8]], io.Error]` |
-| `net.UdpSocket` | `recv_from` | `recv_from(max_bytes: int32, timeout: Duration = ...) -> Result[Option[net.UdpDatagram], io.Error]` |
+| `net.UdpSocket` | `recv` | `recv(max_bytes: int32, timeout: Duration = ...) -> Result[list[uint8] \| None, io.Error]` |
+| `net.UdpSocket` | `recv_from` | `recv_from(max_bytes: int32, timeout: Duration = ...) -> Result[net.UdpDatagram \| None, io.Error]` |
 | `net.UdpSocket` | `local_addr` | `local_addr() -> Result[str, io.Error]` |
 | `net.UdpSocket` | `peer_addr` | `peer_addr() -> Result[str, io.Error]` |
 | `net.UdpSocket` | `close` | `close() -> None` |
@@ -425,19 +425,19 @@ Bounded stream read counts are `1..=67108864`; UDP receive counts are `1..=65535
 | `net.WebSocketListener` | `local_addr` | `local_addr() -> Result[str, io.Error]` |
 | `net.WebSocket` | `send_text` | `send_text(text: str, timeout: Duration = ...) -> Result[None, io.Error]` |
 | `net.WebSocket` | `send_bytes` | `send_bytes(bytes: list[uint8], timeout: Duration = ...) -> Result[None, io.Error]` |
-| `net.WebSocket` | `recv_text` | `recv_text(timeout: Duration = ...) -> Result[Option[str], io.Error]` |
-| `net.WebSocket` | `recv_bytes` | `recv_bytes(timeout: Duration = ...) -> Result[Option[list[uint8]], io.Error]` |
+| `net.WebSocket` | `recv_text` | `recv_text(timeout: Duration = ...) -> Result[str \| None, io.Error]` |
+| `net.WebSocket` | `recv_bytes` | `recv_bytes(timeout: Duration = ...) -> Result[list[uint8] \| None, io.Error]` |
 | `net.WebSocket` | `close` | `close() -> None` |
 | `net.UnixListener` | `accept` | `accept(timeout: Duration = ...) -> Result[net.UnixStream, io.Error]` |
 | `net.UnixListener` | `close` | `close() -> None` |
-| `net.UnixStream` | `read_line` | `read_line(timeout: Duration = ...) -> Result[Option[str], io.Error]` |
+| `net.UnixStream` | `read_line` | `read_line(timeout: Duration = ...) -> Result[str \| None, io.Error]` |
 | `net.UnixStream` | `read_exact` | `read_exact(count: int32, timeout: Duration = ...) -> Result[list[uint8], io.Error]` |
 | `net.UnixStream` | `write_all` | `write_all(text: str, timeout: Duration = ...) -> Result[None, io.Error]` |
 | `net.UnixStream` | `close` | `close() -> None` |
 | `net.TlsListener` | `accept` | `accept(timeout: Duration = ...) -> Result[net.TlsStream, io.Error]` |
 | `net.TlsListener` | `local_addr` | `local_addr() -> Result[str, io.Error]` |
 | `net.TlsListener` | `close` | `close() -> None` |
-| `net.TlsStream` | `read_line` | `read_line(timeout: Duration = ...) -> Result[Option[str], io.Error]` |
+| `net.TlsStream` | `read_line` | `read_line(timeout: Duration = ...) -> Result[str \| None, io.Error]` |
 | `net.TlsStream` | `read_exact` | `read_exact(count: int32, timeout: Duration = ...) -> Result[list[uint8], io.Error]` |
 | `net.TlsStream` | `write_all` | `write_all(text: str, timeout: Duration = ...) -> Result[None, io.Error]` |
 | `net.TlsStream` | `close` | `close() -> None` |
@@ -452,20 +452,20 @@ See [Process Module](/manual/process) for defaults, groups, and supervisor behav
 | `process.null` | `null() -> process.Stdio` |
 | `process.pipe` | `pipe() -> process.Stdio` |
 | `process.supervisor` | `supervisor() -> process.Supervisor` |
-| `process.start` | `start(command: list[str], cwd: Option[str] = ..., env: dict[str, str] = ..., stdin: process.Stdio = ..., stdout: process.Stdio = ..., stderr: process.Stdio = ..., group: bool = ...) -> Result[process.Child, process.Error]` |
-| `process.run` | `run(command: list[str], cwd: Option[str] = ..., env: dict[str, str] = ..., stdin: process.Stdio = ..., stdout: process.Stdio = ..., stderr: process.Stdio = ..., timeout: Duration = ..., group: bool = ...) -> Result[process.Completed, process.Error]` |
-| `process.Child.stdin` | `stdin() -> Option[process.Pipe]` |
-| `process.Child.stdout` | `stdout() -> Option[process.Pipe]` |
-| `process.Child.stderr` | `stderr() -> Option[process.Pipe]` |
+| `process.start` | `start(command: list[str], cwd: str \| None = ..., env: dict[str, str] = ..., stdin: process.Stdio = ..., stdout: process.Stdio = ..., stderr: process.Stdio = ..., group: bool = ...) -> Result[process.Child, process.Error]` |
+| `process.run` | `run(command: list[str], cwd: str \| None = ..., env: dict[str, str] = ..., stdin: process.Stdio = ..., stdout: process.Stdio = ..., stderr: process.Stdio = ..., timeout: Duration = ..., group: bool = ...) -> Result[process.Completed, process.Error]` |
+| `process.Child.stdin` | `stdin() -> process.Pipe \| None` |
+| `process.Child.stdout` | `stdout() -> process.Pipe \| None` |
+| `process.Child.stderr` | `stderr() -> process.Pipe \| None` |
 | `process.Child.wait` | `wait(timeout: Duration = ...) -> process.Wait` |
-| `process.Child.wait_or_none` | `wait_or_none(timeout: Duration = ...) -> Result[Option[process.ExitStatus], process.Error]` |
+| `process.Child.wait_or_none` | `wait_or_none(timeout: Duration = ...) -> Result[process.ExitStatus \| None, process.Error]` |
 | `process.Child.wait_ok` | `wait_ok(timeout: Duration = ...) -> Result[process.ExitStatus, process.Error]` |
 | `process.Child.kill` | `kill() -> Result[None, process.Error]` |
 | `process.Child.terminate` | `terminate() -> Result[None, process.Error]` |
 | `process.Child.close` | `close() -> None` |
 | `process.Pipe.read_all` | `read_all() -> Result[str, process.Error]` |
-| `process.Pipe.read_line` | `read_line(timeout: Duration = ...) -> Result[Option[str], process.Error]` |
-| `process.Pipe.read_bytes` | `read_bytes(max_bytes: int32, timeout: Duration = ...) -> Result[Option[list[uint8]], process.Error]` |
+| `process.Pipe.read_line` | `read_line(timeout: Duration = ...) -> Result[str \| None, process.Error]` |
+| `process.Pipe.read_bytes` | `read_bytes(max_bytes: int32, timeout: Duration = ...) -> Result[list[uint8] \| None, process.Error]` |
 | `process.Pipe.write_all` | `write_all(text: str, timeout: Duration = ...) -> Result[None, process.Error]` |
 | `process.Pipe.write_bytes` | `write_bytes(bytes: list[uint8], timeout: Duration = ...) -> Result[None, process.Error]` |
 | `process.Pipe.flush` | `flush() -> Result[None, process.Error]` |
@@ -477,9 +477,9 @@ See [Process Module](/manual/process) for defaults, groups, and supervisor behav
 | `process.Completed.stderr` | `stderr() -> str` |
 | `process.Completed.stderr_bytes` | `stderr_bytes() -> list[uint8]` |
 | `process.Completed.check` | `check() -> Result[None, process.Error]` |
-| `process.Supervisor.start` | `start(name: own str, command: own list[str], cwd: own Option[str] = ..., env: own dict[str, str] = ..., stdin: own process.Stdio = ..., stdout: own process.Stdio = ..., stderr: own process.Stdio = ..., restart: own process.RestartPolicy = ..., backoff: own Duration = ..., max_restarts: own int32 = ..., group: own bool = ...) -> Result[None, process.Error]` |
+| `process.Supervisor.start` | `start(name: own str, command: own list[str], cwd: own (str \| None) = ..., env: own dict[str, str] = ..., stdin: own process.Stdio = ..., stdout: own process.Stdio = ..., stderr: own process.Stdio = ..., restart: own process.RestartPolicy = ..., backoff: own Duration = ..., max_restarts: own int32 = ..., group: own bool = ...) -> Result[None, process.Error]` |
 | `process.Supervisor.wait` | `wait(timeout: Duration = ...) -> process.SupervisorWait` |
-| `process.Supervisor.wait_or_none` | `wait_or_none(timeout: Duration = ...) -> Result[Option[process.SupervisorEvent], process.Error]` |
+| `process.Supervisor.wait_or_none` | `wait_or_none(timeout: Duration = ...) -> Result[process.SupervisorEvent \| None, process.Error]` |
 | `process.Supervisor.stop` | `stop() -> Result[None, process.Error]` |
 | `process.Supervisor.is_empty` | `is_empty() -> bool` |
 | `process.Supervisor.close` | `close() -> None` |
@@ -490,7 +490,8 @@ Pipe `read_bytes` returns `Ok(None)` only at EOF; timeout and cancellation are `
 
 | Type | Variants |
 | --- | --- |
-| `Option[T]` | `Some(value: own T)`, `None` |
+| `Lookup[T]` | `Found(value: own T)`, `Missing` |
+| `Poll[T]` | `Ready(value: own T)`, `Unavailable` |
 | `Result[T, E]` | `Ok(value: own T)`, `Err(error: own E)` |
 | `SendError[T]` | `Closed(value: own T)`, `Cancelled(value: own T)`, `TimedOut(value: own T)`, `Full(value: own T)` |
 | `QueueReceive[T]` | `Item(value: own T)`, `Closed`, `TimedOut`, `Cancelled` |

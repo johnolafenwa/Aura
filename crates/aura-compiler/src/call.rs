@@ -1036,11 +1036,11 @@ pub enum BuiltinMember {
     QueuePut,
     QueueTryPut,
     QueueGet,
-    QueueGetOrNone,
+    QueuePoll,
     QueueGetOr,
     QueueClose,
     TaskResult,
-    TaskResultOrNone,
+    TaskPoll,
     TaskResultOr,
     TaskGroupStart,
     TaskGroupStartSoon,
@@ -1371,11 +1371,11 @@ impl BuiltinMember {
             ("Queue", "put") => Some(Self::QueuePut),
             ("Queue", "try_put") => Some(Self::QueueTryPut),
             ("Queue", "get") => Some(Self::QueueGet),
-            ("Queue", "get_or_none") => Some(Self::QueueGetOrNone),
+            ("Queue", "poll") => Some(Self::QueuePoll),
             ("Queue", "get_or") => Some(Self::QueueGetOr),
             ("Queue", "close") => Some(Self::QueueClose),
             ("Task", "result") => Some(Self::TaskResult),
-            ("Task", "result_or_none") => Some(Self::TaskResultOrNone),
+            ("Task", "poll") => Some(Self::TaskPoll),
             ("Task", "result_or") => Some(Self::TaskResultOr),
             ("TaskGroup", "start") => Some(Self::TaskGroupStart),
             ("TaskGroup", "start_soon") => Some(Self::TaskGroupStartSoon),
@@ -1572,11 +1572,11 @@ impl BuiltinMember {
             Self::QueuePut => "put",
             Self::QueueTryPut => "try_put",
             Self::QueueGet => "get",
-            Self::QueueGetOrNone => "get_or_none",
+            Self::QueuePoll => "poll",
             Self::QueueGetOr => "get_or",
             Self::QueueClose => "close",
             Self::TaskResult => "result",
-            Self::TaskResultOrNone => "result_or_none",
+            Self::TaskPoll => "poll",
             Self::TaskResultOr => "result_or",
             Self::TaskGroupStart => "start",
             Self::TaskGroupStartSoon => "start_soon",
@@ -1711,16 +1711,16 @@ impl BuiltinMember {
             Self::StringReplace => "replace(from: str, to: str) -> str",
             Self::StringToLower => "to_lower() -> str",
             Self::StringToUpper => "to_upper() -> str",
-            Self::StringStripPrefix => "strip_prefix(text: str) -> Option[str]",
-            Self::StringStripSuffix => "strip_suffix(text: str) -> Option[str]",
+            Self::StringStripPrefix => "strip_prefix(text: str) -> str | None",
+            Self::StringStripSuffix => "strip_suffix(text: str) -> str | None",
             Self::StringTrim => "trim() -> str",
             Self::StringJoin => "join(parts: list[str]) -> str",
             Self::StringToBytes => "to_bytes() -> list[uint8]",
             Self::ArrayShape => "shape() -> list[int64]",
             Self::ArrayLen => "len() -> int64",
             Self::ArrayClone => "clone() -> Array[T]",
-            Self::ArrayGet => "get(index: list[int64]) -> Option[T]",
-            Self::ArraySet => "set(index: list[int64], value: T) -> Option[T]",
+            Self::ArrayGet => "get(index: list[int64]) -> T | None",
+            Self::ArraySet => "set(index: list[int64], value: T) -> T | None",
             Self::ArrayFill => "fill(value: T) -> None",
             Self::ArrayMap => "map[U](f: def(T) -> U) -> Array[U]",
             Self::ArraySum => "sum() -> T",
@@ -1738,7 +1738,7 @@ impl BuiltinMember {
             Self::VecClone => "copy() -> list[T]",
             Self::VecPush => "append(value: own T) -> None",
             Self::VecPop => "pop(index: int64 = -1) -> T",
-            Self::VecGet => "get(index: int64) -> Option[T]",
+            Self::VecGet => "get(index: int64) -> Lookup[T]",
             Self::VecSet => "set(index: int64, value: own T) -> T",
             Self::VecRemove => "remove(value: T) -> None",
             Self::VecIndex => "index(value: T) -> int64",
@@ -1756,9 +1756,9 @@ impl BuiltinMember {
             Self::MapLen => "len() -> int64",
             Self::MapIsEmpty => "is_empty() -> bool",
             Self::MapClone => "copy() -> dict[K, V]",
-            Self::MapGet => "get(key: K) -> Option[V]",
-            Self::MapSet => "set(key: own K, value: own V) -> Option[V]",
-            Self::MapRemove => "remove(key: K) -> Option[V]",
+            Self::MapGet => "get(key: K) -> Lookup[V]",
+            Self::MapSet => "set(key: own K, value: own V) -> Lookup[V]",
+            Self::MapRemove => "remove(key: K) -> Lookup[V]",
             Self::MapContainsKey => "contains(key: K) -> bool",
             Self::MapKeys => "keys() -> list[K]",
             Self::MapValues => "values() -> list[V]",
@@ -1785,8 +1785,8 @@ impl BuiltinMember {
             Self::QueueGet => {
                 "get(timeout: Duration = ...) -> QueueReceive[T] [T must be Transfer]"
             }
-            Self::QueueGetOrNone => {
-                "get_or_none(timeout: Duration = ...) -> Option[T] [T must be Transfer]"
+            Self::QueuePoll => {
+                "poll(timeout: Duration = ...) -> Poll[T] [T must be Transfer]"
             }
             Self::QueueGetOr => {
                 "get_or(default: own T, timeout: Duration = ...) -> T [T must be Transfer]"
@@ -1795,8 +1795,8 @@ impl BuiltinMember {
             Self::TaskResult => {
                 "result(timeout: Duration = ...) -> TaskResult[T] [consumes Task[T] when T is non-repeatable]"
             }
-            Self::TaskResultOrNone => {
-                "result_or_none(timeout: Duration = ...) -> Option[T] [consumes Task[T] when T is non-repeatable]"
+            Self::TaskPoll => {
+                "poll(timeout: Duration = ...) -> Poll[T] [consumes Task[T] when T is non-repeatable]"
             }
             Self::TaskResultOr => {
                 "result_or(default: own T, timeout: Duration = ...) -> T [consumes Task[T] when T is non-repeatable]"
@@ -1820,8 +1820,8 @@ impl BuiltinMember {
             Self::TcpListenerLocalAddr => "local_addr() -> Result[str, io.Error]",
             Self::TcpListenerClose => "close() -> None",
             Self::TcpStreamReadAll => "read_all(timeout: Duration = ...) -> Result[str, io.Error]",
-            Self::TcpStreamReadLine => "read_line(timeout: Duration = ...) -> Result[Option[str], io.Error]",
-            Self::TcpStreamReadBytes => "read_bytes(max_bytes: int32, timeout: Duration = ...) -> Result[Option[list[uint8]], io.Error]",
+            Self::TcpStreamReadLine => "read_line(timeout: Duration = ...) -> Result[str | None, io.Error]",
+            Self::TcpStreamReadBytes => "read_bytes(max_bytes: int32, timeout: Duration = ...) -> Result[list[uint8] | None, io.Error]",
             Self::TcpStreamReadExact => "read_exact(count: int32, timeout: Duration = ...) -> Result[list[uint8], io.Error]",
             Self::TcpStreamWriteAll => "write_all(text: str, timeout: Duration = ...) -> Result[None, io.Error]",
             Self::TcpStreamWriteBytes => "write_bytes(bytes: list[uint8], timeout: Duration = ...) -> Result[None, io.Error]",
@@ -1834,8 +1834,8 @@ impl BuiltinMember {
             Self::TcpStreamClose => "close() -> None",
             Self::UdpSocketSendText => "send_text(address: str, text: str, timeout: Duration = ...) -> Result[None, io.Error]",
             Self::UdpSocketSendBytes => "send_bytes(address: str, bytes: list[uint8], timeout: Duration = ...) -> Result[None, io.Error]",
-            Self::UdpSocketRecv => "recv(max_bytes: int32, timeout: Duration = ...) -> Result[Option[list[uint8]], io.Error]",
-            Self::UdpSocketRecvFrom => "recv_from(max_bytes: int32, timeout: Duration = ...) -> Result[Option[net.UdpDatagram], io.Error]",
+            Self::UdpSocketRecv => "recv(max_bytes: int32, timeout: Duration = ...) -> Result[list[uint8] | None, io.Error]",
+            Self::UdpSocketRecvFrom => "recv_from(max_bytes: int32, timeout: Duration = ...) -> Result[net.UdpDatagram | None, io.Error]",
             Self::UdpSocketLocalAddr => "local_addr() -> Result[str, io.Error]",
             Self::UdpSocketPeerAddr => "peer_addr() -> Result[str, io.Error]",
             Self::UdpSocketClose => "close() -> None",
@@ -1861,28 +1861,28 @@ impl BuiltinMember {
             Self::WebSocketListenerLocalAddr => "local_addr() -> Result[str, io.Error]",
             Self::WebSocketSendText => "send_text(text: str, timeout: Duration = ...) -> Result[None, io.Error]",
             Self::WebSocketSendBytes => "send_bytes(bytes: list[uint8], timeout: Duration = ...) -> Result[None, io.Error]",
-            Self::WebSocketRecvText => "recv_text(timeout: Duration = ...) -> Result[Option[str], io.Error]",
-            Self::WebSocketRecvBytes => "recv_bytes(timeout: Duration = ...) -> Result[Option[list[uint8]], io.Error]",
+            Self::WebSocketRecvText => "recv_text(timeout: Duration = ...) -> Result[str | None, io.Error]",
+            Self::WebSocketRecvBytes => "recv_bytes(timeout: Duration = ...) -> Result[list[uint8] | None, io.Error]",
             Self::WebSocketClose => "close() -> None",
             Self::UnixListenerAccept => "accept(timeout: Duration = ...) -> Result[net.UnixStream, io.Error]",
             Self::UnixListenerClose => "close() -> None",
-            Self::UnixStreamReadLine => "read_line(timeout: Duration = ...) -> Result[Option[str], io.Error]",
+            Self::UnixStreamReadLine => "read_line(timeout: Duration = ...) -> Result[str | None, io.Error]",
             Self::UnixStreamReadExact => "read_exact(count: int32, timeout: Duration = ...) -> Result[list[uint8], io.Error]",
             Self::UnixStreamWriteAll => "write_all(text: str, timeout: Duration = ...) -> Result[None, io.Error]",
             Self::UnixStreamClose => "close() -> None",
             Self::TlsListenerAccept => "accept(timeout: Duration = ...) -> Result[net.TlsStream, io.Error]",
             Self::TlsListenerLocalAddr => "local_addr() -> Result[str, io.Error]",
             Self::TlsListenerClose => "close() -> None",
-            Self::TlsStreamReadLine => "read_line(timeout: Duration = ...) -> Result[Option[str], io.Error]",
+            Self::TlsStreamReadLine => "read_line(timeout: Duration = ...) -> Result[str | None, io.Error]",
             Self::TlsStreamReadExact => "read_exact(count: int32, timeout: Duration = ...) -> Result[list[uint8], io.Error]",
             Self::TlsStreamWriteAll => "write_all(text: str, timeout: Duration = ...) -> Result[None, io.Error]",
             Self::TlsStreamClose => "close() -> None",
-            Self::ProcessChildStdin => "stdin() -> Option[process.Pipe]",
-            Self::ProcessChildStdout => "stdout() -> Option[process.Pipe]",
-            Self::ProcessChildStderr => "stderr() -> Option[process.Pipe]",
+            Self::ProcessChildStdin => "stdin() -> process.Pipe | None",
+            Self::ProcessChildStdout => "stdout() -> process.Pipe | None",
+            Self::ProcessChildStderr => "stderr() -> process.Pipe | None",
             Self::ProcessChildWait => "wait(timeout: Duration = ...) -> process.Wait",
             Self::ProcessChildWaitOrNone => {
-                "wait_or_none(timeout: Duration = ...) -> Result[Option[process.ExitStatus], process.Error]"
+                "wait_or_none(timeout: Duration = ...) -> Result[process.ExitStatus | None, process.Error]"
             }
             Self::ProcessChildWaitOk => {
                 "wait_ok(timeout: Duration = ...) -> Result[process.ExitStatus, process.Error]"
@@ -1892,10 +1892,10 @@ impl BuiltinMember {
             Self::ProcessChildClose => "close() -> None",
             Self::ProcessPipeReadAll => "read_all() -> Result[str, process.Error]",
             Self::ProcessPipeReadLine => {
-                "read_line(timeout: Duration = ...) -> Result[Option[str], process.Error]"
+                "read_line(timeout: Duration = ...) -> Result[str | None, process.Error]"
             }
             Self::ProcessPipeReadBytes => {
-                "read_bytes(max_bytes: int32, timeout: Duration = ...) -> Result[Option[list[uint8]], process.Error]"
+                "read_bytes(max_bytes: int32, timeout: Duration = ...) -> Result[list[uint8] | None, process.Error]"
             }
             Self::ProcessPipeWriteAll => {
                 "write_all(text: str, timeout: Duration = ...) -> Result[None, process.Error]"
@@ -1912,12 +1912,12 @@ impl BuiltinMember {
             Self::ProcessCompletedStderr => "stderr() -> str",
             Self::ProcessCompletedStderrBytes => "stderr_bytes() -> list[uint8]",
             Self::ProcessCompletedCheck => "check() -> Result[None, process.Error]",
-            Self::ProcessSupervisorStart => "start(name: own str, command: own list[str], cwd: own Option[str] = ..., env: own dict[str, str] = ..., stdin: own process.Stdio = ..., stdout: own process.Stdio = ..., stderr: own process.Stdio = ..., restart: own process.RestartPolicy = ..., backoff: own Duration = ..., max_restarts: own int32 = ..., group: own bool = ...) -> Result[None, process.Error]",
+            Self::ProcessSupervisorStart => "start(name: own str, command: own list[str], cwd: own (str | None) = ..., env: own dict[str, str] = ..., stdin: own process.Stdio = ..., stdout: own process.Stdio = ..., stderr: own process.Stdio = ..., restart: own process.RestartPolicy = ..., backoff: own Duration = ..., max_restarts: own int32 = ..., group: own bool = ...) -> Result[None, process.Error]",
             Self::ProcessSupervisorWait => {
                 "wait(timeout: Duration = ...) -> process.SupervisorWait"
             }
             Self::ProcessSupervisorWaitOrNone => {
-                "wait_or_none(timeout: Duration = ...) -> Result[Option[process.SupervisorEvent], process.Error]"
+                "wait_or_none(timeout: Duration = ...) -> Result[process.SupervisorEvent | None, process.Error]"
             }
             Self::ProcessSupervisorStop => "stop() -> Result[None, process.Error]",
             Self::ProcessSupervisorIsEmpty => "is_empty() -> bool",
@@ -1985,10 +1985,10 @@ impl BuiltinMember {
                 "Returns a new `str` with Unicode uppercase conversion applied."
             }
             Self::StringStripPrefix => {
-                "Removes `text` from the front of the string and returns the remaining `str`, or `Option.None` when it does not match."
+                "Removes `text` from the front of the string and returns the remaining `str`, or `None` when it does not match."
             }
             Self::StringStripSuffix => {
-                "Removes `text` from the end of the string and returns the remaining `str`, or `Option.None` when it does not match."
+                "Removes `text` from the end of the string and returns the remaining `str`, or `None` when it does not match."
             }
             Self::StringTrim => {
                 "Returns a new `str` with surrounding Unicode whitespace removed."
@@ -2003,7 +2003,7 @@ impl BuiltinMember {
             Self::ArrayLen => "Returns the total number of scalar elements in the Array.",
             Self::ArrayClone => "Creates an independent copy of the Array.",
             Self::ArrayGet => {
-                "Returns the scalar at an exact-rank coordinate, or `Option.None` when out of bounds."
+                "Returns the scalar at an exact-rank coordinate, or `None` when out of bounds."
             }
             Self::ArraySet => {
                 "Replaces the scalar at an exact-rank coordinate and returns the previous value."
@@ -2032,7 +2032,7 @@ impl BuiltinMember {
             Self::VecPush => "Appends a value to the end of the list.",
             Self::VecPop => "Removes and returns the element at `index`.",
             Self::VecGet => {
-                "Returns the element at `index`, or `Option.None` when the index is out of bounds."
+                "Returns the element at `index`, or `Lookup.Missing` when the index is out of bounds."
             }
             Self::VecSet => {
                 "Replaces the element at `index` and returns the previous element. Out-of-bounds indices raise a runtime error."
@@ -2066,13 +2066,13 @@ impl BuiltinMember {
             Self::MapIsEmpty => "Returns true when the map contains no entries.",
             Self::MapClone => "Creates a new owned `dict[K, V]` with copied keys and values.",
             Self::MapGet => {
-                "Returns the value for `key`, or `Option.None` when the key is absent."
+                "Returns the value for `key`, or `Lookup.Missing` when the key is absent."
             }
             Self::MapSet => {
-                "Inserts or replaces `key`, returning the previous value as `Option[V]`."
+                "Inserts or replaces `key`, returning the previous value as `Lookup[V]`."
             }
             Self::MapRemove => {
-                "Removes `key` and returns its previous value, or `Option.None` when absent."
+                "Removes `key` and returns its previous value, or `Lookup.Missing` when absent."
             }
             Self::MapContainsKey => "Returns true when the dict contains `key`.",
             Self::MapKeys => "Returns the current keys as a `list[K]`.",
@@ -2100,8 +2100,8 @@ impl BuiltinMember {
             Self::QueueGet => {
                 "Receives the next queue outcome as `QueueReceive.Item(value)`, `QueueReceive.Closed`, `QueueReceive.TimedOut`, or `QueueReceive.Cancelled`. Queue payload type `T` must be Transfer so values are safe to transport between tasks."
             }
-            Self::QueueGetOrNone => {
-                "Receives the next queue value and returns `Option.Some(value)`, or `Option.None` when the queue is closed, the timeout expires, or cancellation interrupts the wait. Queue payload type `T` must be Transfer so values are safe to transport between tasks."
+            Self::QueuePoll => {
+                "Receives the next queue value and returns `Poll.Ready(value)`, or `Poll.Unavailable` when the queue is closed, the timeout expires, or cancellation interrupts the wait. Queue payload type `T` must be Transfer so values are safe to transport between tasks."
             }
             Self::QueueGetOr => {
                 "Receives the next queue value or returns `default` when the queue is closed, the timeout expires, or cancellation interrupts the wait. Queue payload type `T` must be Transfer so values are safe to transport between tasks."
@@ -2110,8 +2110,8 @@ impl BuiltinMember {
             Self::TaskResult => {
                 "Waits for the task to finish and reports `TaskResult.Ready(value)`, `TaskResult.Error(message)`, `TaskResult.TimedOut`, or `TaskResult.Cancelled`. Observing non-repeatable `T` consumes the unique `Task[T]` observation right. Copy data, `Queue` handles, and recursively repeatable `Task` handles remain repeatable; `Task[T]` is copyable only when `T` is repeatable."
             }
-            Self::TaskResultOrNone => {
-                "Waits for the task result and returns `Option.Some(value)`, or `Option.None` when the task fails, the timeout expires, or cancellation interrupts the wait. Observing non-repeatable `T` consumes the unique `Task[T]` observation right. Copy data, `Queue` handles, and recursively repeatable `Task` handles remain repeatable; `Task[T]` is copyable only when `T` is repeatable."
+            Self::TaskPoll => {
+                "Waits for the task result and returns `Poll.Ready(value)`, or `Poll.Unavailable` when the task fails, the timeout expires, or cancellation interrupts the wait. Observing non-repeatable `T` consumes the unique `Task[T]` observation right. Copy data, `Queue` handles, and recursively repeatable `Task` handles remain repeatable; `Task[T]` is copyable only when `T` is repeatable."
             }
             Self::TaskResultOr => {
                 "Waits for the task result or returns `default` when the task fails, the timeout expires, or cancellation interrupts the wait. Observing non-repeatable `T` consumes the unique `Task[T]` observation right. Copy data, `Queue` handles, and recursively repeatable `Task` handles remain repeatable; `Task[T]` is copyable only when `T` is repeatable."
@@ -2141,7 +2141,7 @@ impl BuiltinMember {
             Self::TcpListenerLocalAddr => "Returns the bound local address for the listener.",
             Self::TcpListenerClose => "Closes the TCP listener handle.",
             Self::TcpStreamReadAll => "Reads the remaining TCP stream contents into a `str` until the peer closes.",
-            Self::TcpStreamReadLine => "Reads a UTF-8 line from the TCP stream, returning `Option.None` on EOF.",
+            Self::TcpStreamReadLine => "Reads a UTF-8 line from the TCP stream, returning `None` on EOF.",
             Self::TcpStreamReadBytes => "Reads up to `max_bytes` raw bytes from the TCP stream.",
             Self::TcpStreamReadExact => "Reads exactly `count` raw bytes from the TCP stream or returns an `io.Error`.",
             Self::TcpStreamWriteAll => "Writes all of `text` to the TCP stream.",
@@ -2203,7 +2203,7 @@ impl BuiltinMember {
             Self::ProcessChildStderr => "Returns the child's piped stderr handle when stderr was configured with `process.pipe()`.",
             Self::ProcessChildWait => "Waits for the child process to exit and reports exit, timeout, cancellation, or wait failure.",
             Self::ProcessChildWaitOrNone => {
-                "Waits for the child process to exit and returns `Result.Ok(Option.Some(status))`, `Result.Ok(Option.None)` on timeout, or `Result.Err(...)` for cancellation or wait failures."
+                "Waits for the child process to exit and returns `Result.Ok(status)`, `Result.Ok(None)` on timeout, or `Result.Err(...)` for cancellation or wait failures."
             }
             Self::ProcessChildWaitOk => {
                 "Waits for the child process to exit and returns the exit status for a successful exit, or `process.Error` for timeouts, cancellation, wait failures, or non-zero exits."
@@ -2212,7 +2212,7 @@ impl BuiltinMember {
             Self::ProcessChildTerminate => "Requests graceful child-process termination.",
             Self::ProcessChildClose => "Closes the child resource, terminating it if it is still running.",
             Self::ProcessPipeReadAll => "Reads the remaining piped output into a str until EOF.",
-            Self::ProcessPipeReadLine => "Reads a UTF-8 line from the process pipe, returning `Option.None` on EOF.",
+            Self::ProcessPipeReadLine => "Reads a UTF-8 line from the process pipe, returning `None` on EOF.",
             Self::ProcessPipeReadBytes => "Reads up to `max_bytes` raw bytes from the process pipe.",
             Self::ProcessPipeWriteAll => "Writes all of `text` to the process pipe.",
             Self::ProcessPipeWriteBytes => "Writes all of `bytes` to the process pipe.",
@@ -2230,7 +2230,7 @@ impl BuiltinMember {
             Self::ProcessSupervisorStart => "Starts a named supervised child process using the configured restart policy and process-group behavior.",
             Self::ProcessSupervisorWait => "Waits for the next supervisor event, timeout, or cancellation outcome.",
             Self::ProcessSupervisorWaitOrNone => {
-                "Waits for the next supervisor event and returns `Result.Ok(Option.Some(event))`, `Result.Ok(Option.None)` on timeout, or `Result.Err(...)` when the wait was cancelled."
+                "Waits for the next supervisor event and returns `Result.Ok(event)`, `Result.Ok(None)` on timeout, or `Result.Err(...)` when the wait was cancelled."
             }
             Self::ProcessSupervisorStop => "Stops every supervised child and clears the supervisor.",
             Self::ProcessSupervisorIsEmpty => "Returns true when the supervisor has no running or pending services.",
@@ -2401,9 +2401,9 @@ impl BuiltinMember {
             | Self::ProcessPipeReadLine
             | Self::ProcessSupervisorWait
             | Self::ProcessSupervisorWaitOrNone
-            | Self::QueueGetOrNone
+            | Self::QueuePoll
             | Self::TaskResult
-            | Self::TaskResultOrNone => {
+            | Self::TaskPoll => {
                 BuiltinCallShape::fixed(&TIMEOUT_ONLY_PARAMS, CallConvention::PositionalOrNamed)
             }
             Self::QueueGet => {

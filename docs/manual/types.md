@@ -29,8 +29,9 @@ different element types. Select a member with the
 [type patterns](/manual/enums-and-match#union-type-patterns) described in the
 match chapter, or test the `None` member with `is None` and `is not None`,
 which [narrow](/manual/enums-and-match#conditional-narrowing) a stable place
-to its remaining members for the selected branch. `Option[T]` and `T?` remain
-supported during phase 1.
+to its remaining members for the selected branch. `T | None` is the sole
+optional spelling: there is no builtin `Option` type, `Some` constructor, or
+`T?` suffix.
 
 | Type | Description |
 | --- | --- |
@@ -133,7 +134,7 @@ positions:
 - tuple values when every element type is copyable
 - `copy class` values whose fields are all copyable
 - user enum values when every declared payload type is statically copyable
-- `Option[T]`, `Result[T, E]`, `SendError[T]`, and `QueueReceive[T]` when all payload types are copyable
+- `Lookup[T]`, `Poll[T]`, `Result[T, E]`, `SendError[T]`, and `QueueReceive[T]` when all payload types are copyable
 - union values when every member type is copyable
 
 Move values transfer ownership:
@@ -148,7 +149,7 @@ Move values transfer ownership:
 - ordinary user classes
 - user enum values with any move payload
 - `json.Value` and `json.Error`
-- `Option`, `Result`, and related outcome values with move payloads
+- `Lookup`, `Poll`, `Result`, and related outcome values with move payloads
 - `TaskGroup`
 - file, process, supervisor, and network resources
 - opaque FFI handles declared by `extern "C" opaque class`
@@ -219,8 +220,9 @@ is Transfer, and a member that is not names the failing member in `AU3008`.
 
 All copy types and `str` are `Transfer`. `list[T]`, `set[T]`, `dict[K, V]`,
 tuples, classes, and enums are `Transfer` exactly when all of their stored
-component types are. The same recursive rule covers data wrappers such as
-`Option`, `Result`, task/queue outcomes, errors, and `json.Value`.
+component types are. The same recursive rule covers unions and data wrappers
+such as `Lookup`, `Poll`, `Result`, task/queue outcomes, errors, and
+`json.Value`.
 `Queue[T]` and `Task[T]` handles are `Transfer` independently of `T`: moving
 the handle does not inspect or move the stored payload. Queue construction,
 `put`, and `try_put` separately require its payload `T` to be `Transfer`;
@@ -264,9 +266,14 @@ on different pinned workers.
 
 ## Builtin Generic Types
 
+Ordinary absence is the union `T | None` described above, not a generic
+wrapper type. The builtin generic enums below cover the outcomes that must
+stay distinct from a present `None` payload.
+
 | Type | Meaning |
 | --- | --- |
-| `Option[T]` | `Some(T)` or `None`; use for ordinary absence. |
+| `Lookup[T]` | `Found(T)` or `Missing`; the outcome of `list.get`, `dict.get`, and `dict.remove`. |
+| `Poll[T]` | `Ready(T)` or `Unavailable`; the outcome of `Queue.poll` and `Task.poll`. |
 | `Result[T, E]` | `Ok(T)` or `Err(E)`; use for recoverable failure. |
 | `list[T]` | Owned ordered collection. |
 | `dict[K, V]` | Owned key/value dictionary. |
@@ -336,39 +343,71 @@ lookup = dict[str, int32]()
 seen = set[int32]()
 ```
 
-`T?` is shorthand for `Option[T]`:
+An optional type is a union whose last member is `None`. A bare value or
+`None` is injected at the annotated destination:
 
 ```aura
-name: str? = None
+name: str | None = None
+label: str | None = "name"
 ```
 
 Type arguments are invariant, nonempty when brackets are present, and must exactly match the declared arity. Aura does not implicitly convert `list[int32]` to `list[int64]` or treat structurally identical user classes as the same type.
 
-## Option And Result Types
+## Optional And Result Types
 
-Construct `Option` and `Result` with their enum names:
+An optional value is a union whose last member is `None`; there is no builtin
+`Option` type, `Some` constructor, or `T?` suffix. A value enters the union at
+a typed destination, and `None` selects its absence member there. `Result` is
+constructed with its enum name:
 
 ```aura
-maybe: Option[str] = Option.Some("name")
-missing: Option[str] = Option.None
+maybe: str | None = "name"
+missing: str | None = None
 
 result: Result[int32, str] = Result.Ok(42)
 failure: Result[int32, str] = Result.Err("bad number")
 ```
 
-Bare `None` contextually denotes `Option.None` whenever an expected
-`Option[T]` is available. This context flows through grouping, annotated
-bindings, returns, and arguments. Equality and inequality provide the context
-symmetrically: if either operand is `Option[T]`, a bare `None` on the other side
-has that same option type. Unit `None == None` is `true` and unit
-`None != None` is `false`. A qualified `Option.None` without an expected or
-otherwise inferred specialization is rejected because `T` is unconstrained.
-Aura has no identity-test spelling: use `value == None`, `value != None`, or
-`match`, not Python's `is` or `is not`.
+Bare `None` alone is the unit value and renders as `None`; it becomes an optional only where a
+`T | None` annotation, parameter, result, or other expected type applies. An
+unannotated `count = 5` is a plain `int64`; write `count: int64 | None = 5` to
+keep the optional type. A function declared `-> T | None` returns absence with
+an explicit `return None`.
+
+Test presence with `is None` and `is not None`, which
+[narrow](/manual/enums-and-match#conditional-narrowing) a stable place to its
+remaining members for the selected branch, or select a member with a
+[type pattern](/manual/enums-and-match#union-type-patterns):
+
+```aura
+def describe(value: str | None):
+    if value is None:
+        print("missing")
+        return
+    print(value.len())
+
+def label(value: int64 | None) -> str:
+    match value:
+        case int64 as number:
+            return f"{number}"
+        case None:
+            return "missing"
+```
+
+`value == None` and `value != None` are ordinary comparisons for a `T | None`
+operand and do not narrow. Unit `None == None` is `true` and unit
+`None != None` is `false`.
+
+Operations that must keep a missing entry distinct from a present `None`
+payload return the builtin enums `Lookup[T]` (`Found(value)` or `Missing`)
+for `list.get`, `dict.get`, and `dict.remove`, and `Poll[T]` (`Ready(value)`
+or `Unavailable`) for `Queue.poll` and `Task.poll`; see
+[Collections](/manual/collections) and [Concurrency](/manual/concurrency).
 
 Pattern matching may use qualified or short-form variants when the type is known:
 
 ```aura
+result: Result[int32, str] = Result.Ok(42)
 match result:
     case Result.Ok(value):
         print(value)
@@ -409,7 +448,7 @@ Direct recursive fields are not implemented. Use `indirect` for recursive class 
 ```aura
 class Node:
     value: int32
-    next: indirect Option[Node] = Option.None
+    next: indirect Node | None = None
 ```
 
 `indirect` gives the recursive field a level of indirection so the value has a finite size.
@@ -458,7 +497,8 @@ execution.
 Copy scalars and declared copy aggregates are represented by value. Other
 values use the maintained owned runtime representations documented by their
 feature pages. Arithmetic and casts are checked and may trap with a runtime
-diagnostic; typed library failure remains an `Option` or `Result` value.
+diagnostic; typed library absence or failure remains a `T | None`, `Lookup`,
+`Poll`, or `Result` value.
 `indirect` inserts the maintained runtime indirection needed to construct a
 recursive field.
 

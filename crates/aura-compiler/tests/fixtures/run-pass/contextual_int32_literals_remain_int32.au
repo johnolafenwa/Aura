@@ -22,11 +22,11 @@ def print_int32(value: int32):
 def print_first(values: list[int32]):
     print(values[0])
 
-def print_optional(value: Option[int32]):
+def print_optional(value: int32 | None):
     match own value:
-        case Option.Some(inner):
+        case int32 as inner:
             print(inner)
-        case Option.None:
+        case None:
             print(0)
 
 def main() -> int32:
@@ -35,7 +35,7 @@ def main() -> int32:
     collection: list[int32] = [3, 4]
     generic: int32 = identity(value=5)
     visible_generic: int32 = contextual(value=7)
-    optional: Option[int32] = Option.Some(6)
+    optional: int32 | None = 6
 
     print_int32(positive)
     print_int32(negative)

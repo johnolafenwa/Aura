@@ -2,7 +2,7 @@ import random
 
 class Node:
     value: str
-    next: indirect Node?
+    next: indirect Node | None
     generator: random.Rng
 
 def consume(node: own Node):

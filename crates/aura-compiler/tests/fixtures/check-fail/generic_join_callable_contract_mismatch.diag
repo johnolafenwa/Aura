@@ -1,0 +1,6 @@
+error[AU2015]: callable contract mismatch: parameter `other` would be renamed to `value`; renaming requires an explicit wrapper
+ --> crates/aura-compiler/tests/fixtures/check-fail/generic_join_callable_contract_mismatch.au:13:24
+   |
+13 |     chosen = pick(one, two, true)
+   |                        ^
+  = help: preserve identical complete contracts at bare destinations; apply safe restrictions through an explicit thin alias or owned callable constructor such as `Alias(function)`

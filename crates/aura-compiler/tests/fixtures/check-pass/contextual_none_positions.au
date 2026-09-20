@@ -1,14 +1,14 @@
-def accepts(value: Option[int32]):
+def accepts(value: int32 | None):
     pass
 
-def no_value() -> Option[int32]:
+def no_value() -> int32 | None:
     return None
 
-def is_empty[T](value: Option[T]) -> bool:
+def is_empty[T](value: T | None) -> bool:
     return value == None
 
 def main() -> int32:
-    left: Option[int32] = None
+    left: int32 | None = None
     accepts(None)
     left_first = left == None
     right_first = None == left
@@ -18,7 +18,7 @@ def main() -> int32:
     unequal_right = None != left
     units_equal = None == None
     units_unequal = None != None
-    returned: Option[int32] = no_value()
+    returned: int32 | None = no_value()
     accepts(returned)
     generic = is_empty[int32](value=returned)
     return 0

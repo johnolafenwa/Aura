@@ -18,9 +18,9 @@ signature tells you which it is — a bare parameter shares, `own` transfers.
 
 **Can this call fail?**
 Failure that a caller might sensibly handle lives in the return type.
-`Result[T, E]`, `Option[T]`, `QueueReceive[T]`, `TaskResult[T]`, and the I/O and
-process error enums let a program handle each failure at the line where it
-matters.
+`Result[T, E]`, `T | None`, `Lookup[T]`, `QueueReceive[T]`, `TaskResult[T]`, and
+the I/O and process error enums let a program handle each failure at the line
+where it matters.
 
 **What closes this resource?**
 Files, network sockets, subprocess pipes, supervisors, and task groups should normally live inside a `with` block. The block is what runs cleanup — on normal exit and on runtime errors that unwind through it. `with` is how you turn "please remember to close this" into "this closes itself."
@@ -64,7 +64,7 @@ The chapters are ordered so that each idea has a practical reason to exist befor
 6. [Converting Between Types](/learn/casting) — `as`, `.to_float()`, parsing
    text, and why nothing converts implicitly.
 7. [Values, Moves, And Borrows](/learn/ownership-and-borrowing) — the ownership model, explained through the programs that benefit from it.
-8. [Results, Options, And `try`](/learn/results-and-options) — how Aura represents recoverable failure without hiding control flow.
+8. [Results And Optional Values](/learn/results-and-options) — how Aura represents absence and recoverable failure without hiding control flow.
 9. [Testing](/learn/testing) — writing tests, reading a failed assertion, parameterized cases, and CI output.
 10. [Organizing Code](/learn/modules-and-packages) — splitting a program into files, packages, and workspaces.
 11. [Structured Concurrency](/learn/concurrency) — `TaskGroup`, `Task[T]`, `Queue[T]`, cancellation, and worker pools.

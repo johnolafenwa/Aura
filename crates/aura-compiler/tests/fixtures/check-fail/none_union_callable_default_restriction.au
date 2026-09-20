@@ -1,0 +1,10 @@
+def one(value: int64 = 1) -> int64:
+    return value + 1
+
+def main():
+    slot: (def(value: int64) -> int64) | None = one
+    match slot:
+        case def(value: int64) -> int64 as chosen:
+            print(chosen(1))
+        case None:
+            print("none")

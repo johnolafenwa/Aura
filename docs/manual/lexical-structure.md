@@ -67,7 +67,7 @@ Several other spellings are lexed as ordinary identifiers and become special onl
 | `copy` | Modifies `class` when immediately before it. |
 | `self` | Declares or refers to a method receiver. |
 | `Self` | Refers to the current type in supported trait and implementation type positions. |
-| `None` | The unit value, or `Option.None` when an expected option type makes that interpretation unambiguous. |
+| `None` | The unit value, or the absence member of an expected `T \| None` union. |
 | `set` | Names the builtin set type and its constructor. |
 | `lambda` | Introduces a lambda when it appears at the start of an expression; it remains an identifier token for member and named-argument positions. |
 | `_` | The wildcard in a match pattern; elsewhere it is an identifier spelling subject to static rules. |
@@ -259,7 +259,7 @@ computed or negative values.
 
 `true` and `false` are the two `bool` literals. They are lowercase.
 
-`None` is lexically an identifier but statically denotes the unit value of type `None`, or the payload-free `Option.None` variant when an expected `Option[T]` type resolves the meaning. There is no null value distinct from these typed forms.
+`None` is lexically an identifier but statically denotes the unit value of type `None`, or the absence member when an expected `T | None` union type resolves the meaning. There is no null value distinct from these typed forms, and no `?` type suffix.
 
 ## str Literals
 

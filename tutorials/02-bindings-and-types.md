@@ -111,13 +111,14 @@ Aura provides three owned collection types and several runtime types:
 | `dict[K, V]` | Key-value dictionary |
 | `set[T]` | Unordered collection of unique values |
 | `Array[T]` | Fixed-shape contiguous numeric array; `T` is `int32`, `int64`, `float32`, or `float64` |
-| `Option[T]` | A value that may or may not be present |
+| `T \| None` | An optional value: a union whose last member is `None` |
+| `Lookup[T]` | A collection lookup outcome: `Found(value)` or `Missing` |
 | `Result[T, E]` | Success or failure |
 | `Queue[T]` | Typed queue for concurrency |
 | `Task[T]` | Handle to a spawned task |
 | `TaskGroup` | Structured task scope |
 
-`Option[T]` and `Result[T, E]` are covered in [10-results-and-options.md](10-results-and-options.md). Queues and tasks are covered in [13-concurrency.md](13-concurrency.md).
+`T | None`, `Lookup[T]`, and `Result[T, E]` are covered in [10-results-and-options.md](10-results-and-options.md). Queues and tasks are covered in [13-concurrency.md](13-concurrency.md).
 
 `Array[T]` is an owned non-Copy value with a fixed rank-at-least-one shape.
 Construct it explicitly with an Array constructor:
@@ -181,9 +182,9 @@ direct reads and writes and to `get`, `set`, `pop`, and `swap`:
 ```aura fragment
 print(items[-1])                 # final element
 match items.get(-2):
-    case Option.Some(value):
+    case Lookup.Found(value):
         print(value)
-    case Option.None:
+    case Lookup.Missing:
         pass
 
 items[-1] = 50
@@ -277,9 +278,9 @@ reason directly:
 ```aura check-pass
 names = ["Ada", "Grace"]
 match names.get(0):
-    case Option.Some(value):
+    case Lookup.Found(value):
         print(value)
-    case Option.None:
+    case Lookup.Missing:
         pass
 ```
 
@@ -339,10 +340,10 @@ rejection explains that `get(key)` would also be rejected.
 ```aura fragment
 entries = counts.items()
 match entries.get(0):
-    case Option.Some((key, value)):
+    case Lookup.Found((key, value)):
         print(key)
         print(value)
-    case Option.None:
+    case Lookup.Missing:
         pass
 ```
 

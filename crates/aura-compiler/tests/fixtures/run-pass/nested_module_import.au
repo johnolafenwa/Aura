@@ -1,0 +1,4 @@
+import nested_module_import_support.outer as outer
+
+def main():
+    print(outer.make())

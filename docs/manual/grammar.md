@@ -336,7 +336,9 @@ because the value is already a code pointer. `Callable[...]` and
 Consuming, and `mut def`/`own def` are not valid outside those brackets.
 `indirect` is invalid on owned callable types.
 
-`T?` denotes `Option[T]`, including when `T` is a tuple type. Type and
+There is no `?` type suffix; an optional type is written as the union
+`T | None`, including when `T` is a tuple type, and a stray `?` after a type
+is an ordinary AU1101 parse error. Type and
 type-parameter lists are nonempty when brackets are present and do not accept
 trailing commas. `(T,)` is a singleton tuple type; `(T)` is a grouped type
 that denotes `T` itself and exists for precedence. `()` and a trailing comma
@@ -346,8 +348,9 @@ complete named type reference where recursive-field rules permit it; an
 `indirect` tuple type is rejected.
 
 `A | B` is an anonymous closed union of its written members (ADR-0052). `|`
-binds more loosely than `?` and `indirect`, so `int64 | str?` has the members
-`int64` and `Option[str]`, while `(int64 | str)?` is an optional union. A
+binds more loosely than `indirect`, so `indirect Node | None` has the members
+`indirect Node` and `None`, and a union with a trailing `None` member is the
+optional form of its other members. A
 union may appear wherever `type` appears, including type-argument lists,
 tuple elements, and function-type parameters. A function-type result is one
 type atom, so a union result is grouped, as in `def() -> (int64 | str)`, and

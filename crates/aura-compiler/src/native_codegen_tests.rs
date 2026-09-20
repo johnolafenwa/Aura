@@ -2769,9 +2769,9 @@ fn ticket9_uint64_opaque_boundaries_use_typed_boxing_without_generic_detours() {
     let source = r#"
 def main() -> int32:
     values: list[uint64] = [18446744073709551615]
-    maybe: Option[uint64] = Option.Some(18446744073709551615)
+    maybe: uint64 | None = 18446744073709551615
     print(values.len())
-    print(maybe != Option.None)
+    print(maybe != None)
     return 0
 "#;
 
@@ -2977,12 +2977,12 @@ def main() -> int32:
     words = trimmed.split(" ")
     print("/".join(words))
     match trimmed.strip_prefix("Aura "):
-        case Some(rest):
+        case str as rest:
             print(rest)
         case None:
             print("missing")
     match trimmed.strip_suffix(" Repo"):
-        case Some(rest):
+        case str as rest:
             print(rest)
         case None:
             print("missing")
@@ -3769,7 +3769,7 @@ fn direct_backend_internal_collection_member_surface_compiles() {
             element_type: Type::named("int32"),
             elements: vec![Operand::Int(1), Operand::Int(2)],
         },
-        Type::Named("Option".to_string(), vec![Type::named("int32")]),
+        crate::sema::lookup_type(Type::named("int32")),
         "__index_option",
         vec![MirArg {
             name: None,
@@ -3905,7 +3905,7 @@ fn direct_backend_internal_collection_member_surface_compiles() {
             element_type: Type::named("str"),
             elements: vec![Operand::String("x".to_string())],
         },
-        Type::Named("Option".to_string(), vec![Type::named("str")]),
+        crate::sema::lookup_type(Type::named("str")),
         "__index_option",
         vec![MirArg {
             name: None,
@@ -4056,7 +4056,7 @@ fn direct_backend_internal_collection_member_errors_are_reported() {
                     element_type: Type::named("int32"),
                     elements: vec![Operand::Int(1)],
                 },
-                Type::Named("Option".to_string(), vec![Type::named("int32")]),
+                crate::sema::lookup_type(Type::named("int32")),
                 "__index_option",
                 Vec::new(),
             ),
@@ -4113,7 +4113,7 @@ fn direct_backend_internal_collection_member_errors_are_reported() {
                     element_type: Type::named("str"),
                     elements: vec![Operand::String("x".to_string())],
                 },
-                Type::Named("Option".to_string(), vec![Type::named("str")]),
+                crate::sema::lookup_type(Type::named("str")),
                 "__index_option",
                 Vec::new(),
             ),
@@ -4355,7 +4355,7 @@ fn direct_backend_runtime_member_matrix_covers_remaining_string_collection_and_r
                 "text",
                 string_ty.clone(),
                 string_value.clone(),
-                Type::Named("Option".to_string(), vec![Type::named("str")]),
+                crate::sema::optional_type(Type::named("str")),
                 "strip_prefix",
                 vec![MirArg {
                     name: None,
@@ -4370,7 +4370,7 @@ fn direct_backend_runtime_member_matrix_covers_remaining_string_collection_and_r
                 "text",
                 string_ty.clone(),
                 string_value.clone(),
-                Type::Named("Option".to_string(), vec![Type::named("str")]),
+                crate::sema::optional_type(Type::named("str")),
                 "strip_suffix",
                 vec![MirArg {
                     name: None,
@@ -4444,7 +4444,7 @@ fn direct_backend_runtime_member_matrix_covers_remaining_string_collection_and_r
                 "values",
                 vec_ty.clone(),
                 vec_value.clone(),
-                Type::Named("Option".to_string(), vec![Type::named("int32")]),
+                crate::sema::lookup_type(Type::named("int32")),
                 "get",
                 vec![MirArg {
                     name: None,
@@ -4459,7 +4459,7 @@ fn direct_backend_runtime_member_matrix_covers_remaining_string_collection_and_r
                 "values",
                 vec_ty.clone(),
                 vec_value.clone(),
-                Type::Named("Option".to_string(), vec![Type::named("int32")]),
+                Type::named("int32"),
                 "set",
                 vec![
                     MirArg {
@@ -4599,7 +4599,7 @@ fn direct_backend_runtime_member_matrix_covers_remaining_string_collection_and_r
                 "counts",
                 map_ty.clone(),
                 map_value.clone(),
-                Type::Named("Option".to_string(), vec![Type::named("int32")]),
+                crate::sema::lookup_type(Type::named("int32")),
                 "get",
                 vec![MirArg {
                     name: None,
@@ -4614,7 +4614,7 @@ fn direct_backend_runtime_member_matrix_covers_remaining_string_collection_and_r
                 "counts",
                 map_ty.clone(),
                 map_value.clone(),
-                Type::Named("Option".to_string(), vec![Type::named("int32")]),
+                crate::sema::lookup_type(Type::named("int32")),
                 "set",
                 vec![
                     MirArg {
@@ -4636,7 +4636,7 @@ fn direct_backend_runtime_member_matrix_covers_remaining_string_collection_and_r
                 "counts",
                 map_ty.clone(),
                 map_value.clone(),
-                Type::Named("Option".to_string(), vec![Type::named("int32")]),
+                crate::sema::lookup_type(Type::named("int32")),
                 "remove",
                 vec![MirArg {
                     name: None,
@@ -4801,7 +4801,7 @@ fn direct_backend_runtime_member_matrix_covers_remaining_string_collection_and_r
                 "jobs",
                 channel_ty.clone(),
                 channel_value.clone(),
-                Type::Named("Option".to_string(), vec![Type::named("int32")]),
+                Type::Named("QueueReceive".to_string(), vec![Type::named("int32")]),
                 "get",
                 Vec::new(),
             ),
@@ -5718,7 +5718,7 @@ fn direct_backend_resource_member_success_paths_cover_remaining_network_surfaces
     let opaque_value = || Rvalue::Use(Operand::String("opaque-resource".to_string()));
     let named = |name: &str| Type::Named(name.to_string(), Vec::new());
     let vec_uint8 = || Type::Named("list".to_string(), vec![Type::named("uint8")]);
-    let option = |ty: Type| Type::Named("Option".to_string(), vec![ty]);
+    let option = |ty: Type| crate::sema::optional_type(ty);
     let result = |ok: Type| {
         Type::Named(
             "Result".to_string(),
@@ -6259,7 +6259,7 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
                 "text",
                 string_ty.clone(),
                 string_value.clone(),
-                Type::Named("Option".to_string(), vec![Type::named("str")]),
+                crate::sema::optional_type(Type::named("str")),
                 "strip_prefix",
                 Vec::new(),
             ),
@@ -6314,7 +6314,7 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
                 "values",
                 vec_ty.clone(),
                 vec_value.clone(),
-                Type::Named("Option".to_string(), vec![Type::named("int32")]),
+                crate::sema::lookup_type(Type::named("int32")),
                 "get",
                 Vec::new(),
             ),
@@ -6370,7 +6370,7 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
                 "values",
                 vec_ty.clone(),
                 vec_value.clone(),
-                Type::Named("Option".to_string(), vec![Type::named("int32")]),
+                Type::named("int32"),
                 "set",
                 vec![arg(Operand::Int(0))],
             ),
@@ -6381,7 +6381,7 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
                 "values",
                 vec_ty.clone(),
                 vec_value.clone(),
-                Type::Named("Option".to_string(), vec![Type::named("int32")]),
+                Type::Unit,
                 "remove",
                 Vec::new(),
             ),
@@ -6488,7 +6488,7 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
                 "counts",
                 map_ty.clone(),
                 map_value.clone(),
-                Type::Named("Option".to_string(), vec![Type::named("int32")]),
+                crate::sema::lookup_type(Type::named("int32")),
                 "get",
                 Vec::new(),
             ),
@@ -6499,7 +6499,7 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
                 "counts",
                 map_ty.clone(),
                 map_value.clone(),
-                Type::Named("Option".to_string(), vec![Type::named("int32")]),
+                crate::sema::lookup_type(Type::named("int32")),
                 "remove",
                 Vec::new(),
             ),
@@ -6617,7 +6617,7 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
                 "seen",
                 set_ty.clone(),
                 set_value.clone(),
-                Type::Named("Option".to_string(), vec![Type::named("str")]),
+                crate::sema::lookup_type(Type::named("str")),
                 "__index_option",
                 Vec::new(),
             ),
@@ -6706,7 +6706,7 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
                 "jobs",
                 channel_ty.clone(),
                 channel_value.clone(),
-                Type::Named("Option".to_string(), vec![Type::named("int32")]),
+                Type::Named("QueueReceive".to_string(), vec![Type::named("int32")]),
                 "get",
                 vec![MirArg {
                     name: Some("delay".to_string()),
@@ -6721,7 +6721,7 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
                 "jobs",
                 channel_ty.clone(),
                 channel_value.clone(),
-                Type::Named("Option".to_string(), vec![Type::named("int32")]),
+                Type::Named("QueueReceive".to_string(), vec![Type::named("int32")]),
                 "get",
                 vec![
                     MirArg {
@@ -6743,7 +6743,7 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
                 "jobs",
                 channel_ty.clone(),
                 channel_value.clone(),
-                Type::Named("Option".to_string(), vec![Type::named("int32")]),
+                Type::Named("QueueReceive".to_string(), vec![Type::named("int32")]),
                 "__get_in_task_group",
                 Vec::new(),
             ),
@@ -6754,7 +6754,7 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
                 "jobs",
                 channel_ty.clone(),
                 channel_value.clone(),
-                Type::Named("Option".to_string(), vec![Type::named("int32")]),
+                Type::Named("QueueReceive".to_string(), vec![Type::named("int32")]),
                 "__get_with_registered_producers",
                 vec![arg(Operand::Int(1))],
             ),
@@ -6765,26 +6765,26 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
                 "jobs",
                 channel_ty.clone(),
                 channel_value.clone(),
-                Type::Named("Option".to_string(), vec![Type::named("int32")]),
-                "get_or_none",
+                crate::sema::poll_type(Type::named("int32")),
+                "poll",
                 vec![MirArg {
                     name: Some("delay".to_string()),
                     value: Operand::Int(1),
                     writeback_place: None,
                 }],
             ),
-            "expected `get_or_none()` or `get_or_none(timeout=...)`",
+            "expected `poll()` or `poll(timeout=...)`",
         ),
         (
             module_with_main_member_call_result_type(
                 "jobs",
                 channel_ty.clone(),
                 channel_value.clone(),
-                Type::Named("Option".to_string(), vec![Type::named("int32")]),
-                "get_or_none",
+                crate::sema::poll_type(Type::named("int32")),
+                "poll",
                 vec![arg(Operand::Int(1)), arg(Operand::Int(2))],
             ),
-            "expected `get_or_none()` or `get_or_none(timeout=...)`",
+            "expected `poll()` or `poll(timeout=...)`",
         ),
         (
             module_with_main_member_call_result_type(
@@ -6854,26 +6854,26 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
                 "task",
                 task_ty.clone(),
                 task_value.clone(),
-                Type::Named("Option".to_string(), vec![Type::named("int32")]),
-                "result_or_none",
+                crate::sema::poll_type(Type::named("int32")),
+                "poll",
                 vec![MirArg {
                     name: Some("delay".to_string()),
                     value: Operand::Int(1),
                     writeback_place: None,
                 }],
             ),
-            "expected `result_or_none()` or `result_or_none(timeout=...)`",
+            "expected `poll()` or `poll(timeout=...)`",
         ),
         (
             module_with_main_member_call_result_type(
                 "task",
                 task_ty.clone(),
                 task_value.clone(),
-                Type::Named("Option".to_string(), vec![Type::named("int32")]),
-                "result_or_none",
+                crate::sema::poll_type(Type::named("int32")),
+                "poll",
                 vec![arg(Operand::Int(1)), arg(Operand::Int(2))],
             ),
-            "expected `result_or_none()` or `result_or_none(timeout=...)`",
+            "expected `poll()` or `poll(timeout=...)`",
         ),
         (
             module_with_main_member_call_result_type(
@@ -7158,30 +7158,30 @@ def process_members() -> Result[None, process.Error]:
     try completed.check()
 
     with child = try process.start(["/bin/cat"], stdin=process.pipe(), stdout=process.pipe(), stderr=process.pipe(), group=true):
-        match child.stdin():
-            case Option.Some(found_stdin):
-                stdin_pipe: process.Pipe = found_stdin
+        stdin: process.Pipe | None = child.stdin()
+        match own stdin:
+            case process.Pipe as stdin_pipe:
                 try stdin_pipe.write_all(text="ping\n", timeout=500ms)
                 try stdin_pipe.write_bytes(bytes=[33 as uint8, 10 as uint8], timeout=500ms)
                 try stdin_pipe.flush()
                 stdin_pipe.close()
-            case Option.None:
+            case None:
                 pass
-        match child.stdout():
-            case Option.Some(found_stdout):
-                stdout_pipe: process.Pipe = found_stdout
+        stdout: process.Pipe | None = child.stdout()
+        match own stdout:
+            case process.Pipe as stdout_pipe:
                 print(try stdout_pipe.read_line(timeout=500ms))
                 print(try stdout_pipe.read_bytes(max_bytes=4, timeout=500ms))
                 print(try stdout_pipe.read_all())
                 stdout_pipe.close()
-            case Option.None:
+            case None:
                 pass
-        match child.stderr():
-            case Option.Some(found_stderr):
-                stderr_pipe: process.Pipe = found_stderr
+        stderr: process.Pipe | None = child.stderr()
+        match own stderr:
+            case process.Pipe as stderr_pipe:
                 print(try stderr_pipe.read_all())
                 stderr_pipe.close()
-            case Option.None:
+            case None:
                 pass
         print(child.wait(timeout=2s))
         print(try child.wait_or_none(timeout=1ms))
@@ -7202,7 +7202,7 @@ def process_members() -> Result[None, process.Error]:
         try supervisor.start(name="defaulted", command=["/usr/bin/false"])
         print(supervisor.wait(timeout=2s))
         env: dict[str, str] = {}
-        try supervisor.start(name="explicit", command=["/usr/bin/false"], cwd=Option.None, env=env, stdin=process.null(), stdout=process.null(), stderr=process.null(), restart=process.RestartPolicy.Never, backoff=100ms, max_restarts=0, group=true)
+        try supervisor.start(name="explicit", command=["/usr/bin/false"], cwd=None, env=env, stdin=process.null(), stdout=process.null(), stderr=process.null(), restart=process.RestartPolicy.Never, backoff=100ms, max_restarts=0, group=true)
         print(try supervisor.wait_or_none(timeout=2s))
         print(supervisor.is_empty())
         try supervisor.stop()
@@ -8540,7 +8540,7 @@ fn direct_backend_match_and_branch_terminator_edges_cover_enum_and_opaque_paths(
             params: Vec::new(),
             local_types: vec![MirLocalType {
                 name: "maybe".to_string(),
-                ty: Type::Named("Option".to_string(), vec![Type::named("int32")]),
+                ty: crate::sema::lookup_type(Type::named("int32")),
             }],
             return_type: Type::named("int32"),
             entry: "entry".to_string(),
@@ -8550,8 +8550,8 @@ fn direct_backend_match_and_branch_terminator_edges_cover_enum_and_opaque_paths(
                     instructions: vec![Instruction::Assign {
                         target: "maybe".to_string(),
                         value: Rvalue::EnumVariant {
-                            enum_name: "Option".to_string(),
-                            variant_name: "Some".to_string(),
+                            enum_name: "Lookup".to_string(),
+                            variant_name: "Found".to_string(),
                             payloads: vec![Operand::Int(1)],
                         },
                     }],
@@ -11502,7 +11502,7 @@ fn infer_operand_and_rvalue_types_track_plain_classes() {
         (
             "io::read_line",
             result_type(
-                Type::Named("Option".to_string(), vec![Type::named("str")]),
+                crate::sema::optional_type(Type::named("str")),
                 io_error.clone(),
             ),
         ),
@@ -11763,15 +11763,15 @@ fn infer_operand_and_rvalue_types_track_plain_classes() {
     assert_eq!(
         infer_rvalue_type(
             &Rvalue::EnumVariant {
-                enum_name: "Option".to_string(),
-                variant_name: "None".to_string(),
+                enum_name: "Lookup".to_string(),
+                variant_name: "Missing".to_string(),
                 payloads: Vec::new(),
             },
             &variable_types,
             &returns,
             &classes,
         ),
-        Some(DirectType::Opaque(Type::named("Option")))
+        Some(DirectType::Opaque(Type::named("Lookup")))
     );
     assert_eq!(
         infer_rvalue_type(
@@ -12220,7 +12220,7 @@ fn builtin_member_type_helpers_cover_collection_runtime_surface() {
             &classes,
         ),
         Some(DirectType::Opaque(Type::Named(
-            "Option".to_string(),
+            "Lookup".to_string(),
             vec![Type::named("str")],
         )))
     );
@@ -12271,7 +12271,7 @@ fn builtin_member_type_helpers_cover_collection_runtime_surface() {
         (
             Type::Named("str".to_string(), vec![]),
             "strip_prefix",
-            DirectType::Opaque(Type::Named("Option".to_string(), vec![Type::named("str")])),
+            DirectType::Opaque(crate::sema::optional_type(Type::named("str"))),
         ),
         (
             Type::Named("list".to_string(), vec![Type::named("int32")]),
@@ -12349,7 +12349,7 @@ fn builtin_member_type_helpers_cover_collection_runtime_surface() {
             Type::Named("dict".to_string(), vec![Type::named("str")]),
             "get",
             DirectType::Opaque(Type::Named(
-                "Option".to_string(),
+                "Lookup".to_string(),
                 vec![Type::named("Unknown")],
             )),
         ),
@@ -12376,7 +12376,7 @@ fn builtin_member_type_helpers_cover_collection_runtime_surface() {
             Type::Named("set".to_string(), Vec::new()),
             "__index_option",
             DirectType::Opaque(Type::Named(
-                "Option".to_string(),
+                "Lookup".to_string(),
                 vec![Type::named("Unknown")],
             )),
         ),
@@ -12452,7 +12452,7 @@ fn direct_field_and_try_helpers_cover_remaining_direct_inference_paths() {
         (
             "maybe".to_string(),
             DirectType::Opaque(Type::Named(
-                "Option".to_string(),
+                "Lookup".to_string(),
                 vec![Type::named("Entry")],
             )),
         ),
@@ -12518,7 +12518,7 @@ fn direct_field_and_try_helpers_cover_remaining_direct_inference_paths() {
         infer_rvalue_type(
             &Rvalue::VariantPayload {
                 scrutinee: Operand::Place("maybe".to_string()),
-                variant_name: "Some".to_string(),
+                variant_name: "Found".to_string(),
                 index: 0,
             },
             &variable_types,
@@ -12543,15 +12543,15 @@ fn native_codegen_variant_payload_helpers_cover_builtin_result_shapes() {
 
     for (target, enum_name, variant, expected) in [
         (
-            opaque_named("Option", vec![Type::named("int32")]),
-            "Option",
-            "Some",
+            opaque_named("Lookup", vec![Type::named("int32")]),
+            "Lookup",
+            "Found",
             Some(vec![direct_int.clone()]),
         ),
         (
-            opaque_named("Option", vec![Type::named("int32")]),
-            "Option",
-            "None",
+            opaque_named("Lookup", vec![Type::named("int32")]),
+            "Lookup",
+            "Missing",
             Some(Vec::new()),
         ),
         (
@@ -12682,8 +12682,8 @@ fn native_codegen_variant_payload_helpers_cover_builtin_result_shapes() {
         ),
         (
             opaque_named("Result", vec![Type::named("str"), named("io.Error")]),
-            "Option",
-            "Some",
+            "Lookup",
+            "Found",
             None,
         ),
         (
@@ -12712,7 +12712,7 @@ fn native_codegen_variant_payload_helpers_cover_builtin_result_shapes() {
     let variable_types = HashMap::from([
         (
             "maybe".to_string(),
-            opaque_named("Option", vec![Type::named("int32")]),
+            opaque_named("Lookup", vec![Type::named("int32")]),
         ),
         (
             "result".to_string(),
@@ -12749,7 +12749,7 @@ fn native_codegen_variant_payload_helpers_cover_builtin_result_shapes() {
     ]);
 
     for (place, variant, index, expected) in [
-        ("maybe", "Some", 0usize, Some(direct_int.clone())),
+        ("maybe", "Found", 0usize, Some(direct_int.clone())),
         ("result", "Ok", 0, Some(direct_string.clone())),
         (
             "result",
@@ -13159,18 +13159,16 @@ fn native_codegen_builtin_member_tables_and_trait_lookup_cover_additional_paths(
         (
             Type::named("str"),
             "strip_prefix",
-            Some(DirectType::Opaque(Type::Named(
-                "Option".to_string(),
-                vec![Type::named("str")],
-            ))),
+            Some(DirectType::Opaque(crate::sema::optional_type(Type::named(
+                "str",
+            )))),
         ),
         (
             Type::named("str"),
             "strip_suffix",
-            Some(DirectType::Opaque(Type::Named(
-                "Option".to_string(),
-                vec![Type::named("str")],
-            ))),
+            Some(DirectType::Opaque(crate::sema::optional_type(Type::named(
+                "str",
+            )))),
         ),
         (
             Type::Named("list".to_string(), vec![Type::named("int32")]),
@@ -13239,7 +13237,7 @@ fn native_codegen_builtin_member_tables_and_trait_lookup_cover_additional_paths(
             Type::Named("list".to_string(), vec![Type::named("int32")]),
             "get",
             Some(DirectType::Opaque(Type::Named(
-                "Option".to_string(),
+                "Lookup".to_string(),
                 vec![Type::named("int32")],
             ))),
         ),
@@ -13257,7 +13255,7 @@ fn native_codegen_builtin_member_tables_and_trait_lookup_cover_additional_paths(
             Type::Named("list".to_string(), vec![Type::named("int32")]),
             "__index_option",
             Some(DirectType::Opaque(Type::Named(
-                "Option".to_string(),
+                "Lookup".to_string(),
                 vec![Type::named("int32")],
             ))),
         ),
@@ -13308,7 +13306,7 @@ fn native_codegen_builtin_member_tables_and_trait_lookup_cover_additional_paths(
             ),
             "get",
             Some(DirectType::Opaque(Type::Named(
-                "Option".to_string(),
+                "Lookup".to_string(),
                 vec![Type::named("int32")],
             ))),
         ),
@@ -13319,7 +13317,7 @@ fn native_codegen_builtin_member_tables_and_trait_lookup_cover_additional_paths(
             ),
             "remove",
             Some(DirectType::Opaque(Type::Named(
-                "Option".to_string(),
+                "Lookup".to_string(),
                 vec![Type::named("int32")],
             ))),
         ),
@@ -13425,7 +13423,7 @@ fn native_codegen_builtin_member_tables_and_trait_lookup_cover_additional_paths(
             Type::Named("set".to_string(), vec![Type::named("str")]),
             "__index_option",
             Some(DirectType::Opaque(Type::Named(
-                "Option".to_string(),
+                "Lookup".to_string(),
                 vec![Type::named("str")],
             ))),
         ),
@@ -13509,7 +13507,7 @@ fn native_codegen_builtin_member_tables_and_trait_lookup_cover_additional_paths(
 
     let named_type = |name: &str| Type::Named(name.to_string(), Vec::new());
     let vec_type = |inner: Type| Type::Named("list".to_string(), vec![inner]);
-    let option_type = |inner: Type| Type::Named("Option".to_string(), vec![inner]);
+    let option_type = |inner: Type| crate::sema::optional_type(inner);
     let result_direct =
         |ok: Type, err: Type| DirectType::Opaque(Type::Named("Result".to_string(), vec![ok, err]));
     let direct_named = |name: &str| DirectType::Opaque(named_type(name));

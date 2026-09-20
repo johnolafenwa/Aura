@@ -27,15 +27,17 @@ mut values = [10, 20, 30]
 print(values[-1])
 
 match values.get(-2):
-    case Option.Some(value):
+    case Lookup.Found(value):
         print(value)
-    case Option.None:
+    case Lookup.Missing:
         print("missing")
 ```
 
-Use `get` when an invalid position is ordinary input. It returns `Option[T]`
-and requires clone-safe `T`. Direct indexing, `pop`, `set`, and `swap` trap on
-invalid positions.
+Use `get` when an invalid position is ordinary input. It returns `Lookup[T]`
+and requires clone-safe `T`: a valid position is `Lookup.Found(value)` with a
+cloned element, and an invalid one is `Lookup.Missing`, so an element that is
+itself `None` stays distinct from an absent one. Direct indexing, `pop`, `set`,
+and `swap` trap on invalid positions.
 
 The core mutations have Python-shaped names and typed ownership:
 
@@ -131,22 +133,23 @@ counts["done"] = 1
 counts["ready"] = 3
 ```
 
-Use `in` for membership and `get` for typed optional lookup:
+Use `in` for membership and `get` for a lookup that reports absence:
 
 ```aura
 if "ready" in counts:
     print(counts["ready"])
 
 match counts.get("missing"):
-    case Option.Some(value):
+    case Lookup.Found(value):
         print(value)
-    case Option.None:
+    case Lookup.Missing:
         print("not found")
 ```
 
-`get` has no default argument. It returns a cloned value and therefore
-requires clone-safe `V`. `remove(key)` transfers the value when present and
-returns `None` when absent.
+`get` has no default argument. It returns `Lookup.Found(value)` with a cloned
+value, or `Lookup.Missing` when the key is absent, and therefore requires
+clone-safe `V`. `remove(key)` transfers the value into `Lookup.Found(value)`
+when present and returns `Lookup.Missing` when absent.
 
 `keys()`, `values()`, and `items()` return eager owned lists in insertion
 order. Items are tuples:

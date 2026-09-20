@@ -1,0 +1,7 @@
+import path
+
+def main():
+    mut current = path.extension("notes.md")
+    if current is not None:
+        current = path.extension("plain")
+        print(current.len())

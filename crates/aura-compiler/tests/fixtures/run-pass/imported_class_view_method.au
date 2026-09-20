@@ -1,0 +1,6 @@
+import imported_class_view_method_support.pairs as pairs
+
+def main():
+    pair = pairs.make_pair("a", "b")
+    view chosen = pair.pick(false)
+    print(chosen)

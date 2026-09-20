@@ -1,0 +1,5 @@
+error[AU1101]: expected Newline
+ --> crates/aura-compiler/tests/fixtures/parse-fail/unexpected_question_type_suffix.au:2:10
+  |
+2 |     value: int64? = None
+  |          ^

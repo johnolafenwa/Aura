@@ -1,0 +1,7 @@
+from imported_trait_bound_support.shapes import Area, Square
+
+def total[T: Area](item: T) -> int64:
+    return item.area()
+
+def main():
+    print(total(Square(side=4)))

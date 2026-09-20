@@ -67,6 +67,17 @@ mod type_budget;
 mod type_budget_tests;
 mod types;
 pub(crate) use types::builtin_enum_variants;
+pub(crate) use types::{lookup_type, optional_type, poll_type};
+
+/// Whether a type has a `None` member: the unit type itself, a union that
+/// contains it, or a type parameter whose instantiation may.
+fn type_admits_none(ty: &Type) -> bool {
+    match ty {
+        Type::Unit | Type::TypeParam(_) => true,
+        Type::Union(union) => union.members.iter().any(type_admits_none),
+        _ => false,
+    }
+}
 pub(crate) use types::UnionType;
 
 /// The one contract a union receiver's trait method resolves to across
@@ -98,7 +109,7 @@ pub(crate) use properties::integer_type_bounds;
 pub(crate) use properties::is_builtin_io_resource_type;
 use properties::{
     array_element_type, is_array_dtype, is_builtin_copy_named_type, is_builtin_type, is_float_type,
-    is_integer_type, is_numeric_type, is_option_type, is_string_type, map_key_value_types,
+    is_integer_type, is_numeric_type, is_string_type, map_key_value_types,
     preserves_qualified_builtin_type_name, rng_clone_obligation_params_in_context_with_modules,
     rng_clone_safety_in_context_with_modules, set_element_type, type_contains_closure_value,
     type_contains_loan_closure, type_contains_named, type_is_copy_in_context_with_modules,
@@ -1334,12 +1345,7 @@ impl<'a> FunctionChecker<'a> {
         // Transfer at all.
         let transfers_unique_task_result = matches!(
             operation,
-            "Task.result"
-                | "Task.result_or_none"
-                | "Task.result_or"
-                | "wait_any"
-                | "wait_all"
-                | "select"
+            "Task.result" | "Task.poll" | "Task.result_or" | "wait_any" | "wait_all" | "select"
         );
         let operation = if operation.contains('`') {
             operation.to_string()
@@ -6176,10 +6182,27 @@ impl<'a> FunctionChecker<'a> {
     ) -> Result<Type> {
         let actual = self.type_of_expr_hint_uncontracted(expr, locals, expected)?;
         if let Some(expected) = expected {
+            self.enforce_callable_destination(expr, expected, &actual)?;
+        }
+        Ok(actual)
+    }
+
+    /// Bare destinations preserve a callable value's complete contract
+    /// (ADR-0058, C1): a safe restriction needs an explicit adapter, and
+    /// erased storage needs its constructor. Union destinations apply the
+    /// same rule against the member the value selects, so `T | None` never
+    /// admits what a bare `T` refuses.
+    pub(super) fn enforce_callable_destination(
+        &self,
+        expr: &Expr,
+        expected: &Type,
+        actual: &Type,
+    ) -> Result<()> {
+        {
             // A structural function annotation supplies a closure's exposed
             // call contract while the concrete closure retains its captures
             // and call kind. Existing method values cannot lose slot metadata.
-            let exposed = match (expected, &actual) {
+            let exposed = match (expected, actual) {
                 (
                     Type::Function { .. },
                     Type::Closure {
@@ -6193,7 +6216,7 @@ impl<'a> FunctionChecker<'a> {
                 }),
                 _ => None,
             };
-            let exposed = exposed.as_ref().unwrap_or(&actual);
+            let exposed = exposed.as_ref().unwrap_or(actual);
             if exposed == expected
                 || matches!(
                     (expected, exposed),
@@ -6202,7 +6225,7 @@ impl<'a> FunctionChecker<'a> {
                 )
             {
                 check_callable_positions(expected, exposed).map_err(|reason| {
-                    let admissible = match (expected, &actual) {
+                    let admissible = match (expected, actual) {
                         (Type::Callable(destination), Type::Callable(source)) => {
                             destination.call_kind.admits(source.call_kind)
                                 && (!destination.task || source.task)
@@ -6212,12 +6235,12 @@ impl<'a> FunctionChecker<'a> {
                                 )
                                 .is_ok()
                         }
-                        _ => check_callable_adapter_positions(expected, &actual).is_ok(),
+                        _ => check_callable_adapter_positions(expected, actual).is_ok(),
                     };
                     if !admissible {
                         return callable_contract_mismatch(expr.span, reason);
                     }
-                    let adapter_type = match (expected, &actual) {
+                    let adapter_type = match (expected, actual) {
                         (
                             Type::Function {
                                 params,
@@ -6298,7 +6321,7 @@ impl<'a> FunctionChecker<'a> {
                     callable_contract_mismatch(expr.span, format!("{reason}; {help}"))
                 })?;
             } else if let (Type::Callable(callable), Type::Closure { .. } | Type::Function { .. }) =
-                (expected, &actual)
+                (expected, actual)
             {
                 // Erasure into owned callable storage is explicit (C1): a
                 // closure or function value reaches `Callable[...]` only
@@ -6312,7 +6335,7 @@ impl<'a> FunctionChecker<'a> {
                 ));
             }
         }
-        Ok(actual)
+        Ok(())
     }
 
     fn type_of_expr_hint_uncontracted(
@@ -6365,15 +6388,7 @@ impl<'a> FunctionChecker<'a> {
                 },
                 locals,
             ),
-            ExprKind::Name(name) if name == "None" => {
-                if let Some(expected_ty) = expected {
-                    if matches!(expected_ty, Type::Named(enum_name, args) if enum_name == "Option" && args.len() == 1)
-                    {
-                        return Ok(expected_ty.clone());
-                    }
-                }
-                Ok(Type::Unit)
-            }
+            ExprKind::Name(name) if name == "None" => Ok(Type::Unit),
             ExprKind::Name(name) => {
                 if let Some(binding) = locals.get(name) {
                     self.ensure_pattern_binding_not_stale(name, expr.span, binding)?;
@@ -6879,7 +6894,8 @@ impl<'a> FunctionChecker<'a> {
                     ExprKind::Name(name)
                         if matches!(
                             name.as_str(),
-                            "Option"
+                            "Lookup"
+                                | "Poll"
                                 | "Result"
                                 | "SendError"
                                 | "QueueReceive"
@@ -7633,12 +7649,6 @@ impl<'a> FunctionChecker<'a> {
                     }
                 }
                 if let ExprKind::Name(enum_name) = &object.kind {
-                    if expected.is_none() && enum_name == "Option" && field == "None" {
-                        return Err(Diagnostic::at(
-                            expr.span,
-                            "cannot infer type parameter `T` for enum variant `Option.None`",
-                        ));
-                    }
                     if let Some(expected_ty) = expected {
                         if let Some(payload_tys) =
                             self.builtin_enum_variant_payload(expected_ty, enum_name, field)
@@ -8447,8 +8457,8 @@ impl<'a> FunctionChecker<'a> {
                 } else if left_ty != right_ty {
                     let non_optional_none_type = if matches!(op, BinaryOp::Eq | BinaryOp::NotEq) {
                         match (&left_ty, &right_ty) {
-                            (Type::Unit, other) if !is_option_type(other) => Some(other),
-                            (other, Type::Unit) if !is_option_type(other) => Some(other),
+                            (Type::Unit, other) if !type_admits_none(other) => Some(other),
+                            (other, Type::Unit) if !type_admits_none(other) => Some(other),
                             _ => None,
                         }
                     } else {
@@ -8458,7 +8468,7 @@ impl<'a> FunctionChecker<'a> {
                         return Err(Diagnostic::at(
                             span,
                             format!(
-                                "type `{}` is not optional; only `Option[T]` values can be compared with `None`",
+                                "type `{}` is not optional; only `T | None` values can be compared with `None`",
                                 non_optional_ty
                             ),
                         ));
@@ -10400,45 +10410,6 @@ impl<'a> FunctionChecker<'a> {
                             );
                         }
                     }
-                    if object_type_args.is_none() && expected.is_none() && enum_name == "Option" {
-                        match field.as_str() {
-                            "Some" => {
-                                if args.len() != 1 {
-                                    return Err(Diagnostic::at(
-                                        span,
-                                        format!(
-                                            "variant `{}` of enum `{}` expects 1 payload argument, found {}",
-                                            field,
-                                            enum_name,
-                                            args.len()
-                                        ),
-                                    ));
-                                }
-                                self.reject_owned_view_value(
-                                    &args[0].value,
-                                    locals,
-                                    "an enum payload",
-                                )?;
-                                let actual = self.type_of_expr(&args[0].value, locals)?;
-                                if type_contains_loan_closure(&actual) {
-                                    return Err(Diagnostic::coded_at(
-                                        "AU3010",
-                                        args[0].value.span,
-                                        "a closure containing a live view cannot be stored in an enum payload",
-                                    ));
-                                }
-                                self.consume_value_expr(&args[0].value, locals)?;
-                                return Ok(Type::Named("Option".to_string(), vec![actual]));
-                            }
-                            "None" => {
-                                return Err(Diagnostic::at(
-                                    span,
-                                    "cannot infer type parameter `T` for enum variant `Option.None`",
-                                ));
-                            }
-                            _ => {}
-                        }
-                    }
                     if let Some(expected_ty) = expected {
                         if let Some(variant_payloads) =
                             self.builtin_enum_variant_payload(expected_ty, enum_name, field)
@@ -10763,7 +10734,7 @@ impl<'a> FunctionChecker<'a> {
                                             ),
                                         ));
                                     }
-                                    Ok(Type::Named("Option".to_string(), vec![dtype.clone()]))
+                                    Ok(optional_type(dtype.clone()))
                                 }
                                 BuiltinMember::ArraySet => {
                                     self.require_mutable_receiver(object, field, span, locals)?;
@@ -10800,7 +10771,7 @@ impl<'a> FunctionChecker<'a> {
                                             ),
                                         ));
                                     }
-                                    Ok(Type::Named("Option".to_string(), vec![dtype.clone()]))
+                                    Ok(optional_type(dtype.clone()))
                                 }
                                 BuiltinMember::ArrayFill => {
                                     self.require_mutable_receiver(object, field, span, locals)?;
@@ -10985,10 +10956,7 @@ impl<'a> FunctionChecker<'a> {
                                         &receiver_args[0],
                                         span,
                                     )?;
-                                    Ok(Type::Named(
-                                        "Option".to_string(),
-                                        vec![receiver_args[0].clone()],
-                                    ))
+                                    Ok(lookup_type(receiver_args[0].clone()))
                                 }
                                 BuiltinMember::VecSet => {
                                     self.require_mutable_receiver(object, field, span, locals)?;
@@ -11506,7 +11474,7 @@ impl<'a> FunctionChecker<'a> {
                                             ),
                                         ));
                                     }
-                                    Ok(Type::Named("Option".to_string(), vec![Type::named("str")]))
+                                    Ok(optional_type(Type::named("str")))
                                 }
                                 _ => unreachable!("unexpected string builtin member"),
                             };
@@ -11565,10 +11533,7 @@ impl<'a> FunctionChecker<'a> {
                                         &receiver_args[1],
                                         span,
                                     )?;
-                                    Ok(Type::Named(
-                                        "Option".to_string(),
-                                        vec![receiver_args[1].clone()],
-                                    ))
+                                    Ok(lookup_type(receiver_args[1].clone()))
                                 }
                                 BuiltinMember::MapSet => {
                                     self.require_mutable_receiver(object, field, span, locals)?;
@@ -11624,10 +11589,7 @@ impl<'a> FunctionChecker<'a> {
                                         value_arg,
                                         locals,
                                     )?;
-                                    Ok(Type::Named(
-                                        "Option".to_string(),
-                                        vec![receiver_args[1].clone()],
-                                    ))
+                                    Ok(lookup_type(receiver_args[1].clone()))
                                 }
                                 BuiltinMember::MapRemove => {
                                     self.require_mutable_receiver(object, field, span, locals)?;
@@ -11651,10 +11613,7 @@ impl<'a> FunctionChecker<'a> {
                                             ),
                                         ));
                                     }
-                                    Ok(Type::Named(
-                                        "Option".to_string(),
-                                        vec![receiver_args[1].clone()],
-                                    ))
+                                    Ok(lookup_type(receiver_args[1].clone()))
                                 }
                                 BuiltinMember::MapContainsKey => {
                                     let key_arg = self.bound_argument(
@@ -11960,7 +11919,7 @@ impl<'a> FunctionChecker<'a> {
                                         ],
                                     ))
                                 }
-                                BuiltinMember::QueueGet | BuiltinMember::QueueGetOrNone => {
+                                BuiltinMember::QueueGet | BuiltinMember::QueuePoll => {
                                     if let Some(timeout_arg) = ordered_args[0] {
                                         let actual = self.type_of_expr_hint(
                                             &timeout_arg.value,
@@ -11968,20 +11927,25 @@ impl<'a> FunctionChecker<'a> {
                                             Some(&Type::named("Duration")),
                                         )?;
                                         if actual != Type::named("Duration") {
+                                            let label = if matches!(
+                                                builtin_member,
+                                                BuiltinMember::QueuePoll
+                                            ) {
+                                                "poll"
+                                            } else {
+                                                "get"
+                                            };
                                             return Err(Diagnostic::at(
                                                 timeout_arg.span,
                                                 format!(
-                                                    "`get(timeout=...)` expects `Duration`, found `{}`",
+                                                    "`{label}(timeout=...)` expects `Duration`, found `{}`",
                                                     actual
                                                 ),
                                             ));
                                         }
                                     }
-                                    if matches!(builtin_member, BuiltinMember::QueueGetOrNone) {
-                                        Ok(Type::Named(
-                                            "Option".to_string(),
-                                            vec![receiver_args[0].clone()],
-                                        ))
+                                    if matches!(builtin_member, BuiltinMember::QueuePoll) {
+                                        Ok(poll_type(receiver_args[0].clone()))
                                     } else {
                                         Ok(Type::Named(
                                             "QueueReceive".to_string(),
@@ -12059,7 +12023,7 @@ impl<'a> FunctionChecker<'a> {
                                 locals,
                             )?;
                             return match builtin_member {
-                                BuiltinMember::TaskResult | BuiltinMember::TaskResultOrNone => {
+                                BuiltinMember::TaskResult | BuiltinMember::TaskPoll => {
                                     if let Some(timeout_arg) = ordered_args[0] {
                                         let actual = self.type_of_expr_hint(
                                             &timeout_arg.value,
@@ -12067,10 +12031,18 @@ impl<'a> FunctionChecker<'a> {
                                             Some(&Type::named("Duration")),
                                         )?;
                                         if actual != Type::named("Duration") {
+                                            let label = if matches!(
+                                                builtin_member,
+                                                BuiltinMember::TaskPoll
+                                            ) {
+                                                "poll"
+                                            } else {
+                                                "result"
+                                            };
                                             return Err(Diagnostic::at(
                                                 timeout_arg.span,
                                                 format!(
-                                                    "`result(timeout=...)` expects `Duration`, found `{}`",
+                                                    "`{label}(timeout=...)` expects `Duration`, found `{}`",
                                                     actual
                                                 ),
                                             ));
@@ -12082,11 +12054,8 @@ impl<'a> FunctionChecker<'a> {
                                         field,
                                         locals,
                                     )?;
-                                    if matches!(builtin_member, BuiltinMember::TaskResultOrNone) {
-                                        Ok(Type::Named(
-                                            "Option".to_string(),
-                                            vec![receiver_args[0].clone()],
-                                        ))
+                                    if matches!(builtin_member, BuiltinMember::TaskPoll) {
+                                        Ok(poll_type(receiver_args[0].clone()))
                                     } else {
                                         Ok(Type::Named(
                                             "TaskResult".to_string(),
@@ -12677,10 +12646,9 @@ impl<'a> FunctionChecker<'a> {
                             return match builtin_member {
                                 BuiltinMember::ProcessChildStdin
                                 | BuiltinMember::ProcessChildStdout
-                                | BuiltinMember::ProcessChildStderr => Ok(Type::Named(
-                                    "Option".to_string(),
-                                    vec![Type::named("process.Pipe")],
-                                )),
+                                | BuiltinMember::ProcessChildStderr => {
+                                    Ok(optional_type(Type::named("process.Pipe")))
+                                }
                                 BuiltinMember::ProcessChildWait => {
                                     self.check_optional_builtin_timeout_argument(
                                         &ordered_args,
@@ -12700,10 +12668,7 @@ impl<'a> FunctionChecker<'a> {
                                     Ok(Type::Named(
                                         "Result".to_string(),
                                         vec![
-                                            Type::Named(
-                                                "Option".to_string(),
-                                                vec![Type::named("process.ExitStatus")],
-                                            ),
+                                            optional_type(Type::named("process.ExitStatus")),
                                             crate::builtin_modules::process_error_type(),
                                         ],
                                     ))
@@ -12757,10 +12722,7 @@ impl<'a> FunctionChecker<'a> {
                                     Ok(Type::Named(
                                         "Result".to_string(),
                                         vec![
-                                            Type::Named(
-                                                "Option".to_string(),
-                                                vec![Type::named("str")],
-                                            ),
+                                            optional_type(Type::named("str")),
                                             crate::builtin_modules::process_error_type(),
                                         ],
                                     ))
@@ -12793,10 +12755,7 @@ impl<'a> FunctionChecker<'a> {
                                     Ok(Type::Named(
                                         "Result".to_string(),
                                         vec![
-                                            Type::Named(
-                                                "Option".to_string(),
-                                                vec![bytes_ty.clone()],
-                                            ),
+                                            optional_type(bytes_ty.clone()),
                                             crate::builtin_modules::process_error_type(),
                                         ],
                                     ))
@@ -12918,10 +12877,7 @@ impl<'a> FunctionChecker<'a> {
                                     if let Some(argument) = ordered_args.get(2).copied().flatten() {
                                         self.check_builtin_argument_type(
                                             argument,
-                                            &Type::Named(
-                                                "Option".to_string(),
-                                                vec![Type::named("str")],
-                                            ),
+                                            &optional_type(Type::named("str")),
                                             locals,
                                             "start",
                                         )?;
@@ -13042,10 +12998,7 @@ impl<'a> FunctionChecker<'a> {
                                     Ok(Type::Named(
                                         "Result".to_string(),
                                         vec![
-                                            Type::Named(
-                                                "Option".to_string(),
-                                                vec![Type::named("process.SupervisorEvent")],
-                                            ),
+                                            optional_type(Type::named("process.SupervisorEvent")),
                                             crate::builtin_modules::process_error_type(),
                                         ],
                                     ))
@@ -13124,10 +13077,7 @@ impl<'a> FunctionChecker<'a> {
                                     Ok(Type::Named(
                                         "Result".to_string(),
                                         vec![
-                                            Type::Named(
-                                                "Option".to_string(),
-                                                vec![Type::named("str")],
-                                            ),
+                                            optional_type(Type::named("str")),
                                             crate::builtin_modules::io_error_type(),
                                         ],
                                     ))
@@ -13160,10 +13110,7 @@ impl<'a> FunctionChecker<'a> {
                                     Ok(Type::Named(
                                         "Result".to_string(),
                                         vec![
-                                            Type::Named(
-                                                "Option".to_string(),
-                                                vec![bytes_ty.clone()],
-                                            ),
+                                            optional_type(bytes_ty.clone()),
                                             crate::builtin_modules::io_error_type(),
                                         ],
                                     ))
@@ -13391,10 +13338,7 @@ impl<'a> FunctionChecker<'a> {
                                     Ok(Type::Named(
                                         "Result".to_string(),
                                         vec![
-                                            Type::Named(
-                                                "Option".to_string(),
-                                                vec![bytes_ty.clone()],
-                                            ),
+                                            optional_type(bytes_ty.clone()),
                                             crate::builtin_modules::io_error_type(),
                                         ],
                                     ))
@@ -13427,10 +13371,7 @@ impl<'a> FunctionChecker<'a> {
                                     Ok(Type::Named(
                                         "Result".to_string(),
                                         vec![
-                                            Type::Named(
-                                                "Option".to_string(),
-                                                vec![Type::named("net.UdpDatagram")],
-                                            ),
+                                            optional_type(Type::named("net.UdpDatagram")),
                                             crate::builtin_modules::io_error_type(),
                                         ],
                                     ))
@@ -13768,10 +13709,7 @@ impl<'a> FunctionChecker<'a> {
                                     Ok(Type::Named(
                                         "Result".to_string(),
                                         vec![
-                                            Type::Named(
-                                                "Option".to_string(),
-                                                vec![Type::named("str")],
-                                            ),
+                                            optional_type(Type::named("str")),
                                             crate::builtin_modules::io_error_type(),
                                         ],
                                     ))
@@ -13786,7 +13724,7 @@ impl<'a> FunctionChecker<'a> {
                                     Ok(Type::Named(
                                         "Result".to_string(),
                                         vec![
-                                            Type::Named("Option".to_string(), vec![bytes_ty]),
+                                            optional_type(bytes_ty),
                                             crate::builtin_modules::io_error_type(),
                                         ],
                                     ))
@@ -13838,10 +13776,7 @@ impl<'a> FunctionChecker<'a> {
                                     Ok(Type::Named(
                                         "Result".to_string(),
                                         vec![
-                                            Type::Named(
-                                                "Option".to_string(),
-                                                vec![Type::named("str")],
-                                            ),
+                                            optional_type(Type::named("str")),
                                             crate::builtin_modules::io_error_type(),
                                         ],
                                     ))
@@ -13954,10 +13889,7 @@ impl<'a> FunctionChecker<'a> {
                                     Ok(Type::Named(
                                         "Result".to_string(),
                                         vec![
-                                            Type::Named(
-                                                "Option".to_string(),
-                                                vec![Type::named("str")],
-                                            ),
+                                            optional_type(Type::named("str")),
                                             crate::builtin_modules::io_error_type(),
                                         ],
                                     ))
@@ -14594,15 +14526,22 @@ impl<'a> FunctionChecker<'a> {
             }
             Type::Named(name, args) => (name, args),
             Type::TypeParam(type_param_name) => {
-                return self
-                    .trait_method_from_type_param(type_param_name, field)
-                    .map(|method| method.signature.return_type.clone())
-                    .map_err(|_| {
-                        Diagnostic::at(
-                            span,
-                            format!("cannot access field `{}` on `{}`", field, object_ty),
-                        )
-                    });
+                // A bound's method is only callable here. Reading it as a
+                // member would let its result type pose as a field that no
+                // substituted class carries, which both backends then trap on.
+                return match self.trait_method_from_type_param(type_param_name, field) {
+                    Ok(_) => Err(Diagnostic::coded_at(
+                        "AU2005",
+                        span,
+                        format!(
+                            "`{field}` is a method of the `{type_param_name}` bound and is not a field; call it as `{field}(...)` (bound method values on type parameters are not supported in this language version)"
+                        ),
+                    )),
+                    Err(_) => Err(Diagnostic::at(
+                        span,
+                        format!("cannot access field `{}` on `{}`", field, object_ty),
+                    )),
+                };
             }
             Type::Function { .. }
             | Type::Closure { .. }
@@ -14704,7 +14643,8 @@ impl<'a> FunctionChecker<'a> {
     fn builtin_payload_free_variant(enum_name: &str, variant_name: &str) -> bool {
         matches!(
             (enum_name, variant_name),
-            ("Option", "None")
+            ("Lookup", "Missing")
+                | ("Poll", "Unavailable")
                 | ("QueueReceive", "Closed" | "TimedOut" | "Cancelled")
                 | ("TaskResult", "TimedOut" | "Cancelled")
                 | ("WaitAny", "TimedOut" | "Cancelled")
@@ -14757,7 +14697,8 @@ impl<'a> FunctionChecker<'a> {
             ExprKind::Name(name) => {
                 matches!(
                     name.as_str(),
-                    "Option"
+                    "Lookup"
+                        | "Poll"
                         | "Result"
                         | "SendError"
                         | "QueueReceive"
@@ -14959,8 +14900,10 @@ impl<'a> FunctionChecker<'a> {
             return None;
         }
         match (enum_name, variant_name, args.as_slice()) {
-            ("Option", "Some", [inner]) => Some(vec![inner.clone()]),
-            ("Option", "None", [_]) => Some(Vec::new()),
+            ("Lookup", "Found", [inner]) => Some(vec![inner.clone()]),
+            ("Lookup", "Missing", [_]) => Some(Vec::new()),
+            ("Poll", "Ready", [inner]) => Some(vec![inner.clone()]),
+            ("Poll", "Unavailable", [_]) => Some(Vec::new()),
             ("Result", "Ok", [ok, _err]) => Some(vec![ok.clone()]),
             ("Result", "Err", [_ok, err]) => Some(vec![err.clone()]),
             ("SendError", "Closed" | "Cancelled" | "TimedOut" | "Full", [value]) => {
@@ -14998,7 +14941,8 @@ impl<'a> FunctionChecker<'a> {
         span: crate::diag::Span,
     ) -> Result<Type> {
         let expected_len = match name {
-            "Option" => 1,
+            "Lookup" => 1,
+            "Poll" => 1,
             "Result" => 2,
             "SendError" => 1,
             "QueueReceive" => 1,
@@ -15039,7 +14983,8 @@ impl<'a> FunctionChecker<'a> {
         match &expr.kind {
             ExprKind::Name(name) => matches!(
                 name.as_str(),
-                "Option"
+                "Lookup"
+                    | "Poll"
                     | "Result"
                     | "SendError"
                     | "QueueReceive"
@@ -15057,8 +15002,9 @@ impl<'a> FunctionChecker<'a> {
     fn is_builtin_enum_variant_name(&self, name: &str) -> bool {
         matches!(
             name,
-            "Some"
-                | "None"
+            "Found"
+                | "Missing"
+                | "Unavailable"
                 | "Ok"
                 | "Err"
                 | "Closed"

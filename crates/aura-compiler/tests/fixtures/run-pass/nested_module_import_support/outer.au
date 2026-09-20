@@ -1,0 +1,4 @@
+import nested_module_import_support.inner as inner
+
+public def make() -> int64:
+    return inner.value() + 1

@@ -35,14 +35,15 @@ use crate::runtime_value::{
     evaluate_string_to_bytes_host_ref, float_floor_divmod, float_power, format_runtime_value,
     host_process_args, io_error, io_read_line, json_array_metadata_is_exact,
     json_dump_error_to_diagnostic, json_int_metadata_is_exact, json_object_metadata_is_exact,
-    json_parse_owned_to_runtime, nominal_runtime_base_name, option_none, option_some,
-    poll_cancellation, prepare_json_codec_source, process_error_cancelled, process_error_io,
-    process_error_no_command, process_error_spawn, process_error_timed_out, process_exit_status,
-    process_stdio_inherit, process_stdio_null, process_stdio_pipe, process_supervisor_event_failed,
-    process_supervisor_wait_cancelled, process_supervisor_wait_event,
-    process_supervisor_wait_timed_out, process_wait_cancelled, process_wait_exited,
-    process_wait_failed, process_wait_timed_out, queue_receive_cancelled, queue_receive_closed,
-    queue_receive_item, queue_receive_timed_out, read_file_limited,
+    json_parse_owned_to_runtime, lookup_found, lookup_missing, nominal_runtime_base_name,
+    optional_absent, optional_bytes_value, optional_present, optional_str_value, optional_value,
+    poll_cancellation, poll_ready, poll_unavailable, prepare_json_codec_source,
+    process_error_cancelled, process_error_io, process_error_no_command, process_error_spawn,
+    process_error_timed_out, process_exit_status, process_stdio_inherit, process_stdio_null,
+    process_stdio_pipe, process_supervisor_event_failed, process_supervisor_wait_cancelled,
+    process_supervisor_wait_event, process_supervisor_wait_timed_out, process_wait_cancelled,
+    process_wait_exited, process_wait_failed, process_wait_timed_out, queue_receive_cancelled,
+    queue_receive_closed, queue_receive_item, queue_receive_timed_out, read_file_limited,
     recv_for_registered_producers_iteration, recv_for_task_group_iteration, render_float,
     render_float32, result_err, result_ok, round_numeric_value, run_blocking_io,
     run_lightweight_root_task, runtime_value_to_json, select_runtime_values, send_error_cancelled,
@@ -2031,19 +2032,16 @@ fn mir_json_into_exact_payload(
 }
 
 fn mir_json_indent(value: &Value) -> Result<Option<i64>> {
-    let Value::EnumVariant(option) = value else {
-        return Err(Diagnostic::coded(
-            "AU4001",
-            "`json::dumps` expects `indent` to be `Option[int64]`",
-        ));
+    let payload = match value {
+        Value::Unit => return Ok(None),
+        Value::Union(union) => match &union.payload {
+            Value::Unit => return Ok(None),
+            payload => payload,
+        },
+        other => other,
     };
-    match (
-        nominal_runtime_base_name(&option.enum_name),
-        option.variant_name.as_str(),
-        option.payloads.as_slice(),
-    ) {
-        ("Option", "None", []) => Ok(None),
-        ("Option", "Some", [Value::Int(value)]) if json_int_metadata_is_exact(value) => value
+    match payload {
+        Value::Int(value) if json_int_metadata_is_exact(value) => value
             .as_i128()
             .and_then(|value| i64::try_from(value).ok())
             .map(Some)
@@ -2053,13 +2051,13 @@ fn mir_json_indent(value: &Value) -> Result<Option<i64>> {
                     "`json::dumps` expects `indent` to contain an `int64`",
                 )
             }),
-        ("Option", "Some", [Value::Int(_)]) => Err(Diagnostic::coded(
+        Value::Int(_) => Err(Diagnostic::coded(
             "AU4001",
             "`json::dumps` expects `indent` to contain an `int64`",
         )),
         _ => Err(Diagnostic::coded(
             "AU4001",
-            "`json::dumps` expects `indent` to be `Option[int64]`",
+            "`json::dumps` expects `indent` to be `int64 | None`",
         )),
     }
 }
@@ -2152,20 +2150,25 @@ fn evaluate_json_mir_host_call(
                 "json::as_float" => "Float",
                 _ => unreachable!(),
             };
+            let member = match expected {
+                "Bool" => Type::named("bool"),
+                "Int" => Type::named("int64"),
+                _ => Type::named("float64"),
+            };
             match mir_json_exact_payload(value.as_value(), expected, name) {
                 Ok(Some(Value::Bool(value))) if expected == "Bool" => {
-                    Ok(option_some(Value::Bool(*value)))
+                    Ok(optional_present(member, Value::Bool(*value)))
                 }
                 Ok(Some(Value::Int(value)))
                     if expected == "Int" && json_int_metadata_is_exact(value) =>
                 {
-                    Ok(option_some(Value::Int(*value)))
+                    Ok(optional_present(member, Value::Int(*value)))
                 }
                 Ok(Some(Value::Float(value))) if expected == "Float" => {
-                    Ok(option_some(Value::Float(*value)))
+                    Ok(optional_present(member, Value::Float(*value)))
                 }
                 Ok(Some(_)) => Err(malformed_json_variant_metadata(expected, name)),
-                Ok(None) => Ok(option_none()),
+                Ok(None) => Ok(optional_absent(member)),
                 Err(error) => Err(error),
             }
         }
@@ -2184,22 +2187,23 @@ fn evaluate_json_mir_host_call(
                 "json::into_object" => "Object",
                 _ => unreachable!(),
             };
+            let member = crate::runtime_value::json_into_member_type(expected);
             match mir_json_into_exact_payload(value, expected, name) {
                 Ok(Some(Value::String(value))) if expected == "String" => {
-                    Ok(option_some(Value::String(value)))
+                    Ok(optional_present(member, Value::String(value)))
                 }
                 Ok(Some(Value::Vec(value)))
                     if expected == "Array" && json_array_metadata_is_exact(&value) =>
                 {
-                    Ok(option_some(Value::Vec(value)))
+                    Ok(optional_present(member, Value::Vec(value)))
                 }
                 Ok(Some(Value::Map(value)))
                     if expected == "Object" && json_object_metadata_is_exact(&value) =>
                 {
-                    Ok(option_some(Value::Map(value)))
+                    Ok(optional_present(member, Value::Map(value)))
                 }
                 Ok(Some(_)) => Err(malformed_json_variant_metadata(expected, name)),
-                Ok(None) => Ok(option_none()),
+                Ok(None) => Ok(optional_absent(member)),
                 Err(error) => Err(error),
             }
         }
@@ -2721,9 +2725,16 @@ impl MirRuntime {
                 variant.variant_name.as_str(),
                 variant.single_payload(),
             ) {
-                ("Option", "Some", Some(payload)) => Self::infer_value_type(payload)
-                    .map(|inner| Type::Named("Option".to_string(), vec![inner])),
-                ("Option", "None", _) => Some(Type::Named("Option".to_string(), vec![Type::Unit])),
+                ("Lookup", "Found", Some(payload)) => Self::infer_value_type(payload)
+                    .map(|inner| Type::Named("Lookup".to_string(), vec![inner])),
+                ("Lookup", "Missing", _) => {
+                    Some(Type::Named("Lookup".to_string(), vec![Type::Unit]))
+                }
+                ("Poll", "Ready", Some(payload)) => Self::infer_value_type(payload)
+                    .map(|inner| Type::Named("Poll".to_string(), vec![inner])),
+                ("Poll", "Unavailable", _) => {
+                    Some(Type::Named("Poll".to_string(), vec![Type::Unit]))
+                }
                 ("Result", "Ok", Some(payload)) => Self::infer_value_type(payload)
                     .map(|ok| Type::Named("Result".to_string(), vec![ok, Type::Unit])),
                 ("Result", "Err", Some(payload)) => Self::infer_value_type(payload)
@@ -2796,7 +2807,9 @@ impl MirRuntime {
         match value {
             Value::Instance(instance) => self.infer_instance_type(instance),
             Value::EnumVariant(_variant) => Self::infer_value_type(value).map(|ty| match ty {
-                Type::Named(name, args) if name == "Option" && args == vec![Type::Unit] => {
+                Type::Named(name, args)
+                    if matches!(name.as_str(), "Lookup" | "Poll") && args == vec![Type::Unit] =>
+                {
                     Type::Named(name, vec![Type::named("Unknown")])
                 }
                 Type::Named(name, args) if name == "Result" && args.contains(&Type::Unit) => {
@@ -2847,9 +2860,6 @@ impl MirRuntime {
         span: Option<crate::diag::Span>,
     ) -> Result<Value> {
         let coerced = match (&value, ty) {
-            (Value::Unit, Type::Named(name, args)) if name == "Option" && args.len() == 1 => {
-                option_none()
-            }
             (Value::Int(value), Type::Named(name, args))
                 if args.is_empty() && (name.starts_with("int") || name.starts_with("uint")) =>
             {
@@ -4824,8 +4834,8 @@ impl MirRuntime {
                     let values = evaluate_named_args(args, env)?;
                     bind_builtin_args(&[], values)?;
                     return match io_read_line() {
-                        Ok(Some(line)) => Ok(result_ok(option_some(Value::String(line)))),
-                        Ok(None) => Ok(result_ok(option_none())),
+                        Ok(Some(line)) => Ok(result_ok(optional_str_value(Some(line)))),
+                        Ok(None) => Ok(result_ok(optional_str_value(None))),
                         Err(error) => Ok(result_err(io_error(error))),
                     };
                 }
@@ -6060,11 +6070,10 @@ impl MirRuntime {
                     },
                 )
             }
-            "get_or_none" => {
+            "poll" => {
                 let values = evaluate_named_args(args, env)?;
                 let bound = bind_builtin_args(&["timeout"], values)?;
-                let timeout =
-                    expect_optional_timeout(Some(&bound[0].value), "get_or_none(timeout=...)")?;
+                let timeout = expect_optional_timeout(Some(&bound[0].value), "poll(timeout=...)")?;
                 let outcome = if args.is_empty() {
                     if self.cancellation.is_cancelled() {
                         RecvValueResult::Cancelled
@@ -6083,10 +6092,10 @@ impl MirRuntime {
                         .map_err(timer_error_to_diagnostic)?
                 };
                 Ok(match outcome {
-                    RecvValueResult::Value(value) => option_some(value),
+                    RecvValueResult::Value(value) => poll_ready(value),
                     RecvValueResult::Closed
                     | RecvValueResult::TimedOut
-                    | RecvValueResult::Cancelled => option_none(),
+                    | RecvValueResult::Cancelled => poll_unavailable(),
                 })
             }
             "get_or" => {
@@ -6157,14 +6166,22 @@ impl MirRuntime {
                     .try_clone()
                     .map(Value::Array)
             }
-            "get" | "__index_option" => {
+            "get" => {
+                let values = evaluate_named_args(args, env)?;
+                let bound = bind_builtin_args(&["index"], values)?;
+                let coordinates = array_coordinates_from_runtime(&bound[0].value)?;
+                let array = array_place_ref(env, object_place)?;
+                let member = array.element_type();
+                Ok(optional_value(member, array.get_optional(&coordinates)?))
+            }
+            "__index_option" => {
                 let values = evaluate_named_args(args, env)?;
                 let bound = bind_builtin_args(&["index"], values)?;
                 let coordinates = array_coordinates_from_runtime(&bound[0].value)?;
                 Ok(array_place_ref(env, object_place)?
                     .get_optional(&coordinates)?
-                    .map(option_some)
-                    .unwrap_or_else(option_none))
+                    .map(lookup_found)
+                    .unwrap_or_else(lookup_missing))
             }
             "__index" => {
                 let values = evaluate_named_args(args, env)?;
@@ -6183,9 +6200,10 @@ impl MirRuntime {
                 let values = evaluate_named_args(args, env)?;
                 let bound = bind_builtin_args(&["index", "value"], values)?;
                 let coordinates = array_coordinates_from_runtime(&bound[0].value)?;
+                let member = array_place_ref(env, object_place)?.element_type();
                 let previous = array_place_mut(env, object_place)?
                     .set(&coordinates, bound[1].value.clone())?;
-                Ok(option_some(previous))
+                Ok(optional_present(member, previous))
             }
             "__set_index" => {
                 let values = evaluate_named_args(args, env)?;
@@ -6353,8 +6371,8 @@ impl MirRuntime {
                 let (_, index) =
                     self.mir_vec_index_from_value(bound[0].value.clone(), vector.elements.len())?;
                 match index.and_then(|index| vector.elements.get(index)) {
-                    Some(value) => try_clone_mir_value(value).map(option_some),
-                    None => Ok(option_none()),
+                    Some(value) => try_clone_mir_value(value).map(lookup_found),
+                    None => Ok(lookup_missing()),
                 }
             }
             "__take_index_option" => {
@@ -6372,7 +6390,7 @@ impl MirRuntime {
                     ));
                 };
                 env.write_place(place, Value::Vec(updated))?;
-                Ok(value.map(option_some).unwrap_or_else(option_none))
+                Ok(value.map(lookup_found).unwrap_or_else(lookup_missing))
             }
             "__index" => {
                 let values = evaluate_named_args(args, env)?;
@@ -6687,8 +6705,8 @@ impl MirRuntime {
                     .iter()
                     .find(|(candidate_key, _)| *candidate_key == bound[0].value)
                 {
-                    Some((_, value)) => try_clone_mir_value(value).map(option_some),
-                    None => Ok(option_none()),
+                    Some((_, value)) => try_clone_mir_value(value).map(lookup_found),
+                    None => Ok(lookup_missing()),
                 }
             }
             "__index" => {
@@ -6740,7 +6758,7 @@ impl MirRuntime {
                     ));
                 };
                 env.write_place(place, Value::Map(updated))?;
-                Ok(previous.map(option_some).unwrap_or_else(option_none))
+                Ok(previous.map(lookup_found).unwrap_or_else(lookup_missing))
             }
             "__set_index" => {
                 let values = evaluate_named_args(args, env)?;
@@ -6787,7 +6805,7 @@ impl MirRuntime {
                     return Err(Diagnostic::new("`remove` requires a mutable dict place"));
                 };
                 env.write_place(place, Value::Map(updated))?;
-                Ok(removed.map(option_some).unwrap_or_else(option_none))
+                Ok(removed.map(lookup_found).unwrap_or_else(lookup_missing))
             }
             "contains_key" => {
                 let values = evaluate_named_args(args, env)?;
@@ -7033,10 +7051,9 @@ impl MirRuntime {
                 let Value::String(prefix) = bound[0].value.clone() else {
                     return Err(Diagnostic::new("`strip_prefix` requires a `str` argument"));
                 };
-                Ok(text
-                    .strip_prefix(&prefix)
-                    .map(|rest| option_some(Value::String(rest.to_string())))
-                    .unwrap_or_else(option_none))
+                Ok(optional_str_value(
+                    text.strip_prefix(&prefix).map(str::to_string),
+                ))
             }
             "strip_suffix" => {
                 let values = evaluate_named_args(args, env)?;
@@ -7044,10 +7061,9 @@ impl MirRuntime {
                 let Value::String(suffix) = bound[0].value.clone() else {
                     return Err(Diagnostic::new("`strip_suffix` requires a `str` argument"));
                 };
-                Ok(text
-                    .strip_suffix(&suffix)
-                    .map(|rest| option_some(Value::String(rest.to_string())))
-                    .unwrap_or_else(option_none))
+                Ok(optional_str_value(
+                    text.strip_suffix(&suffix).map(str::to_string),
+                ))
             }
             "trim" => {
                 if !args.is_empty() {
@@ -7189,8 +7205,8 @@ impl MirRuntime {
                 let bound = bind_builtin_args(&["index"], values)?;
                 let index = self.mir_index_from_value(bound[0].value.clone())?;
                 match set.elements.get(index) {
-                    Some(value) => try_clone_mir_value(value).map(option_some),
-                    None => Ok(option_none()),
+                    Some(value) => try_clone_mir_value(value).map(lookup_found),
+                    None => Ok(lookup_missing()),
                 }
             }
             "__take_index_option" => {
@@ -7206,7 +7222,7 @@ impl MirRuntime {
                     ));
                 };
                 env.write_place(place, Value::Set(updated))?;
-                Ok(value.map(option_some).unwrap_or_else(option_none))
+                Ok(value.map(lookup_found).unwrap_or_else(lookup_missing))
             }
             _ => Err(Diagnostic::new(format!(
                 "unsupported set method `{}`",
@@ -7317,11 +7333,10 @@ impl MirRuntime {
                     expect_optional_timeout(Some(&bound[0].value), "result(timeout=...)")?;
                 self.join_task(task, timeout)
             }
-            "result_or_none" => {
+            "poll" => {
                 let values = evaluate_named_args(args, env)?;
                 let bound = bind_builtin_args(&["timeout"], values)?;
-                let timeout =
-                    expect_optional_timeout(Some(&bound[0].value), "result_or_none(timeout=...)")?;
+                let timeout = expect_optional_timeout(Some(&bound[0].value), "poll(timeout=...)")?;
                 task.claim_result_observation()?;
                 let outcome = if args.is_empty() {
                     if self.cancellation.is_cancelled() {
@@ -7330,7 +7345,7 @@ impl MirRuntime {
                         TaskWaitStatus::Ready(match result {
                             crate::runtime_value::TaskExecutionResult::Ready(result) => result,
                             crate::runtime_value::TaskExecutionResult::Cancelled => {
-                                return Ok(option_none());
+                                return Ok(poll_unavailable());
                             }
                         })
                     } else {
@@ -7341,10 +7356,10 @@ impl MirRuntime {
                         .map_err(timer_error_to_diagnostic)?
                 };
                 Ok(match outcome {
-                    TaskWaitStatus::Ready(result) => {
-                        result.map(option_some).unwrap_or_else(|_| option_none())
-                    }
-                    TaskWaitStatus::TimedOut | TaskWaitStatus::Cancelled => option_none(),
+                    TaskWaitStatus::Ready(result) => result
+                        .map(poll_ready)
+                        .unwrap_or_else(|_| poll_unavailable()),
+                    TaskWaitStatus::TimedOut | TaskWaitStatus::Cancelled => poll_unavailable(),
                 })
             }
             "result_or" => {
@@ -8058,24 +8073,24 @@ impl MirRuntime {
                 Ok(child
                     .stdin()
                     .map(Value::ProcessPipe)
-                    .map(option_some)
-                    .unwrap_or_else(option_none))
+                    .map(|pipe| optional_present(Type::named("process.Pipe"), pipe))
+                    .unwrap_or_else(|| optional_absent(Type::named("process.Pipe"))))
             }
             "stdout" => {
                 bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
                 Ok(child
                     .stdout()
                     .map(Value::ProcessPipe)
-                    .map(option_some)
-                    .unwrap_or_else(option_none))
+                    .map(|pipe| optional_present(Type::named("process.Pipe"), pipe))
+                    .unwrap_or_else(|| optional_absent(Type::named("process.Pipe"))))
             }
             "stderr" => {
                 bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
                 Ok(child
                     .stderr()
                     .map(Value::ProcessPipe)
-                    .map(option_some)
-                    .unwrap_or_else(option_none))
+                    .map(|pipe| optional_present(Type::named("process.Pipe"), pipe))
+                    .unwrap_or_else(|| optional_absent(Type::named("process.Pipe"))))
             }
             "wait" => {
                 let bound = bind_builtin_args(&["timeout"], evaluate_named_args(args, env)?)?;
@@ -8103,8 +8118,13 @@ impl MirRuntime {
                     Err(error) => return Ok(result_err(error)),
                 };
                 match child.wait_or_none(timeout, Some(&self.cancellation)) {
-                    Ok(Some(status)) => Ok(result_ok(option_some(process_exit_status(status)))),
-                    Ok(None) => Ok(result_ok(option_none())),
+                    Ok(Some(status)) => Ok(result_ok(optional_present(
+                        Type::named("process.ExitStatus"),
+                        process_exit_status(status),
+                    ))),
+                    Ok(None) => Ok(result_ok(optional_absent(Type::named(
+                        "process.ExitStatus",
+                    )))),
                     Err(error) => Ok(result_err(error)),
                 }
             }
@@ -8173,8 +8193,8 @@ impl MirRuntime {
                     Err(error) => return Ok(result_err(error)),
                 };
                 match pipe.read_line(timeout, Some(&self.cancellation)) {
-                    Ok(Some(line)) => Ok(result_ok(option_some(Value::String(line)))),
-                    Ok(None) => Ok(result_ok(option_none())),
+                    Ok(Some(line)) => Ok(result_ok(optional_str_value(Some(line)))),
+                    Ok(None) => Ok(result_ok(optional_str_value(None))),
                     Err(error) => Ok(result_err(process_error_from_io(error))),
                 }
             }
@@ -8193,8 +8213,10 @@ impl MirRuntime {
                     Err(error) => return Ok(result_err(error)),
                 };
                 match pipe.read_bytes(max_bytes, timeout, Some(&self.cancellation)) {
-                    Ok(Some(bytes)) => Ok(result_ok(option_some(bytes_vec_value(bytes)))),
-                    Ok(None) => Ok(result_ok(option_none())),
+                    Ok(Some(bytes)) => Ok(result_ok(optional_bytes_value(Some(bytes_vec_value(
+                        bytes,
+                    ))))),
+                    Ok(None) => Ok(result_ok(optional_bytes_value(None))),
                     Err(error) => Ok(result_err(process_error_from_io(error))),
                 }
             }
@@ -8438,8 +8460,13 @@ impl MirRuntime {
                     Err(error) => return Ok(result_err(error)),
                 };
                 match supervisor.wait_or_none(timeout, Some(&self.cancellation)) {
-                    Ok(Some(event)) => Ok(result_ok(option_some(event))),
-                    Ok(None) => Ok(result_ok(option_none())),
+                    Ok(Some(event)) => Ok(result_ok(optional_present(
+                        Type::named("process.SupervisorEvent"),
+                        event,
+                    ))),
+                    Ok(None) => Ok(result_ok(optional_absent(Type::named(
+                        "process.SupervisorEvent",
+                    )))),
                     Err(error) => Ok(result_err(error)),
                 }
             }
@@ -8530,8 +8557,8 @@ impl MirRuntime {
                     "read_line(timeout=...)"
                 );
                 match stream.read_line(timeout, Some(&self.cancellation)) {
-                    Ok(Some(line)) => Ok(result_ok(option_some(Value::String(line)))),
-                    Ok(None) => Ok(result_ok(option_none())),
+                    Ok(Some(line)) => Ok(result_ok(optional_str_value(Some(line)))),
+                    Ok(None) => Ok(result_ok(optional_str_value(None))),
                     Err(error) => Ok(result_err(io_error(error))),
                 }
             }
@@ -8546,8 +8573,10 @@ impl MirRuntime {
                 let timeout =
                     io_timeout_or_return!(Some(&bound[1].value), "read_bytes(timeout=...)");
                 match stream.read_bytes(max_bytes, timeout, Some(&self.cancellation)) {
-                    Ok(Some(bytes)) => Ok(result_ok(option_some(bytes_vec_value(bytes)))),
-                    Ok(None) => Ok(result_ok(option_none())),
+                    Ok(Some(bytes)) => Ok(result_ok(optional_bytes_value(Some(bytes_vec_value(
+                        bytes,
+                    ))))),
+                    Ok(None) => Ok(result_ok(optional_bytes_value(None))),
                     Err(error) => Ok(result_err(io_error(error))),
                 }
             }
@@ -8693,8 +8722,10 @@ impl MirRuntime {
                     })?;
                 let timeout = io_timeout_or_return!(Some(&bound[1].value), "recv(timeout=...)");
                 match socket.recv(max_bytes, timeout, Some(&self.cancellation)) {
-                    Ok(Some(bytes)) => Ok(result_ok(option_some(bytes_vec_value(bytes)))),
-                    Ok(None) => Ok(result_ok(option_none())),
+                    Ok(Some(bytes)) => Ok(result_ok(optional_bytes_value(Some(bytes_vec_value(
+                        bytes,
+                    ))))),
+                    Ok(None) => Ok(result_ok(optional_bytes_value(None))),
                     Err(error) => Ok(result_err(io_error(error))),
                 }
             }
@@ -8708,8 +8739,11 @@ impl MirRuntime {
                 let timeout =
                     io_timeout_or_return!(Some(&bound[1].value), "recv_from(timeout=...)");
                 match socket.recv_from(max_bytes, timeout, Some(&self.cancellation)) {
-                    Ok(Some(datagram)) => Ok(result_ok(option_some(Value::UdpDatagram(datagram)))),
-                    Ok(None) => Ok(result_ok(option_none())),
+                    Ok(Some(datagram)) => Ok(result_ok(optional_present(
+                        Type::named("net.UdpDatagram"),
+                        Value::UdpDatagram(datagram),
+                    ))),
+                    Ok(None) => Ok(result_ok(optional_absent(Type::named("net.UdpDatagram")))),
                     Err(error) => Ok(result_err(io_error(error))),
                 }
             }
@@ -8962,8 +8996,8 @@ impl MirRuntime {
                 let timeout =
                     io_timeout_or_return!(Some(&bound[0].value), "recv_text(timeout=...)");
                 match socket.recv_text(timeout) {
-                    Ok(Some(text)) => Ok(result_ok(option_some(Value::String(text)))),
-                    Ok(None) => Ok(result_ok(option_none())),
+                    Ok(Some(text)) => Ok(result_ok(optional_str_value(Some(text)))),
+                    Ok(None) => Ok(result_ok(optional_str_value(None))),
                     Err(error) => Ok(result_err(io_error(error))),
                 }
             }
@@ -8972,8 +9006,10 @@ impl MirRuntime {
                 let timeout =
                     io_timeout_or_return!(Some(&bound[0].value), "recv_bytes(timeout=...)");
                 match socket.recv_bytes(timeout) {
-                    Ok(Some(bytes)) => Ok(result_ok(option_some(bytes_vec_value(bytes)))),
-                    Ok(None) => Ok(result_ok(option_none())),
+                    Ok(Some(bytes)) => Ok(result_ok(optional_bytes_value(Some(bytes_vec_value(
+                        bytes,
+                    ))))),
+                    Ok(None) => Ok(result_ok(optional_bytes_value(None))),
                     Err(error) => Ok(result_err(io_error(error))),
                 }
             }
@@ -9028,8 +9064,8 @@ impl MirRuntime {
                 let timeout =
                     io_timeout_or_return!(Some(&bound[0].value), "read_line(timeout=...)");
                 match stream.read_line(timeout, Some(&self.cancellation)) {
-                    Ok(Some(text)) => Ok(result_ok(option_some(Value::String(text)))),
-                    Ok(None) => Ok(result_ok(option_none())),
+                    Ok(Some(text)) => Ok(result_ok(optional_str_value(Some(text)))),
+                    Ok(None) => Ok(result_ok(optional_str_value(None))),
                     Err(error) => Ok(result_err(io_error(error))),
                 }
             }
@@ -9113,8 +9149,8 @@ impl MirRuntime {
                 let timeout =
                     io_timeout_or_return!(Some(&bound[0].value), "read_line(timeout=...)");
                 match stream.read_line(timeout, Some(&self.cancellation)) {
-                    Ok(Some(text)) => Ok(result_ok(option_some(Value::String(text)))),
-                    Ok(None) => Ok(result_ok(option_none())),
+                    Ok(Some(text)) => Ok(result_ok(optional_str_value(Some(text)))),
+                    Ok(None) => Ok(result_ok(optional_str_value(None))),
                     Err(error) => Ok(result_err(io_error(error))),
                 }
             }
@@ -10505,24 +10541,13 @@ fn expect_bool_value(value: &Value, label: &str) -> Result<bool> {
 fn expect_optional_string_value(value: &Value, label: &str) -> Result<Option<String>> {
     match value {
         Value::Unit => Ok(None),
-        Value::EnumVariant(variant)
-            if variant.enum_name == "Option" && variant.variant_name == "None" =>
-        {
-            Ok(None)
-        }
-        Value::EnumVariant(variant)
-            if variant.enum_name == "Option" && variant.variant_name == "Some" =>
-        {
-            match variant.payloads.as_slice() {
-                [text] => Ok(Some(expect_string_value(text, label)?)),
-                _ => Err(Diagnostic::new(format!(
-                    "`{}` expects `Option[str]`, found malformed option payload",
-                    label
-                ))),
-            }
-        }
+        Value::Union(union) => match &union.payload {
+            Value::Unit => Ok(None),
+            payload => Ok(Some(expect_string_value(payload, label)?)),
+        },
+        Value::String(_) => Ok(Some(expect_string_value(value, label)?)),
         other => Err(Diagnostic::new(format!(
-            "`{}` expects `Option[str]`, found `{}`",
+            "`{}` expects `str | None`, found `{}`",
             label,
             other.render()
         ))),
@@ -10532,27 +10557,13 @@ fn expect_optional_string_value(value: &Value, label: &str) -> Result<Option<Str
 fn expect_owned_optional_string_value(value: Value, label: &str) -> Result<Option<String>> {
     match value {
         Value::Unit => Ok(None),
-        Value::EnumVariant(variant)
-            if variant.enum_name == "Option" && variant.variant_name == "None" =>
-        {
-            Ok(None)
-        }
-        Value::EnumVariant(mut variant)
-            if variant.enum_name == "Option" && variant.variant_name == "Some" =>
-        {
-            if variant.payloads.len() != 1 {
-                return Err(Diagnostic::new(format!(
-                    "`{}` expects `Option[str]`, found malformed option payload",
-                    label
-                )));
-            }
-            Ok(Some(expect_owned_string_value(
-                variant.payloads.pop().expect("one payload remains"),
-                label,
-            )?))
-        }
+        Value::Union(union) => match union.payload {
+            Value::Unit => Ok(None),
+            payload => Ok(Some(expect_owned_string_value(payload, label)?)),
+        },
+        Value::String(_) => Ok(Some(expect_owned_string_value(value, label)?)),
         other => Err(Diagnostic::new(format!(
-            "`{}` expects `Option[str]`, found `{}`",
+            "`{}` expects `str | None`, found `{}`",
             label,
             other.render()
         ))),

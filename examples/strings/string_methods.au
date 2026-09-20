@@ -1,6 +1,6 @@
-def print_string_option(value: own Option[str]):
+def print_optional_string(value: own str | None):
     match own value:
-        case Some(text):
+        case str as text:
             print(text)
         case None:
             print("none")
@@ -20,21 +20,21 @@ def main() -> int32:
     parts = trimmed.split(" ")
     print(parts.len())
     match parts.get(0):
-        case Some(value):
+        case Lookup.Found(value):
             print(value)
-        case None:
+        case Lookup.Missing:
             pass
     match parts.get(1):
-        case Some(value):
+        case Lookup.Found(value):
             print(value)
-        case None:
+        case Lookup.Missing:
             pass
     print(trimmed.replace("repo", "lang"))
     print(trimmed.to_lower())
     print(trimmed.to_upper())
-    print_string_option(trimmed.strip_prefix("aura "))
-    print_string_option(trimmed.strip_prefix("repo"))
-    print_string_option(trimmed.strip_suffix(" repo"))
-    print_string_option(trimmed.strip_suffix("aura"))
+    print_optional_string(trimmed.strip_prefix("aura "))
+    print_optional_string(trimmed.strip_prefix("repo"))
+    print_optional_string(trimmed.strip_suffix(" repo"))
+    print_optional_string(trimmed.strip_suffix("aura"))
     print(trimmed.clone().len())
     return 0

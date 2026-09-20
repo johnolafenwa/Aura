@@ -1,0 +1,5 @@
+error[AU2005]: public type alias `Handler` exposes private type `Secret`
+ --> crates/aura-compiler/tests/fixtures/check-path-fail/alias_private_support/handler.au:4:33
+  |
+4 | public type Handler = def(item: Secret) -> None
+  |                                 ^

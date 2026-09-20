@@ -1,0 +1,15 @@
+class Holder:
+    values: list[int64]
+
+def consume(item: own Holder):
+    print(item.values.len())
+
+def main():
+    callbacks: list[def(item: own Holder) -> None] = [consume]
+    chooser: def(callback: def(item: own Holder) -> None) -> (def(item: own Holder) -> None) = lambda callback: consume
+    mapped = callbacks.map(chooser)
+    match mapped.get(0):
+        case Lookup.Found(handler):
+            handler(Holder(values=[1, 2, 3]))
+        case Lookup.Missing:
+            print("none")

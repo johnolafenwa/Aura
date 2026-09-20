@@ -166,7 +166,7 @@ generator.
 This rejects direct `random.Rng.clone()` calls and clone-producing collection
 or task observations such as `list.copy`, `list.get`, `dict.copy`, `dict.get`,
 `dict.keys`, `dict.values`, `dict.items`, `set.copy`,
-`Task.result`, `Task.result_or_none`, `Task.result_or`, `wait_any`, and
+`Task.result`, `Task.poll`, `Task.result_or`, `wait_any`, and
 `wait_all` when the produced value would contain an `Rng`. A polymorphic
 clone-producing operation over an unresolved type parameter instead infers a
 clone-safety obligation. The generic declaration remains valid, the obligation

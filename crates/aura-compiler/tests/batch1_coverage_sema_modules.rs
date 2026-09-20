@@ -276,7 +276,7 @@ fn specialized_member_and_grouped_callees_are_not_bare_names() {
 #[test]
 fn bare_variant_constructor_without_an_expected_type_is_rejected() {
     rejects(
-        "def main():\n    x = Some(1)\n",
+        "def main():\n    x = Found(1)\n",
         "bare enum variants require an expected enum type",
     );
 }
@@ -854,8 +854,8 @@ fn bool_or_pattern_covering_both_literals_makes_the_wildcard_unreachable() {
 #[test]
 fn duplicate_and_covered_variant_arms_are_rejected() {
     rejects(
-        "def main():\n    value: int64? = Some(1)\n    match value:\n        case Some(x):\n            print(x)\n        case Some(y):\n            print(y)\n        case None:\n            print(0)\n",
-        "duplicate match arm for `Option.Some`",
+        "def main():\n    items = [1]\n    match items.get(0):\n        case Lookup.Found(x):\n            print(x)\n        case Lookup.Found(y):\n            print(y)\n        case Lookup.Missing:\n            print(0)\n",
+        "duplicate match arm for `Lookup.Found`",
     );
     rejects(
         "enum Shape:\n    Circle(int64)\n    Square(int64, int64)\ndef main():\n    shape = Shape.Circle(1)\n    match shape:\n        case Shape.Circle(_):\n            print(1)\n        case Shape.Circle(1):\n            print(2)\n        case Shape.Square(_, _):\n            print(3)\n",

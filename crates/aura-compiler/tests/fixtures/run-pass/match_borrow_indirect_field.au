@@ -1,18 +1,18 @@
 class Node:
     value: int32
-    next: indirect Node?
+    next: indirect Node | None
 
 def print_list(node: Node):
     print(node.value)
     match node.next:
-        case Some(next):
+        case Node as next:
             print_list(node=next)
         case None:
             pass
 
 def main() -> int32:
-    tail = Node(value=3, next=Option.None)
-    middle = Node(value=2, next=Option.Some(tail))
-    head = Node(value=1, next=Option.Some(middle))
+    tail = Node(value=3, next=None)
+    middle = Node(value=2, next=tail)
+    head = Node(value=1, next=middle)
     print_list(node=head)
     return 0

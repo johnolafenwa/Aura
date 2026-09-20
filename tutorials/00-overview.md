@@ -22,7 +22,7 @@ These tutorials teach the language as it exists in this repository today, not th
 - classes, keyword construction, defaults, receivers, and methods
 - ownership, borrowing, move semantics, copy types, and cloning
 - owned `list[T]`, `dict[K, V]`, and `set[T]` collections with literals, indexing, and iteration
-- enums, exhaustive `match`, built-in `Result[T, E]`, `Option[T]`, and `SendError[T]`
+- enums, exhaustive `match`, built-in `Result[T, E]`, optional `T | None` unions, `Lookup[T]`, and `SendError[T]`
 - strings, string parsing/formatting, numbers, signed computed Duration values, and the current builtin methods
 - `if`, `elif`, `else`, `while`, `for range(...)`, `break`, and `continue`
 - statement-form `match` over enum variants plus literal `bool`, integer, and `str` cases
@@ -46,7 +46,7 @@ Today's working subset includes:
 - mutable reassignment with `mut`
 - omitted `-> None` return types
 - ownership and borrowing with `T` and `mut T`
-- user-defined enums plus built-in `Result`, `Option`, and `SendError`
+- user-defined enums plus built-in `Result`, `Lookup`, `Poll`, and `SendError`, and optional `T | None` unions
 - user-defined generic classes, enums, and functions
 - builtin `list[T]`, `dict[K, V]`, and `set[T]` collections with literals
 - class methods with shared `self`, consuming `own self`, and mutable `mut self`

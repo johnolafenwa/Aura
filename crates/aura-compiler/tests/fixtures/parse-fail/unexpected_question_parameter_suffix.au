@@ -1,0 +1,5 @@
+def describe(value: str?) -> str:
+    return "x"
+
+def main():
+    print(describe(None))

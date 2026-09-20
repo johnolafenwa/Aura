@@ -1,0 +1,5 @@
+error[AU2001]: unknown type `Option`
+ --> crates/aura-compiler/tests/fixtures/check-fail/unknown_type_option_annotation.au:2:12
+  |
+2 |     value: Option[int64] = None
+  |            ^

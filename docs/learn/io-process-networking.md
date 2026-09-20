@@ -55,15 +55,15 @@ try io.write("name> ")
 try io.flush()
 
 match io.read_line():
-    case Result.Ok(Option.Some(line)):
+    case Result.Ok(str as line):
         print("hello " + line.trim())
-    case Result.Ok(Option.None):
+    case Result.Ok(None):
         print("end of input")
     case Result.Err(error):
         print(error)
 ```
 
-`io.read_line()` returns `Result[Option[str], io.Error]`. The `Option` is `None` at end of input; the `Result` captures I/O failures. Both are in the type, and a caller that wants to treat them differently can.
+`io.read_line()` returns `Result[str | None, io.Error]`. The payload is `None` at end of input; the `Result` captures I/O failures. Both are in the type, and a caller that wants to treat them differently can: the nested type pattern `Result.Ok(str as line)` selects a present line, and `Result.Ok(None)` selects a clean end of input.
 
 ## Processes: No Shell By Default
 
@@ -104,18 +104,18 @@ import process
 
 child = try process.start(command=["/bin/cat"], stdin=process.pipe(), stdout=process.pipe(), stderr=process.pipe(), group=true)
 
-match child.stdin():
-    case Option.Some(pipe):
+match own child.stdin():
+    case process.Pipe as pipe:
         try pipe.write_all("hello\n")
         pipe.close()
-    case Option.None:
+    case None:
         print("stdin was not piped")
 
-match child.stdout():
-    case Option.Some(pipe):
+match own child.stdout():
+    case process.Pipe as pipe:
         text = try pipe.read_all()
         print(text.trim())
-    case Option.None:
+    case None:
         print("stdout was not piped")
 
 match child.wait(timeout=1s):
@@ -131,7 +131,7 @@ match child.wait(timeout=1s):
 child.close()
 ```
 
-`child.stdin()`, `child.stdout()`, and `child.stderr()` return `Option[process.Pipe]` so the program can tell the difference between "the stream was not piped" and "the stream is available."
+`child.stdin()`, `child.stdout()`, and `child.stderr()` return `process.Pipe | None` so the program can tell the difference between "the stream was not piped" and "the stream is available." `match own` moves the pipe out of that result, so the arm holds an owned resource it may write, read, and close; a bare `match` would bind only a shared view of the pipe.
 
 ## Supervisors
 
@@ -197,11 +197,10 @@ import net
 
 def handle(stream: own net.TcpStream) -> Result[None, io.Error]:
     with conn = stream:
-        line = try conn.read_line(timeout=5s)
-        match line:
-            case Option.Some(text):
+        match try conn.read_line(timeout=5s):
+            case str as text:
                 try conn.write_all(text, timeout=5s)
-            case Option.None:
+            case None:
                 pass
     return Result.Ok(None)
 ```
@@ -211,7 +210,7 @@ listener. A copy `Queue[str]` handle can cross the boundary so the child can
 publish its bound address to the parent; the live listener never leaves its
 owning task.
 
-The `read_line` returns `Result[Option[str], io.Error]` for the same reason `io.read_line` does: the client might close cleanly, and the program might have to decide what that means.
+The `read_line` returns `Result[str | None, io.Error]` for the same reason `io.read_line` does: the client might close cleanly, and the program might have to decide what that means. `try` unwraps the `Result`, and the `match` then selects either the present line or the `None` that marks end of input.
 
 ## HTTP And WebSockets
 
