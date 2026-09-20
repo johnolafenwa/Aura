@@ -1,6 +1,35 @@
 # Task Board
 
-Last updated: 2026-09-19
+Last updated: 2026-09-20
+
+## Batch 1 phase 2 (H2, Option removal; in progress)
+
+- Target: remove the language builtin `Option[T]`, `Option.Some/None`, the
+  contextual short constructors, and the `T?` suffix across the maintained
+  surface; `T | None` is the sole optional spelling; add `Lookup[T]` and
+  `Poll[T]` (Q23 A) and convert every D3 row. Branch `codex/batch-1-phase-2`
+  from `b79f9497`; work note `2026-09-19-batch-1-phase-2.md`.
+- State: compiler, both runtimes and backends, analysis, language server,
+  extension grammar, fixtures (61 converted, 8 `T?` conversions, the H2
+  families and coverage companions added), unit/integration/CLI tests,
+  benchmarks, manual, tutorials (344 fences pass), examples (reference tool
+  runner output byte-identical), and records converted. Two checker holes
+  found by the phase are fixed and pinned: a callable bound into a
+  `(def(...)) | None` destination now meets the bare-destination contract
+  rule (`AU2015`) at the checker, and reading a bound's method as a member of
+  a type-parameter value is refused (`AU2005`) instead of trapping at
+  runtime. The unit value renders as `None` (an absent optional printed
+  empty text after the removal).
+- Verification: the complete local `npm run ci` chain is green at `d00b232a`
+  on 2026-09-20. Compiler coverage 96.4984% lines / 97.4197% functions /
+  95.3211% regions against floors 96.46 / 97.33 / 95.23 (floors unchanged);
+  LSP 116/116 tests at 100% coverage; extension 28/28 tests and packaging;
+  forced backend parity, CLI, reference, tutorial, docs, audit, clippy, and
+  hygiene gates pass.
+- Hosted integration: pending (branch CI on both platforms, merge, main CI,
+  completion record).
+- Next: the representation phase (Q9/Q15/Q16 A layout with allocation
+  measurements; no FFI/ABI claim and no 0.4 before it).
 
 ## Held-finding closeout (complete)
 
