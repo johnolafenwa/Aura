@@ -36,10 +36,11 @@ use crate::runtime_value::{
     fail_current_lightweight_task, float_floor_divmod, float_power, format_runtime_value, io_error,
     io_read_line, json_array_metadata_is_exact, json_dump_error_to_diagnostic,
     json_int_metadata_is_exact, json_object_metadata_is_exact, json_parse_owned_to_runtime,
-    nominal_runtime_base_name, option_none, option_some, poll_cancellation,
-    prepare_json_codec_source, process_error_cancelled, process_error_io, process_error_no_command,
-    process_error_spawn, process_error_timed_out, process_exit_status, process_stdio_inherit,
-    process_stdio_null, process_stdio_pipe, process_supervisor_event_failed,
+    lookup_found, lookup_missing, nominal_runtime_base_name, optional_absent, optional_bytes_value,
+    optional_present, optional_str_value, optional_value, poll_cancellation, poll_ready,
+    poll_unavailable, prepare_json_codec_source, process_error_cancelled, process_error_io,
+    process_error_no_command, process_error_spawn, process_error_timed_out, process_exit_status,
+    process_stdio_inherit, process_stdio_null, process_stdio_pipe, process_supervisor_event_failed,
     process_supervisor_wait_cancelled, process_supervisor_wait_event,
     process_supervisor_wait_timed_out, process_wait_cancelled, process_wait_exited,
     process_wait_failed, process_wait_timed_out, queue_receive_cancelled, queue_receive_closed,
@@ -2042,19 +2043,16 @@ fn direct_json_into_exact_payload(
 }
 
 fn direct_json_indent(value: &Value) -> std::result::Result<Option<i64>, Diagnostic> {
-    let Value::EnumVariant(option) = value else {
-        return Err(Diagnostic::coded(
-            "AU4001",
-            "`json::dumps` expects `indent` to be `Option[int64]`",
-        ));
+    let payload = match value {
+        Value::Unit => return Ok(None),
+        Value::Union(union) => match &union.payload {
+            Value::Unit => return Ok(None),
+            payload => payload,
+        },
+        other => other,
     };
-    match (
-        nominal_runtime_base_name(&option.enum_name),
-        option.variant_name.as_str(),
-        option.payloads.as_slice(),
-    ) {
-        ("Option", "None", []) => Ok(None),
-        ("Option", "Some", [Value::Int(value)]) => {
+    match payload {
+        Value::Int(value) => {
             if !json_int_metadata_is_exact(value) {
                 return Err(Diagnostic::coded(
                     "AU4001",
@@ -2069,7 +2067,7 @@ fn direct_json_indent(value: &Value) -> std::result::Result<Option<i64>, Diagnos
         }
         _ => Err(Diagnostic::coded(
             "AU4001",
-            "`json::dumps` expects `indent` to be `Option[int64]`",
+            "`json::dumps` expects `indent` to be `int64 | None`",
         )),
     }
 }
@@ -2115,20 +2113,22 @@ fn evaluate_direct_json_host_builtin(
         }),
         "json::as_bool" => args.with_borrow(name, 0, |value| {
             Ok(match direct_json_exact_payload(value, "Bool", name)? {
-                Some(Value::Bool(value)) => option_some(Value::Bool(*value)),
+                Some(Value::Bool(value)) => {
+                    optional_present(Type::named("bool"), Value::Bool(*value))
+                }
                 Some(_) => {
                     return Err(Diagnostic::coded(
                         "AU4001",
                         "malformed runtime `json.Value.Bool` payload in `json::as_bool`",
                     ))
                 }
-                None => option_none(),
+                None => optional_absent(Type::named("bool")),
             })
         }),
         "json::as_int" => args.with_borrow(name, 0, |value| {
             Ok(match direct_json_exact_payload(value, "Int", name)? {
                 Some(Value::Int(value)) if json_int_metadata_is_exact(value) => {
-                    option_some(Value::Int(*value))
+                    optional_present(Type::named("int64"), Value::Int(*value))
                 }
                 Some(_) => {
                     return Err(Diagnostic::coded(
@@ -2136,37 +2136,45 @@ fn evaluate_direct_json_host_builtin(
                         "malformed runtime `json.Value.Int` payload in `json::as_int`",
                     ))
                 }
-                None => option_none(),
+                None => optional_absent(Type::named("int64")),
             })
         }),
         "json::as_float" => args.with_borrow(name, 0, |value| {
             Ok(match direct_json_exact_payload(value, "Float", name)? {
-                Some(Value::Float(value)) => option_some(Value::Float(*value)),
+                Some(Value::Float(value)) => {
+                    optional_present(Type::named("float64"), Value::Float(*value))
+                }
                 Some(_) => {
                     return Err(Diagnostic::coded(
                         "AU4001",
                         "malformed runtime `json.Value.Float` payload in `json::as_float`",
                     ))
                 }
-                None => option_none(),
+                None => optional_absent(Type::named("float64")),
             })
         }),
         "json::into_string" => Ok(
             match direct_json_into_exact_payload(args.take_value(name, 0)?, "String", name)? {
-                Some(Value::String(value)) => option_some(Value::String(value)),
+                Some(Value::String(value)) => optional_present(
+                    crate::runtime_value::json_into_member_type("String"),
+                    Value::String(value),
+                ),
                 Some(_) => {
                     return Err(Diagnostic::coded(
                         "AU4001",
                         "malformed runtime `json.Value.String` payload in `json::into_string`",
                     ))
                 }
-                None => option_none(),
+                None => optional_absent(crate::runtime_value::json_into_member_type("String")),
             },
         ),
         "json::into_array" => Ok(
             match direct_json_into_exact_payload(args.take_value(name, 0)?, "Array", name)? {
                 Some(Value::Vec(value)) if json_array_metadata_is_exact(&value) => {
-                    option_some(Value::Vec(value))
+                    optional_present(
+                        crate::runtime_value::json_into_member_type("Array"),
+                        Value::Vec(value),
+                    )
                 }
                 Some(_) => {
                     return Err(Diagnostic::coded(
@@ -2174,13 +2182,16 @@ fn evaluate_direct_json_host_builtin(
                         "malformed runtime `json.Value.Array` payload in `json::into_array`",
                     ))
                 }
-                None => option_none(),
+                None => optional_absent(crate::runtime_value::json_into_member_type("Array")),
             },
         ),
         "json::into_object" => Ok(
             match direct_json_into_exact_payload(args.take_value(name, 0)?, "Object", name)? {
                 Some(Value::Map(value)) if json_object_metadata_is_exact(&value) => {
-                    option_some(Value::Map(value))
+                    optional_present(
+                        crate::runtime_value::json_into_member_type("Object"),
+                        Value::Map(value),
+                    )
                 }
                 Some(_) => {
                     return Err(Diagnostic::coded(
@@ -2188,7 +2199,7 @@ fn evaluate_direct_json_host_builtin(
                         "malformed runtime `json.Value.Object` payload in `json::into_object`",
                     ))
                 }
-                None => option_none(),
+                None => optional_absent(crate::runtime_value::json_into_member_type("Object")),
             },
         ),
         _ => Err(Diagnostic::coded(
@@ -2949,26 +2960,13 @@ fn expect_command_vec(value: &Value, label: &str) -> Vec<String> {
 fn expect_optional_string_value(value: &Value, label: &str) -> Option<String> {
     match value {
         Value::Unit => None,
-        Value::EnumVariant(variant)
-            if nominal_runtime_base_name(&variant.enum_name) == "Option"
-                && variant.variant_name == "None" =>
-        {
-            None
-        }
-        Value::EnumVariant(variant)
-            if nominal_runtime_base_name(&variant.enum_name) == "Option"
-                && variant.variant_name == "Some" =>
-        {
-            match variant.payloads.as_slice() {
-                [text] => Some(expect_string_value(text, label)),
-                _ => runtime_error(format!(
-                    "`{}` expects `Option[str]`, found malformed option payload",
-                    label
-                )),
-            }
-        }
+        Value::Union(union) => match &union.payload {
+            Value::Unit => None,
+            payload => Some(expect_string_value(payload, label)),
+        },
+        Value::String(_) => Some(expect_string_value(value, label)),
         other => runtime_error(format!(
-            "`{}` expects `Option[str]`, found `{}`",
+            "`{}` expects `str | None`, found `{}`",
             label,
             value_type_name(other)
         )),
@@ -4711,11 +4709,9 @@ pub extern "C-unwind" fn aura_direct_string_strip_prefix(
             runtime_error("`strip_prefix` requires a `str` argument");
         };
         match unsafe { value_ref(value) } {
-            Value::String(text) => boxed_value(
-                text.strip_prefix(&prefix)
-                    .map(|rest| option_some(Value::String(rest.to_string())))
-                    .unwrap_or_else(option_none),
-            ),
+            Value::String(text) => boxed_value(optional_str_value(
+                text.strip_prefix(&prefix).map(str::to_string),
+            )),
             other => runtime_error(format!(
                 "expected `str`, found `{}`",
                 value_type_name(other)
@@ -4734,11 +4730,9 @@ pub extern "C-unwind" fn aura_direct_string_strip_suffix(
             runtime_error("`strip_suffix` requires a `str` argument");
         };
         match unsafe { value_ref(value) } {
-            Value::String(text) => boxed_value(
-                text.strip_suffix(&suffix)
-                    .map(|rest| option_some(Value::String(rest.to_string())))
-                    .unwrap_or_else(option_none),
-            ),
+            Value::String(text) => boxed_value(optional_str_value(
+                text.strip_suffix(&suffix).map(str::to_string),
+            )),
             other => runtime_error(format!(
                 "expected `str`, found `{}`",
                 value_type_name(other)
@@ -5292,8 +5286,8 @@ pub extern "C-unwind" fn aura_direct_vec_pop_in_place(vec: *mut OpaqueValue) -> 
     task_runtime_boundary(|| {
         let value = with_vector_mut(vec, |vector| vector.elements.pop());
         match value {
-            Some(value) => boxed_value(option_some(value)),
-            None => boxed_value(option_none()),
+            Some(value) => boxed_value(lookup_found(value)),
+            None => boxed_value(lookup_missing()),
         }
     })
 }
@@ -5311,7 +5305,7 @@ pub extern "C-unwind" fn aura_direct_vec_get(
                 .transpose()
         });
         let value = direct_array_result(value, 0, 0);
-        boxed_value(value.map(option_some).unwrap_or_else(option_none))
+        boxed_value(value.map(lookup_found).unwrap_or_else(lookup_missing))
     })
 }
 
@@ -5365,7 +5359,7 @@ pub extern "C-unwind" fn aura_direct_vec_remove_in_place(
                 "list remove index `{index}` is out of bounds for length `{len}`"
             ))
         });
-        boxed_value(option_some(previous))
+        boxed_value(lookup_found(previous))
     })
 }
 
@@ -5644,7 +5638,7 @@ pub extern "C-unwind" fn aura_direct_vec_index_option(
                 .transpose()
         });
         let value = direct_array_result(value, 0, 0);
-        boxed_value(value.map(option_some).unwrap_or_else(option_none))
+        boxed_value(value.map(lookup_found).unwrap_or_else(lookup_missing))
     })
 }
 
@@ -5659,7 +5653,7 @@ pub extern "C-unwind" fn aura_direct_vec_take_index_in_place(
                 .filter(|normalized| *normalized < vector.elements.len())
                 .map(|normalized| vector.elements.remove(normalized))
         });
-        boxed_value(value.map(option_some).unwrap_or_else(option_none))
+        boxed_value(value.map(lookup_found).unwrap_or_else(lookup_missing))
     })
 }
 
@@ -5990,11 +5984,12 @@ pub extern "C-unwind" fn aura_direct_array_get(
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
         let coordinates = direct_array_result(direct_array_coordinates(coordinates), line, column);
+        let member = with_array(array, ArrayValue::element_type);
         let value = with_array(array, |array| array.get_optional(&coordinates));
-        match direct_array_result(value, line, column) {
-            Some(value) => boxed_value(option_some(value)),
-            None => boxed_value(option_none()),
-        }
+        boxed_value(optional_value(
+            member,
+            direct_array_result(value, line, column),
+        ))
     })
 }
 
@@ -6009,8 +6004,12 @@ pub extern "C-unwind" fn aura_direct_array_set_in_place(
     task_runtime_boundary(|| {
         let coordinates = direct_array_result(direct_array_coordinates(coordinates), line, column);
         let value = unsafe { value_ref(value) };
+        let member = with_array(array, ArrayValue::element_type);
         let previous = with_array_mut(array, |array| array.set(&coordinates, value));
-        boxed_value(option_some(direct_array_result(previous, line, column)))
+        boxed_value(optional_present(
+            member,
+            direct_array_result(previous, line, column),
+        ))
     })
 }
 
@@ -6223,7 +6222,7 @@ pub extern "C-unwind" fn aura_direct_map_get(
                 .transpose()
         });
         let value = direct_array_result(value, 0, 0);
-        boxed_value(value.map(option_some).unwrap_or_else(option_none))
+        boxed_value(value.map(lookup_found).unwrap_or_else(lookup_missing))
     })
 }
 
@@ -6259,7 +6258,7 @@ pub extern "C-unwind" fn aura_direct_map_set_in_place(
                 None
             }
         });
-        boxed_value(previous.map(option_some).unwrap_or_else(option_none))
+        boxed_value(previous.map(lookup_found).unwrap_or_else(lookup_missing))
     })
 }
 
@@ -6281,7 +6280,7 @@ pub extern "C-unwind" fn aura_direct_map_remove_in_place(
                 None
             }
         });
-        boxed_value(previous.map(option_some).unwrap_or_else(option_none))
+        boxed_value(previous.map(lookup_found).unwrap_or_else(lookup_missing))
     })
 }
 
@@ -6554,7 +6553,7 @@ pub extern "C-unwind" fn aura_direct_set_index_option(
                 .transpose()
         });
         let value = direct_array_result(value, 0, 0);
-        boxed_value(value.map(option_some).unwrap_or_else(option_none))
+        boxed_value(value.map(lookup_found).unwrap_or_else(lookup_missing))
     })
 }
 
@@ -6573,7 +6572,7 @@ pub extern "C-unwind" fn aura_direct_set_take_index_in_place(
         let value = with_set_mut(set, |set| {
             (index < set.elements.len()).then(|| set.elements.remove(index))
         });
-        boxed_value(value.map(option_some).unwrap_or_else(option_none))
+        boxed_value(value.map(lookup_found).unwrap_or_else(lookup_missing))
     })
 }
 
@@ -8594,10 +8593,10 @@ pub extern "C-unwind" fn aura_direct_channel_recv_or_none(
                         crate::runtime_value::TryRecvResult::Empty => RecvValueResult::TimedOut,
                     }
                 } {
-                    RecvValueResult::Value(value) => option_some(value),
+                    RecvValueResult::Value(value) => poll_ready(value),
                     RecvValueResult::Closed
                     | RecvValueResult::TimedOut
-                    | RecvValueResult::Cancelled => option_none(),
+                    | RecvValueResult::Cancelled => poll_unavailable(),
                 },
             ),
             other => runtime_error(format!(
@@ -8614,7 +8613,7 @@ pub extern "C-unwind" fn aura_direct_channel_recv_or_none_timeout_value(
     duration: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
-        let timeout = duration_from_ptr(duration, "get_or_none(timeout=...)");
+        let timeout = duration_from_ptr(duration, "poll(timeout=...)");
         match unsafe { value_ref(channel) } {
             Value::Channel(channel) => {
                 boxed_value(
@@ -8622,10 +8621,10 @@ pub extern "C-unwind" fn aura_direct_channel_recv_or_none_timeout_value(
                         Some(timeout),
                         Some(&current_cancellation()),
                     )) {
-                        RecvValueResult::Value(value) => option_some(value),
+                        RecvValueResult::Value(value) => poll_ready(value),
                         RecvValueResult::Closed
                         | RecvValueResult::TimedOut
-                        | RecvValueResult::Cancelled => option_none(),
+                        | RecvValueResult::Cancelled => poll_unavailable(),
                     },
                 )
             }
@@ -8798,11 +8797,11 @@ pub extern "C-unwind" fn aura_direct_task_join_or_none(task: *mut OpaqueValue) -
                     TaskWaitStatus::TimedOut
                 } {
                     TaskWaitStatus::Ready(result) => match result {
-                        Ok(value) => boxed_value(option_some(value)),
-                        Err(_) => boxed_value(option_none()),
+                        Ok(value) => boxed_value(poll_ready(value)),
+                        Err(_) => boxed_value(poll_unavailable()),
                     },
                     TaskWaitStatus::TimedOut | TaskWaitStatus::Cancelled => {
-                        boxed_value(option_none())
+                        boxed_value(poll_unavailable())
                     }
                 }
             }
@@ -8820,7 +8819,7 @@ pub extern "C-unwind" fn aura_direct_task_join_or_none_timeout_value(
     duration: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
-        let timeout = duration_from_ptr(duration, "result_or_none(timeout=...)");
+        let timeout = duration_from_ptr(duration, "poll(timeout=...)");
         match unsafe { value_ref(task) } {
             Value::Task(task) => {
                 if let Err(error) = task.claim_result_observation() {
@@ -8831,11 +8830,11 @@ pub extern "C-unwind" fn aura_direct_task_join_or_none_timeout_value(
                     Some(&current_cancellation()),
                 )) {
                     TaskWaitStatus::Ready(result) => match result {
-                        Ok(value) => boxed_value(option_some(value)),
-                        Err(_) => boxed_value(option_none()),
+                        Ok(value) => boxed_value(poll_ready(value)),
+                        Err(_) => boxed_value(poll_unavailable()),
                     },
                     TaskWaitStatus::TimedOut | TaskWaitStatus::Cancelled => {
-                        boxed_value(option_none())
+                        boxed_value(poll_unavailable())
                     }
                 }
             }
@@ -9334,8 +9333,8 @@ pub extern "C-unwind" fn aura_direct_io_flush() -> *mut OpaqueValue {
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_io_read_line() -> *mut OpaqueValue {
     task_runtime_boundary(|| match io_read_line() {
-        Ok(Some(line)) => boxed_value(result_ok(option_some(Value::String(line)))),
-        Ok(None) => boxed_value(result_ok(option_none())),
+        Ok(Some(line)) => boxed_value(result_ok(optional_str_value(Some(line)))),
+        Ok(None) => boxed_value(result_ok(optional_str_value(None))),
         Err(error) => boxed_value(result_err(io_error(error))),
     })
 }
@@ -9856,8 +9855,8 @@ pub extern "C-unwind" fn aura_direct_process_child_stdin(
             child
                 .stdin()
                 .map(Value::ProcessPipe)
-                .map(option_some)
-                .unwrap_or_else(option_none),
+                .map(|pipe| optional_present(Type::named("process.Pipe"), pipe))
+                .unwrap_or_else(|| optional_absent(Type::named("process.Pipe"))),
         ),
         other => runtime_error(format!(
             "expected `process.Child`, found `{}`",
@@ -9875,8 +9874,8 @@ pub extern "C-unwind" fn aura_direct_process_child_stdout(
             child
                 .stdout()
                 .map(Value::ProcessPipe)
-                .map(option_some)
-                .unwrap_or_else(option_none),
+                .map(|pipe| optional_present(Type::named("process.Pipe"), pipe))
+                .unwrap_or_else(|| optional_absent(Type::named("process.Pipe"))),
         ),
         other => runtime_error(format!(
             "expected `process.Child`, found `{}`",
@@ -9894,8 +9893,8 @@ pub extern "C-unwind" fn aura_direct_process_child_stderr(
             child
                 .stderr()
                 .map(Value::ProcessPipe)
-                .map(option_some)
-                .unwrap_or_else(option_none),
+                .map(|pipe| optional_present(Type::named("process.Pipe"), pipe))
+                .unwrap_or_else(|| optional_absent(Type::named("process.Pipe"))),
         ),
         other => runtime_error(format!(
             "expected `process.Child`, found `{}`",
@@ -9943,10 +9942,13 @@ pub extern "C-unwind" fn aura_direct_process_child_wait_or_none(
         match unsafe { value_ref(child) } {
             Value::ProcessChild(child) => {
                 match child.wait_or_none(timeout, Some(&current_cancellation())) {
-                    Ok(Some(status)) => {
-                        boxed_value(result_ok(option_some(process_exit_status(status))))
-                    }
-                    Ok(None) => boxed_value(result_ok(option_none())),
+                    Ok(Some(status)) => boxed_value(result_ok(optional_present(
+                        Type::named("process.ExitStatus"),
+                        process_exit_status(status),
+                    ))),
+                    Ok(None) => boxed_value(result_ok(optional_absent(Type::named(
+                        "process.ExitStatus",
+                    )))),
                     Err(error) => boxed_value(result_err(error)),
                 }
             }
@@ -10054,8 +10056,8 @@ pub extern "C-unwind" fn aura_direct_process_pipe_read_line(
         match unsafe { value_ref(pipe) } {
             Value::ProcessPipe(pipe) => {
                 match pipe.read_line(timeout, Some(&current_cancellation())) {
-                    Ok(Some(text)) => boxed_value(result_ok(option_some(Value::String(text)))),
-                    Ok(None) => boxed_value(result_ok(option_none())),
+                    Ok(Some(text)) => boxed_value(result_ok(optional_str_value(Some(text)))),
+                    Ok(None) => boxed_value(result_ok(optional_str_value(None))),
                     Err(error) => boxed_value(result_err(process_error_from_io(error))),
                 }
             }
@@ -10082,8 +10084,10 @@ pub extern "C-unwind" fn aura_direct_process_pipe_read_bytes(
         match unsafe { value_ref(pipe) } {
             Value::ProcessPipe(pipe) => {
                 match pipe.read_bytes(count, timeout, Some(&current_cancellation())) {
-                    Ok(Some(bytes)) => boxed_value(result_ok(option_some(bytes_vec_value(bytes)))),
-                    Ok(None) => boxed_value(result_ok(option_none())),
+                    Ok(Some(bytes)) => boxed_value(result_ok(optional_bytes_value(Some(
+                        bytes_vec_value(bytes),
+                    )))),
+                    Ok(None) => boxed_value(result_ok(optional_bytes_value(None))),
                     Err(error) => boxed_value(result_err(process_error_from_io(error))),
                 }
             }
@@ -10394,8 +10398,13 @@ pub extern "C-unwind" fn aura_direct_process_supervisor_wait_or_none(
         match unsafe { value_ref(supervisor) } {
             Value::ProcessSupervisor(supervisor) => {
                 match supervisor.wait_or_none(timeout, Some(&current_cancellation())) {
-                    Ok(Some(event)) => boxed_value(result_ok(option_some(event))),
-                    Ok(None) => boxed_value(result_ok(option_none())),
+                    Ok(Some(event)) => boxed_value(result_ok(optional_present(
+                        Type::named("process.SupervisorEvent"),
+                        event,
+                    ))),
+                    Ok(None) => boxed_value(result_ok(optional_absent(Type::named(
+                        "process.SupervisorEvent",
+                    )))),
                     Err(error) => boxed_value(result_err(error)),
                 }
             }
@@ -10940,8 +10949,8 @@ pub extern "C-unwind" fn aura_direct_tcp_stream_read_line(
         match unsafe { value_ref(stream) } {
             Value::TcpStream(stream) => {
                 match stream.read_line(timeout, Some(&current_cancellation())) {
-                    Ok(Some(line)) => boxed_value(result_ok(option_some(Value::String(line)))),
-                    Ok(None) => boxed_value(result_ok(option_none())),
+                    Ok(Some(line)) => boxed_value(result_ok(optional_str_value(Some(line)))),
+                    Ok(None) => boxed_value(result_ok(optional_str_value(None))),
                     Err(error) => boxed_value(result_err(io_error(error))),
                 }
             }
@@ -10968,8 +10977,10 @@ pub extern "C-unwind" fn aura_direct_tcp_stream_read_bytes(
         match unsafe { value_ref(stream) } {
             Value::TcpStream(stream) => {
                 match stream.read_bytes(max_bytes, timeout, Some(&current_cancellation())) {
-                    Ok(Some(bytes)) => boxed_value(result_ok(option_some(bytes_vec_value(bytes)))),
-                    Ok(None) => boxed_value(result_ok(option_none())),
+                    Ok(Some(bytes)) => boxed_value(result_ok(optional_bytes_value(Some(
+                        bytes_vec_value(bytes),
+                    )))),
+                    Ok(None) => boxed_value(result_ok(optional_bytes_value(None))),
                     Err(error) => boxed_value(result_err(io_error(error))),
                 }
             }
@@ -11240,8 +11251,10 @@ pub extern "C-unwind" fn aura_direct_udp_socket_recv(
         match unsafe { value_ref(socket) } {
             Value::UdpSocket(socket) => {
                 match socket.recv(max_bytes, timeout, Some(&current_cancellation())) {
-                    Ok(Some(bytes)) => boxed_value(result_ok(option_some(bytes_vec_value(bytes)))),
-                    Ok(None) => boxed_value(result_ok(option_none())),
+                    Ok(Some(bytes)) => boxed_value(result_ok(optional_bytes_value(Some(
+                        bytes_vec_value(bytes),
+                    )))),
+                    Ok(None) => boxed_value(result_ok(optional_bytes_value(None))),
                     Err(error) => boxed_value(result_err(io_error(error))),
                 }
             }
@@ -11268,10 +11281,13 @@ pub extern "C-unwind" fn aura_direct_udp_socket_recv_from(
         match unsafe { value_ref(socket) } {
             Value::UdpSocket(socket) => {
                 match socket.recv_from(max_bytes, timeout, Some(&current_cancellation())) {
-                    Ok(Some(datagram)) => {
-                        boxed_value(result_ok(option_some(Value::UdpDatagram(datagram))))
+                    Ok(Some(datagram)) => boxed_value(result_ok(optional_present(
+                        Type::named("net.UdpDatagram"),
+                        Value::UdpDatagram(datagram),
+                    ))),
+                    Ok(None) => {
+                        boxed_value(result_ok(optional_absent(Type::named("net.UdpDatagram"))))
                     }
-                    Ok(None) => boxed_value(result_ok(option_none())),
                     Err(error) => boxed_value(result_err(io_error(error))),
                 }
             }
@@ -11704,8 +11720,8 @@ pub extern "C-unwind" fn aura_direct_websocket_recv_text(
         let timeout = io_timeout_or_return!(timeout, "recv_text(timeout=...)");
         match unsafe { value_ref(socket) } {
             Value::WebSocket(socket) => match socket.recv_text(timeout) {
-                Ok(Some(text)) => boxed_value(result_ok(option_some(Value::String(text)))),
-                Ok(None) => boxed_value(result_ok(option_none())),
+                Ok(Some(text)) => boxed_value(result_ok(optional_str_value(Some(text)))),
+                Ok(None) => boxed_value(result_ok(optional_str_value(None))),
                 Err(error) => boxed_value(result_err(io_error(error))),
             },
             other => runtime_error(format!(
@@ -11725,8 +11741,10 @@ pub extern "C-unwind" fn aura_direct_websocket_recv_bytes(
         let timeout = io_timeout_or_return!(timeout, "recv_bytes(timeout=...)");
         match unsafe { value_ref(socket) } {
             Value::WebSocket(socket) => match socket.recv_bytes(timeout) {
-                Ok(Some(bytes)) => boxed_value(result_ok(option_some(bytes_vec_value(bytes)))),
-                Ok(None) => boxed_value(result_ok(option_none())),
+                Ok(Some(bytes)) => boxed_value(result_ok(optional_bytes_value(Some(
+                    bytes_vec_value(bytes),
+                )))),
+                Ok(None) => boxed_value(result_ok(optional_bytes_value(None))),
                 Err(error) => boxed_value(result_err(io_error(error))),
             },
             other => runtime_error(format!(
@@ -11799,8 +11817,8 @@ pub extern "C-unwind" fn aura_direct_unix_stream_read_line(
         match unsafe { value_ref(stream) } {
             Value::UnixStream(stream) => {
                 match stream.read_line(timeout, Some(&current_cancellation())) {
-                    Ok(Some(text)) => boxed_value(result_ok(option_some(Value::String(text)))),
-                    Ok(None) => boxed_value(result_ok(option_none())),
+                    Ok(Some(text)) => boxed_value(result_ok(optional_str_value(Some(text)))),
+                    Ok(None) => boxed_value(result_ok(optional_str_value(None))),
                     Err(error) => boxed_value(result_err(io_error(error))),
                 }
             }
@@ -11942,8 +11960,8 @@ pub extern "C-unwind" fn aura_direct_tls_stream_read_line(
         match unsafe { value_ref(stream) } {
             Value::TlsStream(stream) => {
                 match stream.read_line(timeout, Some(&current_cancellation())) {
-                    Ok(Some(text)) => boxed_value(result_ok(option_some(Value::String(text)))),
-                    Ok(None) => boxed_value(result_ok(option_none())),
+                    Ok(Some(text)) => boxed_value(result_ok(optional_str_value(Some(text)))),
+                    Ok(None) => boxed_value(result_ok(optional_str_value(None))),
                     Err(error) => boxed_value(result_err(io_error(error))),
                 }
             }

@@ -1713,7 +1713,7 @@ impl Parser {
             return Err(parse_error(span, format!("`{capability}` is not valid in a type position; capability modifiers belong only on parameters and receivers or on supported `for` and `match` selectors (`mut` also declares mutable local bindings)")));
         }
         let indirect = self.eat_simple(&TokenKind::KwIndirect).is_some();
-        let mut ty = if self.eat_simple(&TokenKind::KwDef).is_some() {
+        let ty = if self.eat_simple(&TokenKind::KwDef).is_some() {
             if indirect {
                 return Err(parse_error(span, "`indirect` is not valid on function types; function values already use pointer-like representation"));
             }
@@ -1790,9 +1790,6 @@ impl Parser {
                 TypeRef::named(name, args, indirect, span)
             }
         };
-        if self.eat_simple(&TokenKind::Question).is_some() {
-            ty = TypeRef::named("Option", vec![ty], indirect, span);
-        }
         Ok(ty)
     }
 
@@ -3444,9 +3441,6 @@ impl Parser {
                 }
                 idx += 1;
             }
-            if matches!(self.peek_kind_at(idx), Some(TokenKind::Question)) {
-                idx += 1;
-            }
             return idx;
         }
 
@@ -3478,10 +3472,6 @@ impl Parser {
                 }
                 idx += 1;
             }
-        }
-
-        if matches!(self.peek_kind_at(idx), Some(TokenKind::Question)) {
-            idx += 1;
         }
 
         idx

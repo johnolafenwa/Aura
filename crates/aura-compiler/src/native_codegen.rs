@@ -26,6 +26,7 @@ use crate::mir::{
 use crate::native_runtime::{
     encode_direct_ffi_call_spec, DirectFfiCallSpec, DirectFfiParam, DirectFfiType,
 };
+use crate::sema::{lookup_type, optional_type};
 use crate::sema::{substitute_type, FunctionParamContract, Type};
 
 const DIRECT_TO_FLOAT_ARITY_ERROR: &str =
@@ -8214,7 +8215,7 @@ impl<'a> FunctionCompiler<'a> {
                 Type::Named(
                     "Result".to_string(),
                     vec![
-                        Type::Named("Option".to_string(), vec![Type::named("str")]),
+                        optional_type(Type::named("str")),
                         Type::Named("io.Error".to_string(), Vec::new()),
                     ],
                 ),
@@ -9425,17 +9426,6 @@ impl<'a> FunctionCompiler<'a> {
         }
 
         if let DirectType::Opaque(target_ty) = target {
-            if matches!(value.ty.scalar_kind(), Some(ScalarKind::Unit))
-                && matches!(target_ty, Type::Named(name, args) if name == "Option" && args.len() == 1)
-            {
-                let none =
-                    self.compile_enum_variant_for_target("Option", "None", &[], Some(target))?;
-                self.tag_opaque_runtime_type(&none, target_ty)?;
-                return Ok(ValueRef {
-                    values: none.values,
-                    ty: target.clone(),
-                });
-            }
             if is_numeric_type_name(target_ty) {
                 let boxed = self.ensure_opaque(value)?;
                 let (target_ptr, target_len) =
@@ -11408,7 +11398,7 @@ impl<'a> FunctionCompiler<'a> {
                             .call(func, &[object.values[0], value.values[0]]);
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
-                            Type::Named("Option".to_string(), vec![Type::named("str")]),
+                            optional_type(Type::named("str")),
                         ))
                     }
                     "trim" => {
@@ -11579,7 +11569,7 @@ impl<'a> FunctionCompiler<'a> {
                         );
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
-                            Type::Named("Option".to_string(), vec![element_ty]),
+                            optional_type(element_ty),
                         ))
                     }
                     "set" => {
@@ -11603,7 +11593,7 @@ impl<'a> FunctionCompiler<'a> {
                         }
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
-                            Type::Named("Option".to_string(), vec![element_ty]),
+                            optional_type(element_ty),
                         ))
                     }
                     "fill" => {
@@ -11990,7 +11980,7 @@ impl<'a> FunctionCompiler<'a> {
                         self.store_place(receiver_place, object.clone())?;
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
-                            Type::Named("Option".to_string(), vec![element_ty]),
+                            optional_type(element_ty),
                         ))
                     }
                     "__index" => {
@@ -12052,12 +12042,11 @@ impl<'a> FunctionCompiler<'a> {
                         }
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
-                            Type::Named(
-                                "Option".to_string(),
-                                vec![class_args
+                            optional_type(
+                                class_args
                                     .first()
                                     .cloned()
-                                    .unwrap_or(Type::named("Unknown"))],
+                                    .unwrap_or(Type::named("Unknown")),
                             ),
                         ))
                     }
@@ -12345,7 +12334,7 @@ impl<'a> FunctionCompiler<'a> {
                             .call(self.map_get, &[object.values[0], key.values[0]]);
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
-                            Type::Named("Option".to_string(), vec![value_ty.clone()]),
+                            optional_type(value_ty.clone()),
                         ))
                     }
                     "__index" => {
@@ -12398,7 +12387,7 @@ impl<'a> FunctionCompiler<'a> {
                         }
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
-                            Type::Named("Option".to_string(), vec![value_ty.clone()]),
+                            optional_type(value_ty.clone()),
                         ))
                     }
                     "__set_index" => {
@@ -12454,7 +12443,7 @@ impl<'a> FunctionCompiler<'a> {
                         }
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
-                            Type::Named("Option".to_string(), vec![value_ty.clone()]),
+                            optional_type(value_ty.clone()),
                         ))
                     }
                     "contains_key" => {
@@ -12736,7 +12725,7 @@ impl<'a> FunctionCompiler<'a> {
                             .call(self.set_index_option, &[object.values[0], index.values[0]]);
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
-                            Type::Named("Option".to_string(), vec![element_ty]),
+                            optional_type(element_ty),
                         ))
                     }
                     "__take_index_option" => {
@@ -12762,7 +12751,7 @@ impl<'a> FunctionCompiler<'a> {
                         self.store_place(receiver_place, object.clone())?;
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
-                            Type::Named("Option".to_string(), vec![element_ty]),
+                            optional_type(element_ty),
                         ))
                     }
                     _ => Err(format!(
@@ -12909,10 +12898,7 @@ impl<'a> FunctionCompiler<'a> {
                             .call(self.process_child_stdin, &[object.values[0]]);
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
-                            Type::Named(
-                                "Option".to_string(),
-                                vec![Type::Named("process.Pipe".to_string(), Vec::new())],
-                            ),
+                            optional_type(Type::Named("process.Pipe".to_string(), Vec::new())),
                         ))
                     }
                     "stdout" => {
@@ -12926,10 +12912,7 @@ impl<'a> FunctionCompiler<'a> {
                             .call(self.process_child_stdout, &[object.values[0]]);
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
-                            Type::Named(
-                                "Option".to_string(),
-                                vec![Type::Named("process.Pipe".to_string(), Vec::new())],
-                            ),
+                            optional_type(Type::Named("process.Pipe".to_string(), Vec::new())),
                         ))
                     }
                     "stderr" => {
@@ -12943,10 +12926,7 @@ impl<'a> FunctionCompiler<'a> {
                             .call(self.process_child_stderr, &[object.values[0]]);
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
-                            Type::Named(
-                                "Option".to_string(),
-                                vec![Type::Named("process.Pipe".to_string(), Vec::new())],
-                            ),
+                            optional_type(Type::Named("process.Pipe".to_string(), Vec::new())),
                         ))
                     }
                     "wait" => {
@@ -12973,13 +12953,10 @@ impl<'a> FunctionCompiler<'a> {
                             Type::Named(
                                 "Result".to_string(),
                                 vec![
-                                    Type::Named(
-                                        "Option".to_string(),
-                                        vec![Type::Named(
-                                            "process.ExitStatus".to_string(),
-                                            Vec::new(),
-                                        )],
-                                    ),
+                                    optional_type(Type::Named(
+                                        "process.ExitStatus".to_string(),
+                                        Vec::new(),
+                                    )),
                                     Type::Named("process.Error".to_string(), Vec::new()),
                                 ],
                             ),
@@ -13101,7 +13078,7 @@ impl<'a> FunctionCompiler<'a> {
                             Type::Named(
                                 "Result".to_string(),
                                 vec![
-                                    Type::Named("Option".to_string(), vec![Type::named("str")]),
+                                    optional_type(Type::named("str")),
                                     Type::Named("process.Error".to_string(), Vec::new()),
                                 ],
                             ),
@@ -13127,13 +13104,10 @@ impl<'a> FunctionCompiler<'a> {
                             Type::Named(
                                 "Result".to_string(),
                                 vec![
-                                    Type::Named(
-                                        "Option".to_string(),
-                                        vec![Type::Named(
-                                            "list".to_string(),
-                                            vec![Type::named("uint8")],
-                                        )],
-                                    ),
+                                    optional_type(Type::Named(
+                                        "list".to_string(),
+                                        vec![Type::named("uint8")],
+                                    )),
                                     Type::Named("process.Error".to_string(), Vec::new()),
                                 ],
                             ),
@@ -13379,7 +13353,8 @@ impl<'a> FunctionCompiler<'a> {
                             let loaded = self.load_operand(&argument.value)?;
                             self.ensure_opaque(loaded)?
                         } else {
-                            self.compile_enum_variant_for_target("Option", "None", &[], None)?
+                            let unit = unit_value(&mut self.builder);
+                            self.ensure_opaque(unit)?
                         };
                         let env = if let Some(argument) = bound[3] {
                             let loaded = self.load_operand(&argument.value)?;
@@ -13536,13 +13511,10 @@ impl<'a> FunctionCompiler<'a> {
                             Type::Named(
                                 "Result".to_string(),
                                 vec![
-                                    Type::Named(
-                                        "Option".to_string(),
-                                        vec![Type::Named(
-                                            "process.SupervisorEvent".to_string(),
-                                            Vec::new(),
-                                        )],
-                                    ),
+                                    optional_type(Type::Named(
+                                        "process.SupervisorEvent".to_string(),
+                                        Vec::new(),
+                                    )),
                                     Type::Named("process.Error".to_string(), Vec::new()),
                                 ],
                             ),
@@ -13697,7 +13669,7 @@ impl<'a> FunctionCompiler<'a> {
                             Type::Named(
                                 "Result".to_string(),
                                 vec![
-                                    Type::Named("Option".to_string(), vec![Type::named("str")]),
+                                    optional_type(Type::named("str")),
                                     Type::Named("io.Error".to_string(), Vec::new()),
                                 ],
                             ),
@@ -13723,13 +13695,10 @@ impl<'a> FunctionCompiler<'a> {
                             Type::Named(
                                 "Result".to_string(),
                                 vec![
-                                    Type::Named(
-                                        "Option".to_string(),
-                                        vec![Type::Named(
-                                            "list".to_string(),
-                                            vec![Type::named("uint8")],
-                                        )],
-                                    ),
+                                    optional_type(Type::Named(
+                                        "list".to_string(),
+                                        vec![Type::named("uint8")],
+                                    )),
                                     Type::Named("io.Error".to_string(), Vec::new()),
                                 ],
                             ),
@@ -14023,13 +13992,10 @@ impl<'a> FunctionCompiler<'a> {
                             Type::Named(
                                 "Result".to_string(),
                                 vec![
-                                    Type::Named(
-                                        "Option".to_string(),
-                                        vec![Type::Named(
-                                            "list".to_string(),
-                                            vec![Type::named("uint8")],
-                                        )],
-                                    ),
+                                    optional_type(Type::Named(
+                                        "list".to_string(),
+                                        vec![Type::named("uint8")],
+                                    )),
                                     Type::Named("io.Error".to_string(), Vec::new()),
                                 ],
                             ),
@@ -14055,13 +14021,10 @@ impl<'a> FunctionCompiler<'a> {
                             Type::Named(
                                 "Result".to_string(),
                                 vec![
-                                    Type::Named(
-                                        "Option".to_string(),
-                                        vec![Type::Named(
-                                            "net.UdpDatagram".to_string(),
-                                            Vec::new(),
-                                        )],
-                                    ),
+                                    optional_type(Type::Named(
+                                        "net.UdpDatagram".to_string(),
+                                        Vec::new(),
+                                    )),
                                     Type::Named("io.Error".to_string(), Vec::new()),
                                 ],
                             ),
@@ -14466,7 +14429,7 @@ impl<'a> FunctionCompiler<'a> {
                             Type::Named(
                                 "Result".to_string(),
                                 vec![
-                                    Type::Named("Option".to_string(), vec![Type::named("str")]),
+                                    optional_type(Type::named("str")),
                                     Type::Named("io.Error".to_string(), Vec::new()),
                                 ],
                             ),
@@ -14484,13 +14447,10 @@ impl<'a> FunctionCompiler<'a> {
                             Type::Named(
                                 "Result".to_string(),
                                 vec![
-                                    Type::Named(
-                                        "Option".to_string(),
-                                        vec![Type::Named(
-                                            "list".to_string(),
-                                            vec![Type::named("uint8")],
-                                        )],
-                                    ),
+                                    optional_type(Type::Named(
+                                        "list".to_string(),
+                                        vec![Type::named("uint8")],
+                                    )),
                                     Type::Named("io.Error".to_string(), Vec::new()),
                                 ],
                             ),
@@ -14560,7 +14520,7 @@ impl<'a> FunctionCompiler<'a> {
                             Type::Named(
                                 "Result".to_string(),
                                 vec![
-                                    Type::Named("Option".to_string(), vec![Type::named("str")]),
+                                    optional_type(Type::named("str")),
                                     Type::Named("io.Error".to_string(), Vec::new()),
                                 ],
                             ),
@@ -14693,7 +14653,7 @@ impl<'a> FunctionCompiler<'a> {
                             Type::Named(
                                 "Result".to_string(),
                                 vec![
-                                    Type::Named("Option".to_string(), vec![Type::named("str")]),
+                                    optional_type(Type::named("str")),
                                     Type::Named("io.Error".to_string(), Vec::new()),
                                 ],
                             ),
@@ -14955,7 +14915,7 @@ impl<'a> FunctionCompiler<'a> {
                             ),
                         ))
                     }
-                    "get_or_none" => {
+                    "poll" => {
                         let inst = match args {
                             [] => self
                                 .builder
@@ -14966,7 +14926,7 @@ impl<'a> FunctionCompiler<'a> {
                                     && argument.name.is_some()
                                 {
                                     return Err(
-                                        "direct backend expected `get_or_none()` or `get_or_none(timeout=...)`"
+                                        "direct backend expected `poll()` or `poll(timeout=...)`"
                                             .to_string(),
                                     );
                                 }
@@ -14979,14 +14939,14 @@ impl<'a> FunctionCompiler<'a> {
                             }
                             _ => {
                                 return Err(
-                                    "direct backend expected `get_or_none()` or `get_or_none(timeout=...)`"
+                                    "direct backend expected `poll()` or `poll(timeout=...)`"
                                         .to_string(),
                                 )
                             }
                         };
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
-                            Type::Named("Option".to_string(), vec![element_ty.clone()]),
+                            optional_type(element_ty.clone()),
                         ))
                     }
                     "get_or" => {
@@ -15077,7 +15037,7 @@ impl<'a> FunctionCompiler<'a> {
                             ),
                         ))
                     }
-                    "result_or_none" => {
+                    "poll" => {
                         let inst = match args {
                             [] => self
                                 .builder
@@ -15088,7 +15048,7 @@ impl<'a> FunctionCompiler<'a> {
                                     && argument.name.is_some()
                                 {
                                     return Err(
-                                        "direct backend expected `result_or_none()` or `result_or_none(timeout=...)`"
+                                        "direct backend expected `poll()` or `poll(timeout=...)`"
                                             .to_string(),
                                     );
                                 }
@@ -15101,17 +15061,14 @@ impl<'a> FunctionCompiler<'a> {
                             }
                             _ => {
                                 return Err(
-                                    "direct backend expected `result_or_none()` or `result_or_none(timeout=...)`"
+                                    "direct backend expected `poll()` or `poll(timeout=...)`"
                                         .to_string(),
                                 )
                             }
                         };
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
-                            Type::Named(
-                                "Option".to_string(),
-                                vec![class_args.first().cloned().unwrap_or(Type::Unit)],
-                            ),
+                            optional_type(class_args.first().cloned().unwrap_or(Type::Unit)),
                         ))
                     }
                     "result_or" => {
@@ -17049,7 +17006,7 @@ fn infer_rvalue_type(
                 Some(DirectType::Opaque(Type::Named(
                     "Result".to_string(),
                     vec![
-                        Type::Named("Option".to_string(), vec![Type::named("str")]),
+                        optional_type(Type::named("str")),
                         Type::Named("io.Error".to_string(), Vec::new()),
                     ],
                 )))
@@ -17523,10 +17480,9 @@ fn builtin_opaque_member_return_type(
             vec![Type::named("uint8")],
         ))),
         ("str", "join") => Some(DirectType::Opaque(Type::named("str"))),
-        ("str", "strip_prefix") | ("str", "strip_suffix") => Some(DirectType::Opaque(Type::Named(
-            "Option".to_string(),
-            vec![Type::named("str")],
-        ))),
+        ("str", "strip_prefix") | ("str", "strip_suffix") => {
+            Some(DirectType::Opaque(optional_type(Type::named("str"))))
+        }
         ("Array", "shape") => Some(DirectType::Opaque(Type::Named(
             "list".to_string(),
             vec![Type::named("int64")],
@@ -17544,10 +17500,7 @@ fn builtin_opaque_member_return_type(
             args.clone(),
         ))),
         ("Array", "get") | ("Array", "set") => direct_type(
-            &Type::Named(
-                "Option".to_string(),
-                vec![args.first().cloned().unwrap_or(Type::named("Unknown"))],
-            ),
+            &optional_type(args.first().cloned().unwrap_or(Type::named("Unknown"))),
             classes,
         ),
         ("Array", "fill") | ("Array", "__set_index") => Some(DirectType::Scalar(ScalarKind::Unit)),
@@ -17581,10 +17534,7 @@ fn builtin_opaque_member_return_type(
         ("list", "contains") => Some(DirectType::Scalar(ScalarKind::Bool)),
         ("list", "get") | ("list", "__index_option") | ("list", "__take_index_option") => {
             direct_type(
-                &Type::Named(
-                    "Option".to_string(),
-                    vec![args.first().cloned().unwrap_or(Type::named("Unknown"))],
-                ),
+                &lookup_type(args.first().cloned().unwrap_or(Type::named("Unknown"))),
                 classes,
             )
         }
@@ -17601,10 +17551,7 @@ fn builtin_opaque_member_return_type(
             args.clone(),
         ))),
         ("dict", "get") | ("dict", "set") | ("dict", "remove") => direct_type(
-            &Type::Named(
-                "Option".to_string(),
-                vec![args.get(1).cloned().unwrap_or(Type::named("Unknown"))],
-            ),
+            &lookup_type(args.get(1).cloned().unwrap_or(Type::named("Unknown"))),
             classes,
         ),
         ("dict", "keys") => direct_type(
@@ -17649,10 +17596,7 @@ fn builtin_opaque_member_return_type(
         | ("set", "clear")
         | ("set", "reserve") => Some(DirectType::Scalar(ScalarKind::Unit)),
         ("set", "__index_option") | ("set", "__take_index_option") => direct_type(
-            &Type::Named(
-                "Option".to_string(),
-                vec![args.first().cloned().unwrap_or(Type::named("Unknown"))],
-            ),
+            &lookup_type(args.first().cloned().unwrap_or(Type::named("Unknown"))),
             classes,
         ),
         ("Queue", "put") | ("Queue", "try_put") => direct_type(
@@ -17719,10 +17663,7 @@ fn builtin_opaque_member_return_type(
         ("fs.File", "close") => Some(DirectType::Scalar(ScalarKind::Unit)),
         ("process.Child", "stdin") | ("process.Child", "stdout") | ("process.Child", "stderr") => {
             direct_type(
-                &Type::Named(
-                    "Option".to_string(),
-                    vec![Type::Named("process.Pipe".to_string(), Vec::new())],
-                ),
+                &optional_type(Type::Named("process.Pipe".to_string(), Vec::new())),
                 classes,
             )
         }
@@ -17734,10 +17675,7 @@ fn builtin_opaque_member_return_type(
             &Type::Named(
                 "Result".to_string(),
                 vec![
-                    Type::Named(
-                        "Option".to_string(),
-                        vec![Type::Named("process.ExitStatus".to_string(), Vec::new())],
-                    ),
+                    optional_type(Type::Named("process.ExitStatus".to_string(), Vec::new())),
                     Type::Named("process.Error".to_string(), Vec::new()),
                 ],
             ),
@@ -17778,7 +17716,7 @@ fn builtin_opaque_member_return_type(
             &Type::Named(
                 "Result".to_string(),
                 vec![
-                    Type::Named("Option".to_string(), vec![Type::named("str")]),
+                    optional_type(Type::named("str")),
                     Type::Named("process.Error".to_string(), Vec::new()),
                 ],
             ),
@@ -17788,10 +17726,7 @@ fn builtin_opaque_member_return_type(
             &Type::Named(
                 "Result".to_string(),
                 vec![
-                    Type::Named(
-                        "Option".to_string(),
-                        vec![Type::Named("list".to_string(), vec![Type::named("uint8")])],
-                    ),
+                    optional_type(Type::Named("list".to_string(), vec![Type::named("uint8")])),
                     Type::Named("process.Error".to_string(), Vec::new()),
                 ],
             ),
@@ -17842,13 +17777,10 @@ fn builtin_opaque_member_return_type(
             &Type::Named(
                 "Result".to_string(),
                 vec![
-                    Type::Named(
-                        "Option".to_string(),
-                        vec![Type::Named(
-                            "process.SupervisorEvent".to_string(),
-                            Vec::new(),
-                        )],
-                    ),
+                    optional_type(Type::Named(
+                        "process.SupervisorEvent".to_string(),
+                        Vec::new(),
+                    )),
                     Type::Named("process.Error".to_string(), Vec::new()),
                 ],
             ),
@@ -17893,7 +17825,7 @@ fn builtin_opaque_member_return_type(
             &Type::Named(
                 "Result".to_string(),
                 vec![
-                    Type::Named("Option".to_string(), vec![Type::named("str")]),
+                    optional_type(Type::named("str")),
                     Type::Named("io.Error".to_string(), Vec::new()),
                 ],
             ),
@@ -17903,10 +17835,7 @@ fn builtin_opaque_member_return_type(
             &Type::Named(
                 "Result".to_string(),
                 vec![
-                    Type::Named(
-                        "Option".to_string(),
-                        vec![Type::Named("list".to_string(), vec![Type::named("uint8")])],
-                    ),
+                    optional_type(Type::Named("list".to_string(), vec![Type::named("uint8")])),
                     Type::Named("io.Error".to_string(), Vec::new()),
                 ],
             ),
@@ -17946,10 +17875,7 @@ fn builtin_opaque_member_return_type(
             &Type::Named(
                 "Result".to_string(),
                 vec![
-                    Type::Named(
-                        "Option".to_string(),
-                        vec![Type::Named("list".to_string(), vec![Type::named("uint8")])],
-                    ),
+                    optional_type(Type::Named("list".to_string(), vec![Type::named("uint8")])),
                     Type::Named("io.Error".to_string(), Vec::new()),
                 ],
             ),
@@ -17959,10 +17885,7 @@ fn builtin_opaque_member_return_type(
             &Type::Named(
                 "Result".to_string(),
                 vec![
-                    Type::Named(
-                        "Option".to_string(),
-                        vec![Type::Named("net.UdpDatagram".to_string(), Vec::new())],
-                    ),
+                    optional_type(Type::Named("net.UdpDatagram".to_string(), Vec::new())),
                     Type::Named("io.Error".to_string(), Vec::new()),
                 ],
             ),
@@ -18084,7 +18007,7 @@ fn builtin_opaque_member_return_type(
             &Type::Named(
                 "Result".to_string(),
                 vec![
-                    Type::Named("Option".to_string(), vec![Type::named("str")]),
+                    optional_type(Type::named("str")),
                     Type::Named("io.Error".to_string(), Vec::new()),
                 ],
             ),
@@ -18094,10 +18017,7 @@ fn builtin_opaque_member_return_type(
             &Type::Named(
                 "Result".to_string(),
                 vec![
-                    Type::Named(
-                        "Option".to_string(),
-                        vec![Type::Named("list".to_string(), vec![Type::named("uint8")])],
-                    ),
+                    optional_type(Type::Named("list".to_string(), vec![Type::named("uint8")])),
                     Type::Named("io.Error".to_string(), Vec::new()),
                 ],
             ),
@@ -18119,7 +18039,7 @@ fn builtin_opaque_member_return_type(
             &Type::Named(
                 "Result".to_string(),
                 vec![
-                    Type::Named("Option".to_string(), vec![Type::named("str")]),
+                    optional_type(Type::named("str")),
                     Type::Named("io.Error".to_string(), Vec::new()),
                 ],
             ),
@@ -18168,7 +18088,7 @@ fn builtin_opaque_member_return_type(
             &Type::Named(
                 "Result".to_string(),
                 vec![
-                    Type::Named("Option".to_string(), vec![Type::named("str")]),
+                    optional_type(Type::named("str")),
                     Type::Named("io.Error".to_string(), Vec::new()),
                 ],
             ),
@@ -18208,7 +18128,8 @@ fn infer_variant_payload_type(
         return None;
     };
     let payload_ty = match (name.as_str(), args.as_slice(), variant_name, index) {
-        ("Option", [inner], "Some", 0) => inner.clone(),
+        ("Lookup", [inner], "Found", 0) => inner.clone(),
+        ("Poll", [inner], "Ready", 0) => inner.clone(),
         ("Result", [ok, _], "Ok", 0) => ok.clone(),
         ("Result", [_, err], "Err", 0) => err.clone(),
         ("SendError", [inner], "Closed" | "Cancelled" | "TimedOut" | "Full", 0) => inner.clone(),
@@ -18248,8 +18169,10 @@ fn enum_variant_payload_types_for_target(
         return None;
     }
     let payload_types = match (name.as_str(), args.as_slice(), variant_name) {
-        ("Option", [inner], "Some") => vec![inner.clone()],
-        ("Option", [_], "None") => Vec::new(),
+        ("Lookup", [inner], "Found") => vec![inner.clone()],
+        ("Lookup", [_], "Missing") => Vec::new(),
+        ("Poll", [inner], "Ready") => vec![inner.clone()],
+        ("Poll", [_], "Unavailable") => Vec::new(),
         ("Result", [ok, _], "Ok") => vec![ok.clone()],
         ("Result", [_, err], "Err") => vec![err.clone()],
         ("SendError", [inner], "Closed" | "Cancelled" | "TimedOut" | "Full") => {

@@ -16,6 +16,7 @@ use crate::sema::{
     ClosureCallKind, ClosureCaptureMode, ClosureInfo, ClosureOwner, ComprehensionClauseInfo,
     ComprehensionInfo, FunctionParamContract, ModuleNamespace, Program, TraitBound, Type,
 };
+use crate::sema::{lookup_type, optional_type, poll_type};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -24,7 +25,8 @@ fn is_known_enum_name(program: &Program, name: &str) -> bool {
         || matches!(
             name,
             "Result"
-                | "Option"
+                | "Lookup"
+                | "Poll"
                 | "SendError"
                 | "QueueReceive"
                 | "TaskResult"
@@ -2114,7 +2116,8 @@ impl<'a> MirLoanValidationContext<'a> {
                                 )
                             })
                         }
-                    } else if matches!(name.as_str(), "Option" | "Task") && args.len() == 1 {
+                    } else if matches!(name.as_str(), "Lookup" | "Poll" | "Task") && args.len() == 1
+                    {
                         visit(context, &args[0], visiting)
                     } else if matches!(name.as_str(), "Result" | "SendError") {
                         args.iter().any(|arg| visit(context, arg, visiting))
@@ -2267,9 +2270,13 @@ impl<'a> MirLoanValidationContext<'a> {
         let Some(expected) = self.root_type(function, loan) else {
             return Ok(());
         };
+        // A nominal type may be spelled module-qualified on one side only (a
+        // builtin signature versus the enum's own module); compare it the way
+        // the runtime compares union members.
         if !matches!(actual, Type::TypeParam(_))
             && !matches!(expected, Type::TypeParam(_))
             && actual != expected
+            && !crate::union_runtime::member_matches(&actual, &expected)
         {
             return Err(format!(
                 "invalid MIR loan `{loan}` in `{}` projects `{place}` with type `{:?}`, expected `{:?}`",
@@ -3842,13 +3849,33 @@ fn rebase_callable_rvalue(
         Rvalue::Try { .. } => Vec::new(),
         Rvalue::UnionInject {
             value: operand,
+            union_type,
             member_index,
             ..
-        } => rebase_callable_operand(
-            operand,
-            &format!("{target}.{UNION_PAYLOAD_PROJECTION_PREFIX}{member_index}"),
-            state,
-        ),
+        } => {
+            let mut identities = rebase_callable_operand(
+                operand,
+                &format!("{target}.{UNION_PAYLOAD_PROJECTION_PREFIX}{member_index}"),
+                state,
+            );
+            // The inactive members hold nothing: mark their callable
+            // positions known-empty so a later boundary (a field store, a
+            // call, a return) does not demand an identity for a member the
+            // injected value cannot be, such as the `Tool` member of a
+            // `Tool | None` that holds `None`.
+            if let Type::Union(union) = union_type {
+                for (index, member) in union.members.iter().enumerate() {
+                    if index != *member_index
+                        && !callable_identities_in_type(member, context).is_empty()
+                    {
+                        identities.push(empty_container_marker(&format!(
+                            "{target}.{UNION_PAYLOAD_PROJECTION_PREFIX}{index}"
+                        )));
+                    }
+                }
+            }
+            identities
+        }
         Rvalue::ModuleConstant { initializer, .. } => context
             .functions
             .get(initializer.as_str())
@@ -4035,10 +4062,19 @@ fn callable_identities_in_type(
                         out,
                     );
                 }
-                ("Option", [payload]) => {
+                ("Lookup", [payload]) => {
                     walk(
                         payload,
-                        &format!("{prefix}.{ENUM_PAYLOAD_PROJECTION_PREFIX}Some_0"),
+                        &format!("{prefix}.{ENUM_PAYLOAD_PROJECTION_PREFIX}Found_0"),
+                        context,
+                        visiting,
+                        out,
+                    );
+                }
+                ("Poll", [payload]) => {
+                    walk(
+                        payload,
+                        &format!("{prefix}.{ENUM_PAYLOAD_PROJECTION_PREFIX}Ready_0"),
                         context,
                         visiting,
                         out,
@@ -4702,7 +4738,7 @@ fn rebase_container_result_callables(
             }
             _ => vec![
                 target.to_owned(),
-                format!("{target}.{ENUM_PAYLOAD_PROJECTION_PREFIX}Some_0"),
+                format!("{target}.{ENUM_PAYLOAD_PROJECTION_PREFIX}Found_0"),
             ],
         };
         for prefix in prefixes {
@@ -4736,12 +4772,8 @@ fn task_result_callables(
                 ));
             }
         }
-        "result_or_none" | "poll" => {
+        "poll" => {
             for (suffix, callable) in recorded {
-                results.push((
-                    format!("{target}.{ENUM_PAYLOAD_PROJECTION_PREFIX}Some_0{suffix}"),
-                    callable.clone(),
-                ));
                 results.push((
                     format!("{target}.{ENUM_PAYLOAD_PROJECTION_PREFIX}Ready_0{suffix}"),
                     callable,
@@ -4801,7 +4833,7 @@ fn empty_container_result_callables(
         }
         _ => vec![
             target.to_owned(),
-            format!("{target}.{ENUM_PAYLOAD_PROJECTION_PREFIX}Some_0"),
+            format!("{target}.{ENUM_PAYLOAD_PROJECTION_PREFIX}Found_0"),
         ],
     };
     let mut results = Vec::new();
@@ -4861,7 +4893,10 @@ fn callable_suffix_covers(marker_suffix: &str, expected: &str) -> bool {
     let container = marker_suffix
         .strip_suffix(&format!(".{ANY_ELEMENT_PROJECTION}"))
         .unwrap_or(marker_suffix);
+    // A known-empty container covers the positions inside it and, for a
+    // union member marked absent, the member position itself.
     expected == marker_suffix
+        || expected == container
         || expected
             .strip_prefix(container)
             .is_some_and(|rest| rest.starts_with('.'))
@@ -5453,7 +5488,8 @@ fn validated_transfer_failure(
                     | "set"
                     | "Array"
                     | "dict"
-                    | "Option"
+                    | "Lookup"
+                    | "Poll"
                     | "SendError"
                     | "QueueReceive"
                     | "TaskResult"
@@ -8679,7 +8715,8 @@ fn lower_enum_layouts(program: &Program) -> Vec<MirEnum> {
         })
         .collect::<Vec<_>>();
     for (name, arity) in [
-        ("Option", 1),
+        ("Lookup", 1),
+        ("Poll", 1),
         ("Result", 2),
         ("SendError", 1),
         ("QueueReceive", 1),
@@ -13190,6 +13227,8 @@ impl<'a> Lowerer<'a> {
             }
         };
         if let Type::Union(union) = scrutinee_ty {
+            // The checker proved the arm names a direct member, and
+            // `type_pattern_member` already spelled it as this union does.
             let index = union
                 .members
                 .iter()
@@ -13215,6 +13254,27 @@ impl<'a> Lowerer<'a> {
         } else {
             place
         }
+    }
+
+    /// The union member a type arm names, spelled as the scrutinee's union
+    /// spells it. The checker proved direct membership; a nominal member may
+    /// be module-qualified on one side only (a parameter or return type
+    /// lowered elsewhere), so the projection, loan, and binding types must
+    /// take the union's own spelling.
+    fn type_pattern_member(
+        &mut self,
+        ty: &crate::ast::TypeRef,
+        scrutinee_ty: Option<&Type>,
+    ) -> Type {
+        let member = self.lower_type_ref_with_provenance(ty);
+        if let Some(Type::Union(union)) = scrutinee_ty {
+            if let Some(canonical) = union.members.iter().find(|candidate| {
+                **candidate == member || crate::union_runtime::member_matches(candidate, &member)
+            }) {
+                return canonical.clone();
+            }
+        }
+        member
     }
 
     fn begin_pattern_view(&mut self, target: &str, source: &str, mutable: bool) {
@@ -13253,7 +13313,7 @@ impl<'a> Lowerer<'a> {
         let first_loan = self.loan_scopes.last().map_or(0, Vec::len);
         match pattern {
             Pattern::Type(pattern) => {
-                let member = self.lower_type_ref_with_provenance(&pattern.ty);
+                let member = self.type_pattern_member(&pattern.ty, scrutinee_ty);
                 let target = self
                     .scoped_names
                     .last()
@@ -13580,7 +13640,7 @@ impl<'a> Lowerer<'a> {
     fn register_consuming_pattern_bindings(&mut self, pattern: &Pattern, pattern_ty: &Type) {
         match pattern {
             Pattern::Type(pattern) => {
-                let member = self.lower_type_ref_with_provenance(&pattern.ty);
+                let member = self.type_pattern_member(&pattern.ty, Some(pattern_ty));
                 self.register_consuming_pattern_bindings(
                     &Pattern::Binding(pattern.binding.clone()),
                     &member,
@@ -13624,7 +13684,7 @@ impl<'a> Lowerer<'a> {
     ) {
         match pattern {
             Pattern::Type(pattern) => {
-                let member = self.lower_type_ref_with_provenance(&pattern.ty);
+                let member = self.type_pattern_member(&pattern.ty, scrutinee_ty);
                 let target = self.new_typed_temp(member.clone());
                 self.scoped_names
                     .last_mut()
@@ -13975,8 +14035,7 @@ impl<'a> Lowerer<'a> {
         }
 
         for (position, (object, receiver_place, element_ty)) in sources.iter().enumerate() {
-            let next_value =
-                self.new_typed_temp(Type::Named("Option".to_string(), vec![element_ty.clone()]));
+            let next_value = self.new_typed_temp(lookup_type(element_ty.clone()));
             self.emit(Instruction::Assign {
                 target: next_value.clone(),
                 value: Rvalue::Call {
@@ -14001,14 +14060,14 @@ impl<'a> Lowerer<'a> {
                 scrutinee: Operand::Place(next_value.clone()),
                 arms: vec![
                     MirMatchArm {
-                        enum_name: Some("Option".to_string()),
-                        variant_name: Some("Some".to_string()),
+                        enum_name: Some("Lookup".to_string()),
+                        variant_name: Some("Found".to_string()),
                         wildcard: false,
                         label: self.label(present_block),
                     },
                     MirMatchArm {
-                        enum_name: Some("Option".to_string()),
-                        variant_name: Some("None".to_string()),
+                        enum_name: Some("Lookup".to_string()),
+                        variant_name: Some("Missing".to_string()),
                         wildcard: false,
                         label: self.label(after_block),
                     },
@@ -14021,7 +14080,7 @@ impl<'a> Lowerer<'a> {
                 target: element.clone(),
                 value: Rvalue::VariantPayload {
                     scrutinee: Operand::Place(next_value),
-                    variant_name: "Some".to_string(),
+                    variant_name: "Found".to_string(),
                     index: 0,
                 },
             });
@@ -14268,8 +14327,7 @@ impl<'a> Lowerer<'a> {
                         binding
                     }
                 };
-                let next_value = self
-                    .new_typed_temp(Type::Named("Option".to_string(), vec![element_ty.clone()]));
+                let next_value = self.new_typed_temp(lookup_type(element_ty.clone()));
                 let index = self.new_typed_temp(Type::named("int64"));
                 self.emit(Instruction::Assign {
                     target: index.clone(),
@@ -14314,14 +14372,14 @@ impl<'a> Lowerer<'a> {
                     scrutinee: Operand::Place(next_value.clone()),
                     arms: vec![
                         MirMatchArm {
-                            enum_name: Some("Option".to_string()),
-                            variant_name: Some("Some".to_string()),
+                            enum_name: Some("Lookup".to_string()),
+                            variant_name: Some("Found".to_string()),
                             wildcard: false,
                             label: self.label(body_block),
                         },
                         MirMatchArm {
-                            enum_name: Some("Option".to_string()),
-                            variant_name: Some("None".to_string()),
+                            enum_name: Some("Lookup".to_string()),
+                            variant_name: Some("Missing".to_string()),
                             wildcard: false,
                             label: self.label(after_block),
                         },
@@ -14337,7 +14395,7 @@ impl<'a> Lowerer<'a> {
                         } else {
                             Operand::Place(next_value)
                         },
-                        variant_name: "Some".to_string(),
+                        variant_name: "Found".to_string(),
                         index: 0,
                     },
                 });
@@ -14454,8 +14512,7 @@ impl<'a> Lowerer<'a> {
                         binding
                     }
                 };
-                let next_value = self
-                    .new_typed_temp(Type::Named("Option".to_string(), vec![element_ty.clone()]));
+                let next_value = self.new_typed_temp(lookup_type(element_ty.clone()));
                 let index = self.new_typed_temp(Type::named("int64"));
                 self.emit(Instruction::Assign {
                     target: index.clone(),
@@ -14500,14 +14557,14 @@ impl<'a> Lowerer<'a> {
                     scrutinee: Operand::Place(next_value.clone()),
                     arms: vec![
                         MirMatchArm {
-                            enum_name: Some("Option".to_string()),
-                            variant_name: Some("Some".to_string()),
+                            enum_name: Some("Lookup".to_string()),
+                            variant_name: Some("Found".to_string()),
                             wildcard: false,
                             label: self.label(body_block),
                         },
                         MirMatchArm {
-                            enum_name: Some("Option".to_string()),
-                            variant_name: Some("None".to_string()),
+                            enum_name: Some("Lookup".to_string()),
+                            variant_name: Some("Missing".to_string()),
                             wildcard: false,
                             label: self.label(after_block),
                         },
@@ -14523,7 +14580,7 @@ impl<'a> Lowerer<'a> {
                         } else {
                             Operand::Place(next_value)
                         },
-                        variant_name: "Some".to_string(),
+                        variant_name: "Found".to_string(),
                         index: 0,
                     },
                 });
@@ -16178,7 +16235,7 @@ impl<'a> Lowerer<'a> {
         span: Span,
     ) {
         let index = self.new_typed_temp(Type::named("int64"));
-        let next = self.new_typed_temp(Type::Named("Option".to_string(), vec![element_ty.clone()]));
+        let next = self.new_typed_temp(lookup_type(element_ty.clone()));
         let element = self.new_typed_temp(element_ty.clone());
         self.emit(Instruction::Assign {
             target: index.clone(),
@@ -16196,14 +16253,14 @@ impl<'a> Lowerer<'a> {
             scrutinee: Operand::Place(next.clone()),
             arms: vec![
                 MirMatchArm {
-                    enum_name: Some("Option".to_string()),
-                    variant_name: Some("Some".to_string()),
+                    enum_name: Some("Lookup".to_string()),
+                    variant_name: Some("Found".to_string()),
                     wildcard: false,
                     label: self.label(body),
                 },
                 MirMatchArm {
-                    enum_name: Some("Option".to_string()),
-                    variant_name: Some("None".to_string()),
+                    enum_name: Some("Lookup".to_string()),
+                    variant_name: Some("Missing".to_string()),
                     wildcard: false,
                     label: self.label(done),
                 },
@@ -16216,7 +16273,7 @@ impl<'a> Lowerer<'a> {
             target: element.clone(),
             value: Rvalue::VariantPayload {
                 scrutinee: Operand::MovePlace(next),
-                variant_name: "Some".to_string(),
+                variant_name: "Found".to_string(),
                 index: 0,
             },
         });
@@ -16252,7 +16309,7 @@ impl<'a> Lowerer<'a> {
         span: Span,
     ) {
         let index = self.new_typed_temp(Type::named("int64"));
-        let next = self.new_typed_temp(Type::Named("Option".to_string(), vec![element_ty.clone()]));
+        let next = self.new_typed_temp(lookup_type(element_ty.clone()));
         let element = self.new_typed_temp(element_ty.clone());
         self.emit(Instruction::Assign {
             target: index.clone(),
@@ -16287,14 +16344,14 @@ impl<'a> Lowerer<'a> {
             scrutinee: Operand::Place(next.clone()),
             arms: vec![
                 MirMatchArm {
-                    enum_name: Some("Option".to_string()),
-                    variant_name: Some("Some".to_string()),
+                    enum_name: Some("Lookup".to_string()),
+                    variant_name: Some("Found".to_string()),
                     wildcard: false,
                     label: self.label(body),
                 },
                 MirMatchArm {
-                    enum_name: Some("Option".to_string()),
-                    variant_name: Some("None".to_string()),
+                    enum_name: Some("Lookup".to_string()),
+                    variant_name: Some("Missing".to_string()),
                     wildcard: false,
                     label: self.label(done),
                 },
@@ -16307,7 +16364,7 @@ impl<'a> Lowerer<'a> {
             target: element.clone(),
             value: Rvalue::VariantPayload {
                 scrutinee: Operand::MovePlace(next),
-                variant_name: "Some".to_string(),
+                variant_name: "Found".to_string(),
                 index: 0,
             },
         });
@@ -16890,21 +16947,6 @@ impl<'a> Lowerer<'a> {
                     signature: Box::new(expected.clone()),
                 };
             }
-        }
-        if Self::is_contextual_none_expr(expr)
-            && matches!(expected, Some(Type::Named(name, args)) if name == "Option" && args.len() == 1)
-        {
-            let expected = expected.expect("contextual Option type should be present");
-            let temp = self.new_typed_temp(expected.clone());
-            self.emit(Instruction::Assign {
-                target: temp.clone(),
-                value: Rvalue::EnumVariant {
-                    enum_name: "Option".to_string(),
-                    variant_name: "None".to_string(),
-                    payloads: Vec::new(),
-                },
-            });
-            return Operand::Place(temp);
         }
         if let Some(expected) = expected {
             if let Some(value) = self.lower_collection_literal_with_type(expr, expected) {
@@ -18404,8 +18446,9 @@ impl<'a> Lowerer<'a> {
             ExprKind::Name(name)
                 if matches!(
                     name.as_str(),
-                    "Some"
-                        | "None"
+                    "Found"
+                        | "Missing"
+                        | "Unavailable"
                         | "Ok"
                         | "Err"
                         | "Closed"
@@ -18421,7 +18464,8 @@ impl<'a> Lowerer<'a> {
                 let enum_name = match enum_type {
                     Some(Type::Named(enum_name, _)) => enum_name.clone(),
                     _ => match name.as_str() {
-                        "Some" | "None" => "Option".to_string(),
+                        "Found" | "Missing" => "Lookup".to_string(),
+                        "Unavailable" => "Poll".to_string(),
                         "Ok" | "Err" => "Result".to_string(),
                         "Closed" | "Cancelled" | "TimedOut" | "Full" => "SendError".to_string(),
                         "Item" => "QueueReceive".to_string(),
@@ -19046,7 +19090,7 @@ impl<'a> Lowerer<'a> {
                             && args.len() == 1
                             && matches!(
                                 field.as_str(),
-                                "result" | "result_or_none" | "result_or"
+                                "result" | "poll" | "result_or"
                             )
                             && !type_is_copy_in_program(
                                 &Type::Named(name.clone(), args.clone()),
@@ -19989,8 +20033,11 @@ impl<'a> Lowerer<'a> {
 
     fn builtin_enum_variant_type(&self, receiver_type: &Type, field: &str) -> Option<Type> {
         match receiver_type {
-            Type::Named(name, args) if name == "Option" && args.len() == 1 => {
-                matches!(field, "Some" | "None").then(|| receiver_type.clone())
+            Type::Named(name, args) if name == "Lookup" && args.len() == 1 => {
+                matches!(field, "Found" | "Missing").then(|| receiver_type.clone())
+            }
+            Type::Named(name, args) if name == "Poll" && args.len() == 1 => {
+                matches!(field, "Ready" | "Unavailable").then(|| receiver_type.clone())
             }
             Type::Named(name, args) if name == "Result" && args.len() == 2 => {
                 matches!(field, "Ok" | "Err").then(|| receiver_type.clone())
@@ -20000,16 +20047,6 @@ impl<'a> Lowerer<'a> {
             }
             _ => None,
         }
-    }
-
-    fn infer_option_some_call_type(&self, value: &Expr) -> Option<Type> {
-        let inner = self.infer_expr_type(value)?;
-        let payload = if inner == Type::Unit {
-            Type::Named("Option".to_string(), vec![Type::named("Unknown")])
-        } else {
-            inner
-        };
-        Some(Type::Named("Option".to_string(), vec![payload]))
     }
 
     /// The type the checker gives `expr` against a resolved contextual hint:
@@ -20253,7 +20290,14 @@ impl<'a> Lowerer<'a> {
                     ExprKind::Name(name)
                         if matches!(
                             name.as_str(),
-                            "Option" | "Result" | "SendError" | "Queue" | "list" | "set" | "dict"
+                            "Lookup"
+                                | "Poll"
+                                | "Result"
+                                | "SendError"
+                                | "Queue"
+                                | "list"
+                                | "set"
+                                | "dict"
                         ) =>
                     {
                         Some(Type::Named(
@@ -20523,9 +20567,6 @@ impl<'a> Lowerer<'a> {
                                 explicit_type_args,
                             );
                         }
-                        if name == "Some" && args.len() == 1 {
-                            return self.infer_option_some_call_type(&args[0].value);
-                        }
                         self.resolve_function_info(name).map(|function| {
                             if let Some(type_args) = explicit_type_args {
                                 let substitutions = function
@@ -20725,11 +20766,6 @@ impl<'a> Lowerer<'a> {
                                         enum_info,
                                     )));
                                 }
-                            }
-                        }
-                        if let ExprKind::Name(enum_name) = &object.kind {
-                            if enum_name == "Option" && field == "Some" && args.len() == 1 {
-                                return self.infer_option_some_call_type(&args[0].value);
                             }
                         }
                         let associated_owner = match &object.kind {
@@ -21613,12 +21649,10 @@ impl<'a> Lowerer<'a> {
             | ("Array", "saturating_add")
             | ("Array", "saturating_sub")
             | ("Array", "saturating_mul") => Some(Type::Named("Array".to_string(), args.clone())),
-            ("Array", "get") | ("Array", "set") => Some(Type::Named(
-                "Option".to_string(),
-                vec![args
-                    .first()
+            ("Array", "get") | ("Array", "set") => Some(optional_type(
+                args.first()
                     .cloned()
-                    .unwrap_or_else(|| Type::named("Unknown"))],
+                    .unwrap_or_else(|| Type::named("Unknown")),
             )),
             ("Array", "fill") => Some(Type::Unit),
             ("Array", "sum") | ("Array", "min") | ("Array", "max") => args.first().cloned(),
@@ -21635,7 +21669,7 @@ impl<'a> Lowerer<'a> {
             | ("str", "join")
             | ("str", "clone") => Some(Type::named("str")),
             ("str", "strip_prefix") | ("str", "strip_suffix") => {
-                Some(Type::Named("Option".to_string(), vec![Type::named("str")]))
+                Some(optional_type(Type::named("str")))
             }
             ("list", "len") => Some(Type::named("int64")),
             ("list", "is_empty") => Some(Type::named("bool")),
@@ -21653,12 +21687,10 @@ impl<'a> Lowerer<'a> {
             ("list", "contains") => Some(Type::named("bool")),
             ("list", "index") | ("list", "count") => Some(Type::named("int64")),
             ("list", "pop") | ("list", "set") => args.first().cloned(),
-            ("list", "get") => Some(Type::Named(
-                "Option".to_string(),
-                vec![args
-                    .first()
+            ("list", "get") => Some(lookup_type(
+                args.first()
                     .cloned()
-                    .unwrap_or_else(|| Type::named("Unknown"))],
+                    .unwrap_or_else(|| Type::named("Unknown")),
             )),
             ("set", "len") => Some(Type::named("int64")),
             ("set", "is_empty") => Some(Type::named("bool")),
@@ -21695,12 +21727,10 @@ impl<'a> Lowerer<'a> {
                 ])],
             )),
             ("dict", "clear") | ("dict", "update") | ("dict", "reserve") => Some(Type::Unit),
-            ("dict", "get") | ("dict", "set") | ("dict", "remove") => Some(Type::Named(
-                "Option".to_string(),
-                vec![args
-                    .get(1)
+            ("dict", "get") | ("dict", "set") | ("dict", "remove") => Some(lookup_type(
+                args.get(1)
                     .cloned()
-                    .unwrap_or_else(|| Type::named("Unknown"))],
+                    .unwrap_or_else(|| Type::named("Unknown")),
             )),
             ("Queue", "get" | "__get_in_task_group" | "__get_with_registered_producers") => {
                 Some(Type::Named(
@@ -21711,12 +21741,10 @@ impl<'a> Lowerer<'a> {
                         .unwrap_or_else(|| Type::named("Unknown"))],
                 ))
             }
-            ("Queue", "get_or_none") => Some(Type::Named(
-                "Option".to_string(),
-                vec![args
-                    .first()
+            ("Queue", "poll") => Some(poll_type(
+                args.first()
                     .cloned()
-                    .unwrap_or_else(|| Type::named("Unknown"))],
+                    .unwrap_or_else(|| Type::named("Unknown")),
             )),
             ("Queue", "put") => Some(Type::Named(
                 "Result".to_string(),
@@ -21751,10 +21779,7 @@ impl<'a> Lowerer<'a> {
                 "TaskResult".to_string(),
                 vec![args.first().cloned().unwrap_or(Type::Unit)],
             )),
-            ("Task", "result_or_none") => Some(Type::Named(
-                "Option".to_string(),
-                vec![args.first().cloned().unwrap_or(Type::Unit)],
-            )),
+            ("Task", "poll") => Some(poll_type(args.first().cloned().unwrap_or(Type::Unit))),
             // `result_or` yields the task's own result type, so a local bound
             // from a function-valued task result keeps its callable type.
             ("Task", "result_or") => args.first().cloned(),
@@ -21806,17 +21831,11 @@ impl<'a> Lowerer<'a> {
             )),
             ("net.TcpStream", "read_line") => Some(Type::Named(
                 "Result".to_string(),
-                vec![
-                    Type::Named("Option".to_string(), vec![Type::named("str")]),
-                    io_error_ty.clone(),
-                ],
+                vec![optional_type(Type::named("str")), io_error_ty.clone()],
             )),
             ("net.TcpStream", "read_bytes") => Some(Type::Named(
                 "Result".to_string(),
-                vec![
-                    Type::Named("Option".to_string(), vec![bytes_ty.clone()]),
-                    io_error_ty.clone(),
-                ],
+                vec![optional_type(bytes_ty.clone()), io_error_ty.clone()],
             )),
             ("net.TcpStream", "read_exact") => Some(Type::Named(
                 "Result".to_string(),
@@ -21838,15 +21857,12 @@ impl<'a> Lowerer<'a> {
             )),
             ("net.UdpSocket", "recv") => Some(Type::Named(
                 "Result".to_string(),
-                vec![
-                    Type::Named("Option".to_string(), vec![bytes_ty.clone()]),
-                    io_error_ty.clone(),
-                ],
+                vec![optional_type(bytes_ty.clone()), io_error_ty.clone()],
             )),
             ("net.UdpSocket", "recv_from") => Some(Type::Named(
                 "Result".to_string(),
                 vec![
-                    Type::Named("Option".to_string(), vec![Type::named("net.UdpDatagram")]),
+                    optional_type(Type::named("net.UdpDatagram")),
                     io_error_ty.clone(),
                 ],
             )),
@@ -21906,17 +21922,11 @@ impl<'a> Lowerer<'a> {
             )),
             ("net.WebSocket", "recv_text") => Some(Type::Named(
                 "Result".to_string(),
-                vec![
-                    Type::Named("Option".to_string(), vec![Type::named("str")]),
-                    io_error_ty.clone(),
-                ],
+                vec![optional_type(Type::named("str")), io_error_ty.clone()],
             )),
             ("net.WebSocket", "recv_bytes") => Some(Type::Named(
                 "Result".to_string(),
-                vec![
-                    Type::Named("Option".to_string(), vec![bytes_ty.clone()]),
-                    io_error_ty.clone(),
-                ],
+                vec![optional_type(bytes_ty.clone()), io_error_ty.clone()],
             )),
             ("net.WebSocket", "close") => Some(Type::Unit),
             ("net.UnixListener", "accept") => Some(Type::Named(
@@ -21926,10 +21936,7 @@ impl<'a> Lowerer<'a> {
             ("net.UnixListener", "close") => Some(Type::Unit),
             ("net.UnixStream", "read_line") => Some(Type::Named(
                 "Result".to_string(),
-                vec![
-                    Type::Named("Option".to_string(), vec![Type::named("str")]),
-                    io_error_ty.clone(),
-                ],
+                vec![optional_type(Type::named("str")), io_error_ty.clone()],
             )),
             ("net.UnixStream", "read_exact") => Some(Type::Named(
                 "Result".to_string(),
@@ -21951,10 +21958,7 @@ impl<'a> Lowerer<'a> {
             ("net.TlsListener", "close") => Some(Type::Unit),
             ("net.TlsStream", "read_line") => Some(Type::Named(
                 "Result".to_string(),
-                vec![
-                    Type::Named("Option".to_string(), vec![Type::named("str")]),
-                    io_error_ty.clone(),
-                ],
+                vec![optional_type(Type::named("str")), io_error_ty.clone()],
             )),
             ("net.TlsStream", "read_exact") => Some(Type::Named(
                 "Result".to_string(),
@@ -21965,6 +21969,37 @@ impl<'a> Lowerer<'a> {
                 vec![Type::Unit, io_error_ty],
             )),
             ("net.TlsStream", "close") => Some(Type::Unit),
+            ("process.Child", "stdin" | "stdout" | "stderr") => {
+                Some(optional_type(Type::named("process.Pipe")))
+            }
+            ("process.Child", "wait_or_none") => Some(Type::Named(
+                "Result".to_string(),
+                vec![
+                    optional_type(Type::named("process.ExitStatus")),
+                    crate::builtin_modules::process_error_type(),
+                ],
+            )),
+            ("process.Pipe", "read_line") => Some(Type::Named(
+                "Result".to_string(),
+                vec![
+                    optional_type(Type::named("str")),
+                    crate::builtin_modules::process_error_type(),
+                ],
+            )),
+            ("process.Pipe", "read_bytes") => Some(Type::Named(
+                "Result".to_string(),
+                vec![
+                    optional_type(Type::Named("list".to_string(), vec![Type::named("uint8")])),
+                    crate::builtin_modules::process_error_type(),
+                ],
+            )),
+            ("process.Supervisor", "wait_or_none") => Some(Type::Named(
+                "Result".to_string(),
+                vec![
+                    optional_type(Type::named("process.SupervisorEvent")),
+                    crate::builtin_modules::process_error_type(),
+                ],
+            )),
             _ => None,
         }
     }

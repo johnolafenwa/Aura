@@ -41,7 +41,8 @@ const KEYWORDS = [
 
 const BUILTINS = [
   "Array",
-  "Option",
+  "Lookup",
+  "Poll",
   "Queue",
   "Result",
   "SelectOutcome",

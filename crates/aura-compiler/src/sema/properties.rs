@@ -644,7 +644,9 @@ pub(super) fn type_is_copy_in_context_inner(
             )
         }
         Type::Named(name, args) if is_builtin_copy_named_type(name, args) => true,
-        Type::Named(name, args) if name == "Option" && args.len() == 1 => {
+        Type::Named(name, args)
+            if matches!(name.as_str(), "Lookup" | "Poll") && args.len() == 1 =>
+        {
             type_is_copy_in_context_inner(
                 &args[0],
                 classes,
@@ -896,7 +898,8 @@ pub(super) fn is_builtin_type(name: &str) -> bool {
             | "Range"
             | "Queue"
             | "Task"
-            | "Option"
+            | "Lookup"
+            | "Poll"
             | "Result"
             | "SendError"
             | "QueueReceive"
@@ -956,10 +959,6 @@ pub(super) fn is_float_type(ty: &Type) -> bool {
 
 pub(super) fn is_string_type(ty: &Type) -> bool {
     matches!(ty, Type::Named(name, args) if name == "str" && args.is_empty())
-}
-
-pub(super) fn is_option_type(ty: &Type) -> bool {
-    matches!(ty, Type::Named(name, args) if name == "Option" && args.len() == 1)
 }
 
 pub(super) fn is_numeric_type(ty: &Type) -> bool {
@@ -1353,7 +1352,13 @@ impl<'a> FunctionChecker<'a> {
             Type::Named(name, args)
                 if matches!(
                     name.as_str(),
-                    "Option" | "SendError" | "QueueReceive" | "TaskResult" | "WaitAny" | "WaitAll"
+                    "Lookup"
+                        | "Poll"
+                        | "SendError"
+                        | "QueueReceive"
+                        | "TaskResult"
+                        | "WaitAny"
+                        | "WaitAll"
                 ) && args.len() == 1 =>
             {
                 Self::prefix_transfer_summary(
@@ -1681,7 +1686,8 @@ impl<'a> FunctionChecker<'a> {
                     "list"
                         | "set"
                         | "dict"
-                        | "Option"
+                        | "Lookup"
+                        | "Poll"
                         | "Result"
                         | "SendError"
                         | "QueueReceive"
@@ -1811,7 +1817,7 @@ impl<'a> FunctionChecker<'a> {
             Type::Named(name, args)
                 if matches!(
                     name.as_str(),
-                    "Task" | "Option" | "SendError" | "QueueReceive"
+                    "Task" | "Lookup" | "Poll" | "SendError" | "QueueReceive"
                 ) && args.len() == 1 =>
             {
                 self.symbolic_copy_shape(&args[0], formals, visiting)

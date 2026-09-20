@@ -193,6 +193,7 @@ impl FunctionChecker<'_> {
     ) -> Result<Type> {
         let expected = Type::Union(Box::new(union.clone()));
         let contextual = Self::is_union_contextual_literal(expr);
+        let mut contracted = false;
         let actual = if contextual {
             if union.members.len() > 128 {
                 return Err(Diagnostic::capacity_at(
@@ -214,6 +215,7 @@ impl FunctionChecker<'_> {
                         matches.iter().map(|index| union.members[*index].to_string()).collect::<Vec<_>>().join(", "))));
             }
             if let Some(index) = matches.first() {
+                contracted = true;
                 self.type_of_expr_hint(expr, locals, Some(&union.members[*index]))?
             } else {
                 self.type_of_expr(expr, locals).map_err(|error| {
@@ -244,6 +246,10 @@ impl FunctionChecker<'_> {
                 format!("'{actual}' is not a member of '{expected}'"),
             ));
         };
+        if !contracted {
+            // The selected member is this value's bare destination.
+            self.enforce_callable_destination(expr, &union.members[member_index], &actual)?;
+        }
         let id = UnionInjectionId {
             module_name: self.module_name.to_owned(),
             line: expr.span.line,

@@ -1910,7 +1910,7 @@ impl<'a> FunctionChecker<'a> {
                     "`{form}` is a `for` loop form, not a value; write `for ... in {form}(...):`"
                 ),
             ),
-            Some("Some" | "None" | "Ok" | "Err" | "Closed") => Diagnostic::at(
+            Some("Found" | "Missing" | "Ready" | "Unavailable" | "Ok" | "Err" | "Closed") => Diagnostic::at(
                 span,
                 "bare enum variants require an expected enum type or a qualified form such as `Result.Ok(...)`",
             ),

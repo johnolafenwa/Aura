@@ -19,6 +19,11 @@ fn type_ref(name: &str, args: Vec<TypeRef>) -> TypeRef {
     TypeRef::named(name, args, false, builtin_span())
 }
 
+/// The canonical optional spelling `inner | None` for a builtin signature.
+fn optional_type_ref(inner: TypeRef) -> TypeRef {
+    TypeRef::union(vec![inner, type_ref("None", Vec::new())], builtin_span())
+}
+
 fn lower_callable_type_ref(
     task: bool,
     call_kind: crate::ast::ReceiverKind,
@@ -960,7 +965,7 @@ fn io_namespace() -> ModuleNamespace {
             type_ref(
                 "Result",
                 vec![
-                    type_ref("Option", vec![type_ref("str", Vec::new())]),
+                    optional_type_ref(type_ref("str", Vec::new())),
                     io_error_type_ref(),
                 ],
             ),
@@ -1447,7 +1452,7 @@ fn process_namespace() -> ModuleNamespace {
                 ),
                 value_param_with_default(
                     "cwd",
-                    type_ref("Option", vec![type_ref("str", Vec::new())]),
+                    optional_type_ref(type_ref("str", Vec::new())),
                     name_expr("None"),
                 ),
                 value_param_with_default("env", string_map_type_ref(), empty_map_expr()),
@@ -1480,7 +1485,7 @@ fn process_namespace() -> ModuleNamespace {
                 ),
                 value_param_with_default(
                     "cwd",
-                    type_ref("Option", vec![type_ref("str", Vec::new())]),
+                    optional_type_ref(type_ref("str", Vec::new())),
                     name_expr("None"),
                 ),
                 value_param_with_default("env", string_map_type_ref(), empty_map_expr()),
@@ -1677,7 +1682,7 @@ fn sys_namespace() -> ModuleNamespace {
                 "sys",
                 "env",
                 vec![value_param("name", type_ref("str", Vec::new()))],
-                type_ref("Option", vec![type_ref("str", Vec::new())]),
+                optional_type_ref(type_ref("str", Vec::new())),
             ),
             function_info(
                 "sys",
@@ -1703,7 +1708,7 @@ fn sys_namespace() -> ModuleNamespace {
 
 fn path_namespace() -> ModuleNamespace {
     let string = || type_ref("str", Vec::new());
-    let optional_string = || type_ref("Option", vec![string()]);
+    let optional_string = || optional_type_ref(string());
     function_only_namespace(
         "path",
         vec![
@@ -1953,7 +1958,7 @@ fn json_error_enum_info() -> EnumInfo {
 }
 
 fn json_namespace() -> ModuleNamespace {
-    let option = |inner| type_ref("Option", vec![inner]);
+    let option = |inner| optional_type_ref(inner);
     let json_value = json_value_type_ref;
     let functions_to_add = vec![
         function_info(
