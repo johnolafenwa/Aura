@@ -10,3 +10,7 @@ draft decision record, and a personal script), which is why the runner ran
 with `--allow-dirty`; every tracked source matched the commit. `SHA256SUMS`
 covers the raw report. The report is archived in the commit that follows the measured one. The
 second pull request re-measures the same programs.
+
+`representation-pr2-raw.json` is the second pull request's report (owned-handle
+union members) at commit `aba80f87d49b0d1992cf08ec3286b55e8836a862`, taken the same way; the archive lands in the
+commit that follows the measured one.
