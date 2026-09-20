@@ -165,3 +165,26 @@ fn direct_union_class_field_allocates_no_union_box() {
         "a union class field is flattened into the plain class layout (Q9 A)"
     );
 }
+
+const UNION_EQUALITY: &str = "def main():\n    value: int64 | None = 5\n    print(value == None)\n    print(value == 5)\n    empty: int64 | None = None\n    print(empty == None)\n";
+
+const UNION_ELEMENT_READ: &str = "def main():\n    items: list[int64 | None] = [7, None]\n    first: int64 | None = items[0]\n    match first:\n        case int64 as number:\n            print(number)\n        case None:\n            print(\"none\")\n";
+
+#[test]
+fn direct_union_equality_compares_inline_without_a_union_box() {
+    let (_, direct) =
+        assert_both_backends("repr-union-equality", UNION_EQUALITY, "false\ntrue\ntrue\n");
+    assert_eq!(
+        direct.union_payload_boxes, 0,
+        "`value == None` and `value == 5` compare tags and members inline (Q9 A)"
+    );
+}
+
+#[test]
+fn direct_union_element_read_reenters_inline_from_the_list() {
+    let (_, direct) = assert_both_backends("repr-union-element", UNION_ELEMENT_READ, "7\n");
+    assert_eq!(
+        direct.union_payload_boxes, 3,
+        "the list boxes its two elements and hands out one copy for the read; the inline local adds none"
+    );
+}

@@ -141,11 +141,17 @@ coverage floors may only rise.
 
 ## Open items
 
-- Equality between two unions, `.clone()`, rendering, hashing, and every
-  runtime-helper argument of union type box the inline value for the call
-  (the runtime's shared rules keep both backends identical); only
-  `value == None` and `value != None` compare the tag inline. Inline
-  member-wise equality and hashing are an optimization for a later pass.
+- `.clone()`, rendering, hashing, and every runtime-helper argument of union
+  type box the inline value for the call (the runtime's shared rules keep
+  both backends identical); equality of two inline unions of one type
+  compares tags and members inline, with a plain-class member boxed for the
+  runtime's structural rule. Inline plain-class equality and hashing are an
+  optimization for a later pass.
+- A consuming `match own` take and the value-position `NoneTest` never
+  reach an inline union (non-Copy payloads stay runtime values; lowering
+  tests `None` through `UnionTagTest`), so the direct backend has no inline
+  arms for them; the second pull request adds the take when non-Copy members
+  go inline.
 - Unions with a runtime-object member remain boxed on both backends until
   the second pull request lands owned-handle words with tag-selected retain
   and release.

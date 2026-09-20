@@ -1,0 +1,18 @@
+class Point:
+    x: int64
+    y: int64
+
+def main():
+    value: int64 | None = 5
+    print(value == None)
+    print(value != None)
+    print(value == 5)
+    print(value != 6)
+    empty: int64 | None = None
+    print(empty == None)
+    print(empty != 5)
+    ratio: float64 | None = 2.5
+    print(ratio == 2.5)
+    print(ratio == None)
+    slot: Point | None = Point(x=1, y=2)
+    print(slot == None)

@@ -363,12 +363,14 @@ and `NoneTest` compare the tag, `UnionTakePayload` and the
 receiver dispatches on the tag with a `mut self` arm writing back through
 the member's payload projection. The value owns nothing, so it needs no
 release; it crosses into a runtime container, a task or queue boundary, a
-runtime helper, `print`, equality with another union, or `.clone()` as the
-runtime's `Value::Union` through `aura_direct_union_inject`, and re-enters
-inline through `aura_direct_union_tag` and `aura_direct_union_payload_copy`,
-exactly as a plain class becomes an instance and back. `value == None` on an
-inline union is one tag compare. A checked unwrap of an inline union to one
-member traps with `AU4001` when another member is active. The interpreter
+runtime helper, `print`, or `.clone()` as the runtime's `Value::Union`
+through `aura_direct_union_inject`, and re-enters inline through
+`aura_direct_union_tag` and `aura_direct_union_payload_copy`, exactly as a
+plain class becomes an instance and back. Equality of two inline unions of
+one type (which is what `value == None` and `value == 5` become after the
+checker's comparison injection) compares the tags and then the active
+members inline, a plain-class member under the runtime's structural rule,
+so no comparison boxes a union. The interpreter
 keeps its `Value::Union` model as the reference semantics; its per-injection
 box is a measured reference number, not the ABI.
 
