@@ -99,12 +99,11 @@ shared validator keeps its refusals pinned at `run_mir` and
    board; the phase 1 review's finding 11 closed by reference.
 
 R0 and the inline-member half of R1 (unions whose members are all scalars,
-`None`, or plain classes) merge as the first pull request; the
-owned-handle half of R1 (`str | None` and every union with a runtime-object
-member) shares its ownership machinery with the four-word callable
-environment and merges with R2 and R3 as the second, so each stays
-reviewable and each carries its own green local chain and hosted run. The
-coverage floors may only rise.
+`None`, or plain classes) merged as the first pull request. The owned-handle
+half of R1 (`str | None` and every union with a runtime-object member) is
+the second, and the four-word callable environment (R2) with the records
+(R3) the third, so each stays reviewable and each carries its own green
+local chain and hosted run. The coverage floors may only rise.
 
 ## Risks and rules
 
@@ -146,6 +145,20 @@ coverage floors may only rise.
   backend): recorded in the performance chapter's representation table and
   archived in `work/2026-09-20-representation-measurements/`.
 
+## Evidence, second pull request (owned-handle unions)
+
+- Seven run-pass fixtures (`none_union_string_local`, `none_union_list_local`,
+  `none_union_string_parameters_and_function_value`,
+  `union_string_class_members_trait_dispatch`,
+  `none_union_string_elements_in_list`, `none_union_string_moves_and_fields`,
+  `none_union_string_return`) run on both backends with identical output
+  and pass the runtime's exit leak check; three measurement tests assert
+  zero direct-backend union boxes for a string local, a list local, and a
+  `Dog | Cat` union of classes holding strings; the fixture suite, the union
+  security suites, the validator coverage suite, and the 399 native unit
+  tests pass; every runnable fixture emits a direct object. Parity matrix
+  and chain results are recorded below when they finish.
+
 ## Open items
 
 - `.clone()`, rendering, hashing, and every runtime-helper argument of union
@@ -159,9 +172,13 @@ coverage floors may only rise.
   tests `None` through `UnionTagTest`), so the direct backend has no inline
   arms for them; the second pull request adds the take when non-Copy members
   go inline.
-- Unions with a runtime-object member remain boxed on both backends until
-  the second pull request lands owned-handle words with tag-selected retain
-  and release.
+- Unions with a runtime-object member are inline on the direct backend as
+  of the second pull request; the interpreter keeps its boxed `Value::Union`
+  as the reference semantics. Two defects the owned handles surfaced are
+  fixed and pinned: the thunk boundary released a payload copy it had
+  handed to the callee, and a call result of owning-union type was retained
+  instead of adopted, leaking one reference per return (the runtime's exit
+  leak check catches both on every fixture).
 - The interpreter boxes a union payload twice per `match` over a local
   (injection plus the scrutinee copy of a type pattern); it is a reference
   number, not an ABI claim, but the second box is avoidable.

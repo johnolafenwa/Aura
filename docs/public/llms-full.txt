@@ -3702,12 +3702,12 @@ Owned callable storage holds owned captures only; loan captures stay in
 local loan closures. A stored callable may return a view of one explicit
 parameter but never of a captured receiver. A packed value keeps the closure's existing environment
 as its storage, so packing allocates no second environment on either
-backend. A union whose members are all scalars, `None`, or plain classes is
-one inline tagged value on the direct backend; a union with a string, list,
-or other runtime-object member, and every closure environment, remain the
-explicitly disclosed boxed interim until the second pull request of the
-representation phase lands the ratified Q15 A / Q16 A callable layout; no
-FFI/ABI stability claim and no 0.4 release precede that. A `TaskCallable[...]` value is a stored task
+backend. Every concrete union is one inline tagged value on the direct
+backend, a runtime-object member riding along as an owned handle word;
+closure environments remain the explicitly disclosed boxed interim until
+the next pull request of the representation phase lands the ratified
+Q15 A / Q16 A callable layout; no FFI/ABI stability claim and no 0.4 release
+precede that. A `TaskCallable[...]` value is a stored task
 target: every `TaskGroup` start method takes it by move for one child call,
 whether Shared, Mutable, or Consuming, and a Mutable target's captures are
 child-owned state with no parent writeback (see

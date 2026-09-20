@@ -374,10 +374,24 @@ so no comparison boxes a union. The interpreter
 keeps its `Value::Union` model as the reference semantics; its per-injection
 box is a measured reference number, not the ABI.
 
-Unions with a runtime-object member (`str | None`, `list[T] | None`, a
-class holding a string) stay one boxed runtime value on both backends; the
-owned-handle-in-words ownership that they and the four-word callable
-environment share is the second pull request of this phase. Every runtime
+A union with a runtime-object member (`str | None`, `list[T] | None`, a
+class holding a string) is inline too: that member's payload word is an
+owned handle, and tag-selected switches retain it when the union is copied
+into a new owner and release it when the union's local, temporary, or
+overwritten slot dies. Stores adopt an owned temporary or retain a borrowed
+value; a move zeroes its source words, which release nothing; arguments,
+returns, and call results transfer the active handle; a thunk copies the
+payload out of a boxed union parameter and hands the copy to the callee. A
+borrowed string payload is shared when the union is boxed for the runtime
+(strings are immutable); any other borrowed payload is copied, as the
+interpreter copies a place read into an injection. `.clone()` clones the
+active member in place. A plain class holding such a union stays one runtime
+object, as it does with any handle-bearing field. A union that names a type
+parameter keeps the generic frame's symbolic runtime layout, a member
+resolves through its canonical key so a local spelling and its
+module-qualified import share one layout, and a nested projection into a
+runtime-object member writes through the runtime. The four-word callable
+environment (Q15 A / Q16 A) is the next pull request. Every runtime
 reports the phase's counters (`union_payload_boxes`, `closure_environments`,
 `opaque_boxes`, `callable_overflow_allocations`) on standard error when
 `AURA_RUNTIME_STATS=1` is set, and `benchmarks/representation` records them
