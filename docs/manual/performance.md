@@ -273,15 +273,17 @@ allocation is counted on both backends, and a process run with
 ends. `benchmarks/representation` holds the programs and
 `scripts/bench-representation.py` records the counters, the direct binary's
 size, and wall time with commit provenance; the numbers below are the
-counters, which are deterministic for these programs.
+counters, which are deterministic for these programs, measured at
+`47826c62` and archived with a checksum manifest in
+[work/2026-09-20-representation-measurements](https://github.com/johnolafenwa/Aura/blob/main/work/2026-09-20-representation-measurements).
 
 | Program | Interpreter | Direct backend |
 | --- | --- | --- |
-| `union_scalar_local` (one million `int64 \| None` injections and tag tests) | REPR_MIR_SCALAR union boxes | REPR_DIRECT_SCALAR union boxes |
-| `union_class_field` (one hundred thousand `Point \| None` class fields) | REPR_MIR_FIELD union boxes | REPR_DIRECT_FIELD union boxes |
-| `callable_pack_inline` (one hundred thousand one-capture packings) | REPR_MIR_INLINE environments | REPR_DIRECT_INLINE environments |
-| `callable_pack_overflow` (one hundred thousand four-capture packings) | REPR_MIR_OVERFLOW environments | REPR_DIRECT_OVERFLOW environments |
-| `callable_move` (one packing moved one hundred thousand times) | REPR_MIR_MOVE environments | REPR_DIRECT_MOVE environments |
+| `union_scalar_local` (one million `int64 \| None` injections and tag tests) | 2,000,000 union boxes | 0 union boxes |
+| `union_class_field` (one hundred thousand `Point \| None` class fields) | 100,000 union boxes | 0 union boxes |
+| `callable_pack_inline` (one hundred thousand one-capture packings) | 100,000 environments | 100,000 environments |
+| `callable_pack_overflow` (one hundred thousand four-capture packings) | 100,000 environments | 100,000 environments |
+| `callable_move` (one packing moved one hundred thousand times) | 1 environments | 1 environments |
 
 A union whose members are all inline (scalars, `None`, plain classes) is one
 tagged value in registers and locals on the direct backend, so its
