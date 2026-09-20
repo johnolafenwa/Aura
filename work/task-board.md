@@ -2,7 +2,7 @@
 
 Last updated: 2026-09-20
 
-## Batch 1 phase 2 (H2, Option removal; in progress)
+## Batch 1 phase 2 (H2, Option removal; complete)
 
 - Target: remove the language builtin `Option[T]`, `Option.Some/None`, the
   contextual short constructors, and the `T?` suffix across the maintained
@@ -26,8 +26,12 @@ Last updated: 2026-09-20
   LSP 116/116 tests at 100% coverage; extension 28/28 tests and packaging;
   forced backend parity, CLI, reference, tutorial, docs, audit, clippy, and
   hygiene gates pass.
-- Hosted integration: pending (branch CI on both platforms, merge, main CI,
-  completion record).
+- Hosted integration: [PR #13](https://github.com/johnolafenwa/Aura/pull/13) merged `e7ce8ddf` as `ae106162` after
+  branch CI `35495364398` passed on Ubuntu 24.04 and macOS 15 (Docs
+  `35495364406`, Tutorial Examples `35495364397`); main CI `35501298799` is
+  green on both platforms (Docs `35501298793`, Tutorial Examples
+  `35501298806`). Hosted coverage totals are in the work-note evidence
+  table (about 96.50 / 97.42 / 95.32 on both platforms).
 - Next: the representation phase (Q9/Q15/Q16 A layout with allocation
   measurements; no FFI/ABI claim and no 0.4 before it).
 
