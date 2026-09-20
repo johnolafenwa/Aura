@@ -344,10 +344,42 @@ call returns (a null non-optional handle, a missing symbol, an argument
 mismatch) is reported as an `AU4005` diagnostic instead of unwinding
 through generated code that carries no unwind tables.
 
-The 2026-09-13 owner ruling retains the boxed union payload and `Arc`
-closure environment as the disclosed interim. The ratified Q9 A / Q15 A /
-Q16 A layout and allocation measurements form a separate phase after H2.
-No FFI/ABI stability claim and no 0.4 release precede that phase.
+The 2026-09-13 owner ruling retained the boxed union payload and `Arc`
+closure environment as the disclosed interim and scheduled the ratified
+Q9 A / Q15 A / Q16 A layout with allocation measurements as its own phase
+after H2. No FFI/ABI stability claim and no 0.4 release precede that phase.
+
+## Batch 1 representation phase: inline unions on the direct backend
+
+`DirectType::Union` carries a union inline on the direct backend when every
+member is itself inline (a scalar, `None`, a plain class, or such a union):
+one tag word holding the plan's dense ordinal followed by the payload words
+of the widest member, with float members bit-cast into integer words. A
+plain class may hold such a union as a field; the field is flattened like
+every other. `UnionInject` writes the tag and payload words, `UnionTagTest`
+and `NoneTest` compare the tag, `UnionTakePayload` and the
+`__union_payload_N` place projections reinterpret the payload words, a
+`match` over the members is a tag switch, and a trait method on a union
+receiver dispatches on the tag with a `mut self` arm writing back through
+the member's payload projection. The value owns nothing, so it needs no
+release; it crosses into a runtime container, a task or queue boundary, a
+runtime helper, `print`, equality with another union, or `.clone()` as the
+runtime's `Value::Union` through `aura_direct_union_inject`, and re-enters
+inline through `aura_direct_union_tag` and `aura_direct_union_payload_copy`,
+exactly as a plain class becomes an instance and back. `value == None` on an
+inline union is one tag compare. A checked unwrap of an inline union to one
+member traps with `AU4001` when another member is active. The interpreter
+keeps its `Value::Union` model as the reference semantics; its per-injection
+box is a measured reference number, not the ABI.
+
+Unions with a runtime-object member (`str | None`, `list[T] | None`, a
+class holding a string) stay one boxed runtime value on both backends; the
+owned-handle-in-words ownership that they and the four-word callable
+environment share is the second pull request of this phase. Every runtime
+reports the phase's counters (`union_payload_boxes`, `closure_environments`,
+`opaque_boxes`, `callable_overflow_allocations`) on standard error when
+`AURA_RUNTIME_STATS=1` is set, and `benchmarks/representation` records them
+with provenance.
 
 ## Batch 1 phase 1: callable contracts
 
