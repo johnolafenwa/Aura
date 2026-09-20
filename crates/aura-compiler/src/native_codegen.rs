@@ -267,13 +267,6 @@ impl DirectUnionType {
                 )
             })
     }
-
-    /// The tag of the `None` member, when the union has one.
-    fn none_member(&self) -> Option<usize> {
-        self.members
-            .iter()
-            .position(|member| matches!(member.ty, DirectType::Scalar(ScalarKind::Unit)))
-    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -485,7 +478,6 @@ struct NativeCodegen<'a> {
     fail_division_by_zero: FuncId,
     fail_erased_union_mutable_receiver: FuncId,
     fail_int32_overflow: FuncId,
-    fail_union_member: FuncId,
     fail_integer_overflow: FuncId,
     register_cleanup: FuncId,
     unregister_cleanup: FuncId,
@@ -1012,7 +1004,6 @@ impl<'a> NativeCodegen<'a> {
             fail_division_by_zero => ("aura_direct_fail_division_by_zero", [types::I64, types::I64], None),
             fail_erased_union_mutable_receiver => ("aura_direct_fail_erased_union_mutable_receiver", [types::I64, types::I64], None),
             fail_int32_overflow => ("aura_direct_fail_int32_overflow", [types::I64, types::I64, types::I64], None),
-            fail_union_member => ("aura_direct_fail_union_member", [types::I64, types::I64, types::I64, types::I64], None),
             fail_integer_overflow => ("aura_direct_fail_integer_overflow", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], None),
             register_cleanup => ("aura_direct_register_cleanup", [types::I64, types::I64, types::I64], Some(types::I64)),
             unregister_cleanup => ("aura_direct_unregister_cleanup", [types::I64], None),
@@ -1493,7 +1484,6 @@ impl<'a> NativeCodegen<'a> {
             fail_division_by_zero,
             fail_erased_union_mutable_receiver,
             fail_int32_overflow,
-            fail_union_member,
             fail_integer_overflow,
             register_cleanup,
             unregister_cleanup,
@@ -2262,9 +2252,6 @@ impl<'a> NativeCodegen<'a> {
         let fail_int32_overflow = self
             .object
             .declare_func_in_func(self.fail_int32_overflow, builder.func);
-        let fail_union_member = self
-            .object
-            .declare_func_in_func(self.fail_union_member, builder.func);
         let fail_integer_overflow = self
             .object
             .declare_func_in_func(self.fail_integer_overflow, builder.func);
@@ -3318,7 +3305,6 @@ impl<'a> NativeCodegen<'a> {
             fail_division_by_zero,
             fail_erased_union_mutable_receiver,
             fail_int32_overflow,
-            fail_union_member,
             fail_integer_overflow,
             register_cleanup,
             unregister_cleanup,
@@ -4601,7 +4587,6 @@ struct FunctionCompiler<'a> {
     fail_division_by_zero: cranelift_codegen::ir::FuncRef,
     fail_erased_union_mutable_receiver: cranelift_codegen::ir::FuncRef,
     fail_int32_overflow: cranelift_codegen::ir::FuncRef,
-    fail_union_member: cranelift_codegen::ir::FuncRef,
     fail_integer_overflow: cranelift_codegen::ir::FuncRef,
     register_cleanup: cranelift_codegen::ir::FuncRef,
     unregister_cleanup: cranelift_codegen::ir::FuncRef,
@@ -5695,24 +5680,9 @@ impl<'a> FunctionCompiler<'a> {
                 self.load_operand_with_integer_hint(operand, integer_hint)
             }
             Rvalue::NoneTest { value } => {
+                // Lowering tests a union's `None` member through
+                // `UnionTagTest`; this dynamic form only reaches runtime values.
                 let loaded = self.load_operand(value)?;
-                if let DirectType::Union(union) = &loaded.ty {
-                    let is_none = match union.none_member() {
-                        Some(index) => {
-                            let matched = self.builder.ins().icmp_imm(
-                                IntCC::Equal,
-                                loaded.values[0],
-                                index as i64,
-                            );
-                            self.builder.ins().uextend(types::I64, matched)
-                        }
-                        None => self.builder.ins().iconst(types::I64, 0),
-                    };
-                    return Ok(ValueRef {
-                        values: vec![is_none],
-                        ty: DirectType::Scalar(ScalarKind::Bool),
-                    });
-                }
                 let loaded = self.ensure_opaque(loaded)?;
                 let call = self.builder.ins().call(self.none_test, &[loaded.values[0]]);
                 Ok(ValueRef {
@@ -5872,14 +5842,9 @@ impl<'a> FunctionCompiler<'a> {
                 member_index,
             } => {
                 self.require_union_plan(union_type)?;
+                // A consuming take only reaches non-Copy payloads, which stay
+                // runtime values; an inline union's members are all Copy.
                 let value = self.load_operand(&Operand::Place(place.clone()))?;
-                if let DirectType::Union(union) = &value.ty {
-                    let union = union.clone();
-                    let member =
-                        self.union_member_from_words(&union, *member_index, &value.values)?;
-                    let target = ensure_direct_type(member_type, &self.classes, "union payload")?;
-                    return self.coerce_value(member, &target);
-                }
                 let value = self.ensure_opaque(value)?;
                 let encoded = crate::native_runtime::canonical_runtime_type_name(union_type);
                 let (ptr, len) = self.string_constant(encoded.as_bytes())?;
@@ -6346,6 +6311,56 @@ impl<'a> FunctionCompiler<'a> {
         })
     }
 
+    /// Equality of two inline unions of one type: the tags must agree and
+    /// the active members must compare equal under their own rule; `None`
+    /// equals `None`.
+    fn compile_inline_union_equality(
+        &mut self,
+        left: ValueRef,
+        right: ValueRef,
+        op: BinaryOp,
+        span: Option<Span>,
+    ) -> std::result::Result<ValueRef, String> {
+        let DirectType::Union(union) = left.ty.clone() else {
+            unreachable!("caller checked an inline union");
+        };
+        let same_tag = self
+            .builder
+            .ins()
+            .icmp(IntCC::Equal, left.values[0], right.values[0]);
+        let same_tag = self.builder.ins().uextend(types::I64, same_tag);
+        let bool_ty = DirectType::Scalar(ScalarKind::Bool);
+        let right_words = right.values.clone();
+        let members_equal =
+            self.switch_on_union_tag(&union, &left.values, &bool_ty, |codegen, index, member| {
+                if matches!(member.ty, DirectType::Scalar(ScalarKind::Unit)) {
+                    return Ok(ValueRef {
+                        values: vec![codegen.builder.ins().iconst(types::I64, 1)],
+                        ty: DirectType::Scalar(ScalarKind::Bool),
+                    });
+                }
+                let other = codegen.union_member_from_words(&union, index, &right_words)?;
+                if matches!(member.ty, DirectType::Scalar(_)) {
+                    return codegen.compile_binary(BinaryOp::Eq, member, other, span);
+                }
+                // A plain-class member compares under the runtime's shared
+                // structural rule, exactly as the interpreter compares it.
+                let member = codegen.ensure_opaque(member)?;
+                let other = codegen.ensure_opaque(other)?;
+                codegen.compile_binary(BinaryOp::Eq, member, other, span)
+            })?;
+        let equal = self.builder.ins().band(same_tag, members_equal.values[0]);
+        let result = if op == BinaryOp::Eq {
+            equal
+        } else {
+            self.builder.ins().bxor_imm(equal, 1)
+        };
+        Ok(ValueRef {
+            values: vec![result],
+            ty: bool_ty,
+        })
+    }
+
     fn compile_binary(
         &mut self,
         op: BinaryOp,
@@ -6353,42 +6368,18 @@ impl<'a> FunctionCompiler<'a> {
         right: ValueRef,
         span: Option<Span>,
     ) -> std::result::Result<ValueRef, String> {
-        let left_union = matches!(left.ty, DirectType::Union(_));
-        let right_union = matches!(right.ty, DirectType::Union(_));
-        if (left_union || right_union) && matches!(op, BinaryOp::Eq | BinaryOp::NotEq) {
-            // `value == None` on an inline union is one tag compare; every
-            // other union comparison runs the shared runtime rule on boxed
-            // values, so both backends agree member by member.
-            let unit_side = if left_union {
-                matches!(right.ty, DirectType::Scalar(ScalarKind::Unit)).then_some(&left)
-            } else {
-                matches!(left.ty, DirectType::Scalar(ScalarKind::Unit)).then_some(&right)
-            };
-            if let Some(union_value) = unit_side {
-                let DirectType::Union(union) = &union_value.ty else {
-                    unreachable!("selected the union side");
-                };
-                let is_none = match union.none_member() {
-                    Some(index) => self.builder.ins().icmp_imm(
-                        IntCC::Equal,
-                        union_value.values[0],
-                        index as i64,
-                    ),
-                    None => self.builder.ins().iconst(types::I8, 0),
-                };
-                let result = if op == BinaryOp::Eq {
-                    is_none
-                } else {
-                    self.builder.ins().bxor_imm(is_none, 1)
-                };
-                let result = self.builder.ins().uextend(types::I64, result);
-                return Ok(ValueRef {
-                    values: vec![result],
-                    ty: DirectType::Scalar(ScalarKind::Bool),
-                });
+        if let (DirectType::Union(left_union), DirectType::Union(right_union)) =
+            (&left.ty, &right.ty)
+        {
+            if left_union == right_union && matches!(op, BinaryOp::Eq | BinaryOp::NotEq) {
+                // The checker injects the compared member into the union, so
+                // `value == None` and `value == 5` arrive as two inline unions
+                // of one type: equal tags and equal active members, without
+                // a runtime box (ADR-0052 union equality).
+                return self.compile_inline_union_equality(left, right, op, span);
             }
         }
-        if left_union || right_union {
+        if matches!(left.ty, DirectType::Union(_)) || matches!(right.ty, DirectType::Union(_)) {
             let left = self.ensure_opaque(left)?;
             let right = self.ensure_opaque(right)?;
             return self.compile_binary(op, left, right, span);
@@ -9642,17 +9633,6 @@ impl<'a> FunctionCompiler<'a> {
 
         if let DirectType::Union(union) = target {
             let union = union.clone();
-            if let DirectType::Union(source) = &value.ty {
-                // Another spelling of a union: the runtime aligns the boxed
-                // value to the target's canonical layout, then it re-enters
-                // inline. Both spellings normalize to the same members.
-                let source = source.clone();
-                let boxed = self.box_inline_union(&source, &value.values)?;
-                let mut boxed = boxed;
-                self.tag_opaque_runtime_type(&boxed, &union.union_type)?;
-                boxed.ty = DirectType::Opaque(union.union_type.clone());
-                return self.unbox_inline_union(&union, boxed.values[0]);
-            }
             if let DirectType::Opaque(_) = &value.ty {
                 return self.unbox_inline_union(&union, value.values[0]);
             }
@@ -9674,38 +9654,6 @@ impl<'a> FunctionCompiler<'a> {
                 values: words,
                 ty: target.clone(),
             });
-        }
-
-        if let DirectType::Union(source) = &value.ty {
-            if !matches!(target, DirectType::Opaque(_)) {
-                // Unwrapping an inline union to one member is a checked
-                // operation: the tag must select that member.
-                let source = source.clone();
-                let member_index = source
-                    .members
-                    .iter()
-                    .position(|member| &member.ty == target)
-                    .ok_or_else(|| {
-                        format!(
-                            "direct backend encountered an unsupported value coercion from `{}` to `{}`",
-                            render_direct_type(&value.ty),
-                            render_direct_type(target)
-                        )
-                    })?;
-                let matched =
-                    self.builder
-                        .ins()
-                        .icmp_imm(IntCC::Equal, value.values[0], member_index as i64);
-                let (message_ptr, message_len) = self.string_constant(
-                    format!(
-                        "union value is not the expected `{}` member",
-                        render_direct_type(target)
-                    )
-                    .as_bytes(),
-                )?;
-                self.emit_trap_unless(matched, message_ptr, message_len, span)?;
-                return self.union_member_from_words(&source, member_index, &value.values);
-            }
         }
 
         if let DirectType::Opaque(target_ty) = target {
@@ -9894,34 +9842,6 @@ impl<'a> FunctionCompiler<'a> {
         self.builder
             .ins()
             .call(self.tag_value_type, &[raw, type_ptr, type_len]);
-        Ok(())
-    }
-
-    /// Traps with `message` unless `condition` holds, running the pending
-    /// cleanups first like every other checked failure.
-    fn emit_trap_unless(
-        &mut self,
-        condition: Value,
-        message_ptr: Value,
-        message_len: Value,
-        span: Option<Span>,
-    ) -> std::result::Result<(), String> {
-        let fail_block = self.builder.create_block();
-        let continue_block = self.builder.create_block();
-        self.builder
-            .ins()
-            .brif(condition, continue_block, &[], fail_block, &[]);
-        self.builder.switch_to_block(fail_block);
-        self.emit_pending_cleanups(true)?;
-        let (line, column) = self.span_values(span);
-        self.builder.ins().call(
-            self.fail_union_member,
-            &[message_ptr, message_len, line, column],
-        );
-        self.builder.ins().trap(TrapCode::unwrap_user(1));
-        self.builder.seal_block(fail_block);
-        self.builder.switch_to_block(continue_block);
-        self.builder.seal_block(continue_block);
         Ok(())
     }
 
@@ -10187,15 +10107,26 @@ impl<'a> FunctionCompiler<'a> {
         &self,
         union: &DirectUnionType,
         field: &str,
+        trait_name: Option<&str>,
     ) -> Option<DirectType> {
         union.members.iter().find_map(|member| {
             let DirectType::PlainClass(class_ty) = &member.ty else {
                 return None;
             };
-            let method =
-                find_method(self.classes.get(&class_ty.class_name), field).or_else(|| {
-                    find_concrete_impl_method(&self.trait_impls, &class_ty.class_name, field)
-                })?;
+            let method = match trait_name {
+                Some(trait_name) => self
+                    .find_trait_method_for_trait(
+                        &Type::named(&class_ty.class_name),
+                        trait_name,
+                        field,
+                    )
+                    .cloned(),
+                None => find_method(self.classes.get(&class_ty.class_name), field)
+                    .or_else(|| {
+                        find_concrete_impl_method(&self.trait_impls, &class_ty.class_name, field)
+                    })
+                    .cloned(),
+            }?;
             self.function_return_types
                 .get(&method.function_name)
                 .cloned()
@@ -10216,7 +10147,7 @@ impl<'a> FunctionCompiler<'a> {
         trait_name: Option<&str>,
     ) -> std::result::Result<ValueRef, String> {
         let result_ty = self
-            .union_member_call_result_type(union, field)
+            .union_member_call_result_type(union, field, trait_name)
             .ok_or_else(|| {
                 format!(
                     "direct backend does not know the result of `.{field}` on `{}`",
@@ -10259,29 +10190,23 @@ impl<'a> FunctionCompiler<'a> {
         args: &[MirArg],
         trait_name: Option<&str>,
     ) -> std::result::Result<ValueRef, String> {
-        match object.ty.clone() {
-            DirectType::PlainClass(class_ty) => self.compile_class_member_call(
-                class_ty.class_name.as_str(),
-                Some(Type::named(&class_ty.class_name)),
-                object,
-                field,
-                receiver_place,
-                args,
-                trait_name,
-            ),
-            DirectType::Opaque(ty) => self.compile_opaque_member_call(
-                &ty,
-                object,
-                field,
-                receiver_place,
-                args,
-                trait_name,
-            ),
-            other => Err(format!(
+        // Every inline union member is a scalar, `None`, or a plain class,
+        // and only a plain class carries methods.
+        let DirectType::PlainClass(class_ty) = object.ty.clone() else {
+            return Err(format!(
                 "direct backend cannot call `.{field}` on `{}`",
-                render_direct_type(&other)
-            )),
-        }
+                render_direct_type(&object.ty)
+            ));
+        };
+        self.compile_class_member_call(
+            class_ty.class_name.as_str(),
+            Some(Type::named(&class_ty.class_name)),
+            object,
+            field,
+            receiver_place,
+            args,
+            trait_name,
+        )
     }
 
     /// The tag word and payload words of `member` injected as member
@@ -16521,31 +16446,19 @@ fn unit_value(builder: &mut FunctionBuilder<'_>) -> ValueRef {
     }
 }
 
-/// The trait-impl method a concrete class provides for `field` when exactly
-/// one impl declares it; inherent methods take precedence in `find_method`.
+/// The trait-impl method a concrete class provides for `field`; the checker
+/// has already rejected an ambiguous name, so the first impl is the one.
 fn find_concrete_impl_method<'a>(
     trait_impls: &'a [MirTraitImpl],
     class_name: &str,
     field: &str,
 ) -> Option<&'a MirMethod> {
-    let mut found = None;
-    for trait_impl in trait_impls {
-        if !matches!(&trait_impl.for_type, Type::Named(name, args) if name == class_name && args.is_empty())
-        {
-            continue;
-        }
-        if let Some(method) = trait_impl
-            .methods
-            .iter()
-            .find(|method| method.name == field)
-        {
-            if found.is_some() {
-                return None;
-            }
-            found = Some(method);
-        }
-    }
-    found
+    trait_impls
+        .iter()
+        .filter(|trait_impl| {
+            matches!(&trait_impl.for_type, Type::Named(name, args) if name == class_name && args.is_empty())
+        })
+        .find_map(|trait_impl| trait_impl.methods.iter().find(|method| method.name == field))
 }
 
 fn find_method<'a>(class: Option<&'a MirClass>, field: &str) -> Option<&'a MirMethod> {

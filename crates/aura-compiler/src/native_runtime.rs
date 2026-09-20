@@ -7294,8 +7294,8 @@ pub extern "C-unwind" fn aura_direct_union_tag(value: *mut OpaqueValue) -> i64 {
         let Value::Union(union) = (unsafe { value_ref(value) }) else {
             runtime_error("direct union tag read expected a union value");
         };
-        i64::try_from(union.member_index)
-            .unwrap_or_else(|_| runtime_error("direct union tag does not fit in int64"))
+        // A union has at most 128 members; the ordinal always fits.
+        union.member_index as i64
     })
 }
 
@@ -12877,24 +12877,6 @@ pub extern "C-unwind" fn aura_direct_fail_erased_union_mutable_receiver(
     task_runtime_boundary(|| match runtime_span(line, column) {
         Some(span) => runtime_error_at(span, MESSAGE),
         None => runtime_error(MESSAGE),
-    })
-}
-
-/// A checked inline-union unwrap found another member active; the message
-/// names the member the generated code expected.
-#[cfg_attr(not(coverage), no_mangle)]
-pub extern "C-unwind" fn aura_direct_fail_union_member(
-    message_ptr: *const u8,
-    message_len: usize,
-    line: i64,
-    column: i64,
-) -> ! {
-    task_runtime_boundary(|| {
-        let message = decode_bytes(message_ptr, message_len);
-        match runtime_span(line, column) {
-            Some(span) => runtime_error_at(span, message),
-            None => runtime_error(message),
-        }
     })
 }
 
