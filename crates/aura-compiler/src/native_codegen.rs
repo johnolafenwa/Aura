@@ -10277,12 +10277,13 @@ impl<'a> FunctionCompiler<'a> {
                 let nested = self.union_member_from_words(&union, index, &current.values)?;
                 self.replace_nested_field(nested, rest, new_value)?
             };
-            let replacement = if matches!(member_ty, DirectType::Opaque(_)) {
-                // The written handle is owned by the union: adopt an owned
-                // temporary or retain a borrowed value, and release the
-                // handle the union held when this member was active.
+            let owns_written_handle = matches!(member_ty, DirectType::Opaque(_));
+            let replacement = if owns_written_handle {
+                // The written handle is owned by the new union words: adopt
+                // an owned temporary or retain a borrowed value. The handle
+                // the union held before is released once, by the store that
+                // replaces the root's words.
                 let stored = self.transfer_opaque_arg(&replacement);
-                self.release_union_words(&union, &current.values);
                 ValueRef {
                     values: vec![stored],
                     ty: member_ty.clone(),
@@ -10291,10 +10292,14 @@ impl<'a> FunctionCompiler<'a> {
                 replacement
             };
             let values = self.union_words_from_member(&union, index, replacement)?;
-            return Ok(ValueRef {
+            let updated = ValueRef {
                 values,
                 ty: current.ty,
-            });
+            };
+            if owns_written_handle {
+                self.mark_temporary_union_owned(&updated);
+            }
+            return Ok(updated);
         }
         let (start, end, field_ty) = required_direct_field_slice(&current.ty, head)?;
 
