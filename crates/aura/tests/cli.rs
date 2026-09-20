@@ -10216,7 +10216,7 @@ def main() -> int32:
     assert_run_and_direct_source_stdout(
         "aura-string-lengths-negative-list-indices",
         source,
-        "4\n9\n40\n35\n10\n-999\n10\n35\n\n\n\n40\n20\n99\n11\n77\n",
+        "4\n9\n40\n35\n10\n-999\n10\n35\nNone\nNone\nNone\n40\n20\n99\n11\n77\n",
     );
 }
 

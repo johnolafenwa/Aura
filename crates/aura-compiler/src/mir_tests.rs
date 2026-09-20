@@ -6297,7 +6297,7 @@ def main():
     let output = crate::run_mir(&module).expect("dynamic JSON should execute through MIR");
     assert_eq!(
         output.stdout,
-        "{\"f\":1.5,\"items\":[true,null,\"x\"],\"z\":1}\n{\n  \"f\": 1.5,\n  \"items\": [\n    true,\n    null,\n    \"x\"\n  ],\n  \"z\": 1\n}\n7\n\n1\n1\n"
+        "{\"f\":1.5,\"items\":[true,null,\"x\"],\"z\":1}\n{\n  \"f\": 1.5,\n  \"items\": [\n    true,\n    null,\n    \"x\"\n  ],\n  \"z\": 1\n}\n7\nNone\n1\n1\n"
     );
 }
 

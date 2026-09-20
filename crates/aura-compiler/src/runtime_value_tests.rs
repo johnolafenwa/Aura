@@ -5772,7 +5772,7 @@ fn optional_and_result_helpers_render_expected_variants() {
         .render(),
         "7"
     );
-    assert_eq!(optional_absent(Type::named("int64")).render(), "");
+    assert_eq!(optional_absent(Type::named("int64")).render(), "None");
     assert_eq!(
         lookup_found(Value::Int(IntegerValue::from_signed(7))).render(),
         "Lookup.Found(7)"
@@ -8312,7 +8312,7 @@ fn host_control_plane_builtins_cover_success_and_error_boundaries() {
             )]
         )
         .render(),
-        ""
+        "None"
     );
     assert!(call("sys::current_dir", vec![])
         .render()
@@ -8354,7 +8354,7 @@ fn host_control_plane_builtins_cover_success_and_error_boundaries() {
             vec![Value::String("no-extension".into())]
         )
         .render(),
-        ""
+        "None"
     );
     assert_eq!(
         call("path::is_absolute", vec![Value::String("relative".into())]),
@@ -9674,7 +9674,7 @@ fn phase58_select_claims_nonrepeatable_tasks_before_waiting() {
     .expect("the ready queue should win");
     assert_eq!(
         selected.render(),
-        "SelectOutcome.Queue(0, QueueReceive.Item())"
+        "SelectOutcome.Queue(0, QueueReceive.Item(None))"
     );
     let error = losing_task
         .claim_result_observation()
@@ -9699,7 +9699,7 @@ fn phase58_select_claims_nonrepeatable_tasks_before_waiting() {
     .expect("a repeatable task may lose without losing reuse");
     assert_eq!(
         selected.render(),
-        "SelectOutcome.Queue(0, QueueReceive.Item())"
+        "SelectOutcome.Queue(0, QueueReceive.Item(None))"
     );
     assert_eq!(
         wait_task_ready(&repeatable_task).expect("a losing repeatable task remains observable"),

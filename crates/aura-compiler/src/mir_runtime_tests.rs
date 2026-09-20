@@ -1991,8 +1991,8 @@ def main():
         "\
 [2, 2]\n\
 4\n\
-\n\
-\n\
+None\n\
+None\n\
 4\n\
 2\n\
 6\n\
@@ -6354,7 +6354,7 @@ fn mir_runtime_helper_values_and_streams_cover_optional_result_and_diagnostics()
         optional_present(Type::named("bool"), Value::Bool(true)).render(),
         "true"
     );
-    assert_eq!(optional_absent(Type::named("bool")).render(), "");
+    assert_eq!(optional_absent(Type::named("bool")).render(), "None");
     assert_eq!(
         lookup_found(Value::Bool(true)).render(),
         "Lookup.Found(true)"

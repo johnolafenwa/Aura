@@ -3292,8 +3292,8 @@ fn direct_json_host_builtins_borrow_without_cloning_and_move_owned_payloads() {
         super::with_value(indent, |value| {
             assert_eq!(
                 value.render(),
-                "",
-                "copy-valued `None` indent should remain usable and render as an empty payload"
+                "None",
+                "copy-valued `None` indent should remain usable and render by name"
             )
         });
     }

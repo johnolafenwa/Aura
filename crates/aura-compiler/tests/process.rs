@@ -298,7 +298,7 @@ def wait_for_sleep_timeout() -> Result[None, process.Error]:
     assert_eq!(
         output.stdout,
         format!(
-            "present\n0\nExitStatus.Exited(0)\n{cwd}\n0\nExitStatus.Exited(0)\nchecked\n\necho from cat\nExitStatus.Exited(0)\nSupervisorEvent.Restarted(flaky, ExitStatus.Exited(1), 1)\nSupervisorEvent.Exited(flaky, ExitStatus.Exited(1), 1)\ntrue\nfalse\ntrue\n",
+            "present\n0\nExitStatus.Exited(0)\n{cwd}\n0\nExitStatus.Exited(0)\nchecked\nNone\necho from cat\nExitStatus.Exited(0)\nSupervisorEvent.Restarted(flaky, ExitStatus.Exited(1), 1)\nSupervisorEvent.Exited(flaky, ExitStatus.Exited(1), 1)\ntrue\nfalse\ntrue\n",
             cwd = cwd,
         )
     );
