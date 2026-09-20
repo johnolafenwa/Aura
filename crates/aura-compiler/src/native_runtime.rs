@@ -7291,11 +7291,18 @@ pub extern "C-unwind" fn aura_direct_union_take_payload(
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_union_tag(value: *mut OpaqueValue) -> i64 {
     task_runtime_boundary(|| {
-        let Value::Union(union) = (unsafe { value_ref(value) }) else {
-            runtime_error("direct union tag read expected a union value");
+        // The lock is released before any failure is raised.
+        let tag = unsafe {
+            with_value(value, |value| match value {
+                Value::Union(union) => Some(union.member_index),
+                _ => None,
+            })
         };
-        // A union has at most 128 members; the ordinal always fits.
-        union.member_index as i64
+        match tag {
+            // A union has at most 128 members; the ordinal always fits.
+            Some(index) => index as i64,
+            None => runtime_error("direct union tag read expected a union value"),
+        }
     })
 }
 
@@ -7307,15 +7314,22 @@ pub extern "C-unwind" fn aura_direct_union_payload_copy(
     member_index: usize,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
-        let Value::Union(union) = (unsafe { value_ref(value) }) else {
-            runtime_error("direct union payload copy expected a union value");
+        // The lock is released before any failure is raised.
+        let copied = unsafe {
+            with_value(value, |value| match value {
+                Value::Union(union) if union.member_index == member_index => {
+                    Some(Ok(try_clone_array_containing_value(&union.payload)))
+                }
+                Value::Union(_) => Some(Err("direct union payload copy member mismatch")),
+                _ => None,
+            })
         };
-        if union.member_index != member_index {
-            runtime_error("direct union payload copy member mismatch");
+        match copied {
+            Some(Ok(Ok(payload))) => boxed_value(payload),
+            Some(Ok(Err(error))) => runtime_diagnostic_error(error),
+            Some(Err(message)) => runtime_error(message),
+            None => runtime_error("direct union payload copy expected a union value"),
         }
-        let payload = try_clone_array_containing_value(&union.payload)
-            .unwrap_or_else(|error| runtime_diagnostic_error(error));
-        boxed_value(payload)
     })
 }
 

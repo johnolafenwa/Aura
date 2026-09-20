@@ -232,6 +232,8 @@ struct DirectUnionType {
     members: Vec<DirectUnionMember>,
     /// Payload words after the tag: the widest member's word count.
     payload_words: usize,
+    /// Members whose payload word is an owned runtime handle when active.
+    owning: Vec<usize>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -246,6 +248,12 @@ impl DirectUnionType {
             .map(DirectType::value_count)
             .max()
             .unwrap_or(0);
+        let owning = members
+            .iter()
+            .enumerate()
+            .filter(|(_, ty)| matches!(ty, DirectType::Opaque(_)))
+            .map(|(index, _)| index)
+            .collect();
         Self {
             union_type,
             members: members
@@ -253,7 +261,13 @@ impl DirectUnionType {
                 .map(|ty| DirectUnionMember { ty })
                 .collect(),
             payload_words,
+            owning,
         }
+    }
+
+    /// Whether some member's payload word is an owned handle.
+    fn owns_handles(&self) -> bool {
+        !self.owning.is_empty()
     }
 
     fn member(&self, index: usize) -> std::result::Result<&DirectType, String> {
@@ -361,6 +375,33 @@ impl DirectType {
 struct ValueRef {
     values: Vec<Value>,
     ty: DirectType,
+}
+
+/// The temporaries a statement owns: opaque handles, and inline unions
+/// whose active member may hold a handle (keyed by the tag word).
+#[derive(Clone, Default)]
+struct OwnedTemporaries {
+    opaque: HashSet<Value>,
+    unions: HashMap<Value, (Vec<Value>, DirectUnionType)>,
+}
+
+impl OwnedTemporaries {
+    fn contains(&self, value: &Value) -> bool {
+        self.opaque.contains(value)
+    }
+
+    fn insert(&mut self, value: Value) -> bool {
+        self.opaque.insert(value)
+    }
+
+    fn remove(&mut self, value: &Value) -> bool {
+        self.opaque.remove(value)
+    }
+
+    fn clear(&mut self) {
+        self.opaque.clear();
+        self.unions.clear();
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -3277,7 +3318,7 @@ impl<'a> NativeCodegen<'a> {
             union_layouts: self.union_layouts.clone(),
             trait_impls: self.trait_impls.clone(),
             return_type: function.return_type.clone(),
-            owned_opaque_temporaries: HashSet::new(),
+            owned_opaque_temporaries: OwnedTemporaries::default(),
             view_places: HashMap::new(),
             view_selector_vars,
             view_selector_tags,
@@ -4559,7 +4600,7 @@ struct FunctionCompiler<'a> {
     union_layouts: HashMap<String, crate::union_layout::MirUnionLayout>,
     trait_impls: Vec<MirTraitImpl>,
     return_type: Type,
-    owned_opaque_temporaries: HashSet<Value>,
+    owned_opaque_temporaries: OwnedTemporaries,
     view_places: HashMap<String, DirectViewPlace>,
     view_selector_vars: HashMap<String, Variable>,
     view_selector_tags: HashMap<String, HashMap<String, i64>>,
@@ -5014,29 +5055,152 @@ impl<'a> FunctionCompiler<'a> {
     fn release_all_temporary_owned(&mut self) {
         let owned = self
             .owned_opaque_temporaries
+            .opaque
             .iter()
             .copied()
             .collect::<Vec<_>>();
         for value in owned {
             self.release_opaque_handle(value);
         }
+        let unions = std::mem::take(&mut self.owned_opaque_temporaries.unions);
+        for (words, union) in unions.into_values() {
+            self.release_union_words(&union, &words);
+        }
         self.owned_opaque_temporaries.clear();
     }
 
-    fn release_temporary_owned_since(&mut self, baseline: &HashSet<Value>) {
+    fn release_temporary_owned_since(&mut self, baseline: &OwnedTemporaries) {
         let created = self
             .owned_opaque_temporaries
-            .difference(baseline)
+            .opaque
+            .difference(&baseline.opaque)
             .copied()
             .collect::<Vec<_>>();
         for value in created {
             self.release_opaque_handle(value);
             self.owned_opaque_temporaries.remove(&value);
         }
+        let created = self
+            .owned_opaque_temporaries
+            .unions
+            .keys()
+            .filter(|tag| !baseline.unions.contains_key(tag))
+            .copied()
+            .collect::<Vec<_>>();
+        for tag in created {
+            if let Some((words, union)) = self.owned_opaque_temporaries.unions.remove(&tag) {
+                self.release_union_words(&union, &words);
+            }
+        }
+    }
+
+    fn temporary_owns_union(&self, value: &ValueRef) -> bool {
+        matches!(value.ty, DirectType::Union(_))
+            && self
+                .owned_opaque_temporaries
+                .unions
+                .contains_key(&value.values[0])
+    }
+
+    fn mark_temporary_union_owned(&mut self, value: &ValueRef) {
+        if let DirectType::Union(union) = &value.ty {
+            if union.owns_handles() {
+                self.owned_opaque_temporaries
+                    .unions
+                    .insert(value.values[0], (value.values.clone(), union.clone()));
+            }
+        }
+    }
+
+    fn clear_temporary_union_owned(&mut self, value: &ValueRef) {
+        self.owned_opaque_temporaries
+            .unions
+            .remove(&value.values[0]);
+    }
+
+    /// Releases the active member's handle of an inline union, if the active
+    /// member owns one; a null handle (a moved-from local) is skipped by the
+    /// runtime.
+    fn release_union_words(&mut self, union: &DirectUnionType, words: &[Value]) {
+        for &index in &union.owning {
+            let active = self
+                .builder
+                .ins()
+                .icmp_imm(IntCC::Equal, words[0], index as i64);
+            let release_block = self.builder.create_block();
+            let continue_block = self.builder.create_block();
+            self.builder
+                .ins()
+                .brif(active, release_block, &[], continue_block, &[]);
+            self.builder.switch_to_block(release_block);
+            self.builder.seal_block(release_block);
+            self.release_opaque_handle(words[1]);
+            self.builder.ins().jump(continue_block, &[]);
+            self.builder.switch_to_block(continue_block);
+            self.builder.seal_block(continue_block);
+        }
+    }
+
+    /// Retains the active member's handle of an inline union, if the active
+    /// member owns one.
+    fn retain_union_words(&mut self, union: &DirectUnionType, words: &[Value]) {
+        for &index in &union.owning {
+            let active = self
+                .builder
+                .ins()
+                .icmp_imm(IntCC::Equal, words[0], index as i64);
+            let retain_block = self.builder.create_block();
+            let continue_block = self.builder.create_block();
+            self.builder
+                .ins()
+                .brif(active, retain_block, &[], continue_block, &[]);
+            self.builder.switch_to_block(retain_block);
+            self.builder.seal_block(retain_block);
+            let _ = self.retain_opaque_handle(words[1]);
+            self.builder.ins().jump(continue_block, &[]);
+            self.builder.switch_to_block(continue_block);
+            self.builder.seal_block(continue_block);
+        }
+    }
+
+    /// The words of an inline union handed to a new owner: an owned
+    /// temporary moves, a borrowed value retains its active handle.
+    fn transfer_union_words(&mut self, value: &ValueRef) -> Vec<Value> {
+        if self.temporary_owns_union(value) {
+            self.clear_temporary_union_owned(value);
+            return value.values.clone();
+        }
+        if let DirectType::Union(union) = &value.ty {
+            let union = union.clone();
+            self.retain_union_words(&union, &value.values);
+        }
+        value.values.clone()
+    }
+
+    /// Argument or field words for any direct value: opaque handles and
+    /// owning unions transfer, everything else copies.
+    fn transfer_values(&mut self, value: &ValueRef) -> Vec<Value> {
+        match &value.ty {
+            DirectType::Opaque(_) => vec![self.transfer_opaque_arg(value)],
+            DirectType::Union(union) if union.owns_handles() => self.transfer_union_words(value),
+            _ => value.values.clone(),
+        }
     }
 
     fn release_root_if_opaque(&mut self, name: &str) -> std::result::Result<(), String> {
         let ty = self.local_type(name)?;
+        if let DirectType::Union(union) = &ty {
+            if union.owns_handles() {
+                let union = union.clone();
+                let vars = self.local_vars(name)?;
+                let words = vars
+                    .iter()
+                    .map(|var| self.builder.use_var(*var))
+                    .collect::<Vec<_>>();
+                self.release_union_words(&union, &words);
+            }
+            return Ok(());
+        }
         if !matches!(ty, DirectType::Opaque(_)) {
             return Ok(());
         }
@@ -5077,6 +5241,12 @@ impl<'a> FunctionCompiler<'a> {
     }
 
     fn export_return_value(&mut self, value: ValueRef) -> Vec<Value> {
+        if let DirectType::Union(union) = &value.ty {
+            if union.owns_handles() {
+                return self.transfer_union_words(&value);
+            }
+            return value.values;
+        }
         if !self.is_opaque_value(&value) {
             return value.values;
         }
@@ -8065,11 +8235,8 @@ impl<'a> FunctionCompiler<'a> {
                     *slot = Some(place.clone());
                 }
             }
-            if matches!(coerced.ty, DirectType::Opaque(_)) {
-                lowered_args.push(self.transfer_opaque_arg(&coerced));
-            } else {
-                lowered_args.extend(coerced.values);
-            }
+            let transferred = self.transfer_values(&coerced);
+            lowered_args.extend(transferred);
         }
         let mutable_sinks = if mutable_sink_places.iter().any(Option::is_some) {
             let mut sinks = Vec::with_capacity(mutable_sink_places.len());
@@ -9472,6 +9639,7 @@ impl<'a> FunctionCompiler<'a> {
                 ty: root_ty,
             };
             self.mark_temporary_opaque_owned(&moved);
+            self.mark_temporary_union_owned(&moved);
             return Ok(moved);
         }
 
@@ -9633,8 +9801,50 @@ impl<'a> FunctionCompiler<'a> {
 
         if let DirectType::Union(union) = target {
             let union = union.clone();
-            if let DirectType::Opaque(_) = &value.ty {
-                return self.unbox_inline_union(&union, value.values[0]);
+            if let DirectType::Union(source) = &value.ty {
+                // Another spelling of the same union (a module-qualified
+                // member versus its local name): the canonical keys, the tag
+                // ordinals, and the word layout agree, so the words are the
+                // value under the target's spelling.
+                if source.union_type == union.union_type
+                    && source.members.len() == union.members.len()
+                    && source.payload_words == union.payload_words
+                    && source.owning == union.owning
+                {
+                    return Ok(ValueRef {
+                        values: value.values,
+                        ty: target.clone(),
+                    });
+                }
+            }
+            if let DirectType::Opaque(source_ty) = &value.ty {
+                if let Some(index) = union
+                    .members
+                    .iter()
+                    .position(|member| member.ty == value.ty)
+                {
+                    // A runtime-object member lifts into the union as its
+                    // owned handle word: an owned temporary moves in, a
+                    // borrowed value is retained, and the union owns it.
+                    let handle = self.transfer_opaque_arg(&value);
+                    let member = ValueRef {
+                        values: vec![handle],
+                        ty: value.ty.clone(),
+                    };
+                    let words = self.union_words_from_member(&union, index, member)?;
+                    let lifted = ValueRef {
+                        values: words,
+                        ty: target.clone(),
+                    };
+                    self.mark_temporary_union_owned(&lifted);
+                    return Ok(lifted);
+                }
+                if matches!(source_ty, Type::Union(_))
+                    || matches!(source_ty, Type::Named(name, _) if name == "Unknown")
+                    || matches!(source_ty, Type::TypeParam(_))
+                {
+                    return self.unbox_inline_union(&union, value.values[0]);
+                }
             }
             // A bare member value lifts into the union it is a member of
             // (the checker's comparison-only injection and the bare `None`).
@@ -10046,11 +10256,39 @@ impl<'a> FunctionCompiler<'a> {
             let index = crate::mir::union_payload_projection_index(head)
                 .ok_or_else(|| format!("invalid union payload projection `{head}`"))?;
             let member_ty = union.member(index)?.clone();
+            if !rest.is_empty() && matches!(member_ty, DirectType::Opaque(_)) {
+                // A projection into a runtime-object member writes through
+                // the runtime, which resolves enum payloads and nested unions
+                // inside the object; the union's own words do not change.
+                let member = self.union_member_from_words(&union, index, &current.values)?;
+                let updated_value = self.ensure_opaque(new_value)?;
+                let updated_value = self.transfer_owned_opaque_value(&updated_value);
+                let field_path = rest.join(".");
+                let (field_ptr, field_len) = self.string_constant(field_path.as_bytes())?;
+                self.builder.ins().call(
+                    self.instance_set_field_owned,
+                    &[member.values[0], field_ptr, field_len, updated_value],
+                );
+                return Ok(current);
+            }
             let replacement = if rest.is_empty() {
                 self.coerce_value(new_value, &member_ty)?
             } else {
                 let nested = self.union_member_from_words(&union, index, &current.values)?;
                 self.replace_nested_field(nested, rest, new_value)?
+            };
+            let replacement = if matches!(member_ty, DirectType::Opaque(_)) {
+                // The written handle is owned by the union: adopt an owned
+                // temporary or retain a borrowed value, and release the
+                // handle the union held when this member was active.
+                let stored = self.transfer_opaque_arg(&replacement);
+                self.release_union_words(&union, &current.values);
+                ValueRef {
+                    values: vec![stored],
+                    ty: member_ty.clone(),
+                }
+            } else {
+                replacement
             };
             let values = self.union_words_from_member(&union, index, replacement)?;
             return Ok(ValueRef {
@@ -10084,6 +10322,14 @@ impl<'a> FunctionCompiler<'a> {
         let expected = self.local_type(name)?;
         let value = self.coerce_value(value, &expected)?;
         let vars = self.local_vars(name)?;
+        if matches!(&expected, DirectType::Union(union) if union.owns_handles()) {
+            let stored = self.transfer_union_words(&value);
+            self.release_root_if_opaque(name)?;
+            for (var, compiled) in vars.into_iter().zip(stored) {
+                self.builder.def_var(var, compiled);
+            }
+            return Ok(());
+        }
         if matches!(expected, DirectType::Opaque(_)) {
             let stored = if self.temporary_owns_opaque(&value) {
                 self.clear_temporary_opaque_owned(&value);
@@ -10110,21 +10356,17 @@ impl<'a> FunctionCompiler<'a> {
         trait_name: Option<&str>,
     ) -> Option<DirectType> {
         union.members.iter().find_map(|member| {
-            let DirectType::PlainClass(class_ty) = &member.ty else {
-                return None;
+            let class_name = match &member.ty {
+                DirectType::PlainClass(class_ty) => class_ty.class_name.clone(),
+                DirectType::Opaque(Type::Named(name, args)) if args.is_empty() => name.clone(),
+                _ => return None,
             };
             let method = match trait_name {
                 Some(trait_name) => self
-                    .find_trait_method_for_trait(
-                        &Type::named(&class_ty.class_name),
-                        trait_name,
-                        field,
-                    )
+                    .find_trait_method_for_trait(&Type::named(&class_name), trait_name, field)
                     .cloned(),
-                None => find_method(self.classes.get(&class_ty.class_name), field)
-                    .or_else(|| {
-                        find_concrete_impl_method(&self.trait_impls, &class_ty.class_name, field)
-                    })
+                None => find_method(self.classes.get(&class_name), field)
+                    .or_else(|| find_concrete_impl_method(&self.trait_impls, &class_name, field))
                     .cloned(),
             }?;
             self.function_return_types
@@ -10146,6 +10388,37 @@ impl<'a> FunctionCompiler<'a> {
         args: &[MirArg],
         trait_name: Option<&str>,
     ) -> std::result::Result<ValueRef, String> {
+        if field == "clone" && trait_name.is_none() {
+            // A union clones as its active member (ADR-0052 A6): inline
+            // members copy their words, a runtime-object member's handle is
+            // cloned by the runtime, and the copy owns its handle.
+            if !args.is_empty() {
+                return Err("`clone` does not take arguments".to_string());
+            }
+            let result_ty = DirectType::Union(union.clone());
+            let cloned =
+                self.switch_on_union_tag(union, words, &result_ty, |codegen, index, member| {
+                    let member = if matches!(member.ty, DirectType::Opaque(_)) {
+                        let inst = codegen
+                            .builder
+                            .ins()
+                            .call(codegen.clone_value, &[member.values[0]]);
+                        ValueRef {
+                            values: codegen.builder.inst_results(inst).to_vec(),
+                            ty: member.ty.clone(),
+                        }
+                    } else {
+                        member
+                    };
+                    let member_words = codegen.union_words_from_member(union, index, member)?;
+                    Ok(ValueRef {
+                        values: member_words,
+                        ty: result_ty.clone(),
+                    })
+                })?;
+            self.mark_temporary_union_owned(&cloned);
+            return Ok(cloned);
+        }
         let result_ty = self
             .union_member_call_result_type(union, field, trait_name)
             .ok_or_else(|| {
@@ -10190,23 +10463,29 @@ impl<'a> FunctionCompiler<'a> {
         args: &[MirArg],
         trait_name: Option<&str>,
     ) -> std::result::Result<ValueRef, String> {
-        // Every inline union member is a scalar, `None`, or a plain class,
-        // and only a plain class carries methods.
-        let DirectType::PlainClass(class_ty) = object.ty.clone() else {
-            return Err(format!(
+        match object.ty.clone() {
+            DirectType::PlainClass(class_ty) => self.compile_class_member_call(
+                class_ty.class_name.as_str(),
+                Some(Type::named(&class_ty.class_name)),
+                object,
+                field,
+                receiver_place,
+                args,
+                trait_name,
+            ),
+            DirectType::Opaque(ty) => self.compile_opaque_member_call(
+                &ty,
+                object,
+                field,
+                receiver_place,
+                args,
+                trait_name,
+            ),
+            other => Err(format!(
                 "direct backend cannot call `.{field}` on `{}`",
-                render_direct_type(&object.ty)
-            ));
-        };
-        self.compile_class_member_call(
-            class_ty.class_name.as_str(),
-            Some(Type::named(&class_ty.class_name)),
-            object,
-            field,
-            receiver_place,
-            args,
-            trait_name,
-        )
+                render_direct_type(&other)
+            )),
+        }
     }
 
     /// The tag word and payload words of `member` injected as member
@@ -10326,10 +10605,31 @@ impl<'a> FunctionCompiler<'a> {
         let encoded = crate::native_runtime::canonical_runtime_type_name(&union_type);
         let (ptr, len) = self.string_constant(encoded.as_bytes())?;
         let result_ty = DirectType::Opaque(union_type.clone());
+        let source = ValueRef {
+            values: words.to_vec(),
+            ty: DirectType::Union(union.clone()),
+        };
+        let owned = self.temporary_owns_union(&source);
+        if owned {
+            self.clear_temporary_union_owned(&source);
+        }
         let boxed =
             self.switch_on_union_tag(union, words, &result_ty, |codegen, index, member| {
                 let payload = codegen.ensure_opaque(member)?;
-                let transferred = codegen.transfer_owned_opaque_value(&payload);
+                if owned {
+                    // The moved union's handle moves into the boxed value.
+                    codegen.mark_temporary_opaque_owned(&payload);
+                }
+                // A borrowed string payload is immutable, so the boxed union
+                // shares it; any other borrowed payload is copied, as the
+                // interpreter copies a place read into an injection.
+                let immutable_payload =
+                    matches!(&payload.ty, DirectType::Opaque(Type::Named(name, args)) if name == "str" && args.is_empty());
+                let transferred = if immutable_payload {
+                    codegen.transfer_opaque_arg(&payload)
+                } else {
+                    codegen.transfer_owned_opaque_value(&payload)
+                };
                 let tag = codegen.builder.ins().iconst(types::I64, index as i64);
                 let call = codegen
                     .builder
@@ -10357,24 +10657,30 @@ impl<'a> FunctionCompiler<'a> {
             probe.push(self.builder.ins().iconst(types::I64, 0));
         }
         let result_ty = DirectType::Union(union.clone());
-        self.switch_on_union_tag(union, &probe, &result_ty, |codegen, index, _| {
-            let member_ty = union.member(index)?.clone();
-            let index_value = codegen.builder.ins().iconst(types::I64, index as i64);
-            let call = codegen
-                .builder
-                .ins()
-                .call(codegen.union_payload_copy, &[handle, index_value]);
-            let payload = codegen.owned_opaque_result(
-                codegen.builder.inst_results(call).to_vec(),
-                direct_type_to_type(&member_ty),
-            );
-            let member = codegen.coerce_value(payload, &member_ty)?;
-            let words = codegen.union_words_from_member(union, index, member)?;
-            Ok(ValueRef {
-                values: words,
-                ty: DirectType::Union(union.clone()),
-            })
-        })
+        let unboxed =
+            self.switch_on_union_tag(union, &probe, &result_ty, |codegen, index, _| {
+                let member_ty = union.member(index)?.clone();
+                let index_value = codegen.builder.ins().iconst(types::I64, index as i64);
+                let call = codegen
+                    .builder
+                    .ins()
+                    .call(codegen.union_payload_copy, &[handle, index_value]);
+                let payload = codegen.owned_opaque_result(
+                    codegen.builder.inst_results(call).to_vec(),
+                    direct_type_to_type(&member_ty),
+                );
+                let member = codegen.coerce_value(payload, &member_ty)?;
+                // The payload copy is owned; an opaque member's handle leaves the
+                // statement's temporaries and travels with the union words.
+                codegen.clear_temporary_opaque_owned(&member);
+                let words = codegen.union_words_from_member(union, index, member)?;
+                Ok(ValueRef {
+                    values: words,
+                    ty: DirectType::Union(union.clone()),
+                })
+            })?;
+        self.mark_temporary_union_owned(&unboxed);
+        Ok(unboxed)
     }
 
     fn ensure_opaque(&mut self, value: ValueRef) -> std::result::Result<ValueRef, String> {
@@ -11361,12 +11667,13 @@ impl<'a> FunctionCompiler<'a> {
                 values: results[cursor..cursor + count].to_vec(),
                 ty,
             });
-            if matches!(
-                writebacks.last().map(|value| &value.ty),
-                Some(DirectType::Opaque(_))
-            ) {
-                let value = writebacks.last().expect("just pushed writeback");
-                self.mark_temporary_opaque_owned(value);
+            let value = writebacks.last().expect("just pushed writeback");
+            match &value.ty {
+                DirectType::Opaque(_) => self.mark_temporary_opaque_owned(value),
+                DirectType::Union(union) if union.owns_handles() => {
+                    self.mark_temporary_union_owned(value)
+                }
+                _ => {}
             }
             cursor += count;
         }
@@ -11374,8 +11681,13 @@ impl<'a> FunctionCompiler<'a> {
             values: results[..result_count].to_vec(),
             ty: result_ty,
         };
-        if matches!(result.ty, DirectType::Opaque(_)) {
-            self.mark_temporary_opaque_owned(&result);
+        // The callee exported one owned reference; the caller adopts it.
+        match &result.ty {
+            DirectType::Opaque(_) => self.mark_temporary_opaque_owned(&result),
+            DirectType::Union(union) if union.owns_handles() => {
+                self.mark_temporary_union_owned(&result)
+            }
+            _ => {}
         }
         Ok((result, writebacks))
     }
@@ -11506,11 +11818,8 @@ impl<'a> FunctionCompiler<'a> {
         let mut mutable_sink_places = vec![None; expected.len()];
         let receiver_expected = expected.first().cloned().unwrap_or(object.ty.clone());
         let receiver = self.coerce_value(object.clone(), &receiver_expected)?;
-        if matches!(receiver.ty, DirectType::Opaque(_)) {
-            lowered_args.push(self.transfer_opaque_arg(&receiver));
-        } else {
-            lowered_args.extend(receiver.values);
-        }
+        let transferred = self.transfer_values(&receiver);
+        lowered_args.extend(transferred);
         if method.receiver == Some(MirReceiverKind::BorrowMut) {
             let Some(place) = receiver_place else {
                 return Err(format!(
@@ -11540,11 +11849,8 @@ impl<'a> FunctionCompiler<'a> {
                     *slot = Some(place.clone());
                 }
             }
-            if matches!(coerced.ty, DirectType::Opaque(_)) {
-                lowered_args.push(self.transfer_opaque_arg(&coerced));
-            } else {
-                lowered_args.extend(coerced.values);
-            }
+            let transferred = self.transfer_values(&coerced);
+            lowered_args.extend(transferred);
         }
         let mutable_sinks = if mutable_sink_places.iter().any(Option::is_some) {
             let mut sinks = Vec::with_capacity(mutable_sink_places.len());
@@ -17247,16 +17553,32 @@ fn direct_type_inner(
 ) -> Option<DirectType> {
     match ty {
         Type::Union(union) => {
-            // Members that are inline themselves make the union inline; a
-            // member that needs a runtime object keeps the whole union as
-            // one runtime object for now.
+            // Every concrete union is inline: a scalar, `None`, or plain-class
+            // member occupies its own words, and a runtime-object member
+            // occupies one owned handle word that the tag switches retain and
+            // release. A union naming a type parameter keeps the generic
+            // frame's symbolic runtime layout.
+            let mut type_params = BTreeSet::new();
+            collect_type_params_from_type(ty, &mut type_params);
+            if !type_params.is_empty() {
+                return Some(DirectType::Opaque(ty.clone()));
+            }
+            // A member whose canonical key names a class this module knows
+            // under its module-qualified name resolves through that key, so
+            // a local spelling and its qualified import share one layout;
+            // an entry-module class keeps its own spelling, which is how the
+            // class table names it.
             let mut members = Vec::new();
-            for member in &union.members {
-                let member_ty = direct_type_inner(member, classes, visiting)?;
-                if matches!(member_ty, DirectType::Opaque(_)) {
-                    return Some(DirectType::Opaque(ty.clone()));
-                }
-                members.push(member_ty);
+            for (index, member) in union.members.iter().enumerate() {
+                let resolved = union
+                    .keys
+                    .get(index)
+                    .and_then(|key| canonical_named_type_from_key(key))
+                    .filter(|candidate| {
+                        matches!(candidate, Type::Named(name, _) if classes.contains_key(name))
+                    })
+                    .unwrap_or_else(|| member.clone());
+                members.push(direct_type_inner(&resolved, classes, visiting)?);
             }
             Some(DirectType::Union(DirectUnionType::new(ty.clone(), members)))
         }
@@ -17305,7 +17627,12 @@ fn direct_type_inner(
                         visiting.remove(name);
                         return Some(DirectType::Opaque(Type::Named(name.clone(), vec![])));
                     };
-                    if matches!(field_ty, DirectType::Opaque(_)) {
+                    let owns_handles = match &field_ty {
+                        DirectType::Opaque(_) => true,
+                        DirectType::Union(union) => union.owns_handles(),
+                        _ => false,
+                    };
+                    if owns_handles {
                         visiting.remove(name);
                         return Some(DirectType::Opaque(Type::Named(name.clone(), vec![])));
                     }
@@ -17326,6 +17653,23 @@ fn direct_type_inner(
             Some(DirectType::Opaque(Type::Named(name.clone(), args.clone())))
         }
     }
+}
+
+/// The module-qualified nominal type a canonical key names, for a key of a
+/// non-generic named type; every other key shape resolves through the
+/// member's own spelling.
+fn canonical_named_type_from_key(key: &str) -> Option<Type> {
+    let encoded = key.strip_prefix("aura-type-key-v1:")?;
+    let parsed: serde_json::Value = serde_json::from_str(encoded).ok()?;
+    let parts = parsed.as_array()?;
+    if parts.len() != 3 || parts[0].as_str()? != "named" {
+        return None;
+    }
+    let name = parts[1].as_str()?;
+    if !parts[2].as_array()?.is_empty() {
+        return None;
+    }
+    Some(Type::named(name))
 }
 
 fn collect_type_params_from_type(ty: &Type, collected: &mut BTreeSet<String>) {
@@ -17895,13 +18239,18 @@ fn infer_rvalue_type(
                     }
                 }
                 match object_ty {
+                    DirectType::Union(union) if field == "clone" => Some(DirectType::Union(union)),
                     DirectType::Union(union) => union.members.iter().find_map(|member| {
-                        let DirectType::PlainClass(class_ty) = &member.ty else {
-                            return None;
+                        let class_name = match &member.ty {
+                            DirectType::PlainClass(class_ty) => class_ty.class_name.clone(),
+                            DirectType::Opaque(Type::Named(name, args)) if args.is_empty() => {
+                                name.clone()
+                            }
+                            _ => return None,
                         };
-                        let method = find_method(classes.get(&class_ty.class_name), field)
-                            .or_else(|| {
-                                find_concrete_impl_method(trait_impls, &class_ty.class_name, field)
+                        let method =
+                            find_method(classes.get(&class_name), field).or_else(|| {
+                                find_concrete_impl_method(trait_impls, &class_name, field)
                             })?;
                         function_return_types.get(&method.function_name).cloned()
                     }),
@@ -19138,7 +19487,12 @@ fn unbox_thunk_value(
                     let copy = builder.ins().call(union_payload_copy, &[raw, index_value]);
                     let payload = builder.inst_results(copy)[0];
                     let member_values = unbox_thunk_value(codegen, builder, payload, member_ty)?;
-                    let _ = builder.ins().call(release_value, &[payload]);
+                    // A scalar or plain-class member was read out of the copy,
+                    // so the copy is released; a runtime-object member's handle
+                    // is the copy itself and travels with the union words.
+                    if !matches!(member_ty, DirectType::Opaque(_)) {
+                        let _ = builder.ins().call(release_value, &[payload]);
+                    }
                     let mut words = vec![builder.ins().iconst(types::I64, index as i64)];
                     for (value, abi) in member_values.iter().zip(member_ty.abi_types()) {
                         words.push(if abi == types::F64 {
@@ -19272,7 +19626,29 @@ fn release_direct_values(
     ty: &DirectType,
 ) -> std::result::Result<(), String> {
     match ty {
-        DirectType::Union(_) => {}
+        DirectType::Union(union) => {
+            if union.owns_handles() {
+                let release_value = codegen
+                    .object
+                    .declare_func_in_func(codegen.release_value, builder.func);
+                let tag = values[0];
+                let handle = values[1];
+                for &index in &union.owning {
+                    let active = builder.ins().icmp_imm(IntCC::Equal, tag, index as i64);
+                    let release_block = builder.create_block();
+                    let continue_block = builder.create_block();
+                    builder
+                        .ins()
+                        .brif(active, release_block, &[], continue_block, &[]);
+                    builder.switch_to_block(release_block);
+                    builder.seal_block(release_block);
+                    builder.ins().call(release_value, &[handle]);
+                    builder.ins().jump(continue_block, &[]);
+                    builder.switch_to_block(continue_block);
+                    builder.seal_block(continue_block);
+                }
+            }
+        }
         DirectType::Opaque(_) => {
             let Some(value) = values.first().copied() else {
                 return Err(format!(
