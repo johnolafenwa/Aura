@@ -362,9 +362,7 @@ pub mod representation_stats {
                     "union_payload_boxes" => stats.union_payload_boxes = value,
                     "closure_environments" => stats.closure_environments = value,
                     "opaque_boxes" => stats.opaque_boxes = value,
-                    "callable_overflow_allocations" => {
-                        stats.callable_overflow_allocations = value
-                    }
+                    "callable_overflow_allocations" => stats.callable_overflow_allocations = value,
                     _ => return None,
                 }
             }
@@ -2419,8 +2417,11 @@ pub(crate) fn try_clone_array_containing_value(value: &Value) -> Result<Value> {
                     }
                 }
                 CloneFrame::Union { union } => {
-                    state.completed =
-                        Some(union_value(union.union_type.clone(), union.member_index, cloned));
+                    state.completed = Some(union_value(
+                        union.union_type.clone(),
+                        union.member_index,
+                        cloned,
+                    ));
                 }
             }
         }

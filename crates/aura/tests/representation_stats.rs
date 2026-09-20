@@ -128,14 +128,20 @@ fn stats_report_appears_only_when_requested_on_both_backends() {
         );
         let (_, stats) = run_with_stats("repr-stats-shape", SCALAR_UNION_LOCAL, backend);
         assert_eq!(stats.callable_overflow_allocations, 0);
-        assert_eq!(stats.closure_environments, 0, "{backend} packs no closure here");
+        assert_eq!(
+            stats.closure_environments, 0,
+            "{backend} packs no closure here"
+        );
     }
 }
 
 #[test]
 fn direct_scalar_union_local_allocates_no_union_box() {
     let (mir, direct) = assert_both_backends("repr-scalar-union", SCALAR_UNION_LOCAL, "42\n");
-    assert!(mir.union_payload_boxes >= 1, "the interpreter boxes its union payload");
+    assert!(
+        mir.union_payload_boxes >= 1,
+        "the interpreter boxes its union payload"
+    );
     assert_eq!(
         direct.union_payload_boxes, 0,
         "an `int64 | None` local stays inline on the direct backend (Q9 A)"

@@ -260,7 +260,12 @@ impl DirectUnionType {
         self.members
             .get(index)
             .map(|member| &member.ty)
-            .ok_or_else(|| format!("union member index {index} is out of range for `{}`", self.union_type))
+            .ok_or_else(|| {
+                format!(
+                    "union member index {index} is out of range for `{}`",
+                    self.union_type
+                )
+            })
     }
 
     /// The tag of the `None` member, when the union has one.
@@ -5870,7 +5875,8 @@ impl<'a> FunctionCompiler<'a> {
                 let value = self.load_operand(&Operand::Place(place.clone()))?;
                 if let DirectType::Union(union) = &value.ty {
                     let union = union.clone();
-                    let member = self.union_member_from_words(&union, *member_index, &value.values)?;
+                    let member =
+                        self.union_member_from_words(&union, *member_index, &value.values)?;
                     let target = ensure_direct_type(member_type, &self.classes, "union payload")?;
                     return self.coerce_value(member, &target);
                 }
@@ -8796,9 +8802,14 @@ impl<'a> FunctionCompiler<'a> {
         }
 
         match object.ty.clone() {
-            DirectType::Union(union) => {
-                self.compile_union_member_call(&union, &object.values, field, receiver_place, args, None)
-            }
+            DirectType::Union(union) => self.compile_union_member_call(
+                &union,
+                &object.values,
+                field,
+                receiver_place,
+                args,
+                None,
+            ),
             DirectType::PlainClass(class_ty) => self.compile_class_member_call(
                 class_ty.class_name.as_str(),
                 Some(Type::named(&class_ty.class_name)),
@@ -9681,11 +9692,10 @@ impl<'a> FunctionCompiler<'a> {
                             render_direct_type(target)
                         )
                     })?;
-                let matched = self.builder.ins().icmp_imm(
-                    IntCC::Equal,
-                    value.values[0],
-                    member_index as i64,
-                );
+                let matched =
+                    self.builder
+                        .ins()
+                        .icmp_imm(IntCC::Equal, value.values[0], member_index as i64);
                 let (message_ptr, message_len) = self.string_constant(
                     format!(
                         "union value is not the expected `{}` member",
@@ -10173,16 +10183,22 @@ impl<'a> FunctionCompiler<'a> {
 
     /// The direct result type of `.field` on an inline union receiver,
     /// taken from the first member that declares it.
-    fn union_member_call_result_type(&self, union: &DirectUnionType, field: &str) -> Option<DirectType> {
+    fn union_member_call_result_type(
+        &self,
+        union: &DirectUnionType,
+        field: &str,
+    ) -> Option<DirectType> {
         union.members.iter().find_map(|member| {
             let DirectType::PlainClass(class_ty) = &member.ty else {
                 return None;
             };
-            let method = find_method(self.classes.get(&class_ty.class_name), field)
-                .or_else(|| {
+            let method =
+                find_method(self.classes.get(&class_ty.class_name), field).or_else(|| {
                     find_concrete_impl_method(&self.trait_impls, &class_ty.class_name, field)
                 })?;
-            self.function_return_types.get(&method.function_name).cloned()
+            self.function_return_types
+                .get(&method.function_name)
+                .cloned()
         })
     }
 
@@ -10212,21 +10228,22 @@ impl<'a> FunctionCompiler<'a> {
         let args = args.to_vec();
         let field = field.to_string();
         let trait_name = trait_name.map(str::to_string);
-        let result = self.switch_on_union_tag(union, &words, &result_ty, |codegen, index, member| {
-            let projected = receiver_place.as_ref().map(|place| {
-                format!(
-                    "{place}.{}{index}",
-                    crate::mir::UNION_PAYLOAD_PROJECTION_PREFIX
+        let result =
+            self.switch_on_union_tag(union, &words, &result_ty, |codegen, index, member| {
+                let projected = receiver_place.as_ref().map(|place| {
+                    format!(
+                        "{place}.{}{index}",
+                        crate::mir::UNION_PAYLOAD_PROJECTION_PREFIX
+                    )
+                });
+                codegen.compile_member_call_on_value(
+                    member,
+                    &field,
+                    projected.as_deref(),
+                    &args,
+                    trait_name.as_deref(),
                 )
-            });
-            codegen.compile_member_call_on_value(
-                member,
-                &field,
-                projected.as_deref(),
-                &args,
-                trait_name.as_deref(),
-            )
-        })?;
+            })?;
         if matches!(result.ty, DirectType::Opaque(_)) {
             self.mark_temporary_opaque_owned(&result);
         }
@@ -10252,9 +10269,14 @@ impl<'a> FunctionCompiler<'a> {
                 args,
                 trait_name,
             ),
-            DirectType::Opaque(ty) => {
-                self.compile_opaque_member_call(&ty, object, field, receiver_place, args, trait_name)
-            }
+            DirectType::Opaque(ty) => self.compile_opaque_member_call(
+                &ty,
+                object,
+                field,
+                receiver_place,
+                args,
+                trait_name,
+            ),
             other => Err(format!(
                 "direct backend cannot call `.{field}` on `{}`",
                 render_direct_type(&other)
@@ -10276,7 +10298,9 @@ impl<'a> FunctionCompiler<'a> {
         let mut words = vec![self.builder.ins().iconst(types::I64, index as i64)];
         for (value, abi) in member.values.iter().zip(member_ty.abi_types()) {
             words.push(if abi == types::F64 {
-                self.builder.ins().bitcast(types::I64, MemFlags::new(), *value)
+                self.builder
+                    .ins()
+                    .bitcast(types::I64, MemFlags::new(), *value)
             } else {
                 *value
             });
@@ -10298,7 +10322,9 @@ impl<'a> FunctionCompiler<'a> {
         let mut values = Vec::new();
         for (word, abi) in words[1..].iter().zip(member_ty.abi_types()) {
             values.push(if abi == types::F64 {
-                self.builder.ins().bitcast(types::F64, MemFlags::new(), *word)
+                self.builder
+                    .ins()
+                    .bitcast(types::F64, MemFlags::new(), *word)
             } else {
                 *word
             });
@@ -10375,19 +10401,20 @@ impl<'a> FunctionCompiler<'a> {
         let encoded = crate::native_runtime::canonical_runtime_type_name(&union_type);
         let (ptr, len) = self.string_constant(encoded.as_bytes())?;
         let result_ty = DirectType::Opaque(union_type.clone());
-        let boxed = self.switch_on_union_tag(union, words, &result_ty, |codegen, index, member| {
-            let payload = codegen.ensure_opaque(member)?;
-            let transferred = codegen.transfer_owned_opaque_value(&payload);
-            let tag = codegen.builder.ins().iconst(types::I64, index as i64);
-            let call = codegen
-                .builder
-                .ins()
-                .call(codegen.union_inject, &[ptr, len, tag, transferred]);
-            Ok(ValueRef {
-                values: codegen.builder.inst_results(call).to_vec(),
-                ty: DirectType::Opaque(union_type.clone()),
-            })
-        })?;
+        let boxed =
+            self.switch_on_union_tag(union, words, &result_ty, |codegen, index, member| {
+                let payload = codegen.ensure_opaque(member)?;
+                let transferred = codegen.transfer_owned_opaque_value(&payload);
+                let tag = codegen.builder.ins().iconst(types::I64, index as i64);
+                let call = codegen
+                    .builder
+                    .ins()
+                    .call(codegen.union_inject, &[ptr, len, tag, transferred]);
+                Ok(ValueRef {
+                    values: codegen.builder.inst_results(call).to_vec(),
+                    ty: DirectType::Opaque(union_type.clone()),
+                })
+            })?;
         self.mark_temporary_opaque_owned(&boxed);
         Ok(boxed)
     }
@@ -16503,10 +16530,15 @@ fn find_concrete_impl_method<'a>(
 ) -> Option<&'a MirMethod> {
     let mut found = None;
     for trait_impl in trait_impls {
-        if !matches!(&trait_impl.for_type, Type::Named(name, args) if name == class_name && args.is_empty()) {
+        if !matches!(&trait_impl.for_type, Type::Named(name, args) if name == class_name && args.is_empty())
+        {
             continue;
         }
-        if let Some(method) = trait_impl.methods.iter().find(|method| method.name == field) {
+        if let Some(method) = trait_impl
+            .methods
+            .iter()
+            .find(|method| method.name == field)
+        {
             if found.is_some() {
                 return None;
             }
@@ -19060,23 +19092,29 @@ fn box_thunk_value(
             let (ptr, len) = thunk_string_constant(codegen, builder, encoded.as_bytes())?;
             let tag = values[0];
             let words = values[1..].to_vec();
-            thunk_switch_on_tag(builder, tag, union.members.len(), &[types::I64], |builder, index| {
-                let member_ty = &union.members[index].ty;
-                let mut member_values = Vec::new();
-                for (word, abi) in words.iter().zip(member_ty.abi_types()) {
-                    member_values.push(if abi == types::F64 {
-                        builder.ins().bitcast(types::F64, MemFlags::new(), *word)
-                    } else {
-                        *word
-                    });
-                }
-                let payload = box_thunk_value(codegen, builder, &member_values, member_ty)?;
-                let index_value = builder.ins().iconst(types::I64, index as i64);
-                let inst = builder
-                    .ins()
-                    .call(union_inject, &[ptr, len, index_value, payload]);
-                Ok(vec![builder.inst_results(inst)[0]])
-            })
+            thunk_switch_on_tag(
+                builder,
+                tag,
+                union.members.len(),
+                &[types::I64],
+                |builder, index| {
+                    let member_ty = &union.members[index].ty;
+                    let mut member_values = Vec::new();
+                    for (word, abi) in words.iter().zip(member_ty.abi_types()) {
+                        member_values.push(if abi == types::F64 {
+                            builder.ins().bitcast(types::F64, MemFlags::new(), *word)
+                        } else {
+                            *word
+                        });
+                    }
+                    let payload = box_thunk_value(codegen, builder, &member_values, member_ty)?;
+                    let index_value = builder.ins().iconst(types::I64, index as i64);
+                    let inst = builder
+                        .ins()
+                        .call(union_inject, &[ptr, len, index_value, payload]);
+                    Ok(vec![builder.inst_results(inst)[0]])
+                },
+            )
             .map(|values| values[0])
         }
         DirectType::Opaque(_) => values.first().copied().ok_or({
@@ -19176,26 +19214,32 @@ fn unbox_thunk_value(
             let tag_inst = builder.ins().call(union_tag, &[raw]);
             let tag = builder.inst_results(tag_inst)[0];
             let result_types = ty.abi_types();
-            thunk_switch_on_tag(builder, tag, union.members.len(), &result_types, |builder, index| {
-                let member_ty = &union.members[index].ty;
-                let index_value = builder.ins().iconst(types::I64, index as i64);
-                let copy = builder.ins().call(union_payload_copy, &[raw, index_value]);
-                let payload = builder.inst_results(copy)[0];
-                let member_values = unbox_thunk_value(codegen, builder, payload, member_ty)?;
-                let _ = builder.ins().call(release_value, &[payload]);
-                let mut words = vec![builder.ins().iconst(types::I64, index as i64)];
-                for (value, abi) in member_values.iter().zip(member_ty.abi_types()) {
-                    words.push(if abi == types::F64 {
-                        builder.ins().bitcast(types::I64, MemFlags::new(), *value)
-                    } else {
-                        *value
-                    });
-                }
-                while words.len() < union.payload_words + 1 {
-                    words.push(builder.ins().iconst(types::I64, 0));
-                }
-                Ok(words)
-            })
+            thunk_switch_on_tag(
+                builder,
+                tag,
+                union.members.len(),
+                &result_types,
+                |builder, index| {
+                    let member_ty = &union.members[index].ty;
+                    let index_value = builder.ins().iconst(types::I64, index as i64);
+                    let copy = builder.ins().call(union_payload_copy, &[raw, index_value]);
+                    let payload = builder.inst_results(copy)[0];
+                    let member_values = unbox_thunk_value(codegen, builder, payload, member_ty)?;
+                    let _ = builder.ins().call(release_value, &[payload]);
+                    let mut words = vec![builder.ins().iconst(types::I64, index as i64)];
+                    for (value, abi) in member_values.iter().zip(member_ty.abi_types()) {
+                        words.push(if abi == types::F64 {
+                            builder.ins().bitcast(types::I64, MemFlags::new(), *value)
+                        } else {
+                            *value
+                        });
+                    }
+                    while words.len() < union.payload_words + 1 {
+                        words.push(builder.ins().iconst(types::I64, 0));
+                    }
+                    Ok(words)
+                },
+            )
         }
         DirectType::Opaque(_) => Ok(vec![raw]),
         DirectType::Scalar(ScalarKind::Int32) => {
