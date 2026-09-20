@@ -1,0 +1,35 @@
+class Holder:
+    name: str
+    label: str | None
+
+def main():
+    mut first: str | None = "ada"
+    second = first
+    first = "grace"
+    match first:
+        case str as text:
+            print(text)
+        case None:
+            print("none")
+    match second:
+        case str as text:
+            print(text)
+        case None:
+            print("none")
+    mut holder = Holder(name="h", label="stored")
+    holder.label = None
+    holder.label = "again"
+    match holder.label:
+        case str as text:
+            print(text)
+        case None:
+            print("none")
+    items: list[str | None] = ["x", None]
+    mut count = 0
+    for item in items:
+        match item:
+            case str as text:
+                count = count + text.len()
+            case None:
+                count = count + 100
+    print(count)

@@ -14,7 +14,7 @@ try:
 except ImportError:
     import benchmark_process
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-PROGRAMS = ('union_scalar_local', 'union_class_field', 'callable_pack_inline',
+PROGRAMS = ('union_scalar_local', 'union_class_field', 'union_string_local', 'callable_pack_inline',
             'callable_pack_overflow', 'callable_move')
 BACKENDS = ('mir', 'direct')
 COUNTERS = ('union_payload_boxes', 'closure_environments', 'opaque_boxes',

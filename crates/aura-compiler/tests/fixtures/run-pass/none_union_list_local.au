@@ -1,0 +1,9 @@
+def main():
+    items: list[int64] | None = [1, 2, 3]
+    match items:
+        case list[int64] as values:
+            print(values.len())
+        case None:
+            print("none")
+    empty: list[int64] | None = None
+    print(empty == None)

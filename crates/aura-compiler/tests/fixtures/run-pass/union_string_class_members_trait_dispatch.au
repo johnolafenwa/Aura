@@ -1,0 +1,28 @@
+trait Greet:
+    def greet(mut self) -> str
+
+class Dog:
+    name: str
+    barks: int64
+
+class Cat:
+    name: str
+
+impl Greet for Dog:
+    def greet(mut self) -> str:
+        self.barks = self.barks + 1
+        return self.name + " woof"
+
+impl Greet for Cat:
+    def greet(mut self) -> str:
+        return self.name + " meow"
+
+def main():
+    mut pet: Dog | Cat = Dog(name="rex", barks=0)
+    print(pet.greet())
+    print(pet.greet())
+    match pet:
+        case Dog as dog:
+            print(dog.barks)
+        case Cat as cat:
+            print(cat.name)

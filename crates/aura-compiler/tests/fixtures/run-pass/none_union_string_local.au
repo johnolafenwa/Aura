@@ -1,0 +1,15 @@
+def main():
+    mut label: str | None = "ada"
+    match label:
+        case str as text:
+            print(text)
+        case None:
+            print("none")
+    label = None
+    print(label == None)
+    label = "grace"
+    match label:
+        case str as text:
+            print(text.len())
+        case None:
+            print("none")

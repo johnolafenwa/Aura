@@ -13547,6 +13547,15 @@ fn native_codegen_builtin_member_tables_and_trait_lookup_cover_additional_paths(
     let option_type = |inner: Type| crate::sema::optional_type(inner);
     let result_direct =
         |ok: Type, err: Type| DirectType::Opaque(Type::Named("Result".to_string(), vec![ok, err]));
+    let inline_option_over_opaque = |member: Type| -> DirectType {
+        DirectType::Union(super::DirectUnionType::new(
+            option_type(member.clone()),
+            vec![
+                DirectType::Opaque(member),
+                DirectType::Scalar(ScalarKind::Unit),
+            ],
+        ))
+    };
     let direct_named = |name: &str| DirectType::Opaque(named_type(name));
     let direct_vec = |inner: Type| DirectType::Opaque(vec_type(inner));
     let io_error = named_type("io.Error");
@@ -13585,17 +13594,17 @@ fn native_codegen_builtin_member_tables_and_trait_lookup_cover_additional_paths(
         (
             named_type("process.Child"),
             "stdin",
-            DirectType::Opaque(option_type(named_type("process.Pipe"))),
+            inline_option_over_opaque(named_type("process.Pipe")),
         ),
         (
             named_type("process.Child"),
             "stdout",
-            DirectType::Opaque(option_type(named_type("process.Pipe"))),
+            inline_option_over_opaque(named_type("process.Pipe")),
         ),
         (
             named_type("process.Child"),
             "stderr",
-            DirectType::Opaque(option_type(named_type("process.Pipe"))),
+            inline_option_over_opaque(named_type("process.Pipe")),
         ),
         (
             named_type("process.Child"),
