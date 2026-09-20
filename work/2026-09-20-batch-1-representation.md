@@ -132,8 +132,15 @@ coverage floors may only rise.
   the validator coverage suite, the native coverage suite, and the 398 native
   codegen, native runtime, union-injection, and union-runtime unit tests
   pass; every runnable fixture emits a direct object; the forced backend
-  parity matrix result and the complete local chain are recorded below when
-  they finish.
+  parity matrix is green (2,034 seconds on this host).
+- Complete local `npm run ci` chain green on 2026-09-20 at 19:45 BST for
+  the tree of `ee8f1d74`: compiler coverage 96.4690% lines (4,262 of
+  120,698 missed) / 97.3506% functions (215 of 8,115) / 95.2864% regions
+  (8,527 of 180,891) against the unchanged floors 96.46 / 97.33 / 95.23;
+  one earlier run of this tree failed only the coverage floors before the
+  dead arms were removed and the boundary tests added. LSP 116/116 at 100%
+  coverage, extension 28/28, reference, tutorials, docs build, audit,
+  clippy, and hygiene pass.
 - Counters measured by `scripts/bench-representation.py` on this host
   (reference numbers for the interpreter, layout claims for the direct
   backend): recorded in the performance chapter's representation table and
