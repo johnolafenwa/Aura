@@ -77,20 +77,20 @@ fn builtin_process_module_type_checks_from_path_context() {
 
 def inspect(child: process.Child, pipe: process.Pipe, completed: process.Completed, status: process.ExitStatus, wait: process.Wait, stdio: process.Stdio, error: process.Error, supervisor: process.Supervisor, event: process.SupervisorEvent, supervisor_wait: process.SupervisorWait, restart: process.RestartPolicy) -> int32:
     match own child.stdin():
-        case Option.Some(stdin_pipe):
+        case process.Pipe as stdin_pipe:
             print(stdin_pipe.write_all("hello\n", timeout=10ms))
             stdin_pipe.close()
-        case Option.None:
+        case None:
             pass
     match own child.stdout():
-        case Option.Some(stdout_pipe):
+        case process.Pipe as stdout_pipe:
             print(stdout_pipe.read_line(timeout=10ms))
-        case Option.None:
+        case None:
             pass
     match own child.stderr():
-        case Option.Some(stderr_pipe):
+        case process.Pipe as stderr_pipe:
             print(stderr_pipe.read_all())
-        case Option.None:
+        case None:
             pass
     print(child.wait(timeout=10ms))
     print(child.wait_or_none(timeout=10ms))
@@ -126,7 +126,7 @@ def inspect(child: process.Child, pipe: process.Pipe, completed: process.Complet
 
 def boot() -> Result[None, process.Error]:
     env: dict[str, str] = {"AURA_PROCESS_VAR": "present"}
-    with running = try process.start(["/bin/cat"], cwd=Option.None, env=env.copy(), stdin=process.pipe(), stdout=process.pipe(), stderr=process.null(), group=true):
+    with running = try process.start(["/bin/cat"], cwd=None, env=env.copy(), stdin=process.pipe(), stdout=process.pipe(), stderr=process.null(), group=true):
         print(running.stdin())
         print(running.stdout())
         print(running.stderr())
@@ -134,7 +134,7 @@ def boot() -> Result[None, process.Error]:
         print(running.wait_or_none(timeout=10ms))
         print(running.wait_ok(timeout=10ms))
 
-    completed = try process.run(["/usr/bin/printenv", "AURA_PROCESS_VAR"], cwd=Option.None, env=env, stdin=process.null(), stdout=process.pipe(), stderr=process.pipe(), timeout=1s, group=true)
+    completed = try process.run(["/usr/bin/printenv", "AURA_PROCESS_VAR"], cwd=None, env=env, stdin=process.null(), stdout=process.pipe(), stderr=process.pipe(), timeout=1s, group=true)
     print(completed.status())
     print(completed.success())
     print(completed.stdout())
@@ -170,14 +170,15 @@ fn builtin_process_module_runs_through_public_api() {
 
 def run_env() -> Result[None, process.Error]:
     env: dict[str, str] = {{"AURA_PROCESS_VAR": "present"}}
-    completed = try process.run(["/usr/bin/printenv", "AURA_PROCESS_VAR"], cwd=Option.None, env=env, stdin=process.null(), stdout=process.pipe(), stderr=process.pipe(), timeout=2s, group=true)
+    completed = try process.run(["/usr/bin/printenv", "AURA_PROCESS_VAR"], cwd=None, env=env, stdin=process.null(), stdout=process.pipe(), stderr=process.pipe(), timeout=2s, group=true)
     print(completed.stdout().trim())
     print(completed.stderr().len())
     print(completed.status())
     return Result.Ok(None)
 
 def run_pwd(cwd: own str) -> Result[None, process.Error]:
-    completed = try process.run(["/bin/pwd"], cwd=Option.Some(cwd), env={{}}, stdin=process.null(), stdout=process.pipe(), stderr=process.pipe(), timeout=2s, group=true)
+    directory: str | None = cwd
+    completed = try process.run(["/bin/pwd"], cwd=directory, env={{}}, stdin=process.null(), stdout=process.pipe(), stderr=process.pipe(), timeout=2s, group=true)
     print(completed.stdout().trim())
     print(completed.stderr().len())
     print(completed.status())
@@ -185,25 +186,27 @@ def run_pwd(cwd: own str) -> Result[None, process.Error]:
 
 def echo_with_cat() -> Result[None, process.Error]:
     with child = try process.start(["/bin/cat"], stdin=process.pipe(), stdout=process.pipe(), stderr=process.null()):
-        match own child.stdin():
-            case Option.Some(stdin_pipe):
+        stdin: process.Pipe | None = child.stdin()
+        match own stdin:
+            case process.Pipe as stdin_pipe:
                 try stdin_pipe.write_all("echo from cat\n", timeout=500ms)
                 try stdin_pipe.flush()
                 stdin_pipe.close()
-            case Option.None:
+            case None:
                 print("missing stdin")
                 return Result.Ok(None)
 
-        match own child.stdout():
-            case Option.Some(stdout_pipe):
-                line = try stdout_pipe.read_line(timeout=500ms)
+        stdout: process.Pipe | None = child.stdout()
+        match own stdout:
+            case process.Pipe as stdout_pipe:
+                line: str | None = try stdout_pipe.read_line(timeout=500ms)
                 match own line:
-                    case Option.Some(text):
+                    case str as text:
                         print(text)
-                    case Option.None:
+                    case None:
                         print("missing stdout text")
                         return Result.Ok(None)
-            case Option.None:
+            case None:
                 print("missing stdout")
                 return Result.Ok(None)
 
@@ -213,16 +216,18 @@ def echo_with_cat() -> Result[None, process.Error]:
 def supervise_flaky_process() -> Result[None, process.Error]:
     with supervisor = process.supervisor():
         try supervisor.start(name="flaky", command=["/usr/bin/false"], restart=process.RestartPolicy.OnFailure, backoff=10ms, max_restarts=1, group=true)
-        match own try supervisor.wait_or_none(timeout=500ms):
-            case Option.Some(event):
+        first: process.SupervisorEvent | None = try supervisor.wait_or_none(timeout=500ms)
+        match own first:
+            case process.SupervisorEvent as event:
                 print(event)
-            case Option.None:
+            case None:
                 print("missing first supervisor event")
                 return Result.Ok(None)
-        match own try supervisor.wait_or_none(timeout=500ms):
-            case Option.Some(event):
+        second: process.SupervisorEvent | None = try supervisor.wait_or_none(timeout=500ms)
+        match own second:
+            case process.SupervisorEvent as event:
                 print(event)
-            case Option.None:
+            case None:
                 print("missing second supervisor event")
                 return Result.Ok(None)
         print(supervisor.is_empty())
@@ -293,7 +298,7 @@ def wait_for_sleep_timeout() -> Result[None, process.Error]:
     assert_eq!(
         output.stdout,
         format!(
-            "present\n0\nExitStatus.Exited(0)\n{cwd}\n0\nExitStatus.Exited(0)\nchecked\nOption.None\necho from cat\nExitStatus.Exited(0)\nSupervisorEvent.Restarted(flaky, ExitStatus.Exited(1), 1)\nSupervisorEvent.Exited(flaky, ExitStatus.Exited(1), 1)\ntrue\nfalse\ntrue\n",
+            "present\n0\nExitStatus.Exited(0)\n{cwd}\n0\nExitStatus.Exited(0)\nchecked\n\necho from cat\nExitStatus.Exited(0)\nSupervisorEvent.Restarted(flaky, ExitStatus.Exited(1), 1)\nSupervisorEvent.Exited(flaky, ExitStatus.Exited(1), 1)\ntrue\nfalse\ntrue\n",
             cwd = cwd,
         )
     );
@@ -308,12 +313,13 @@ fn zero_sized_process_pipe_read_returns_typed_invalid_input_without_consuming() 
 
 def probe() -> Result[None, process.Error]:
     with child = try process.start(["/bin/sh", "-c", "printf x"], stdin=process.null(), stdout=process.pipe(), stderr=process.null()):
-        match own child.stdout():
-            case Option.Some(pipe):
+        stdout: process.Pipe | None = child.stdout()
+        match own stdout:
+            case process.Pipe as pipe:
                 with output = pipe:
                     print(output.read_bytes(0, timeout=1s))
                     print(output.read_bytes(1, timeout=1s))
-            case Option.None:
+            case None:
                 pass
     return Result.Ok(None)
 
@@ -330,7 +336,7 @@ def main() -> int32:
         .expect("zero-sized process reads should be represented as typed results");
     assert_eq!(
         output.stdout,
-        "Result.Err(Error.Io(io.Error.InvalidInput))\nResult.Ok(Option.Some([120]))\n"
+        "Result.Err(Error.Io(io.Error.InvalidInput))\nResult.Ok([120])\n"
     );
 }
 

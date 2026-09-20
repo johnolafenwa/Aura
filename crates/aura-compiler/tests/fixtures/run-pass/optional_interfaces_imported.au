@@ -1,0 +1,28 @@
+from optional_interfaces_imported_support.shapes import head, first, describe, poll_first, MaybeText
+
+def main():
+    title = head("#heading")
+    if title is not None:
+        print(title)
+    print(head("plain") is None)
+    match first([4, 5]):
+        case Lookup.Found(value):
+            print(value)
+        case Lookup.Missing:
+            print("empty")
+    match first[str]([]):
+        case Lookup.Found(value):
+            print(value)
+        case Lookup.Missing:
+            print("empty")
+    print(describe())
+    print(describe(value=9))
+    queue = Queue[int64]()
+    queue.put(11)
+    match poll_first(queue):
+        case Poll.Ready(value):
+            print(value)
+        case Poll.Unavailable:
+            print("unavailable")
+    alias: MaybeText = None
+    print(alias is None)

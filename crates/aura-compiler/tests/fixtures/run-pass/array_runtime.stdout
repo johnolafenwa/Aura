@@ -1,6 +1,6 @@
-Option.None
-Option.None
-Option.Some(2)
+None
+None
+2
 6
 4
 Array[int32](shape=[2, 2], values=[1, 6, 3, 4])

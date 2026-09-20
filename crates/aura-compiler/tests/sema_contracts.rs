@@ -9,7 +9,7 @@ fn exported_type_serialization_preserves_names_modes_defaults_and_nested_types()
         params: vec![FunctionParamContract {
             keyword_only: false,
             name: "input".into(),
-            ty: Type::Named("Option".into(), vec![Type::TypeParam("T".into())]),
+            ty: Type::Named("Envelope".into(), vec![Type::TypeParam("T".into())]),
             passing: ReceiverKind::Value,
             has_default: false,
         }],
@@ -17,7 +17,7 @@ fn exported_type_serialization_preserves_names_modes_defaults_and_nested_types()
     };
     let expected = concat!(
         "{\"Function\":{\"params\":[{\"keyword_only\":false,\"name\":\"input\",",
-        "\"ty\":{\"Named\":[\"Option\",[{\"TypeParam\":\"T\"}]]},",
+        "\"ty\":{\"Named\":[\"Envelope\",[{\"TypeParam\":\"T\"}]]},",
         "\"passing\":\"Value\",\"has_default\":false}],",
         "\"return_type\":{\"Tuple\":[{\"Named\":[\"int32\",[]]},\"Unit\"]}}}"
     );

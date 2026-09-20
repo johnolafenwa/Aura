@@ -1,11 +1,11 @@
-def no_value() -> Option[int32]:
+def no_value() -> int32 | None:
     return None
 
-def is_empty[T](value: Option[T]) -> bool:
+def is_empty[T](value: T | None) -> bool:
     return value == None
 
 def main() -> int32:
-    value: Option[int32] = no_value()
+    value: int32 | None = no_value()
     print(value == None)
     print(None == value)
     print((None) == value)
@@ -15,13 +15,13 @@ def main() -> int32:
     print(None != value)
     print(None == None)
     print(None != None)
-    present: Option[int32] = Option.Some(7)
+    present: int32 | None = 7
     print(present == None)
     print(None == present)
     print(present != None)
     print(None != present)
     print(is_empty[int32](value=value))
-    nested_left: Option[Option[int32]] = Option.Some(None)
-    nested_right: Option[Option[int32]] = Option.Some(no_value())
+    nested_left: Lookup[int32 | None] = Lookup.Found(None)
+    nested_right: Lookup[int32 | None] = Lookup.Found(no_value())
     print(nested_left == nested_right)
     return 0

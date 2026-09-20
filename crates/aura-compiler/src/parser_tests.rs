@@ -295,7 +295,7 @@ fn p63_lambda_rejects_non_contextual_parameter_syntax_with_teaching_diagnostics(
         typed.message,
         "lambda parameter types are inferred from context; write `lambda value: expression` without a parameter type"
     );
-    let typed_generic = parse_expression("lambda value: Option[int32]: value")
+    let typed_generic = parse_expression("lambda value: Lookup[int32]: value")
         .expect_err("generic lambda parameter types come from context");
     assert_eq!(
         typed_generic.message,
@@ -448,9 +448,9 @@ fn tuple_literals_are_parenthesized_and_distinct_from_groups() {
 }
 
 #[test]
-fn tuple_types_are_structural_and_support_singletons_nesting_and_option() {
+fn tuple_types_are_structural_and_support_singletons_nesting_and_none_unions() {
     let item = parse_item_from(
-        "def rotate(value: (int32, str), only: (int64,)) -> ((str, int32), bool)?:\n    return None\n",
+        "def rotate(value: (int32, str), only: (int64,)) -> ((str, int32), bool) | None:\n    return None\n",
     )
     .expect("tuple parameter and return types should parse");
     let Item::Function(function) = item else {
@@ -474,22 +474,28 @@ fn tuple_types_are_structural_and_support_singletons_nesting_and_option() {
         function.params[1].ty.kind,
         TypeRefKind::Tuple(ref elements) if elements.len() == 1
     ));
-    let TypeRefKind::Named {
-        name,
-        args: option_args,
-    } = &function.return_type.kind
-    else {
-        panic!("optional tuple return should lower to an Option type reference");
+    let TypeRefKind::Union(union_members) = &function.return_type.kind else {
+        panic!("optional tuple return should parse as a `T | None` union type reference");
     };
-    assert_eq!(name, "Option");
     assert!(matches!(
-        option_args.as_slice(),
-        [TypeRef {
-            kind: TypeRefKind::Tuple(elements),
-            ..
-        }] if elements.len() == 2
+        union_members.as_slice(),
+        [
+            TypeRef {
+                kind: TypeRefKind::Tuple(elements),
+                ..
+            },
+            none
+        ] if elements.len() == 2
             && matches!(elements[0].kind, TypeRefKind::Tuple(ref nested) if nested.len() == 2)
+            && matches!(named_type_ref(none), Some(("None", args)) if args.is_empty())
     ));
+
+    let suffix = parse_item_from(
+        "def rotate(value: (int32, str)) -> ((str, int32), bool)?:\n    return None\n",
+    )
+    .expect_err("the removed `T?` type suffix is an ordinary parse error");
+    assert_eq!(suffix.code, "AU1101");
+    assert_eq!(suffix.message, "expected Colon, found Question");
 
     let indirect = parse_item_from("def invalid(value: indirect (int32,)):\n    pass\n")
         .expect_err("indirect tuple types must not silently discard the modifier");
@@ -955,9 +961,13 @@ fn tuple_parsing_keeps_container_commas_and_rejects_unsupported_forms() {
     );
 
     assert!(matches!(
-        parse_stmt_from("pair: (int32, str)? = None\n"),
+        parse_stmt_from("pair: (int32, str) | None = None\n"),
         Ok(Stmt::Assign(_))
     ));
+    let suffix = parse_stmt_from("pair: (int32, str)? = None\n")
+        .expect_err("the removed `T?` type suffix is an ordinary parse error");
+    assert_eq!(suffix.code, "AU1101");
+    assert_eq!(suffix.message, "expected Newline");
 }
 
 #[test]
@@ -2240,9 +2250,9 @@ fn bitwise_shift_and_power_precedence_matches_the_accepted_grammar() {
 
 #[test]
 fn parser_helpers_cover_brackets_keywords_and_member_names() {
-    let tokens = lex("list[dict[str, int32]]?\n").expect("tokens");
+    let tokens = lex("list[dict[str, int32]] | None\n").expect("tokens");
     let parser = Parser::new(tokens);
-    assert_eq!(parser.skip_type_tokens(0), 10);
+    assert_eq!(parser.skip_type_tokens(0), 11);
 
     let unclosed_type =
         lex("list[dict[str, int32]\n").expect_err("unclosed type brackets should fail lexing");
@@ -2365,7 +2375,7 @@ fn parser_helpers_cover_specialization_and_format_parts() {
     let indexed = parse_expression("values[idx]").expect("index expression");
     assert!(matches!(indexed.kind, ExprKind::Index { .. }));
 
-    let multi_index = parse_expression("triple[str, int32, Option[bool]]")
+    let multi_index = parse_expression("triple[str, int32, Lookup[bool]]")
         .expect("comma-separated index expression");
     let ExprKind::Index { index, .. } = multi_index.kind else {
         panic!("a bare multi-type suffix remains an index until callable context resolves it");

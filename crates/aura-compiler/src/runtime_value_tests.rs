@@ -2,19 +2,20 @@ use super::{
     append_string_with_limit, cancel_current_lightweight_task_boundary, cast_numeric_value,
     claim_task_result_observations, create_dir_once, decode_process_restart_policy,
     decode_process_stdio, divmod_numeric_values, finalize_task_execution, float_floor_divmod,
-    float_power, format_runtime_value, io_decode_utf8, io_error, lock_mutex,
-    next_retry_runtime_backoff, non_unix_tls_listener_wait_timeout, option_none, option_some,
-    parse_format_spec, process_error_cancelled, process_error_no_command, process_error_other,
-    process_error_spawn, process_error_timed_out, process_supervisor_event_failed,
-    process_supervisor_wait_cancelled, process_supervisor_wait_event,
-    process_supervisor_wait_timed_out, process_wait_cancelled, process_wait_failed,
-    process_wait_timed_out, queue_receive_cancelled, queue_receive_closed, queue_receive_item,
-    queue_receive_timed_out, recv_for_task_group_iteration, remove_file_checked, render_float,
-    render_float32, result_err, result_ok, round_numeric_value, run_blocking_io,
-    run_lightweight_root_task, run_protocol_step, select_outcome_deadline, select_outcome_queue,
-    select_outcome_task, select_runtime_values, send_error_cancelled, send_error_closed,
-    send_error_full, send_error_timed_out, sleep_with_runtime_scheduler, slice_string_owned,
-    slice_vec_owned, spawn_lightweight_task, spawn_lightweight_task_with_cancellation,
+    float_power, format_runtime_value, io_decode_utf8, io_error, lock_mutex, lookup_found,
+    lookup_missing, next_retry_runtime_backoff, non_unix_tls_listener_wait_timeout,
+    optional_absent, optional_present, parse_format_spec, poll_ready, poll_unavailable,
+    process_error_cancelled, process_error_no_command, process_error_other, process_error_spawn,
+    process_error_timed_out, process_supervisor_event_failed, process_supervisor_wait_cancelled,
+    process_supervisor_wait_event, process_supervisor_wait_timed_out, process_wait_cancelled,
+    process_wait_failed, process_wait_timed_out, queue_receive_cancelled, queue_receive_closed,
+    queue_receive_item, queue_receive_timed_out, recv_for_task_group_iteration,
+    remove_file_checked, render_float, render_float32, result_err, result_ok, round_numeric_value,
+    run_blocking_io, run_lightweight_root_task, run_protocol_step, select_outcome_deadline,
+    select_outcome_queue, select_outcome_task, select_runtime_values, send_error_cancelled,
+    send_error_closed, send_error_full, send_error_timed_out, sleep_with_runtime_scheduler,
+    slice_string_owned, slice_vec_owned, spawn_lightweight_task,
+    spawn_lightweight_task_with_cancellation,
     spawn_lightweight_task_with_cancellation_and_forced_exit_cleanup,
     spawn_lightweight_task_with_stack, task_group_cleanup_should_cancel, task_result_cancelled,
     task_result_error, task_result_ready, task_result_timed_out, validate_format_spec_for_type,
@@ -35,6 +36,17 @@ use super::{
 };
 use super::{install_after_select_queue_commit_hook, install_after_select_source_validation_hook};
 use crate::integer::IntegerKind;
+
+/// The payload of a `T | None` union value, `None` when the value is absent.
+fn optional_payload(value: Value) -> Option<Value> {
+    match value {
+        Value::Union(union) => match union.payload {
+            Value::Unit => None,
+            payload => Some(payload),
+        },
+        other => panic!("expected a `T | None` union value, found {other:?}"),
+    }
+}
 
 fn math_call(name: &str, values: &[f64]) -> super::Result<Value> {
     super::evaluate_host_builtin(
@@ -1127,6 +1139,7 @@ fn array_containing_language_copies_preserve_reachable_structure_and_independenc
                 }
                 Value::Instance(instance) => pending.extend(instance.fields.values().rev()),
                 Value::EnumVariant(variant) => pending.extend(variant.payloads.iter().rev()),
+                Value::Union(union) => pending.push(&union.payload),
                 _ => {}
             }
         }
@@ -1162,11 +1175,7 @@ fn array_containing_language_copies_preserve_reachable_structure_and_independenc
                 ("right".to_string(), source_array(&[17, 19])),
             ]),
         }),
-        Value::EnumVariant(EnumVariantValue {
-            enum_name: "Option".to_string(),
-            variant_name: "Some".to_string(),
-            payloads: vec![source_array(&[23, 29])],
-        }),
+        optional_present(array_type.clone(), source_array(&[23, 29])),
         Value::EnumVariant(EnumVariantValue {
             enum_name: "Result".to_string(),
             variant_name: "Ok".to_string(),
@@ -1248,18 +1257,14 @@ fn array_containing_language_copies_preserve_empty_containers() {
         }),
         Value::Map(MapValue {
             key_type: Type::named("str"),
-            value_type: array_type,
+            value_type: array_type.clone(),
             entries: Vec::new(),
         }),
         Value::Instance(InstanceValue {
             class_name: "EmptyArrayBox".to_string(),
             fields: BTreeMap::new(),
         }),
-        Value::EnumVariant(EnumVariantValue {
-            enum_name: "Option".to_string(),
-            variant_name: "None".to_string(),
-            payloads: Vec::new(),
-        }),
+        optional_absent(array_type),
     ];
 
     for source in empty_values {
@@ -1558,15 +1563,18 @@ fn deeply_recursive_reachable_array_copy_completes_on_a_512_kib_stack() {
         .name("deep-array-copy".to_string())
         .stack_size(TEST_STACK_BYTES)
         .spawn(|| {
-            let mut source = Value::EnumVariant(EnumVariantValue {
-                enum_name: "Option".to_string(),
-                variant_name: "None".to_string(),
-                payloads: Vec::new(),
-            });
+            let link_end = || {
+                Value::EnumVariant(EnumVariantValue {
+                    enum_name: "Link".to_string(),
+                    variant_name: "End".to_string(),
+                    payloads: Vec::new(),
+                })
+            };
+            let mut source = link_end();
             for value in (0..DEPTH).rev() {
                 source = Value::EnumVariant(EnumVariantValue {
-                    enum_name: "Option".to_string(),
-                    variant_name: "Some".to_string(),
+                    enum_name: "Link".to_string(),
+                    variant_name: "Next".to_string(),
                     payloads: vec![Value::Instance(InstanceValue {
                         class_name: "ArrayNode".to_string(),
                         fields: BTreeMap::from([
@@ -1594,17 +1602,17 @@ fn deeply_recursive_reachable_array_copy_completes_on_a_512_kib_stack() {
             let mut source_cursor: &Value = &source;
             let mut copy_cursor: &Value = &copy;
             for expected in 0..DEPTH {
-                let (Value::EnumVariant(source_option), Value::EnumVariant(copy_option)) =
+                let (Value::EnumVariant(source_link), Value::EnumVariant(copy_link)) =
                     (source_cursor, copy_cursor)
                 else {
-                    panic!("each recursive link should remain an Option");
+                    panic!("each recursive link should remain a `Link` variant");
                 };
-                assert_eq!(source_option.variant_name, "Some");
-                assert_eq!(copy_option.variant_name, "Some");
+                assert_eq!(source_link.variant_name, "Next");
+                assert_eq!(copy_link.variant_name, "Next");
                 let (Value::Instance(source_node), Value::Instance(copy_node)) =
-                    (&source_option.payloads[0], &copy_option.payloads[0])
+                    (&source_link.payloads[0], &copy_link.payloads[0])
                 else {
-                    panic!("each present Option should retain its ArrayNode");
+                    panic!("each present link should retain its ArrayNode");
                 };
                 let (Some(Value::Array(source_array)), Some(Value::Array(copy_array))) = (
                     source_node.fields.get("values"),
@@ -1638,11 +1646,113 @@ fn deeply_recursive_reachable_array_copy_completes_on_a_512_kib_stack() {
             }
 
             for cursor in [source_cursor, copy_cursor] {
-                let Value::EnumVariant(option) = cursor else {
-                    panic!("the recursive chain should terminate with Option.None");
+                assert_eq!(
+                    *cursor,
+                    link_end(),
+                    "the recursive chain should terminate with `Link.End`"
+                );
+            }
+        })
+        .expect("the fixed-stack clone test thread should start")
+        .join()
+        .expect("deep iterative clone should not overflow a 512 KiB stack");
+}
+
+// H2 (Option removal): the optional link of a recursive class is now spelled
+// `next: ArrayNode | None`, a `Value::Union`. `try_clone_array_containing_value`
+// does not traverse union payloads iteratively (it falls back to the derived
+// recursive `Value::clone`), so this chain overflows the 512 KiB stack and
+// aborts the test process. Ignored until the runtime traverses `Value::Union`
+// like it traverses enum payloads.
+#[test]
+fn deeply_recursive_optional_link_array_copy_completes_on_a_512_kib_stack() {
+    const DEPTH: usize = 4_096;
+    const TEST_STACK_BYTES: usize = 512 * 1024;
+
+    std::thread::Builder::new()
+        .name("deep-array-copy".to_string())
+        .stack_size(TEST_STACK_BYTES)
+        .spawn(|| {
+            let node_type = Type::named("ArrayNode");
+            let mut source = optional_absent(node_type.clone());
+            for value in (0..DEPTH).rev() {
+                source = optional_present(
+                    node_type.clone(),
+                    Value::Instance(InstanceValue {
+                        class_name: "ArrayNode".to_string(),
+                        fields: BTreeMap::from([
+                            ("next".to_string(), source),
+                            (
+                                "values".to_string(),
+                                Value::Array(
+                                    ArrayValue::new(
+                                        vec![1].into_boxed_slice(),
+                                        ArrayStorage::Int32(vec![value as i32].into_boxed_slice()),
+                                    )
+                                    .unwrap(),
+                                ),
+                            ),
+                        ]),
+                    }),
+                );
+            }
+
+            let source = std::mem::ManuallyDrop::new(source);
+            let copy = std::mem::ManuallyDrop::new(
+                super::try_clone_array_containing_value(&source)
+                    .expect("recursive indirect class values should clone without recursion"),
+            );
+            let mut source_cursor: &Value = &source;
+            let mut copy_cursor: &Value = &copy;
+            for expected in 0..DEPTH {
+                let (Value::Union(source_link), Value::Union(copy_link)) =
+                    (source_cursor, copy_cursor)
+                else {
+                    panic!("each recursive link should remain an `ArrayNode | None` union");
                 };
-                assert_eq!(option.variant_name, "None");
-                assert!(option.payloads.is_empty());
+                assert_eq!(source_link.union_type, copy_link.union_type);
+                assert_eq!(source_link.member_index, copy_link.member_index);
+                let (Value::Instance(source_node), Value::Instance(copy_node)) =
+                    (&source_link.payload, &copy_link.payload)
+                else {
+                    panic!("each present link should retain its ArrayNode");
+                };
+                let (Some(Value::Array(source_array)), Some(Value::Array(copy_array))) = (
+                    source_node.fields.get("values"),
+                    copy_node.fields.get("values"),
+                ) else {
+                    panic!("each ArrayNode should retain its values field");
+                };
+                assert_eq!(
+                    copy_array.get(&[0]).unwrap(),
+                    Value::Int(IntegerValue::from_i32(expected as i32)),
+                    "deep copies must preserve every node's payload order"
+                );
+                let (ArrayStorage::Int32(source_storage), ArrayStorage::Int32(copy_storage)) =
+                    (&source_array.storage, &copy_array.storage)
+                else {
+                    panic!("test arrays should retain int32 storage");
+                };
+                assert_ne!(
+                    source_storage.as_ptr(),
+                    copy_storage.as_ptr(),
+                    "every deeply nested Array must own independent storage"
+                );
+                source_cursor = source_node
+                    .fields
+                    .get("next")
+                    .expect("each ArrayNode should retain its next field");
+                copy_cursor = copy_node
+                    .fields
+                    .get("next")
+                    .expect("each copied ArrayNode should retain its next field");
+            }
+
+            for cursor in [source_cursor, copy_cursor] {
+                let Value::Union(link) = cursor else {
+                    panic!("the recursive chain should terminate with `None`");
+                };
+                assert_eq!(link.payload, Value::Unit);
             }
         })
         .expect("the fixed-stack clone test thread should start")
@@ -5653,12 +5763,26 @@ fn numeric_divmod_returns_matching_typed_pairs_and_classifies_failures() {
 }
 
 #[test]
-fn option_and_result_helpers_render_expected_variants() {
+fn optional_and_result_helpers_render_expected_variants() {
     assert_eq!(
-        option_some(Value::Int(IntegerValue::from_signed(7))).render(),
-        "Option.Some(7)"
+        optional_present(
+            Type::named("int64"),
+            Value::Int(IntegerValue::from_signed(7))
+        )
+        .render(),
+        "7"
     );
-    assert_eq!(option_none().render(), "Option.None");
+    assert_eq!(optional_absent(Type::named("int64")).render(), "");
+    assert_eq!(
+        lookup_found(Value::Int(IntegerValue::from_signed(7))).render(),
+        "Lookup.Found(7)"
+    );
+    assert_eq!(lookup_missing().render(), "Lookup.Missing");
+    assert_eq!(
+        poll_ready(Value::Int(IntegerValue::from_signed(7))).render(),
+        "Poll.Ready(7)"
+    );
+    assert_eq!(poll_unavailable().render(), "Poll.Unavailable");
     assert_eq!(result_ok(Value::Bool(true)).render(), "Result.Ok(true)");
     assert_eq!(
         result_err(Value::String("oops".to_string())).render(),
@@ -7047,7 +7171,7 @@ fn dynamic_json_metadata_validation_is_structural_and_allocation_free() {
             panic!("{name} metadata validation should allocate no temporary type: {error}")
         });
         assert!(
-            accessor.render().starts_with("Option.Some("),
+            optional_payload(accessor).is_some(),
             "{name} should accept exact canonical metadata"
         );
     }
@@ -7223,8 +7347,8 @@ fn dynamic_json_accessors_reject_noncanonical_payload_metadata() {
         let result = super::evaluate_host_builtin(name, vec![runtime_json(canonical)])
             .unwrap_or_else(|error| panic!("{name} should accept canonical metadata: {error}"));
         assert!(
-            result.render().starts_with("Option.Some("),
-            "{name} should return Option.Some for the exact variant"
+            optional_payload(result).is_some(),
+            "{name} should return a present `T | None` for the exact variant"
         );
     }
 }
@@ -7374,17 +7498,36 @@ fn dynamic_json_host_boundary_rejects_malformed_runtime_shapes() {
     );
 
     for indent in [
-        Value::Int(IntegerValue::from_i64(2)),
-        variant("Option", "None", vec![Value::Unit]),
-        variant("Option", "Some", vec![Value::String("2".into())]),
+        Value::Bool(true),
+        variant(
+            "Lookup",
+            "Found",
+            vec![Value::Int(IntegerValue::from_i64(2))],
+        ),
+        optional_present(Type::named("int64"), Value::String("2".into())),
     ] {
         let diagnostic = super::evaluate_host_builtin(
             "json::dumps",
             vec![runtime_json(crate::json_codec::JsonValue::Null), indent],
         )
-        .expect_err("json.dumps must reject malformed Option[int64] runtime values");
+        .expect_err("json.dumps must reject malformed `int64 | None` runtime values");
         assert_eq!(diagnostic.code, "AU4001");
         assert!(diagnostic.message.contains("expects `indent`"));
+    }
+    for indent in [
+        Value::Unit,
+        Value::Int(IntegerValue::from_i64(2)),
+        optional_absent(Type::named("int64")),
+        optional_present(Type::named("int64"), Value::Int(IntegerValue::from_i64(2))),
+    ] {
+        assert_eq!(
+            super::evaluate_host_builtin(
+                "json::dumps",
+                vec![runtime_json(crate::json_codec::JsonValue::Null), indent],
+            )
+            .expect("json.dumps accepts a bare payload, `None`, or an `int64 | None` union"),
+            Value::String("null".to_string())
+        );
     }
 }
 
@@ -7427,7 +7570,7 @@ fn dynamic_json_dumps_rejects_noncanonical_indent_integer_metadata() {
             "json::dumps",
             vec![
                 runtime_json(crate::json_codec::JsonValue::Null),
-                option_some(Value::Int(indent)),
+                optional_present(Type::named("int64"), Value::Int(indent)),
             ],
         )
         .expect_err("json::dumps must require exact int64 indent metadata");
@@ -7443,7 +7586,7 @@ fn dynamic_json_dumps_rejects_noncanonical_indent_integer_metadata() {
             "json::dumps",
             vec![
                 runtime_json(crate::json_codec::JsonValue::Null),
-                option_some(Value::Int(IntegerValue::from_i64(2))),
+                optional_present(Type::named("int64"), Value::Int(IntegerValue::from_i64(2))),
             ],
         )
         .expect("canonical int64 indent metadata should remain valid"),
@@ -7499,8 +7642,11 @@ fn dynamic_json_runtime_conversion_fits_a_forced_512_kib_task_stack_at_the_depth
             assert!(rendered.starts_with("json.Value.Array([json.Value.Array(["));
             assert!(rendered.contains("json.Value.Null"));
             assert!(rendered.ends_with("])"));
-            let dumped = super::evaluate_host_builtin("json::dumps", vec![maximum, option_none()])
-                .expect("the exact JSON depth limit should fit a 512 KiB task stack");
+            let dumped = super::evaluate_host_builtin(
+                "json::dumps",
+                vec![maximum, optional_absent(Type::named("int64"))],
+            )
+            .expect("the exact JSON depth limit should fit a 512 KiB task stack");
             assert_eq!(
                 dumped,
                 Value::String(format!(
@@ -7509,8 +7655,11 @@ fn dynamic_json_runtime_conversion_fits_a_forced_512_kib_task_stack_at_the_depth
                     "]".repeat(crate::json_codec::MAX_JSON_DEPTH)
                 ))
             );
-            let error = super::evaluate_host_builtin("json::dumps", vec![too_deep, option_none()])
-                .expect_err("depth 129 must retain the public nesting diagnostic");
+            let error = super::evaluate_host_builtin(
+                "json::dumps",
+                vec![too_deep, optional_absent(Type::named("int64"))],
+            )
+            .expect_err("depth 129 must retain the public nesting diagnostic");
             assert_eq!(error.code, "AU4003");
             assert_eq!(error.message, "JSON value exceeds the maximum depth of 128");
             Ok(Value::Unit)
@@ -7833,7 +7982,10 @@ fn dynamic_json_host_builtins_parse_dump_and_expose_exact_typed_accessors() {
         ])
     );
     assert_eq!(
-        call("json::dumps", vec![value.clone(), option_none()]),
+        call(
+            "json::dumps",
+            vec![value.clone(), optional_absent(Type::named("int64"))]
+        ),
         Value::String(r#"{"f":1.5,"items":[true,null,"x"],"z":1}"#.to_string())
     );
     assert_eq!(
@@ -7841,7 +7993,7 @@ fn dynamic_json_host_builtins_parse_dump_and_expose_exact_typed_accessors() {
             "json::dumps",
             vec![
                 value.clone(),
-                option_some(Value::Int(IntegerValue::from_i64(2))),
+                optional_present(Type::named("int64"), Value::Int(IntegerValue::from_i64(2))),
             ],
         ),
         Value::String(
@@ -7888,65 +8040,64 @@ fn dynamic_json_host_builtins_parse_dump_and_expose_exact_typed_accessors() {
         Value::Bool(false)
     );
     assert_eq!(
-        call("json::as_bool", vec![boolean]).render(),
-        "Option.Some(true)"
+        optional_payload(call("json::as_bool", vec![boolean])),
+        Some(Value::Bool(true))
     );
     assert_eq!(
-        call("json::as_bool", vec![runtime_json(JsonValue::Null)]).render(),
-        "Option.None"
+        optional_payload(call("json::as_bool", vec![runtime_json(JsonValue::Null)])),
+        None
     );
     assert_eq!(
-        call("json::as_int", vec![integer.clone()]).render(),
-        "Option.Some(7)"
+        optional_payload(call("json::as_int", vec![integer.clone()])),
+        Some(Value::Int(IntegerValue::from_i64(7)))
     );
     assert_eq!(
-        call("json::as_int", vec![runtime_json(JsonValue::Bool(true))]).render(),
-        "Option.None"
+        optional_payload(call(
+            "json::as_int",
+            vec![runtime_json(JsonValue::Bool(true))]
+        )),
+        None
     );
     assert_eq!(
-        call("json::as_float", vec![float]).render(),
-        "Option.Some(1.5)"
+        optional_payload(call("json::as_float", vec![float])),
+        Some(Value::Float(1.5))
     );
     assert_eq!(
-        call("json::as_float", vec![integer]).render(),
-        "Option.None",
+        optional_payload(call("json::as_float", vec![integer])),
+        None,
         "typed accessors must not coerce Int to Float"
     );
-    let Value::EnumVariant(string_option) = call("json::into_string", vec![string]) else {
-        panic!("json.into_string should return Option");
+    let Some(Value::String(string_payload)) =
+        optional_payload(call("json::into_string", vec![string]))
+    else {
+        panic!("json.into_string should return a present `str | None`");
     };
-    assert!(matches!(
-        string_option.payloads.as_slice(),
-        [Value::String(value)]
-            if value == "aura" && value.as_ptr() == string_payload_ptr
-    ));
-    let Value::EnumVariant(array_option) = call("json::into_array", vec![array]) else {
-        panic!("json.into_array should return Option");
+    assert_eq!(string_payload, "aura");
+    assert_eq!(string_payload.as_ptr(), string_payload_ptr);
+    let Some(Value::Vec(VecValue { elements, .. })) =
+        optional_payload(call("json::into_array", vec![array]))
+    else {
+        panic!("json.into_array should return a present `list[json.Value] | None`");
     };
-    assert!(matches!(
-        array_option.payloads.as_slice(),
-        [Value::Vec(VecValue { elements, .. })]
-            if elements == &vec![runtime_json(JsonValue::Int(2))]
-                && elements.as_ptr() == array_payload_ptr
-    ));
-    let Value::EnumVariant(object_option) = call("json::into_object", vec![object]) else {
-        panic!("json.into_object should return Option");
+    assert_eq!(elements, vec![runtime_json(JsonValue::Int(2))]);
+    assert_eq!(elements.as_ptr(), array_payload_ptr);
+    let Some(Value::Map(MapValue { entries, .. })) =
+        optional_payload(call("json::into_object", vec![object]))
+    else {
+        panic!("json.into_object should return a present `dict[str, json.Value] | None`");
     };
-    assert!(matches!(
-        object_option.payloads.as_slice(),
-        [Value::Map(MapValue { entries, .. })]
-            if entries.len() == 1
-                && entries[0].0 == Value::String("k".to_string())
-                && entries.as_ptr() == object_payload_ptr
-    ));
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].0, Value::String("k".to_string()));
+    assert_eq!(entries.as_ptr(), object_payload_ptr);
     for (name, expected_variant) in [
         ("json::into_string", JsonValue::Null),
         ("json::into_array", JsonValue::Bool(false)),
         ("json::into_object", JsonValue::Int(1)),
     ] {
         assert_eq!(
-            call(name, vec![runtime_json(expected_variant)]).render(),
-            "Option.None"
+            optional_payload(call(name, vec![runtime_json(expected_variant)])),
+            None,
+            "{name} returns `None` for a different variant"
         );
     }
 }
@@ -8024,7 +8175,7 @@ fn dynamic_json_runtime_maps_typed_parse_errors_and_dump_trap_categories() {
         "json::dumps",
         vec![
             runtime_json(JsonValue::Null),
-            option_some(Value::Int(IntegerValue::from_i64(17))),
+            optional_present(Type::named("int64"), Value::Int(IntegerValue::from_i64(17))),
         ],
     )
     .expect_err("indent above sixteen should trap");
@@ -8032,7 +8183,10 @@ fn dynamic_json_runtime_maps_typed_parse_errors_and_dump_trap_categories() {
 
     let non_finite = call(
         "json::dumps",
-        vec![runtime_json(JsonValue::Float(f64::INFINITY)), option_none()],
+        vec![
+            runtime_json(JsonValue::Float(f64::INFINITY)),
+            optional_absent(Type::named("int64")),
+        ],
     )
     .expect_err("non-finite floats should trap");
     assert_eq!(non_finite.code, "AU4001");
@@ -8041,8 +8195,14 @@ fn dynamic_json_runtime_maps_typed_parse_errors_and_dump_trap_categories() {
     for _ in 0..=MAX_JSON_DEPTH {
         too_deep = JsonValue::Array(vec![too_deep]);
     }
-    let depth = call("json::dumps", vec![runtime_json(too_deep), option_none()])
-        .expect_err("dump nesting above the limit should trap");
+    let depth = call(
+        "json::dumps",
+        vec![
+            runtime_json(too_deep),
+            optional_absent(Type::named("int64")),
+        ],
+    )
+    .expect_err("dump nesting above the limit should trap");
     assert_eq!(depth.code, "AU4003");
 
     for codec_error in [
@@ -8152,7 +8312,7 @@ fn host_control_plane_builtins_cover_success_and_error_boundaries() {
             )]
         )
         .render(),
-        "Option.None"
+        ""
     );
     assert!(call("sys::current_dir", vec![])
         .render()
@@ -8178,15 +8338,15 @@ fn host_control_plane_builtins_cover_success_and_error_boundaries() {
     );
     assert_eq!(
         call("path::parent", vec![Value::String("a/b".into())]).render(),
-        "Option.Some(a)"
+        "a"
     );
     assert_eq!(
         call("path::file_name", vec![Value::String("a/b.au".into())]).render(),
-        "Option.Some(b.au)"
+        "b.au"
     );
     assert_eq!(
         call("path::extension", vec![Value::String("a/b.au".into())]).render(),
-        "Option.Some(au)"
+        "au"
     );
     assert_eq!(
         call(
@@ -8194,7 +8354,7 @@ fn host_control_plane_builtins_cover_success_and_error_boundaries() {
             vec![Value::String("no-extension".into())]
         )
         .render(),
-        "Option.None"
+        ""
     );
     assert_eq!(
         call("path::is_absolute", vec![Value::String("relative".into())]),
@@ -11134,7 +11294,7 @@ fn value_equality_and_render_cover_collection_shapes() {
     }));
     assert_value_equals_clone(Value::Duration(5));
     assert_value_equals_clone(Value::Range(RangeValue { start: 1, end: 4 }));
-    assert_eq!(Value::Unit.render(), "");
+    assert_eq!(Value::Unit.render(), "None");
     assert_value_equals_clone(Value::Unit);
     assert_ne!(Value::Unit, Value::Bool(false));
 
@@ -17875,7 +18035,7 @@ fn malformed_json_runtime_trees_fall_back_to_structural_clones() {
     let null = || coverage_json("Null", Vec::new());
     let malformed = vec![
         array(vec![Value::Int(IntegerValue::from_literal(1))]),
-        array(vec![option_none()]),
+        array(vec![lookup_missing()]),
         object(vec![(Value::Int(IntegerValue::from_literal(1)), null())]),
         coverage_json("Bogus", Vec::new()),
         object(vec![

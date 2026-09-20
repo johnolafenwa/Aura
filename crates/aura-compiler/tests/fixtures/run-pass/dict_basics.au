@@ -5,11 +5,11 @@ def print_bool(value: bool):
         case false:
             print("false")
 
-def print_int_option(value: Option[int32]):
+def print_int_lookup(value: Lookup[int32]):
     match own value:
-        case Some(inner):
+        case Found(inner):
             print(inner)
-        case None:
+        case Missing:
             print(-1)
 
 def main() -> int32:
@@ -18,14 +18,14 @@ def main() -> int32:
     counts["aura"] = 1
     counts["agents"] = 2
     print(counts["aura"])
-    print_int_option(counts.get("agents"))
+    print_int_lookup(counts.get("agents"))
     print_bool(("missing" in counts))
     print(counts.len())
     previous_aura = counts.get("aura")
     counts["aura"] = 3
-    print_int_option(previous_aura)
+    print_int_lookup(previous_aura)
     print(counts["aura"])
-    print_int_option(counts.remove("agents"))
+    print_int_lookup(counts.remove("agents"))
     print_bool(counts == {"aura": 3})
 
     seeded = {"codex": 4, "agents": 5}

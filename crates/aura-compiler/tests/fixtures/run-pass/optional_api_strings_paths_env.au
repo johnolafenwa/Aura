@@ -1,0 +1,24 @@
+import path
+import sys
+
+def show(label: str, value: str | None):
+    if value is None:
+        print(f"{label}: absent")
+    else:
+        print(f"{label}: present '{value}'")
+
+def main():
+    show("prefix", "prefix-body".strip_prefix("prefix-"))
+    show("prefix miss", "prefix-body".strip_prefix("other"))
+    show("prefix whole", "abc".strip_prefix("abc"))
+    show("suffix", "file.txt".strip_suffix(".txt"))
+    show("suffix miss", "file.txt".strip_suffix(".md"))
+    show("suffix whole", "abc".strip_suffix("abc"))
+    show("parent", path.parent("/a/b/c.txt"))
+    show("parent root", path.parent("/"))
+    show("file", path.file_name("/a/b/c.txt"))
+    show("file none", path.file_name("/"))
+    show("ext", path.extension("/a/b/c.txt"))
+    show("ext none", path.extension("/a/b/c"))
+    show("env unset", sys.env("AURA_FIXTURE_VARIABLE_THAT_IS_NEVER_SET"))
+    print(sys.env("PATH") is not None)

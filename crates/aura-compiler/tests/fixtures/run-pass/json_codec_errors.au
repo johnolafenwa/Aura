@@ -4,7 +4,7 @@ def main():
     match json.parse("{\"a\": [1, 2]}"):
         case Result.Ok(value):
             print(json.dumps(value))
-            print(json.dumps(value, indent=Option.Some(2)))
+            print(json.dumps(value, indent=2))
         case Result.Err(error):
             print(error)
     match json.parse("{bad"):

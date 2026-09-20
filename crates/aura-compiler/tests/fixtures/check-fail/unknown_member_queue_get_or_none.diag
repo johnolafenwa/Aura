@@ -1,0 +1,5 @@
+error[AU2999]: unsupported method call `get_or_none` on `Queue[int64]`
+ --> crates/aura-compiler/tests/fixtures/check-fail/unknown_member_queue_get_or_none.au:4:17
+  |
+4 |     match queue.get_or_none():
+  |                 ^

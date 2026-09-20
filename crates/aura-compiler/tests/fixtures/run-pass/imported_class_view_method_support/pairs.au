@@ -1,0 +1,11 @@
+public class Pair:
+    public left: str
+    public right: str
+
+    public def pick(self, first: bool) -> view str from self:
+        if first:
+            return view self.left
+        return view self.right
+
+public def make_pair(left: own str, right: own str) -> Pair:
+    return Pair(left=left, right=right)

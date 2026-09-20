@@ -1,0 +1,9 @@
+public trait Area:
+    def area(self) -> int64
+
+public class Square:
+    public side: int64
+
+impl Area for Square:
+    def area(self) -> int64:
+        return self.side * self.side

@@ -1,0 +1,6 @@
+error[AU2015]: callable contract mismatch: parameter `value` is keyword-only and cannot become positional
+ --> crates/aura-compiler/tests/fixtures/check-fail/thin_alias_adapter_keyword_only_slot.au:7:18
+  |
+7 |     step = Unary(keyword_only)
+  |                  ^
+  = help: preserve identical complete contracts at bare destinations; apply safe restrictions through an explicit thin alias or owned callable constructor such as `Alias(function)`

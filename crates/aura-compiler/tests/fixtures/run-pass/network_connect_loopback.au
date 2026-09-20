@@ -8,9 +8,9 @@ def serve_tcp(addresses: Queue[str]) -> Result[None, io.Error]:
         stream = try server_listener.accept(timeout=2s)
         with server_stream = stream:
             match try server_stream.read_line(timeout=2s):
-                case Option.Some(text):
+                case str as text:
                     try server_stream.write_all("tcp:" + text + "\n", timeout=2s)
-                case Option.None:
+                case None:
                     pass
     return Result.Ok(None)
 
@@ -20,9 +20,9 @@ def serve_unix(path: str, ready: Queue[bool]) -> Result[None, io.Error]:
         stream = try server_listener.accept(timeout=2s)
         with server_stream = stream:
             match try server_stream.read_line(timeout=2s):
-                case Option.Some(text):
+                case str as text:
                     try server_stream.write_all("unix:" + text + "\n", timeout=2s)
-                case Option.None:
+                case None:
                     pass
     return Result.Ok(None)
 
@@ -43,9 +43,9 @@ def run() -> Result[None, io.Error]:
                 with tcp_client = try net.connect_timeout(tcp_hostname, 2s):
                     try tcp_client.write_all("ping\n", timeout=2s)
                     match try tcp_client.read_line(timeout=2s):
-                        case Option.Some(text):
+                        case str as text:
                             print(text)
-                        case Option.None:
+                        case None:
                             pass
             case QueueReceive.Closed:
                 return Result.Err(io.Error.Other(message="TCP address queue closed"))
@@ -70,9 +70,9 @@ def run() -> Result[None, io.Error]:
                 with unix_client = try net.unix_connect_timeout(socket_path.clone(), 2s):
                     try unix_client.write_all("ping\n", timeout=2s)
                     match try unix_client.read_line(timeout=2s):
-                        case Option.Some(text):
+                        case str as text:
                             print(text)
-                        case Option.None:
+                        case None:
                             pass
             case QueueReceive.Closed:
                 return Result.Err(io.Error.Other(message="Unix readiness queue closed"))

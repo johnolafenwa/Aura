@@ -1,0 +1,17 @@
+def main() -> int32:
+    left: int32 | None = 42
+    right: float64 | None = 3.5
+
+    match own left:
+        case int32 as value:
+            print(value)
+        case None:
+            print(0)
+
+    match own right:
+        case float64 as value:
+            print(value)
+        case None:
+            print(0.0)
+
+    return 0

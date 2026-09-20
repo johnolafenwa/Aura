@@ -1,0 +1,3 @@
+def main() -> None:
+    missing: int32 | None = None
+    print(missing)

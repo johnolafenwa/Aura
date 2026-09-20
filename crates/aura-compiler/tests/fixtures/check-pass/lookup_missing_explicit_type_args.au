@@ -1,0 +1,8 @@
+def main() -> int32:
+    value = Lookup[int32].Missing
+    match own value:
+        case Lookup.Found(inner):
+            print(inner)
+        case Lookup.Missing:
+            print(0)
+    return 0

@@ -8,14 +8,14 @@ import trace
 def main() -> int32:
     print(path.join(child="beta", base="alpha"))
     match path.file_name("alpha/beta.au"):
-        case Option.Some(name):
+        case str as name:
             print(name)
-        case Option.None:
+        case None:
             return 1
     match path.extension("alpha/beta.au"):
-        case Option.Some(extension):
+        case str as extension:
             print(extension)
-        case Option.None:
+        case None:
             return 1
     print(path.is_absolute("alpha/beta.au"))
 
@@ -29,9 +29,9 @@ def main() -> int32:
     match json.parse_string_map("{\"name\":\"aura\"}"):
         case Result.Ok(parsed):
             match parsed.get("name"):
-                case Option.Some(name):
+                case Lookup.Found(name):
                     print(name)
-                case Option.None:
+                case Lookup.Missing:
                     return 1
         case Result.Err(error):
             print(error)
@@ -47,9 +47,9 @@ def main() -> int32:
     match toml.parse_string_map("name = \"aura\""):
         case Result.Ok(parsed):
             match parsed.get("name"):
-                case Option.Some(name):
+                case Lookup.Found(name):
                     print(name)
-                case Option.None:
+                case Lookup.Missing:
                     return 1
         case Result.Err(error):
             print(error)

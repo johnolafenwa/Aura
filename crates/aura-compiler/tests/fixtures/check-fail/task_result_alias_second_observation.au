@@ -6,5 +6,5 @@ def main() -> int32:
         task = group.start(make_text)
         alias = task
         print(task.result())
-        print(alias.result_or_none())
+        print(alias.poll())
     return 0

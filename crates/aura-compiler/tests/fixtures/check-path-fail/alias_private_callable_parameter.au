@@ -1,0 +1,5 @@
+import alias_private_support.handler
+
+def main() -> int32:
+    handler: alias_private_support.handler.Handler = lambda item: None
+    return 0

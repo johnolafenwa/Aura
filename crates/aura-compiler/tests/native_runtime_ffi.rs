@@ -321,17 +321,6 @@ unsafe fn string_value(value: &str) -> *mut OpaqueValue {
     aura_direct_string_literal(value.as_ptr(), value.len())
 }
 
-unsafe fn enum_unit(enum_name: &str, variant_name: &str) -> *mut OpaqueValue {
-    aura_direct_enum_variant(
-        enum_name.as_ptr(),
-        enum_name.len(),
-        variant_name.as_ptr(),
-        variant_name.len(),
-        ptr::null_mut(),
-        0,
-    )
-}
-
 unsafe fn expect_i64(value: *mut OpaqueValue) -> i64 {
     let unboxed = aura_direct_unbox_i64(value);
     unsafe {
@@ -384,8 +373,26 @@ unsafe fn expect_result_ok_payload(value: *mut OpaqueValue) -> *mut OpaqueValue 
     unsafe { expect_variant_payload(value, "Result", "Ok") }
 }
 
-unsafe fn expect_option_some_payload(value: *mut OpaqueValue) -> *mut OpaqueValue {
-    unsafe { expect_variant_payload(value, "Option", "Some") }
+/// The present payload of a `T | None` union value, read through the direct
+/// backend's active-member projection spelling.
+unsafe fn expect_optional_payload(value: *mut OpaqueValue) -> *mut OpaqueValue {
+    let member_index = match unsafe { cloned_value(value) } {
+        Value::Union(union) if !matches!(union.payload, Value::Unit) => union.member_index,
+        other => panic!("expected a present `T | None` value, found {other:?}"),
+    };
+    let projection = format!("__union_payload_{member_index}");
+    let payload = aura_direct_instance_get_field(value, projection.as_ptr(), projection.len());
+    unsafe {
+        release(value);
+    }
+    payload
+}
+
+/// A bare unit `None` for a `T | None` argument; the coverage surface exports
+/// no unit constructor, so take the payload of a successful `io.flush()`.
+unsafe fn unit_value() -> *mut OpaqueValue {
+    let flushed = aura_direct_io_flush();
+    unsafe { expect_result_ok_payload(flushed) }
 }
 
 unsafe fn expect_result_ok_string(value: *mut OpaqueValue) -> String {
@@ -934,7 +941,7 @@ fn direct_runtime_exported_ffi_symbols_execute_through_the_library_copy() {
             command,
             string_value("printf out; printf err >&2"),
         ));
-        let cwd = enum_unit("Option", "None");
+        let cwd = unit_value();
         let env = aura_direct_map_empty();
         let stdin = aura_direct_process_null();
         let stdout = aura_direct_process_null();
@@ -1065,7 +1072,7 @@ fn direct_runtime_exported_array_symbols_execute_typed_kernels_through_the_libra
 
         let coordinates = int64_vec(&[0, 1]);
         assert_eq!(
-            expect_i64(expect_option_some_payload(aura_direct_array_get(
+            expect_i64(expect_optional_payload(aura_direct_array_get(
                 source,
                 coordinates,
                 4,
@@ -1079,7 +1086,7 @@ fn direct_runtime_exported_array_symbols_execute_typed_kernels_through_the_libra
         let coordinates = int64_vec(&[0, 1]);
         let nine = int32_value(9);
         assert_eq!(
-            expect_i64(expect_option_some_payload(aura_direct_array_set_in_place(
+            expect_i64(expect_optional_payload(aura_direct_array_set_in_place(
                 working,
                 coordinates,
                 nine,
@@ -1343,7 +1350,7 @@ fn direct_runtime_resource_ffi_symbols_execute_through_the_library_copy() {
     let _runtime_guard = direct_runtime_ffi_test_guard();
     unsafe {
         let command = string_vec(&["/bin/sh", "-c", "cat; printf err >&2"]);
-        let cwd = enum_unit("Option", "None");
+        let cwd = unit_value();
         let env = aura_direct_map_empty();
         let stdin = aura_direct_process_pipe();
         let stdout = aura_direct_process_pipe();
@@ -1359,9 +1366,9 @@ fn direct_runtime_resource_ffi_symbols_execute_through_the_library_copy() {
         release(stderr);
         release(group);
         let child = expect_result_ok_payload(child_result);
-        let child_stdin = expect_option_some_payload(aura_direct_process_child_stdin(child));
-        let child_stdout = expect_option_some_payload(aura_direct_process_child_stdout(child));
-        let child_stderr = expect_option_some_payload(aura_direct_process_child_stderr(child));
+        let child_stdin = expect_optional_payload(aura_direct_process_child_stdin(child));
+        let child_stdout = expect_optional_payload(aura_direct_process_child_stdout(child));
+        let child_stderr = expect_optional_payload(aura_direct_process_child_stderr(child));
         expect_result_ok_unit(aura_direct_process_pipe_write_all(
             child_stdin,
             ScopedValue::new(string_value("left")).as_ptr(),
@@ -1471,7 +1478,7 @@ fn direct_runtime_resource_ffi_symbols_execute_through_the_library_copy() {
             ScopedValue::new(duration_value(5_000)).as_ptr(),
         ));
         let datagram =
-            expect_option_some_payload(expect_result_ok_payload(aura_direct_udp_socket_recv_from(
+            expect_optional_payload(expect_result_ok_payload(aura_direct_udp_socket_recv_from(
                 udp_receiver,
                 ScopedValue::new(int_value(64)).as_ptr(),
                 ScopedValue::new(duration_value(5_000)).as_ptr(),
@@ -1488,7 +1495,7 @@ fn direct_runtime_resource_ffi_symbols_execute_through_the_library_copy() {
             ScopedValue::new(byte_vec(b"ok")).as_ptr(),
             ScopedValue::new(duration_value(5_000)).as_ptr(),
         ));
-        release(expect_option_some_payload(expect_result_ok_payload(
+        release(expect_optional_payload(expect_result_ok_payload(
             aura_direct_udp_socket_recv(
                 udp_sender,
                 ScopedValue::new(int_value(64)).as_ptr(),
@@ -1620,7 +1627,7 @@ fn direct_runtime_resource_ffi_symbols_execute_through_the_library_copy() {
                 ws_listener,
                 ScopedValue::new(duration_value(5_000)).as_ptr(),
             ));
-            release(expect_option_some_payload(expect_result_ok_payload(
+            release(expect_optional_payload(expect_result_ok_payload(
                 aura_direct_websocket_recv_text(
                     socket,
                     ScopedValue::new(duration_value(5_000)).as_ptr(),
@@ -1642,7 +1649,7 @@ fn direct_runtime_resource_ffi_symbols_execute_through_the_library_copy() {
             ScopedValue::new(string_value("hello")).as_ptr(),
             ScopedValue::new(duration_value(5_000)).as_ptr(),
         ));
-        release(expect_option_some_payload(expect_result_ok_payload(
+        release(expect_optional_payload(expect_result_ok_payload(
             aura_direct_websocket_recv_bytes(
                 ws_client,
                 ScopedValue::new(duration_value(5_000)).as_ptr(),

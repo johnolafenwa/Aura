@@ -1,0 +1,10 @@
+class Counter:
+    count: int64
+
+    def peek(self, *, extra: int64) -> int64:
+        return self.count + extra
+
+def main():
+    counter = Counter(count=7)
+    bound = counter.peek
+    print(bound(extra=3))

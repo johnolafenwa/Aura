@@ -1,0 +1,27 @@
+class Token:
+    text: str
+
+def main():
+    mut names: dict[str, Token] = {"a": Token(text="alpha"), "b": Token(text="beta")}
+    match own names.remove("a"):
+        case Lookup.Found(token):
+            print(token.text)
+        case Lookup.Missing:
+            print("missing")
+    print(names.len())
+    match names.get("b"):
+        case Lookup.Found(token):
+            print(token.text.len())
+        case Lookup.Missing:
+            print("missing")
+    items = [1, 2, 3]
+    match items.get(-1):
+        case Lookup.Found(last):
+            print(last)
+        case Lookup.Missing:
+            print("no last")
+    match items.get(-4):
+        case Lookup.Found(first):
+            print(first)
+        case Lookup.Missing:
+            print("negative out of range")

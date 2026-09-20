@@ -690,7 +690,7 @@ test("compiler bridge reuses one persistent compiler process", async () => {
 });
 
 test("persistent compiler service sends and accepts the current semantic schema", async () => {
-  assert.equal(SUPPORTED_SEMANTIC_INTERFACE_SCHEMA_VERSION, 15);
+  assert.equal(SUPPORTED_SEMANTIC_INTERFACE_SCHEMA_VERSION, 16);
   const script = [
     "const readline = require('node:readline');",
     "const lines = readline.createInterface({ input: process.stdin });",
@@ -743,7 +743,7 @@ test("persistent compiler service rejects and disposes a mismatched semantic sch
       path: "/virtual/main.au",
       source: "def main():\n    pass\n"
     }),
-    /semantic schema mismatch.*received `8`.*expected `15`/
+    /semantic schema mismatch.*received `8`.*expected `16`/
   );
   assert.equal(service.closed, true);
   assert.equal(invalidations, 1);
@@ -1829,7 +1829,7 @@ test("compiler bridge preserves single-consumer Task alias provenance", async ()
     "        task = group.start(make_text)",
     "        alias = task",
     "        print(task.result())",
-    "        print(alias.result_or_none())",
+    "        print(alias.poll())",
     "    return 0",
     ""
   ].join("\n");
@@ -1875,7 +1875,7 @@ test("compiler bridge teaches conditional task consumption and Queue Transfer", 
   );
   const source = [
     "def inspect(task: own Task[str], tasks: own list[Task[str]], queue: Queue[str]):",
-    "    print(task.result_or_none())",
+    "    print(task.poll())",
     "    print(wait_all(tasks))",
     '    queue.put("hello")',
     ""
@@ -1893,7 +1893,7 @@ test("compiler bridge teaches conditional task consumption and Queue Transfer", 
     assert.ok(
       hovers.some(
         (hover) =>
-          hover.includes("result_or_none(timeout: Duration = ...) -> Option[T]") &&
+          hover.includes("poll(timeout: Duration = ...) -> Poll[T]") &&
           hover.includes("consumes the unique `Task[T]` observation right") &&
           hover.includes("`Task[T]` is copyable only when `T` is repeatable")
       )
@@ -1940,7 +1940,7 @@ test("compiler bridge teaches conditional task consumption and Queue Transfer", 
       "."
     );
     assert.ok(taskCompletions);
-    for (const name of ["result", "result_or_none", "result_or"]) {
+    for (const name of ["result", "poll", "result_or"]) {
       const item = taskCompletions.find((completion) => completion.name === name);
       assert.ok(item, `missing Task.${name} completion`);
       assert.ok(
@@ -1957,7 +1957,7 @@ test("compiler bridge teaches conditional task consumption and Queue Transfer", 
       "."
     );
     assert.ok(queueCompletions);
-    for (const name of ["put", "try_put", "get", "get_or_none", "get_or"]) {
+    for (const name of ["put", "try_put", "get", "poll", "get_or"]) {
       const item = queueCompletions.find((completion) => completion.name === name);
       assert.ok(item, `missing Queue.${name} completion`);
       assert.ok(
@@ -4117,11 +4117,11 @@ test("compiler bridge exposes canonical set members and tuple-shaped dict items"
       "    counts: dict[str, int32] = {\"a\": 1, \"b\": 2}",
       "    entries: list[(str, int32)] = counts.items()",
       "    match entries.get(index=0):",
-      "        case Some(found):",
+      "        case Lookup.Found(found):",
       "            entry = found",
       "            seen.",
       "            print(entry[0])",
-      "        case None:",
+      "        case Lookup.Missing:",
       "            pass",
       "    return 0"
     ].join("\n");
@@ -4515,7 +4515,7 @@ test("compiler bridge exposes the recursive json.Value contract", async () => {
       "",
       "def main() -> int32:",
       "    value = json.Value.Int(7)",
-      "    print(json.dumps(value, indent=Option.Some(2)))",
+      "    print(json.dumps(value, indent=2))",
       "    return 0"
     ].join("\n");
     const analysis = await analyzeWithCompiler(mainUri, validSource);
@@ -4552,17 +4552,17 @@ test("compiler bridge exposes the recursive json.Value contract", async () => {
     );
     assert.equal(
       moduleItems.find((item) => item.name === "dumps")?.detail,
-      "dumps(value: json.Value, indent: Option[int64] = ...) -> str"
+      "dumps(value: json.Value, indent: int64 | None = ...) -> str"
     );
     const accessorDetails = {
-      as_bool: "as_bool(value: json.Value) -> Option[bool]",
-      as_float: "as_float(value: json.Value) -> Option[float64]",
-      as_int: "as_int(value: json.Value) -> Option[int64]",
+      as_bool: "as_bool(value: json.Value) -> bool | None",
+      as_float: "as_float(value: json.Value) -> float64 | None",
+      as_int: "as_int(value: json.Value) -> int64 | None",
       into_array:
-        "into_array(value: own json.Value) -> Option[list[json.Value]]",
+        "into_array(value: own json.Value) -> list[json.Value] | None",
       into_object:
-        "into_object(value: own json.Value) -> Option[dict[str, json.Value]]",
-      into_string: "into_string(value: own json.Value) -> Option[str]",
+        "into_object(value: own json.Value) -> dict[str, json.Value] | None",
+      into_string: "into_string(value: own json.Value) -> str | None",
       is_null: "is_null(value: json.Value) -> bool"
     };
     for (const [name, detail] of Object.entries(accessorDetails)) {
@@ -4663,9 +4663,9 @@ test("compiler bridge analyzes indexed member chains and f-string indexed lookup
       "    idx: int32 = 1",
       "    mut counts = {\"key\": 7}",
       "    match keys.get(index=idx):",
-      "        case Some(key):",
+      "        case Lookup.Found(key):",
       "            print(key)",
-      "        case None:",
+      "        case Lookup.Missing:",
       "            return 1",
       "    print(f\"val: {counts[\"key\"]}\")",
       "    return 0"
@@ -6086,9 +6086,9 @@ test("compiler bridge exposes the global numeric Array surface and result types"
     "    replaced = writable.set([0, 1], 9)",
     "    total = scaled.sum()",
     "    match replaced:",
-    "        case Option.Some(previous):",
+    "        case int32 as previous:",
     "            print(previous)",
-    "        case Option.None:",
+    "        case None:",
     "            print(-1)",
     "    wrapped_scalar = scaled.wrapping_add(2147483647)",
     "    saturated_scalar = scaled.saturating_add(2147483647)",
@@ -6111,13 +6111,13 @@ test("compiler bridge exposes the global numeric Array surface and result types"
       "binding combined: Array[int32]",
       "binding scaled: Array[int32]",
       "binding item: int32",
-      "binding maybe_item: Option[int32]",
+      "binding maybe_item: int32 | None",
       "binding dimensions: list[int64]",
       "binding length: int64",
       "binding first_row: Array[int32]",
       "binding mapped: Array[float64]",
       "binding writable: Array[int32]",
-      "binding replaced: Option[int32]",
+      "binding replaced: int32 | None",
       "binding total: int32",
       "binding float_values: Array[float64]",
       "binding average: float64"

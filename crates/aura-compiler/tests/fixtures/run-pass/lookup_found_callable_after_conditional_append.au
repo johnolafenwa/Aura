@@ -1,0 +1,21 @@
+class Holder:
+    values: list[int64]
+
+def consume(item: own Holder):
+    print(item.values.len())
+
+def main():
+    mut callbacks: list[def(item: own Holder) -> None] = []
+    if true:
+        callbacks.append(consume)
+    match callbacks.get(0):
+        case Lookup.Found(callback):
+            callback(Holder(values=[1, 2]))
+        case Lookup.Missing:
+            print("none")
+    mapped = callbacks.copy()
+    match mapped.get(0):
+        case Lookup.Found(callback):
+            callback(Holder(values=[]))
+        case Lookup.Missing:
+            print("none")

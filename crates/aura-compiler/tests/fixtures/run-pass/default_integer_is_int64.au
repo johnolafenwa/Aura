@@ -16,11 +16,11 @@ def print_int64(value: int64):
 def print_first(values: list[int64]):
     print(values[0])
 
-def print_optional(value: Option[int64]):
+def print_optional(value: int64 | None):
     match own value:
-        case Option.Some(inner):
+        case int64 as inner:
             print(inner)
-        case Option.None:
+        case None:
             print(0)
 
 def main() -> int32:
@@ -28,7 +28,7 @@ def main() -> int32:
     negative = -42
     collection = [43, 44]
     generic = identity(value=2147483648)
-    optional = Option.Some(46)
+    optional = 46
     alias_value: int = 2147483648
     minimum = -9223372036854775808
     maximum = 9223372036854775807

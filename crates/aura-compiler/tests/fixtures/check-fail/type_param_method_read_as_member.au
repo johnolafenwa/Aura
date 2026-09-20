@@ -1,0 +1,16 @@
+trait Size:
+    def size(self) -> int64
+
+class Item:
+    width: int64
+
+impl Size for Item:
+    def size(self) -> int64:
+        return self.width
+
+def render[T: Size](item: T):
+    value: int64 = item.size
+    print(value)
+
+def main():
+    render(Item(width=4))

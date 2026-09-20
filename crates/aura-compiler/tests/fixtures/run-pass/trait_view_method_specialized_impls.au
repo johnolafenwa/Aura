@@ -1,0 +1,19 @@
+trait Peek[T]:
+    def first(self) -> view T from self
+
+class Box[T]:
+    value: T
+    spare: T
+
+impl[T] Peek[T] for Box[T]:
+    def first(self) -> view T from self:
+        return view self.value
+
+impl Peek[int64] for Box[int64]:
+    def first(self) -> view int64 from self:
+        return view self.spare
+
+def main():
+    box = Box(value=1, spare=2)
+    view chosen = box.first()
+    print(chosen)

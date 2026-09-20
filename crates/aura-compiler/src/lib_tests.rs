@@ -635,7 +635,7 @@ const ADDITIONAL_EXAMPLE_CASES: &[(&str, &str, &str)] = &[
     (
         "examples/concurrency/queue_get_timeout_named.au",
         include_str!("../../../examples/concurrency/queue_get_timeout_named.au"),
-        "Option.None\n",
+        "Poll.Unavailable\n",
     ),
     (
         "examples/control_flow.au",
@@ -2307,7 +2307,7 @@ fn mir_runtime_runs_queue_get_timeout_example_natively() {
     let source = include_str!("../../../examples/concurrency/queue_get_timeout.au");
     let mir = lower_source_to_mir(source).expect("queue_get_timeout example should lower to MIR");
     let output = run_mir(&mir).expect("queue_get_timeout example should run directly through MIR");
-    assert_eq!(output.stdout, "Option.None\n");
+    assert_eq!(output.stdout, "Poll.Unavailable\n");
     assert_eq!(output.value, zero_exit_value());
 }
 
@@ -2931,7 +2931,7 @@ fn categorized_examples_run_with_expected_output() {
             (
                 "examples/concurrency/queue_get_timeout.au",
                 EXAMPLE_CASES[23].1,
-                "Option.None\n",
+                "Poll.Unavailable\n",
             ),
             (
                 "examples/concurrency/sleep_builtin.au",
@@ -3105,12 +3105,12 @@ def main() -> int32:
     words = trimmed.split(" ")
     print("/".join(words))
     match trimmed.strip_prefix("Aura "):
-        case Some(rest):
+        case str as rest:
             print(rest)
         case None:
             print("missing")
     match trimmed.strip_suffix(" Repo"):
-        case Some(rest):
+        case str as rest:
             print(rest)
         case None:
             print("missing")

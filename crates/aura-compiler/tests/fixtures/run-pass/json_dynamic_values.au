@@ -22,7 +22,7 @@ def main():
     match json.parse(source):
         case Result.Ok(value):
             print(json.dumps(value))
-            print(json.dumps(value, indent=Option.Some(2)))
+            print(json.dumps(value, indent=2))
             print(source)
             print(json.dumps(value))
         case Result.Err(error):
@@ -32,7 +32,7 @@ def main():
     print(json.as_bool(boolean))
     print(json.as_int(boolean))
     print(json.dumps(boolean))
-    indent = Option.Some(0)
+    indent: int64 | None = 0
     print(json.dumps(boolean, indent=indent))
     print(indent)
 
@@ -47,9 +47,9 @@ def main():
     print(json.as_int(floating))
 
     match json.into_string(json.Value.String("aura")):
-        case Option.Some(text):
+        case str as text:
             print(text)
-        case Option.None:
+        case None:
             print("not a string")
 
     print(json.into_string(json.Value.Int(1)))
@@ -57,16 +57,16 @@ def main():
     print(json.into_object(json.Value.Bool(false)))
 
     match json.into_array(json.Value.Array([json.Value.Int(1), json.Value.Int(2)])):
-        case Option.Some(items):
+        case list[json.Value] as items:
             print(items.len())
-        case Option.None:
+        case None:
             print("not an array")
 
     match own json.into_object(json.Value.Object({"b": json.Value.Int(2), "a": json.Value.Int(1)})):
-        case Option.Some(object):
+        case dict[str, json.Value] as object:
             print(object.len())
             print(json.dumps(json.Value.Object(object)))
-        case Option.None:
+        case None:
             print("not an object")
 
     print(kind(json.Value.Null))
@@ -92,12 +92,12 @@ def main():
     match own json.parse("{\"b\":1,\"a\":2,\"b\":3}"):
         case Result.Ok(value):
             match own json.into_object(value):
-                case Option.Some(object):
+                case dict[str, json.Value] as object:
                     keys = object.keys()
                     for key in keys:
                         print(key)
                     print(json.dumps(json.Value.Object(object)))
-                case Option.None:
+                case None:
                     print("not an object")
         case Result.Err(error):
             print(error)
@@ -144,13 +144,13 @@ def main():
     match own json.parse("{\"b\":1,\"a\":2,\"\\u0062\":3}"):
         case Result.Ok(value):
             match own json.into_object(value):
-                case Option.Some(object):
+                case dict[str, json.Value] as object:
                     print(object.len())
                     for key in object.keys():
                         print(key)
                     print(object.get("b"))
                     print(json.dumps(json.Value.Object(object)))
-                case Option.None:
+                case None:
                     print("not an object")
         case Result.Err(error):
             print(error)
@@ -180,8 +180,8 @@ def main():
         case Result.Err(error):
             print(error)
 
-    print(json.dumps(json.Value.Array([json.Value.Null]), indent=Option.Some(0)))
-    print(json.dumps(json.Value.Object({"a": json.Value.Null}), indent=Option.Some(16)))
+    print(json.dumps(json.Value.Array([json.Value.Null]), indent=0))
+    print(json.dumps(json.Value.Object({"a": json.Value.Null}), indent=16))
 
     mut depth_128 = "null"
     mut depth: int32 = 0

@@ -1,5 +1,5 @@
 def main() -> int32:
-    concrete: ((Option[int32],), (float32,)) = ((None,), (1,))
+    concrete: ((int32 | None,), (float32,)) = ((None,), (1,))
     literal_left_equal: bool = ((None,), (1,)) == concrete
     literal_right_equal: bool = concrete == ((None,), (1,))
     literal_left_unequal: bool = ((None,), (2,)) != concrete

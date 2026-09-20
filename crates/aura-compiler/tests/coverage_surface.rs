@@ -136,11 +136,11 @@ def parse_and_offset(text: str) -> Result[int32, str]:
     parsed = try parse_value(text)
     return Result.Ok(parsed + 5)
 
-def print_int_option(value: Option[int32]) -> None:
+def print_int_lookup(value: Lookup[int32]) -> None:
     match value:
-        case Some(inner):
+        case Lookup.Found(inner):
             print(inner)
-        case None:
+        case Lookup.Missing:
             print(-1)
 
 def main() -> int32:
@@ -193,7 +193,7 @@ def main() -> int32:
     values.reverse()
     values.extend([5, 6])
     print(values == [3, 7, 8, 5, 6])
-    print_int_option(values.get(0))
+    print_int_lookup(values.get(0))
     mut range_total: int64 = 0
     for number in range(values.len()):
         range_total += number

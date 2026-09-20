@@ -1,0 +1,20 @@
+bool true
+true
+43
+true
+5.0
+true
+text
+not text
+array with 0 items
+true
+object with 0 fields
+true
+{"a":[1,2]}
+{"a":[1,2]}
+[
+ 1
+]
+[
+  true
+]

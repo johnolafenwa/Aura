@@ -1,0 +1,9 @@
+present: found None
+seven: found 7
+absent: missing
+removed present, none? true
+second removal missing
+hole found
+hole missing
+Lookup.Found(None)
+Lookup.Missing

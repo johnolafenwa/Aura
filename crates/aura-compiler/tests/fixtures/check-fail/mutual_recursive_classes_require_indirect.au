@@ -1,5 +1,5 @@
 class A:
-    b: B?
+    b: B | None
 
 class B:
-    a: A?
+    a: A | None

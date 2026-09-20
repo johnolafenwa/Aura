@@ -1,0 +1,27 @@
+trait Bump:
+    def bump(mut self)
+    def peek(self) -> int64
+
+class Counter:
+    count: int64
+
+impl Bump for Counter:
+    def bump(mut self):
+        self.count += 1
+
+    def peek(self) -> int64:
+        return self.count
+
+def poke[T: Bump](value: mut T):
+    value.bump()
+    value.bump()
+
+def report[T: Bump](value: T) -> int64:
+    return value.peek()
+
+def main():
+    mut counter = Counter(count=1)
+    poke(counter)
+    counter.bump()
+    print(counter.count)
+    print(report(counter))

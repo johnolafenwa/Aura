@@ -10,9 +10,9 @@ def main():
             print(array.mean())
             print(array.clone().len())
             match array.get([1]):
-                case Option.Some(value):
+                case float64 as value:
                     print(value)
-                case Option.None:
+                case None:
                     print("missing")
         case None:
             print(0)

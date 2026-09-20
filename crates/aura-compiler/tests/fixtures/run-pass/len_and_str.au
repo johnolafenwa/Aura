@@ -42,7 +42,8 @@ def main():
     print(str(2.5))
     print(str(true))
     print(str(values))
-    print(str(Option.Some(7)))
+    found: Lookup[int32] = Lookup.Found(7)
+    print(str(found))
 
     rendered = str(42)
     print(len(rendered))

@@ -24,6 +24,6 @@ Array[int32](shape=[3], values=[2147483647, -2147483648, 12])
 Array[int32](shape=[3], values=[2147483647, -2147483647, 8])
 Array[int32](shape=[3], values=[2147483646, -2147483648, 4])
 Array[int32](shape=[3], values=[2147483647, -2147483648, 12])
-Option.None
-Option.Some(0)
+None
+0
 Array[int32](shape=[2], values=[9, 9])

@@ -55,10 +55,10 @@ def main():
     mut lines = 0
     while true:
         match io.read_line():
-            case Result.Ok(Option.Some(line)):
+            case Result.Ok(str as line):
                 lines += 1
                 print("got " + line)
-            case Result.Ok(Option.None):
+            case Result.Ok(None):
                 print("eof")
                 break
             case Result.Err(error):

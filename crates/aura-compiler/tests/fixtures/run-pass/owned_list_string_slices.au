@@ -39,9 +39,9 @@ def main() -> int32:
     names: list[str] = ["Ada", "Grace"]
     first: list[str] = names[:1]
     match first.get(0):
-        case Option.Some(name):
+        case Lookup.Found(name):
             print(name)
-        case Option.None:
+        case Lookup.Missing:
             print("missing")
     print(names.len())
     return 0

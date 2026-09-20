@@ -1,0 +1,5 @@
+error[AU2001]: unknown name `Option`
+ --> crates/aura-compiler/tests/fixtures/check-fail/unknown_name_option_none.au:2:13
+  |
+2 |     value = Option.None
+  |             ^

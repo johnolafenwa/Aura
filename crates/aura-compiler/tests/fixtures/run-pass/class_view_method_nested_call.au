@@ -1,0 +1,16 @@
+class Pair:
+    left: str
+    right: str
+
+    def pick(self, first: bool) -> view str from self:
+        if first:
+            return view self.left
+        return view self.right
+
+    def leftmost(self) -> view str from self:
+        return view self.pick(true)
+
+def main():
+    pair = Pair(left="a", right="b")
+    view chosen = pair.leftmost()
+    print(chosen)

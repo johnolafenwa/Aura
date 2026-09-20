@@ -1,0 +1,14 @@
+trait Peek:
+    def peek(self) -> int64
+
+class Counter:
+    count: int64
+
+impl Peek for Counter:
+    def peek(self) -> int64:
+        return self.count
+
+def main():
+    counter = Counter(count=7)
+    bound = counter.peek
+    print(bound())

@@ -1,0 +1,3 @@
+def main():
+    items: list[Option[str]] = []
+    print(items.len())

@@ -1,0 +1,5 @@
+error[AU2005]: `size` is a method of the `T` bound and is not a field; call it as `size(...)` (bound method values on type parameters are not supported in this language version)
+ --> crates/aura-compiler/tests/fixtures/check-fail/type_param_method_read_as_member.au:12:25
+   |
+12 |     value: int64 = item.size
+   |                         ^

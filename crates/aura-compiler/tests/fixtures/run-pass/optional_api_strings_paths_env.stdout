@@ -1,0 +1,14 @@
+prefix: present 'body'
+prefix miss: absent
+prefix whole: present ''
+suffix: present 'file'
+suffix miss: absent
+suffix whole: present ''
+parent: present '/a/b'
+parent root: absent
+file: present 'c.txt'
+file none: absent
+ext: present 'txt'
+ext none: absent
+env unset: absent
+true

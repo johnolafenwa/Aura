@@ -1,0 +1,13 @@
+class Box[T]:
+    value: T
+    spare: T
+
+    def choose[U](self, extra: own U, first: bool) -> view T from self:
+        if first:
+            return view self.value
+        return view self.spare
+
+def main():
+    box = Box(value=1, spare=2)
+    view chosen = box.choose("tag", false)
+    print(chosen)

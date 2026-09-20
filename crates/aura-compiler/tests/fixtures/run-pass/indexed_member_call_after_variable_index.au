@@ -2,8 +2,8 @@ def main() -> int32:
     keys = ["a", "b"]
     idx: int32 = 1
     match keys.get(idx):
-        case Option.Some(value):
+        case Lookup.Found(value):
             print(value.clone())
-        case Option.None:
+        case Lookup.Missing:
             pass
     return 0

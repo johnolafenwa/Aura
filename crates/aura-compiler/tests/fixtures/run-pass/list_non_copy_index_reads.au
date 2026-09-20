@@ -1,25 +1,25 @@
 def main() -> int32:
     names = ["Ada", "Grace"]
     match names.get(0):
-        case Option.Some(value):
+        case Lookup.Found(value):
             print(value)
-        case Option.None:
+        case Lookup.Missing:
             pass
     match names.get(1):
-        case Option.Some(value):
+        case Lookup.Found(value):
             print(value)
-        case Option.None:
+        case Lookup.Missing:
             pass
 
     grids = [[1, 2], [3, 4]]
     match grids.get(0):
-        case Option.Some(row):
+        case Lookup.Found(row):
             print(row[1])
-        case Option.None:
+        case Lookup.Missing:
             pass
     match grids.get(1):
-        case Option.Some(row):
+        case Lookup.Found(row):
             print(row[0])
-        case Option.None:
+        case Lookup.Missing:
             pass
     return 0

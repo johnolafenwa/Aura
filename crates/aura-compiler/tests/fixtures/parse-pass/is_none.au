@@ -1,2 +1,2 @@
-def has_value(value: Option[int32]) -> bool:
+def has_value(value: int32 | None) -> bool:
     return value is None

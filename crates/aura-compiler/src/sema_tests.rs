@@ -275,13 +275,13 @@ fn s1_sema_fourth_duplicate_ffi_items_report_the_prior_declaration_kind() {
 #[test]
 fn s1_sema_fourth_expected_builtin_enum_arity_and_len_receiver_stay_specific() {
     let arity = crate::check_source(
-        "def make() -> Option[int32]:\n    return Option.Some()\n\ndef main():\n    pass\n",
+        "def make() -> Lookup[int32]:\n    return Lookup.Found()\n\ndef main():\n    pass\n",
     )
-    .expect_err("the expected Option type must not hide a missing Some payload");
+    .expect_err("the expected Lookup type must not hide a missing Found payload");
     assert_eq!(arity.code, "AU2004");
     assert_eq!(
         arity.message,
-        "variant `Some` of enum `Option` expects 1 payload argument, found 0"
+        "variant `Found` of enum `Lookup` expects 1 payload argument, found 0"
     );
 
     let len = crate::check_source("def main():\n    print(len(1))\n")
@@ -410,13 +410,13 @@ fn s1_sema_fifth_contextual_literals_lambdas_and_variants_keep_exact_errors() {
     );
 
     let variant = crate::check_source(
-        "def make() -> Option[int32]:\n    return Option.Some(\"bad\")\n\ndef main():\n    pass\n",
+        "def make() -> Lookup[int32]:\n    return Lookup.Found(\"bad\")\n\ndef main():\n    pass\n",
     )
     .expect_err("an expected builtin enum type must constrain its payload");
     assert_eq!(variant.code, "AU2999");
     assert_eq!(
         variant.message,
-        "variant `Some` of enum `Option` expects `int32`, found `str`"
+        "variant `Found` of enum `Lookup` expects `int32`, found `str`"
     );
 }
 
@@ -1146,8 +1146,8 @@ def main():
     shape: list[int64] = values.shape()
     count: int64 = values.len()
     copied: Array[int32] = values.clone()
-    maybe: Option[int32] = values.get(index=[0, 1])
-    old: Option[int32] = values.set(index=[0, 1], value=9)
+    maybe: int32 | None = values.get(index=[0, 1])
+    old: int32 | None = values.set(index=[0, 1], value=9)
     values.fill(value=0)
     item: int32 = values[0, 1]
     coordinates: list[int64] = [0]
@@ -1707,12 +1707,12 @@ def main():
 "#,
         ),
         (
-            "Option payload",
-            "Option[Array[int32]]",
+            "optional member",
+            "Array[int32] | None",
             r#"
 def main():
-    left: Option[Array[int32]] = Option.Some(Array[int32].zeros([1]))
-    right: Option[Array[int32]] = Option.Some(Array[int32].zeros([1]))
+    left: Array[int32] | None = Array[int32].zeros([1])
+    right: Array[int32] | None = Array[int32].zeros([1])
     print(left == right)
 "#,
         ),
@@ -2901,7 +2901,7 @@ def main():
     replaced: Handle = replaced_values.set(0, acquire())
 
     mut handles: dict[str, Handle] = {"one": acquire()}
-    removed_from_map: Option[Handle] = handles.remove("one")
+    removed_from_map: Lookup[Handle] = handles.remove("one")
 "#,
     )
     .expect("move-producing collection operations must preserve one opaque-handle owner");
@@ -3151,13 +3151,13 @@ fn type_ref(name: &str) -> TypeRef {
 fn tuples_type_contextual_none_indexing_and_recursive_copyability() {
     crate::check_source(
         "\
-def choose() -> (Option[int32], int32):
+def choose() -> (int32 | None, int32):
     return (None, 7)
 
 def main():
-    pair: (Option[int32], int32) = choose()
+    pair: (int32 | None, int32) = choose()
     value: int32 = pair[1]
-    grouped: Option[int32] = pair[(0)]
+    grouped: int32 | None = pair[(0)]
     print(value)
 ",
     )
@@ -3729,8 +3729,8 @@ def choose(flag: bool, count: int32) -> int32:
 def ratio(flag: bool) -> float64:
     return 1 if flag else 2.5
 
-def maybe(flag: bool) -> Option[int32]:
-    return None if flag else Option.Some(7)
+def maybe(flag: bool) -> int32 | None:
+    return None if flag else 7
 "#,
     )
     .expect("expected types should flow into both conditional arms");
@@ -3789,8 +3789,8 @@ def choose(
     left_empty = [] if flag else values
     right_empty = reverse_values if flag else []
     nested_empty = ([], 1) if flag else (tuple_values, 2)
-    left_none = None if flag else Option.Some(exact_integer)
-    right_none = Option.Some(reverse_integer) if flag else None
+    left_none: int32 | None = None if flag else exact_integer
+    right_none: int32 | None = reverse_integer if flag else None
     left_integer = (-1) if flag else exact_integer
     right_integer = reverse_integer if flag else (-2)
     promoted_integer = 1 if flag else exact_float
@@ -4320,10 +4320,10 @@ def main():
     mut holders = dict[str, Holder]()
     holders["a"] = Holder(generator=random.Rng(seed=7))
     match own holders.remove("a"):
-        case Option.Some(chosen):
+        case Lookup.Found(chosen):
             mut taken = chosen
             print(taken.generator.next_int(lo=1, hi=10))
-        case Option.None:
+        case Lookup.Missing:
             print("none")
     print(holders.len())
 "#,
@@ -4400,7 +4400,7 @@ def main():
     print(str(2.5))
     print(str(true))
     print(str(values))
-    print(str(Option.Some(7)))
+    print(str(Lookup[int64].Found(7)))
 
     rendered = str(42)
     print(len(rendered))
@@ -4409,7 +4409,7 @@ def main():
     .expect("len should delegate and str should render");
     assert_eq!(
         output.stdout,
-        "2\n5\n1\n1\ntrue\ntrue\ntrue\ntrue\n2\n6\n1\n2.5\ntrue\n[1, 2]\nOption.Some(7)\n2\n"
+        "2\n5\n1\n1\ntrue\ntrue\ntrue\ntrue\n2\n6\n1\n2.5\ntrue\n[1, 2]\nLookup.Found(7)\n2\n"
     );
 
     // `str` renders exactly what an f-string interpolation renders.
@@ -5923,7 +5923,7 @@ fn builtin_method_names_cannot_be_shadowed_on_any_builtin_target() {
             "str.contains",
         ),
         (
-            "trait Lookup:\n    def get(self, key: str) -> Option[str]\n\nimpl Lookup for dict[str, str]:\n    def get(self, key: str) -> Option[str]:\n        return Option.None\n",
+            "trait Finder:\n    def get(self, key: str) -> str | None\n\nimpl Finder for dict[str, str]:\n    def get(self, key: str) -> str | None:\n        return None\n",
             "dict.get",
         ),
         (
@@ -6083,8 +6083,8 @@ fn random_rng_clone_producing_collection_and_task_observers_are_rejected() {
             "import random\n\ndef observe(task: Task[random.Rng]):\n    print(task.result())\n",
         ),
         (
-            "Task.result_or_none",
-            "import random\n\ndef observe(task: Task[random.Rng]):\n    print(task.result_or_none())\n",
+            "Task.poll",
+            "import random\n\ndef observe(task: Task[random.Rng]):\n    print(task.poll())\n",
         ),
         (
             "Task.result_or",
@@ -6190,7 +6190,7 @@ def pop_generator(values: mut list[random.Rng]) -> random.Rng:
 def pop_first_generator(values: mut list[random.Rng]) -> random.Rng:
     return values.pop(0)
 
-def remove_mapped_generator(values: mut dict[str, random.Rng]) -> Option[random.Rng]:
+def remove_mapped_generator(values: mut dict[str, random.Rng]) -> Lookup[random.Rng]:
     return values.remove("main")
 
 def shuffle_generators(rng: mut random.Rng, values: mut list[random.Rng]):
@@ -6378,8 +6378,8 @@ trait Factory:
     def choose[T](self, left: own T, right: own T) -> T:
         return left
 
-    def empty[T](self) -> Option[T]:
-        return Option.None
+    def empty[T](self) -> T | None:
+        return None
 
     def display[T: Display](self, value: own T) -> T:
         return value
@@ -7213,18 +7213,23 @@ def accept(value: int64):
 def accept_values(values: list[int64]):
     print(values.len())
 
-def accept_option(value: Option[int64]):
-    print(value != Option.None)
+def accept_lookup(value: Lookup[int64]):
+    print(value != Lookup.Missing)
+
+def accept_optional(value: int64 | None):
+    print(value != None)
 
 def main() -> int32:
     positive = 2147483648
     negative = -2147483649
     values = [1, 2147483648]
-    maybe = Option.Some(1)
+    found = Lookup[int64].Found(1)
+    maybe: int64 | None = 1
     accept(positive)
     accept(negative)
     accept_values(values)
-    accept_option(maybe)
+    accept_lookup(found)
+    accept_optional(maybe)
     return 0
 "#;
     crate::check_source(source).expect("unhinted integer expressions should infer int64");
@@ -7469,7 +7474,7 @@ fn contextual_none_rejects_non_optional_comparisons_symmetrically() {
             .expect_err("None comparisons with non-optional values should fail");
         assert_eq!(
             error.message,
-            "type `int32` is not optional; only `Option[T]` values can be compared with `None`"
+            "type `int32` is not optional; only `T | None` values can be compared with `None`"
         );
     }
 }
@@ -8118,7 +8123,7 @@ fn checker_helper_paths_cover_explicit_type_args_and_pattern_unification_edges()
         1
     );
     assert!(has_unresolved_type_params(&Type::Named(
-        "Option".to_string(),
+        "Lookup".to_string(),
         vec![Type::TypeParam("T".to_string())],
     )));
     assert!(!has_unresolved_type_params(&Type::Unit));
@@ -8291,7 +8296,7 @@ fn checker_expression_helper_paths_cover_collection_specialization_and_control_e
         "dict".to_string(),
         vec![Type::named("str"), Type::named("str")],
     );
-    let option_int = Type::Named("Option".to_string(), vec![Type::named("int32")]);
+    let optional_int = crate::sema::optional_type(Type::named("int32"));
     let result_int_string = Type::Named(
         "Result".to_string(),
         vec![Type::named("int32"), Type::named("str")],
@@ -8442,10 +8447,10 @@ fn checker_expression_helper_paths_cover_collection_specialization_and_control_e
             .type_of_expr_hint(
                 &expr(ExprKind::Name("None".to_string())),
                 &mut locals,
-                Some(&option_int)
+                Some(&optional_int)
             )
-            .expect("None should follow Option hints"),
-        option_int
+            .expect("None should follow `T | None` hints"),
+        optional_int
     );
     assert_eq!(
         checker
@@ -9050,10 +9055,10 @@ fn checker_expression_helper_paths_cover_collection_specialization_and_control_e
         .type_of_expr(
             &expr(ExprKind::Member {
                 object: Box::new(expr(ExprKind::Specialize {
-                    expr: Box::new(expr(ExprKind::Name("Option".to_string()))),
+                    expr: Box::new(expr(ExprKind::Name("Lookup".to_string()))),
                     type_args: vec![type_ref("int32")],
                 })),
-                field: "Some".to_string(),
+                field: "Found".to_string(),
             }),
             &mut locals,
         )
@@ -10644,61 +10649,79 @@ fn checker_type_of_call_covers_associated_methods_generic_variants_and_private_f
         .message
         .contains("does not take a payload"));
 
-    let option_some = expr(ExprKind::Member {
+    let lookup_found = expr(ExprKind::Member {
         object: Box::new(expr(ExprKind::Specialize {
-            expr: Box::new(expr(ExprKind::Name("Option".to_string()))),
+            expr: Box::new(expr(ExprKind::Name("Lookup".to_string()))),
             type_args: vec![type_ref("int32")],
         })),
-        field: "Some".to_string(),
+        field: "Found".to_string(),
     });
-    let option_none = expr(ExprKind::Member {
+    let lookup_missing = expr(ExprKind::Member {
         object: Box::new(expr(ExprKind::Specialize {
-            expr: Box::new(expr(ExprKind::Name("Option".to_string()))),
+            expr: Box::new(expr(ExprKind::Name("Lookup".to_string()))),
             type_args: vec![type_ref("int32")],
         })),
-        field: "None".to_string(),
+        field: "Missing".to_string(),
     });
     assert_eq!(
         checker
             .type_of_call(
-                &option_some,
+                &lookup_found,
                 &[named_arg("value", expr(ExprKind::Int(1)))],
                 span,
                 &mut locals,
                 None,
             )
             .expect("builtin enum constructors should accept `value=`"),
-        Type::Named("Option".to_string(), vec![Type::named("int32")])
+        Type::Named("Lookup".to_string(), vec![Type::named("int32")])
     );
     assert!(checker
-        .type_of_call(&option_some, &[], span, &mut locals, None)
-        .expect_err("Option.Some still requires a payload")
+        .type_of_call(&lookup_found, &[], span, &mut locals, None)
+        .expect_err("Lookup.Found still requires a payload")
         .message
         .contains("payload"));
-    let inferred_option_some = expr(ExprKind::Member {
-        object: Box::new(expr(ExprKind::Name("Option".to_string()))),
-        field: "Some".to_string(),
+    let inferred_lookup_found = expr(ExprKind::Member {
+        object: Box::new(expr(ExprKind::Name("Lookup".to_string()))),
+        field: "Found".to_string(),
     });
-    let inferred_option_none = expr(ExprKind::Member {
-        object: Box::new(expr(ExprKind::Name("Option".to_string()))),
-        field: "None".to_string(),
+    let inferred_lookup_missing = expr(ExprKind::Member {
+        object: Box::new(expr(ExprKind::Name("Lookup".to_string()))),
+        field: "Missing".to_string(),
     });
+    // Builtin enum constructors resolve only against an expected type or
+    // explicit type arguments (the pre-existing `Result` rule now also
+    // covers `Lookup`/`Poll`): an unqualified `Lookup.Found(...)` with
+    // neither reports the enum name as unresolved.
     assert!(checker
-        .type_of_call(&inferred_option_some, &[], span, &mut locals, None)
-        .expect_err("unqualified Option.Some should still require a payload")
+        .type_of_call(&inferred_lookup_found, &[], span, &mut locals, None)
+        .expect_err("unqualified Lookup.Found needs an expected type")
+        .message
+        .contains("unknown name `Lookup`"));
+    assert!(checker
+        .type_of_call(
+            &inferred_lookup_found,
+            &[],
+            span,
+            &mut locals,
+            Some(&Type::Named(
+                "Lookup".to_string(),
+                vec![Type::named("int32")]
+            )),
+        )
+        .expect_err("Lookup.Found still requires a payload under an expected type")
         .message
         .contains("expects 1 payload argument, found 0"));
     assert!(checker
-        .type_of_expr(&inferred_option_none, &mut locals)
-        .expect_err("bare Option.None needs an expected type")
+        .type_of_expr(&inferred_lookup_missing, &mut locals)
+        .expect_err("bare Lookup.Missing needs an expected type")
         .message
-        .contains("cannot infer type parameter `T`"));
+        .contains("unknown name `Lookup`"));
     assert!(checker
         .type_of_expr_hint(
-            &inferred_option_some,
+            &inferred_lookup_found,
             &mut locals,
             Some(&Type::Named(
-                "Option".to_string(),
+                "Lookup".to_string(),
                 vec![Type::named("int32")]
             )),
         )
@@ -10707,9 +10730,9 @@ fn checker_type_of_call_covers_associated_methods_generic_variants_and_private_f
         .contains("requires a payload"));
     assert_eq!(
         checker
-            .type_of_call(&option_none, &[], span, &mut locals, None)
-            .expect("Option.None with explicit type args should type check"),
-        Type::Named("Option".to_string(), vec![Type::named("int32")])
+            .type_of_call(&lookup_missing, &[], span, &mut locals, None)
+            .expect("Lookup.Missing with explicit type args should type check"),
+        Type::Named("Lookup".to_string(), vec![Type::named("int32")])
     );
 
     assert!(checker
@@ -11059,7 +11082,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
             vec![ok, crate::builtin_modules::process_error_type()],
         )
     };
-    let option_ty = |inner: Type| Type::Named("Option".to_string(), vec![inner]);
+    let optional_ty = |inner: Type| crate::sema::optional_type(inner);
     let bytes_expr = || expr(ExprKind::List(vec![expr(ExprKind::Int(1))]));
     let headers_expr = || {
         expr(ExprKind::Map(vec![MapEntryExpr {
@@ -11327,7 +11350,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "strip_prefix".to_string(),
             }),
             vec![arg(expr(ExprKind::String("au".to_string())))],
-            Type::Named("Option".to_string(), vec![string_ty.clone()]),
+            optional_ty(string_ty.clone()),
         ),
         (
             expr(ExprKind::Member {
@@ -11335,7 +11358,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "strip_suffix".to_string(),
             }),
             vec![arg(expr(ExprKind::String("x".to_string())))],
-            Type::Named("Option".to_string(), vec![string_ty.clone()]),
+            optional_ty(string_ty.clone()),
         ),
         (
             expr(ExprKind::Member {
@@ -11399,7 +11422,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "get".to_string(),
             }),
             vec![arg(expr(ExprKind::Int(0)))],
-            Type::Named("Option".to_string(), vec![int_ty.clone()]),
+            Type::Named("Lookup".to_string(), vec![int_ty.clone()]),
         ),
         (
             expr(ExprKind::Member {
@@ -11498,7 +11521,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "get".to_string(),
             }),
             vec![arg(expr(ExprKind::String("count".to_string())))],
-            Type::Named("Option".to_string(), vec![int_ty.clone()]),
+            Type::Named("Lookup".to_string(), vec![int_ty.clone()]),
         ),
         (
             expr(ExprKind::Member {
@@ -11506,7 +11529,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "remove".to_string(),
             }),
             vec![arg(expr(ExprKind::String("count".to_string())))],
-            Type::Named("Option".to_string(), vec![int_ty.clone()]),
+            Type::Named("Lookup".to_string(), vec![int_ty.clone()]),
         ),
         (
             expr(ExprKind::Member {
@@ -11619,10 +11642,10 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
         (
             expr(ExprKind::Member {
                 object: Box::new(expr(ExprKind::Name("queue".to_string()))),
-                field: "get_or_none".to_string(),
+                field: "poll".to_string(),
             }),
             Vec::new(),
-            Type::Named("Option".to_string(), vec![string_ty.clone()]),
+            Type::Named("Poll".to_string(), vec![string_ty.clone()]),
         ),
         (
             expr(ExprKind::Member {
@@ -11665,10 +11688,10 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
         (
             expr(ExprKind::Member {
                 object: Box::new(expr(ExprKind::Name("task".to_string()))),
-                field: "result_or_none".to_string(),
+                field: "poll".to_string(),
             }),
             Vec::new(),
-            Type::Named("Option".to_string(), vec![int_ty.clone()]),
+            Type::Named("Poll".to_string(), vec![int_ty.clone()]),
         ),
         (
             expr(ExprKind::Member {
@@ -11740,7 +11763,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "stdin".to_string(),
             }),
             Vec::new(),
-            option_ty(Type::named("process.Pipe")),
+            optional_ty(Type::named("process.Pipe")),
         ),
         (
             expr(ExprKind::Member {
@@ -11748,7 +11771,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "stdout".to_string(),
             }),
             Vec::new(),
-            option_ty(Type::named("process.Pipe")),
+            optional_ty(Type::named("process.Pipe")),
         ),
         (
             expr(ExprKind::Member {
@@ -11756,7 +11779,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "stderr".to_string(),
             }),
             Vec::new(),
-            option_ty(Type::named("process.Pipe")),
+            optional_ty(Type::named("process.Pipe")),
         ),
         (
             expr(ExprKind::Member {
@@ -11772,7 +11795,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "wait_or_none".to_string(),
             }),
             vec![timeout_arg()],
-            process_result_ty(option_ty(Type::named("process.ExitStatus"))),
+            process_result_ty(optional_ty(Type::named("process.ExitStatus"))),
         ),
         (
             expr(ExprKind::Member {
@@ -11820,7 +11843,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "read_line".to_string(),
             }),
             vec![timeout_arg()],
-            process_result_ty(option_ty(string_ty.clone())),
+            process_result_ty(optional_ty(string_ty.clone())),
         ),
         (
             expr(ExprKind::Member {
@@ -11828,7 +11851,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "read_bytes".to_string(),
             }),
             vec![arg(expr(ExprKind::Int(8))), timeout_arg()],
-            process_result_ty(option_ty(bytes_ty.clone())),
+            process_result_ty(optional_ty(bytes_ty.clone())),
         ),
         (
             expr(ExprKind::Member {
@@ -11945,7 +11968,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "wait_or_none".to_string(),
             }),
             vec![timeout_arg()],
-            process_result_ty(option_ty(Type::named("process.SupervisorEvent"))),
+            process_result_ty(optional_ty(Type::named("process.SupervisorEvent"))),
         ),
         (
             expr(ExprKind::Member {
@@ -12009,7 +12032,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "read_line".to_string(),
             }),
             vec![timeout_arg()],
-            result_ty(option_ty(string_ty.clone())),
+            result_ty(optional_ty(string_ty.clone())),
         ),
         (
             expr(ExprKind::Member {
@@ -12017,7 +12040,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "read_bytes".to_string(),
             }),
             vec![arg(expr(ExprKind::Int(8))), timeout_arg()],
-            result_ty(option_ty(bytes_ty.clone())),
+            result_ty(optional_ty(bytes_ty.clone())),
         ),
         (
             expr(ExprKind::Member {
@@ -12129,7 +12152,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "recv".to_string(),
             }),
             vec![arg(expr(ExprKind::Int(8))), timeout_arg()],
-            result_ty(option_ty(bytes_ty.clone())),
+            result_ty(optional_ty(bytes_ty.clone())),
         ),
         (
             expr(ExprKind::Member {
@@ -12137,7 +12160,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "recv_from".to_string(),
             }),
             vec![arg(expr(ExprKind::Int(8))), timeout_arg()],
-            result_ty(option_ty(Type::named("net.UdpDatagram"))),
+            result_ty(optional_ty(Type::named("net.UdpDatagram"))),
         ),
         (
             expr(ExprKind::Member {
@@ -12353,7 +12376,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "recv_text".to_string(),
             }),
             vec![timeout_arg()],
-            result_ty(option_ty(string_ty.clone())),
+            result_ty(optional_ty(string_ty.clone())),
         ),
         (
             expr(ExprKind::Member {
@@ -12361,7 +12384,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "recv_bytes".to_string(),
             }),
             vec![timeout_arg()],
-            result_ty(option_ty(bytes_ty.clone())),
+            result_ty(optional_ty(bytes_ty.clone())),
         ),
         (
             expr(ExprKind::Member {
@@ -12393,7 +12416,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "read_line".to_string(),
             }),
             vec![timeout_arg()],
-            result_ty(option_ty(string_ty.clone())),
+            result_ty(optional_ty(string_ty.clone())),
         ),
         (
             expr(ExprKind::Member {
@@ -12449,7 +12472,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "read_line".to_string(),
             }),
             vec![timeout_arg()],
-            result_ty(option_ty(string_ty.clone())),
+            result_ty(optional_ty(string_ty.clone())),
         ),
         (
             expr(ExprKind::Member {
@@ -12516,10 +12539,10 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
         (
             expr(ExprKind::Member {
                 object: Box::new(expr(ExprKind::Name("queue".to_string()))),
-                field: "get_or_none".to_string(),
+                field: "poll".to_string(),
             }),
             vec![arg(expr(ExprKind::Int(1)))],
-            "`get(timeout=...)` expects `Duration`, found `int64`",
+            "`poll(timeout=...)` expects `Duration`, found `int64`",
         ),
         (
             expr(ExprKind::Member {
@@ -12551,10 +12574,10 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
         (
             expr(ExprKind::Member {
                 object: Box::new(expr(ExprKind::Name("task".to_string()))),
-                field: "result_or_none".to_string(),
+                field: "poll".to_string(),
             }),
             vec![arg(expr(ExprKind::Int(1)))],
-            "`result(timeout=...)` expects `Duration`, found `int64`",
+            "`poll(timeout=...)` expects `Duration`, found `int64`",
         ),
         (
             expr(ExprKind::Member {
@@ -12710,7 +12733,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 ))]))),
                 named_arg("cwd", expr(ExprKind::Bool(true))),
             ],
-            "`start` expects `Option[str]`, found `bool`",
+            "'bool' is not a member of 'str | None'",
         ),
         (
             expr(ExprKind::Member {
@@ -13587,7 +13610,12 @@ fn copy_and_type_classifier_helpers_cover_builtin_and_user_types() {
         &enums
     ));
     assert!(type_is_copy_in_context(
-        &Type::Named("Option".to_string(), vec![Type::named("int32")]),
+        &crate::sema::optional_type(Type::named("int32")),
+        &classes,
+        &enums,
+    ));
+    assert!(type_is_copy_in_context(
+        &Type::Named("Lookup".to_string(), vec![Type::named("int32")]),
         &classes,
         &enums,
     ));
@@ -13943,22 +13971,23 @@ fn sema_render_and_builtin_enum_hint_helpers_cover_remaining_paths() {
     );
     assert_eq!(set_element_type(&Type::named("str")), None);
 
-    let option_name = expr(ExprKind::Name("Option".to_string()));
-    let specialized_option = expr(ExprKind::Specialize {
-        expr: Box::new(option_name.clone()),
+    let lookup_name = expr(ExprKind::Name("Lookup".to_string()));
+    let specialized_lookup = expr(ExprKind::Specialize {
+        expr: Box::new(lookup_name.clone()),
         type_args: vec![type_ref("int32")],
     });
     let constructor_member = expr(ExprKind::Member {
-        object: Box::new(specialized_option.clone()),
-        field: "Some".to_string(),
+        object: Box::new(specialized_lookup.clone()),
+        field: "Found".to_string(),
     });
     let constructor_call = expr(ExprKind::Call {
         callee: Box::new(constructor_member.clone()),
         args: vec![arg(expr(ExprKind::Int(1)))],
     });
 
-    assert!(checker.is_builtin_enum_constructor_expr(&option_name));
-    assert!(checker.is_builtin_enum_constructor_expr(&specialized_option));
+    assert!(checker.is_builtin_enum_constructor_expr(&lookup_name));
+    assert!(checker.is_builtin_enum_constructor_expr(&specialized_lookup));
+    assert!(!checker.is_builtin_enum_constructor_expr(&expr(ExprKind::Name("Option".to_string()))));
     assert!(!checker.is_builtin_enum_constructor_expr(&place));
     assert!(checker.expr_can_use_partial_expected_hint(&constructor_member));
     assert!(checker.expr_can_use_partial_expected_hint(&constructor_call));
@@ -14846,20 +14875,12 @@ fn builtin_omitted_marker_is_valid_only_while_checking_generated_defaults() {
         keyword_only: false,
         name: "timeout".to_string(),
         mode: ParamMode::Default,
-        ty: type_ref("Option"),
+        ty: type_ref("Duration"),
         default: Some(omitted.clone()),
         span: omitted.span,
     };
-    let mut option_param = param;
-    option_param.ty = nested_type_ref("Option", vec![type_ref("Duration")]);
     checker
-        .check_param_defaults(
-            &[option_param],
-            &BTreeMap::new(),
-            None,
-            true,
-            "builtin function",
-        )
+        .check_param_defaults(&[param], &BTreeMap::new(), None, true, "builtin function")
         .expect("generated omitted defaults should match their declared parameter type");
 
     let error = checker
@@ -15207,15 +15228,24 @@ fn lower_type_covers_builtin_generic_and_error_paths() {
     );
     assert_eq!(
         lower_type(
-            &nested_type_ref("Option", vec![type_ref("int32")]),
+            &nested_type_ref("Lookup", vec![type_ref("int32")]),
             &type_names,
             &type_arities,
             &canonical_type_names,
             &type_params,
         )
-        .expect("Option should lower"),
-        Type::Named("Option".to_string(), vec![Type::named("int32")])
+        .expect("Lookup should lower"),
+        Type::Named("Lookup".to_string(), vec![Type::named("int32")])
     );
+    let removed_option = lower_type(
+        &nested_type_ref("Option", vec![type_ref("int32")]),
+        &type_names,
+        &type_arities,
+        &canonical_type_names,
+        &type_params,
+    )
+    .expect_err("the removed builtin `Option` is an ordinary unknown type");
+    assert!(removed_option.message.contains("unknown type `Option`"));
     assert_eq!(
         lower_type(
             &nested_type_ref("dict", vec![type_ref("str"), type_ref("int32")]),
@@ -15296,15 +15326,15 @@ fn lower_type_covers_builtin_generic_and_error_paths() {
     )
     .expect_err("unknown types should fail");
     assert!(unknown.message.contains("unknown type `Unknown`"));
-    let option_arity = lower_type(
-        &nested_type_ref("Option", vec![]),
+    let lookup_arity = lower_type(
+        &nested_type_ref("Lookup", vec![]),
         &type_names,
         &type_arities,
         &canonical_type_names,
         &type_params,
     )
-    .expect_err("Option arity mismatch should fail");
-    assert!(option_arity
+    .expect_err("Lookup arity mismatch should fail");
+    assert!(lookup_arity
         .message
         .contains("expects exactly one type argument"));
     let task_group_args = lower_type(
@@ -16331,7 +16361,7 @@ fn checker_select_and_assignment_direct_helpers_cover_remaining_error_and_succes
 #[test]
 fn builtin_call_and_member_resolution_surface_type_checks() {
     let program = crate::check_source(
-            "def main() -> int32:\n    text = \"  Aura  \"\n    pieces: list[str] = text.split(\"u\")\n    replaced: str = text.replace(\"Aura\", \"language\")\n    lowered: str = text.to_lower()\n    raised: str = text.to_upper()\n    prefix: Option[str] = text.strip_prefix(\"  \")\n    suffix: Option[str] = text.strip_suffix(\"  \")\n    text_len: int64 = text.len()\n    text_byte_len: int64 = text.byte_len()\n    text_has: bool = text.contains(\"Aur\")\n    text_start: bool = text.starts_with(\"  A\")\n    text_end: bool = text.ends_with(\"  \")\n    parsed_i32: Result[int32, str] = parse_int32(text=\"7\")\n    parsed_i64: Result[int64, str] = parse_int64(text=\"9\")\n    parsed_f64: Result[float64, str] = parse_float64(text=\"3.5\")\n    negative: int32 = -7\n    one: int32 = 1\n    two: int32 = 2\n    abs_i32: int32 = abs(value=negative)\n    min_i32: int32 = min(left=one, right=two)\n    max_i32: int32 = max(left=one, right=two)\n    root: float64 = sqrt(value=9.0)\n    mut values: list[int32] = [1, 2, 3]\n    values_len: int64 = values.len()\n    popped: int32 = values.pop()\n    gotten: Option[int32] = values.get(index=0)\n    values.insert(index=0, value=9)\n    mut counts: dict[str, int32] = {\"a\": 1}\n    counts_len: int64 = counts.len()\n    keys: list[str] = counts.keys()\n    vals: list[int32] = counts.values()\n    items: list[(str, int32)] = counts.items()\n    mut names = {\"ada\"}\n    names_len: int64 = names.len()\n    has_name: bool = \"ada\" in names\n    names.add(\"bob\")\n    names.remove(\"ada\")\n    return (text_len as int32) + abs_i32 + min_i32 + max_i32 + (root as int32)\n",
+            "def main() -> int32:\n    text = \"  Aura  \"\n    pieces: list[str] = text.split(\"u\")\n    replaced: str = text.replace(\"Aura\", \"language\")\n    lowered: str = text.to_lower()\n    raised: str = text.to_upper()\n    prefix: str | None = text.strip_prefix(\"  \")\n    suffix: str | None = text.strip_suffix(\"  \")\n    text_len: int64 = text.len()\n    text_byte_len: int64 = text.byte_len()\n    text_has: bool = text.contains(\"Aur\")\n    text_start: bool = text.starts_with(\"  A\")\n    text_end: bool = text.ends_with(\"  \")\n    parsed_i32: Result[int32, str] = parse_int32(text=\"7\")\n    parsed_i64: Result[int64, str] = parse_int64(text=\"9\")\n    parsed_f64: Result[float64, str] = parse_float64(text=\"3.5\")\n    negative: int32 = -7\n    one: int32 = 1\n    two: int32 = 2\n    abs_i32: int32 = abs(value=negative)\n    min_i32: int32 = min(left=one, right=two)\n    max_i32: int32 = max(left=one, right=two)\n    root: float64 = sqrt(value=9.0)\n    mut values: list[int32] = [1, 2, 3]\n    values_len: int64 = values.len()\n    popped: int32 = values.pop()\n    gotten: Lookup[int32] = values.get(index=0)\n    values.insert(index=0, value=9)\n    mut counts: dict[str, int32] = {\"a\": 1}\n    counts_len: int64 = counts.len()\n    keys: list[str] = counts.keys()\n    vals: list[int32] = counts.values()\n    items: list[(str, int32)] = counts.items()\n    mut names = {\"ada\"}\n    names_len: int64 = names.len()\n    has_name: bool = \"ada\" in names\n    names.add(\"bob\")\n    names.remove(\"ada\")\n    return (text_len as int32) + abs_i32 + min_i32 + max_i32 + (root as int32)\n",
         )
         .expect("builtin call/member surface should type check");
     assert!(program.functions.contains_key("main"));
@@ -16769,13 +16799,13 @@ fn checker_builtin_constructor_and_variant_error_edges_cover_direct_paths() {
     }
 
     expect_error(
-        name("Some"),
+        name("Found"),
         vec![arg(expr(ExprKind::Int(1)))],
         None,
         "bare enum variants require an expected enum type",
     );
     expect_error(
-        name("Some"),
+        name("Found"),
         vec![arg(expr(ExprKind::Int(1)))],
         Some(Type::Unit),
         "bare enum variants require an expected enum type",
@@ -16783,28 +16813,34 @@ fn checker_builtin_constructor_and_variant_error_edges_cover_direct_paths() {
     expect_error(
         name("Closed"),
         Vec::new(),
-        Some(Type::Named("Option".to_string(), vec![int_ty.clone()])),
+        Some(Type::Named("Lookup".to_string(), vec![int_ty.clone()])),
         "bare enum variants require an expected enum type",
     );
     expect_error(
-        member(name("Option"), "None"),
+        member(name("Lookup"), "Missing"),
         Vec::new(),
         None,
-        "cannot infer type parameter `T` for enum variant `Option.None`",
+        "unknown name `Lookup`",
+    );
+    expect_error(
+        member(name("Lookup"), "Found"),
+        vec![arg(name("text"))],
+        None,
+        "unknown name `Lookup`",
     );
     drop(expect_error);
 
     assert_eq!(
         checker
             .type_of_call(
-                &member(name("Option"), "Some"),
+                &member(name("Lookup"), "Found"),
                 &[arg(name("text"))],
                 span,
                 &mut locals,
-                None,
+                Some(&Type::Named("Lookup".to_string(), vec![string_ty.clone()])),
             )
-            .expect("bare Option.Some should infer from payload"),
-        Type::Named("Option".to_string(), vec![string_ty])
+            .expect("qualified Lookup.Found should type check against an expected Lookup"),
+        Type::Named("Lookup".to_string(), vec![string_ty])
     );
 }
 
@@ -17256,28 +17292,36 @@ fn checker_match_and_builtin_error_surfaces_cover_remaining_branches() {
                 "`with` resources must define `close(mut self)` returning `None`",
             ),
             (
-                "def make() -> Option[int32]:\n    return Option[int32].Missing()\n\ndef main():\n    pass\n",
-                "enum `Option` has no variant `Missing`",
+                "def make() -> Lookup[int32]:\n    return Lookup[int32].Some()\n\ndef main():\n    pass\n",
+                "enum `Lookup` has no variant `Some`",
             ),
             (
-                "def make() -> Option[int32]:\n    return Option[int32].None(1)\n\ndef main():\n    pass\n",
-                "variant `None` of enum `Option` does not take a payload",
+                "def make() -> Lookup[int32]:\n    return Lookup[int32].Missing(1)\n\ndef main():\n    pass\n",
+                "variant `Missing` of enum `Lookup` does not take a payload",
             ),
             (
-                "def make() -> Option[int32]:\n    return Option[int32].Some()\n\ndef main():\n    pass\n",
-                "variant `Some` of enum `Option` expects 1 payload argument, found 0",
+                "def make() -> Lookup[int32]:\n    return Lookup[int32].Found()\n\ndef main():\n    pass\n",
+                "variant `Found` of enum `Lookup` expects 1 payload argument, found 0",
             ),
             (
-                "def make() -> Option[int32]:\n    return Option[int32].Some(\"x\")\n\ndef main():\n    pass\n",
-                "variant `Some` of enum `Option` expects `int32`, found `str`",
+                "def make() -> Lookup[int32]:\n    return Lookup[int32].Found(\"x\")\n\ndef main():\n    pass\n",
+                "variant `Found` of enum `Lookup` expects `int32`, found `str`",
             ),
             (
-                "def make() -> Option[int32]:\n    return Option.None(1)\n\ndef main():\n    pass\n",
-                "variant `None` of enum `Option` does not take a payload",
+                "def make() -> Lookup[int32]:\n    return Lookup.Missing(1)\n\ndef main():\n    pass\n",
+                "variant `Missing` of enum `Lookup` does not take a payload",
             ),
             (
-                "def make() -> Option[int32]:\n    return Option[int32].Some(value=1, extra=2)\n\ndef main():\n    pass\n",
-                "variant `Some` of enum `Option` expects 1 payload argument, found 2",
+                "def make() -> Lookup[int32]:\n    return Lookup[int32].Found(value=1, extra=2)\n\ndef main():\n    pass\n",
+                "variant `Found` of enum `Lookup` expects 1 payload argument, found 2",
+            ),
+            (
+                "def make() -> Option[int32]:\n    return Option.None\n\ndef main():\n    pass\n",
+                "unknown type `Option`",
+            ),
+            (
+                "def make() -> int32 | None:\n    return Option.None\n\ndef main():\n    pass\n",
+                "unknown name `Option`",
             ),
             (
                 "enum Pair:\n    Both(int32, int32)\n\ndef make() -> Pair:\n    return Pair.Both(left=1, right=2)\n\ndef main():\n    pass\n",
@@ -17580,9 +17624,9 @@ fn checker_module_member_type_edges_cover_private_and_uncalled_members() {
             "module `pkg` has no member `missing`",
         ),
         (
-            Type::Named("Option".to_string(), vec![Type::named("int32")]),
-            "Some",
-            "variant `Some` of enum `Option` requires a payload",
+            Type::Named("Lookup".to_string(), vec![Type::named("int32")]),
+            "Found",
+            "variant `Found` of enum `Lookup` requires a payload",
         ),
         (
             Type::named("Widget"),
@@ -18346,9 +18390,25 @@ fn module_namespace_and_builtin_enum_helpers_cover_resolution_paths() {
 
     assert_eq!(
         checker.builtin_enum_variant_payload(
-            &Type::Named("Option".to_string(), vec![Type::named("int32")]),
-            "Option",
-            "Some",
+            &Type::Named("Lookup".to_string(), vec![Type::named("int32")]),
+            "Lookup",
+            "Found",
+        ),
+        Some(vec![Type::named("int32")])
+    );
+    assert_eq!(
+        checker.builtin_enum_variant_payload(
+            &Type::Named("Lookup".to_string(), vec![Type::named("int32")]),
+            "Lookup",
+            "Missing",
+        ),
+        Some(Vec::new())
+    );
+    assert_eq!(
+        checker.builtin_enum_variant_payload(
+            &Type::Named("Poll".to_string(), vec![Type::named("int32")]),
+            "Poll",
+            "Ready",
         ),
         Some(vec![Type::named("int32")])
     );
@@ -18356,9 +18416,9 @@ fn module_namespace_and_builtin_enum_helpers_cover_resolution_paths() {
         checker.builtin_enum_variant_payload(
             &Type::Named("Option".to_string(), vec![Type::named("int32")]),
             "Option",
-            "None",
+            "Some",
         ),
-        Some(Vec::new())
+        None
     );
     let string_ty = Type::named("str");
     let int_ty = Type::named("int32");
@@ -18508,12 +18568,12 @@ fn module_namespace_and_builtin_enum_helpers_cover_resolution_paths() {
         );
     }
     assert_eq!(
-        checker.builtin_enum_variant_payload(&Type::Unit, "Option", "Some"),
+        checker.builtin_enum_variant_payload(&Type::Unit, "Lookup", "Found"),
         None
     );
     assert_eq!(
         checker.builtin_enum_variant_payload(
-            &Type::Named("Option".to_string(), vec![int_ty.clone()]),
+            &Type::Named("Lookup".to_string(), vec![int_ty.clone()]),
             "Result",
             "Ok",
         ),
@@ -18545,9 +18605,13 @@ fn module_namespace_and_builtin_enum_helpers_cover_resolution_paths() {
         );
     }
     let builtin_arity = checker
-        .explicit_builtin_type("Option", &[], span)
+        .explicit_builtin_type("Lookup", &[], span)
         .expect_err("wrong explicit type arg arity should fail");
     assert!(builtin_arity.message.contains("expects 1 type argument"));
+    let removed_option = checker
+        .explicit_builtin_type("Option", &[int_ty.clone()], span)
+        .expect_err("the removed builtin `Option` is an ordinary unknown name");
+    assert!(removed_option.message.contains("unknown name `Option`"));
     let builtin_missing = checker
         .explicit_builtin_type("Missing", &[], span)
         .expect_err("unknown builtin enum should fail");
@@ -18555,39 +18619,39 @@ fn module_namespace_and_builtin_enum_helpers_cover_resolution_paths() {
 
     let builtin_ctor = expr(ExprKind::Member {
         object: Box::new(expr(ExprKind::Specialize {
-            expr: Box::new(expr(ExprKind::Name("Option".to_string()))),
+            expr: Box::new(expr(ExprKind::Name("Lookup".to_string()))),
             type_args: vec![type_ref("int32")],
         })),
-        field: "Some".to_string(),
+        field: "Found".to_string(),
     });
     assert!(checker.expr_can_use_partial_expected_hint(&builtin_ctor));
-    assert!(checker.is_builtin_enum_constructor_expr(&expr(ExprKind::Name("Option".to_string()))));
+    assert!(checker.is_builtin_enum_constructor_expr(&expr(ExprKind::Name("Lookup".to_string()))));
 
     let mut locals = HashMap::new();
     assert_eq!(
         checker
             .type_check_builtin_enum_variant_constructor(
-                "Option",
-                "Some",
-                &Type::Named("Option".to_string(), vec![Type::named("int32")]),
+                "Lookup",
+                "Found",
+                &Type::Named("Lookup".to_string(), vec![Type::named("int32")]),
                 &[arg(expr(ExprKind::Int(7)))],
                 span,
                 &mut locals,
             )
-            .expect("builtin Option.Some constructor should type check"),
-        Type::Named("Option".to_string(), vec![Type::named("int32")])
+            .expect("builtin Lookup.Found constructor should type check"),
+        Type::Named("Lookup".to_string(), vec![Type::named("int32")])
     );
-    let none_payload = checker
+    let missing_payload = checker
         .type_check_builtin_enum_variant_constructor(
-            "Option",
-            "None",
-            &Type::Named("Option".to_string(), vec![Type::named("int32")]),
+            "Lookup",
+            "Missing",
+            &Type::Named("Lookup".to_string(), vec![Type::named("int32")]),
             &[arg(expr(ExprKind::Int(7)))],
             span,
             &mut locals,
         )
-        .expect_err("Option.None should reject payloads");
-    assert!(none_payload.message.contains("does not take a payload"));
+        .expect_err("Lookup.Missing should reject payloads");
+    assert!(missing_payload.message.contains("does not take a payload"));
 
     let mut locals = HashMap::from([(
         "pkg".to_string(),
@@ -19685,8 +19749,8 @@ fn place_path_and_resource_helpers_cover_remaining_checker_paths() {
                 named_arg("extra", expr(ExprKind::Int(2))),
             ],
             span,
-            "Some",
-            "Option",
+            "Found",
+            "Lookup",
         )
         .expect_err("single-payload helper should reject extra named arguments");
     assert!(payload_arity
@@ -19770,7 +19834,7 @@ fn top_level_type_and_trait_helpers_cover_display_and_copy_paths() {
         &enums
     ));
     assert!(type_is_copy_in_context(
-        &Type::Named("Option".to_string(), vec![Type::named("int32")]),
+        &crate::sema::optional_type(Type::named("int32")),
         &classes,
         &enums
     ));
@@ -20444,8 +20508,12 @@ fn lower_type_and_imported_context_helpers_cover_builtin_and_context_paths() {
             "`None` does not take generic arguments",
         ),
         (
-            nested_type_ref("Option", Vec::new()),
-            "`Option` expects exactly one type argument",
+            nested_type_ref("Lookup", Vec::new()),
+            "`Lookup` expects exactly one type argument",
+        ),
+        (
+            nested_type_ref("Option", vec![type_ref("int32")]),
+            "unknown type `Option`",
         ),
         (
             nested_type_ref("Result", vec![type_ref("int32")]),
@@ -20623,12 +20691,12 @@ def main():
         &program.enums,
     ));
     assert!(type_is_copy_in_context(
-        &Type::Named("Option".to_string(), vec![Type::named("int32")]),
+        &crate::sema::optional_type(Type::named("int32")),
         &program.classes,
         &program.enums,
     ));
     assert!(!type_is_copy_in_context(
-        &Type::Named("Option".to_string(), vec![Type::named("str")]),
+        &crate::sema::optional_type(Type::named("str")),
         &program.classes,
         &program.enums,
     ));
@@ -20762,7 +20830,7 @@ fn sema_type_helper_suite_covers_default_args_patterns_and_classifiers() {
         &Type::Named(
             "Result".to_string(),
             vec![
-                Type::Named("Option".to_string(), vec![Type::named("str")]),
+                Type::Named("Lookup".to_string(), vec![Type::named("str")]),
                 Type::named("int32"),
             ],
         ),
@@ -20779,7 +20847,7 @@ class Wrapper:
     target: Target
 
 class IndirectWrapper:
-    target: indirect Target?
+    target: indirect Target | None
 
 def main():
     pass
@@ -20855,7 +20923,7 @@ def main():
             "Result".to_string(),
             vec![
                 Type::TypeParam("T".to_string()),
-                Type::Named("Option".to_string(), vec![Type::TypeParam("U".to_string())]),
+                Type::Named("Lookup".to_string(), vec![Type::TypeParam("U".to_string())]),
             ],
         ),
         &mut collected,
@@ -22732,17 +22800,17 @@ fn empty_set_constructor_requires_an_explicit_element_type() {
 fn task_target_explicit_specialization_and_contextual_defaults_are_concrete() {
     crate::check_source(
         r#"
-def empty[T]() -> Option[T]:
-    return Option.None
+def empty[T]() -> T | None:
+    return None
 
 class Factory:
-    def empty[T]() -> Option[T]:
-        return Option.None
+    def empty[T]() -> T | None:
+        return None
 
-def pair[A, B]() -> (Option[A], Option[B]):
-    return (Option.None, Option.None)
+def pair[A, B]() -> (A | None, B | None):
+    return (None, None)
 
-def fallback(value: own Option[str] = Option.None) -> Option[str]:
+def fallback(value: own (str | None) = None) -> str | None:
     return value
 
 def launch():
@@ -22751,17 +22819,17 @@ def launch():
         second = group.start(Factory.empty[str])
         third = group.start(fallback)
         group.start(pair[str, int32])
-        print(first.result_or(Option.None))
-        print(second.result_or(Option.None))
-        print(third.result_or(Option.None))
+        print(first.result_or(None))
+        print(second.result_or(None))
+        print(third.result_or(None))
 "#,
     )
     .expect("explicit callable type arguments and contextual defaults must classify concretely");
 
     let arity = crate::check_source(
         r#"
-def pair[A, B]() -> (Option[A], Option[B]):
-    return (Option.None, Option.None)
+def pair[A, B]() -> (A | None, B | None):
+    return (None, None)
 
 def launch():
     with group = TaskGroup():
@@ -23123,8 +23191,8 @@ enum Maybe[T]:
 class TupleObserver[T]:
     task: Task[(T, int32)]
 
-class OptionObserver[T]:
-    task: Task[Option[T]]
+class OptionalObserver[T]:
+    task: Task[T | None]
 
 class ResultObserver[T]:
     task: Task[Result[int32, T]]
@@ -23147,7 +23215,7 @@ class CopyClassObserver:
 def copy_tuple(values: list[TupleObserver[int32]]) -> list[TupleObserver[int32]]:
     return values.copy()
 
-def copy_option(values: list[OptionObserver[int32]]) -> list[OptionObserver[int32]]:
+def copy_optional(values: list[OptionalObserver[int32]]) -> list[OptionalObserver[int32]]:
     return values.copy()
 
 def copy_result(values: list[ResultObserver[int32]]) -> list[ResultObserver[int32]]:
@@ -23184,15 +23252,15 @@ def duplicate(values: list[Observer[str]]) -> list[Observer[str]]:
             "(str, int32)",
         ),
         (
-            "option",
+            "optional",
             r#"
 class Observer[T]:
-    task: Task[Option[T]]
+    task: Task[T | None]
 
 def duplicate(values: list[Observer[str]]) -> list[Observer[str]]:
     return values.copy()
 "#,
-            "Option[str]",
+            "str | None",
         ),
         (
             "result",
@@ -23306,19 +23374,19 @@ def duplicate(values: list[Observer]) -> list[Observer]:
 fn task_target_specialization_accepts_nested_and_grouped_type_arguments() {
     crate::check_source(
         r#"
-def empty[T]() -> Option[T]:
-    return Option.None
+def empty[T]() -> T | None:
+    return None
 
 def identity[T](value: own T) -> T:
     return value
 
 class Factory:
-    def empty[T]() -> Option[T]:
-        return Option.None
+    def empty[T]() -> T | None:
+        return None
 
 def launch():
     with group = TaskGroup():
-        group.start(empty[Option[str]])
+        group.start(empty[Lookup[str]])
         group.start(Factory.empty[Result[str, int32]])
         group.start(identity[((str, int32))], ("ready", 7))
 "#,
@@ -23327,8 +23395,8 @@ def launch():
 
     let invalid = crate::check_source(
         r#"
-def empty[T]() -> Option[T]:
-    return Option.None
+def empty[T]() -> T | None:
+    return None
 
 def make_type() -> str:
     return "str"
@@ -23479,23 +23547,23 @@ fn generic_function_values_support_explicit_and_contextual_specialization() {
 def identity[T](value: own T) -> T:
     return value
 
-def empty[T]() -> Option[T]:
-    return Option.None
+def empty[T]() -> T | None:
+    return None
 
 def main():
     identity_string = identity[str]
     copied = identity_string
     value: str = copied("ready")
-    empty_string: def() -> Option[str] = empty
-    missing: Option[str] = empty_string()
+    empty_string: def() -> (str | None) = empty
+    missing: str | None = empty_string()
 "#,
     )
     .expect("generic function values specialize explicitly or from an expected function type");
 
     let ambiguous = crate::check_source(
         r#"
-def empty[T]() -> Option[T]:
-    return Option.None
+def empty[T]() -> T | None:
+    return None
 
 def main():
     callback = empty
@@ -25577,10 +25645,10 @@ fn lambda_capture_discovery_respects_match_pattern_shadowing() {
         r#"
 def main():
     outer = "outside"
-    checks: def(Option[str]) -> bool = lambda choice: match choice:
-        case Option.Some(outer): outer == "inside"
-        case Option.None: false
-    print(checks(Option.Some("inside")))
+    checks: def(str | None) -> bool = lambda choice: match choice:
+        case str as outer: outer == "inside"
+        case None: false
+    print(checks("inside"))
     print(outer)
 "#,
     )
@@ -26635,10 +26703,10 @@ def constant() -> int64:
 
 def main():
     offset: int64 = 7
-    choice: Option[bool] = Option.Some(true)
+    choice: Lookup[bool] = Lookup.Found(true)
     selected = match choice:
-        case Option.Some(value): constant
-        case Option.None: lambda: offset
+        case Lookup.Found(value): constant
+        case Lookup.Missing: lambda: offset
 "#,
     )
     .expect_err("an enum match cannot erase one arm's closure environment");
@@ -29204,8 +29272,6 @@ fn adr0038_loan_closures_reject_every_aggregate_storage_shape() {
         "    callbacks: dict[str, def() -> int64] = {\"callback\": callback}\n    print(callbacks.len())\n",
         "    holder = Holder(callback=callback)\n    print(holder.callback())\n",
         "    packet = Packet.Callback(callback)\n    print(packet)\n",
-        "    packet = Option.Some(callback)\n    print(packet)\n",
-        "    packet = Option.Some((callback,))\n    print(packet)\n",
     ] {
         let source = format!(
             r#"
@@ -29377,7 +29443,7 @@ def main():
 def main():
     value = 1
     view alias = value
-    packet: Option[int64] = Option.Some(alias)
+    packet: Lookup[int64] = Lookup.Found(alias)
     print(packet)
 "#,
         r#"
@@ -29823,16 +29889,16 @@ def main():
 fn adr0038_returned_view_control_contexts_preserve_capability_and_lifetime() {
     let matched = crate::check_source(
         r#"
-def borrow_option(value: Option[int64]) -> view Option[int64] from value:
+def borrow_lookup(value: Lookup[int64]) -> view Lookup[int64] from value:
     return view value
 
 def main():
-    mut value: Option[int64] = Some(1)
-    match borrow_option(value):
-        case Some(item):
-            value = None
+    mut value: Lookup[int64] = Lookup.Found(1)
+    match borrow_lookup(value):
+        case Lookup.Found(item):
+            value = Lookup.Missing
             print(item)
-        case None:
+        case Lookup.Missing:
             pass
 "#,
     )
@@ -29924,7 +29990,7 @@ class Factory:
         return value
 
 def main():
-    maybe: Option[int64] = Option.Some(1)
+    maybe: int64 | None = 1
     result: Result[int64, str] = Result.Ok(2)
     value = Factory.make(3)
     print(maybe)
@@ -30164,7 +30230,7 @@ def keep(value: own int64) -> int64:
         "    stored = shared_int(value) if flag else 0\n    print(stored)\n",
         "    stored = match flag:\n        case true: shared_int(value)\n        case false: 0\n    print(stored)\n",
         "    stored = Holder(value=shared_int(value))\n    print(stored.value)\n",
-        "    stored = Option.Some(shared_int(value))\n    print(stored)\n",
+        "    stored: Lookup[int64] = Lookup.Found(shared_int(value))\n    print(stored)\n",
         "    stored = keep(shared_int(value))\n    print(stored)\n",
     ] {
         let source = format!(

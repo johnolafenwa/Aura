@@ -1,0 +1,17 @@
+trait Show:
+    def show(self) -> str
+
+class Box[T]:
+    value: T
+
+impl[T] Show for Box[T]:
+    def show(self) -> str:
+        return "generic"
+
+impl Show for Box[int64]:
+    def show(self) -> str:
+        return "int"
+
+def main():
+    box = Box(value=1)
+    print(box.show())

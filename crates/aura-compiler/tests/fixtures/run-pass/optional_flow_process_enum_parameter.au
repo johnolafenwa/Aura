@@ -1,0 +1,13 @@
+import process
+
+def show(status: own (process.ExitStatus | None)):
+    match own status:
+        case process.ExitStatus as found:
+            print(found)
+        case None:
+            print("none")
+
+def main() -> int32:
+    show(process.ExitStatus.Exited(0))
+    show(None)
+    return 0

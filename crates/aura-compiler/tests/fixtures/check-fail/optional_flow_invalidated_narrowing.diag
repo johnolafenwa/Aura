@@ -1,0 +1,7 @@
+error[AU2014]: narrowing of `current` no longer applies after assignment; test the current value again
+ --> crates/aura-compiler/tests/fixtures/check-fail/optional_flow_invalidated_narrowing.au:7:23
+  |
+7 |         print(current.len())
+  |                       ^
+  = related crates/aura-compiler/tests/fixtures/check-fail/optional_flow_invalidated_narrowing.au:5:16: narrowed by this test
+  = related crates/aura-compiler/tests/fixtures/check-fail/optional_flow_invalidated_narrowing.au:6:9: invalidated here

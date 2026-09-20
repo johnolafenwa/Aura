@@ -1,0 +1,19 @@
+trait Peek:
+    def first(self, offset: int64) -> view int64 from self
+
+class Pair:
+    left: int64
+    right: int64
+
+impl Peek for Pair:
+    def first(self, offset: int64) -> view int64 from self:
+        if offset == 0:
+            return view self.left
+        return view self.right
+
+def pick[T: Peek](item: T):
+    view chosen = item.first(1)
+    print(chosen)
+
+def main():
+    pick(Pair(left=1, right=2))

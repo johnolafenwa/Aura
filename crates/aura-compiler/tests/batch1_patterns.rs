@@ -64,7 +64,7 @@ runs!(
     nested_mutable_try,
     nested_generic_enum,
     nested_imported_enum,
-    nested_option,
+    none_member,
     nested_enum_chain,
     nested_union_chain,
     alias,

@@ -6,14 +6,14 @@ def apply(transform: def(int32) -> int32, value: int32) -> int32:
 
 def main() -> int32:
     imported = function_value_imported_support.helpers.triple
-    imported_empty: def() -> Option[int32] = function_value_imported_support.helpers.empty
+    imported_empty: def() -> (int32 | None) = function_value_imported_support.helpers.empty
     print(imported(4))
     print(apply(Unary(imported), 5))
     with group = TaskGroup():
         empty_task = group.start(imported_empty)
-        match empty_task.result_or(Option.Some(99), timeout=1s):
-            case Option.None:
+        match empty_task.result_or(99, timeout=1s):
+            case None:
                 print("imported-none")
-            case Option.Some(value):
+            case int32 as value:
                 print(value)
     return 0

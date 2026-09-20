@@ -9,9 +9,9 @@ def main() -> int32:
     for job in jobs:
         consume(job)
 
-    match jobs.get_or_none():
-        case Some(_unexpected):
+    match jobs.poll():
+        case Poll.Ready(_unexpected):
             print("unexpected")
-        case None:
+        case Poll.Unavailable:
             print("closed")
     return 0

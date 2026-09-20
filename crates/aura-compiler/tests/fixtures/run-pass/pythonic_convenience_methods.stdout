@@ -1,10 +1,10 @@
 7
 4
-Option.None
+Poll.Unavailable
 8
 4
-Option.Some(4)
+Poll.Ready(4)
 aura
 ping
 ExitStatus.Exited(0)
-Option.None
+None

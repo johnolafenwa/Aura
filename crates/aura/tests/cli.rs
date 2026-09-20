@@ -2495,9 +2495,9 @@ def main() -> int32:
     with TaskGroup() as group:
         group.start_soon(print_child_arguments)
     match sys.env("AURA_CLI_TEST_VALUE"):
-        case Option.Some(value):
+        case str as value:
             print(value)
-        case Option.None:
+        case None:
             return 1
     return 0
 "#;
@@ -5900,16 +5900,11 @@ fn direct_json_channel_is_private_and_does_not_wait_for_a_grandchild() {
 import sys
 
 def internal_env_visible() -> bool:
-    match sys.env("AURA_INTERNAL_DIAGNOSTIC_FD"):
-        case Option.Some(_):
-            return true
-        case Option.None:
-            pass
-    match sys.env("AURA_INTERNAL_DIAGNOSTIC_SIGNAL_FD"):
-        case Option.Some(_):
-            return true
-        case Option.None:
-            return false
+    diagnostic_fd = sys.env("AURA_INTERNAL_DIAGNOSTIC_FD")
+    if diagnostic_fd is not None:
+        return true
+    signal_fd = sys.env("AURA_INTERNAL_DIAGNOSTIC_SIGNAL_FD")
+    return signal_fd is not None
 
 def run() -> Result[int32, process.Error]:
     if internal_env_visible():
@@ -6922,7 +6917,7 @@ def main() -> int32:
         "2\n",
         "Array[int32](shape=[2], values=[4, 4])\n",
         "Array[int32](shape=[1], values=[5])\n",
-        "Option.Some(6)\n",
+        "6\n",
         "7\n",
         "[2]\n",
         "18\n",
@@ -7048,11 +7043,11 @@ class ArrayHolder:
     array: Array[int32]
     count: int32
 
-def print_array(value: own Option[Array[int32]]):
+def print_array(value: own Lookup[Array[int32]]):
     match own value:
-        case Some(array):
+        case Lookup.Found(array):
             print(array)
-        case None:
+        case Lookup.Missing:
             print("missing")
 
 def main() -> int32:
@@ -7071,9 +7066,9 @@ def main() -> int32:
     print_array(values.get(0))
     items = arrays_by_name.items()
     match own items.get(0):
-        case Some((_key, value)):
+        case Lookup.Found((_key, value)):
             print(value)
-        case None:
+        case Lookup.Missing:
             print("missing item")
     map_copy = arrays_by_name.copy()
     print_array(map_copy.get("item"))
@@ -8896,7 +8891,7 @@ fn build_with_auto_backend_falls_back_for_rich_match_example() {
 fn build_with_direct_backend_supports_indexed_member_chains_and_fstring_indexing() {
     let (_, run) = build_and_run_direct_source(
         "aura-build-direct-index-chain-fstring",
-        "def main() -> int32:\n    keys = [\"a\", \"b\"]\n    idx: int32 = 1\n    mut counts = {\"key\": 7}\n    match keys.get(idx):\n        case Some(key):\n            print(key)\n        case None:\n            print(\"missing\")\n    print(f\"val: {counts[\"key\"]}\")\n    return 0\n",
+        "def main() -> int32:\n    keys = [\"a\", \"b\"]\n    idx: int32 = 1\n    mut counts = {\"key\": 7}\n    match keys.get(idx):\n        case Lookup.Found(key):\n            print(key)\n        case Lookup.Missing:\n            print(\"missing\")\n    print(f\"val: {counts[\"key\"]}\")\n    return 0\n",
     );
 
     assert!(
@@ -9538,37 +9533,37 @@ fn run_and_direct_backends_preserve_default_int64_to_uint64_negation_failure() {
 }
 
 #[test]
-fn run_and_direct_backend_match_bare_none_literals_as_option_none() {
-    let source = r#"def none_value() -> Option[int32]:
+fn run_and_direct_backend_match_bare_none_literals_as_absent_unions() {
+    let source = r#"def none_value() -> int32 | None:
     return None
 
 def main() -> int32:
-    a: Option[int32] = None
+    a: int32 | None = None
     match a:
-        case Some(value):
+        case int32 as value:
             print(value)
         case None:
             print(-1)
 
-    nested: Option[Option[int32]] = Some(None)
-    match nested:
-        case Some(inner):
+    nested: list[int32 | None] = [None]
+    match nested.get(0):
+        case Lookup.Found(inner):
             match inner:
-                case Some(value):
+                case int32 as value:
                     print(value)
                 case None:
                     print(-2)
-        case None:
+        case Lookup.Missing:
             print(-3)
 
     match none_value():
-        case Some(value):
+        case int32 as value:
             print(value)
         case None:
             print(-4)
 
-    nested_left: Option[Option[int32]] = Option.Some(None)
-    nested_right: Option[Option[int32]] = Option.Some(none_value())
+    nested_left: int32 | None = None
+    nested_right: int32 | None = none_value()
     print(nested_left == nested_right)
     return 0
 "#;
@@ -9618,60 +9613,60 @@ fn mir_and_forced_direct_reject_noncopy_internal_exposure() {
 }
 
 #[test]
-fn run_and_direct_backend_preserve_bare_none_in_collection_paths_and_nested_options() {
+fn run_and_direct_backend_preserve_bare_none_in_collection_paths_and_lookup_payloads() {
     let source = r#"class Wrap:
-    value: Option[Option[int32]]
+    value: list[int32 | None]
 
-def print_opt(value: Option[int32]):
+def print_opt(value: int32 | None):
     match value:
-        case Some(v):
+        case int32 as v:
             print(v)
         case None:
             print(-1)
 
-def print_nested(value: Option[Option[int32]]):
+def print_nested(value: Lookup[int32 | None]):
     match value:
-        case Some(inner):
+        case Lookup.Found(inner):
             match inner:
-                case Some(v):
+                case int32 as v:
                     print(v)
                 case None:
                     print(-2)
-        case None:
+        case Lookup.Missing:
             print(-3)
 
 def main() -> int32:
-    mut pushed = list[Option[int32]]()
+    mut pushed = list[int32 | None]()
     pushed.append(None)
     print_opt(pushed[0])
 
-    literal: list[Option[int32]] = [None]
+    literal: list[int32 | None] = [None]
     print_opt(literal[0])
 
-    mut values: list[Option[int32]] = [Option.Some(7)]
+    mut values: list[int32 | None] = [7]
     print_opt(values.set(index=0, value=None))
     print_opt(values[0])
 
-    mut counts: dict[str, Option[int32]] = {"a": Option.Some(1)}
+    mut counts: dict[str, int32 | None] = {"a": 1}
     counts["a"] = None
     print_opt(counts["a"])
 
-    mut seen: set[Option[int32]] = set[Option[int32]]()
+    mut seen: set[int32 | None] = set[int32 | None]()
     seen.add(None)
     for value in seen:
         print_opt(value)
 
-    jobs = Queue[Option[int32]]()
+    jobs = Queue[int32 | None]()
     jobs.put(None)
-    print_opt(jobs.get_or(Option.Some(99)))
+    print_opt(jobs.get_or(99))
 
-    item = Wrap(value=Option.Some(None))
-    print_nested(item.value)
+    item = Wrap(value=[None])
+    print_nested(item.value.get(0))
     return 0
 "#;
 
     assert_run_and_direct_source_stdout_with_timeout(
-        "aura-bare-none-collections-and-nested-option",
+        "aura-bare-none-collections-and-lookup-payloads",
         source,
         // The generated program is tiny, but the default-parallel CLI suite can
         // delay its process after spawn while other native builds are linking.
@@ -10154,7 +10149,7 @@ fn build_with_direct_backend_supports_list_literals_and_iteration() {
 fn build_with_direct_backend_supports_list_methods_and_constructor() {
     let (_, run) = build_and_run_direct_source(
         "aura-build-direct-list-methods",
-        "def print_int_option(value: Option[int32]):\n    match value:\n        case Some(inner):\n            print(inner)\n        case None:\n            print(-1)\n\ndef main() -> int32:\n    values = list[int32]()\n    print(values.is_empty())\n    mut items: list[int32] = [1, 2, 3]\n    print(items.len())\n    print_int_option(items.get(1))\n    print(items.set(index=1, value=20))\n    print(items.pop(0))\n    items.append(99)\n    print(items.pop())\n    mut total: int32 = 0\n    for value in items:\n        total += value\n    print(total)\n    return 0\n",
+        "def print_int_lookup(value: Lookup[int32]):\n    match value:\n        case Lookup.Found(inner):\n            print(inner)\n        case Lookup.Missing:\n            print(-1)\n\ndef main() -> int32:\n    values = list[int32]()\n    print(values.is_empty())\n    mut items: list[int32] = [1, 2, 3]\n    print(items.len())\n    print_int_lookup(items.get(1))\n    print(items.set(index=1, value=20))\n    print(items.pop(0))\n    items.append(99)\n    print(items.pop())\n    mut total: int32 = 0\n    for value in items:\n        total += value\n    print(total)\n    return 0\n",
     );
 
     assert!(
@@ -10172,7 +10167,7 @@ fn build_with_direct_backend_supports_list_methods_and_constructor() {
 fn build_with_direct_backend_supports_string_map_and_numeric_builtins() {
     let (_, run) = build_and_run_direct_source(
         "aura-build-direct-string-map-numbers",
-        "def print_int_option(value: Option[int32]):\n    match value:\n        case Some(inner):\n            print(inner)\n        case None:\n            print(-1)\n\ndef main() -> int32:\n    text = \"  aura repo  \"\n    print(text.len())\n    print(text.contains(\"repo\"))\n    print(text.starts_with(\"  au\"))\n    print(text.ends_with(\"  \"))\n    print(text.trim())\n    print(abs(-7))\n    print(min(9, 2))\n    print(max(4, 12))\n    print(sqrt(81.0))\n    mut counts: dict[str, int32] = {\"aura\": 1, \"codex\": 2}\n    print(counts.len())\n    print(\"aura\" in counts)\n    print_int_option(counts.get(\"aura\"))\n    counts[\"aura\"] = 5\n    print(counts[\"aura\"])\n    print(counts.keys().len())\n    print(counts.values().len())\n    print_int_option(counts.remove(\"codex\"))\n    print(counts.is_empty())\n    return 0\n",
+        "def print_int_lookup(value: Lookup[int32]):\n    match value:\n        case Lookup.Found(inner):\n            print(inner)\n        case Lookup.Missing:\n            print(-1)\n\ndef main() -> int32:\n    text = \"  aura repo  \"\n    print(text.len())\n    print(text.contains(\"repo\"))\n    print(text.starts_with(\"  au\"))\n    print(text.ends_with(\"  \"))\n    print(text.trim())\n    print(abs(-7))\n    print(min(9, 2))\n    print(max(4, 12))\n    print(sqrt(81.0))\n    mut counts: dict[str, int32] = {\"aura\": 1, \"codex\": 2}\n    print(counts.len())\n    print(\"aura\" in counts)\n    print_int_lookup(counts.get(\"aura\"))\n    counts[\"aura\"] = 5\n    print(counts[\"aura\"])\n    print(counts.keys().len())\n    print(counts.values().len())\n    print_int_lookup(counts.remove(\"codex\"))\n    print(counts.is_empty())\n    return 0\n",
     );
 
     assert!(
@@ -10189,11 +10184,11 @@ fn build_with_direct_backend_supports_string_map_and_numeric_builtins() {
 #[test]
 fn string_lengths_and_negative_list_indices_match_run_and_direct_backends() {
     let source = r#"
-def print_int_option(value: Option[int32]):
+def print_int_lookup(value: Lookup[int32]):
     match value:
-        case Some(inner):
+        case Lookup.Found(inner):
             print(inner)
-        case None:
+        case Lookup.Missing:
             print(-999)
 
 def main() -> int32:
@@ -10205,8 +10200,8 @@ def main() -> int32:
     print(values[-1])
     values[-2] = 35
     print(values[-2])
-    print_int_option(values.get(-4))
-    print_int_option(values.get(-5))
+    print_int_lookup(values.get(-4))
+    print_int_lookup(values.get(-5))
     print(values.set(index=-4, value=11))
     print(values.pop(-2))
     print(values.swap(first=-1, second=-3))
@@ -11170,7 +11165,7 @@ fn run_executes_vec_methods_and_constructor() {
     let source_path = temp.path().join("main.au");
     fs::write(
         &source_path,
-        "def print_int_option(value: Option[int32]):\n    match value:\n        case Some(inner):\n            print(inner)\n        case None:\n            print(-1)\n\ndef main() -> int32:\n    values = list[int32]()\n    print(values.is_empty())\n    mut items: list[int32] = [1, 2, 3]\n    print(items.len())\n    print_int_option(items.get(1))\n    print(items.set(index=1, value=20))\n    print(items.pop(0))\n    items.append(99)\n    print(items.pop())\n    mut total: int32 = 0\n    for value in items:\n        total += value\n    print(total)\n    return 0\n",
+        "def print_int_lookup(value: Lookup[int32]):\n    match value:\n        case Lookup.Found(inner):\n            print(inner)\n        case Lookup.Missing:\n            print(-1)\n\ndef main() -> int32:\n    values = list[int32]()\n    print(values.is_empty())\n    mut items: list[int32] = [1, 2, 3]\n    print(items.len())\n    print_int_lookup(items.get(1))\n    print(items.set(index=1, value=20))\n    print(items.pop(0))\n    items.append(99)\n    print(items.pop())\n    mut total: int32 = 0\n    for value in items:\n        total += value\n    print(total)\n    return 0\n",
     )
     .expect("failed to write vec methods source");
 
@@ -11494,7 +11489,7 @@ fn run_executes_string_map_and_numeric_builtins() {
     let source_path = temp.path().join("main.au");
     fs::write(
         &source_path,
-        "def print_int_option(value: Option[int32]):\n    match value:\n        case Some(inner):\n            print(inner)\n        case None:\n            print(-1)\n\ndef main() -> int32:\n    text = \"  aura repo  \"\n    print(text.len())\n    print(text.contains(\"repo\"))\n    print(text.starts_with(\"  au\"))\n    print(text.ends_with(\"  \"))\n    print(text.trim())\n    print(abs(-7))\n    print(min(9, 2))\n    print(max(4, 12))\n    print(sqrt(81.0))\n    mut counts: dict[str, int32] = {\"aura\": 1, \"codex\": 2}\n    print(counts.len())\n    print(\"aura\" in counts)\n    print_int_option(counts.get(\"aura\"))\n    counts[\"aura\"] = 5\n    print(counts[\"aura\"])\n    print(counts.keys().len())\n    print(counts.values().len())\n    print_int_option(counts.remove(\"codex\"))\n    print(counts.is_empty())\n    return 0\n",
+        "def print_int_lookup(value: Lookup[int32]):\n    match value:\n        case Lookup.Found(inner):\n            print(inner)\n        case Lookup.Missing:\n            print(-1)\n\ndef main() -> int32:\n    text = \"  aura repo  \"\n    print(text.len())\n    print(text.contains(\"repo\"))\n    print(text.starts_with(\"  au\"))\n    print(text.ends_with(\"  \"))\n    print(text.trim())\n    print(abs(-7))\n    print(min(9, 2))\n    print(max(4, 12))\n    print(sqrt(81.0))\n    mut counts: dict[str, int32] = {\"aura\": 1, \"codex\": 2}\n    print(counts.len())\n    print(\"aura\" in counts)\n    print_int_lookup(counts.get(\"aura\"))\n    counts[\"aura\"] = 5\n    print(counts[\"aura\"])\n    print(counts.keys().len())\n    print(counts.values().len())\n    print_int_lookup(counts.remove(\"codex\"))\n    print(counts.is_empty())\n    return 0\n",
     )
     .expect("failed to write string/map/numbers source");
 
@@ -11871,11 +11866,11 @@ def serve_udp(addresses: Queue[str]) -> Result[str, io.Error]:
     with server_socket = try net.udp_bind("127.0.0.1:0"):
         addresses.put(try server_socket.local_addr())
         match own try server_socket.recv_from(1024, timeout=1s):
-            case Option.Some(packet):
+            case net.UdpDatagram as packet:
                 text = try packet.text()
                 try server_socket.send_text(packet.address(), "udp:" + text, timeout=1s)
                 return Result.Ok(text)
-            case Option.None:
+            case None:
                 return Result.Ok("missing")
 
 def serve_http(addresses: Queue[str]) -> Result[None, io.Error]:
@@ -11888,10 +11883,10 @@ def serve_http(addresses: Queue[str]) -> Result[None, io.Error]:
             body = try request.body_text()
             headers = request.headers()
             match own headers.get("X-Test"):
-                case Option.Some(test_header):
+                case Lookup.Found(test_header):
                     try request.respond_text(200, method + ":" + path + ":" + body + ":" + test_header, {{"Content-Type": "text/plain"}})
                     return Result.Ok(None)
-                case Option.None:
+                case Lookup.Missing:
                     try request.respond_text(400, "missing X-Test", {{"Content-Type": "text/plain"}})
                     return Result.Ok(None)
 
@@ -11910,10 +11905,10 @@ def serve_ws(addresses: Queue[str]) -> Result[None, io.Error]:
         socket = try server_listener.accept(timeout=1s)
         with server_socket = socket:
             match own try server_socket.recv_text(timeout=1s):
-                case Option.Some(text):
+                case str as text:
                     try server_socket.send_text("ws:" + text, timeout=1s)
                     return Result.Ok(None)
-                case Option.None:
+                case None:
                     return Result.Ok(None)
 
 def receive_address(addresses: Queue[str]) -> Result[str, io.Error]:
@@ -11944,9 +11939,9 @@ def run() -> Result[None, io.Error]:
         with client_socket = udp_client:
             try client_socket.send_text(udp_addr, "ping", timeout=1s)
             match own try client_socket.recv_from(1024, timeout=1s):
-                case Option.Some(packet):
+                case net.UdpDatagram as packet:
                     print(try packet.text())
-                case Option.None:
+                case None:
                     return Result.Ok(None)
         match own udp_task.result():
             case TaskResult.Ready(result):
@@ -12004,9 +11999,9 @@ def run() -> Result[None, io.Error]:
         with ws_client = client:
             try ws_client.send_text("hi", timeout=1s)
             match own try ws_client.recv_text(timeout=1s):
-                case Option.Some(text):
+                case str as text:
                     print(text)
-                case Option.None:
+                case None:
                     return Result.Ok(None)
         match own ws_task.result():
             case TaskResult.Ready(result):
@@ -12044,7 +12039,7 @@ def main() -> int32:
 }
 
 #[test]
-fn run_and_direct_backend_match_unannotated_get_or_none_and_result_or_none() {
+fn run_and_direct_backend_match_unannotated_queue_and_task_polls() {
     let source = r#"
 def worker() -> int32:
     return 7
@@ -12052,45 +12047,45 @@ def worker() -> int32:
 def main() -> int32:
     jobs = Queue[int32]()
     jobs.put(5)
-    queue_opt = jobs.get_or_none()
+    queue_opt = jobs.poll()
     match queue_opt:
-        case Some(value):
+        case Poll.Ready(value):
             print(value)
-        case None:
+        case Poll.Unavailable:
             print(-1)
 
     with TaskGroup() as group:
         task = group.start(worker)
-        task_opt = task.result_or_none(timeout=50ms)
+        task_opt = task.poll(timeout=50ms)
         match task_opt:
-            case Some(value):
+            case Poll.Ready(value):
                 print(value)
-            case None:
+            case Poll.Unavailable:
                 print(-2)
     return 0
 "#;
 
-    assert_run_and_direct_source_stdout("aura-unannotated-option-match-lowering", source, "5\n7\n");
+    assert_run_and_direct_source_stdout("aura-unannotated-poll-match-lowering", source, "5\n7\n");
 }
 
 #[test]
-fn run_and_direct_backend_match_bare_none_in_indirect_option_field() {
+fn run_and_direct_backend_match_bare_none_in_indirect_optional_field() {
     let source = r#"
 class Node:
     value: int32
-    next: indirect Node?
+    next: indirect Node | None
 
 def main() -> int32:
     tail = Node(value=2, next=None)
     match tail.next:
-        case Some(next):
+        case Node as next:
             print(next.value)
         case None:
             print(-1)
     return 0
 "#;
 
-    assert_run_and_direct_source_stdout("aura-indirect-option-none-match", source, "-1\n");
+    assert_run_and_direct_source_stdout("aura-indirect-none-match", source, "-1\n");
 }
 
 #[test]
@@ -12314,11 +12309,11 @@ def main() -> int32:
 
         print(task.result_or(-1))
 
-        maybe = task.result_or_none(timeout=100ms)
+        maybe = task.poll(timeout=100ms)
         match maybe:
-            case Some(value):
+            case Poll.Ready(value):
                 print(value)
-            case None:
+            case Poll.Unavailable:
                 print(-1)
     print("after")
     return 0
@@ -13189,17 +13184,17 @@ def main() -> int32:
 }
 
 #[test]
-fn process_completed_stdout_bytes_get_matches_short_option_patterns() {
+fn process_completed_stdout_bytes_get_matches_lookup_patterns() {
     let source = r#"import process
 
 def inspect_first_byte() -> Result[None, process.Error]:
     completed = try process.run(["/bin/echo", "hi"], stdout=process.pipe(), stderr=process.pipe(), timeout=2s, group=true)
     opt = completed.stdout_bytes().get(0)
     match opt:
-        case Some(byte):
+        case Lookup.Found(byte):
             print("some")
             print(byte)
-        case None:
+        case Lookup.Missing:
             print("none")
     return Result.Ok(None)
 
@@ -13213,7 +13208,7 @@ def main() -> int32:
 "#;
 
     assert_run_and_direct_source_stdout(
-        "aura-process-stdout-bytes-short-option-match",
+        "aura-process-stdout-bytes-lookup-match",
         source,
         "some\n104\n",
     );
@@ -13386,10 +13381,10 @@ def main() -> int32:
     with TaskGroup() as group:
         task = group.start(slow)
         print(task.result_or(-1))
-        match task.result_or_none():
-            case Some(value):
+        match task.poll():
+            case Poll.Ready(value):
                 print(value)
-            case None:
+            case Poll.Unavailable:
                 print(-2)
     return 0
 "#;
@@ -13433,31 +13428,35 @@ def run(cwd: own str) -> Result[None, process.Error]:
     completed = try process.run(["/usr/bin/printenv", "AURA_PROCESS_VAR"], env=env, timeout=2s, group=true)
     print(completed.stdout().trim())
     print(completed.stderr().len())
-    pwd = try process.run(["/bin/pwd"], cwd=Option.Some(cwd), timeout=2s, group=true)
+    directory: str | None = cwd
+    pwd = try process.run(["/bin/pwd"], cwd=directory, timeout=2s, group=true)
     print(pwd.stdout().trim())
     print(pwd.stderr().len())
     print(completed.status())
     print(pwd.status())
 
     with child = try process.start(["/bin/cat"], stdin=process.pipe(), stdout=process.pipe(), stderr=process.null(), group=true):
-        match child.stdin():
-            case Option.Some(found_pipe):
+        stdin: process.Pipe | None = child.stdin()
+        match own stdin:
+            case process.Pipe as found_pipe:
                 stdin_pipe: process.Pipe = found_pipe
                 try stdin_pipe.write_all("echo from cat\n", timeout=500ms)
                 try stdin_pipe.flush()
                 stdin_pipe.close()
-            case Option.None:
+            case None:
                 return Result.Ok(None)
 
-        match child.stdout():
-            case Option.Some(found_pipe):
+        stdout: process.Pipe | None = child.stdout()
+        match own stdout:
+            case process.Pipe as found_pipe:
                 stdout_pipe: process.Pipe = found_pipe
-                match try stdout_pipe.read_line(timeout=500ms):
-                    case Option.Some(text):
+                line: str | None = try stdout_pipe.read_line(timeout=500ms)
+                match own line:
+                    case str as text:
                         print(text)
-                    case Option.None:
+                    case None:
                         return Result.Ok(None)
-            case Option.None:
+            case None:
                 return Result.Ok(None)
 
         print(child.wait(timeout=2s))
@@ -13492,7 +13491,7 @@ def main() -> int32:
     assert_eq!(
         String::from_utf8_lossy(&run.stdout),
         format!(
-            "present\n0\n{cwd}\n0\nExitStatus.Exited(0)\nExitStatus.Exited(0)\necho from cat\nWait.Exited(ExitStatus.Exited(0))\nOption.Some(SupervisorEvent.Restarted(flaky, ExitStatus.Exited(1), 1))\nOption.Some(SupervisorEvent.Exited(flaky, ExitStatus.Exited(1), 1))\ntrue\nfalse\ntrue\n",
+            "present\n0\n{cwd}\n0\nExitStatus.Exited(0)\nExitStatus.Exited(0)\necho from cat\nWait.Exited(ExitStatus.Exited(0))\nSupervisorEvent.Restarted(flaky, ExitStatus.Exited(1), 1)\nSupervisorEvent.Exited(flaky, ExitStatus.Exited(1), 1)\ntrue\nfalse\ntrue\n",
             cwd = cwd,
         )
     );
@@ -13530,10 +13529,10 @@ def serve_unix(path: own str, ready: Queue[bool]) -> Result[None, io.Error]:
         stream = try server_listener.accept(timeout=1s)
         with server_stream = stream:
             match own try server_stream.read_line(timeout=1s):
-                case Option.Some(text):
+                case str as text:
                     try server_stream.write_all("unix:" + text, timeout=1s)
                     return Result.Ok(None)
-                case Option.None:
+                case None:
                     return Result.Ok(None)
 
 def serve_tls(cert_path: own str, key_path: own str, addresses: Queue[str]) -> Result[None, io.Error]:
@@ -13542,10 +13541,10 @@ def serve_tls(cert_path: own str, key_path: own str, addresses: Queue[str]) -> R
         stream = try server_listener.accept(timeout=2s)
         with server_stream = stream:
             match own try server_stream.read_line(timeout=2s):
-                case Option.Some(text):
+                case str as text:
                     try server_stream.write_all("tls:" + text + "\n", timeout=2s)
                     return Result.Ok(None)
-                case Option.None:
+                case None:
                     return Result.Ok(None)
 
 def run() -> Result[None, io.Error]:
@@ -13558,9 +13557,9 @@ def run() -> Result[None, io.Error]:
                 with unix_client = client:
                     try unix_client.write_all("ping\n", timeout=1s)
                     match own try unix_client.read_line(timeout=1s):
-                        case Option.Some(text):
+                        case str as text:
                             print(text)
-                        case Option.None:
+                        case None:
                             return Result.Ok(None)
             case QueueReceive.Closed:
                 return Result.Err(io.Error.Other(message="Unix readiness queue closed"))
@@ -13586,9 +13585,9 @@ def run() -> Result[None, io.Error]:
                 with tls_client = stream:
                     try tls_client.write_all("ping!\n", timeout=2s)
                     match own try tls_client.read_line(timeout=2s):
-                        case Option.Some(text):
+                        case str as text:
                             print(text)
-                        case Option.None:
+                        case None:
                             return Result.Ok(None)
             case QueueReceive.Closed:
                 return Result.Err(io.Error.Other(message="TLS address queue closed"))
@@ -15189,7 +15188,7 @@ def choose_transform(use_increment: bool) -> def(int32) -> int32:
 def publish(values: Queue[int32], value: int32) -> None:
     values.put(value)
 
-def empty[T]() -> Option[T]:
+def empty[T]() -> T | None:
     return None
 
 def main() -> int32:
@@ -15218,17 +15217,17 @@ def main() -> int32:
     values = Queue[int32]()
     publisher = publish
     task_target = choose_transform(true)
-    local_empty: def() -> Option[int32] = empty
+    local_empty: def() -> (int32 | None) = empty
     selected_task_default = first_task_default if false else second_task_default
     with TaskGroup() as group:
         task = group.start(task_target, 20)
         empty_task = group.start(local_empty)
         group.start_soon(publisher, values, 9)
         print(task.result_or(-1, timeout=1s))
-        match empty_task.result_or(Option.Some(99), timeout=1s):
-            case Option.None:
+        match empty_task.result_or(99, timeout=1s):
+            case None:
                 print("local-none")
-            case Option.Some(value):
+            case int32 as value:
                 print(value)
     print(values.get_or(-1))
     with default_group = TaskGroup():
@@ -15293,26 +15292,26 @@ fn imported_builtin_function_values_retain_process_run_defaults_on_both_backends
 #[test]
 fn generic_default_can_supply_a_function_value_for_calls_and_tasks_on_both_backends() {
     let source = r#"
-def empty[T]() -> Option[T]:
+def empty[T]() -> T | None:
     return None
 
-def supplier[T](callback: def() -> Option[T] = empty) -> def() -> Option[T]:
+def supplier[T](callback: def() -> (T | None) = empty) -> def() -> (T | None):
     return callback
 
 def main() -> int32:
     supplied = supplier[str]()
     match supplied():
-        case Option.None:
+        case None:
             print("ordinary-none")
-        case Option.Some(value):
+        case str as value:
             print(value)
 
     with group = TaskGroup():
         task = group.start(supplied)
-        match task.result_or(Option.Some("fallback"), timeout=1s):
-            case Option.None:
+        match task.result_or("fallback", timeout=1s):
+            case None:
                 print("task-none")
-            case Option.Some(value):
+            case str as value:
                 print(value)
     return 0
 "#;

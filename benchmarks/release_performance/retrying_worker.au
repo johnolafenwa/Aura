@@ -4,9 +4,9 @@ import net
 
 def read_control(expected: str) -> bool:
     match io.read_line():
-        case Result.Ok(Option.Some(line)):
+        case Result.Ok(str as line):
             return line == expected
-        case Result.Ok(Option.None):
+        case Result.Ok(None):
             return false
         case Result.Err(_):
             return false

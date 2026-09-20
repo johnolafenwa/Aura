@@ -1,0 +1,4 @@
+def main():
+    value: int32 | None = None
+    if value is None:
+        pass

@@ -19,7 +19,7 @@ def main() -> int32:
     print((("only",),) == (("only",),))
     print((("only",),) != (("only",),))
 
-    concrete: ((Option[int32],), (float32,)) = ((None,), (1,))
+    concrete: ((int32 | None,), (float32,)) = ((None,), (1,))
     print(((None,), (1,)) == concrete)
     print(concrete == ((None,), (1,)))
     print(((None,), (2,)) != concrete)

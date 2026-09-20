@@ -680,7 +680,7 @@ fn direct_array_abi_uses_typed_storage_kernels_and_callback_thunks() {
     );
     let missing_index = super::aura_direct_box_i64(9);
     let missing = super::aura_direct_array_get(vector, missing_index, 7, 9);
-    expect_option_none(missing);
+    expect_optional_absent(missing);
 
     let clone_count = super::direct_value_clone_count();
     let scalar = super::aura_direct_box_i32(10);
@@ -2779,32 +2779,81 @@ fn expect_vec_strings(ptr: *mut OpaqueValue) -> Vec<String> {
     }
 }
 
-fn expect_option_some_int(ptr: *mut OpaqueValue) -> i128 {
-    match unsafe { take_value(ptr) } {
-        Value::EnumVariant(variant)
-            if variant.enum_name == "Option" && variant.variant_name == "Some" =>
-        {
-            match variant.single_payload().expect("expected option payload") {
-                Value::Int(value) => value.as_i128().expect("expected signed integer"),
-                other => panic!("expected int payload, found {:?}", other),
-            }
-        }
-        other => panic!("expected Option.Some(int), found {:?}", other),
+fn int_payload(value: Value, label: &str) -> i128 {
+    match value {
+        Value::Int(value) => value.as_i128().expect("expected signed integer"),
+        other => panic!("expected {label} int payload, found {:?}", other),
     }
 }
 
-fn expect_option_some_string(ptr: *mut OpaqueValue) -> String {
-    match unsafe { take_value(ptr) } {
-        Value::EnumVariant(variant)
-            if variant.enum_name == "Option" && variant.variant_name == "Some" =>
-        {
-            match variant.single_payload().expect("expected option payload") {
-                Value::String(text) => text.to_string(),
-                other => panic!("expected string payload, found {:?}", other),
-            }
-        }
-        other => panic!("expected Option.Some(str), found {:?}", other),
+fn string_payload(value: Value, label: &str) -> String {
+    match value {
+        Value::String(text) => text,
+        other => panic!("expected {label} string payload, found {:?}", other),
     }
+}
+
+/// The present payload of a `T | None` union value.
+fn expect_optional_payload(value: Value) -> Value {
+    match value {
+        Value::Union(union) if !matches!(union.payload, Value::Unit) => union.payload,
+        other => panic!("expected a present `T | None` value, found {:?}", other),
+    }
+}
+
+fn expect_optional_absent_value(value: Value) {
+    match value {
+        Value::Union(union) if matches!(union.payload, Value::Unit) => {}
+        other => panic!("expected `None`, found {:?}", other),
+    }
+}
+
+fn expect_optional_present(ptr: *mut OpaqueValue) -> Value {
+    expect_optional_payload(unsafe { take_value(ptr) })
+}
+
+fn expect_optional_string(ptr: *mut OpaqueValue) -> String {
+    string_payload(expect_optional_present(ptr), "`str | None`")
+}
+
+fn expect_optional_absent(ptr: *mut OpaqueValue) {
+    expect_optional_absent_value(unsafe { take_value(ptr) });
+}
+
+/// The payload of a `Lookup.Found(value)` result.
+fn expect_lookup_found(ptr: *mut OpaqueValue) -> Value {
+    let mut payloads = expect_variant_ptr(ptr, "Lookup", "Found");
+    assert_eq!(payloads.len(), 1, "expected one Lookup.Found payload");
+    payloads.remove(0)
+}
+
+fn expect_lookup_found_int(ptr: *mut OpaqueValue) -> i128 {
+    int_payload(expect_lookup_found(ptr), "Lookup.Found")
+}
+
+fn expect_lookup_missing(ptr: *mut OpaqueValue) {
+    assert!(
+        expect_variant_ptr(ptr, "Lookup", "Missing").is_empty(),
+        "Lookup.Missing carries no payload"
+    );
+}
+
+/// The payload of a `Poll.Ready(value)` result.
+fn expect_poll_ready(ptr: *mut OpaqueValue) -> Value {
+    let mut payloads = expect_variant_ptr(ptr, "Poll", "Ready");
+    assert_eq!(payloads.len(), 1, "expected one Poll.Ready payload");
+    payloads.remove(0)
+}
+
+fn expect_poll_ready_int(ptr: *mut OpaqueValue) -> i128 {
+    int_payload(expect_poll_ready(ptr), "Poll.Ready")
+}
+
+fn expect_poll_unavailable(ptr: *mut OpaqueValue) {
+    assert!(
+        expect_variant_ptr(ptr, "Poll", "Unavailable").is_empty(),
+        "Poll.Unavailable carries no payload"
+    );
 }
 
 fn assert_value_metadata(value: &Value, display_name: &str, type_name: &str) {
@@ -2891,10 +2940,10 @@ fn direct_json_value(value: crate::json_codec::JsonValue) -> *mut OpaqueValue {
 }
 
 fn direct_option_int(value: Option<i64>) -> *mut OpaqueValue {
-    boxed_value(match value {
-        Some(value) => crate::runtime_value::option_some(Value::Int(IntegerValue::from_i64(value))),
-        None => crate::runtime_value::option_none(),
-    })
+    boxed_value(crate::runtime_value::optional_value(
+        Type::named("int64"),
+        value.map(|value| Value::Int(IntegerValue::from_i64(value))),
+    ))
 }
 
 #[test]
@@ -3054,19 +3103,19 @@ fn direct_json_host_abi_rejects_malformed_values_with_precise_diagnostics() {
                 Some(Value::Bool(false)),
             ],
         ),
-        "`json::dumps` expects `indent` to be `Option[int64]`",
+        "`json::dumps` expects `indent` to be `int64 | None`",
     );
     assert_au4001(
         direct_json_host_builtin_error(
             "json::dumps",
             vec![
                 Some(json_variant("Null", Vec::new())),
-                Some(crate::runtime_value::option_some(Value::String(
+                Some(crate::runtime_value::optional_str_value(Some(
                     "two".to_string(),
                 ))),
             ],
         ),
-        "`json::dumps` expects `indent` to be `Option[int64]`",
+        "`json::dumps` expects `indent` to be `int64 | None`",
     );
 
     assert_au4001(
@@ -3150,7 +3199,7 @@ fn direct_json_accessors_return_none_for_other_variants_and_owned_accessors_stil
     ] {
         let source = direct_json_value(input);
         let result = direct_json_host_builtin_call(name, &[source]);
-        expect_option_none(result);
+        expect_optional_absent(result);
         unsafe {
             super::with_value(source, |value| {
                 assert!(
@@ -3166,7 +3215,7 @@ fn direct_json_accessors_return_none_for_other_variants_and_owned_accessors_stil
     for name in ["json::into_string", "json::into_array", "json::into_object"] {
         let source = direct_json_value(JsonValue::Null);
         let result = direct_json_host_builtin_call(name, &[source]);
-        expect_option_none(result);
+        expect_optional_absent(result);
         unsafe {
             super::with_value(source, |value| {
                 assert!(
@@ -3243,8 +3292,8 @@ fn direct_json_host_builtins_borrow_without_cloning_and_move_owned_payloads() {
         super::with_value(indent, |value| {
             assert_eq!(
                 value.render(),
-                "Option.None",
-                "copy-valued indent should remain usable"
+                "",
+                "copy-valued `None` indent should remain usable and render as an empty payload"
             )
         });
     }
@@ -3267,9 +3316,9 @@ fn direct_json_host_builtins_borrow_without_cloning_and_move_owned_payloads() {
     }
 
     for (name, input, expected) in [
-        ("json::as_bool", JsonValue::Bool(true), "Option.Some(true)"),
-        ("json::as_int", JsonValue::Int(7), "Option.Some(7)"),
-        ("json::as_float", JsonValue::Float(1.5), "Option.Some(1.5)"),
+        ("json::as_bool", JsonValue::Bool(true), "true"),
+        ("json::as_int", JsonValue::Int(7), "7"),
+        ("json::as_float", JsonValue::Float(1.5), "1.5"),
     ] {
         let source = direct_json_value(input);
         let output = direct_json_host_builtin_call(name, &[source]);
@@ -3299,18 +3348,14 @@ fn direct_json_host_builtins_borrow_without_cloning_and_move_owned_payloads() {
     let extracted_string = direct_json_host_builtin_call("json::into_string", &[owned_string]);
     unsafe {
         super::with_value(extracted_string, |value| match value {
-            Value::EnumVariant(variant)
-                if variant.enum_name == "Option" && variant.variant_name == "Some" =>
-            {
-                match variant.payloads.as_slice() {
-                    [Value::String(value)] => {
-                        assert_eq!(value, "aura");
-                        assert_eq!(value.as_ptr(), string_allocation);
-                    }
-                    other => panic!("expected extracted str, found {other:?}"),
+            Value::Union(union) => match &union.payload {
+                Value::String(value) => {
+                    assert_eq!(value, "aura");
+                    assert_eq!(value.as_ptr(), string_allocation);
                 }
-            }
-            other => panic!("expected Option.Some(str), found {other:?}"),
+                other => panic!("expected extracted str, found {other:?}"),
+            },
+            other => panic!("expected a present `str | None`, found {other:?}"),
         });
         super::with_value(owned_string, |value| {
             assert!(
@@ -3333,17 +3378,13 @@ fn direct_json_host_builtins_borrow_without_cloning_and_move_owned_payloads() {
     let extracted_array = direct_json_host_builtin_call("json::into_array", &[owned_array]);
     unsafe {
         super::with_value(extracted_array, |value| match value {
-            Value::EnumVariant(variant)
-                if variant.enum_name == "Option" && variant.variant_name == "Some" =>
-            {
-                match variant.payloads.as_slice() {
-                    [Value::Vec(value)] => {
-                        assert_eq!(value.elements.as_ptr(), array_allocation)
-                    }
-                    other => panic!("expected extracted Vec, found {other:?}"),
+            Value::Union(union) => match &union.payload {
+                Value::Vec(value) => {
+                    assert_eq!(value.elements.as_ptr(), array_allocation)
                 }
-            }
-            other => panic!("expected Option.Some(Vec), found {other:?}"),
+                other => panic!("expected extracted Vec, found {other:?}"),
+            },
+            other => panic!("expected a present `list[json.Value] | None`, found {other:?}"),
         });
         super::with_value(owned_array, |value| {
             assert!(
@@ -3369,15 +3410,11 @@ fn direct_json_host_builtins_borrow_without_cloning_and_move_owned_payloads() {
     let extracted_object = direct_json_host_builtin_call("json::into_object", &[owned_object]);
     unsafe {
         super::with_value(extracted_object, |value| match value {
-            Value::EnumVariant(variant)
-                if variant.enum_name == "Option" && variant.variant_name == "Some" =>
-            {
-                match variant.payloads.as_slice() {
-                    [Value::Map(value)] => assert_eq!(value.entries.as_ptr(), object_allocation),
-                    other => panic!("expected extracted Map, found {other:?}"),
-                }
-            }
-            other => panic!("expected Option.Some(Map), found {other:?}"),
+            Value::Union(union) => match &union.payload {
+                Value::Map(value) => assert_eq!(value.entries.as_ptr(), object_allocation),
+                other => panic!("expected extracted Map, found {other:?}"),
+            },
+            other => panic!("expected a present `dict[str, json.Value] | None`, found {other:?}"),
         });
         super::with_value(owned_object, |value| {
             assert!(
@@ -3639,7 +3676,7 @@ fn direct_json_dump_trap_preserves_borrowed_value_and_copy_indent() {
         super::with_value(indent, |value| {
             assert_eq!(
                 value.render(),
-                "Option.Some(17)",
+                "17",
                 "json.dumps must preserve its copy-valued indent when dumping traps"
             )
         });
@@ -3695,14 +3732,6 @@ fn capture_direct_boundary_diagnostic(work: impl FnOnce() + Send + 'static) -> D
 
 fn capture_direct_boundary_error_message(work: impl FnOnce() + Send + 'static) -> String {
     capture_direct_boundary_diagnostic(work).message
-}
-
-fn expect_option_none(ptr: *mut OpaqueValue) {
-    match unsafe { take_value(ptr) } {
-        Value::EnumVariant(variant)
-            if variant.enum_name == "Option" && variant.variant_name == "None" => {}
-        other => panic!("expected Option.None, found {:?}", other),
-    }
 }
 
 fn expect_variant_value(value: Value, enum_name: &str, variant_name: &str) -> Vec<Value> {
@@ -3819,19 +3848,6 @@ fn expect_process_invalid_input(value: Value) {
     assert!(expect_variant_value(io_payloads.remove(0), "io.Error", "InvalidInput").is_empty());
 }
 
-fn expect_option_some_payload(value: Value) -> Value {
-    match value {
-        Value::EnumVariant(variant)
-            if variant.enum_name == "Option" && variant.variant_name == "Some" =>
-        {
-            let mut payloads = variant.payloads;
-            assert_eq!(payloads.len(), 1, "expected one Option.Some payload");
-            payloads.remove(0)
-        }
-        other => panic!("expected Option.Some(...), found {:?}", other),
-    }
-}
-
 fn expect_result_ok_vec_ints(ptr: *mut OpaqueValue) -> Vec<i128> {
     match unsafe { take_value(ptr) } {
         Value::EnumVariant(variant)
@@ -3877,7 +3893,7 @@ fn expect_result_ok_vec_strings(ptr: *mut OpaqueValue) -> Vec<String> {
 fn string_map(entries: &[(&str, &str)]) -> *mut OpaqueValue {
     let map = super::aura_direct_map_empty();
     for (key, value) in entries {
-        expect_option_none(super::aura_direct_map_set_in_place(
+        expect_lookup_missing(super::aura_direct_map_set_in_place(
             map,
             string_value(key),
             string_value(value),
@@ -4799,41 +4815,34 @@ fn native_runtime_timeout_and_option_decoders_cover_error_edges() {
     );
     assert_eq!(
         super::expect_optional_string_value(
-            &Value::EnumVariant(EnumVariantValue {
-                enum_name: "Option".to_string(),
-                variant_name: "None".to_string(),
-                payloads: vec![],
-            }),
+            &crate::runtime_value::optional_str_value(None),
             "stderr",
         ),
         None
     );
     assert_eq!(
         super::expect_optional_string_value(
-            &Value::EnumVariant(EnumVariantValue {
-                enum_name: "Option".to_string(),
-                variant_name: "Some".to_string(),
-                payloads: vec![Value::String("log".to_string())],
-            }),
+            &crate::runtime_value::optional_str_value(Some("log".to_string())),
             "stderr",
         ),
         Some("log".to_string())
     );
+    assert_eq!(
+        super::expect_optional_string_value(&Value::String("bare".to_string()), "stderr"),
+        Some("bare".to_string()),
+        "a bare `str` is accepted where `str | None` is expected"
+    );
     let message = capture_runtime_error_message(|| {
         let _ = super::expect_optional_string_value(
-            &Value::EnumVariant(EnumVariantValue {
-                enum_name: "Option".to_string(),
-                variant_name: "Some".to_string(),
-                payloads: vec![],
-            }),
+            &crate::runtime_value::optional_present(Type::named("str"), Value::Bool(true)),
             "stderr",
         );
     });
-    assert!(message.contains("malformed option payload"));
+    assert!(message.contains("expects `str`, found `bool`"));
     let message = capture_runtime_error_message(|| {
         let _ = super::expect_optional_string_value(&Value::Bool(true), "stderr");
     });
-    assert!(message.contains("expects `Option[str]`"));
+    assert!(message.contains("expects `str | None`"));
 }
 
 #[test]
@@ -5112,46 +5121,46 @@ fn direct_uint64_boxing_helpers_preserve_the_full_range() {
 #[test]
 fn direct_runtime_type_tags_preserve_generic_identity_through_clone() {
     let value = boxed_value(Value::EnumVariant(EnumVariantValue {
-        enum_name: "Option".to_string(),
-        variant_name: "Some".to_string(),
+        enum_name: "Lookup".to_string(),
+        variant_name: "Found".to_string(),
         payloads: vec![Value::Int(IntegerValue::from_i32(7))],
     }));
-    super::aura_direct_tag_value_type(value, b"Option[int32]".as_ptr(), "Option[int32]".len());
+    super::aura_direct_tag_value_type(value, b"Lookup[int32]".as_ptr(), "Lookup[int32]".len());
 
     for candidate in [value, super::aura_direct_clone_value(value)] {
         assert_eq!(
             super::aura_direct_value_type_matches(
                 candidate,
-                b"Option[int32]".as_ptr(),
-                "Option[int32]".len(),
+                b"Lookup[int32]".as_ptr(),
+                "Lookup[int32]".len(),
             ),
             1
         );
         assert_eq!(
             super::aura_direct_value_type_matches(
                 candidate,
-                b"Option[int64]".as_ptr(),
-                "Option[int64]".len(),
+                b"Lookup[int64]".as_ptr(),
+                "Lookup[int64]".len(),
             ),
             0
         );
         assert_eq!(
-            super::aura_direct_value_type_matches(candidate, b"Option".as_ptr(), "Option".len(),),
+            super::aura_direct_value_type_matches(candidate, b"Lookup".as_ptr(), "Lookup".len(),),
             1
         );
         assert_eq!(
             super::aura_direct_value_type_matches(
                 candidate,
-                b"Option[?T]".as_ptr(),
-                "Option[?T]".len(),
+                b"Lookup[?T]".as_ptr(),
+                "Lookup[?T]".len(),
             ),
             1
         );
         assert_eq!(
             super::aura_direct_value_type_matches(
                 candidate,
-                b"Option[list[?T]]".as_ptr(),
-                "Option[list[?T]]".len(),
+                b"Lookup[list[?T]]".as_ptr(),
+                "Lookup[list[?T]]".len(),
             ),
             0
         );
@@ -5161,8 +5170,8 @@ fn direct_runtime_type_tags_preserve_generic_identity_through_clone() {
     }
 
     let nested = boxed_value(Value::EnumVariant(EnumVariantValue {
-        enum_name: "Option".to_string(),
-        variant_name: "Some".to_string(),
+        enum_name: "Lookup".to_string(),
+        variant_name: "Found".to_string(),
         payloads: vec![Value::Vec(VecValue {
             element_type: Type::named("int64"),
             elements: vec![Value::Int(
@@ -5172,26 +5181,26 @@ fn direct_runtime_type_tags_preserve_generic_identity_through_clone() {
     }));
     super::aura_direct_tag_value_type(
         nested,
-        b"Option[list[int64]]".as_ptr(),
-        "Option[list[int64]]".len(),
+        b"Lookup[list[int64]]".as_ptr(),
+        "Lookup[list[int64]]".len(),
     );
     assert_eq!(
-        super::aura_direct_value_type_matches(nested, b"Option[?T]".as_ptr(), "Option[?T]".len(),),
+        super::aura_direct_value_type_matches(nested, b"Lookup[?T]".as_ptr(), "Lookup[?T]".len(),),
         1
     );
     assert_eq!(
         super::aura_direct_value_type_matches(
             nested,
-            b"Option[list[?T]]".as_ptr(),
-            "Option[list[?T]]".len(),
+            b"Lookup[list[?T]]".as_ptr(),
+            "Lookup[list[?T]]".len(),
         ),
         1
     );
     assert_eq!(
         super::aura_direct_value_type_matches(
             nested,
-            b"Option[list[int32]]".as_ptr(),
-            "Option[list[int32]]".len(),
+            b"Lookup[list[int32]]".as_ptr(),
+            "Lookup[list[int32]]".len(),
         ),
         0
     );
@@ -5422,19 +5431,19 @@ fn direct_runtime_type_tags_preserve_generic_identity_through_clone() {
     }
 
     let untagged = boxed_value(Value::EnumVariant(EnumVariantValue {
-        enum_name: "Option".to_string(),
-        variant_name: "Some".to_string(),
+        enum_name: "Lookup".to_string(),
+        variant_name: "Found".to_string(),
         payloads: vec![Value::Int(IntegerValue::from_i32(11))],
     }));
     assert_eq!(
-        super::aura_direct_value_type_matches(untagged, b"Option[?T]".as_ptr(), "Option[?T]".len(),),
+        super::aura_direct_value_type_matches(untagged, b"Lookup[?T]".as_ptr(), "Lookup[?T]".len(),),
         1
     );
     assert_eq!(
         super::aura_direct_value_type_matches(
             untagged,
-            b"Option[list[?T]]".as_ptr(),
-            "Option[list[?T]]".len(),
+            b"Lookup[list[?T]]".as_ptr(),
+            "Lookup[list[?T]]".len(),
         ),
         0
     );
@@ -6537,12 +6546,7 @@ fn native_runtime_single_consumer_task_observation_is_defended_across_aliases() 
             TaskWaitStatus::Cancelled
         ));
 
-        assert!(expect_variant_ptr(
-            super::aura_direct_task_join_or_none(task_ptr(&cancelled)),
-            "Option",
-            "None",
-        )
-        .is_empty());
+        expect_poll_unavailable(super::aura_direct_task_join_or_none(task_ptr(&cancelled)));
         assert_eq!(
             expect_string(super::aura_direct_task_join_or_value(
                 task_ptr(&cancelled),
@@ -6637,16 +6641,12 @@ fn native_runtime_direct_process_wrappers_cover_child_pipe_and_completed_paths()
     )
     .expect("process child should spawn");
     let child_ptr = boxed_value(Value::ProcessChild(child));
-    let stdout_payload = expect_variant_ptr(
-        super::aura_direct_process_child_stdout(child_ptr),
-        "Option",
-        "Some",
-    );
-    let stdout_pipe = match stdout_payload.as_slice() {
-        [Value::ProcessPipe(pipe)] => pipe.clone(),
-        other => panic!("expected process stdout pipe, found {:?}", other),
-    };
-    expect_option_none(super::aura_direct_process_child_stderr(child_ptr));
+    let stdout_pipe =
+        match expect_optional_present(super::aura_direct_process_child_stdout(child_ptr)) {
+            Value::ProcessPipe(pipe) => pipe,
+            other => panic!("expected process stdout pipe, found {:?}", other),
+        };
+    expect_optional_absent(super::aura_direct_process_child_stderr(child_ptr));
 
     let stdout_text = expect_result_ok_string(super::aura_direct_process_pipe_read_all(
         boxed_value(Value::ProcessPipe(stdout_pipe.clone())),
@@ -6724,22 +6724,21 @@ fn native_runtime_direct_process_wrappers_cover_streaming_and_signal_paths() {
         ptr: *mut OpaqueValue,
         label: &str,
     ) -> crate::runtime_value::ProcessPipeValue {
-        let payloads = expect_variant_ptr(ptr, "Option", "Some");
-        match payloads.as_slice() {
-            [Value::ProcessPipe(pipe)] => pipe.clone(),
+        match expect_optional_present(ptr) {
+            Value::ProcessPipe(pipe) => pipe,
             other => panic!("expected {label} process pipe, found {:?}", other),
         }
     }
 
     fn string_from_option(value: Value, label: &str) -> String {
-        match expect_option_some_payload(value) {
+        match expect_optional_payload(value) {
             Value::String(text) => text,
             other => panic!("expected {label} string payload, found {:?}", other),
         }
     }
 
     fn byte_values_from_option(value: Value, label: &str) -> Vec<i128> {
-        match expect_option_some_payload(value) {
+        match expect_optional_payload(value) {
             Value::Vec(values) => values
                 .elements
                 .into_iter()
@@ -6804,7 +6803,7 @@ fn native_runtime_direct_process_wrappers_cover_streaming_and_signal_paths() {
         io_child_ptr,
         duration_value(5_000),
     ));
-    match expect_option_some_payload(maybe_status) {
+    match expect_optional_payload(maybe_status) {
         Value::EnumVariant(status) if status.enum_name == "ExitStatus" => {}
         other => panic!("expected process exit status, found {:?}", other),
     }
@@ -6914,9 +6913,8 @@ fn native_runtime_direct_process_wrappers_cover_timeout_and_error_results() {
         ptr: *mut OpaqueValue,
         label: &str,
     ) -> crate::runtime_value::ProcessPipeValue {
-        let payloads = expect_variant_ptr(ptr, "Option", "Some");
-        match payloads.as_slice() {
-            [Value::ProcessPipe(pipe)] => pipe.clone(),
+        match expect_optional_present(ptr) {
+            Value::ProcessPipe(pipe) => pipe,
             other => panic!("expected {label} process pipe, found {:?}", other),
         }
     }
@@ -7013,11 +7011,7 @@ fn native_runtime_direct_process_wrappers_cover_timeout_and_error_results() {
         slow_child_ptr,
         duration_value(0),
     ));
-    assert!(matches!(
-        wait_or_none,
-        Value::EnumVariant(variant)
-            if variant.enum_name == "Option" && variant.variant_name == "None"
-    ));
+    expect_optional_absent_value(wait_or_none);
     assert!(expect_variant_value(
         expect_result_err_payload(super::aura_direct_process_child_wait_ok(
             slow_child_ptr,
@@ -7325,11 +7319,7 @@ fn native_runtime_direct_process_supervisor_wrappers_cover_start_wait_and_stop_p
         supervisor_ptr,
         duration_value(0),
     ));
-    assert!(matches!(
-        empty_wait,
-        Value::EnumVariant(variant)
-            if variant.enum_name == "Option" && variant.variant_name == "None"
-    ));
+    expect_optional_absent_value(empty_wait);
 
     expect_result_ok_unit(super::aura_direct_process_supervisor_stop(supervisor_ptr));
     expect_unit(super::aura_direct_process_supervisor_close(supervisor_ptr));
@@ -7638,7 +7628,7 @@ fn native_runtime_direct_network_wrappers_cover_tcp_udp_http_success_paths() {
             other => panic!("expected accepted net.TcpStream, found {:?}", other),
         };
         let accepted_ptr = boxed_value(Value::TcpStream(accepted.clone()));
-        let line = expect_option_some_payload(expect_result_ok_payload(
+        let line = expect_optional_payload(expect_result_ok_payload(
             super::aura_direct_tcp_stream_read_line(accepted_ptr, duration_value(5_000)),
         ));
         assert_eq!(line, Value::String("ping".to_string()));
@@ -7771,7 +7761,7 @@ fn native_runtime_direct_network_wrappers_cover_tcp_udp_http_success_paths() {
         string_value("hello"),
         timeout,
     ));
-    let datagram = match expect_option_some_payload(expect_result_ok_payload(
+    let datagram = match expect_optional_payload(expect_result_ok_payload(
         super::aura_direct_udp_socket_recv_from(
             boxed_value(Value::UdpSocket(udp_receiver.clone())),
             int_value(64),
@@ -7802,7 +7792,7 @@ fn native_runtime_direct_network_wrappers_cover_tcp_udp_http_success_paths() {
         int_vec(&[111, 107]),
         timeout,
     ));
-    let udp_reply = expect_option_some_payload(expect_result_ok_payload(
+    let udp_reply = expect_optional_payload(expect_result_ok_payload(
         super::aura_direct_udp_socket_recv(
             boxed_value(Value::UdpSocket(udp_sender.clone())),
             int_value(64),
@@ -7989,7 +7979,7 @@ fn native_runtime_direct_network_wrappers_cover_tcp_udp_http_success_paths() {
                 other => panic!("expected server net.WebSocket, found {:?}", other),
             };
         let server_ptr = boxed_value(Value::WebSocket(server_socket));
-        let text = expect_option_some_payload(expect_result_ok_payload(
+        let text = expect_optional_payload(expect_result_ok_payload(
             super::aura_direct_websocket_recv_text(server_ptr, duration_value(5_000)),
         ));
         assert_eq!(text, Value::String("hello websocket".to_string()));
@@ -7998,7 +7988,7 @@ fn native_runtime_direct_network_wrappers_cover_tcp_udp_http_success_paths() {
             int_vec(&[111, 107]),
             duration_value(5_000),
         ));
-        let bytes = expect_option_some_payload(expect_result_ok_payload(
+        let bytes = expect_optional_payload(expect_result_ok_payload(
             super::aura_direct_websocket_recv_bytes(server_ptr, duration_value(5_000)),
         ));
         assert_eq!(expect_vec_ints(boxed_value(bytes)), vec![1, 2, 3]);
@@ -8023,7 +8013,7 @@ fn native_runtime_direct_network_wrappers_cover_tcp_udp_http_success_paths() {
         string_value("hello websocket"),
         timeout,
     ));
-    let websocket_reply = expect_option_some_payload(expect_result_ok_payload(
+    let websocket_reply = expect_optional_payload(expect_result_ok_payload(
         super::aura_direct_websocket_recv_bytes(websocket_client_ptr, timeout),
     ));
     assert_eq!(
@@ -8035,7 +8025,7 @@ fn native_runtime_direct_network_wrappers_cover_tcp_udp_http_success_paths() {
         int_vec(&[1, 2, 3]),
         timeout,
     ));
-    let websocket_done = expect_option_some_payload(expect_result_ok_payload(
+    let websocket_done = expect_optional_payload(expect_result_ok_payload(
         super::aura_direct_websocket_recv_text(websocket_client_ptr, timeout),
     ));
     assert_eq!(websocket_done, Value::String("done".to_string()));
@@ -8073,7 +8063,7 @@ fn native_runtime_direct_network_wrappers_cover_tcp_udp_http_success_paths() {
                     other => panic!("expected server net.UnixStream, found {:?}", other),
                 };
             let server_ptr = boxed_value(Value::UnixStream(server_stream));
-            let line = expect_option_some_payload(expect_result_ok_payload(
+            let line = expect_optional_payload(expect_result_ok_payload(
                 super::aura_direct_unix_stream_read_line(server_ptr, duration_value(5_000)),
             ));
             assert_eq!(line, Value::String("hello unix".to_string()));
@@ -8161,21 +8151,13 @@ fn native_runtime_direct_network_wrappers_cover_timeout_and_error_results() {
         int_value(16),
         duration_value(0),
     ));
-    assert!(matches!(
-        udp_recv,
-        Value::EnumVariant(variant)
-            if variant.enum_name == "Option" && variant.variant_name == "None"
-    ));
+    expect_optional_absent_value(udp_recv);
     let udp_recv_from = expect_result_ok_payload(super::aura_direct_udp_socket_recv_from(
         boxed_value(Value::UdpSocket(udp_socket.clone())),
         int_value(16),
         duration_value(0),
     ));
-    assert!(matches!(
-        udp_recv_from,
-        Value::EnumVariant(variant)
-            if variant.enum_name == "Option" && variant.variant_name == "None"
-    ));
+    expect_optional_absent_value(udp_recv_from);
     expect_unit(super::aura_direct_udp_socket_close(boxed_value(
         Value::UdpSocket(udp_socket),
     )));
@@ -8333,24 +8315,24 @@ fn direct_runtime_string_and_numeric_helpers_cover_builtin_surface() {
         "AURA"
     );
     assert_eq!(
-        expect_option_some_string(super::aura_direct_string_strip_prefix(
+        expect_optional_string(super::aura_direct_string_strip_prefix(
             string_value("prefix-core"),
             string_value("prefix-"),
         )),
         "core"
     );
-    expect_option_none(super::aura_direct_string_strip_prefix(
+    expect_optional_absent(super::aura_direct_string_strip_prefix(
         string_value("prefix-core"),
         string_value("core"),
     ));
     assert_eq!(
-        expect_option_some_string(super::aura_direct_string_strip_suffix(
+        expect_optional_string(super::aura_direct_string_strip_suffix(
             string_value("core-suffix"),
             string_value("-suffix"),
         )),
         "core"
     );
-    expect_option_none(super::aura_direct_string_strip_suffix(
+    expect_optional_absent(super::aura_direct_string_strip_suffix(
         string_value("core-suffix"),
         string_value("prefix"),
     ));
@@ -8622,11 +8604,11 @@ fn direct_runtime_vec_helpers_cover_collection_surface() {
     expect_unit(super::aura_direct_vec_push_in_place(vec, int_value(3)));
     assert_eq!(super::aura_direct_vec_len(vec), 3);
     assert_eq!(
-        expect_option_some_int(super::aura_direct_vec_pop_in_place(vec)),
+        expect_lookup_found_int(super::aura_direct_vec_pop_in_place(vec)),
         3
     );
     assert_eq!(
-        expect_option_some_int(super::aura_direct_vec_get(vec, 1)),
+        expect_lookup_found_int(super::aura_direct_vec_get(vec, 1)),
         2
     );
     assert_eq!(
@@ -8634,7 +8616,7 @@ fn direct_runtime_vec_helpers_cover_collection_surface() {
         2
     );
     assert_eq!(
-        expect_option_some_int(super::aura_direct_vec_remove_in_place(vec, 0)),
+        expect_lookup_found_int(super::aura_direct_vec_remove_in_place(vec, 0)),
         1
     );
     assert_eq!(super::aura_direct_vec_contains(vec, int_value(5)), 1);
@@ -8646,7 +8628,7 @@ fn direct_runtime_vec_helpers_cover_collection_surface() {
     expect_unit(super::aura_direct_vec_reverse_in_place(vec));
     assert_eq!(expect_int(super::aura_direct_vec_index(vec, 0, 1, 1)), 5);
     assert_eq!(
-        expect_option_some_int(super::aura_direct_vec_index_option(vec, 1)),
+        expect_lookup_found_int(super::aura_direct_vec_index_option(vec, 1)),
         8
     );
     expect_unit(super::aura_direct_vec_set_index_in_place(
@@ -8666,15 +8648,15 @@ fn direct_runtime_vec_helpers_cover_collection_surface() {
     );
     expect_unit(super::aura_direct_vec_clear_in_place(vec));
     assert_eq!(super::aura_direct_vec_len(vec), 0);
-    expect_option_none(super::aura_direct_vec_pop_in_place(vec));
-    expect_option_none(super::aura_direct_vec_index_option(vec, 0));
+    expect_lookup_missing(super::aura_direct_vec_pop_in_place(vec));
+    expect_lookup_missing(super::aura_direct_vec_index_option(vec, 0));
 
     let draining_vec = int_vec(&[10]);
     assert_eq!(
-        expect_option_some_int(super::aura_direct_vec_take_index_in_place(draining_vec, 0,)),
+        expect_lookup_found_int(super::aura_direct_vec_take_index_in_place(draining_vec, 0,)),
         10
     );
-    expect_option_none(super::aura_direct_vec_take_index_in_place(draining_vec, 0));
+    expect_lookup_missing(super::aura_direct_vec_take_index_in_place(draining_vec, 0));
 }
 
 #[test]
@@ -8690,16 +8672,16 @@ fn direct_runtime_vec_helpers_normalize_negative_indices_uniformly() {
         1,
     ));
     assert_eq!(
-        expect_option_some_int(super::aura_direct_vec_get(vec, -2)),
+        expect_lookup_found_int(super::aura_direct_vec_get(vec, -2)),
         35
     );
-    expect_option_none(super::aura_direct_vec_get(vec, -5));
+    expect_lookup_missing(super::aura_direct_vec_get(vec, -5));
     assert_eq!(
         expect_int(super::aura_direct_vec_set_in_place(vec, -4, int_value(11),)),
         10
     );
     assert_eq!(
-        expect_option_some_int(super::aura_direct_vec_remove_in_place(vec, -2)),
+        expect_lookup_found_int(super::aura_direct_vec_remove_in_place(vec, -2)),
         35
     );
     assert_eq!(super::aura_direct_vec_swap_in_place(vec, -1, -3), 1);
@@ -8732,26 +8714,26 @@ fn direct_runtime_map_and_set_helpers_cover_collection_surface() {
     let map = super::aura_direct_map_empty();
     assert_eq!(super::aura_direct_map_len(map), 0);
     assert_eq!(super::aura_direct_map_is_empty(map), 1);
-    expect_option_none(super::aura_direct_map_set_in_place(
+    expect_lookup_missing(super::aura_direct_map_set_in_place(
         map,
         string_value("name"),
         int_value(1),
     ));
     assert_eq!(
-        expect_option_some_int(super::aura_direct_map_set_in_place(
+        expect_lookup_found_int(super::aura_direct_map_set_in_place(
             map,
             string_value("name"),
             int_value(2),
         )),
         1
     );
-    expect_option_none(super::aura_direct_map_set_in_place(
+    expect_lookup_missing(super::aura_direct_map_set_in_place(
         map,
         string_value("count"),
         int_value(3),
     ));
     assert_eq!(
-        expect_option_some_int(super::aura_direct_map_get(map, string_value("name"))),
+        expect_lookup_found_int(super::aura_direct_map_get(map, string_value("name"))),
         2
     );
     assert_eq!(
@@ -8759,7 +8741,7 @@ fn direct_runtime_map_and_set_helpers_cover_collection_surface() {
         1
     );
     assert_eq!(
-        expect_option_some_int(super::aura_direct_map_remove_in_place(
+        expect_lookup_found_int(super::aura_direct_map_remove_in_place(
             map,
             string_value("count"),
         )),
@@ -8807,7 +8789,7 @@ fn direct_runtime_map_and_set_helpers_cover_collection_surface() {
     ));
     expect_unit(super::aura_direct_map_extend_in_place(map, {
         let other = super::aura_direct_map_empty();
-        expect_option_none(super::aura_direct_map_set_in_place(
+        expect_lookup_missing(super::aura_direct_map_set_in_place(
             other,
             string_value("status"),
             int_value(9),
@@ -8820,8 +8802,8 @@ fn direct_runtime_map_and_set_helpers_cover_collection_surface() {
     );
     expect_unit(super::aura_direct_map_clear_in_place(map));
     assert_eq!(super::aura_direct_map_len(map), 0);
-    expect_option_none(super::aura_direct_map_get(map, string_value("missing")));
-    expect_option_none(super::aura_direct_map_remove_in_place(
+    expect_lookup_missing(super::aura_direct_map_get(map, string_value("missing")));
+    expect_lookup_missing(super::aura_direct_map_remove_in_place(
         map,
         string_value("missing"),
     ));
@@ -8837,11 +8819,11 @@ fn direct_runtime_map_and_set_helpers_cover_collection_surface() {
     assert_eq!(super::aura_direct_set_insert_in_place(set, int_value(3)), 0);
     assert_eq!(super::aura_direct_set_contains(set, int_value(3)), 1);
     assert_eq!(
-        expect_option_some_int(super::aura_direct_set_index_option(set, 0)),
+        expect_lookup_found_int(super::aura_direct_set_index_option(set, 0)),
         3
     );
     assert_eq!(super::aura_direct_set_remove_in_place(set, int_value(3)), 1);
-    expect_option_none(super::aura_direct_set_index_option(set, 0));
+    expect_lookup_missing(super::aura_direct_set_index_option(set, 0));
     assert_eq!(super::aura_direct_set_remove_in_place(set, int_value(3)), 0);
 }
 
@@ -10155,10 +10137,10 @@ fn direct_runtime_scalar_and_concurrency_helpers_cover_remaining_surface() {
     let payloads = super::aura_direct_arg_buffer_new(1);
     super::aura_direct_arg_buffer_store(payloads, 0, string_value("payload") as i64);
     let boxed_payload = super::aura_direct_enum_variant(
-        b"Option".as_ptr(),
-        "Option".len(),
-        b"Some".as_ptr(),
-        "Some".len(),
+        b"Lookup".as_ptr(),
+        "Lookup".len(),
+        b"Found".as_ptr(),
+        "Found".len(),
         payloads,
         1,
     );
@@ -10881,15 +10863,15 @@ fn direct_owned_collection_and_queue_adapters_preserve_allocation_identity() {
     let vector_taken = super::aura_direct_vec_remove_in_place(vector, 0);
     unsafe {
         super::with_value(vector_taken, |value| match value {
-            Value::EnumVariant(option)
-                if option.enum_name == "Option" && option.variant_name == "Some" =>
+            Value::EnumVariant(lookup)
+                if lookup.enum_name == "Lookup" && lookup.variant_name == "Found" =>
             {
-                match option.payloads.as_slice() {
+                match lookup.payloads.as_slice() {
                     [Value::String(value)] => assert_eq!(value.as_ptr(), vector_storage),
                     other => panic!("expected taken vector str payload, found {other:?}"),
                 }
             }
-            other => panic!("expected Option.Some(str), found {other:?}"),
+            other => panic!("expected Lookup.Found(str), found {other:?}"),
         });
     }
 
@@ -10898,7 +10880,7 @@ fn direct_owned_collection_and_queue_adapters_preserve_allocation_identity() {
     let map_value = string_value(&"map value".repeat(32));
     let map_key_storage = string_storage(map_key);
     let map_value_storage = string_storage(map_value);
-    expect_option_none(super::aura_direct_map_set_in_place(map, map_key, map_value));
+    expect_lookup_missing(super::aura_direct_map_set_in_place(map, map_key, map_value));
     unsafe {
         super::with_value(map, |value| match value {
             Value::Map(map) => match map.entries.as_slice() {
@@ -10928,15 +10910,15 @@ fn direct_owned_collection_and_queue_adapters_preserve_allocation_identity() {
     let taken = super::aura_direct_set_take_index_in_place(set, 0);
     unsafe {
         super::with_value(taken, |value| match value {
-            Value::EnumVariant(option)
-                if option.enum_name == "Option" && option.variant_name == "Some" =>
+            Value::EnumVariant(lookup)
+                if lookup.enum_name == "Lookup" && lookup.variant_name == "Found" =>
             {
-                match option.payloads.as_slice() {
+                match lookup.payloads.as_slice() {
                     [Value::String(value)] => assert_eq!(value.as_ptr(), set_storage),
                     other => panic!("expected taken str payload, found {other:?}"),
                 }
             }
-            other => panic!("expected Option.Some(str), found {other:?}"),
+            other => panic!("expected Lookup.Found(str), found {other:?}"),
         });
         super::with_value(set, |value| match value {
             Value::Set(set) => assert!(set.elements.is_empty()),
@@ -10951,15 +10933,15 @@ fn direct_owned_collection_and_queue_adapters_preserve_allocation_identity() {
     let received = super::aura_direct_channel_recv_or_none(queue);
     unsafe {
         super::with_value(received, |value| match value {
-            Value::EnumVariant(option)
-                if option.enum_name == "Option" && option.variant_name == "Some" =>
+            Value::EnumVariant(poll)
+                if poll.enum_name == "Poll" && poll.variant_name == "Ready" =>
             {
-                match option.payloads.as_slice() {
+                match poll.payloads.as_slice() {
                     [Value::String(value)] => assert_eq!(value.as_ptr(), queued_storage),
                     other => panic!("expected queued str payload, found {other:?}"),
                 }
             }
-            other => panic!("expected Option.Some(str), found {other:?}"),
+            other => panic!("expected Poll.Ready(str), found {other:?}"),
         });
         for value in [vector, vector_taken, map, set, taken, queue, received] {
             release_value(value);
@@ -11169,17 +11151,18 @@ fn direct_json_rejects_inexact_int_array_object_and_indent_metadata() {
         .contains("malformed runtime `json.Value.Object` payload"));
 
     let source = direct_json_value(crate::json_codec::JsonValue::Null);
-    let indent = boxed_value(crate::runtime_value::option_some(Value::Int(
-        IntegerValue::from_typed_signed(2, IntegerKind::Int32).expect("2 fits int32"),
-    )));
+    let indent = boxed_value(crate::runtime_value::optional_present(
+        Type::named("int64"),
+        Value::Int(IntegerValue::from_typed_signed(2, IntegerKind::Int32).expect("2 fits int32")),
+    ));
     assert!(malformed_json_call("json::dumps", vec![source, indent])
         .contains("expects `indent` to contain an `int64`"));
 }
 
 #[test]
-fn native_runtime_direct_queue_and_task_fallback_wrappers_cover_option_default_paths() {
+fn native_runtime_direct_queue_and_task_fallback_wrappers_cover_poll_and_default_paths() {
     let channel = super::aura_direct_channel_new(std::ptr::null_mut());
-    expect_option_none(super::aura_direct_channel_recv_or_none(channel));
+    expect_poll_unavailable(super::aura_direct_channel_recv_or_none(channel));
     assert_eq!(
         expect_int(super::aura_direct_channel_recv_or_value(
             channel,
@@ -11192,7 +11175,7 @@ fn native_runtime_direct_queue_and_task_fallback_wrappers_cover_option_default_p
         "QueueReceive",
         "TimedOut",
     );
-    expect_option_none(super::aura_direct_channel_recv_or_none_timeout_value(
+    expect_poll_unavailable(super::aura_direct_channel_recv_or_none_timeout_value(
         channel,
         duration_value(0),
     ));
@@ -11207,7 +11190,7 @@ fn native_runtime_direct_queue_and_task_fallback_wrappers_cover_option_default_p
 
     expect_result_ok_unit(super::aura_direct_channel_try_send(channel, int_value(21)));
     assert_eq!(
-        expect_option_some_int(super::aura_direct_channel_recv_or_none(channel)),
+        expect_poll_ready_int(super::aura_direct_channel_recv_or_none(channel)),
         21
     );
     expect_result_ok_unit(super::aura_direct_channel_try_send(channel, int_value(22)));
@@ -11220,7 +11203,7 @@ fn native_runtime_direct_queue_and_task_fallback_wrappers_cover_option_default_p
     );
     expect_result_ok_unit(super::aura_direct_channel_try_send(channel, int_value(23)));
     assert_eq!(
-        expect_option_some_int(super::aura_direct_channel_recv_or_none_timeout_value(
+        expect_poll_ready_int(super::aura_direct_channel_recv_or_none_timeout_value(
             channel,
             duration_value(0),
         )),
@@ -11236,7 +11219,7 @@ fn native_runtime_direct_queue_and_task_fallback_wrappers_cover_option_default_p
         24
     );
     expect_unit(super::aura_direct_channel_close(channel));
-    expect_option_none(super::aura_direct_channel_recv_or_none(channel));
+    expect_poll_unavailable(super::aura_direct_channel_recv_or_none(channel));
     assert_eq!(
         expect_int(super::aura_direct_channel_recv_or_value(
             channel,
@@ -11262,7 +11245,7 @@ fn native_runtime_direct_queue_and_task_fallback_wrappers_cover_option_default_p
         thread::sleep(StdDuration::from_millis(200));
         Ok(Value::Int(IntegerValue::from_signed(77)))
     }))));
-    expect_option_none(super::aura_direct_task_join_or_none(slow_task));
+    expect_poll_unavailable(super::aura_direct_task_join_or_none(slow_task));
     assert_eq!(
         expect_int(super::aura_direct_task_join_or_value(
             slow_task,
@@ -11270,7 +11253,7 @@ fn native_runtime_direct_queue_and_task_fallback_wrappers_cover_option_default_p
         )),
         50
     );
-    expect_option_none(super::aura_direct_task_join_or_none_timeout_value(
+    expect_poll_unavailable(super::aura_direct_task_join_or_none_timeout_value(
         slow_task,
         duration_value(0),
     ));
@@ -11287,11 +11270,11 @@ fn native_runtime_direct_queue_and_task_fallback_wrappers_cover_option_default_p
         77
     );
     assert_eq!(
-        expect_option_some_int(super::aura_direct_task_join_or_none(slow_task)),
+        expect_poll_ready_int(super::aura_direct_task_join_or_none(slow_task)),
         77
     );
     assert_eq!(
-        expect_option_some_int(super::aura_direct_task_join_or_none_timeout_value(
+        expect_poll_ready_int(super::aura_direct_task_join_or_none_timeout_value(
             slow_task,
             duration_value(0),
         )),
@@ -11320,8 +11303,8 @@ fn native_runtime_direct_queue_and_task_fallback_wrappers_cover_option_default_p
         expect_task_result_error_message(super::aura_direct_task_join(error_task)),
         "task failed"
     );
-    expect_option_none(super::aura_direct_task_join_or_none(error_task));
-    expect_option_none(super::aura_direct_task_join_or_none_timeout_value(
+    expect_poll_unavailable(super::aura_direct_task_join_or_none(error_task));
+    expect_poll_unavailable(super::aura_direct_task_join_or_none_timeout_value(
         error_task,
         duration_value(0),
     ));
@@ -11381,8 +11364,8 @@ fn native_runtime_direct_concurrency_wrappers_cover_cancelled_paths() {
             "QueueReceive",
             "Cancelled",
         );
-        expect_option_none(super::aura_direct_channel_recv_or_none(empty));
-        expect_option_none(super::aura_direct_channel_recv_or_none_timeout_value(
+        expect_poll_unavailable(super::aura_direct_channel_recv_or_none(empty));
+        expect_poll_unavailable(super::aura_direct_channel_recv_or_none_timeout_value(
             empty,
             duration_value(1000),
         ));
@@ -11417,8 +11400,8 @@ fn native_runtime_direct_concurrency_wrappers_cover_cancelled_paths() {
             "TaskResult",
             "Cancelled",
         );
-        expect_option_none(super::aura_direct_task_join_or_none(task));
-        expect_option_none(super::aura_direct_task_join_or_none_timeout_value(
+        expect_poll_unavailable(super::aura_direct_task_join_or_none(task));
+        expect_poll_unavailable(super::aura_direct_task_join_or_none_timeout_value(
             task,
             duration_value(1000),
         ));
@@ -11496,8 +11479,8 @@ fn io_read_line_reports_end_of_input_consistently_through_both_runtime_surfaces(
 
         let payload = expect_result_ok_payload(super::aura_direct_io_read_line());
         assert!(
-            expect_variant_value(payload, "Option", "None").is_empty(),
-            "the direct runtime must expose EOF as Result.Ok(Option.None)"
+            coverage_is_none(payload),
+            "the direct runtime must expose EOF as Result.Ok(None)"
         );
         return;
     }
@@ -11999,23 +11982,12 @@ fn native_runtime_private_value_decoders_cover_success_paths() {
         None
     );
     assert_eq!(
-        super::expect_optional_string_value(
-            &Value::EnumVariant(EnumVariantValue {
-                enum_name: "Option".to_string(),
-                variant_name: "None".to_string(),
-                payloads: Vec::new(),
-            }),
-            "cwd",
-        ),
+        super::expect_optional_string_value(&crate::runtime_value::optional_str_value(None), "cwd",),
         None
     );
     assert_eq!(
         super::expect_optional_string_value(
-            &Value::EnumVariant(EnumVariantValue {
-                enum_name: "Option".to_string(),
-                variant_name: "Some".to_string(),
-                payloads: vec![Value::String("/tmp".to_string())],
-            }),
+            &crate::runtime_value::optional_str_value(Some("/tmp".to_string())),
             "cwd",
         ),
         Some("/tmp".to_string())
@@ -12097,23 +12069,9 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
                     "command",
                 );
             }
-            "optional-string-malformed" => {
-                super::expect_optional_string_value(
-                    &Value::EnumVariant(EnumVariantValue {
-                        enum_name: "Option".to_string(),
-                        variant_name: "Some".to_string(),
-                        payloads: Vec::new(),
-                    }),
-                    "cwd",
-                );
-            }
             "optional-string-payload-type" => {
                 super::expect_optional_string_value(
-                    &Value::EnumVariant(EnumVariantValue {
-                        enum_name: "Option".to_string(),
-                        variant_name: "Some".to_string(),
-                        payloads: vec![Value::Bool(true)],
-                    }),
+                    &crate::runtime_value::optional_present(Type::named("str"), Value::Bool(true)),
                     "cwd",
                 );
             }
@@ -12646,7 +12604,7 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
             }
             "map-index-missing" => {
                 let map = super::aura_direct_map_empty();
-                expect_option_none(super::aura_direct_map_set_in_place(
+                expect_lookup_missing(super::aura_direct_map_set_in_place(
                     map,
                     string_value("name"),
                     int_value(1),
@@ -13532,16 +13490,12 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
             "`command` expects `str`, found `integer`",
         ),
         (
-            "optional-string-malformed",
-            "`cwd` expects `Option[str]`, found malformed option payload",
-        ),
-        (
             "optional-string-payload-type",
             "`cwd` expects `str`, found `bool`",
         ),
         (
             "optional-string-type",
-            "`cwd` expects `Option[str]`, found `integer`",
+            "`cwd` expects `str | None`, found `integer`",
         ),
         (
             "process-start-command-type",
@@ -13549,7 +13503,7 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
         ),
         (
             "process-start-cwd-type",
-            "`process.start(...)` expects `Option[str]`, found `bool`",
+            "`process.start(...)` expects `str | None`, found `bool`",
         ),
         (
             "process-start-env-type",
@@ -13620,7 +13574,7 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
         ),
         (
             "queue-recv-or-none-timeout-negative",
-            "get_or_none(timeout=...) must be non-negative",
+            "poll(timeout=...) must be non-negative",
         ),
         ("queue-recv-or-none-type", "expected `Queue`, found `bool`"),
         (
@@ -13713,7 +13667,7 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
         ("task-result-or-none-type", "expected `Task`, found `bool`"),
         (
             "task-result-or-none-timeout-negative",
-            "result_or_none(timeout=...) must be non-negative",
+            "poll(timeout=...) must be non-negative",
         ),
         ("task-result-or-type", "expected `Task`, found `bool`"),
         (
@@ -15262,7 +15216,7 @@ fn native_runtime_resource_metadata_reports_maintained_type_names() {
         string_value("hello tls\n"),
         duration_value(5_000),
     ));
-    let tls_line = expect_option_some_payload(expect_result_ok_payload(
+    let tls_line = expect_optional_payload(expect_result_ok_payload(
         super::aura_direct_tls_stream_read_line(tls_server_ptr, duration_value(5_000)),
     ));
     assert_eq!(tls_line, Value::String("hello tls".to_string()));
@@ -15568,7 +15522,7 @@ fn native_runtime_thread_local_and_pointer_helpers_cover_remaining_paths() {
     );
 
     let map = super::aura_direct_map_empty();
-    expect_option_none(super::aura_direct_map_set_in_place(
+    expect_lookup_missing(super::aura_direct_map_set_in_place(
         map,
         string_value("name"),
         int_value(1),
@@ -18805,7 +18759,7 @@ fn native_runtime_boxing_range_and_condition_helpers_cover_remaining_valid_paths
 
     let map = super::aura_direct_map_empty();
     assert_eq!(super::aura_direct_map_is_empty(map), 1);
-    expect_option_none(super::aura_direct_map_set_in_place(
+    expect_lookup_missing(super::aura_direct_map_set_in_place(
         map,
         string_value("answer"),
         int_value(42),
@@ -18819,9 +18773,9 @@ fn native_runtime_boxing_range_and_condition_helpers_cover_remaining_valid_paths
         1
     );
     assert_eq!(super::aura_direct_set_is_empty(set), 0);
-    expect_option_none(super::aura_direct_set_index_option(set, 5));
-    expect_option_none(super::aura_direct_set_index_option(set, i64::MAX));
-    expect_option_none(super::aura_direct_set_take_index_in_place(set, i64::MAX));
+    expect_lookup_missing(super::aura_direct_set_index_option(set, 5));
+    expect_lookup_missing(super::aura_direct_set_index_option(set, i64::MAX));
+    expect_lookup_missing(super::aura_direct_set_take_index_in_place(set, i64::MAX));
     assert_eq!(
         super::aura_direct_set_len(set),
         1,
@@ -18833,7 +18787,7 @@ fn native_runtime_boxing_range_and_condition_helpers_cover_remaining_valid_paths
 fn native_runtime_collection_helpers_cover_remaining_success_paths() {
     let vec = int_vec(&[1, 2, 3]);
     assert_eq!(
-        expect_option_some_int(super::aura_direct_vec_index_option(vec, 1)),
+        expect_lookup_found_int(super::aura_direct_vec_index_option(vec, 1)),
         2
     );
     assert_eq!(expect_int(super::aura_direct_vec_index(vec, 2, 0, 0)), 3);
@@ -18850,18 +18804,18 @@ fn native_runtime_collection_helpers_cover_remaining_success_paths() {
     );
 
     let map = super::aura_direct_map_empty();
-    expect_option_none(super::aura_direct_map_set_in_place(
+    expect_lookup_missing(super::aura_direct_map_set_in_place(
         map,
         string_value("a"),
         int_value(1),
     ));
-    expect_option_none(super::aura_direct_map_set_in_place(
+    expect_lookup_missing(super::aura_direct_map_set_in_place(
         map,
         string_value("b"),
         int_value(2),
     ));
     assert_eq!(
-        expect_option_some_int(super::aura_direct_map_get(map, string_value("a"))),
+        expect_lookup_found_int(super::aura_direct_map_get(map, string_value("a"))),
         1
     );
     assert_eq!(
@@ -18896,7 +18850,7 @@ fn native_runtime_collection_helpers_cover_remaining_success_paths() {
         0,
     ));
     assert_eq!(
-        expect_option_some_int(super::aura_direct_map_remove_in_place(
+        expect_lookup_found_int(super::aura_direct_map_remove_in_place(
             map,
             string_value("a"),
         )),
@@ -18928,12 +18882,12 @@ fn native_runtime_collection_helpers_cover_remaining_success_paths() {
     );
 
     let other = super::aura_direct_map_empty();
-    expect_option_none(super::aura_direct_map_set_in_place(
+    expect_lookup_missing(super::aura_direct_map_set_in_place(
         other,
         string_value("b"),
         int_value(9),
     ));
-    expect_option_none(super::aura_direct_map_set_in_place(
+    expect_lookup_missing(super::aura_direct_map_set_in_place(
         other,
         string_value("c"),
         int_value(3),
@@ -21699,11 +21653,11 @@ fn direct_union_tag_take_and_inject_reject_invalid_metadata_and_identities() {
 #[test]
 fn direct_instance_field_access_follows_enum_and_union_payload_projections() {
     let some = boxed_value(Value::EnumVariant(EnumVariantValue {
-        enum_name: "Option".to_string(),
-        variant_name: "Some".to_string(),
+        enum_name: "Lookup".to_string(),
+        variant_name: "Found".to_string(),
         payloads: vec![coverage_int(41)],
     }));
-    let projection = "__variant_payload_Some_0";
+    let projection = "__variant_payload_Found_0";
     assert_eq!(
         expect_int(super::aura_direct_instance_get_field(
             some,
@@ -21827,19 +21781,19 @@ fn direct_owned_field_assignment_writes_through_enum_and_union_payloads() {
     }
 
     let some = boxed_value(Value::EnumVariant(EnumVariantValue {
-        enum_name: "Option".to_string(),
-        variant_name: "Some".to_string(),
+        enum_name: "Lookup".to_string(),
+        variant_name: "Found".to_string(),
         payloads: vec![holder(coverage_int(1))],
     }));
-    assign(some, "__variant_payload_Some_0.value", coverage_int(2));
-    let nested = expect_variant_ptr(super::aura_direct_clone_value(some), "Option", "Some");
+    assign(some, "__variant_payload_Found_0.value", coverage_int(2));
+    let nested = expect_variant_ptr(super::aura_direct_clone_value(some), "Lookup", "Found");
     assert_eq!(holder_value(&nested[0]), coverage_int(2));
     assign(
         some,
-        "__variant_payload_Some_0",
+        "__variant_payload_Found_0",
         Value::String("flat".to_string()),
     );
-    let flat = expect_variant_ptr(super::aura_direct_clone_value(some), "Option", "Some");
+    let flat = expect_variant_ptr(super::aura_direct_clone_value(some), "Lookup", "Found");
     assert_eq!(flat[0], Value::String("flat".to_string()));
     unsafe {
         release_value(some);
@@ -22485,11 +22439,7 @@ fn coverage_unique_temp_path(label: &str) -> std::path::PathBuf {
 }
 
 fn coverage_is_none(value: Value) -> bool {
-    matches!(
-        value,
-        Value::EnumVariant(variant)
-            if variant.enum_name == "Option" && variant.variant_name == "None"
-    )
+    matches!(value, Value::Union(union) if matches!(union.payload, Value::Unit))
 }
 
 #[test]
@@ -22885,7 +22835,7 @@ fn direct_unix_stream_wrappers_cover_end_of_stream_and_closed_resources() {
         other => panic!("expected connected net.UnixStream, found {:?}", other),
     };
     let client_ptr = boxed_value(Value::UnixStream(client));
-    let line = expect_option_some_payload(expect_result_ok_payload(
+    let line = expect_optional_payload(expect_result_ok_payload(
         super::aura_direct_unix_stream_read_line(client_ptr, duration_value(5_000)),
     ));
     assert_eq!(line, Value::String("x".to_string()));
@@ -23053,7 +23003,7 @@ fn direct_process_pipe_reads_report_end_of_stream_as_none() {
     )
     .expect("process should spawn");
     let child_ptr = boxed_value(Value::ProcessChild(child));
-    let stdout = match expect_option_some_payload(unsafe {
+    let stdout = match expect_optional_payload(unsafe {
         take_value(super::aura_direct_process_child_stdout(child_ptr))
     }) {
         Value::ProcessPipe(pipe) => pipe,
@@ -23116,5 +23066,13 @@ fn direct_erased_union_mutable_receiver_failure_reports_the_documented_diagnosti
     assert!(
         located.contains("narrow the union to its member before the call"),
         "{located}"
+    );
+}
+
+#[test]
+fn direct_json_indent_accepts_a_bare_none_argument() {
+    assert_eq!(
+        super::direct_json_indent(&Value::Unit).expect("a bare `None` indent decodes as absent"),
+        None
     );
 }

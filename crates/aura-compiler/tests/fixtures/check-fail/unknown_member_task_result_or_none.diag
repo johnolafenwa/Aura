@@ -1,0 +1,5 @@
+error[AU2999]: unsupported method call `result_or_none` on `Task[int64]`
+ --> crates/aura-compiler/tests/fixtures/check-fail/unknown_member_task_result_or_none.au:7:20
+  |
+7 |         match task.result_or_none(timeout=1s):
+  |                    ^

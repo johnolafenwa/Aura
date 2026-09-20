@@ -370,9 +370,7 @@ fn call_metadata_helpers_cover_argument_count_and_doc_surface() {
         BuiltinMember::TaskGroupStartSoonWithStack.detail(),
         "start_soon_with_stack(bytes: int64, function, own ...) -> None"
     );
-    assert!(BuiltinMember::TaskResultOrNone
-        .docs()
-        .contains("Option.None"));
+    assert!(BuiltinMember::TaskPoll.docs().contains("Poll.Unavailable"));
 }
 
 #[test]
@@ -522,7 +520,7 @@ fn s1_frontend_canonical_collection_associated_metadata_is_exact_and_bindable() 
 fn s1_frontend_canonical_membership_metadata_names_dict_and_set_behavior_plainly() {
     assert_eq!(
         BuiltinMember::MapSet.docs(),
-        "Inserts or replaces `key`, returning the previous value as `Option[V]`."
+        "Inserts or replaces `key`, returning the previous value as `Lookup[V]`."
     );
     assert_eq!(
         BuiltinMember::MapContainsKey.detail(),
@@ -595,13 +593,13 @@ fn array_call_metadata_pins_constructors_members_and_integer_modes() {
             BuiltinMember::ArrayGet,
             "Array",
             "get",
-            "get(index: list[int64]) -> Option[T]",
+            "get(index: list[int64]) -> T | None",
         ),
         (
             BuiltinMember::ArraySet,
             "Array",
             "set",
-            "set(index: list[int64], value: T) -> Option[T]",
+            "set(index: list[int64], value: T) -> T | None",
         ),
         (
             BuiltinMember::ArrayMean,
@@ -736,7 +734,7 @@ fn integer_and_array_arithmetic_hover_contracts_name_each_operation() {
     for (member, expected) in [
         (BuiltinMember::ArrayLen, "total number"),
         (BuiltinMember::ArrayClone, "independent copy"),
-        (BuiltinMember::ArrayGet, "Option.None"),
+        (BuiltinMember::ArrayGet, "`None` when out of bounds"),
         (BuiltinMember::ArrayFill, "every scalar"),
         (BuiltinMember::ArrayMin, "minimum"),
         (BuiltinMember::ArrayMax, "maximum"),
@@ -1882,7 +1880,7 @@ fn concurrency_builtin_surface_uses_structured_wait_helpers_only() {
 fn concurrency_builtin_docs_teach_transfer_and_single_consumer_contracts() {
     for member in [
         BuiltinMember::TaskResult,
-        BuiltinMember::TaskResultOrNone,
+        BuiltinMember::TaskPoll,
         BuiltinMember::TaskResultOr,
     ] {
         assert!(
@@ -1932,7 +1930,7 @@ fn concurrency_builtin_docs_teach_transfer_and_single_consumer_contracts() {
         BuiltinMember::QueuePut,
         BuiltinMember::QueueTryPut,
         BuiltinMember::QueueGet,
-        BuiltinMember::QueueGetOrNone,
+        BuiltinMember::QueuePoll,
         BuiltinMember::QueueGetOr,
     ] {
         assert!(

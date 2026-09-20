@@ -1,0 +1,9 @@
+class Bag:
+    items: list[int64]
+
+def measure[T](value: T) -> int64:
+    return 1
+
+def main():
+    bag = Bag(items=[1, 2])
+    print(measure(bag))

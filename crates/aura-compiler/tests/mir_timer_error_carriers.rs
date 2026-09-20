@@ -96,11 +96,11 @@ def main() -> int32:
 "#,
         ),
         (
-            "get_or_none(timeout=...)",
+            "poll(timeout=...)",
             r#"
 def main() -> int32:
     queue = Queue[int32]()
-    print(queue.get_or_none(timeout=Duration.ms(-1)))
+    print(queue.poll(timeout=Duration.ms(-1)))
     return 0
 "#,
         ),
@@ -127,7 +127,7 @@ def main() -> int32:
 "#,
         ),
         (
-            "result_or_none(timeout=...)",
+            "poll(timeout=...)",
             r#"
 def worker() -> int32:
     return 1
@@ -135,7 +135,7 @@ def worker() -> int32:
 def main() -> int32:
     with TaskGroup() as group:
         task = group.start(worker)
-        print(task.result_or_none(timeout=Duration.ms(-1)))
+        print(task.poll(timeout=Duration.ms(-1)))
     return 0
 "#,
         ),

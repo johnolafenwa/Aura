@@ -1,0 +1,18 @@
+type Tool = Callable[def() -> int64]
+
+class Holder:
+    on_done: Tool | None
+
+def make(base: int64) -> Tool:
+    offset = base
+    return Tool(lambda: offset + 1)
+
+def main():
+    holder = Holder(on_done=make(41))
+    match holder.on_done:
+        case Tool as callback:
+            print(callback())
+        case None:
+            print("none")
+    empty = Holder(on_done=None)
+    print(empty.on_done is None)

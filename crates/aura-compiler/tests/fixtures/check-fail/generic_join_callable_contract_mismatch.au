@@ -1,0 +1,14 @@
+def pick[T](left: T, right: T, flag: bool) -> T:
+    if flag:
+        return left
+    return right
+
+def one(value: int64) -> int64:
+    return value + 1
+
+def two(other: int64) -> int64:
+    return other + 2
+
+def main():
+    chosen = pick(one, two, true)
+    print(chosen(1))

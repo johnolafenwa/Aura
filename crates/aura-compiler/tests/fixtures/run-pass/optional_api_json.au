@@ -1,0 +1,45 @@
+import json
+
+def parsed(text: str) -> json.Value:
+    match own json.parse(text):
+        case Result.Ok(value):
+            return value
+        case Result.Err(_):
+            return json.Value.Null
+
+def main():
+    flag = json.as_bool(parsed("true"))
+    if flag is not None and flag:
+        print("bool true")
+    print(json.as_bool(parsed("1")) is None)
+    count = json.as_int(parsed("42"))
+    if count is not None:
+        print(count + 1)
+    print(json.as_int(parsed("4.5")) is None)
+    ratio = json.as_float(parsed("2.5"))
+    if ratio is not None:
+        print(ratio * 2.0)
+    print(json.as_float(parsed("2")) is None)
+    match json.into_string(parsed("\"text\"")):
+        case str as inner:
+            print(inner)
+        case None:
+            print("not text")
+    match json.into_string(parsed("7")):
+        case str as inner:
+            print(inner)
+        case None:
+            print("not text")
+    items = json.into_array(parsed("[]"))
+    if items is not None:
+        print(f"array with {items.len()} items")
+    print(json.into_array(parsed("{}")) is None)
+    fields = json.into_object(parsed("{}"))
+    if fields is not None:
+        print(f"object with {fields.len()} fields")
+    print(json.into_object(parsed("[]")) is None)
+    print(json.dumps(parsed("{\"a\":[1,2]}")))
+    print(json.dumps(parsed("{\"a\":[1,2]}"), indent=None))
+    print(json.dumps(parsed("[1]"), indent=1))
+    width: int64 | None = 2
+    print(json.dumps(parsed("[true]"), indent=width))

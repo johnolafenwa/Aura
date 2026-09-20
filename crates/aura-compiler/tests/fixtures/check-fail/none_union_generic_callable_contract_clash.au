@@ -1,0 +1,14 @@
+def pick[T](left: own T | None, right: own T | None, flag: bool) -> T | None:
+    if flag:
+        return left
+    return right
+
+def one(value: int64 = 1) -> int64:
+    return value + 1
+
+def two(value: int64) -> int64:
+    return value + 2
+
+def main():
+    chosen = pick(one, two, true)
+    print(chosen is None)

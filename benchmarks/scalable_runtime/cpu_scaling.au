@@ -28,9 +28,9 @@ def cpu_worker(
 
 def read_control(expected: str) -> bool:
     match io.read_line():
-        case Result.Ok(Option.Some(line)):
+        case Result.Ok(str as line):
             return line == expected
-        case Result.Ok(Option.None):
+        case Result.Ok(None):
             return false
         case Result.Err(_):
             return false
@@ -51,7 +51,7 @@ def main() -> int32:
 
     mut task_count: int32 = 0
     match args.get(0):
-        case Option.Some(text):
+        case Lookup.Found(text):
             match parse_int32(text):
                 case Result.Ok(value):
                     if value != 1 and value != 4:
@@ -59,7 +59,7 @@ def main() -> int32:
                     task_count = value
                 case Result.Err(_):
                     return 2
-        case Option.None:
+        case Lookup.Missing:
             return 2
 
     iterations: int64 = 80000000

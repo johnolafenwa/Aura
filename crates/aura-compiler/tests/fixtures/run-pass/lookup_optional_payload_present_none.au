@@ -1,0 +1,34 @@
+def main():
+    mut table: dict[str, int64 | None] = {"present": None, "seven": 7}
+    for key in ["present", "seven", "absent"]:
+        match table.get(key):
+            case Lookup.Found(value):
+                if value is None:
+                    print(f"{key}: found None")
+                else:
+                    print(f"{key}: found {value}")
+            case Lookup.Missing:
+                print(f"{key}: missing")
+    match table.remove("present"):
+        case Lookup.Found(value):
+            print(f"removed present, none? {value is None}")
+        case Lookup.Missing:
+            print("nothing removed")
+    match table.remove("present"):
+        case Lookup.Found(value):
+            print("removed again")
+        case Lookup.Missing:
+            print("second removal missing")
+    holes: list[None] = [None, None]
+    match holes.get(1):
+        case Lookup.Found(value):
+            print("hole found")
+        case Lookup.Missing:
+            print("hole missing")
+    match holes.get(2):
+        case Lookup.Found(value):
+            print("hole found")
+        case Lookup.Missing:
+            print("hole missing")
+    print(holes.get(0))
+    print(holes.get(5))

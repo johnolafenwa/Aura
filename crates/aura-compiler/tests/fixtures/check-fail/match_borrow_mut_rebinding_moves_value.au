@@ -1,8 +1,8 @@
 def main() -> None:
-    mut a: Option[list[int32]] = Option.Some([1])
+    mut a: list[int32] | None = [1]
     mut b: list[int32] = [7, 8]
     match mut a:
-        case Some(v):
+        case list[int32] as v:
             v = b
             v.append(99)
         case None:

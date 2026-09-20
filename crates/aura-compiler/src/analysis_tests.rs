@@ -684,10 +684,10 @@ def consume(value: own str):
     assert!(vec_members
         .iter()
         .any(|item| item.name == "append" && item.detail.contains("own T")));
-    let message_members = builtin_enum_variant_completions("Option");
+    let message_members = builtin_enum_variant_completions("Lookup");
     assert!(message_members
         .iter()
-        .any(|item| item.name == "Some" && item.detail.contains("own T")));
+        .any(|item| item.name == "Found" && item.detail.contains("own T")));
 }
 
 #[test]
@@ -698,10 +698,10 @@ fn d3_analysis_reports_canonical_int64_for_aliases_and_defaulted_expressions() {
 def main() -> int32:
     scalar = 1
     numbers = [1, 2]
-    maybe = Option.Some(1)
+    maybe: int64 | None = 1
     print(scalar)
     print(numbers.len())
-    print(maybe != Option.None)
+    print(maybe != None)
     return 0
 "#;
     let output = analyze_source(source);
@@ -710,7 +710,7 @@ def main() -> int32:
     for expected_hover in [
         "binding scalar: int64",
         "binding numbers: list[int64]",
-        "binding maybe: Option[int64]",
+        "binding maybe: int64 | None",
     ] {
         assert!(
             output
@@ -803,8 +803,8 @@ def main():
         "binding average: float64",
         "binding count: int64",
         "binding copied: Array[int32]",
-        "binding maybe: Option[int32]",
-        "binding previous: Option[int32]",
+        "binding maybe: int32 | None",
+        "binding previous: int32 | None",
         "binding wrapped: Array[int32]",
         "binding scalar_wrapped: int32",
         "binding builtin_count: int64",
@@ -1565,8 +1565,8 @@ fn conditional_expression_analysis_uses_the_contextual_arm_type() {
     integers = [] if ready else values
     reverse_integers = reverse_values if ready else []
     nested_integers = ([], 1) if ready else (tuple_values, 2)
-    optional = None if ready else Option.Some(exact_integer)
-    reverse_optional = Option.Some(reverse_integer) if ready else None
+    optional: int32 | None = None if ready else exact_integer
+    reverse_optional: int32 | None = reverse_integer if ready else None
 "#;
     let analysis = analyze_source(source);
     assert!(
@@ -1585,8 +1585,8 @@ fn conditional_expression_analysis_uses_the_contextual_arm_type() {
         "binding integers: list[int32]",
         "binding reverse_integers: list[int32]",
         "binding nested_integers: (list[int32], int64)",
-        "binding optional: Option[int32]",
-        "binding reverse_optional: Option[int32]",
+        "binding optional: int32 | None",
+        "binding reverse_optional: int32 | None",
     ] {
         assert!(
             analysis
@@ -2324,12 +2324,12 @@ fn compiler_completion_uses_nested_scopes_for_methods_match_for_and_trait_bounds
         "        self.value",
         "        return 0",
         "",
-        "def unwrap(value: own Option[str]) -> str:",
+        "def unwrap(value: own (str | None)) -> str:",
         "    match own value:",
-        "        case Option.Some(text):",
+        "        case str as text:",
         "            text.len()",
         "            return text",
-        "        case Option.None:",
+        "        case None:",
         "            return \"\"",
         "",
         "def noop():",
@@ -3666,13 +3666,13 @@ fn analysis_completion_and_inference_helpers_cover_builtin_collection_and_enum_s
             .is_none(),
         "unknown enum variants should not resolve"
     );
-    let option_member_names = builder
-        .member_completions(&Type::named("Option"))
+    let lookup_member_names = builder
+        .member_completions(&Type::named("Lookup"))
         .into_iter()
         .map(|completion| completion.name)
         .collect::<Vec<_>>();
-    assert!(option_member_names.contains(&"Some".to_string()));
-    assert!(option_member_names.contains(&"None".to_string()));
+    assert!(lookup_member_names.contains(&"Found".to_string()));
+    assert!(lookup_member_names.contains(&"Missing".to_string()));
     let local_status = builder
         .resolve_match_variant_enum("Status")
         .expect("local enum should resolve as a match variant enum");
@@ -3822,8 +3822,18 @@ fn analysis_completion_and_inference_helpers_cover_builtin_collection_and_enum_s
         "bytes: int64",
         Type::Unit,
     );
-    assert_resolved_member(Type::named("Option"), "Some", "Some", Type::named("Option"));
-    assert_resolved_member(Type::named("Option"), "None", "None", Type::named("Option"));
+    assert_resolved_member(
+        Type::named("Lookup"),
+        "Found",
+        "Found",
+        Type::named("Lookup"),
+    );
+    assert_resolved_member(
+        Type::named("Lookup"),
+        "Missing",
+        "Missing",
+        Type::named("Lookup"),
+    );
     assert_resolved_member(Type::named("Result"), "Ok", "Ok", Type::named("Result"));
     assert_resolved_member(Type::named("Result"), "Err", "Err", Type::named("Result"));
     assert_resolved_member(
@@ -4044,16 +4054,13 @@ fn analysis_completion_and_inference_helpers_cover_builtin_collection_and_enum_s
             &expr(ExprKind::Call {
                 callee: Box::new(expr(ExprKind::Member {
                     object: Box::new(expr(ExprKind::Name("task".to_string()))),
-                    field: "result_or_none".to_string(),
+                    field: "poll".to_string(),
                 })),
                 args: Vec::new(),
             }),
             &scope,
         ),
-        Some(Type::Named(
-            "Option".to_string(),
-            vec![Type::named("int32")],
-        ))
+        Some(Type::Named("Poll".to_string(), vec![Type::named("int32")],))
     );
     assert_eq!(
         builder.infer_expr_type(
@@ -4313,14 +4320,14 @@ fn analysis_completion_and_inference_helpers_cover_builtin_collection_and_enum_s
     assert_eq!(
         builder.infer_call_type(
             &expr(ExprKind::Member {
-                object: Box::new(expr(ExprKind::Name("Option".to_string()))),
-                field: "Some".to_string(),
+                object: Box::new(expr(ExprKind::Name("Lookup".to_string()))),
+                field: "Found".to_string(),
             }),
             &[arg(expr(ExprKind::Int(1)))],
             &scope,
         ),
         Some(Type::Named(
-            "Option".to_string(),
+            "Lookup".to_string(),
             vec![Type::named("int64")]
         ))
     );
@@ -4385,11 +4392,11 @@ fn analysis_completion_and_inference_helpers_cover_builtin_collection_and_enum_s
     assert_eq!(
         builder.match_binding_type(
             Some(&Type::Named(
-                "Option".to_string(),
+                "Lookup".to_string(),
                 vec![Type::named("int32")],
             )),
             None,
-            "Some",
+            "Found",
         ),
         Some(Type::named("int32"))
     );
@@ -4426,14 +4433,14 @@ fn analysis_import_and_match_resolution_helpers_cover_fallbacks() {
         "    Ready",
         "    Failed(str)",
         "",
-        "def inspect(status: own Status, value: Option[int32]) -> int32:",
+        "def inspect(status: own Status, value: int32 | None) -> int32:",
         "    match status:",
         "        case Status.Ready:",
         "            return 1",
         "        case Status.Failed(reason):",
         "            return 2",
         "    match value:",
-        "        case Some(found):",
+        "        case int32 as found:",
         "            return found",
         "        case None:",
         "            return 0",
@@ -4528,11 +4535,15 @@ fn analysis_import_and_match_resolution_helpers_cover_fallbacks() {
         "fallback import ranges require the token to be present on the source line"
     );
 
-    let option_symbol = builder
-        .resolve_match_variant_enum("Option")
-        .expect("builtin Option enum should resolve");
-    assert!(option_symbol.definition.is_none());
-    assert!(option_symbol.hover.contains("Option[T]"));
+    let lookup_symbol = builder
+        .resolve_match_variant_enum("Lookup")
+        .expect("builtin Lookup enum should resolve");
+    assert!(lookup_symbol.definition.is_none());
+    assert!(lookup_symbol.hover.contains("Lookup[T]"));
+    assert!(
+        builder.resolve_match_variant_enum("Option").is_none(),
+        "the removed builtin `Option` must resolve like any unknown enum"
+    );
 
     let status_symbol = builder
         .resolve_match_variant_enum("Status")
@@ -4543,12 +4554,12 @@ fn analysis_import_and_match_resolution_helpers_cover_fallbacks() {
     let builtin_variant = builder
         .resolve_match_variant(
             Some(&Type::Named(
-                "Option".to_string(),
+                "Lookup".to_string(),
                 vec![Type::named("int32")],
             )),
             &VariantPattern {
                 enum_name: None,
-                variant_name: "Some".to_string(),
+                variant_name: "Found".to_string(),
                 subpatterns: vec![crate::ast::Pattern::Binding(crate::ast::BindingPattern {
                     name: "found".to_string(),
                     span: Span::new(14, 14),
@@ -4558,7 +4569,7 @@ fn analysis_import_and_match_resolution_helpers_cover_fallbacks() {
         )
         .expect("builtin variant should resolve");
     assert!(builtin_variant.definition.is_none());
-    assert!(builtin_variant.hover.contains("Some"));
+    assert!(builtin_variant.hover.contains("Found"));
     assert!(builtin_variant.hover.contains("int32"));
 
     let named_variant = builder
@@ -4628,12 +4639,12 @@ fn analysis_import_and_match_resolution_helpers_cover_fallbacks() {
         builder
             .resolve_match_variant(
                 Some(&Type::Named(
-                    "Option".to_string(),
+                    "Lookup".to_string(),
                     vec![Type::named("int32")],
                 )),
                 &VariantPattern {
                     enum_name: None,
-                    variant_name: "Missing".to_string(),
+                    variant_name: "Some".to_string(),
                     subpatterns: Vec::new(),
                     span: Span::new(14, 14),
                 },
@@ -4752,7 +4763,9 @@ fn analysis_completion_helpers_cover_top_level_module_and_enum_surfaces() {
     assert!(top_level_names.contains(&"Show".to_string()));
     assert!(top_level_names.contains(&"helper".to_string()));
     assert!(top_level_names.contains(&"print".to_string()));
-    assert!(top_level_names.contains(&"Option".to_string()));
+    assert!(top_level_names.contains(&"Lookup".to_string()));
+    assert!(top_level_names.contains(&"Poll".to_string()));
+    assert!(!top_level_names.contains(&"Option".to_string()));
     assert!(top_level_names.contains(&"pkg".to_string()));
 
     let module_names = builder
@@ -5602,7 +5615,7 @@ fn analysis_exposes_structural_tuple_equality_without_consuming_operands() {
         "    right = (\"right\", 2)",
         "    equal = left == right",
         "    not_equal = left != right",
-        "    typed: (Option[int32], float32) = (Option.Some(1), 1.5)",
+        "    typed: (int32 | None, float32) = (1, 1.5)",
         "    literal_on_right = typed == (None, 2.5)",
         "    literal_on_left = (None, 3.5) != typed",
         "    print(left[1])",
@@ -5901,15 +5914,16 @@ fn analysis_helper_functions_cover_formatting_ranges_and_builtin_surface() {
     };
     assert!(format_class_hover(&class_info).contains("value: int32"));
     assert!(format_enum_hover_named(&enum_info.decl.name).contains("enum Status"));
-    assert!(builtin_enum_hover("Option[T]", "docs").contains("docs"));
+    assert!(builtin_enum_hover("Lookup[T]", "docs").contains("docs"));
     assert!(builtin_function_hover("print(value)", "docs").contains("print(value)"));
     assert!(
-        format_variant_hover("Option", "Some", Some(&Type::named("str")))
-            .contains("variant Some(own str) -> Option")
+        format_variant_hover("Lookup", "Found", Some(&Type::named("str")))
+            .contains("variant Found(own str) -> Lookup")
     );
 
-    let option_variants = builtin_enum_variant_completions("Option");
-    assert!(option_variants.iter().any(|item| item.name == "Some"));
+    let lookup_variants = builtin_enum_variant_completions("Lookup");
+    assert!(lookup_variants.iter().any(|item| item.name == "Found"));
+    assert!(builtin_enum_variant_completions("Option").is_empty());
     assert!(builtin_enum_variant_completions("Result")
         .iter()
         .any(|item| item.name == "Err"));
@@ -5986,15 +6000,19 @@ fn builtin_variant_inference_helpers_cover_builtin_constructors_and_unknowns() {
     })];
 
     assert_eq!(
-        infer_builtin_variant_call("Option", "Some", &int_arg, |_| Some(Type::named("int32"))),
+        infer_builtin_variant_call("Lookup", "Found", &int_arg, |_| Some(Type::named("int32"))),
         Some(Type::Named(
-            "Option".to_string(),
+            "Lookup".to_string(),
             vec![Type::named("int32")]
         ))
     );
     assert_eq!(
-        infer_builtin_variant_call("Option", "None", &[], |_| None),
-        Some(Type::Named("Option".to_string(), vec![Type::Unit]))
+        infer_builtin_variant_call("Lookup", "Missing", &[], |_| None),
+        Some(Type::Named("Lookup".to_string(), vec![Type::Unit]))
+    );
+    assert_eq!(
+        infer_builtin_variant_call("Poll", "Ready", &int_arg, |_| Some(Type::named("int32"))),
+        Some(Type::Named("Poll".to_string(), vec![Type::named("int32")]))
     );
     assert_eq!(
         infer_builtin_variant_call("Result", "Ok", &int_arg, |_| Some(Type::named("int32"))),
@@ -6029,7 +6047,11 @@ fn builtin_variant_inference_helpers_cover_builtin_constructors_and_unknowns() {
         ))
     );
     assert_eq!(
-        infer_builtin_variant_call("Option", "Missing", &[], |_| None),
+        infer_builtin_variant_call("Lookup", "Some", &[], |_| None),
+        None
+    );
+    assert_eq!(
+        infer_builtin_variant_call("Option", "Some", &int_arg, |_| None),
         None
     );
 }
@@ -6080,7 +6102,16 @@ fn analysis_recovery_helpers_cover_placeholders_and_receiver_extraction() {
     );
     assert_eq!(
         placeholder_stmt_for_return_type("Option[str]"),
-        Some("return Option.None".to_string())
+        None,
+        "the removed builtin `Option` is an ordinary unknown type with no placeholder"
+    );
+    assert_eq!(
+        placeholder_stmt_for_return_type("str | None"),
+        Some("return None".to_string())
+    );
+    assert_eq!(
+        placeholder_stmt_for_return_type("int64 | None"),
+        Some("return None".to_string())
     );
     assert_eq!(
         placeholder_stmt_for_return_type("str"),
@@ -6495,8 +6526,8 @@ fn analysis_builtin_completion_and_statement_helpers_cover_remaining_branches() 
     let no_payload_arm = crate::ast::MatchArm {
         guard: None,
         pattern: crate::ast::Pattern::Variant(VariantPattern {
-            enum_name: Some("Option".to_string()),
-            variant_name: "None".to_string(),
+            enum_name: Some("Lookup".to_string()),
+            variant_name: "Missing".to_string(),
             subpatterns: Vec::new(),
             span: Span::new(21, 9),
         }),
@@ -6506,7 +6537,7 @@ fn analysis_builtin_completion_and_statement_helpers_cover_remaining_branches() 
     scope_builder.bind_match_arm_scope(
         &no_payload_arm,
         Some(&Type::Named(
-            "Option".to_string(),
+            "Lookup".to_string(),
             vec![Type::named("int32")],
         )),
         &mut scope,
@@ -6515,8 +6546,8 @@ fn analysis_builtin_completion_and_statement_helpers_cover_remaining_branches() 
     let non_binding_payload_arm = crate::ast::MatchArm {
         guard: None,
         pattern: crate::ast::Pattern::Variant(VariantPattern {
-            enum_name: Some("Option".to_string()),
-            variant_name: "Some".to_string(),
+            enum_name: Some("Lookup".to_string()),
+            variant_name: "Found".to_string(),
             subpatterns: vec![crate::ast::Pattern::Wildcard(Span::new(22, 19))],
             span: Span::new(22, 9),
         }),
@@ -6526,7 +6557,7 @@ fn analysis_builtin_completion_and_statement_helpers_cover_remaining_branches() 
     scope_builder.bind_match_arm_scope(
         &non_binding_payload_arm,
         Some(&Type::Named(
-            "Option".to_string(),
+            "Lookup".to_string(),
             vec![Type::named("int32")],
         )),
         &mut scope,
@@ -7480,7 +7511,7 @@ fn analysis_builtin_member_types_cover_io_network_and_process_surfaces() {
     let program = checked_program("def main():\n    pass\n");
     let builder = AnalysisBuilder::new("", &program, Vec::new());
     let named = |name: &str| Type::Named(name.to_string(), Vec::new());
-    let option = |payload: Type| Type::Named("Option".to_string(), vec![payload]);
+    let option = |payload: Type| crate::sema::optional_type(payload);
     let result = |ok: Type, err: Type| Type::Named("Result".to_string(), vec![ok, err]);
     let vec_of = |payload: Type| Type::Named("list".to_string(), vec![payload]);
     let string = Type::named("str");
@@ -9756,4 +9787,30 @@ fn editor_keyword_references_keep_imported_declarations_in_their_module() {
         "qualified type reference only spans its final identifier"
     );
     assert_eq!(refs[0].end_character, 24);
+}
+
+#[test]
+fn poll_outcomes_resolve_like_the_other_builtin_enums_in_analysis() {
+    let program = checked_program("def main():\n    queue = Queue[int64]()\n    match queue.poll():\n        case Poll.Ready(value):\n            print(value)\n        case Poll.Unavailable:\n            print(\"empty\")\n");
+    let builder = AnalysisBuilder::new("", &program, Vec::new());
+    let poll = builder
+        .resolve_match_variant_enum("Poll")
+        .expect("`Poll` resolves as a builtin match enum");
+    assert!(poll.hover.contains("Poll outcomes"), "{}", poll.hover);
+    for (field, fragment) in [("Ready", "Ready"), ("Unavailable", "Unavailable")] {
+        let member = builder
+            .resolve_member_type(&Type::named("Poll"), field)
+            .unwrap_or_else(|| panic!("Poll.{field} resolves"));
+        assert!(member.hover.contains(fragment), "{}", member.hover);
+        assert_eq!(member.ty, Some(Type::named("Poll")));
+    }
+    let names = builtin_enum_variant_completions("Poll")
+        .into_iter()
+        .map(|completion| completion.name)
+        .collect::<Vec<_>>();
+    assert_eq!(names, vec!["Ready".to_string(), "Unavailable".to_string()]);
+    assert_eq!(
+        infer_builtin_variant_call("Poll", "Unavailable", &[], |_| None),
+        Some(Type::Named("Poll".to_string(), vec![Type::Unit]))
+    );
 }

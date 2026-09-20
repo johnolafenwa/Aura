@@ -1,0 +1,8 @@
+true
+true
+err
+ExitStatus.Exited(0)
+true
+stdin pipe
+stdout eof
+ExitStatus.Exited(0)

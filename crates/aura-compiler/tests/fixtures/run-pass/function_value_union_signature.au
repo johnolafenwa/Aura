@@ -9,8 +9,8 @@ def show(value: int64 | str):
 def main():
     handlers: list[def(int64 | str) -> None] = [ValuePrinter(show)]
     match handlers.get(0):
-        case Option.Some(handler):
+        case Lookup.Found(handler):
             handler(41)
             handler("text")
-        case Option.None:
+        case Lookup.Missing:
             print("none")

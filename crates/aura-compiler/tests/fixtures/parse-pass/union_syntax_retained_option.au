@@ -1,3 +1,0 @@
-type NewOptional = int64 | None
-def existing(value: int64?) -> Option[int64]:
-    return value

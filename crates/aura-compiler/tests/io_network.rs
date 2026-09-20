@@ -79,10 +79,10 @@ def serve(addresses: Queue[str]) -> Result[None, io.Error]:
         with server_stream = socket:
             line = try server_stream.read_line()
             match own line:
-                case Option.Some(text):
+                case str as text:
                     try server_stream.write_all("echo:" + text)
                     try server_stream.flush()
-                case Option.None:
+                case None:
                     pass
             return Result.Ok(None)
 
@@ -225,13 +225,13 @@ def touch_bytes(path: str) -> Result[list[uint8], io.Error]:
 def inspect_udp(socket: own net.UdpSocket) -> Result[str, io.Error]:
     with bound = socket:
         match own try bound.recv_from(1024, timeout=100ms):
-            case Option.Some(packet):
+            case net.UdpDatagram as packet:
                 text = try packet.text()
                 bytes = packet.bytes()
                 print(packet.address())
                 print(bytes.len())
                 return Result.Ok(text)
-            case Option.None:
+            case None:
                 return Result.Ok("none")
 
 def inspect_http(listener: own net.HttpListener) -> Result[None, io.Error]:
@@ -253,9 +253,9 @@ def inspect_http_response(response: own net.HttpResponse) -> Result[str, io.Erro
         print(received.reason())
         headers = received.headers()
         match own headers.get("Content-Type"):
-            case Option.Some(content_type):
+            case Lookup.Found(content_type):
                 print(content_type)
-            case Option.None:
+            case Lookup.Missing:
                 pass
         text = try received.text()
         bytes = received.bytes()
@@ -266,14 +266,14 @@ def inspect_websocket(listener: own net.WebSocketListener, client: own net.WebSo
     with bound = listener:
         with accepted = try bound.accept(timeout=100ms):
             match own try accepted.recv_text(timeout=100ms):
-                case Option.Some(text):
+                case str as text:
                     try accepted.send_text(text, timeout=100ms)
-                case Option.None:
+                case None:
                     pass
             match own try accepted.recv_bytes(timeout=100ms):
-                case Option.Some(bytes):
+                case list[uint8] as bytes:
                     try accepted.send_bytes(bytes, timeout=100ms)
-                case Option.None:
+                case None:
                     pass
     with connected = client:
         try connected.send_text("ping", timeout=100ms)
@@ -285,9 +285,9 @@ def inspect_unix(listener: own net.UnixListener, stream: own net.UnixStream) -> 
         accepted = try bound.accept(timeout=100ms)
         with server_stream = accepted:
             match own try server_stream.read_line(timeout=100ms):
-                case Option.Some(text):
+                case str as text:
                     try server_stream.write_all(text, timeout=100ms)
-                case Option.None:
+                case None:
                     pass
     with client_stream = stream:
         exact = try client_stream.read_exact(2, timeout=100ms)
@@ -301,9 +301,9 @@ def inspect_tls(listener: own net.TlsListener, stream: own net.TlsStream) -> Res
         accepted = try bound.accept(timeout=100ms)
         with server_stream = accepted:
             match own try server_stream.read_line(timeout=100ms):
-                case Option.Some(text):
+                case str as text:
                     try server_stream.write_all(text, timeout=100ms)
-                case Option.None:
+                case None:
                     pass
     with client_stream = stream:
         exact = try client_stream.read_exact(2, timeout=100ms)
@@ -350,11 +350,11 @@ def serve_udp(addresses: Queue[str]) -> Result[str, io.Error]:
     with server_socket = try net.udp_bind("127.0.0.1:0"):
         addresses.put(try server_socket.local_addr())
         match own try server_socket.recv_from(1024, timeout=1s):
-            case Option.Some(packet):
+            case net.UdpDatagram as packet:
                 text = try packet.text()
                 try server_socket.send_text(packet.address(), "udp:" + text, timeout=1s)
                 return Result.Ok(text)
-            case Option.None:
+            case None:
                 return Result.Ok("missing")
 
 def serve_http(addresses: Queue[str]) -> Result[None, io.Error]:
@@ -367,10 +367,10 @@ def serve_http(addresses: Queue[str]) -> Result[None, io.Error]:
             body = try request.body_text()
             headers = request.headers()
             match own headers.get("X-Test"):
-                case Option.Some(test_header):
+                case Lookup.Found(test_header):
                     try request.respond_text(200, method + ":" + path + ":" + body + ":" + test_header, {{"Content-Type": "text/plain"}})
                     return Result.Ok(None)
-                case Option.None:
+                case Lookup.Missing:
                     return Result.Ok(None)
 
 def serve_http_bytes(addresses: Queue[str]) -> Result[None, io.Error]:
@@ -388,10 +388,10 @@ def serve_ws(addresses: Queue[str]) -> Result[None, io.Error]:
         socket = try server_listener.accept(timeout=1s)
         with server_socket = socket:
             match own try server_socket.recv_text(timeout=1s):
-                case Option.Some(text):
+                case str as text:
                     try server_socket.send_text("ws:" + text, timeout=1s)
                     return Result.Ok(None)
-                case Option.None:
+                case None:
                     return Result.Ok(None)
 
 def receive_address(addresses: Queue[str]) -> Result[str, io.Error]:
@@ -422,9 +422,9 @@ def run() -> Result[None, io.Error]:
         with client_socket = udp_client:
             try client_socket.send_text(udp_addr, "ping", timeout=1s)
             match own try client_socket.recv_from(1024, timeout=1s):
-                case Option.Some(packet):
+                case net.UdpDatagram as packet:
                     print(try packet.text())
-                case Option.None:
+                case None:
                     return Result.Ok(None)
         match own udp_task.result():
             case TaskResult.Ready(result):
@@ -487,9 +487,9 @@ def run() -> Result[None, io.Error]:
         with ws_client = client:
             try ws_client.send_text("hi", timeout=1s)
             match own try ws_client.recv_text(timeout=1s):
-                case Option.Some(text):
+                case str as text:
                     print(text)
-                case Option.None:
+                case None:
                     return Result.Ok(None)
         match own ws_task.result():
             case TaskResult.Ready(result):
@@ -559,10 +559,10 @@ def serve_unix(path: str, ready: Queue[bool]) -> Result[None, io.Error]:
         stream = try server_listener.accept(timeout=1s)
         with server_stream = stream:
             match own try server_stream.read_line(timeout=1s):
-                case Option.Some(text):
+                case str as text:
                     try server_stream.write_all("unix:" + text, timeout=1s)
                     return Result.Ok(None)
-                case Option.None:
+                case None:
                     return Result.Ok(None)
 
 def serve_tls(cert_path: str, key_path: str, addresses: Queue[str]) -> Result[None, io.Error]:
@@ -571,10 +571,10 @@ def serve_tls(cert_path: str, key_path: str, addresses: Queue[str]) -> Result[No
         stream = try server_listener.accept(timeout=2s)
         with server_stream = stream:
             match own try server_stream.read_line(timeout=2s):
-                case Option.Some(text):
+                case str as text:
                     try server_stream.write_all("tls:" + text + "\n", timeout=2s)
                     return Result.Ok(None)
-                case Option.None:
+                case None:
                     return Result.Ok(None)
 
 def receive_address(addresses: Queue[str]) -> Result[str, io.Error]:
@@ -605,9 +605,9 @@ def run() -> Result[None, io.Error]:
         with unix_client = client:
             try unix_client.write_all("ping\n", timeout=1s)
             match own try unix_client.read_line(timeout=1s):
-                case Option.Some(text):
+                case str as text:
                     print(text)
-                case Option.None:
+                case None:
                     return Result.Ok(None)
         match own unix_task.result():
             case TaskResult.Ready(result):
@@ -629,9 +629,9 @@ def run() -> Result[None, io.Error]:
         with tls_client = stream:
             try tls_client.write_all("ping!\n", timeout=2s)
             match own try tls_client.read_line(timeout=2s):
-                case Option.Some(text):
+                case str as text:
                     print(text)
-                case Option.None:
+                case None:
                     return Result.Ok(None)
         match own tls_task.result():
             case TaskResult.Ready(result):

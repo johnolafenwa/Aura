@@ -1,8 +1,10 @@
 def main() -> int32:
     ok: Result[int32, str] = Ok(7)
     err: Result[int32, str] = Err("bad")
-    some: Option[int32] = Some(3)
-    none: Option[int32] = None
+    found: Lookup[int32] = Found(3)
+    missing: Lookup[int32] = Missing()
+    ready: Poll[int32] = Ready(5)
+    unavailable: Poll[int32] = Unavailable()
 
     match own ok:
         case Ok(value):
@@ -16,15 +18,27 @@ def main() -> int32:
         case Err(message):
             print(message)
 
-    match own some:
-        case Some(value):
+    match own found:
+        case Found(value):
             print(value)
-        case None:
+        case Missing:
             print(0)
 
-    match own none:
-        case Some(value):
+    match own missing:
+        case Found(value):
             print(value)
-        case None:
+        case Missing:
             print(1)
+
+    match own ready:
+        case Ready(value):
+            print(value)
+        case Unavailable:
+            print(-1)
+
+    match own unavailable:
+        case Ready(value):
+            print(value)
+        case Unavailable:
+            print(2)
     return 0

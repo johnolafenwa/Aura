@@ -1,0 +1,12 @@
+trait Show:
+    def show(self) -> str
+
+impl Show for str:
+    def show(self) -> str:
+        return "str:" + self
+
+def render[T: Show](item: T) -> str:
+    return item.show()
+
+def main():
+    print(render("x"))

@@ -1,0 +1,23 @@
+enum Wrapper[T]:
+    Value(T)
+    Empty
+
+class Pair[T]:
+    left: T
+    right: T
+
+def main():
+    queue = Queue[Wrapper[int64]]()
+    queue.put(Wrapper.Value(3))
+    match queue.get():
+        case QueueReceive.Item(Wrapper.Value(inner)):
+            print(inner)
+        case _:
+            print("other")
+    pairs = Queue[Pair[int64]]()
+    pairs.put(Pair(left=1, right=2))
+    match pairs.get():
+        case QueueReceive.Item(pair):
+            print(pair.left + pair.right)
+        case _:
+            print("other")

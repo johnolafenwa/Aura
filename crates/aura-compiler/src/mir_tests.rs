@@ -4960,7 +4960,7 @@ def main():
                         index: 0,
                         ..
                     },
-            } if variant_name == "Some" => {
+            } if variant_name == "Found" => {
                 Some((target.as_str(), local_types.get(target.as_str()).copied()))
             }
             _ => None,
@@ -5020,7 +5020,7 @@ def main():
                         index: 0,
                         ..
                     },
-            } if matches!(variant_name.as_str(), "Item" | "Some") => Some(target.as_str()),
+            } if matches!(variant_name.as_str(), "Item" | "Found") => Some(target.as_str()),
             _ => None,
         })
         .collect::<Vec<_>>();
@@ -5859,7 +5859,7 @@ fn ordinary_for_target_scope_starts_after_iterable_evaluation() {
                         index: 0,
                         ..
                     },
-            } if variant_name == "Some" => Some(target),
+            } if variant_name == "Found" => Some(target),
             _ => None,
         })
         .expect("Vec iteration should extract the current element");
@@ -6130,11 +6130,11 @@ fn d3_mir_canonicalizes_int_and_defaults_unhinted_integer_values_to_int64() {
         Some(Type::named("int64"))
     );
     assert_eq!(
-        lowerer.infer_option_some_call_type(&expr(ExprKind::Int(7))),
-        Some(Type::Named(
-            "Option".to_string(),
-            vec![Type::named("int64")]
-        ))
+        lowerer.infer_expr_type_with_hint(
+            &expr(ExprKind::Int(7)),
+            &crate::sema::optional_type(Type::named("int64"))
+        ),
+        Some(Type::named("int64"))
     );
     assert_eq!(
         lowerer.infer_operand_type(&Operand::Int(7)),
@@ -6220,7 +6220,7 @@ def main() -> int32:
 }
 
 #[test]
-fn json_dumps_omitted_indent_materializes_option_none_in_checked_mir() {
+fn json_dumps_omitted_indent_materializes_none_in_checked_mir() {
     let module = crate::lower_source_to_mir(
         r#"
 import json
@@ -6241,9 +6241,13 @@ def render(value: json.Value) -> str:
             matches!(
                 instruction,
                 Instruction::Assign {
-                    value: Rvalue::EnumVariant { enum_name, variant_name, .. },
+                    value: Rvalue::UnionInject {
+                        value: Operand::Unit,
+                        member_type: Type::Unit,
+                        ..
+                    },
                     ..
-                } if enum_name == "Option" && variant_name == "None"
+                }
             )
         })
     }));
@@ -6273,7 +6277,7 @@ def main():
     match json.parse("{\"z\":1.0,\"f\":1.5,\"items\":[true,null,\"x\"]}"):
         case Result.Ok(value):
             print(json.dumps(value))
-            print(json.dumps(value, indent=Option.Some(2)))
+            print(json.dumps(value, indent=2))
             print(json.as_int(json.Value.Int(7)))
             print(json.as_float(json.Value.Int(7)))
         case Result.Err(error):
@@ -6293,7 +6297,7 @@ def main():
     let output = crate::run_mir(&module).expect("dynamic JSON should execute through MIR");
     assert_eq!(
         output.stdout,
-        "{\"f\":1.5,\"items\":[true,null,\"x\"],\"z\":1}\n{\n  \"f\": 1.5,\n  \"items\": [\n    true,\n    null,\n    \"x\"\n  ],\n  \"z\": 1\n}\nOption.Some(7)\nOption.None\n1\n1\n"
+        "{\"f\":1.5,\"items\":[true,null,\"x\"],\"z\":1}\n{\n  \"f\": 1.5,\n  \"items\": [\n    true,\n    null,\n    \"x\"\n  ],\n  \"z\": 1\n}\n7\n\n1\n1\n"
     );
 }
 
@@ -6307,12 +6311,12 @@ def value_arg() -> json.Value:
     print("value")
     return json.Value.Null
 
-def indent_arg() -> Option[int64]:
+def indent_arg() -> int64 | None:
     print("indent")
-    return Option.None
+    return None
 
 def main():
-    indent = Option.Some(2)
+    indent: int64 | None = 2
     print(json.dumps(indent=indent_arg(), value=value_arg()))
     print(json.dumps(json.Value.Null, indent=indent))
     print(indent)
@@ -6320,7 +6324,7 @@ def main():
     )
     .expect("named JSON arguments should lower");
     let output = crate::run_mir(&module).expect("named JSON arguments should execute");
-    assert_eq!(output.stdout, "indent\nvalue\nnull\nnull\nOption.Some(2)\n");
+    assert_eq!(output.stdout, "indent\nvalue\nnull\nnull\n2\n");
 }
 
 #[test]
@@ -6339,7 +6343,7 @@ def main():
     let output = crate::run_mir(&module).expect("owned JSON temporaries should execute");
     assert_eq!(
         output.stdout,
-        "Option.Some(temporary)\nOption.Some([json.Value.Null])\nOption.Some({k: json.Value.Bool(true)})\n"
+        "temporary\n[json.Value.Null]\n{k: json.Value.Bool(true)}\n"
     );
 }
 
@@ -6349,7 +6353,7 @@ fn json_owned_accessors_lower_noncopy_places_without_snapshot_clones() {
         r#"
 import json
 
-def extract(value: own json.Value) -> Option[str]:
+def extract(value: own json.Value) -> str | None:
     return json.into_string(value)
 "#,
     )
@@ -6417,7 +6421,7 @@ def main():
     relayed = relay(holder.value)
     values = [relayed]
     timeout = 2s
-    wrapped = Option.Some(timeout)
+    wrapped: Duration | None = timeout
     print(timeout)
     print(wrapped)
     print(values)
@@ -6508,18 +6512,11 @@ def main():
     assert!(rvalues.iter().any(|rvalue| {
         matches!(
             rvalue,
-            Rvalue::EnumVariant {
-                enum_name,
-                variant_name,
-                payloads,
-            } if enum_name == "Option"
-                && variant_name == "Some"
-                && payloads
-                    .first()
-                    .is_some_and(|payload| matches!(payload, Operand::Place(_)))
-                && payloads
-                    .iter()
-                    .all(|payload| !matches!(payload, Operand::MovePlace(_)))
+            Rvalue::UnionInject {
+                value: Operand::Place(_),
+                member_type,
+                ..
+            } if member_type == &Type::named("Duration")
         )
     }));
 }
@@ -6871,7 +6868,7 @@ fn task_group_generic_starts_preserve_specialized_result_types_and_repeatability
 def relay[T](value: own T) -> T:
     return value
 
-def defaulted[T](value: own Option[T] = None) -> Option[T]:
+def defaulted[T](value: own (T | None) = None) -> T | None:
     return value
 
 class Factory[T]:
@@ -6977,10 +6974,7 @@ def main():
         named_types["default_int"],
         Type::Named(
             "Task".to_string(),
-            vec![Type::Named(
-                "Option".to_string(),
-                vec![Type::named("int64")]
-            )]
+            vec![crate::sema::optional_type(Type::named("int64"))]
         )
     );
     assert_eq!(
@@ -7009,8 +7003,8 @@ fn task_target_specialization_preserves_tuple_qualified_and_inferred_types() {
         r#"
 import io
 
-def empty[T]() -> Option[T]:
-    return Option.None
+def empty[T]() -> T | None:
+    return None
 
 def pair[A, B](first: own A, second: own B) -> (A, B):
     return (first, second)
@@ -7047,20 +7041,17 @@ def main():
         named_types["tuple_task"],
         Type::Named(
             "Task".to_string(),
-            vec![Type::Named(
-                "Option".to_string(),
-                vec![Type::Tuple(vec![Type::named("str"), Type::named("int32")])]
-            )]
+            vec![crate::sema::optional_type(Type::Tuple(vec![
+                Type::named("str"),
+                Type::named("int32")
+            ]))]
         )
     );
     assert_eq!(
         named_types["qualified_task"],
         Type::Named(
             "Task".to_string(),
-            vec![Type::Named(
-                "Option".to_string(),
-                vec![Type::named("io.Error")]
-            )]
+            vec![crate::sema::optional_type(Type::named("io.Error"))]
         )
     );
     let expected_pair = Type::Named(
@@ -7179,7 +7170,7 @@ def main():
         int_result_task = group.start(int_worker)
         int_result = int_result_task.result()
         queue_result_task = group.start(queue_worker)
-        queue_result = queue_result_task.result_or_none()
+        queue_result = queue_result_task.poll()
         string_result_task = group.start(string_worker)
         string_result = string_result_task.result_or("")
 
@@ -7208,7 +7199,7 @@ def main():
                         ..
                     },
                 ..
-            } if matches!(field.as_str(), "result" | "result_or_none" | "result_or") => {
+            } if matches!(field.as_str(), "result" | "poll" | "result_or") => {
                 Some((field.as_str(), object))
             }
             _ => None,
@@ -7216,10 +7207,7 @@ def main():
         .collect::<Vec<_>>();
     assert_eq!(member_receivers.len(), 3);
     assert!(matches!(member_receivers[0], ("result", Operand::Place(_))));
-    assert!(matches!(
-        member_receivers[1],
-        ("result_or_none", Operand::Place(_))
-    ));
+    assert!(matches!(member_receivers[1], ("poll", Operand::Place(_))));
     assert_eq!(
         member_receivers[2],
         (
@@ -7401,7 +7389,7 @@ fn retained_process_and_http_builtin_arguments_lower_with_owned_operands() {
 import process
 import net
 
-def supervise(supervisor: process.Supervisor, name: own str, command: own list[str], cwd: own Option[str], environment: own dict[str, str], stdin: own process.Stdio, stdout: own process.Stdio, stderr: own process.Stdio, restart: own process.RestartPolicy, backoff: own Duration, max_restarts: own int32, group: own bool):
+def supervise(supervisor: process.Supervisor, name: own str, command: own list[str], cwd: own (str | None), environment: own dict[str, str], stdin: own process.Stdio, stdout: own process.Stdio, stderr: own process.Stdio, restart: own process.RestartPolicy, backoff: own Duration, max_restarts: own int32, group: own bool):
     supervisor.start(name=name, command=command, cwd=cwd, env=environment, stdin=stdin, stdout=stdout, stderr=stderr, restart=restart, backoff=backoff, max_restarts=max_restarts, group=group)
 
 def respond_text(exchange: net.HttpExchange, status: int32, text: own str, headers: own dict[str, str]):
@@ -7501,7 +7489,7 @@ fn json_dump_failures_keep_their_documented_mir_trap_codes() {
 import json
 
 def main():
-    print(json.dumps(json.Value.Null, indent=Option.Some(17)))
+    print(json.dumps(json.Value.Null, indent=17))
 "#,
     )
     .expect("invalid runtime indent should still lower");
@@ -8225,6 +8213,10 @@ fn mir_helper_functions_cover_builtin_ops_and_type_lowering() {
     assert!(is_known_enum_name(&enum_program, "Flag"));
     assert!(is_known_enum_name(
         &checked_program("def main() -> int32:\n    return 0\n"),
+        "Lookup"
+    ));
+    assert!(!is_known_enum_name(
+        &checked_program("def main() -> int32:\n    return 0\n"),
         "Option"
     ));
     assert!(!is_known_enum_name(
@@ -8535,7 +8527,8 @@ fn lowerer_module_resolution_and_rendering_helpers_cover_imported_paths() {
         Some(Type::named("pkg.helpers.Status"))
     );
     for (builtin_name, args) in [
-        ("Option", vec![type_ref("int32")]),
+        ("Lookup", vec![type_ref("int32")]),
+        ("Poll", vec![type_ref("int32")]),
         ("Result", vec![type_ref("int32"), type_ref("str")]),
         ("SendError", vec![type_ref("int32")]),
         ("Queue", vec![type_ref("str")]),
@@ -9187,13 +9180,25 @@ fn lowerer_trait_and_member_type_helpers_cover_trait_bounds_and_variants() {
         .trait_impl_method_for_class_name("User", "name")
         .is_some());
 
-    let option_string = Type::Named("Option".to_string(), vec![Type::named("str")]);
+    let lookup_string = Type::Named("Lookup".to_string(), vec![Type::named("str")]);
     assert_eq!(
-        lowerer.builtin_enum_variant_type(&option_string, "Some"),
-        Some(option_string.clone())
+        lowerer.builtin_enum_variant_type(&lookup_string, "Found"),
+        Some(lookup_string.clone())
     );
     assert_eq!(
-        lowerer.builtin_enum_variant_type(&option_string, "Missing"),
+        lowerer.builtin_enum_variant_type(&lookup_string, "Some"),
+        None
+    );
+    let poll_string = Type::Named("Poll".to_string(), vec![Type::named("str")]);
+    assert_eq!(
+        lowerer.builtin_enum_variant_type(&poll_string, "Ready"),
+        Some(poll_string.clone())
+    );
+    assert_eq!(
+        lowerer.builtin_enum_variant_type(
+            &Type::Named("Option".to_string(), vec![Type::named("str")]),
+            "Some"
+        ),
         None
     );
     let send_error_string = Type::Named("SendError".to_string(), vec![Type::named("str")]);
@@ -9204,9 +9209,9 @@ fn lowerer_trait_and_member_type_helpers_cover_trait_bounds_and_variants() {
 
     assert_eq!(
         lowerer.variant_payload_types(
-            Some(&Type::Named("Option".to_string(), vec![Type::named("str")])),
-            "Option",
-            "Some"
+            Some(&Type::Named("Lookup".to_string(), vec![Type::named("str")])),
+            "Lookup",
+            "Found"
         ),
         Some(vec![Type::named("str")])
     );
@@ -9278,8 +9283,12 @@ fn lowerer_trait_and_member_type_helpers_cover_trait_bounds_and_variants() {
     );
     for (ty, enum_name) in [
         (
-            Type::Named("Option".to_string(), vec![Type::named("str")]),
-            "Option",
+            Type::Named("Lookup".to_string(), vec![Type::named("str")]),
+            "Lookup",
+        ),
+        (
+            Type::Named("Poll".to_string(), vec![Type::named("str")]),
+            "Poll",
         ),
         (
             Type::Named(
@@ -9310,7 +9319,7 @@ fn lowerer_trait_and_member_type_helpers_cover_trait_bounds_and_variants() {
         ),
     ] {
         assert_eq!(
-            lowerer.variant_payload_types(Some(&ty), enum_name, "Missing"),
+            lowerer.variant_payload_types(Some(&ty), enum_name, "Some"),
             None,
             "{enum_name} should reject unknown builtin variants"
         );
@@ -9385,7 +9394,7 @@ fn lowerer_trait_and_member_type_helpers_cover_trait_bounds_and_variants() {
             "get"
         ),
         Some(Type::Named(
-            "Option".to_string(),
+            "Lookup".to_string(),
             vec![Type::named("int32")]
         ))
     );
@@ -9402,9 +9411,9 @@ fn lowerer_trait_and_member_type_helpers_cover_trait_bounds_and_variants() {
     assert_eq!(
         lowerer.builtin_runtime_member_return_type(
             &Type::Named("Task".to_string(), vec![Type::named("bool")]),
-            "result_or_none"
+            "poll"
         ),
-        Some(Type::Named("Option".to_string(), vec![Type::named("bool")]))
+        Some(Type::Named("Poll".to_string(), vec![Type::named("bool")]))
     );
     assert_eq!(
         lowerer.builtin_runtime_member_return_type(
@@ -9432,7 +9441,7 @@ fn lowerer_trait_and_member_type_helpers_cover_trait_bounds_and_variants() {
     assert_eq!(
         lowerer.builtin_runtime_member_return_type(&Type::named("list"), "get"),
         Some(Type::Named(
-            "Option".to_string(),
+            "Lookup".to_string(),
             vec![Type::named("Unknown")]
         ))
     );
@@ -9463,7 +9472,7 @@ fn lowerer_trait_and_member_type_helpers_cover_trait_bounds_and_variants() {
     assert_eq!(
         lowerer.builtin_runtime_member_return_type(&Type::named("dict"), "get"),
         Some(Type::Named(
-            "Option".to_string(),
+            "Lookup".to_string(),
             vec![Type::named("Unknown")]
         ))
     );
@@ -9475,9 +9484,9 @@ fn lowerer_trait_and_member_type_helpers_cover_trait_bounds_and_variants() {
         ))
     );
     assert_eq!(
-        lowerer.builtin_runtime_member_return_type(&Type::named("Queue"), "get_or_none"),
+        lowerer.builtin_runtime_member_return_type(&Type::named("Queue"), "poll"),
         Some(Type::Named(
-            "Option".to_string(),
+            "Poll".to_string(),
             vec![Type::named("Unknown")]
         ))
     );
@@ -9564,10 +9573,10 @@ fn lowerer_trait_and_member_type_helpers_cover_trait_bounds_and_variants() {
         Some(Type::Named(
             "Result".to_string(),
             vec![
-                Type::Named(
-                    "Option".to_string(),
-                    vec![Type::Named("list".to_string(), vec![Type::named("uint8")])]
-                ),
+                crate::sema::optional_type(Type::Named(
+                    "list".to_string(),
+                    vec![Type::named("uint8")]
+                )),
                 Type::named("io.Error")
             ]
         ))
@@ -9601,10 +9610,10 @@ fn lowerer_trait_and_member_type_helpers_cover_trait_bounds_and_variants() {
         Some(Type::Named(
             "Result".to_string(),
             vec![
-                Type::Named(
-                    "Option".to_string(),
-                    vec![Type::Named("list".to_string(), vec![Type::named("uint8")])]
-                ),
+                crate::sema::optional_type(Type::Named(
+                    "list".to_string(),
+                    vec![Type::named("uint8")]
+                )),
                 Type::named("io.Error")
             ]
         ))
@@ -9640,7 +9649,7 @@ fn lowerer_trait_and_member_type_helpers_cover_trait_bounds_and_variants() {
         Some(Type::Named(
             "Result".to_string(),
             vec![
-                Type::Named("Option".to_string(), vec![Type::named("str")]),
+                crate::sema::optional_type(Type::named("str")),
                 Type::named("io.Error")
             ]
         ))
@@ -10613,7 +10622,7 @@ fn imported_generic_rng_holders_keep_distinct_canonical_mir_identities() {
 }
 
 #[test]
-fn contextual_none_equality_lowers_none_as_option_variants() {
+fn contextual_none_equality_lowers_none_as_union_injections() {
     let source = include_str!("../tests/fixtures/run-pass/contextual_none_equality.au");
     let module = crate::lower_source_to_mir(source).expect("contextual None source should lower");
     let main = module
@@ -10629,13 +10638,13 @@ fn contextual_none_equality_lowers_none_as_option_variants() {
             matches!(
                 instruction,
                 Instruction::Assign {
-                    value: Rvalue::EnumVariant {
-                        enum_name,
-                        variant_name,
-                        payloads,
+                    value: Rvalue::UnionInject {
+                        value: Operand::Unit,
+                        member_type: Type::Unit,
+                        ..
                     },
                     ..
-                } if enum_name == "Option" && variant_name == "None" && payloads.is_empty()
+                }
             )
         })
         .count();
@@ -10845,8 +10854,8 @@ def choose(flag: bool, exact: float32):
     float_right = exact if flag else 1.5
     empty_left = [] if flag else make_values()
     empty_right = make_values() if flag else []
-    none_left = None if flag else Option.Some(7)
-    none_right = Option.Some(7) if flag else None
+    none_left: int64 | None = None if flag else 7
+    none_right: int64 | None = 7 if flag else None
     nested_empty = ([], 1) if flag else (make_values(), 2)
 "#;
     let module = crate::lower_source_to_mir(source)
@@ -10872,11 +10881,11 @@ def choose(flag: bool, exact: float32):
         ),
         (
             "none_left",
-            Type::Named("Option".to_string(), vec![Type::named("int64")]),
+            crate::sema::optional_type(Type::named("int64")),
         ),
         (
             "none_right",
-            Type::Named("Option".to_string(), vec![Type::named("int64")]),
+            crate::sema::optional_type(Type::named("int64")),
         ),
         (
             "nested_empty",
@@ -11125,7 +11134,7 @@ fn mir_function_value_helpers_preserve_nested_types_and_imported_specialization(
         return_type: Box::new(Type::TypeParam("U".to_string())),
         captures: Box::new(vec![crate::sema::ClosureCapture {
             name: "environment".to_string(),
-            ty: Type::Named("Option".to_string(), vec![Type::named("Unknown")]),
+            ty: Type::Named("Lookup".to_string(), vec![Type::named("Unknown")]),
             mode: crate::sema::ClosureCaptureMode::Copy,
             span: Span::new(1, 1),
             mutated: false,
@@ -12898,11 +12907,11 @@ fn batch1_payload_projection_parsers_reject_malformed_segments() {
     assert_eq!(union_payload_projection_index("__union_payload_1x"), None);
     assert_eq!(union_payload_projection_index("__union_payload_2"), Some(2));
     assert_eq!(enum_payload_projection("__variant_payload__1"), None);
-    assert_eq!(enum_payload_projection("__variant_payload_Some_"), None);
-    assert_eq!(enum_payload_projection("__variant_payload_Some_x"), None);
+    assert_eq!(enum_payload_projection("__variant_payload_Found_"), None);
+    assert_eq!(enum_payload_projection("__variant_payload_Found_x"), None);
     assert_eq!(
-        enum_payload_projection("__variant_payload_Some_1"),
-        Some(("Some", 1))
+        enum_payload_projection("__variant_payload_Found_1"),
+        Some(("Found", 1))
     );
 }
 

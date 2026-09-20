@@ -1,0 +1,9 @@
+class Toolbox:
+    label: str
+
+    def wrap[T](value: own T) -> list[T]:
+        return [value]
+
+def main():
+    make = Toolbox.wrap[int64]
+    print(make(3).len())
