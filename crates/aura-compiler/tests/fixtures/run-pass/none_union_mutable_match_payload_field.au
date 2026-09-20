@@ -1,0 +1,17 @@
+class Point:
+    x: int64
+    y: int64
+
+def main():
+    mut slot: Point | None = Point(x=1, y=2)
+    match mut slot:
+        case Point as point:
+            point.x = point.x + 10
+        case None:
+            pass
+    match slot:
+        case Point as point:
+            print(point.x)
+            print(point.y)
+        case None:
+            print("none")

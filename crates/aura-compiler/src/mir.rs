@@ -3390,7 +3390,7 @@ struct ValidatedTakenEnumPayload {
     index: usize,
 }
 
-const UNION_PAYLOAD_PROJECTION_PREFIX: &str = "__union_payload_";
+pub(crate) const UNION_PAYLOAD_PROJECTION_PREFIX: &str = "__union_payload_";
 
 /// Whether an argument union is the declared union parameter itself or a
 /// specialization of a generic callee's symbolic union (ADR-0052 A7). Every

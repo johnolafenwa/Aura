@@ -2,6 +2,26 @@
 
 Last updated: 2026-09-20
 
+## Batch 1 representation phase (in progress) and Batch 2–3 design checkpoint (ratified)
+
+- Representation phase: branch `codex/batch-1-representation` from
+  `2339f9f4`; work note `2026-09-20-batch-1-representation.md`. First pull
+  request: runtime allocation counters (`AURA_RUNTIME_STATS=1`), the
+  `benchmarks/representation` lane, and inline unions on the direct backend
+  for unions whose members are all scalars, `None`, or plain classes
+  (Q9 A). Second pull request: unions with runtime-object members and the
+  four-word callable layout (Q15 A / Q16 A), which share the owned-handle
+  ownership machinery, with the measured table re-recorded. First pull
+  request verification: complete local chain green at `ee8f1d74` on
+  2026-09-20 (coverage 96.4690 / 97.3506 / 95.2864 against floors
+  96.46 / 97.33 / 95.23, unchanged); hosted integration pending.
+- Batch 2–3 checkpoint: `architecture_docs/17-batch-2-3-design-checkpoint.md`
+  drafted and ratified 2026-09-20 under the owner's delegated instruction
+  (Pythonic without breaking safety or performance); all 28 questions A.
+  Implementation (2a element/entry loans, 2b slice views, 3a initialization
+  and exit actions, 3b context managers) begins after the representation
+  phase merges, starting with the ADR-0059/0060/0061 reconciliation stage.
+
 ## Batch 1 phase 2 (H2, Option removal; complete)
 
 - Target: remove the language builtin `Option[T]`, `Option.Some/None`, the

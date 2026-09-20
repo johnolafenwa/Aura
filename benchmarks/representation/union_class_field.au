@@ -1,0 +1,19 @@
+class Point:
+    x: int64
+    y: int64
+
+class Slot:
+    point: Point | None
+
+def main():
+    mut total = 0
+    mut index = 0
+    while index < 100000:
+        slot = Slot(point=Point(x=index, y=1))
+        match slot.point:
+            case Point as point:
+                total = total + point.x + point.y
+            case None:
+                total = total - 1
+        index = index + 1
+    print(total)

@@ -218,7 +218,55 @@ enum WideOverflowOp {
 enum DirectType {
     Scalar(ScalarKind),
     PlainClass(PlainClassType),
+    /// An inline union: one tag word followed by the payload words of the
+    /// widest member (checkpoint Q9 A). Every member is itself inline, so the
+    /// value owns nothing and crosses into the runtime as `Value::Union` only
+    /// at container and helper boundaries.
+    Union(DirectUnionType),
     Opaque(Type),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct DirectUnionType {
+    union_type: Type,
+    members: Vec<DirectUnionMember>,
+    /// Payload words after the tag: the widest member's word count.
+    payload_words: usize,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct DirectUnionMember {
+    ty: DirectType,
+}
+
+impl DirectUnionType {
+    fn new(union_type: Type, members: Vec<DirectType>) -> Self {
+        let payload_words = members
+            .iter()
+            .map(DirectType::value_count)
+            .max()
+            .unwrap_or(0);
+        Self {
+            union_type,
+            members: members
+                .into_iter()
+                .map(|ty| DirectUnionMember { ty })
+                .collect(),
+            payload_words,
+        }
+    }
+
+    fn member(&self, index: usize) -> std::result::Result<&DirectType, String> {
+        self.members
+            .get(index)
+            .map(|member| &member.ty)
+            .ok_or_else(|| {
+                format!(
+                    "union member index {index} is out of range for `{}`",
+                    self.union_type
+                )
+            })
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -237,6 +285,11 @@ impl DirectType {
     fn abi_types(&self) -> Vec<cranelift_codegen::ir::Type> {
         match self {
             DirectType::Scalar(kind) => vec![kind.signature_type()],
+            DirectType::Union(union) => {
+                let mut types = vec![types::I64];
+                types.extend(std::iter::repeat_n(types::I64, union.payload_words));
+                types
+            }
             DirectType::PlainClass(class) => {
                 let mut types = Vec::new();
                 for field in &class.fields {
@@ -255,7 +308,7 @@ impl DirectType {
     fn scalar_kind(&self) -> Option<ScalarKind> {
         match self {
             DirectType::Scalar(kind) => Some(*kind),
-            DirectType::PlainClass(_) | DirectType::Opaque(_) => None,
+            DirectType::PlainClass(_) | DirectType::Union(_) | DirectType::Opaque(_) => None,
         }
     }
 
@@ -269,11 +322,25 @@ impl DirectType {
                 }
                 values
             }
+            DirectType::Union(union) => {
+                let mut values = vec![builder.ins().iconst(types::I64, 0)];
+                for _ in 0..union.payload_words {
+                    values.push(builder.ins().iconst(types::I64, 0));
+                }
+                values
+            }
             DirectType::Opaque(_) => vec![builder.ins().iconst(types::I64, 0)],
         }
     }
 
     fn field_slice(&self, field_name: &str) -> Option<(usize, usize, DirectType)> {
+        if let DirectType::Union(union) = self {
+            // A payload projection selects the member's words after the tag;
+            // the words are reinterpreted by `extract_field`/`replace_nested_field`.
+            let index = crate::mir::union_payload_projection_index(field_name)?;
+            let member = union.member(index).ok()?;
+            return Some((1, 1 + member.value_count(), member.clone()));
+        }
         let DirectType::PlainClass(class) = self else {
             return None;
         };
@@ -557,6 +624,8 @@ struct NativeCodegen<'a> {
     tuple_take_element: FuncId,
     union_inject: FuncId,
     union_tag_test: FuncId,
+    union_tag: FuncId,
+    union_payload_copy: FuncId,
     none_test: FuncId,
     value_is_union: FuncId,
     union_active_payload: FuncId,
@@ -1081,6 +1150,8 @@ impl<'a> NativeCodegen<'a> {
             tuple_take_element => ("aura_direct_tuple_take_element", [types::I64, types::I64], Some(types::I64)),
             union_inject => ("aura_direct_union_inject", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             union_tag_test => ("aura_direct_union_tag_test", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
+            union_tag => ("aura_direct_union_tag", [types::I64], Some(types::I64)),
+            union_payload_copy => ("aura_direct_union_payload_copy", [types::I64, types::I64], Some(types::I64)),
             none_test => ("aura_direct_none_test", [types::I64], Some(types::I64)),
             value_is_union => ("aura_direct_value_is_union", [types::I64], Some(types::I64)),
             union_active_payload => ("aura_direct_union_active_payload", [types::I64, types::I64], Some(types::I64)),
@@ -1559,6 +1630,8 @@ impl<'a> NativeCodegen<'a> {
             tuple_take_element,
             union_inject,
             union_tag_test,
+            union_tag,
+            union_payload_copy,
             none_test,
             value_is_union,
             union_active_payload,
@@ -1945,6 +2018,7 @@ impl<'a> NativeCodegen<'a> {
                     &variable_types,
                     &self.function_return_types,
                     &self.classes,
+                    &self.trait_impls,
                 ) else {
                     continue;
                 };
@@ -2593,6 +2667,12 @@ impl<'a> NativeCodegen<'a> {
         let union_tag_test = self
             .object
             .declare_func_in_func(self.union_tag_test, builder.func);
+        let union_tag = self
+            .object
+            .declare_func_in_func(self.union_tag, builder.func);
+        let union_payload_copy = self
+            .object
+            .declare_func_in_func(self.union_payload_copy, builder.func);
         let none_test = self
             .object
             .declare_func_in_func(self.none_test, builder.func);
@@ -3370,6 +3450,8 @@ impl<'a> NativeCodegen<'a> {
             tuple_take_element,
             union_inject,
             union_tag_test,
+            union_tag,
+            union_payload_copy,
             none_test,
             value_is_union,
             union_active_payload,
@@ -3701,7 +3783,7 @@ impl<'a> NativeCodegen<'a> {
                     lowered_args.push(builder.ins().iconst(types::I64, 0));
                     let _ = builder.ins().call(release_value, &[raw]);
                 }
-                DirectType::PlainClass(_) => {
+                DirectType::PlainClass(_) | DirectType::Union(_) => {
                     lowered_args.extend(unbox_thunk_value(self, &mut builder, raw, param_ty)?);
                     let _ = builder.ins().call(release_value, &[raw]);
                 }
@@ -3888,6 +3970,7 @@ impl<'a> NativeCodegen<'a> {
         let place_ty = cleanup_place_type_in_reachable(
             function,
             &self.classes,
+            &self.trait_impls,
             place,
             &self.function_return_types,
             self.reachable_blocks.get(&function.name).ok_or_else(|| {
@@ -3912,6 +3995,7 @@ impl<'a> NativeCodegen<'a> {
         let args_ptr = builder.block_params(entry)[0];
         let raw = builder.ins().load(types::I64, MemFlags::new(), args_ptr, 0);
         match &place_ty {
+            DirectType::Union(_) => {}
             DirectType::PlainClass(class_ty) => {
                 let close_method = self
                     .classes
@@ -4651,6 +4735,8 @@ struct FunctionCompiler<'a> {
     tuple_take_element: cranelift_codegen::ir::FuncRef,
     union_inject: cranelift_codegen::ir::FuncRef,
     union_tag_test: cranelift_codegen::ir::FuncRef,
+    union_tag: cranelift_codegen::ir::FuncRef,
+    union_payload_copy: cranelift_codegen::ir::FuncRef,
     none_test: cranelift_codegen::ir::FuncRef,
     value_is_union: cranelift_codegen::ir::FuncRef,
     union_active_payload: cranelift_codegen::ir::FuncRef,
@@ -5594,6 +5680,8 @@ impl<'a> FunctionCompiler<'a> {
                 self.load_operand_with_integer_hint(operand, integer_hint)
             }
             Rvalue::NoneTest { value } => {
+                // Lowering tests a union's `None` member through
+                // `UnionTagTest`; this dynamic form only reaches runtime values.
                 let loaded = self.load_operand(value)?;
                 let loaded = self.ensure_opaque(loaded)?;
                 let call = self.builder.ins().call(self.none_test, &[loaded.values[0]]);
@@ -5722,6 +5810,18 @@ impl<'a> FunctionCompiler<'a> {
             } => {
                 self.require_union_plan(union_type)?;
                 let value = self.load_operand(&Operand::Place(place.clone()))?;
+                if let DirectType::Union(_) = &value.ty {
+                    let matched = self.builder.ins().icmp_imm(
+                        IntCC::Equal,
+                        value.values[0],
+                        *member_index as i64,
+                    );
+                    let matched = self.builder.ins().uextend(types::I64, matched);
+                    return Ok(ValueRef {
+                        values: vec![matched],
+                        ty: DirectType::Scalar(ScalarKind::Bool),
+                    });
+                }
                 let value = self.ensure_opaque(value)?;
                 let encoded = crate::native_runtime::canonical_runtime_type_name(union_type);
                 let (ptr, len) = self.string_constant(encoded.as_bytes())?;
@@ -5742,6 +5842,8 @@ impl<'a> FunctionCompiler<'a> {
                 member_index,
             } => {
                 self.require_union_plan(union_type)?;
+                // A consuming take only reaches non-Copy payloads, which stay
+                // runtime values; an inline union's members are all Copy.
                 let value = self.load_operand(&Operand::Place(place.clone()))?;
                 let value = self.ensure_opaque(value)?;
                 let encoded = crate::native_runtime::canonical_runtime_type_name(union_type);
@@ -5768,6 +5870,15 @@ impl<'a> FunctionCompiler<'a> {
                 let member_target = ensure_direct_type(member_type, &self.classes, "union member")?;
                 let loaded = self.load_operand_for_target(value, &member_target)?;
                 let loaded = self.coerce_value(loaded, &member_target)?;
+                if let DirectType::Union(union) =
+                    ensure_direct_type(union_type, &self.classes, "union")?
+                {
+                    let words = self.union_words_from_member(&union, *member_index, loaded)?;
+                    return Ok(ValueRef {
+                        values: words,
+                        ty: DirectType::Union(union),
+                    });
+                }
                 let payload = self.ensure_opaque(loaded)?;
                 let transferred = self.transfer_owned_opaque_value(&payload);
                 let encoded = crate::native_runtime::canonical_runtime_type_name(union_type);
@@ -6200,6 +6311,56 @@ impl<'a> FunctionCompiler<'a> {
         })
     }
 
+    /// Equality of two inline unions of one type: the tags must agree and
+    /// the active members must compare equal under their own rule; `None`
+    /// equals `None`.
+    fn compile_inline_union_equality(
+        &mut self,
+        left: ValueRef,
+        right: ValueRef,
+        op: BinaryOp,
+        span: Option<Span>,
+    ) -> std::result::Result<ValueRef, String> {
+        let DirectType::Union(union) = left.ty.clone() else {
+            unreachable!("caller checked an inline union");
+        };
+        let same_tag = self
+            .builder
+            .ins()
+            .icmp(IntCC::Equal, left.values[0], right.values[0]);
+        let same_tag = self.builder.ins().uextend(types::I64, same_tag);
+        let bool_ty = DirectType::Scalar(ScalarKind::Bool);
+        let right_words = right.values.clone();
+        let members_equal =
+            self.switch_on_union_tag(&union, &left.values, &bool_ty, |codegen, index, member| {
+                if matches!(member.ty, DirectType::Scalar(ScalarKind::Unit)) {
+                    return Ok(ValueRef {
+                        values: vec![codegen.builder.ins().iconst(types::I64, 1)],
+                        ty: DirectType::Scalar(ScalarKind::Bool),
+                    });
+                }
+                let other = codegen.union_member_from_words(&union, index, &right_words)?;
+                if matches!(member.ty, DirectType::Scalar(_)) {
+                    return codegen.compile_binary(BinaryOp::Eq, member, other, span);
+                }
+                // A plain-class member compares under the runtime's shared
+                // structural rule, exactly as the interpreter compares it.
+                let member = codegen.ensure_opaque(member)?;
+                let other = codegen.ensure_opaque(other)?;
+                codegen.compile_binary(BinaryOp::Eq, member, other, span)
+            })?;
+        let equal = self.builder.ins().band(same_tag, members_equal.values[0]);
+        let result = if op == BinaryOp::Eq {
+            equal
+        } else {
+            self.builder.ins().bxor_imm(equal, 1)
+        };
+        Ok(ValueRef {
+            values: vec![result],
+            ty: bool_ty,
+        })
+    }
+
     fn compile_binary(
         &mut self,
         op: BinaryOp,
@@ -6207,6 +6368,22 @@ impl<'a> FunctionCompiler<'a> {
         right: ValueRef,
         span: Option<Span>,
     ) -> std::result::Result<ValueRef, String> {
+        if let (DirectType::Union(left_union), DirectType::Union(right_union)) =
+            (&left.ty, &right.ty)
+        {
+            if left_union == right_union && matches!(op, BinaryOp::Eq | BinaryOp::NotEq) {
+                // The checker injects the compared member into the union, so
+                // `value == None` and `value == 5` arrive as two inline unions
+                // of one type: equal tags and equal active members, without
+                // a runtime box (ADR-0052 union equality).
+                return self.compile_inline_union_equality(left, right, op, span);
+            }
+        }
+        if matches!(left.ty, DirectType::Union(_)) || matches!(right.ty, DirectType::Union(_)) {
+            let left = self.ensure_opaque(left)?;
+            let right = self.ensure_opaque(right)?;
+            return self.compile_binary(op, left, right, span);
+        }
         if matches!(
             op,
             BinaryOp::Pow
@@ -8486,6 +8663,17 @@ impl<'a> FunctionCompiler<'a> {
         args: &[MirArg],
     ) -> std::result::Result<ValueRef, String> {
         let object = self.load_operand(object)?;
+        if let DirectType::Union(union) = &object.ty {
+            let union = union.clone();
+            return self.compile_union_member_call(
+                &union,
+                &object.values,
+                field,
+                receiver_place,
+                args,
+                Some(trait_name),
+            );
+        }
         let receiver_ty = direct_type_to_type(&object.ty);
         if let Type::Named(receiver_name, _) = &receiver_ty {
             self.compile_class_member_call(
@@ -8605,6 +8793,14 @@ impl<'a> FunctionCompiler<'a> {
         }
 
         match object.ty.clone() {
+            DirectType::Union(union) => self.compile_union_member_call(
+                &union,
+                &object.values,
+                field,
+                receiver_place,
+                args,
+                None,
+            ),
             DirectType::PlainClass(class_ty) => self.compile_class_member_call(
                 class_ty.class_name.as_str(),
                 Some(Type::named(&class_ty.class_name)),
@@ -8756,6 +8952,10 @@ impl<'a> FunctionCompiler<'a> {
             )?,
         };
         match &ty {
+            DirectType::Union(_) => Err(format!(
+                "direct backend cannot construct union type `{}` as a class",
+                class_name
+            )),
             DirectType::PlainClass(class_ty) => {
                 let mut by_name = HashMap::new();
                 for field in fields {
@@ -9350,6 +9550,12 @@ impl<'a> FunctionCompiler<'a> {
                     ty: field_ty,
                 })
             }
+            DirectType::Union(union) => {
+                let union = union.clone();
+                let index = crate::mir::union_payload_projection_index(field)
+                    .ok_or_else(|| format!("invalid union payload projection `{field}`"))?;
+                self.union_member_from_words(&union, index, &object.values)
+            }
             DirectType::Opaque(Type::Tuple(elements)) => {
                 let index = field.parse::<usize>().map_err(|_| {
                     format!("direct backend tuple projection `{field}` is not a fixed position")
@@ -9425,6 +9631,31 @@ impl<'a> FunctionCompiler<'a> {
             return Ok(value);
         }
 
+        if let DirectType::Union(union) = target {
+            let union = union.clone();
+            if let DirectType::Opaque(_) = &value.ty {
+                return self.unbox_inline_union(&union, value.values[0]);
+            }
+            // A bare member value lifts into the union it is a member of
+            // (the checker's comparison-only injection and the bare `None`).
+            let member_index = union
+                .members
+                .iter()
+                .position(|member| member.ty == value.ty)
+                .ok_or_else(|| {
+                    format!(
+                        "direct backend encountered an unsupported value coercion from `{}` to `{}`",
+                        render_direct_type(&value.ty),
+                        render_direct_type(target)
+                    )
+                })?;
+            let words = self.union_words_from_member(&union, member_index, value)?;
+            return Ok(ValueRef {
+                values: words,
+                ty: target.clone(),
+            });
+        }
+
         if let DirectType::Opaque(target_ty) = target {
             if is_numeric_type_name(target_ty) {
                 let boxed = self.ensure_opaque(value)?;
@@ -9490,6 +9721,10 @@ impl<'a> FunctionCompiler<'a> {
                     }
                 }
                 DirectType::Scalar(ScalarKind::Unit) => unit_value(&mut self.builder),
+                DirectType::Union(union) => {
+                    let union = union.clone();
+                    self.unbox_inline_union(&union, value.values[0])?
+                }
                 DirectType::PlainClass(class) => {
                     let mut values = Vec::new();
                     for field in &class.fields {
@@ -9804,6 +10039,25 @@ impl<'a> FunctionCompiler<'a> {
         new_value: ValueRef,
     ) -> std::result::Result<ValueRef, String> {
         let (head, rest) = split_field_path_segments(segments)?;
+        if let DirectType::Union(union) = &current.ty {
+            // Writing a payload projection selects that member: the tag and
+            // the payload words are replaced together.
+            let union = union.clone();
+            let index = crate::mir::union_payload_projection_index(head)
+                .ok_or_else(|| format!("invalid union payload projection `{head}`"))?;
+            let member_ty = union.member(index)?.clone();
+            let replacement = if rest.is_empty() {
+                self.coerce_value(new_value, &member_ty)?
+            } else {
+                let nested = self.union_member_from_words(&union, index, &current.values)?;
+                self.replace_nested_field(nested, rest, new_value)?
+            };
+            let values = self.union_words_from_member(&union, index, replacement)?;
+            return Ok(ValueRef {
+                values,
+                ty: current.ty,
+            });
+        }
         let (start, end, field_ty) = required_direct_field_slice(&current.ty, head)?;
 
         let replacement = if rest.is_empty() {
@@ -9847,9 +10101,289 @@ impl<'a> FunctionCompiler<'a> {
         Ok(())
     }
 
+    /// The direct result type of `.field` on an inline union receiver,
+    /// taken from the first member that declares it.
+    fn union_member_call_result_type(
+        &self,
+        union: &DirectUnionType,
+        field: &str,
+        trait_name: Option<&str>,
+    ) -> Option<DirectType> {
+        union.members.iter().find_map(|member| {
+            let DirectType::PlainClass(class_ty) = &member.ty else {
+                return None;
+            };
+            let method = match trait_name {
+                Some(trait_name) => self
+                    .find_trait_method_for_trait(
+                        &Type::named(&class_ty.class_name),
+                        trait_name,
+                        field,
+                    )
+                    .cloned(),
+                None => find_method(self.classes.get(&class_ty.class_name), field)
+                    .or_else(|| {
+                        find_concrete_impl_method(&self.trait_impls, &class_ty.class_name, field)
+                    })
+                    .cloned(),
+            }?;
+            self.function_return_types
+                .get(&method.function_name)
+                .cloned()
+        })
+    }
+
+    /// A method on an inline union receiver dispatches on the tag; every
+    /// member resolves the method through one trait, so the arms share the
+    /// result type. A `mut self` arm writes its receiver back through the
+    /// member's payload projection.
+    fn compile_union_member_call(
+        &mut self,
+        union: &DirectUnionType,
+        words: &[Value],
+        field: &str,
+        receiver_place: Option<&str>,
+        args: &[MirArg],
+        trait_name: Option<&str>,
+    ) -> std::result::Result<ValueRef, String> {
+        let result_ty = self
+            .union_member_call_result_type(union, field, trait_name)
+            .ok_or_else(|| {
+                format!(
+                    "direct backend does not know the result of `.{field}` on `{}`",
+                    union.union_type
+                )
+            })?;
+        let words = words.to_vec();
+        let receiver_place = receiver_place.map(str::to_string);
+        let args = args.to_vec();
+        let field = field.to_string();
+        let trait_name = trait_name.map(str::to_string);
+        let result =
+            self.switch_on_union_tag(union, &words, &result_ty, |codegen, index, member| {
+                let projected = receiver_place.as_ref().map(|place| {
+                    format!(
+                        "{place}.{}{index}",
+                        crate::mir::UNION_PAYLOAD_PROJECTION_PREFIX
+                    )
+                });
+                codegen.compile_member_call_on_value(
+                    member,
+                    &field,
+                    projected.as_deref(),
+                    &args,
+                    trait_name.as_deref(),
+                )
+            })?;
+        if matches!(result.ty, DirectType::Opaque(_)) {
+            self.mark_temporary_opaque_owned(&result);
+        }
+        Ok(result)
+    }
+
+    /// A member call whose receiver is an already loaded value.
+    fn compile_member_call_on_value(
+        &mut self,
+        object: ValueRef,
+        field: &str,
+        receiver_place: Option<&str>,
+        args: &[MirArg],
+        trait_name: Option<&str>,
+    ) -> std::result::Result<ValueRef, String> {
+        // Every inline union member is a scalar, `None`, or a plain class,
+        // and only a plain class carries methods.
+        let DirectType::PlainClass(class_ty) = object.ty.clone() else {
+            return Err(format!(
+                "direct backend cannot call `.{field}` on `{}`",
+                render_direct_type(&object.ty)
+            ));
+        };
+        self.compile_class_member_call(
+            class_ty.class_name.as_str(),
+            Some(Type::named(&class_ty.class_name)),
+            object,
+            field,
+            receiver_place,
+            args,
+            trait_name,
+        )
+    }
+
+    /// The tag word and payload words of `member` injected as member
+    /// `index`: floats are bit-cast into integer words, and the unused
+    /// words are zero.
+    fn union_words_from_member(
+        &mut self,
+        union: &DirectUnionType,
+        index: usize,
+        member: ValueRef,
+    ) -> std::result::Result<Vec<Value>, String> {
+        let member_ty = union.member(index)?.clone();
+        let member = self.coerce_value(member, &member_ty)?;
+        let mut words = vec![self.builder.ins().iconst(types::I64, index as i64)];
+        for (value, abi) in member.values.iter().zip(member_ty.abi_types()) {
+            words.push(if abi == types::F64 {
+                self.builder
+                    .ins()
+                    .bitcast(types::I64, MemFlags::new(), *value)
+            } else {
+                *value
+            });
+        }
+        while words.len() < union.payload_words + 1 {
+            words.push(self.builder.ins().iconst(types::I64, 0));
+        }
+        Ok(words)
+    }
+
+    /// Member `index` read back from an inline union's words.
+    fn union_member_from_words(
+        &mut self,
+        union: &DirectUnionType,
+        index: usize,
+        words: &[Value],
+    ) -> std::result::Result<ValueRef, String> {
+        let member_ty = union.member(index)?.clone();
+        let mut values = Vec::new();
+        for (word, abi) in words[1..].iter().zip(member_ty.abi_types()) {
+            values.push(if abi == types::F64 {
+                self.builder
+                    .ins()
+                    .bitcast(types::F64, MemFlags::new(), *word)
+            } else {
+                *word
+            });
+        }
+        Ok(ValueRef {
+            values,
+            ty: member_ty,
+        })
+    }
+
+    /// Runs `body` once per member on the inline union's words, selected by
+    /// the tag at run time, and merges the bodies' results, which must share
+    /// `result_ty`.
+    fn switch_on_union_tag(
+        &mut self,
+        union: &DirectUnionType,
+        words: &[Value],
+        result_ty: &DirectType,
+        mut body: impl FnMut(&mut Self, usize, ValueRef) -> std::result::Result<ValueRef, String>,
+    ) -> std::result::Result<ValueRef, String> {
+        let merge = self.builder.create_block();
+        for abi in result_ty.abi_types() {
+            self.builder.append_block_param(merge, abi);
+        }
+        let tag = words[0];
+        let caller_owned = self.owned_opaque_temporaries.clone();
+        let member_count = union.members.len();
+        for index in 0..member_count {
+            let matched = self.builder.create_block();
+            let next = if index + 1 < member_count {
+                Some(self.builder.create_block())
+            } else {
+                None
+            };
+            if let Some(next) = next {
+                let selected = self.builder.ins().icmp_imm(IntCC::Equal, tag, index as i64);
+                self.builder.ins().brif(selected, matched, &[], next, &[]);
+            } else {
+                self.builder.ins().jump(matched, &[]);
+            }
+            self.builder.switch_to_block(matched);
+            self.builder.seal_block(matched);
+            self.owned_opaque_temporaries = caller_owned.clone();
+            let member = self.union_member_from_words(union, index, words)?;
+            let result = body(self, index, member)?;
+            let result = self.coerce_value(result, result_ty)?;
+            // A result the body owns is handed to the merge block; the
+            // caller decides its ownership once for every arm.
+            self.clear_temporary_opaque_owned(&result);
+            self.release_temporary_owned_since(&caller_owned);
+            self.builder.ins().jump(merge, &result.values);
+            if let Some(next) = next {
+                self.builder.switch_to_block(next);
+                self.builder.seal_block(next);
+            }
+        }
+        self.builder.switch_to_block(merge);
+        self.builder.seal_block(merge);
+        self.owned_opaque_temporaries = caller_owned;
+        Ok(ValueRef {
+            values: self.builder.block_params(merge).to_vec(),
+            ty: result_ty.clone(),
+        })
+    }
+
+    /// Boxes an inline union into the runtime's `Value::Union` for a
+    /// container, task, queue, or helper boundary.
+    fn box_inline_union(
+        &mut self,
+        union: &DirectUnionType,
+        words: &[Value],
+    ) -> std::result::Result<ValueRef, String> {
+        let union_type = union.union_type.clone();
+        let encoded = crate::native_runtime::canonical_runtime_type_name(&union_type);
+        let (ptr, len) = self.string_constant(encoded.as_bytes())?;
+        let result_ty = DirectType::Opaque(union_type.clone());
+        let boxed =
+            self.switch_on_union_tag(union, words, &result_ty, |codegen, index, member| {
+                let payload = codegen.ensure_opaque(member)?;
+                let transferred = codegen.transfer_owned_opaque_value(&payload);
+                let tag = codegen.builder.ins().iconst(types::I64, index as i64);
+                let call = codegen
+                    .builder
+                    .ins()
+                    .call(codegen.union_inject, &[ptr, len, tag, transferred]);
+                Ok(ValueRef {
+                    values: codegen.builder.inst_results(call).to_vec(),
+                    ty: DirectType::Opaque(union_type.clone()),
+                })
+            })?;
+        self.mark_temporary_opaque_owned(&boxed);
+        Ok(boxed)
+    }
+
+    /// Reads a boxed runtime union back into inline words.
+    fn unbox_inline_union(
+        &mut self,
+        union: &DirectUnionType,
+        handle: Value,
+    ) -> std::result::Result<ValueRef, String> {
+        let tag_call = self.builder.ins().call(self.union_tag, &[handle]);
+        let tag = self.builder.inst_results(tag_call)[0];
+        let mut probe = vec![tag];
+        for _ in 0..union.payload_words {
+            probe.push(self.builder.ins().iconst(types::I64, 0));
+        }
+        let result_ty = DirectType::Union(union.clone());
+        self.switch_on_union_tag(union, &probe, &result_ty, |codegen, index, _| {
+            let member_ty = union.member(index)?.clone();
+            let index_value = codegen.builder.ins().iconst(types::I64, index as i64);
+            let call = codegen
+                .builder
+                .ins()
+                .call(codegen.union_payload_copy, &[handle, index_value]);
+            let payload = codegen.owned_opaque_result(
+                codegen.builder.inst_results(call).to_vec(),
+                direct_type_to_type(&member_ty),
+            );
+            let member = codegen.coerce_value(payload, &member_ty)?;
+            let words = codegen.union_words_from_member(union, index, member)?;
+            Ok(ValueRef {
+                values: words,
+                ty: DirectType::Union(union.clone()),
+            })
+        })
+    }
+
     fn ensure_opaque(&mut self, value: ValueRef) -> std::result::Result<ValueRef, String> {
         match value.ty {
             DirectType::Opaque(_) => Ok(value),
+            DirectType::Union(ref union) => {
+                let union = union.clone();
+                self.box_inline_union(&union, &value.values)
+            }
             DirectType::Scalar(ScalarKind::Int32) => {
                 let inst = self.builder.ins().call(self.box_i32, &[value.values[0]]);
                 let boxed = ValueRef {
@@ -10905,7 +11439,7 @@ impl<'a> FunctionCompiler<'a> {
                     return Ok(());
                 }
             }
-            DirectType::Scalar(_) => {}
+            DirectType::Scalar(_) | DirectType::Union(_) => {}
         }
         Ok(())
     }
@@ -15912,6 +16446,21 @@ fn unit_value(builder: &mut FunctionBuilder<'_>) -> ValueRef {
     }
 }
 
+/// The trait-impl method a concrete class provides for `field`; the checker
+/// has already rejected an ambiguous name, so the first impl is the one.
+fn find_concrete_impl_method<'a>(
+    trait_impls: &'a [MirTraitImpl],
+    class_name: &str,
+    field: &str,
+) -> Option<&'a MirMethod> {
+    trait_impls
+        .iter()
+        .filter(|trait_impl| {
+            matches!(&trait_impl.for_type, Type::Named(name, args) if name == class_name && args.is_empty())
+        })
+        .find_map(|trait_impl| trait_impl.methods.iter().find(|method| method.name == field))
+}
+
 fn find_method<'a>(class: Option<&'a MirClass>, field: &str) -> Option<&'a MirMethod> {
     let class = class?;
     class
@@ -16049,12 +16598,20 @@ fn cleanup_place_type(
     function_return_types: &HashMap<String, DirectType>,
 ) -> std::result::Result<DirectType, String> {
     let reachable = reachable_direct_block_labels(function)?;
-    cleanup_place_type_in_reachable(function, classes, place, function_return_types, &reachable)
+    cleanup_place_type_in_reachable(
+        function,
+        classes,
+        &[],
+        place,
+        function_return_types,
+        &reachable,
+    )
 }
 
 fn cleanup_place_type_in_reachable(
     function: &MirFunction,
     classes: &HashMap<String, MirClass>,
+    trait_impls: &[MirTraitImpl],
     place: &str,
     function_return_types: &HashMap<String, DirectType>,
     reachable: &HashSet<String>,
@@ -16102,8 +16659,13 @@ fn cleanup_place_type_in_reachable(
             if target.contains('.') || root_types.contains_key(target) {
                 continue;
             }
-            if let Some(ty) = infer_rvalue_type(value, &root_types, function_return_types, classes)
-            {
+            if let Some(ty) = infer_rvalue_type(
+                value,
+                &root_types,
+                function_return_types,
+                classes,
+                trait_impls,
+            ) {
                 root_types.insert(target.clone(), ty);
             }
         }
@@ -16202,6 +16764,10 @@ fn direct_type_contains_unknown(ty: &DirectType) -> bool {
             .fields
             .iter()
             .any(|field| direct_type_contains_unknown(&field.ty)),
+        DirectType::Union(union) => union
+            .members
+            .iter()
+            .any(|member| direct_type_contains_unknown(&member.ty)),
         DirectType::Opaque(ty) => type_contains_unknown(ty),
     }
 }
@@ -16681,10 +17247,18 @@ fn direct_type_inner(
 ) -> Option<DirectType> {
     match ty {
         Type::Union(union) => {
+            // Members that are inline themselves make the union inline; a
+            // member that needs a runtime object keeps the whole union as
+            // one runtime object for now.
+            let mut members = Vec::new();
             for member in &union.members {
-                direct_type_inner(member, classes, visiting)?;
+                let member_ty = direct_type_inner(member, classes, visiting)?;
+                if matches!(member_ty, DirectType::Opaque(_)) {
+                    return Some(DirectType::Opaque(ty.clone()));
+                }
+                members.push(member_ty);
             }
-            Some(DirectType::Opaque(ty.clone()))
+            Some(DirectType::Union(DirectUnionType::new(ty.clone(), members)))
         }
         Type::Unit => Some(DirectType::Scalar(ScalarKind::Unit)),
         Type::TypeParam(name) => Some(DirectType::Opaque(Type::TypeParam(name.clone()))),
@@ -16817,6 +17391,7 @@ fn infer_rvalue_type(
     variable_types: &HashMap<String, DirectType>,
     function_return_types: &HashMap<String, DirectType>,
     classes: &HashMap<String, MirClass>,
+    trait_impls: &[MirTraitImpl],
 ) -> Option<DirectType> {
     match rvalue {
         Rvalue::Use(operand) | Rvalue::CallableAdapt { value: operand, .. } => {
@@ -17320,6 +17895,16 @@ fn infer_rvalue_type(
                     }
                 }
                 match object_ty {
+                    DirectType::Union(union) => union.members.iter().find_map(|member| {
+                        let DirectType::PlainClass(class_ty) = &member.ty else {
+                            return None;
+                        };
+                        let method = find_method(classes.get(&class_ty.class_name), field)
+                            .or_else(|| {
+                                find_concrete_impl_method(trait_impls, &class_ty.class_name, field)
+                            })?;
+                        function_return_types.get(&method.function_name).cloned()
+                    }),
                     DirectType::PlainClass(class_ty) => {
                         let method = find_method(classes.get(&class_ty.class_name), field)?;
                         function_return_types.get(&method.function_name).cloned()
@@ -18334,6 +18919,7 @@ fn render_direct_type(ty: &DirectType) -> String {
         DirectType::Scalar(ScalarKind::Bool) => "bool".to_string(),
         DirectType::Scalar(ScalarKind::Unit) => "None".to_string(),
         DirectType::PlainClass(class) => class.class_name.clone(),
+        DirectType::Union(union) => union.union_type.to_string(),
         DirectType::Opaque(ty) => ty.to_string(),
     }
 }
@@ -18368,6 +18954,42 @@ fn thunk_string_constant(
     Ok((ptr, len))
 }
 
+/// A tag switch in a thunk's own builder: `body` runs once per member and
+/// its results, typed `result_types`, merge into one block.
+fn thunk_switch_on_tag(
+    builder: &mut FunctionBuilder<'_>,
+    tag: Value,
+    member_count: usize,
+    result_types: &[cranelift_codegen::ir::Type],
+    mut body: impl FnMut(&mut FunctionBuilder<'_>, usize) -> std::result::Result<Vec<Value>, String>,
+) -> std::result::Result<Vec<Value>, String> {
+    let merge = builder.create_block();
+    for abi in result_types {
+        builder.append_block_param(merge, *abi);
+    }
+    for index in 0..member_count {
+        let matched = builder.create_block();
+        let next = (index + 1 < member_count).then(|| builder.create_block());
+        if let Some(next) = next {
+            let selected = builder.ins().icmp_imm(IntCC::Equal, tag, index as i64);
+            builder.ins().brif(selected, matched, &[], next, &[]);
+        } else {
+            builder.ins().jump(matched, &[]);
+        }
+        builder.switch_to_block(matched);
+        builder.seal_block(matched);
+        let results = body(builder, index)?;
+        builder.ins().jump(merge, &results);
+        if let Some(next) = next {
+            builder.switch_to_block(next);
+            builder.seal_block(next);
+        }
+    }
+    builder.switch_to_block(merge);
+    builder.seal_block(merge);
+    Ok(builder.block_params(merge).to_vec())
+}
+
 fn box_thunk_value(
     codegen: &mut NativeCodegen<'_>,
     builder: &mut FunctionBuilder<'_>,
@@ -18375,6 +18997,39 @@ fn box_thunk_value(
     ty: &DirectType,
 ) -> std::result::Result<Value, String> {
     match ty {
+        DirectType::Union(union) => {
+            let union_inject = codegen
+                .object
+                .declare_func_in_func(codegen.union_inject, builder.func);
+            let encoded = crate::native_runtime::canonical_runtime_type_name(&union.union_type);
+            let (ptr, len) = thunk_string_constant(codegen, builder, encoded.as_bytes())?;
+            let tag = values[0];
+            let words = values[1..].to_vec();
+            thunk_switch_on_tag(
+                builder,
+                tag,
+                union.members.len(),
+                &[types::I64],
+                |builder, index| {
+                    let member_ty = &union.members[index].ty;
+                    let mut member_values = Vec::new();
+                    for (word, abi) in words.iter().zip(member_ty.abi_types()) {
+                        member_values.push(if abi == types::F64 {
+                            builder.ins().bitcast(types::F64, MemFlags::new(), *word)
+                        } else {
+                            *word
+                        });
+                    }
+                    let payload = box_thunk_value(codegen, builder, &member_values, member_ty)?;
+                    let index_value = builder.ins().iconst(types::I64, index as i64);
+                    let inst = builder
+                        .ins()
+                        .call(union_inject, &[ptr, len, index_value, payload]);
+                    Ok(vec![builder.inst_results(inst)[0]])
+                },
+            )
+            .map(|values| values[0])
+        }
         DirectType::Opaque(_) => values.first().copied().ok_or({
             format!(
                 "task-start thunk expected an opaque value for `{}`",
@@ -18459,6 +19114,46 @@ fn unbox_thunk_value(
     ty: &DirectType,
 ) -> std::result::Result<Vec<Value>, String> {
     match ty {
+        DirectType::Union(union) => {
+            let union_tag = codegen
+                .object
+                .declare_func_in_func(codegen.union_tag, builder.func);
+            let union_payload_copy = codegen
+                .object
+                .declare_func_in_func(codegen.union_payload_copy, builder.func);
+            let release_value = codegen
+                .object
+                .declare_func_in_func(codegen.release_value, builder.func);
+            let tag_inst = builder.ins().call(union_tag, &[raw]);
+            let tag = builder.inst_results(tag_inst)[0];
+            let result_types = ty.abi_types();
+            thunk_switch_on_tag(
+                builder,
+                tag,
+                union.members.len(),
+                &result_types,
+                |builder, index| {
+                    let member_ty = &union.members[index].ty;
+                    let index_value = builder.ins().iconst(types::I64, index as i64);
+                    let copy = builder.ins().call(union_payload_copy, &[raw, index_value]);
+                    let payload = builder.inst_results(copy)[0];
+                    let member_values = unbox_thunk_value(codegen, builder, payload, member_ty)?;
+                    let _ = builder.ins().call(release_value, &[payload]);
+                    let mut words = vec![builder.ins().iconst(types::I64, index as i64)];
+                    for (value, abi) in member_values.iter().zip(member_ty.abi_types()) {
+                        words.push(if abi == types::F64 {
+                            builder.ins().bitcast(types::I64, MemFlags::new(), *value)
+                        } else {
+                            *value
+                        });
+                    }
+                    while words.len() < union.payload_words + 1 {
+                        words.push(builder.ins().iconst(types::I64, 0));
+                    }
+                    Ok(words)
+                },
+            )
+        }
         DirectType::Opaque(_) => Ok(vec![raw]),
         DirectType::Scalar(ScalarKind::Int32) => {
             let unbox_i64 = codegen
@@ -18577,6 +19272,7 @@ fn release_direct_values(
     ty: &DirectType,
 ) -> std::result::Result<(), String> {
     match ty {
+        DirectType::Union(_) => {}
         DirectType::Opaque(_) => {
             let Some(value) = values.first().copied() else {
                 return Err(format!(
@@ -18698,6 +19394,7 @@ fn direct_type_to_type(ty: &DirectType) -> Type {
         DirectType::Scalar(ScalarKind::Bool) => Type::named("bool"),
         DirectType::Scalar(ScalarKind::Unit) => Type::Unit,
         DirectType::PlainClass(class) => Type::named(&class.class_name),
+        DirectType::Union(union) => union.union_type.clone(),
         DirectType::Opaque(ty) => ty.clone(),
     }
 }

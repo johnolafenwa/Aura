@@ -38,6 +38,14 @@ in this file.
   `None` (the former `Option.None` spelling printed `Option.None`, while the
   unit value previously rendered as empty text, giving `[, 1]` and
   `Result.Ok()`).
+- Represent a union whose members are all scalars, `None`, or plain classes
+  as one inline tagged value on the direct backend (checkpoint Q9 A): its
+  injections, tag tests, payload reads, pattern matches, and trait dispatch
+  run without a runtime allocation, and a plain class may hold such a union
+  as a flattened field. Both runtimes count union payload boxes, closure
+  environments, opaque runtime boxes, and callable overflow allocations and
+  report them on standard error when `AURA_RUNTIME_STATS=1` is set;
+  `benchmarks/representation` records the counters with provenance.
 - Refuse reading a bound's method as a member of a type-parameter value
   (`value: int64 = item.size` where `item: T` and `T: Size`) with `AU2005`;
   the checker previously typed it as the method's result and both backends

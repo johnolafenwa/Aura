@@ -18328,3 +18328,47 @@ fn process_child_waits_report_unrepresentable_deadlines_as_failures() {
         ProcessChildWaitStatus::Exited(status) if status.success()
     ));
 }
+
+#[test]
+fn representation_stats_count_report_and_parse_round_trip() {
+    use super::representation_stats::{self, RepresentationStats};
+    let before = representation_stats::snapshot();
+    representation_stats::note_union_payload_box();
+    representation_stats::note_closure_environment();
+    representation_stats::note_opaque_box();
+    representation_stats::note_callable_overflow_allocation();
+    let delta = representation_stats::snapshot().since(before);
+    assert!(delta.union_payload_boxes >= 1);
+    assert!(delta.closure_environments >= 1);
+    assert!(delta.opaque_boxes >= 1);
+    assert!(delta.callable_overflow_allocations >= 1);
+
+    let stats = RepresentationStats {
+        union_payload_boxes: 2,
+        closure_environments: 1,
+        opaque_boxes: 10,
+        callable_overflow_allocations: 0,
+    };
+    let line = stats.report_line("direct");
+    assert_eq!(
+        line,
+        "aura runtime stats (direct): union_payload_boxes=2 closure_environments=1 opaque_boxes=10 callable_overflow_allocations=0"
+    );
+    assert_eq!(
+        RepresentationStats::parse_report_line(&line),
+        Some(("direct".to_string(), stats))
+    );
+    assert_eq!(
+        RepresentationStats::parse_report_line("aura runtime stats (mir): heap=1"),
+        None
+    );
+    assert_eq!(
+        RepresentationStats::parse_report_line("aura runtime stats (mir): opaque_boxes=x"),
+        None
+    );
+    assert_eq!(RepresentationStats::parse_report_line("nothing"), None);
+    assert!(
+        !representation_stats::requested()
+            || std::env::var_os(representation_stats::ENV_VAR).is_some()
+    );
+}

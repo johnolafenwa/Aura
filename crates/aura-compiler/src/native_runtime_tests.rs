@@ -23076,3 +23076,53 @@ fn direct_json_indent_accepts_a_bare_none_argument() {
         None
     );
 }
+
+#[test]
+fn direct_union_tag_and_payload_copy_serve_inline_union_boundaries() {
+    let target = coverage_union(vec![Type::named("int64"), Type::Unit]);
+    let int_index = coverage_union_member_index(&target, &Type::named("int64"));
+    let none_index = coverage_union_member_index(&target, &Type::Unit);
+    let some = boxed_value(coverage_union_value(&target, int_index, coverage_int(41)));
+    let none = boxed_value(coverage_union_value(&target, none_index, Value::Unit));
+    assert_eq!(super::aura_direct_union_tag(some), int_index as i64);
+    assert_eq!(super::aura_direct_union_tag(none), none_index as i64);
+    assert_eq!(
+        expect_int(super::aura_direct_union_payload_copy(some, int_index)),
+        41
+    );
+    assert_eq!(
+        coverage_union_payload(some),
+        coverage_int(41),
+        "a payload copy leaves the union intact"
+    );
+    let copied_none = super::aura_direct_union_payload_copy(none, none_index);
+    assert_eq!(super::aura_direct_none_test(copied_none), 1);
+    unsafe {
+        release_value(copied_none);
+        release_value(some);
+        release_value(none);
+    }
+
+    let not_a_union = int_value(7) as usize;
+    assert_eq!(
+        capture_direct_boundary_error_message(move || {
+            super::aura_direct_union_tag(not_a_union as *mut OpaqueValue);
+        }),
+        "direct union tag read expected a union value"
+    );
+    let not_a_union = int_value(7) as usize;
+    assert_eq!(
+        capture_direct_boundary_error_message(move || {
+            super::aura_direct_union_payload_copy(not_a_union as *mut OpaqueValue, 0);
+        }),
+        "direct union payload copy expected a union value"
+    );
+    let mismatched =
+        boxed_value(coverage_union_value(&target, int_index, coverage_int(1))) as usize;
+    assert_eq!(
+        capture_direct_boundary_error_message(move || {
+            super::aura_direct_union_payload_copy(mismatched as *mut OpaqueValue, none_index);
+        }),
+        "direct union payload copy member mismatch"
+    );
+}

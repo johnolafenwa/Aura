@@ -1,0 +1,15 @@
+def main():
+    items: list[int64 | None] = [7, None, 9]
+    first: int64 | None = items[0]
+    second: int64 | None = items[1]
+    match first:
+        case int64 as number:
+            print(number)
+        case None:
+            print("none")
+    match second:
+        case int64 as number:
+            print(number)
+        case None:
+            print("none")
+    print(items[2] == 9)

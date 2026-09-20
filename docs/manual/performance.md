@@ -263,6 +263,36 @@ For before Arrays, use the original tag's own runner, the same interpreter and
 standalone integer runner, only `--repeats 11` is supported. Keep the distinct
 measurement families and source identities separate.
 
+## Representation
+
+The Batch 1 representation phase measures allocation behavior with the
+runtime's own counters rather than a host allocator: every union payload
+box, closure environment, opaque runtime box, and callable overflow
+allocation is counted on both backends, and a process run with
+`AURA_RUNTIME_STATS=1` prints the totals on standard error when its program
+ends. `benchmarks/representation` holds the programs and
+`scripts/bench-representation.py` records the counters, the direct binary's
+size, and wall time with commit provenance; the numbers below are the
+counters, which are deterministic for these programs, measured at
+`6f19ac88` and archived with a checksum manifest in
+[work/2026-09-20-representation-measurements](https://github.com/johnolafenwa/Aura/blob/main/work/2026-09-20-representation-measurements).
+
+| Program | Interpreter | Direct backend |
+| --- | --- | --- |
+| `union_scalar_local` (one million `int64 \| None` injections and tag tests) | 2,000,000 union boxes | 0 union boxes |
+| `union_class_field` (one hundred thousand `Point \| None` class fields) | 100,000 union boxes | 0 union boxes |
+| `callable_pack_inline` (one hundred thousand one-capture packings) | 100,000 environments | 100,000 environments |
+| `callable_pack_overflow` (one hundred thousand four-capture packings) | 100,000 environments | 100,000 environments |
+| `callable_move` (one packing moved one hundred thousand times) | 1 environments | 1 environments |
+
+A union whose members are all inline (scalars, `None`, plain classes) is one
+tagged value in registers and locals on the direct backend, so its
+injections allocate nothing; the interpreter's boxes are reference numbers
+for its `Value` model, not an ABI claim. Unions with a runtime-object
+member and every closure environment still allocate; the four-word callable
+layout (Q15 A / Q16 A) and the owned-handle union members are the phase's
+second pull request, and these rows are re-measured there.
+
 ## Executable Size
 
 Current counts are exact executable bytes from a clean detached release build

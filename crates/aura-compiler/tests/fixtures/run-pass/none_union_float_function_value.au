@@ -1,0 +1,19 @@
+def halve(value: float64 | None) -> float64 | None:
+    match value:
+        case float64 as number:
+            return number / 2.0
+        case None:
+            return None
+
+def main():
+    step: def(value: float64 | None) -> (float64 | None) = halve
+    match step(3.0):
+        case float64 as number:
+            print(number)
+        case None:
+            print("none")
+    match step(None):
+        case float64 as number:
+            print(number)
+        case None:
+            print("none")

@@ -1,0 +1,23 @@
+class Point:
+    x: int64
+    y: int64
+
+def locate(flag: bool) -> Point | None:
+    if flag:
+        return Point(x=3, y=4)
+    return None
+
+def main():
+    with group = TaskGroup():
+        found = group.start(locate, true)
+        missing = group.start(locate, false)
+        match found.result_or(None, timeout=5s):
+            case Point as point:
+                print(point.x + point.y)
+            case None:
+                print("none")
+        match missing.result_or(None, timeout=5s):
+            case Point as point:
+                print(point.x)
+            case None:
+                print("none")

@@ -1,0 +1,229 @@
+{
+  "aura": "/Users/johnolafenwa/source2/Aurora/target/debug/aura",
+  "commit": "6f19ac88d681115a5eb70a20d583bb6efa135038",
+  "records": {
+    "callable_move": {
+      "direct": {
+        "binary_bytes": 4835368,
+        "elapsed_s": 3.515987625000008,
+        "stats": {
+          "callable_overflow_allocations": 0,
+          "closure_environments": 1,
+          "opaque_boxes": 7,
+          "union_payload_boxes": 0
+        },
+        "stdout": "42\n"
+      },
+      "mir": {
+        "elapsed_s": 5.320494666000002,
+        "stats": {
+          "callable_overflow_allocations": 0,
+          "closure_environments": 1,
+          "opaque_boxes": 0,
+          "union_payload_boxes": 0
+        },
+        "stdout": "42\n"
+      }
+    },
+    "callable_pack_inline": {
+      "direct": {
+        "binary_bytes": 4835368,
+        "elapsed_s": 11.857459875000018,
+        "stats": {
+          "callable_overflow_allocations": 0,
+          "closure_environments": 100000,
+          "opaque_boxes": 600001,
+          "union_payload_boxes": 0
+        },
+        "stdout": "5000050000\n"
+      },
+      "mir": {
+        "elapsed_s": 17.069786166,
+        "stats": {
+          "callable_overflow_allocations": 0,
+          "closure_environments": 100000,
+          "opaque_boxes": 0,
+          "union_payload_boxes": 0
+        },
+        "stdout": "5000050000\n"
+      }
+    },
+    "callable_pack_overflow": {
+      "direct": {
+        "binary_bytes": 4835376,
+        "elapsed_s": 17.224745708,
+        "stats": {
+          "callable_overflow_allocations": 0,
+          "closure_environments": 100000,
+          "opaque_boxes": 1200001,
+          "union_payload_boxes": 0
+        },
+        "stdout": "5000650000\n"
+      },
+      "mir": {
+        "elapsed_s": 25.425408290999997,
+        "stats": {
+          "callable_overflow_allocations": 0,
+          "closure_environments": 100000,
+          "opaque_boxes": 0,
+          "union_payload_boxes": 0
+        },
+        "stdout": "5000650000\n"
+      }
+    },
+    "union_class_field": {
+      "direct": {
+        "binary_bytes": 3657944,
+        "elapsed_s": 0.3147962090000078,
+        "stats": {
+          "callable_overflow_allocations": 0,
+          "closure_environments": 0,
+          "opaque_boxes": 1,
+          "union_payload_boxes": 0
+        },
+        "stdout": "5000050000\n"
+      },
+      "mir": {
+        "elapsed_s": 14.379437291999992,
+        "stats": {
+          "callable_overflow_allocations": 0,
+          "closure_environments": 0,
+          "opaque_boxes": 0,
+          "union_payload_boxes": 100000
+        },
+        "stdout": "5000050000\n"
+      }
+    },
+    "union_scalar_local": {
+      "direct": {
+        "binary_bytes": 3657944,
+        "elapsed_s": 0.359278584000009,
+        "stats": {
+          "callable_overflow_allocations": 0,
+          "closure_environments": 0,
+          "opaque_boxes": 1,
+          "union_payload_boxes": 0
+        },
+        "stdout": "499999500000\n"
+      },
+      "mir": {
+        "elapsed_s": 114.74054833299999,
+        "stats": {
+          "callable_overflow_allocations": 0,
+          "closure_environments": 0,
+          "opaque_boxes": 0,
+          "union_payload_boxes": 2000000
+        },
+        "stdout": "499999500000\n"
+      }
+    }
+  },
+  "schema_version": 1,
+  "summary": {
+    "callable_move": {
+      "direct": {
+        "binary_bytes": 4835368,
+        "elapsed_s": 3.515987625000008,
+        "stats": {
+          "callable_overflow_allocations": 0,
+          "closure_environments": 1,
+          "opaque_boxes": 7,
+          "union_payload_boxes": 0
+        }
+      },
+      "mir": {
+        "elapsed_s": 5.320494666000002,
+        "stats": {
+          "callable_overflow_allocations": 0,
+          "closure_environments": 1,
+          "opaque_boxes": 0,
+          "union_payload_boxes": 0
+        }
+      }
+    },
+    "callable_pack_inline": {
+      "direct": {
+        "binary_bytes": 4835368,
+        "elapsed_s": 11.857459875000018,
+        "stats": {
+          "callable_overflow_allocations": 0,
+          "closure_environments": 100000,
+          "opaque_boxes": 600001,
+          "union_payload_boxes": 0
+        }
+      },
+      "mir": {
+        "elapsed_s": 17.069786166,
+        "stats": {
+          "callable_overflow_allocations": 0,
+          "closure_environments": 100000,
+          "opaque_boxes": 0,
+          "union_payload_boxes": 0
+        }
+      }
+    },
+    "callable_pack_overflow": {
+      "direct": {
+        "binary_bytes": 4835376,
+        "elapsed_s": 17.224745708,
+        "stats": {
+          "callable_overflow_allocations": 0,
+          "closure_environments": 100000,
+          "opaque_boxes": 1200001,
+          "union_payload_boxes": 0
+        }
+      },
+      "mir": {
+        "elapsed_s": 25.425408290999997,
+        "stats": {
+          "callable_overflow_allocations": 0,
+          "closure_environments": 100000,
+          "opaque_boxes": 0,
+          "union_payload_boxes": 0
+        }
+      }
+    },
+    "union_class_field": {
+      "direct": {
+        "binary_bytes": 3657944,
+        "elapsed_s": 0.3147962090000078,
+        "stats": {
+          "callable_overflow_allocations": 0,
+          "closure_environments": 0,
+          "opaque_boxes": 1,
+          "union_payload_boxes": 0
+        }
+      },
+      "mir": {
+        "elapsed_s": 14.379437291999992,
+        "stats": {
+          "callable_overflow_allocations": 0,
+          "closure_environments": 0,
+          "opaque_boxes": 0,
+          "union_payload_boxes": 100000
+        }
+      }
+    },
+    "union_scalar_local": {
+      "direct": {
+        "binary_bytes": 3657944,
+        "elapsed_s": 0.359278584000009,
+        "stats": {
+          "callable_overflow_allocations": 0,
+          "closure_environments": 0,
+          "opaque_boxes": 1,
+          "union_payload_boxes": 0
+        }
+      },
+      "mir": {
+        "elapsed_s": 114.74054833299999,
+        "stats": {
+          "callable_overflow_allocations": 0,
+          "closure_environments": 0,
+          "opaque_boxes": 0,
+          "union_payload_boxes": 2000000
+        }
+      }
+    }
+  }
+}
