@@ -146,7 +146,7 @@ FFI or ABI claim, and any change to the ratified Batch 1 answers.
 **Constraints honored throughout.**
 
 - Clean-slate policy ([ADR-0057](decisions/0057-clean-slate-pre-adoption-policy.md)):
-  where an existing spelling or rule changes, the old form has no
+  where an existing spelling or rule changes, the changed spelling gets no
   compatibility layer, migration diagnostic, or quick fix.
 - Every feature lands on both maintained backends through the thin boundary
   described in [15-backend-boundary.md](15-backend-boundary.md), with the
@@ -749,7 +749,7 @@ arm (the same arm-local rule as enum payload views,
 | --- | --- |
 | Arm-scoped `lookup` outcome (recommended) | One probe, no clone, present-None preserved, mutable form; a second-class outcome, consistent with second-class borrows; costs one compiler-known member and one guarded keyed loan lowering |
 | Presence guard plus index (`if key in table: view v = table[key]`) | No new operation; two probes; the guarded index still carries a statically unprovable trap path; no combined mutable form beyond `view mut` |
-| A `Lookup[view V]` value returned by a method | Requires a view-bearing generic enum, which ADR-0038 defers and ADR-0052 forbids for unions; a first-class view value would also need an escape rule for every destination |
+| A `Lookup[view V]` value returned by a method | Requires a view-bearing generic enum, which ADR-0038 defers and ADR-0052 forbids for unions; a view-bearing first-class value would also need an escape rule for every destination |
 
 `lookup` becomes a builtin member of `list[T]` and `dict[K, V]`; under the
 clean-slate policy a user trait method named `lookup` implemented for those
@@ -2021,7 +2021,7 @@ Each question lists its alternatives and one recommendation. The
 
 **Q5 — A5: Should list iteration bindings become element loans?**
 
-- A. Unify: bare and `mut` list iteration hold a root loan and bind element loans with immediate write-through; `MutableIterationWriteback` is retired for lists; reborrows from loop bindings are allowed.
+- A. Unify: bare and `mut` list iteration hold a root loan and bind element loans with immediate write-through; `MutableIterationWriteback` is no longer emitted for lists; reborrows from loop bindings are allowed.
 - B. Keep the separate loop provenance and edge-time writeback; loop bindings are not views.
 - **Recommended: A.**
 - **Ratified: A.**
