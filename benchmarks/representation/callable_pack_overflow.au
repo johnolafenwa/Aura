@@ -1,0 +1,13 @@
+type Summer = Callable[def(value: int64) -> int64]
+
+def make(a: own int64, b: own int64, c: own int64, d: own int64) -> Summer:
+    return Summer(lambda value: value + a + b + c + d)
+
+def main():
+    mut total = 0
+    mut index = 0
+    while index < 100000:
+        sum = make(index, 1, 2, 3)
+        total = total + sum(1)
+        index = index + 1
+    print(total)

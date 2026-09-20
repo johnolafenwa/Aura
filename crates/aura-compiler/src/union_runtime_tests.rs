@@ -1,6 +1,6 @@
 use super::*;
 use crate::integer::IntegerValue;
-use crate::runtime_value::InstanceValue;
+use crate::runtime_value::{InstanceValue, UnionValue};
 use std::collections::BTreeMap;
 
 fn union(members: Vec<Type>) -> UnionType {

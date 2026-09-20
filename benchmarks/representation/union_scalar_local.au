@@ -1,0 +1,12 @@
+def main():
+    mut total = 0
+    mut index = 0
+    while index < 1000000:
+        value: int64 | None = index
+        match value:
+            case int64 as number:
+                total = total + number
+            case None:
+                total = total - 1
+        index = index + 1
+    print(total)

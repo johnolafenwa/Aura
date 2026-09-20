@@ -1790,7 +1790,7 @@ fn direct_select_inference_preserves_queue_and_task_payload_types() {
             &select_call,
             &variable_types,
             &HashMap::new(),
-            &HashMap::new(),
+            &HashMap::new(), &[]
         ),
         Some(DirectType::Opaque(Type::Named(
             "SelectOutcome".to_string(),
@@ -10850,7 +10850,7 @@ fn d2_numeric_member_and_floor_division_inference_preserve_backend_result_types(
                 },
                 &variable_types,
                 &function_return_types,
-                &classes,
+                &classes, &[]
             ),
             Some(expected),
             "floor division should preserve the numeric type of `{place}`",
@@ -10870,7 +10870,7 @@ fn d2_numeric_member_and_floor_division_inference_preserve_backend_result_types(
                 },
                 &variable_types,
                 &function_return_types,
-                &classes,
+                &classes, &[]
             ),
             Some(DirectType::Scalar(ScalarKind::Float64)),
             "integer `{place}` should infer `to_float()` as float64",
@@ -10917,7 +10917,7 @@ fn s1_direct_inference_pins_numeric_collection_and_constant_abis() {
             },
             &variable_types,
             &returns,
-            &classes,
+            &classes, &[]
         ),
         None,
         "module-constant reads use their declared destination ABI instead of guessing from the key",
@@ -10935,7 +10935,7 @@ fn s1_direct_inference_pins_numeric_collection_and_constant_abis() {
                 },
                 &variable_types,
                 &returns,
-                &classes,
+                &classes, &[]
             ),
             Some(expected),
             "round must preserve integer width and return int64 for float input",
@@ -10954,7 +10954,7 @@ fn s1_direct_inference_pins_numeric_collection_and_constant_abis() {
                 },
                 &variable_types,
                 &returns,
-                &classes,
+                &classes, &[]
             ),
             Some(DirectType::Opaque(Type::Tuple(vec![
                 element_type.clone(),
@@ -10982,7 +10982,7 @@ fn s1_direct_inference_pins_numeric_collection_and_constant_abis() {
                 },
                 &variable_types,
                 &returns,
-                &classes,
+                &classes, &[]
             ),
             Some(DirectType::Scalar(ScalarKind::Int64)),
             "{field} must preserve the receiver's direct scalar lane",
@@ -11001,7 +11001,7 @@ fn s1_direct_inference_pins_numeric_collection_and_constant_abis() {
             },
             &variable_types,
             &returns,
-            &classes,
+            &classes, &[]
         ),
         Some(DirectType::Opaque(Type::Named(
             "list".to_string(),
@@ -11168,7 +11168,7 @@ fn infer_operand_and_rvalue_types_track_plain_classes() {
             },
             &variable_types,
             &returns,
-            &classes,
+            &classes, &[]
         ),
         Some(DirectType::Scalar(ScalarKind::Bool))
     );
@@ -11181,7 +11181,7 @@ fn infer_operand_and_rvalue_types_track_plain_classes() {
             },
             &variable_types,
             &returns,
-            &classes,
+            &classes, &[]
         ),
         Some(DirectType::Scalar(ScalarKind::Int32))
     );
@@ -11194,7 +11194,7 @@ fn infer_operand_and_rvalue_types_track_plain_classes() {
             },
             &variable_types,
             &returns,
-            &classes,
+            &classes, &[]
         ),
         Some(DirectType::Scalar(ScalarKind::Float64))
     );
@@ -11207,7 +11207,7 @@ fn infer_operand_and_rvalue_types_track_plain_classes() {
             },
             &variable_types,
             &returns,
-            &classes,
+            &classes, &[]
         ),
         None
     );
@@ -11221,7 +11221,7 @@ fn infer_operand_and_rvalue_types_track_plain_classes() {
             },
             &variable_types,
             &returns,
-            &classes,
+            &classes, &[]
         ),
         Some(DirectType::Scalar(ScalarKind::Int32))
     );
@@ -11236,7 +11236,7 @@ fn infer_operand_and_rvalue_types_track_plain_classes() {
                 },
                 &variable_types,
                 &returns,
-                &classes,
+                &classes, &[]
             ),
             Some(DirectType::Scalar(ScalarKind::Bool)),
             "boolean operator `{op:?}` should infer bool",
@@ -11254,7 +11254,7 @@ fn infer_operand_and_rvalue_types_track_plain_classes() {
             },
             &variable_types,
             &returns,
-            &classes,
+            &classes, &[]
         ),
         Some(DirectType::Scalar(ScalarKind::Unit))
     );
@@ -11266,7 +11266,7 @@ fn infer_operand_and_rvalue_types_track_plain_classes() {
             },
             &variable_types,
             &returns,
-            &classes,
+            &classes, &[]
         ),
         Some(DirectType::Scalar(ScalarKind::Float64))
     );
@@ -11277,7 +11277,7 @@ fn infer_operand_and_rvalue_types_track_plain_classes() {
             },
             &variable_types,
             &returns,
-            &classes,
+            &classes, &[]
         ),
         Some(DirectType::Opaque(Type::named("str")))
     );
@@ -11290,7 +11290,7 @@ fn infer_operand_and_rvalue_types_track_plain_classes() {
             },
             &variable_types,
             &returns,
-            &classes,
+            &classes, &[]
         ),
         Some(DirectType::Scalar(ScalarKind::Float64))
     );
@@ -11302,7 +11302,7 @@ fn infer_operand_and_rvalue_types_track_plain_classes() {
             },
             &variable_types,
             &returns,
-            &classes,
+            &classes, &[]
         ),
         Some(DirectType::Opaque(Type::Named(
             "list".to_string(),
@@ -11321,7 +11321,7 @@ fn infer_operand_and_rvalue_types_track_plain_classes() {
             },
             &variable_types,
             &returns,
-            &classes,
+            &classes, &[]
         ),
         Some(DirectType::Opaque(Type::Named(
             "dict".to_string(),
@@ -11336,7 +11336,7 @@ fn infer_operand_and_rvalue_types_track_plain_classes() {
             },
             &variable_types,
             &returns,
-            &classes,
+            &classes, &[]
         ),
         Some(DirectType::Opaque(Type::Named(
             "set".to_string(),
@@ -11404,7 +11404,7 @@ fn infer_operand_and_rvalue_types_track_plain_classes() {
                 },
                 &variable_types,
                 &returns,
-                &classes,
+                &classes, &[]
             ),
             Some(expected),
             "expected builtin `{name}` to infer correctly",
@@ -11424,7 +11424,7 @@ fn infer_operand_and_rvalue_types_track_plain_classes() {
                 },
                 &variable_types,
                 &returns,
-                &classes,
+                &classes, &[]
             ),
             Some(DirectType::Opaque(Type::Named(
                 expected_variant.to_string(),
@@ -11452,7 +11452,7 @@ fn infer_operand_and_rvalue_types_track_plain_classes() {
                 },
                 &variable_types,
                 &returns,
-                &classes,
+                &classes, &[]
             ),
             Some(DirectType::Opaque(Type::Named(
                 if name == "wait_any" {
@@ -11481,7 +11481,7 @@ fn infer_operand_and_rvalue_types_track_plain_classes() {
                 },
                 &variable_types,
                 &returns,
-                &classes,
+                &classes, &[]
             ),
             Some(DirectType::Opaque(Type::Named(
                 "WaitAny".to_string(),
@@ -11657,7 +11657,7 @@ fn infer_operand_and_rvalue_types_track_plain_classes() {
                 },
                 &variable_types,
                 &returns,
-                &classes,
+                &classes, &[]
             ),
             Some(expected),
             "expected direct builtin `{name}` to infer correctly",
@@ -11704,7 +11704,7 @@ fn infer_operand_and_rvalue_types_track_plain_classes() {
                 },
                 &variable_types,
                 &returns,
-                &classes,
+                &classes, &[]
             ),
             expected,
             "expected direct member `{field}` to infer correctly",
@@ -11718,7 +11718,7 @@ fn infer_operand_and_rvalue_types_track_plain_classes() {
             },
             &variable_types,
             &returns,
-            &classes,
+            &classes, &[]
         ),
         Some(DirectType::Opaque(Type::named("str")))
     );
@@ -11729,7 +11729,7 @@ fn infer_operand_and_rvalue_types_track_plain_classes() {
             },
             &variable_types,
             &returns,
-            &classes,
+            &classes, &[]
         ),
         Some(DirectType::Opaque(Type::named("Unknown")))
     );
@@ -11741,7 +11741,7 @@ fn infer_operand_and_rvalue_types_track_plain_classes() {
             },
             &variable_types,
             &returns,
-            &classes,
+            &classes, &[]
         ),
         Some(DirectType::PlainClass(PlainClassType {
             class_name: "Point".to_string(),
@@ -11756,7 +11756,7 @@ fn infer_operand_and_rvalue_types_track_plain_classes() {
             },
             &variable_types,
             &returns,
-            &classes,
+            &classes, &[]
         ),
         Some(DirectType::Scalar(ScalarKind::Float64))
     );
@@ -11769,7 +11769,7 @@ fn infer_operand_and_rvalue_types_track_plain_classes() {
             },
             &variable_types,
             &returns,
-            &classes,
+            &classes, &[]
         ),
         Some(DirectType::Opaque(Type::named("Lookup")))
     );
@@ -11782,7 +11782,7 @@ fn infer_operand_and_rvalue_types_track_plain_classes() {
             },
             &variable_types,
             &returns,
-            &classes,
+            &classes, &[]
         ),
         Some(DirectType::Opaque(Type::named("Unknown")))
     );
@@ -11799,7 +11799,7 @@ fn infer_operand_and_rvalue_types_track_plain_classes() {
             },
             &variable_types,
             &returns,
-            &classes,
+            &classes, &[]
         ),
         Some(DirectType::Opaque(Type::Named(
             "Task".to_string(),
@@ -11819,7 +11819,7 @@ fn infer_operand_and_rvalue_types_track_plain_classes() {
             },
             &variable_types,
             &returns,
-            &classes,
+            &classes, &[]
         ),
         Some(DirectType::Scalar(ScalarKind::Unit))
     );
@@ -11836,7 +11836,7 @@ fn infer_operand_and_rvalue_types_track_plain_classes() {
             },
             &variable_types,
             &returns,
-            &classes,
+            &classes, &[]
         ),
         None
     );
@@ -12523,7 +12523,7 @@ fn direct_field_and_try_helpers_cover_remaining_direct_inference_paths() {
             },
             &variable_types,
             &HashMap::new(),
-            &classes,
+            &classes, &[]
         ),
         Some(DirectType::Opaque(Type::named("Entry")))
     );

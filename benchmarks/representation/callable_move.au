@@ -1,0 +1,13 @@
+type Adder = Callable[def(value: int64) -> int64]
+
+def make(offset: own int64) -> Adder:
+    return Adder(lambda value: value + offset)
+
+def main():
+    mut current = make(1)
+    mut index = 0
+    while index < 100000:
+        moved = current
+        current = moved
+        index = index + 1
+    print(current(41))
