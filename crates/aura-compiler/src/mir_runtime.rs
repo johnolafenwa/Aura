@@ -202,10 +202,12 @@ pub(crate) fn run_entry_with_stdout_sink_and_program_args_trusted(
             ));
         }
     };
-    match handle.join() {
+    let result = match handle.join() {
         Ok(result) => result.map_err(Diagnostic::into_runtime_trap),
         Err(payload) => std::panic::resume_unwind(payload),
-    }
+    };
+    crate::runtime_value::representation_stats::report_if_requested("mir");
+    result
 }
 
 fn reject_untrusted_extern_calls(module: &MirModule) -> Result<()> {

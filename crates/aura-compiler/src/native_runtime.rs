@@ -1194,6 +1194,7 @@ fn boxed_value_with_type(value: Value, runtime_type_name: Option<String>) -> *mu
     }));
     #[cfg(coverage)]
     DIRECT_VALUE_LIVE_COUNT.fetch_add(1, Ordering::Relaxed);
+    crate::runtime_value::representation_stats::note_opaque_box();
     register_direct_owned_value(value);
     value
 }
@@ -3736,6 +3737,7 @@ pub unsafe extern "C-unwind" fn aura_direct_run_root(thunk_ptr: i64) -> i32 {
         }
         let _module_constant_cleanup = ModuleConstantCleanup;
         let result = run_direct_root_task(thunk);
+        crate::runtime_value::representation_stats::report_if_requested("direct");
         match result {
             Ok(Value::Int(value)) => value.as_i128().unwrap_or_default() as i32,
             Ok(Value::Unit) => 0,
@@ -7280,6 +7282,39 @@ pub extern "C-unwind" fn aura_direct_union_take_payload(
                 union.payload
             })
         };
+        boxed_value(payload)
+    })
+}
+
+/// The active member's dense tag of a boxed union, for an inline union that
+/// re-enters generated code from a runtime container or helper.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_union_tag(value: *mut OpaqueValue) -> i64 {
+    task_runtime_boundary(|| {
+        let Value::Union(union) = (unsafe { value_ref(value) }) else {
+            runtime_error("direct union tag read expected a union value");
+        };
+        i64::try_from(union.member_index)
+            .unwrap_or_else(|_| runtime_error("direct union tag does not fit in int64"))
+    })
+}
+
+/// A copy of a boxed union's active payload, checked against the member the
+/// generated tag switch selected; the union itself stays intact.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_union_payload_copy(
+    value: *mut OpaqueValue,
+    member_index: usize,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let Value::Union(union) = (unsafe { value_ref(value) }) else {
+            runtime_error("direct union payload copy expected a union value");
+        };
+        if union.member_index != member_index {
+            runtime_error("direct union payload copy member mismatch");
+        }
+        let payload = try_clone_array_containing_value(&union.payload)
+            .unwrap_or_else(|error| runtime_diagnostic_error(error));
         boxed_value(payload)
     })
 }
@@ -12842,6 +12877,24 @@ pub extern "C-unwind" fn aura_direct_fail_erased_union_mutable_receiver(
     task_runtime_boundary(|| match runtime_span(line, column) {
         Some(span) => runtime_error_at(span, MESSAGE),
         None => runtime_error(MESSAGE),
+    })
+}
+
+/// A checked inline-union unwrap found another member active; the message
+/// names the member the generated code expected.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_fail_union_member(
+    message_ptr: *const u8,
+    message_len: usize,
+    line: i64,
+    column: i64,
+) -> ! {
+    task_runtime_boundary(|| {
+        let message = decode_bytes(message_ptr, message_len);
+        match runtime_span(line, column) {
+            Some(span) => runtime_error_at(span, message),
+            None => runtime_error(message),
+        }
     })
 }
 

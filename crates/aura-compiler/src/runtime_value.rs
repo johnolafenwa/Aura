@@ -301,6 +301,127 @@ pub enum Value {
 
 /// Interpreter and opaque boundary transport for a selected union payload.
 /// Native local layout is planned independently by the shared MIR layout plan.
+/// Allocation counters for the representation phase (checkpoint Q9 A, Q15 A,
+/// Q16 A). Both runtimes count every union payload box, closure environment,
+/// opaque runtime box, and callable overflow allocation, and a process whose
+/// `AURA_RUNTIME_STATS` environment variable is `1` reports the totals on
+/// standard error when its program ends, so measurements are the same
+/// numbers on the interpreter and the direct backend.
+pub mod representation_stats {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static UNION_PAYLOAD_BOXES: AtomicU64 = AtomicU64::new(0);
+    static CLOSURE_ENVIRONMENTS: AtomicU64 = AtomicU64::new(0);
+    static OPAQUE_BOXES: AtomicU64 = AtomicU64::new(0);
+    static CALLABLE_OVERFLOW_ALLOCATIONS: AtomicU64 = AtomicU64::new(0);
+
+    /// The environment variable that requests the exit report.
+    pub const ENV_VAR: &str = "AURA_RUNTIME_STATS";
+
+    /// A snapshot of the process-wide counters.
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+    pub struct RepresentationStats {
+        pub union_payload_boxes: u64,
+        pub closure_environments: u64,
+        pub opaque_boxes: u64,
+        pub callable_overflow_allocations: u64,
+    }
+
+    impl RepresentationStats {
+        /// The counters that grew since `earlier`.
+        pub fn since(self, earlier: RepresentationStats) -> RepresentationStats {
+            RepresentationStats {
+                union_payload_boxes: self.union_payload_boxes - earlier.union_payload_boxes,
+                closure_environments: self.closure_environments - earlier.closure_environments,
+                opaque_boxes: self.opaque_boxes - earlier.opaque_boxes,
+                callable_overflow_allocations: self.callable_overflow_allocations
+                    - earlier.callable_overflow_allocations,
+            }
+        }
+
+        /// The report line a backend prints at exit.
+        pub fn report_line(self, backend: &str) -> String {
+            format!(
+                "aura runtime stats ({backend}): union_payload_boxes={} closure_environments={} opaque_boxes={} callable_overflow_allocations={}",
+                self.union_payload_boxes,
+                self.closure_environments,
+                self.opaque_boxes,
+                self.callable_overflow_allocations
+            )
+        }
+
+        /// Parses a report line back into counters.
+        pub fn parse_report_line(line: &str) -> Option<(String, RepresentationStats)> {
+            let rest = line.strip_prefix("aura runtime stats (")?;
+            let (backend, fields) = rest.split_once("): ")?;
+            let mut stats = RepresentationStats::default();
+            for field in fields.split_whitespace() {
+                let (name, value) = field.split_once('=')?;
+                let value = value.parse::<u64>().ok()?;
+                match name {
+                    "union_payload_boxes" => stats.union_payload_boxes = value,
+                    "closure_environments" => stats.closure_environments = value,
+                    "opaque_boxes" => stats.opaque_boxes = value,
+                    "callable_overflow_allocations" => {
+                        stats.callable_overflow_allocations = value
+                    }
+                    _ => return None,
+                }
+            }
+            Some((backend.to_string(), stats))
+        }
+    }
+
+    pub fn note_union_payload_box() {
+        UNION_PAYLOAD_BOXES.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn note_closure_environment() {
+        CLOSURE_ENVIRONMENTS.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn note_opaque_box() {
+        OPAQUE_BOXES.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn note_callable_overflow_allocation() {
+        CALLABLE_OVERFLOW_ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// The current totals.
+    pub fn snapshot() -> RepresentationStats {
+        RepresentationStats {
+            union_payload_boxes: UNION_PAYLOAD_BOXES.load(Ordering::Relaxed),
+            closure_environments: CLOSURE_ENVIRONMENTS.load(Ordering::Relaxed),
+            opaque_boxes: OPAQUE_BOXES.load(Ordering::Relaxed),
+            callable_overflow_allocations: CALLABLE_OVERFLOW_ALLOCATIONS.load(Ordering::Relaxed),
+        }
+    }
+
+    /// Whether the process asked for the exit report.
+    pub fn requested() -> bool {
+        std::env::var_os(ENV_VAR).is_some_and(|value| value == "1")
+    }
+
+    /// Prints the report on standard error when requested.
+    pub fn report_if_requested(backend: &str) {
+        if requested() {
+            eprintln!("{}", snapshot().report_line(backend));
+        }
+    }
+}
+
+/// Boxes a union value and counts the allocation for the representation
+/// measurements; every runtime union construction goes through here.
+pub(crate) fn union_value(union_type: Type, member_index: usize, payload: Value) -> Value {
+    representation_stats::note_union_payload_box();
+    Value::Union(Box::new(UnionValue {
+        union_type,
+        member_index,
+        payload,
+    }))
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct UnionValue {
     pub union_type: Type,
@@ -396,6 +517,7 @@ impl ClosureEnvironment {
     }
 
     pub fn new(captures: Vec<ClosureCaptureValue>, consuming: bool) -> Self {
+        representation_stats::note_closure_environment();
         Self {
             captures: Mutex::new(Some(captures)),
             consuming,
@@ -2297,11 +2419,8 @@ pub(crate) fn try_clone_array_containing_value(value: &Value) -> Result<Value> {
                     }
                 }
                 CloneFrame::Union { union } => {
-                    state.completed = Some(Value::Union(Box::new(UnionValue {
-                        union_type: union.union_type.clone(),
-                        member_index: union.member_index,
-                        payload: cloned,
-                    })));
+                    state.completed =
+                        Some(union_value(union.union_type.clone(), union.member_index, cloned));
                 }
             }
         }
@@ -14051,11 +14170,7 @@ pub(crate) fn optional_present(member: crate::sema::Type, value: Value) -> Value
         .iter()
         .position(|member| !matches!(member, crate::sema::Type::Unit))
         .expect("an optional union has a present member");
-    Value::Union(Box::new(UnionValue {
-        union_type: union_type.clone(),
-        member_index,
-        payload: value,
-    }))
+    union_value(union_type.clone(), member_index, value)
 }
 
 /// The absent builtin optional result: the `None` member of `member | None`.
@@ -14069,11 +14184,7 @@ pub(crate) fn optional_absent(member: crate::sema::Type) -> Value {
         .iter()
         .position(|member| matches!(member, crate::sema::Type::Unit))
         .expect("an optional union has a None member");
-    Value::Union(Box::new(UnionValue {
-        union_type: union_type.clone(),
-        member_index,
-        payload: Value::Unit,
-    }))
+    union_value(union_type.clone(), member_index, Value::Unit)
 }
 
 /// `Some(value)` becomes the present member, `None` the absent member.

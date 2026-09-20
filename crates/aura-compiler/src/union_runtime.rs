@@ -16,7 +16,7 @@
 //! member that the instruction's union cannot admit is rejected, so forged or
 //! mismatched MIR still fails closed.
 
-use crate::runtime_value::{UnionValue, Value};
+use crate::runtime_value::Value;
 use crate::sema::{Type, UnionType};
 
 /// How a value must change to take the layout of a target union.
@@ -205,11 +205,11 @@ pub(crate) fn align_union_value(
         }
         UnionAlignment::Lift(index) => {
             let payload = std::mem::replace(value, Value::Unit);
-            *value = Value::Union(Box::new(UnionValue {
-                union_type: Type::Union(Box::new(target.clone())),
-                member_index: index,
+            *value = crate::runtime_value::union_value(
+                Type::Union(Box::new(target.clone())),
+                index,
                 payload,
-            }));
+            );
             Ok(index)
         }
     }
@@ -234,11 +234,11 @@ pub(crate) fn inject_union_member(
         align_union_value(&mut flattened, target, "union injection")?;
         return Ok(flattened);
     }
-    Ok(Value::Union(Box::new(UnionValue {
-        union_type: Type::Union(Box::new(target.clone())),
+    Ok(crate::runtime_value::union_value(
+        Type::Union(Box::new(target.clone())),
         member_index,
         payload,
-    })))
+    ))
 }
 
 /// Normalizes a value crossing a typed boundary: a union takes the layout of
