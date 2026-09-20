@@ -29,7 +29,7 @@ Guards do not count toward coverage, so include an unguarded arm for every
 member or a final `_`. Type arms also work inside an enum payload pattern.
 
 See [union_type_patterns.au](../examples/enums/union_type_patterns.au).
-`Option[T]` and `T?` remain supported in phase 1.
+There is no builtin `Option` type or `T?` suffix; `T | None` is the only optional spelling.
 
 ## Testing For `None`
 
@@ -84,7 +84,7 @@ bad = ParseResult.Failure("invalid input")
 
 Variant payloads are owned constructor positions. `Failure(str)` therefore
 acts like `Failure(own str)`, and the same is true of builtins such as
-`Option.Some(own T)` and `Result.Err(own E)`.
+`Lookup.Found(own T)` and `Result.Err(own E)`.
 
 ## Generic Enums
 
@@ -153,7 +153,7 @@ match result:
         print(message)
 ```
 
-This is especially convenient with built-in enums like `Result` and `Option`.
+This is especially convenient with built-in enums like `Result` and `Lookup`.
 
 ## Borrowed Matching
 
@@ -291,6 +291,6 @@ emit(match outer:
 
 See [examples/enums/match_expression_positions.au](../examples/enums/match_expression_positions.au).
 
-Built-in generic enums `Result[T, E]`, `Option[T]`, and `SendError[T]` are covered in the next chapter.
+Built-in `Result[T, E]`, optional `T | None` unions, `Lookup[T]`, and `SendError[T]` are covered in the next chapter.
 
 See [examples/enums/result_match.au](../examples/enums/result_match.au) and [examples/enums/wildcard_match.au](../examples/enums/wildcard_match.au).

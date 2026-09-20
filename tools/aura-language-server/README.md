@@ -40,10 +40,10 @@ The server starts one persistent compiler service:
 - `aura lsp`
 
 Requests and responses are newline-delimited JSON and carry compiler-owned
-`semantic_interface_version: 15`. Every request must include the exact field:
+`semantic_interface_version: 16`. Every request must include the exact field:
 
 ```json
-{"id":1,"semantic_interface_version":15,"method":"analyze","path":"/absolute/app.au","source":"print(1)\n"}
+{"id":1,"semantic_interface_version":16,"method":"analyze","path":"/absolute/app.au","source":"print(1)\n"}
 ```
 
 This identity is distinct from the public diagnostic document's numeric schema

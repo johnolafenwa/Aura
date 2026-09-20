@@ -19,7 +19,7 @@ Current copy categories are:
 - tuples whose every element type is copyable
 - `copy class` values whose fields are copyable
 - user enums whose every declared payload type is statically copyable
-- `Option[T]`, `Result[T, E]`, `SendError[T]`, and `QueueReceive[T]` when every payload type is copyable
+- `Lookup[T]`, `Poll[T]`, `Result[T, E]`, `SendError[T]`, and `QueueReceive[T]` when every payload type is copyable
 
 ```aura
 a = 1

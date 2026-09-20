@@ -78,7 +78,7 @@ The current tutorial set covers:
 - package-authorized FFI v0 with bodyless `extern "C"` declarations,
   fixed-width scalars, pointer-length str/byte views, opaque handles, and
   exact root dependency reports
-- built-in `Result[T, E]`, `Option[T]`, `SendError[T]`, and bare `None`
+- built-in `Result[T, E]`, optional `T | None` unions, `Lookup[T]`, `Poll[T]`, `SendError[T]`, and bare `None`
 - `try expr`
 - conditional expressions such as `value if condition else alternative`, with
   exact-`bool` conditions and lazy selection of one arm

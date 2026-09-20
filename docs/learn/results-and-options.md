@@ -1,29 +1,58 @@
-# Results, Options, And `try`
+# Results And Optional Values
 
 A program that runs for any length of time has to deal with two uncomfortable facts: values can be absent, and operations can fail. Aura represents both in the type system so the code is honest about which calls might go wrong and how.
 
-This chapter introduces `Option[T]`, `Result[T, E]`, the `try` expression, and the outcome enums the runtime uses for queues, tasks, and I/O. Together they are how Aura replaces exceptions, null pointers, and sentinel values with ordinary control flow.
+This chapter introduces optional values written `T | None`, `Result[T, E]`, the `try` expression, and the outcome enums the runtime uses for lookups, queues, tasks, and I/O. Together they are how Aura replaces exceptions, null pointers, and sentinel values with ordinary control flow.
 
-## `Option[T]`: A Value May Be Missing
+## `T | None`: A Value May Be Missing
 
-`Option[T]` is either `Some(value)` or `None`. Use it when absence is expected and is not itself an error:
+An optional value is a union whose last member is `None`. There is no builtin `Option` type, `Some` constructor, or `T?` suffix: the type is written `str | None`, a bare value enters it at a typed destination, and `None` selects its absence member there. Use it when absence is expected and is not itself an error:
 
-- a list index may be out of range
-- a dictionary key may be absent
-- a stream may reach end-of-file
-- a timed wait may finish with no value
+- a prefix may not be present (`str.strip_prefix`)
+- an environment variable may be unset (`sys.env`)
+- a stream may reach end-of-file (`io.read_line`)
+- a search may find nothing
+
+```aura
+def find_name(names: list[str], wanted: str) -> str | None:
+    for name in names:
+        if name == wanted:
+            return name.clone()
+    return None
+
+def describe(found: str | None):
+    if found is None:
+        print("missing")
+        return
+    print(found.len())
+
+names = ["Ada", "Grace"]
+describe(find_name(names, "Grace"))
+
+match find_name(names, "Katherine"):
+    case str as name:
+        print(name)
+    case None:
+        print("missing")
+```
+
+This prints `5` and `missing`. `is None` and `is not None` test presence and narrow a stable place — an owned or `mut` local, a parameter, a field of one of those, or a view — so after `if found is None: return`, `found` has the type `str` for the rest of the function. A call result is not a stable place; bind it to a local first. `match` selects a member with a type pattern, `case str as name:`, and `case None:` covers absence. `print` renders an optional's payload, and a `None` prints an empty line.
+
+## `Lookup[T]`: Was There An Entry?
+
+`list.get`, `dict.get`, and `dict.remove` return the builtin enum `Lookup[T]` rather than `T | None`, so a missing entry stays distinct from a present entry whose value is itself `None`: `Lookup.Found(None)` differs from `Lookup.Missing`.
 
 ```aura
 names = ["Ada", "Grace"]
 
 match names.get(3):
-    case Option.Some(name):
+    case Lookup.Found(name):
         print(name)
-    case Option.None:
+    case Lookup.Missing:
         print("missing")
 ```
 
-The short-form patterns `Some(name)` and `None` also work when the compiler already knows the scrutinee's type, but the qualified form is always clear and reads well in reference material.
+The short-form patterns `Found(name)` and `Missing` also work when the compiler already knows the scrutinee's type, but the qualified form is always clear and reads well in reference material. `Queue.poll` and `Task.poll` make the same distinction with `Poll[T]`: `Poll.Ready(value)` when a value is available, `Poll.Unavailable` otherwise.
 
 ## `Result[T, E]`: A Caller Must Decide
 
@@ -100,6 +129,8 @@ Not every failure is well-described by a plain `Result[T, str]`. Aura APIs use r
 | --- | --- | --- |
 | `fs`, `io`, `net` | `Result[T, io.Error]` | Operating-system and protocol failures have named categories (`NotFound`, `TimedOut`, `BrokenPipe`, ...). |
 | `process` | `Result[T, process.Error]` | Spawning, waiting, status checks, and pipes have process-specific failure modes. |
+| `list.get`, `dict.get`, `dict.remove` | `Lookup[T]` | A missing entry is `Lookup.Missing`; a present entry is `Lookup.Found(value)` even when the stored value is `None`. |
+| `Queue.poll`, `Task.poll` | `Poll[T]` | `Poll.Ready(value)` when a value is available; `Poll.Unavailable` when nothing is, whether through closure, failure, timeout, or cancellation — for callers that treat those alike. |
 | `Queue.put` | `Result[None, SendError[T]]` | A failed send returns the unsent value so the caller can retry, queue elsewhere, or log it. |
 | `Queue.get` | `QueueReceive[T]` | A receive can produce an item, observe a close, time out, or be cancelled — four distinct outcomes. |
 | `Task.result` | `TaskResult[T]` | A task can finish normally, fail, time out, or be cancelled. |
@@ -166,7 +197,8 @@ demonstrates the generic helper.
 
 A rule of thumb for day-to-day code:
 
-- Use **`Option[T]`** when absence is an ordinary state.
+- Use **`T | None`** when absence is an ordinary state.
+- Use **`Lookup[T]`** and **`Poll[T]`** when a present `None` must stay distinct from absence; the collection and concurrency APIs hand them to you.
 - Use **`Result[T, E]`** when failure needs a reason.
 - Use **`try`** when the only useful local behaviour is "return this error to my caller."
 - Use **`match`** when the current function can make a decision.
@@ -174,4 +206,4 @@ A rule of thumb for day-to-day code:
 
 The next chapter turns to program structure: splitting code across files, modules, and packages so domain types and their error shapes stay organised as programs grow.
 
-Reference: [Enums And Pattern Matching](/manual/enums-and-match), [Expressions](/manual/expressions).
+Reference: [Types](/manual/types#optional-and-result-types), [Enums And Pattern Matching](/manual/enums-and-match), [Expressions](/manual/expressions).

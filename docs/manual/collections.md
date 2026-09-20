@@ -106,7 +106,7 @@ owns each produced element, key, and value.
 | `sort` | `sort(reverse: bool = false) -> None` | Stably sorts an orderable list in place. |
 | `sort` | `sort[K](key: def(T) -> K, reverse: bool = false) -> None` | Stably sorts by keys computed once per element. |
 | `copy` | `copy() -> list[T]` | Returns independent owned storage; requires clone-safe `T`. |
-| `get` | `get(index: int64) -> Option[T]` | Returns a cloned element or `None`; requires clone-safe `T`. |
+| `get` | `get(index: int64) -> Lookup[T]` | Returns `Lookup.Found(value)` with a cloned element, or `Lookup.Missing`; requires clone-safe `T`. |
 | `set` | `set(index: int64, value: own T) -> T` | Replaces a position and transfers out its old element. |
 | `swap` | `swap(first: int64, second: int64) -> None` | Swaps two positions. |
 | `reserve` | `reserve(additional: int64) -> None` | Ensures room for `len() + additional` elements. |
@@ -121,13 +121,14 @@ clone-safe element type.
 Direct indexing, `get`, `set`, `swap`, and `pop` normalize a negative position
 once as `len() + index`. The result must be in `0..len()`. Invalid direct
 positions and invalid `pop`, `set`, or `swap` positions trap with `AU4003`.
-`get` returns `None` for an invalid position.
+`get` returns `Lookup.Missing` for an invalid position, so a present element
+that is itself `None` stays distinct from an absent one.
 
 ```aura
 match values.get(index):
-    case Option.Some(value):
+    case Lookup.Found(value):
         print(value)
-    case Option.None:
+    case Lookup.Missing:
         print("missing")
 ```
 
@@ -193,8 +194,8 @@ assignment, and membership are the primary lookup and storage forms:
 
 | Method | Signature | Contract |
 | --- | --- | --- |
-| `get` | `get(key: K) -> Option[V]` | Returns a cloned value or `None`; requires clone-safe `V`. |
-| `remove` | `remove(key: K) -> Option[V]` | Removes the entry and transfers its value, or returns `None`. |
+| `get` | `get(key: K) -> Lookup[V]` | Returns `Lookup.Found(value)` with a cloned value, or `Lookup.Missing` when the key is absent; requires clone-safe `V`. |
+| `remove` | `remove(key: K) -> Lookup[V]` | Removes the entry and transfers its value into `Lookup.Found(value)`, or returns `Lookup.Missing`. |
 | `keys` | `keys() -> list[K]` | Returns cloned keys in insertion order. |
 | `values` | `values() -> list[V]` | Returns cloned values in insertion order. |
 | `items` | `items() -> list[(K, V)]` | Returns cloned key/value tuples in insertion order. |
@@ -207,14 +208,16 @@ assignment, and membership are the primary lookup and storage forms:
 `keys()` and `copy()` require clone-safe `K`; `values()` requires clone-safe
 `V`; `items()` requires both. These methods return eager snapshots, not live
 views. `get` accepts no default argument. Absence is represented by
-`Option[V]`.
+`Lookup[V]`: a missing key is `Lookup.Missing`, and a present value is
+`Lookup.Found(value)` even when `V` is itself an optional `T | None` and the
+stored value is `None`.
 
 ```aura
 def bump(counts: mut dict[str, int32], key: own str):
     match counts.get(key):
-        case Option.Some(count):
+        case Lookup.Found(count):
             counts[key] = count + 1
-        case Option.None:
+        case Lookup.Missing:
             counts[key] = 1
 ```
 

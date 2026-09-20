@@ -265,7 +265,7 @@ grep -Fq 'code: "AU3007"' crates/aura-compiler/src/diag.rs
 grep -Fq -- '- Status: Accepted' architecture_docs/decisions/0020-randomness-algorithm-and-security-boundary.md
 grep -Fq '0020-randomness-algorithm-and-security-boundary.md' architecture_docs/decisions/README.md
 grep -Fq '| `json.parse` | `parse(text: str) -> Result[json.Value, json.Error]` |' docs/manual/api-index.md
-grep -Fq '| `json.dumps` | `dumps(value: json.Value, indent: Option[int64] = None) -> str` |' docs/manual/api-index.md
+grep -Fq '| `json.dumps` | `dumps(value: json.Value, indent: int64 \| None = None) -> str` |' docs/manual/api-index.md
 grep -Fq '`json.Value` is a move type' docs/manual/types.md
 grep -Fq 'JSON input-data failures are typed `json.Error` values' docs/manual/diagnostics.md
 grep -Fq 'recursive JSON parse/dump semantics' docs/manual/conformance.md
@@ -1005,7 +1005,7 @@ grep -Fq 'array [ expression { , expression } ]' docs/manual/numeric-arrays.md
 grep -Fq 'copies its scalar elements, and leaves the' docs/manual/numeric-arrays.md
 grep -Fq 'shared source list usable' docs/manual/numeric-arrays.md
 grep -Fq 'method `set`, direct indexed read, and direct indexed assignment' docs/manual/numeric-arrays.md
-grep -Fq '`Some(old_value)` on success and traps on an invalid coordinate or rank.' docs/manual/expressions.md
+grep -Fq 'returns the old scalar on success and traps on an' docs/manual/expressions.md
 grep -Fq 'Floating reductions visit elements' docs/manual/numeric-arrays.md
 grep -Fq 'left to right with deterministic dtype rounding and propagate NaN.' docs/manual/numeric-arrays.md
 grep -Fq '`Array[T]` is non-Copy and cloneable.' docs/manual/numeric-arrays.md

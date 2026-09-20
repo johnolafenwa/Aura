@@ -232,15 +232,15 @@ jobs.append(label.clone())
 print(label)
 ```
 
-Lookup methods such as `list.get` and `dict.get` return cloned owned values. The collection keeps its element, and the caller receives an independent copy:
+Lookup methods such as `list.get` and `dict.get` return cloned owned values inside `Lookup[T]`. The collection keeps its element, and the caller receives an independent copy:
 
 ```aura
 names = ["ada", "grace"]
 
 match names.get(0):
-    case Some(name):
+    case Lookup.Found(name):
         print(name)
-    case None:
+    case Lookup.Missing:
         print("missing")
 ```
 
@@ -292,7 +292,7 @@ Queue and Task handle state is synchronized across workers; every other
 capture and result crosses as owned `Transfer` data.
 
 For a non-repeatable but transferable task result, the first call to
-`result`, `result_or_none`, or `result_or` consumes the task handle even if it
+`result`, `poll`, or `result_or` consumes the task handle even if it
 times out, is cancelled, fails, or returns a fallback. Use a Queue protocol
 when several consumers need independently owned messages.
 
@@ -322,7 +322,7 @@ When a program starts to feel tangled, run down this list:
   value is clone-safe.
 - Put resources in `with` blocks.
 - Put concurrent child work inside a `TaskGroup`.
-- Let `Result`, `Option`, and the outcome enums carry control flow. Do not smuggle failure through strings or magic values.
+- Let `Result`, `T | None`, `Lookup`, and the outcome enums carry control flow. Do not smuggle failure through strings or magic values.
 
 The goal is not to fight the checker. The goal is to make the program say who is responsible for every value.
 

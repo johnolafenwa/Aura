@@ -20,7 +20,7 @@ Examples:
 - two user classes with identical fields are still different types.
 - an imported type retains its defining module identity even when imported under an unqualified binding.
 
-`T?` is syntactic sugar for `Option[T]`. `int` canonicalizes to `int64`, and `str` currently canonicalizes to `str`; neither alias introduces a distinct runtime type.
+An optional type is the union `T | None`; there is no builtin `Option` type and no `T?` suffix. `int` canonicalizes to `int64`, and `str` currently canonicalizes to `str`; neither alias introduces a distinct runtime type.
 
 Every generic type use must supply its declared number of type arguments. Non-generic types reject type arguments. `Self` is available only in supported trait and implementation type positions.
 
@@ -40,7 +40,7 @@ Aura uses local, contextual inference rather than global inference. Public funct
   type. String-only, integer-only, numeric-only, sign, precision, and grouping
   restrictions are compile-time errors under `AU2002`.
 - A duration literal has type `Duration`.
-- Bare `None` has type `None`, except in an expected `Option[T]` position where it denotes `Option.None` of that type. Expected-option context flows through grouping, annotated bindings, return positions, and argument positions. For `==` and `!=`, when either operand has static type `Option[T]`, a bare `None` on the other side is contextually typed as that same option specialization; this rule is symmetric. Unit `None == None` is `true` and unit `None != None` is `false`. A qualified `Option.None` with no expected specialization remains an inference error.
+- Bare `None` has type `None`, except in an expected `T | None` position where it denotes that union's absence member. Expected-union context flows through grouping, annotated bindings, return positions, and argument positions; an unannotated `x = None` is a unit binding, not an inferred optional. For `==` and `!=`, a `T | None` operand compares with a bare `None` or with a value of a member type under the union equality rule; the comparison does not narrow. Unit `None == None` is `true` and unit `None != None` is `false`.
 
 ### Collections
 
@@ -560,7 +560,7 @@ context already resolves its complete types is also concrete.
 ADR-0008 also distinguishes repeatable and single-consumer task results.
 `Task[T]` is copyable only when `T` is copyable, `T` is `Queue[...]`, or `T`
 is a recursively repeatable `Task[...]`. For any other transferable `T`,
-`result`, `result_or_none`, and `result_or` consume the unique observation
+`result`, `poll`, and `result_or` consume the unique observation
 right on every outcome. `wait_any` and `wait_all` consume the complete task
 list; `wait_any` abandons the unchosen rights. `select(...)` consumes every
 non-repeatable Task source at call entry and abandons each losing right. This

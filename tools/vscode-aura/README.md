@@ -59,7 +59,8 @@ AURA_LSP_AURA_PATH="/absolute/path/to/aura" code /path/to/aura-project
 ## Language Support
 
 The compiler-backed language server understands the maintained Aura surface,
-including classes, enums, traits, generics, modules, `Result` and `Option`,
+including classes, enums, traits, generics, modules, `Result`, optional
+`T | None` unions, `Lookup` and `Poll`,
 structured concurrency, closures, FFI, owned slices, and numeric arrays. It
 also preserves useful editor assistance while the current buffer is incomplete.
 

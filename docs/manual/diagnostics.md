@@ -3,8 +3,16 @@
 Aura diagnostics are part of the language and tooling contract. Lexing,
 parsing, static checking, ownership checking, lowering, building, and runtime
 traps all use the compiler-owned diagnostic structure described here. A typed
-library failure such as `Result.Err`, `Option.None`, a timeout, cancellation, or
-an `io.Error` value is ordinary program data, not a diagnostic.
+library failure such as `Result.Err`, a `None` member of a `T | None` result,
+`Lookup.Missing`, `Poll.Unavailable`, a timeout, cancellation, or an `io.Error`
+value is ordinary program data, not a diagnostic.
+
+There is no builtin `Option` type and no `T?` type suffix. Absent a user
+declaration, `Option[T]` in a type position reports the ordinary `AU2001`
+unknown type (``unknown type `Option` ``) and `Option.Some`/`Option.None`
+the ordinary `AU2001` unknown name; a `?` after a type reports the ordinary
+`AU1101` unexpected-token error. Those removed spellings receive only these
+ordinary diagnostics; nothing else recognizes them.
 
 ## Stable Diagnostic Codes
 
@@ -326,7 +334,7 @@ imported module is never mislabeled with the entry module's path.
 
 The arrays are an additive schema-version-1 extension. Schema-version-1
 readers MUST ignore unrecognized object members while continuing to validate
-the fields they use. The compiler-service semantic-interface version is `15`.
+the fields they use. The compiler-service semantic-interface version is `16`.
 
 The process exits unsuccessfully after emitting a JSON error report. Tools MUST
 parse standard error as one JSON document in JSON mode and MUST NOT scrape the

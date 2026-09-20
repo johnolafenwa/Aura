@@ -70,8 +70,8 @@ exact type contextually types the literal recursively; this rule is symmetric.
 `<`, `<=`, `>`, and `>=` are not defined for tuples; Aura does not infer a
 lexicographic ordering.
 
-The ordinary optional-type suffix applies to a complete tuple type:
-`(str, int64)?` is `Option[(str, int64)]`. `indirect` tuple types are
+An optional tuple is the ordinary union of a complete tuple type with
+`None`: `(str, int64) | None`. `indirect` tuple types are
 rejected; `indirect` remains the recursive named-field facility. Consequently,
 a class field cannot place its recursive link inside a tuple. Put that link in
 a separately named `indirect` field instead; the compiler diagnoses the tuple

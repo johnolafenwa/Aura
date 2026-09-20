@@ -1,8 +1,8 @@
-def print_int_option(value: Option[int32]):
+def print_int_lookup(value: Lookup[int32]):
     match own value:
-        case Some(inner):
+        case Lookup.Found(inner):
             print(inner)
-        case None:
+        case Lookup.Missing:
             print(-1)
 
 def main() -> int32:
@@ -11,21 +11,21 @@ def main() -> int32:
     counts.update(other)
     print(counts.len())
     print(("aura" in counts))
-    print_int_option(counts.get("aura"))
+    print_int_lookup(counts.get("aura"))
     previous_aura = counts.get("aura")
     counts["aura"] = 5
-    print_int_option(previous_aura)
+    print_int_lookup(previous_aura)
     print(counts["aura"])
     items = counts.items()
     match items.get(0):
-        case Some(entry):
+        case Lookup.Found(entry):
             print(entry)
-        case None:
+        case Lookup.Missing:
             pass
     match items.get(2):
-        case Some(entry):
+        case Lookup.Found(entry):
             print(entry)
-        case None:
+        case Lookup.Missing:
             pass
     print(counts.keys().len())
     print(counts.values().len())

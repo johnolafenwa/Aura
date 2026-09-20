@@ -3,15 +3,15 @@ def divide(a: int32, b: int32) -> Result[int32, str]:
         return Result.Err("division by zero")
     return Result.Ok(a // b)
 
-def first_value(flag: bool) -> Option[int32]:
+def first_value(flag: bool) -> int32 | None:
     if flag:
-        return Option.Some(7)
-    return Option.None
+        return 7
+    return None
 
 def main() -> int32:
     good: Result[int32, str] = divide(8, 2)
     bad: Result[int32, str] = divide(8, 0)
-    maybe: Option[int32] = first_value(true)
+    maybe: int32 | None = first_value(true)
 
     match own good:
         case Result.Ok(value):
@@ -26,9 +26,9 @@ def main() -> int32:
             print(message)
 
     match own maybe:
-        case Option.Some(value):
+        case int32 as value:
             print(value)
-        case Option.None:
+        case None:
             print(0)
 
     return 0

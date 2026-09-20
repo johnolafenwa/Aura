@@ -5,7 +5,7 @@ enum Status:
 def main() -> int32:
     status = Status.Count(value=4)
     ok: Result[int32, str] = Ok(7)
-    some: Option[int32] = Some(9)
+    maybe: int32 | None = 9
 
     print(status)
     match own ok:
@@ -13,8 +13,8 @@ def main() -> int32:
             print(value)
         case Err(message):
             print(message)
-    match own some:
-        case Some(value):
+    match own maybe:
+        case int32 as value:
             print(value)
         case None:
             print(0)

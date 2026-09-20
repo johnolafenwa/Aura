@@ -10,10 +10,10 @@ def main() -> int32:
         task = group.start(producer, jobs)
 
         while true:
-            match jobs.get_or_none(timeout=50ms):
-                case Option.Some(value):
+            match jobs.poll(timeout=50ms):
+                case Poll.Ready(value):
                     print(value)
-                case Option.None:
+                case Poll.Unavailable:
                     break
 
         print(task.result_or(-1, timeout=50ms))

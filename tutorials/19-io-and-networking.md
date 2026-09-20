@@ -44,19 +44,19 @@ def main() -> int32:
             return 1
 
     match io.read_line():
-        case Result.Ok(Option.Some(line)):
+        case Result.Ok(str as line):
             print(line)
             return 0
-        case Result.Ok(Option.None):
+        case Result.Ok(None):
             return 0
         case Result.Err(_):
             return 1
 ```
 
-`io.read_line()` returns `Result[Option[str], io.Error]`:
+`io.read_line()` returns `Result[str | None, io.Error]`:
 
-- `Result.Ok(Option.Some(text))` when a line was read
-- `Result.Ok(Option.None)` on end-of-file
+- `Result.Ok(text)` when a line was read; an empty line is a present `""`
+- `Result.Ok(None)` on end-of-file
 - `Result.Err(...)` on I/O failure
 
 ## File I/O
@@ -222,22 +222,22 @@ import process
 
 def roundtrip() -> Result[None, process.Error]:
     with child = try process.start(["/bin/cat"], stdin=process.pipe(), stdout=process.pipe(), stderr=process.null(), group=true):
-        match child.stdin():
-            case Option.Some(stdin_pipe):
+        match own child.stdin():
+            case process.Pipe as stdin_pipe:
                 try stdin_pipe.write_all("ping\n", timeout=500ms)
                 try stdin_pipe.flush()
                 stdin_pipe.close()
-            case Option.None:
+            case None:
                 pass
 
-        match child.stdout():
-            case Option.Some(stdout_pipe):
+        match own child.stdout():
+            case process.Pipe as stdout_pipe:
                 match try stdout_pipe.read_line(timeout=500ms):
-                    case Option.Some(text):
+                    case str as text:
                         print(text.trim())
-                    case Option.None:
+                    case None:
                         pass
-            case Option.None:
+            case None:
                 pass
         print(try child.wait_ok(timeout=2s))
         return Result.Ok(None)
@@ -311,10 +311,10 @@ def serve(addresses: Queue[str]) -> Result[None, io.Error]:
         addresses.put(try server.local_addr())
         with stream = try server.accept(timeout=1s):
             match try stream.read_line(timeout=1s):
-                case Option.Some(text):
+                case str as text:
                     try stream.write_all("echo:" + text, timeout=1s)
                     try stream.flush()
-                case Option.None:
+                case None:
                     pass
         return Result.Ok(None)
 ```
@@ -344,7 +344,7 @@ Aura also supports UDP sockets on the same poll-driven runtime:
 - `peer_addr()`
 - `close()`
 
-`recv_from(...)` returns `Option[net.UdpDatagram]`. `net.UdpDatagram` exposes:
+`recv_from(...)` returns `Result[net.UdpDatagram | None, io.Error]`, with `Ok(None)` when the deadline expires. `net.UdpDatagram` exposes:
 
 - `address()`
 - `bytes()`

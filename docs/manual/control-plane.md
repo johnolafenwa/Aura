@@ -9,7 +9,7 @@ Import `sys` for process arguments, environment access, the current directory, a
 | API | Signature |
 | --- | --- |
 | `sys.args` | `args() -> list[str]` |
-| `sys.env` | `env(name: str) -> Option[str]` |
+| `sys.env` | `env(name: str) -> str \| None` |
 | `sys.current_dir` | `current_dir() -> Result[str, io.Error]` |
 | `sys.unix_time_ms` | `unix_time_ms() -> int64` |
 | `sys.monotonic_time_ms` | `monotonic_time_ms() -> int64` |
@@ -25,7 +25,7 @@ aura run worker.au -- --model small --port 8080
 
 `sys.env` returns `None` both when a variable is missing and when its host value is not valid Unicode. `sys.current_dir` and the string-producing `path` helpers convert non-Unicode host paths lossily. `unix_time_ms` is milliseconds since the Unix epoch; `monotonic_time_ms` is milliseconds since the first call to that function in the current process and is suitable for elapsed-time comparisons, not wall-clock timestamps.
 
-`path` provides host-aware `join`, `parent`, `file_name`, `extension`, and `is_absolute` operations. Components that may not exist return `Option[str]`.
+`path` provides host-aware `join`, `parent`, `file_name`, `extension`, and `is_absolute` operations. Components that may not exist return `str | None`.
 
 ## JSON And TOML
 
@@ -35,7 +35,7 @@ failures through `json.Error`:
 | API | Signature |
 | --- | --- |
 | `json.parse` | `parse(text: str) -> Result[json.Value, json.Error]` |
-| `json.dumps` | `dumps(value: json.Value, indent: Option[int64] = None) -> str` |
+| `json.dumps` | `dumps(value: json.Value, indent: int64 \| None = None) -> str` |
 
 Exact inspecting and consuming accessors are listed in [JSON
 Module](/manual/json), which is the normative contract for number
@@ -143,13 +143,13 @@ last-error behavior.
 
 ## Grammar
 
-These modules add no source-language grammar. They are imported and called with the ordinary import, call, member-access, named-argument, collection, `Result`, and `Option` forms defined elsewhere in this reference. Module and member names are case-sensitive. The `--` separator that supplies `sys.args()` belongs to the CLI protocol, not Aura syntax.
+These modules add no source-language grammar. They are imported and called with the ordinary import, call, member-access, named-argument, collection, `Result`, and `T | None` union forms defined elsewhere in this reference. Module and member names are case-sensitive. The `--` separator that supplies `sys.args()` belongs to the CLI protocol, not Aura syntax.
 
 ## Typing Rules
 
 The function signatures in the tables above are normative. `sys.args()`
 produces owned `str` values in a `list`; environment and path components that
-may be absent use `Option`; fallible current-directory access uses
+may be absent use `str | None`; fallible current-directory access uses
 `Result[..., io.Error]`. Dynamic JSON parsing returns
 `Result[json.Value, json.Error]`. Bounded JSON and TOML dictionary operations
 retain their `Result[..., str]` contracts.
@@ -212,7 +212,7 @@ Invalid JSON or TOML data is ordinary program data: validation returns
 `false`, dynamic JSON parsing returns `Result.Err(json.Error)`, and bounded
 flat-dictionary operations return `Result.Err(str)` as documented. JSON dumping
 has the runtime traps and limits specified by the JSON chapter. A missing
-environment variable returns `Option.None`, and current-directory failure
+environment variable returns `None`, and current-directory failure
 returns `Result.Err(io.Error)`; none of those typed outcomes is a language
 diagnostic.
 

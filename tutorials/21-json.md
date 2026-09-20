@@ -67,12 +67,12 @@ import json
 integer = json.Value.Int(7)
 
 match json.as_int(integer):
-    case Option.Some(value):
+    case int64 as value:
         print(value)
-    case Option.None:
+    case None:
         print("not an integer")
 
-print(json.as_float(integer) == Option.None)
+print(json.as_float(integer) == None)
 ```
 
 `as_float` does not convert an Int. Perform any numeric conversion explicitly
@@ -93,9 +93,9 @@ def main():
     value = json.Value.Array([json.Value.Int(2), json.Value.Int(3)])
 
     match json.into_array(value):
-        case Option.Some(items):
+        case list[json.Value] as items:
             print(items.len())
-        case Option.None:
+        case None:
             print("not an array")
 ```
 
@@ -115,7 +115,7 @@ import json
 payload = json.Value.Object({"workers": json.Value.Int(3), "ready": json.Value.Bool(true), "tags": json.Value.Array([json.Value.String("compiler"), json.Value.String("service")])})
 
 print(json.dumps(payload))
-print(json.dumps(payload, indent=Option.Some(2)))
+print(json.dumps(payload, indent=2))
 ```
 
 Compact output sorts object keys, so the first line is:
@@ -144,7 +144,7 @@ Failures therefore trap:
 - NaN or infinity in a manually constructed Float uses `AU4001`
 - output-cap or allocation failure uses `AU4005`
 
-Indent must be `None` or `Some(0)` through `Some(16)`. Both parse input and dump
+Indent must be `None` or an integer from 0 through 16. Both parse input and dump
 output have independent 67,108,864-byte caps. The exact boundary is accepted.
 Depth counts containers only: a root scalar is depth zero, a root Object or
 Array is depth one, and depth 128 is accepted.

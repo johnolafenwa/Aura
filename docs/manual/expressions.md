@@ -110,7 +110,9 @@ permitted, but an overlapping mutable borrow or consumption is rejected with
 Name roots and projected member places follow the same rule, and Aura never
 deep-clones the selected place implicitly. Each f-string interpolation renders
 to `str` at its own position before evaluation moves to the next
-interpolation. Static borrow analysis checks all accesses at one call boundary
+interpolation. The unit value `None` renders as `None` in `print`, `str`, and
+interpolation, so an absent `T | None` value and a unit enum payload such as
+`Result.Ok(None)` print by name rather than as empty text. Static borrow analysis checks all accesses at one call boundary
 together even though runtime evaluation remains ordered.
 
 ## Precedence And Associativity
@@ -244,11 +246,10 @@ symmetric contextual typing, the two static tuple types must still match
 exactly. Evaluating either operand keeps its ordinary ownership effects; the
 equality operation adds no move of the resulting tuple.
 
-Equality and inequality have one contextual `Option` rule: when either operand
-has static type `Option[T]`, a bare `None` on the other side denotes
-`Option.None` of that same specialization. The rule is symmetric. Unit
-`None == None` is `true` and unit `None != None` is `false`; a qualified
-`Option.None` with no context for its type argument is rejected.
+Equality and inequality have no separate optional rule: a `T | None` operand
+compares with a bare `None`, or with a value of one of its member types, under
+the union rule below, and the comparison does not narrow the operand. Unit
+`None == None` is `true` and unit `None != None` is `false`.
 
 Union equality follows the ratified member rule. Two values of the same
 normalized union are equal exactly when their active members agree and the
@@ -572,9 +573,10 @@ use `remove(key)` to transfer any stored value, including one that contains
 An `Array[T]` index has one `int64` coordinate per runtime axis.
 Coordinates evaluate left to right and negative values normalize once against
 their own axis. A direct out-of-range coordinate is `AU4003`; a direct
-coordinate-count/rank mismatch is `AU4007`. `get(list[int64])` returns `None`
-for an invalid coordinate or rank. Mutable `set(list[int64], value)` returns
-`Some(old_value)` on success and traps on an invalid coordinate or rank.
+coordinate-count/rank mismatch is `AU4007`. `get(list[int64])` returns a
+`T | None` that is `None` for an invalid coordinate or rank. Mutable
+`set(list[int64], value)` returns the old scalar on success and traps on an
+invalid coordinate or rank rather than returning `None`.
 
 A direct list read of a copy element returns the value. Moving a non-copy
 List element by direct indexing is restricted; use `get(index)` when the
@@ -803,7 +805,7 @@ Enum constructors use the enum or specialized enum name followed by the variant:
 
 ```aura
 result: Result[int32, str] = Result.Ok(7)
-missing: Option[str] = Option.None
+missing: Lookup[str] = Lookup.Missing
 ready = Status.Ready(count=3)
 ```
 

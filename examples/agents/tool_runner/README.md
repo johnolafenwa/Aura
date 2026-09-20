@@ -17,9 +17,9 @@ streaming, and scoped cleanup) and adds the owned-callable surface that phase
   clone-safe value and a packed tool is not one. Removal and reinsertion may
   change insertion order; this program never iterates the registry.
 
-The JSON codecs still use the Option library patterns of this language
-version; the phase 2 diff replaces them. There is no network, filesystem, or
-process access in the Aura program.
+The JSON codecs use optional `T | None` unions and `Lookup` results; this
+language version has no builtin `Option` type. There is no network,
+filesystem, or process access in the Aura program.
 
 From the repository root:
 

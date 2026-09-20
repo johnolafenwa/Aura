@@ -26,7 +26,9 @@ This page documents known current limits of the Aura compiler and runtime.
 - Class field defaults cannot call user-defined functions in the current compiler. Compute the value before construction and pass it as an explicit field argument.
 - Bare callable destinations require identical complete contracts (`AU2015`).
   Safe restrictions require a thin alias adapter such as `Unary(function)`
-  or an explicit `Callable[...]`/`TaskCallable[...]` constructor.
+  or an explicit `Callable[...]`/`TaskCallable[...]` constructor. The callable
+  member of a union destination such as `(def(value: int64) -> int64) | None`
+  is a bare destination too.
 - Union payloads are boxed and closure environments use `Arc` as a disclosed
   interim. The ratified Q9 A / Q15 A / Q16 A layout and allocation measurements
   are scheduled after H2. No FFI/ABI stability claim and no 0.4 release precede

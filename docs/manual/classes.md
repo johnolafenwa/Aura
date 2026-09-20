@@ -213,8 +213,12 @@ Mark a field `indirect` to break the direct layout cycle:
 ```aura
 class Node:
     value: int32
-    next: indirect Option[Node] = Option.None
+    next: indirect Node | None = None
 ```
+
+The `indirect` marker on the recursive member marks the whole field as stored
+indirectly; `|` binds more loosely than `indirect`, so the field's type is the
+optional union of an indirect `Node` with `None`.
 
 `indirect` applies to the complete following type reference. It is a field-layout marker, not a general pointer expression and not valid as an arbitrary runtime operation. At least one field on every recursive layout cycle must provide the indirection.
 

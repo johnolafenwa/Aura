@@ -14,7 +14,7 @@ The top-level `print(value)` builtin is separate. It renders a value, writes a n
 | --- | --- | --- |
 | `io.write` | `write(text: str) -> Result[None, io.Error]` | Writes `text` to standard output without adding a newline. |
 | `io.flush` | `flush() -> Result[None, io.Error]` | Flushes standard output. |
-| `io.read_line` | `read_line() -> Result[Option[str], io.Error]` | Reads one strict UTF-8 line from standard input, removes trailing LF/CRLF, and returns `Ok(None)` on EOF. |
+| `io.read_line` | `read_line() -> Result[str \| None, io.Error]` | Reads one strict UTF-8 line from standard input, removes trailing LF/CRLF, and returns `Ok(None)` on EOF. |
 
 Example:
 
@@ -27,9 +27,9 @@ def prompt() -> Result[None, io.Error]:
     return Result.Ok(None)
 
 match io.read_line():
-    case Result.Ok(Option.Some(line)):
+    case Result.Ok(str as line):
         print("hello " + line.trim())
-    case Result.Ok(Option.None):
+    case Result.Ok(None):
         print("no input")
     case Result.Err(error):
         print(error)
@@ -67,9 +67,9 @@ Handle specific cases when the program has specific policy:
 
 ```aura
 match io.read_line():
-    case Result.Ok(Option.Some(line)):
+    case Result.Ok(str as line):
         print(line)
-    case Result.Ok(Option.None):
+    case Result.Ok(None):
         print("end of input")
     case Result.Err(io.Error.InvalidData):
         print("input was not valid text")
@@ -81,13 +81,13 @@ Avoid turning `io.Error` into a string too early. Error variants carry useful co
 
 ## Grammar
 
-The `io` module and top-level `print` builtin add no source-language grammar. They use ordinary imports, calls, `Result`, `Option`, `try`, and pattern matching. `io.Error.Other(message: own str)` uses the normal owned enum-payload rule; the other variants carry no payload.
+The `io` module and top-level `print` builtin add no source-language grammar. They use ordinary imports, calls, `Result`, `T | None` unions, `try`, and pattern matching. `io.Error.Other(message: own str)` uses the normal owned enum-payload rule; the other variants carry no payload.
 
 Line endings are runtime input, not token syntax. `io.read_line()` removes one trailing LF or CRLF sequence from the returned line; it does not strip other whitespace.
 
 ## Typing Rules
 
-`print(value)` accepts one value and returns `None`. `io.write` accepts `str`; `io.flush` accepts no arguments; both return `Result[None, io.Error]`. `io.read_line` returns `Result[Option[str], io.Error]`, distinguishing a line, clean EOF, and an I/O failure.
+`print(value)` accepts one value and returns `None`. `io.write` accepts `str`; `io.flush` accepts no arguments; both return `Result[None, io.Error]`. `io.read_line` returns `Result[str | None, io.Error]`, distinguishing a line, clean EOF, and an I/O failure.
 
 The `io.Error` variants in the table above are the common typed failure vocabulary for `io`, `fs`, and `net`; `process.Error.Io` owns an `io.Error` payload. Exhaustiveness and payload ownership follow the ordinary enum and match rules.
 
@@ -95,7 +95,7 @@ The `io.Error` variants in the table above are the common typed failure vocabula
 
 `print` renders its value, writes the rendered text, and appends a newline. Floating-point rendering uses the type-specific shortest finite decimal that round-trips to the same `float32` or `float64` value, retains a decimal marker for integral values, and preserves negative zero. `io.write` adds no newline, and `io.flush` requests that buffered standard output be delivered to the host.
 
-`io.read_line` reads from process standard input as strict UTF-8. It returns `Ok(Some(line))` after removing LF or CRLF, `Ok(None)` only when EOF is reached before any bytes are read, and `Err(io.Error.InvalidData)` for invalid text. Other host failures map to the closest `io.Error` variant.
+`io.read_line` reads from process standard input as strict UTF-8. It returns `Ok(line)` after removing LF or CRLF, `Ok(None)` only when EOF is reached before any bytes are read, and `Err(io.Error.InvalidData)` for invalid text. Other host failures map to the closest `io.Error` variant.
 
 ## Ownership And Evaluation Order
 

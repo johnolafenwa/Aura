@@ -285,7 +285,7 @@ printed-output order unless they explicitly coordinate that order.
     - `1`
     - `2`
 - `indirect_recursive.au`
-  - recursive fields with `indirect Node?` and optional children
+  - recursive fields with `indirect Node | None` and optional children
   - prints `2`
 - `positional_constructors.au`
   - positional class constructor arguments with optional trailing named fields
@@ -439,7 +439,7 @@ printed-output order unless they explicitly coordinate that order.
     - `bad`
     - `0`
 - `result_option.au`
-  - built-in `Result[T, E]` and `Option[T]` values with exhaustive `match`
+  - built-in `Result[T, E]` and optional `T | None` values with exhaustive `match`
   - prints:
     - `4`
     - `division by zero`
@@ -450,7 +450,7 @@ printed-output order unless they explicitly coordinate that order.
     - `7`
     - `bad`
 - `constructor_ergonomics.au`
-  - keyword payload arguments on enum variants plus bare `Ok(...)` and `Some(...)` constructors with expected types
+  - keyword payload arguments on enum variants plus bare `Ok(...)` constructors and a bare value injected into a `T | None` binding with expected types
   - prints:
     - `Status.Count(4)`
     - `7`
@@ -702,8 +702,8 @@ static in-repo package tree.
 - `process_supervisor.au`
   - `process.supervisor()`, restart policies, restart backoff, and group-aware supervisor shutdown
   - prints:
-    - `Option.Some(SupervisorEvent.Restarted(flaky, ExitStatus.Exited(1), 1))`
-    - `Option.Some(SupervisorEvent.Exited(flaky, ExitStatus.Exited(1), 1))`
+    - `SupervisorEvent.Restarted(flaky, ExitStatus.Exited(1), 1)`
+    - `SupervisorEvent.Exited(flaky, ExitStatus.Exited(1), 1)`
     - `true`
     - `false`
     - `true`
@@ -743,8 +743,8 @@ repeatable Task handles); observing any other transferable result consumes its
 single task-result right on the first attempt.
 
 - `task_group_start.au`
-  - structured task startup with `TaskGroup.start(...)`, `Queue[T]().get_or_none()`, and `Task.result_or(...)`
-  - the no-timeout `get_or_none()` / `result_or(...)` helpers act as immediate non-blocking checks
+  - structured task startup with `TaskGroup.start(...)`, `Queue[T]().poll()`, and `Task.result_or(...)`
+  - the no-timeout `poll()` / `result_or(...)` helpers act as immediate non-blocking checks
   - prints:
     - `2`
     - `4`
@@ -812,11 +812,11 @@ single task-result right on the first attempt.
     - `3`
     - `2`
 - `queue_get_timeout.au`
-  - short timeout handling through `Queue.get_or_none(timeout=...)`
-  - prints `Option.None`
+  - short timeout handling through `Queue.poll(timeout=...)`
+  - prints `Poll.Unavailable`
 - `queue_get_timeout_named.au`
-  - named timeout arguments on `Queue.get_or_none(timeout=...)`
-  - prints `Option.None`
+  - named timeout arguments on `Queue.poll(timeout=...)`
+  - prints `Poll.Unavailable`
 - `task_group_wait_helpers.au`
   - `wait_any(...)`, `wait_all(...)`, `Task.result(timeout=...)`, and bounded queue send/receive outcomes
   - prints:
@@ -951,7 +951,7 @@ single task-result right on the first attempt.
   - `str.clone()` on owned strings
   - prints `aura`
 - `string_methods.au`
-  - single-quoted strings, an owned `Option[str]` match helper, and the
+  - single-quoted strings, an owned `str | None` match helper, and the
     maintained `str` method surface: `int64` Unicode-scalar `len()`,
     `int64` UTF-8 `byte_len()`, `contains(...)`, `starts_with(...)`,
     `ends_with(...)`, `split(...)`, `replace(...)`, `to_lower()`,

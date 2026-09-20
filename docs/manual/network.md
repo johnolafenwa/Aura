@@ -63,8 +63,8 @@ Text reads decode UTF-8 strictly and return `io.Error.InvalidData` for invalid b
 | API | Signature | Contract |
 | --- | --- | --- |
 | `read_all` | `read_all(timeout: Duration = ...) -> Result[str, io.Error]` | Reads strict UTF-8 text until EOF, capped at 64 MiB. Use byte APIs for arbitrary data. |
-| `read_line` | `read_line(timeout: Duration = ...) -> Result[Option[str], io.Error]` | Reads one strict UTF-8 line without its trailing LF/CRLF, capped at 64 MiB. Returns `Ok(None)` only on EOF. |
-| `read_bytes` | `read_bytes(max_bytes: int32, timeout: Duration = ...) -> Result[Option[list[uint8]], io.Error]` | Reads up to `max_bytes` raw bytes. The count must be in `1..=67108864`; `Ok(None)` means EOF. |
+| `read_line` | `read_line(timeout: Duration = ...) -> Result[str \| None, io.Error]` | Reads one strict UTF-8 line without its trailing LF/CRLF, capped at 64 MiB. Returns `Ok(None)` only on EOF; an empty line is a present `""`. |
+| `read_bytes` | `read_bytes(max_bytes: int32, timeout: Duration = ...) -> Result[list[uint8] \| None, io.Error]` | Reads up to `max_bytes` raw bytes. The count must be in `1..=67108864`; `Ok(None)` means EOF. |
 | `read_exact` | `read_exact(count: int32, timeout: Duration = ...) -> Result[list[uint8], io.Error]` | Reads exactly `count` bytes or returns an error. The count must be in `1..=67108864`. |
 | `write_all` | `write_all(text: str, timeout: Duration = ...) -> Result[None, io.Error]` | Writes all UTF-8 text. |
 | `write_bytes` | `write_bytes(bytes: list[uint8], timeout: Duration = ...) -> Result[None, io.Error]` | Writes all raw bytes. |
@@ -85,9 +85,9 @@ import net
 def handle(stream: own net.TcpStream) -> Result[None, io.Error]:
     with conn = stream:
         match try conn.read_line(timeout=5s):
-            case Option.Some(line):
+            case str as line:
                 try conn.write_all(line, timeout=5s)
-            case Option.None:
+            case None:
                 pass
     return Result.Ok(None)
 ```
@@ -100,8 +100,8 @@ def handle(stream: own net.TcpStream) -> Result[None, io.Error]:
 | --- | --- | --- |
 | `send_text` | `send_text(address: str, text: str, timeout: Duration = ...) -> Result[None, io.Error]` | Sends UTF-8 text to an address. |
 | `send_bytes` | `send_bytes(address: str, bytes: list[uint8], timeout: Duration = ...) -> Result[None, io.Error]` | Sends raw bytes to an address. |
-| `recv` | `recv(max_bytes: int32, timeout: Duration = ...) -> Result[Option[list[uint8]], io.Error]` | Receives bytes from a connected UDP socket. `Ok(None)` means the deadline expired. |
-| `recv_from` | `recv_from(max_bytes: int32, timeout: Duration = ...) -> Result[Option[net.UdpDatagram], io.Error]` | Receives a datagram plus source address. `Ok(None)` means the deadline expired. |
+| `recv` | `recv(max_bytes: int32, timeout: Duration = ...) -> Result[list[uint8] \| None, io.Error]` | Receives bytes from a connected UDP socket. `Ok(None)` means the deadline expired; an empty datagram is a present list. |
+| `recv_from` | `recv_from(max_bytes: int32, timeout: Duration = ...) -> Result[net.UdpDatagram \| None, io.Error]` | Receives a datagram plus source address. `Ok(None)` means the deadline expired. |
 | `local_addr` | `local_addr() -> Result[str, io.Error]` | Returns the local address. |
 | `peer_addr` | `peer_addr() -> Result[str, io.Error]` | Returns the connected peer address when available. |
 | `close` | `close() -> None` | Closes the socket handle. |
@@ -180,8 +180,8 @@ Use byte request and response APIs for binary payloads or unknown encodings. Cli
 | --- | --- | --- |
 | `send_text` | `send_text(text: str, timeout: Duration = ...) -> Result[None, io.Error]` | Sends a text frame. |
 | `send_bytes` | `send_bytes(bytes: list[uint8], timeout: Duration = ...) -> Result[None, io.Error]` | Sends a binary frame. |
-| `recv_text` | `recv_text(timeout: Duration = ...) -> Result[Option[str], io.Error]` | Receives the next text or binary message decoded as strict UTF-8; `Ok(None)` on close. |
-| `recv_bytes` | `recv_bytes(timeout: Duration = ...) -> Result[Option[list[uint8]], io.Error]` | Receives the next text or binary message as bytes; `Ok(None)` on close. |
+| `recv_text` | `recv_text(timeout: Duration = ...) -> Result[str \| None, io.Error]` | Receives the next text or binary message decoded as strict UTF-8; `Ok(None)` on close; an empty message is present. |
+| `recv_bytes` | `recv_bytes(timeout: Duration = ...) -> Result[list[uint8] \| None, io.Error]` | Receives the next text or binary message as bytes; `Ok(None)` on close. |
 | `close` | `close() -> None` | Closes the WebSocket. |
 
 Use text receive when the payload must be valid UTF-8 and bytes otherwise. Messages are capped at 64 MiB; individual frames and the write buffer are capped at 16 MiB. WebSocket accept/send/receive cancellation is not yet as complete as the TCP/UDP scheduler surface, and `close()` currently discards host close errors.
@@ -201,7 +201,7 @@ Unix socket APIs are available on Unix hosts.
 
 | API | Signature | Contract |
 | --- | --- | --- |
-| `read_line` | `read_line(timeout: Duration = ...) -> Result[Option[str], io.Error]` | Reads one strict UTF-8 line without its trailing LF/CRLF, `Ok(None)` on EOF. |
+| `read_line` | `read_line(timeout: Duration = ...) -> Result[str \| None, io.Error]` | Reads one strict UTF-8 line without its trailing LF/CRLF, `Ok(None)` on EOF. |
 | `read_exact` | `read_exact(count: int32, timeout: Duration = ...) -> Result[list[uint8], io.Error]` | Reads exactly `count` bytes; count must be in `1..=67108864`. |
 | `write_all` | `write_all(text: str, timeout: Duration = ...) -> Result[None, io.Error]` | Writes all text. |
 | `close` | `close() -> None` | Closes the stream. |
@@ -224,7 +224,7 @@ TLS APIs use PEM files for certificates and keys. Maintained examples keep test 
 
 | API | Signature | Contract |
 | --- | --- | --- |
-| `read_line` | `read_line(timeout: Duration = ...) -> Result[Option[str], io.Error]` | Reads one strict UTF-8 line without its trailing LF/CRLF, `Ok(None)` on EOF. |
+| `read_line` | `read_line(timeout: Duration = ...) -> Result[str \| None, io.Error]` | Reads one strict UTF-8 line without its trailing LF/CRLF, `Ok(None)` on EOF. |
 | `read_exact` | `read_exact(count: int32, timeout: Duration = ...) -> Result[list[uint8], io.Error]` | Reads exactly `count` decrypted bytes; count must be in `1..=67108864`. |
 | `write_all` | `write_all(text: str, timeout: Duration = ...) -> Result[None, io.Error]` | Writes all text through the TLS stream. |
 | `close` | `close() -> None` | Closes the TLS stream. |
@@ -249,13 +249,13 @@ When a resource is not scoped with `with`, call its `close()` method when one is
 
 ## Grammar
 
-The network module adds no source-language grammar. Network programs use ordinary imports, calls, named arguments, `Duration` literals, `Result`, `Option`, `try`, `match`, task constructs, and `with`. Addresses, URLs, server names, and Unix socket paths are runtime `str` values, not specialized literals.
+The network module adds no source-language grammar. Network programs use ordinary imports, calls, named arguments, `Duration` literals, `Result`, `T | None` unions, `try`, `match`, task constructs, and `with`. Addresses, URLs, server names, and Unix socket paths are runtime `str` values, not specialized literals.
 
 Omitting a parameter displayed with `= ...` selects its builtin default. In particular, an omitted timeout means no caller-supplied deadline unless this page states a protocol hard cap. Text and byte operations are distinct members; the selected member determines UTF-8 decoding.
 
 ## Typing Rules
 
-The constructor and method signatures in all tables above are normative. Listeners, streams, sockets, exchanges, and WebSockets are non-copy resource values. Fallible operations return `Result[..., io.Error]`; EOF and UDP receive timeout use `Option` only in the positions explicitly documented. `Duration` is required for timeout parameters, and byte-count parameters are `int32` checked against each API's runtime range.
+The constructor and method signatures in all tables above are normative. Listeners, streams, sockets, exchanges, and WebSockets are non-copy resource values. Fallible operations return `Result[..., io.Error]`; EOF, WebSocket close, and UDP receive timeout use a `None` member of a `T | None` success payload only in the positions explicitly documented, and empty text, bytes, and datagrams remain present values. `Duration` is required for timeout parameters, and byte-count parameters are `int32` checked against each API's runtime range.
 
 Text members accept or return `str` and enforce UTF-8. Byte members accept or return `list[uint8]`. HTTP headers use `dict[str, str]`. `HttpExchange.respond_text` and `respond_bytes` consume their response body and header dictionary. Other data arguments are shared for the call unless their displayed signature explicitly says `own`.
 

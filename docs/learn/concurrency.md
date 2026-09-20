@@ -37,9 +37,9 @@ The `with` block defines the task's lifetime. Leaving the block waits for childr
 `Task[T]` is always safe to transfer between tasks, but it is copyable only
 when `T` is repeatable: a copy value, a `Queue[...]` handle, or a
 recursively repeatable `Task[...]` handle. A non-copy owned result gives the
-task handle one observation right. `result`, `result_or_none`, and `result_or`
+task handle one observation right. `result`, `poll`, and `result_or`
 consume that right on the first attempt, even if the attempt times out, is
-cancelled, fails, returns `None`, or selects a fallback.
+cancelled, fails, returns `Poll.Unavailable`, or selects a fallback.
 
 A result that is not structurally `Transfer`, such as `random.Rng` or a live
 host resource, is rejected before the task is scheduled with `AU3008`.

@@ -233,12 +233,12 @@ def classify(value: int32) -> str:
 
 def bump(counts: mut dict[str, int32], key: own str):
     match counts.get(key):
-        case Some(value):
+        case Lookup.Found(value):
             counts[key] = value + 1
-        case None:
+        case Lookup.Missing:
             counts[key] = 1
 
-values = [-3, 0, 1, 2, 10, 18, 21]
+values: list[int32] = [-3, 0, 1, 2, 10, 18, 21]
 mut counts: dict[str, int32] = {}
 
 for value in values:
@@ -255,9 +255,10 @@ There are two details in `bump` worth slowing down for.
 caller. The parameter declaration selects mutable access; the caller writes no
 capability prefix at the call site.
 
-`dict.get` borrows its key, so the same owned `key` can be moved into the later
-`counts.set`. The `own` annotation says `bump` takes responsibility for storing
-the category string.
+`dict.get` borrows its key and returns `Lookup[int32]` — `Lookup.Found(value)`
+when the category has been seen, `Lookup.Missing` otherwise — so the same owned
+`key` can be moved into the later `counts[key] = ...` assignment. The `own`
+annotation says `bump` takes responsibility for storing the category string.
 
 Run the program and you should see a tally for each category that appeared in `values`.
 
@@ -267,7 +268,7 @@ Small Aura programs read well when type boundaries line up with data boundaries:
 
 - parse input into typed values as early as possible
 - use enums for states that have names
-- use `Option[T]` when a value may be missing
+- use `T | None` when a value may be missing
 - use `Result[T, E]` when an operation may fail
 - borrow values for helpers that do not need ownership
 

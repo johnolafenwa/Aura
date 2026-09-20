@@ -7,10 +7,10 @@ def serve_ws(addresses: Queue[str]) -> Result[None, io.Error]:
         socket = try server_listener.accept(timeout=5s)
         with server_socket = socket:
             match try server_socket.recv_text(timeout=5s):
-                case Option.Some(text):
+                case str as text:
                     try server_socket.send_text("ws:" + text, timeout=5s)
                     return Result.Ok(None)
-                case Option.None:
+                case None:
                     return Result.Ok(None)
 
 def run() -> Result[None, io.Error]:
@@ -23,9 +23,9 @@ def run() -> Result[None, io.Error]:
         with client_socket = socket:
             try client_socket.send_text("hi", timeout=5s)
             match try client_socket.recv_text(timeout=5s):
-                case Option.Some(text):
+                case str as text:
                     print(text)
-                case Option.None:
+                case None:
                     return Result.Ok(None)
 
         match own server.result():

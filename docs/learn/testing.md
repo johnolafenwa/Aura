@@ -75,18 +75,18 @@ When the same logic needs several inputs, return a list of labeled case
 functions from a `test_*` function:
 
 ```aura
-def parse_port(text: str) -> Option[int64]:
+def parse_port(text: str) -> int64 | None:
     match parse_int64(text):
         case Result.Ok(port):
-            return Option.Some(port)
+            return port
         case Result.Err(_):
-            return Option.None
+            return None
 
 def valid_case():
-    assert parse_port("8080") == Option.Some(8080)
+    assert parse_port("8080") == 8080
 
 def empty_case():
-    assert parse_port("") == Option.None
+    assert parse_port("") == None
 
 def test_ports() -> list[(str, def() -> None)]:
     return [("valid", valid_case), ("empty", empty_case)]

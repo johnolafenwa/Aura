@@ -766,7 +766,7 @@ crosses by ownership.
 Task result observation has a separate repeatability rule. A copy result, a
 `Queue[...]` result, or a recursively repeatable `Task[...]` result may be
 observed repeatedly. For any other transferable result,
-`result()`, `result_or_none()`, and `result_or()` consume the task handle on
+`result()`, `poll()`, and `result_or()` consume the task handle on
 the first attempt, even if that attempt times out, is cancelled, fails, or
 returns a fallback. `wait_any` and `wait_all` consume the complete task list
 for such results; `wait_any` deliberately abandons the unchosen observation

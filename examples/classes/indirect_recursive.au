@@ -1,13 +1,13 @@
 class Node:
     value: int32
-    next: indirect Node?
+    next: indirect Node | None
 
 def main() -> int32:
-    tail = Node(value=2, next=Option.None)
-    head = Node(value=1, next=Option.Some(tail))
+    tail = Node(value=2, next=None)
+    head = Node(value=1, next=tail)
 
     match own head.next:
-        case Some(next):
+        case Node as next:
             print(next.value)
         case None:
             print(0)

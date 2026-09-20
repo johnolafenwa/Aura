@@ -2,7 +2,7 @@
 
 Enums define nominal sum types. Each value contains exactly one declared variant and, when that variant has payloads, one value for each payload position. Pattern matching evaluates a scrutinee once, selects the first matching arm, and binds payload values for that arm.
 
-Aura uses enums for user data and for maintained runtime outcomes including `Option`, `Result`, queue operations, task waits, process status, supervisor events, and I/O errors.
+Aura uses enums for user data and for maintained runtime outcomes including `Result`, `Lookup`, `Poll`, queue operations, task waits, process status, supervisor events, and I/O errors. Ordinary absence is not an enum: it is the union `T | None` described in [Types](/manual/types#optional-and-result-types).
 
 ## Union Type Patterns
 
@@ -56,8 +56,10 @@ that injects as one of its members; see
 [equality](/manual/expressions#arithmetic-and-comparison). Printing a union
 renders its active payload, or `None`, without a tag. Unions have no ordering.
 
-The existing `Option[T]` library and `T?` spelling remain available during
-Batch 1 phase 1; their removal belongs to phase 2.
+There is no builtin `Option` type, `Some` constructor, or `T?` suffix. Absent
+a user declaration, `Option[T]` reports the ordinary AU2001 unknown type and
+`T?` the ordinary AU1101 parse error; a user may declare an ordinary enum
+named `Option`, and it receives no builtin behavior.
 
 ## Conditional Narrowing
 
@@ -169,8 +171,8 @@ A payload-free variant is a value and is not called. A payload variant is called
 Every payload slot is owned. A declaration such as `Failed(str)` therefore
 has the constructor contract `Failed(own str)`, and a named `Ready(value:
 T)` slot is constructed as `Ready(value: own T)`. This rule also applies to
-builtin variants such as `Option.Some(own T)`, `Result.Ok(own T)`, and
-`Result.Err(own E)`.
+builtin variants such as `Lookup.Found(own T)`, `Poll.Ready(own T)`,
+`Result.Ok(own T)`, and `Result.Err(own E)`.
 
 - positional variants accept positional arguments in declaration order; a single positional payload also accepts `value=`
 - named variants accept either positional arguments in declaration order or their declared payload names
@@ -192,26 +194,26 @@ Explicit specialization fixes generic arguments:
 
 ```aura
 ok = Result[int32, str].Ok(7)
-missing = Option[str].None
+missing = Lookup[str].Missing
 ```
 
 Generic enum arguments may instead be inferred from payloads or an expected annotation, argument, or return type:
 
 ```aura
 ok: Result[int32, str] = Result.Ok(7)
-missing: Option[str] = Option.None
+missing: Lookup[str] = Lookup.Missing
 ```
 
-Every type parameter must resolve. A payload-free generic variant such as `Option.None` usually needs an expected type or explicit specialization because it carries no value from which to infer `T`.
+Every type parameter must resolve. A payload-free generic variant such as `Lookup.Missing` usually needs an expected type or explicit specialization because it carries no value from which to infer `T`.
 
-Bare builtin constructor names such as `Some(...)`, `Ok(...)`, `Err(...)`, or `None` are accepted only where the expected enum identity is unambiguous. Qualified constructors are the normative reference style.
+Bare builtin constructor names such as `Found(...)`, `Missing`, `Ok(...)`, or `Err(...)` are accepted only where the expected enum identity is unambiguous. Qualified constructors are the normative reference style. A bare `None` is never an enum variant: it is the unit value, or the absence member of an expected `T | None` union.
 
 ## Copy And Move Behavior
 
 A user enum is copyable when every payload type declared by every variant is statically copyable. Otherwise the enum is a move type. This classification is structural across all variants, not based on the variant held at runtime.
 
-`Option[T]`, `Result[T, E]`, `SendError[T]`, and `QueueReceive[T]` follow the
-same payload-copy rule. `TaskResult[T]`, `SelectOutcome[Q, T]`, `WaitAny[T]`,
+`Lookup[T]`, `Poll[T]`, `Result[T, E]`, `SendError[T]`, and `QueueReceive[T]`
+follow the same payload-copy rule. `TaskResult[T]`, `SelectOutcome[Q, T]`, `WaitAny[T]`,
 and `WaitAll[T]` remain move outcome types in Aura 0.3 even for copy
 payloads. An unconstrained generic payload is not assumed copyable. See
 [Types](/manual/types#copy-and-move-categories).
@@ -419,7 +421,8 @@ visible; enum declarations themselves continue to write only the payload type:
 
 | Type | Variants |
 | --- | --- |
-| `Option[T]` | `Some(value: own T)`, `None` |
+| `Lookup[T]` | `Found(value: own T)`, `Missing` |
+| `Poll[T]` | `Ready(value: own T)`, `Unavailable` |
 | `Result[T, E]` | `Ok(value: own T)`, `Err(error: own E)` |
 | `SendError[T]` | `Closed(value: own T)`, `Cancelled(value: own T)`, `TimedOut(value: own T)`, `Full(value: own T)` |
 | `QueueReceive[T]` | `Item(value: own T)`, `Closed`, `TimedOut`, `Cancelled` |
@@ -427,6 +430,13 @@ visible; enum declarations themselves continue to write only the payload type:
 | `SelectOutcome[Q, T]` | `Queue(index: own int64, outcome: own QueueReceive[Q])`, `Task(index: own int64, outcome: own TaskResult[T])`, `Deadline(index: own int64)`, `Cancelled` |
 | `WaitAny[T]` | `Ready(index: own int64, value: own T)`, `Error(index: own int64, message: own str)`, `TimedOut`, `Cancelled` |
 | `WaitAll[T]` | `Ready(values: own list[T])`, `Error(index: own int64, message: own str)`, `TimedOut`, `Cancelled` |
+
+`Lookup[T]` is returned by `list.get`, `dict.get`, and `dict.remove`, so a
+missing entry stays distinct from a present `None` payload: `Lookup.Found(None)`
+differs from `Lookup.Missing`. `Poll[T]` is returned by `Queue.poll` and
+`Task.poll` with the same distinction between `Poll.Ready(None)` and
+`Poll.Unavailable`. Their payloads are owned, and Copy, clone, equality, and
+Transfer follow the payload rules above after substitution.
 
 Module-qualified builtin enums are specified by their API chapters:
 

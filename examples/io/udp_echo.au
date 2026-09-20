@@ -5,11 +5,11 @@ def serve_udp(addresses: Queue[str]) -> Result[str, io.Error]:
     with server_socket = try net.udp_bind("127.0.0.1:0"):
         addresses.put(try server_socket.local_addr())
         match try server_socket.recv_from(1024, timeout=5s):
-            case Option.Some(packet):
+            case net.UdpDatagram as packet:
                 text = try packet.text()
                 try server_socket.send_text(packet.address(), "udp:" + text, timeout=5s)
                 return Result.Ok(text)
-            case Option.None:
+            case None:
                 return Result.Ok("missing")
 
 def run() -> Result[None, io.Error]:
@@ -22,9 +22,9 @@ def run() -> Result[None, io.Error]:
         with socket = client:
             try socket.send_text(address, "ping", timeout=5s)
             match try socket.recv_from(1024, timeout=5s):
-                case Option.Some(packet):
+                case net.UdpDatagram as packet:
                     print(try packet.text())
-                case Option.None:
+                case None:
                     return Result.Ok(None)
 
         match own server.result():

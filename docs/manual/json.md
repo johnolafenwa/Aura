@@ -11,7 +11,7 @@ module does not derive schemas from user classes or enums.
 | API | Signature | Contract |
 | --- | --- | --- |
 | `json.parse` | `parse(text: str) -> Result[json.Value, json.Error]` | Parses one strict JSON value from a shared string. |
-| `json.dumps` | `dumps(value: json.Value, indent: Option[int64] = None) -> str` | Deterministically serializes a shared JSON tree. |
+| `json.dumps` | `dumps(value: json.Value, indent: int64 \| None = None) -> str` | Deterministically serializes a shared JSON tree. |
 | `json.is_valid` | `is_valid(text: str) -> bool` | Reports whether the text is valid JSON. |
 | `json.stringify_map` | `stringify_map(value: dict[str, str]) -> Result[str, str]` | Serializes a flat string dictionary in sorted-key order. |
 | `json.parse_string_map` | `parse_string_map(text: str) -> Result[dict[str, str], str]` | Parses a JSON object whose values are strings. |
@@ -55,16 +55,16 @@ Accessors never coerce between variants:
 | API | Signature | Contract |
 | --- | --- | --- |
 | `json.is_null` | `is_null(value: json.Value) -> bool` | `true` only for `Value.Null`. |
-| `json.as_bool` | `as_bool(value: json.Value) -> Option[bool]` | The Bool payload or `None`. |
-| `json.as_int` | `as_int(value: json.Value) -> Option[int64]` | The Int payload or `None`; Float is not converted. |
-| `json.as_float` | `as_float(value: json.Value) -> Option[float64]` | The Float payload or `None`; Int is not converted. |
-| `json.into_string` | `into_string(value: own json.Value) -> Option[str]` | Consumes the value and returns its str payload or `None`. |
-| `json.into_array` | `into_array(value: own json.Value) -> Option[list[json.Value]]` | Consumes the value and returns its Array payload or `None`. |
-| `json.into_object` | `into_object(value: own json.Value) -> Option[dict[str, json.Value]]` | Consumes the value and returns its Object payload or `None`. |
+| `json.as_bool` | `as_bool(value: json.Value) -> bool \| None` | The Bool payload or `None`. |
+| `json.as_int` | `as_int(value: json.Value) -> int64 \| None` | The Int payload or `None`; Float is not converted. |
+| `json.as_float` | `as_float(value: json.Value) -> float64 \| None` | The Float payload or `None`; Int is not converted. |
+| `json.into_string` | `into_string(value: own json.Value) -> str \| None` | Consumes the value and returns its str payload or `None`. |
+| `json.into_array` | `into_array(value: own json.Value) -> list[json.Value] \| None` | Consumes the value and returns its Array payload or `None`; an empty array is a present list. |
+| `json.into_object` | `into_object(value: own json.Value) -> dict[str, json.Value] \| None` | Consumes the value and returns its Object payload or `None`; an empty object is a present dictionary. |
 
 The inspecting functions borrow `value`. The `into_*` functions take an
 explicit owned value. A failed consuming accessor still consumes its argument
-and returns `Option.None`.
+and returns `None`.
 
 ## Parsing
 
@@ -131,7 +131,7 @@ use `\b`, `\t`, `\n`, `\f`, and `\r`; other U+0000 through U+001F controls use
 lowercase `\u00xx`. Solidus is not escaped.
 
 With `indent=None`, the output contains no insignificant whitespace. With
-`indent=Some(n)`, `n` must be from 0 through 16 inclusive. Pretty output uses:
+`indent=n`, `n` must be from 0 through 16 inclusive. Pretty output uses:
 
 - LF line endings
 - `n` ASCII spaces for each container level
@@ -141,7 +141,7 @@ With `indent=None`, the output contains no insignificant whitespace. With
 
 Every nonempty container places each element or member on its own line, uses a
 comma after every item except the last, and places its closing delimiter on a
-separate line aligned with the container's opening level. `Some(0)` therefore
+separate line aligned with the container's opening level. `indent=0` therefore
 uses line breaks but no leading indentation.
 
 Dump depth uses the same container-only definition and limit as parse depth.
@@ -169,7 +169,7 @@ def main():
 
     payload = json.Value.Object({"workers": json.Value.Int(3), "ready": json.Value.Bool(true), "tags": json.Value.Array([json.Value.String("compiler"), json.Value.String("service")])})
     print(json.dumps(payload))
-    print(json.dumps(payload, indent=Option.Some(2)))
+    print(json.dumps(payload, indent=2))
 ```
 
 The same program is maintained as
@@ -178,7 +178,7 @@ The same program is maintained as
 ## Grammar
 
 The module adds no source-language grammar. Imports, qualified enum variants,
-variant construction, method calls, `Result` and `Option` matching, maps,
+variant construction, method calls, `Result` matching, `T | None` unions, maps,
 vectors, and named/default arguments use the ordinary grammar defined
 elsewhere in this Manual. JSON text is runtime `str` data; JSON object,
 array, string, number, Boolean, and null syntax is not Aura source syntax.
@@ -193,7 +193,7 @@ payloads. `json.Error` is also a move type because `Syntax` contains a str.
 Every variant payload uses the normal owned enum-construction rule.
 `json.parse` and `json.dumps` use ordinary bare parameters, which are
 shared borrows under Aura's declaration-stable parameter policy.
-`indent=None` is an `Option[int64]` default evaluated at the call boundary.
+`indent=None` is an `int64 | None` default evaluated at the call boundary; a bare `int64` argument is injected into that union.
 
 An accessor's `value` parameter mode is part of its type. Inspecting accessors
 do not change ownership. Each `into_*` call consumes its argument even when

@@ -55,17 +55,19 @@ match supervisor.wait(timeout=2s):
 
 Each event carries the child's name, its status or error, and how many restarts have happened. That is enough for most log-style reporting and for retry policies that only a program's own logic would understand.
 
-When "timed out or no event" can collapse to the same branch, `wait_or_none` maps a timeout to `Option.None` inside a `Result`:
+When "timed out or no event" can collapse to the same branch, `wait_or_none` maps a timeout to `None` inside a `Result`:
 
 ```aura
-match supervisor.wait_or_none(timeout=500ms):
-    case Result.Ok(Option.Some(event)):
+match own supervisor.wait_or_none(timeout=500ms):
+    case Result.Ok(process.SupervisorEvent as event):
         print(event)
-    case Result.Ok(Option.None):
+    case Result.Ok(None):
         print("no event")
     case Result.Err(error):
         print(error)
 ```
+
+The payload is `process.SupervisorEvent | None`, so the nested type pattern `process.SupervisorEvent as event` selects an event and `None` selects the timeout. `match own` consumes the returned `Result`, so the arm owns the event it prints.
 
 ## Restart Policy
 

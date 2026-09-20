@@ -31,7 +31,7 @@ the same result as the qualified direct call.
 
 ## process.run
 
-Signature: `process.run(command: list[str], cwd: Option[str] = None, env: dict[str, str] = {}, stdin: process.Stdio = process.null(), stdout: process.Stdio = process.pipe(), stderr: process.Stdio = process.pipe(), timeout: Duration = ..., group: bool = false) -> Result[process.Completed, process.Error]`
+Signature: `process.run(command: list[str], cwd: str | None = None, env: dict[str, str] = {}, stdin: process.Stdio = process.null(), stdout: process.Stdio = process.pipe(), stderr: process.Stdio = process.pipe(), timeout: Duration = ..., group: bool = false) -> Result[process.Completed, process.Error]`
 
 `process.run(...)` starts a child, waits for it, and returns a `process.Completed` value. By default, stdin is null and stdout/stderr are captured. Omitting `timeout` uses an internal absence marker and supplies no caller deadline. No Duration value is that marker: an explicit negative timeout is invalid rather than unlimited.
 
@@ -58,7 +58,7 @@ Set `group=true` when the child may spawn descendants and the parent should clea
 
 ## process.start
 
-Signature: `process.start(command: list[str], cwd: Option[str] = None, env: dict[str, str] = {}, stdin: process.Stdio = process.null(), stdout: process.Stdio = process.inherit(), stderr: process.Stdio = process.inherit(), group: bool = false) -> Result[process.Child, process.Error]`
+Signature: `process.start(command: list[str], cwd: str | None = None, env: dict[str, str] = {}, stdin: process.Stdio = process.null(), stdout: process.Stdio = process.inherit(), stderr: process.Stdio = process.inherit(), group: bool = false) -> Result[process.Child, process.Error]`
 
 `process.start(...)` returns a live `process.Child`. The default is interactive-friendly: stdout and stderr inherit the parent's streams unless you ask for pipes.
 
@@ -75,11 +75,11 @@ The caller is responsible for waiting, killing, terminating, or closing the chil
 
 | API | Signature | Contract |
 | --- | --- | --- |
-| `stdin` | `stdin() -> Option[process.Pipe]` | Returns the child's piped stdin when `stdin=process.pipe()` was used. |
-| `stdout` | `stdout() -> Option[process.Pipe]` | Returns the child's piped stdout when `stdout=process.pipe()` was used. |
-| `stderr` | `stderr() -> Option[process.Pipe]` | Returns the child's piped stderr when `stderr=process.pipe()` was used. |
+| `stdin` | `stdin() -> process.Pipe \| None` | Returns the child's piped stdin when `stdin=process.pipe()` was used, otherwise `None`. |
+| `stdout` | `stdout() -> process.Pipe \| None` | Returns the child's piped stdout when `stdout=process.pipe()` was used, otherwise `None`. |
+| `stderr` | `stderr() -> process.Pipe \| None` | Returns the child's piped stderr when `stderr=process.pipe()` was used, otherwise `None`. |
 | `wait` | `wait(timeout: Duration = ...) -> process.Wait` | Waits for exit and returns an exit, timeout, cancellation, or failure outcome. |
-| `wait_or_none` | `wait_or_none(timeout: Duration = ...) -> Result[Option[process.ExitStatus], process.Error]` | Returns `Ok(Some(status))` on exit, `Ok(None)` on timeout, and `Err(...)` for cancellation or wait failure. |
+| `wait_or_none` | `wait_or_none(timeout: Duration = ...) -> Result[process.ExitStatus \| None, process.Error]` | Returns `Ok(status)` on exit, `Ok(None)` on timeout, and `Err(...)` for cancellation or wait failure. |
 | `wait_ok` | `wait_ok(timeout: Duration = ...) -> Result[process.ExitStatus, process.Error]` | Returns the exit status only for successful exits; non-zero status and wait failures become `process.Error`. |
 | `kill` | `kill() -> Result[None, process.Error]` | Kills the child immediately. With `group=true`, targets the process group on maintained Unix hosts. |
 | `terminate` | `terminate() -> Result[None, process.Error]` | Requests graceful termination. With `group=true`, targets the process group on maintained Unix hosts. |
@@ -106,8 +106,8 @@ The caller is responsible for waiting, killing, terminating, or closing the chil
 | API | Signature | Contract |
 | --- | --- | --- |
 | `read_all` | `read_all() -> Result[str, process.Error]` | Reads remaining strict UTF-8 text until EOF, capped at 64 MiB. Use byte APIs for arbitrary output. |
-| `read_line` | `read_line(timeout: Duration = ...) -> Result[Option[str], process.Error]` | Reads one strict UTF-8 line without its trailing LF/CRLF, `Ok(None)` only on EOF, or an error. |
-| `read_bytes` | `read_bytes(max_bytes: int32, timeout: Duration = ...) -> Result[Option[list[uint8]], process.Error]` | Reads up to `max_bytes` raw bytes and returns `Ok(None)` only at EOF. `max_bytes` must be in `1..=67108864`. |
+| `read_line` | `read_line(timeout: Duration = ...) -> Result[str \| None, process.Error]` | Reads one strict UTF-8 line without its trailing LF/CRLF, `Ok(None)` only on EOF, or an error. |
+| `read_bytes` | `read_bytes(max_bytes: int32, timeout: Duration = ...) -> Result[list[uint8] \| None, process.Error]` | Reads up to `max_bytes` raw bytes and returns `Ok(None)` only at EOF. `max_bytes` must be in `1..=67108864`. |
 | `write_all` | `write_all(text: str, timeout: Duration = ...) -> Result[None, process.Error]` | Writes all text. |
 | `write_bytes` | `write_bytes(bytes: list[uint8], timeout: Duration = ...) -> Result[None, process.Error]` | Writes all bytes. |
 | `flush` | `flush() -> Result[None, process.Error]` | Flushes buffered pipe output. |
@@ -119,14 +119,18 @@ Close a child's stdin pipe when the child expects EOF:
 
 ```aura
 def close_stdin(child: process.Child) -> Result[None, process.Error]:
-    match child.stdin():
-        case Option.Some(pipe):
+    match own child.stdin():
+        case process.Pipe as pipe:
             try pipe.write_all("hello\n")
             pipe.close()
-        case Option.None:
+        case None:
             pass
     return Result.Ok(None)
 ```
+
+The accessor returns an owned `process.Pipe | None`; `match own` moves the
+pipe out of that result so the arm holds an owned resource that it may write,
+flush, and close. A bare `match` would bind only a shared view of the pipe.
 
 ## process.Completed
 
@@ -172,9 +176,9 @@ def wait_for_worker() -> Result[process.SupervisorWait, process.Error]:
 
 | API | Signature | Contract |
 | --- | --- | --- |
-| `start` | `start(name: own str, command: own list[str], cwd: own Option[str] = ..., env: own dict[str, str] = ..., stdin: own process.Stdio = ..., stdout: own process.Stdio = ..., stderr: own process.Stdio = ..., restart: own process.RestartPolicy = ..., backoff: own Duration = ..., max_restarts: own int32 = ..., group: own bool = ...) -> Result[None, process.Error]` | Starts a named child under supervision and retains the owned configuration needed for restarts. Names must be unique within the supervisor. |
+| `start` | `start(name: own str, command: own list[str], cwd: own (str \| None) = ..., env: own dict[str, str] = ..., stdin: own process.Stdio = ..., stdout: own process.Stdio = ..., stderr: own process.Stdio = ..., restart: own process.RestartPolicy = ..., backoff: own Duration = ..., max_restarts: own int32 = ..., group: own bool = ...) -> Result[None, process.Error]` | Starts a named child under supervision and retains the owned configuration needed for restarts. Names must be unique within the supervisor. |
 | `wait` | `wait(timeout: Duration = ...) -> process.SupervisorWait` | Waits for the next supervisor event, timeout, or cancellation. |
-| `wait_or_none` | `wait_or_none(timeout: Duration = ...) -> Result[Option[process.SupervisorEvent], process.Error]` | Returns `Ok(Some(event))`, `Ok(None)` on timeout, or `Err(...)` on cancellation or wait failure. |
+| `wait_or_none` | `wait_or_none(timeout: Duration = ...) -> Result[process.SupervisorEvent \| None, process.Error]` | Returns `Ok(event)`, `Ok(None)` on timeout, or `Err(...)` on cancellation or wait failure. |
 | `stop` | `stop() -> Result[None, process.Error]` | Stops every supervised child and clears the supervisor. |
 | `is_empty` | `is_empty() -> bool` | Returns `true` when no services are running or pending restart. |
 | `close` | `close() -> None` | Closes the supervisor, stopping all managed children. |
@@ -248,7 +252,7 @@ When `process.run` times out or its Aura task is cancelled, the runtime terminat
 
 ## Grammar
 
-The process module adds no source-language grammar. Commands are ordinary `list[str]` expressions passed to ordinary calls; Aura does not parse shell syntax, split one command string, expand variables, interpret redirections, or construct pipelines. Named arguments, `Duration` literals, `Result`, `Option`, `try`, `match`, and `with` use their general grammar.
+The process module adds no source-language grammar. Commands are ordinary `list[str]` expressions passed to ordinary calls; Aura does not parse shell syntax, split one command string, expand variables, interpret redirections, or construct pipelines. Named arguments, `Duration` literals, `Result`, `T | None` unions, `try`, `match`, and `with` use their general grammar.
 
 An omitted parameter displayed with `= ...` selects the documented builtin default. The ellipsis is reference notation, not a source expression. Process and standard-I/O variants use ordinary qualified enum construction and pattern syntax.
 
@@ -259,7 +263,7 @@ ADR-0019.
 
 ## Typing Rules
 
-The function and method signatures above are normative. Commands are `list[str]`, environment overlays are `dict[str, str]`, working directories are `Option[str]`, and timeout parameters are `Duration`. Fallible start/run/pipe/control operations use `process.Error`; wait APIs deliberately distinguish enum, `Option`, and `Result` outcomes as shown in their tables.
+The function and method signatures above are normative. Commands are `list[str]`, environment overlays are `dict[str, str]`, working directories are `str | None` (with `None` inheriting the parent's directory), and timeout parameters are `Duration`. Fallible start/run/pipe/control operations use `process.Error`; wait APIs deliberately distinguish enum, `T | None`, and `Result` outcomes as shown in their tables.
 
 `process.Child`, `process.Pipe`, and `process.Supervisor` are non-copy resources. Kill, terminate, pipe write/flush/close, and supervisor start/stop/close operations require mutable receiver places. `Supervisor.start` consumes every configuration argument marked `own`, because the supervisor retains that configuration for possible restart. `Completed.stdout()` and `stderr()` are trapping text accessors; the byte accessors are total over captured bytes.
 

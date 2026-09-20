@@ -30,32 +30,32 @@ The original text is kept in `message` so later code can print or inspect the un
 
 ## Step 2: Parse One Line
 
-A line that cannot be parsed is not a crash. It is an expected, measurable absence of data. That makes `Option[LogLine]` the right return type:
+A line that cannot be parsed is not a crash. It is an expected, measurable absence of data. That makes `LogLine | None` the right return type:
 
 ```aura
-def parse_line(line: str) -> Option[LogLine]:
+def parse_line(line: str) -> LogLine | None:
     clean = line.trim()
     parts = clean.split(" ")
 
     if parts.len() < 3:
-        return Option.None
+        return None
 
-    level = match parts.get(0):
-        case Option.Some(value):
+    level = match own parts.get(0):
+        case Lookup.Found(value):
             value
-        case Option.None:
+        case Lookup.Missing:
             "UNKNOWN"
 
-    service = match parts.get(1):
-        case Option.Some(value):
+    service = match own parts.get(1):
+        case Lookup.Found(value):
             value
-        case Option.None:
+        case Lookup.Missing:
             "unknown"
 
-    return Option.Some(LogLine(level=level, service=service, message=clean))
+    return LogLine(level=level, service=service, message=clean)
 ```
 
-The `parts.len() < 3` guard makes the two fallback arms unreachable, but keeping the `match` exhaustive is a cheap insurance policy. When the parser grows — a later revision might accept quoted strings or nested fields — the exhaustive shape makes the change hard to get wrong.
+`return None` selects the absence member of `LogLine | None`, and the final `return` injects the constructed `LogLine` into the union without a wrapper. `parts.get(0)` returns `Lookup[str]`; `match own` moves the found string out of that result so `level` owns it. The `parts.len() < 3` guard makes the two fallback arms unreachable, but keeping the `match` exhaustive is a cheap insurance policy. When the parser grows — a later revision might accept quoted strings or nested fields — the exhaustive shape makes the change hard to get wrong.
 
 ## Step 3: Count With A dict
 
@@ -64,9 +64,9 @@ Counting uses a dictionary from string to integer. The helper is deliberately sm
 ```aura
 def increment(counts: mut dict[str, int32], key: own str):
     current = match counts.get(key):
-        case Option.Some(value):
+        case Lookup.Found(value):
             value
-        case Option.None:
+        case Lookup.Missing:
             0
 
     counts[key] = current + 1
@@ -88,11 +88,11 @@ mut services = set[str]()
 mut skipped = 0
 
 for line in lines:
-    match parse_line(line):
-        case Option.Some(entry):
+    match own parse_line(line):
+        case LogLine as entry:
             increment(levels, entry.level.clone())
             services.add(entry.service)
-        case Option.None:
+        case None:
             skipped += 1
 
 print("levels")
@@ -102,6 +102,8 @@ for level, count in levels.items():
 print("services: " + services.len().to_string())
 print("skipped: " + skipped.to_string())
 ```
+
+The type pattern `LogLine as entry` selects a parsed line and `None` selects a skipped one. `match own` consumes the parsed value, so the arm can move `entry.service` into the set while cloning only the level it still needs.
 
 The three report variables are visible at the top of the aggregation loop. There is no hidden state.
 
@@ -123,7 +125,7 @@ text = try fs.read_to_string("app.log")
 lines = text.split("\n")
 ```
 
-The parser keeps returning `Option[LogLine]`. The counter keeps mutating a dictionary owned by its caller. The set keeps owning service names. The program's structure does not move.
+The parser keeps returning `LogLine | None`. The counter keeps mutating a dictionary owned by its caller. The set keeps owning service names. The program's structure does not move.
 
 That is the argument for typing data at the boundary: when the input source changes, the program's core stays exactly where it was.
 

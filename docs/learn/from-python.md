@@ -217,9 +217,10 @@ match parse_port("8080"):
         print(f"bad config: {message}")
 ```
 
-`Option[T]` plays the role of `None`-or-a-value, and `try` propagates an error
-to the caller when your own function returns a `Result`. See
-[Results, Options, And `try`](/learn/results-and-options).
+`T | None` plays the role of `None`-or-a-value: a `str | None` holds either a
+string or `None`, `is None` and `is not None` test it, and `try` propagates an
+error to the caller when your own function returns a `Result`. See
+[Results And Optional Values](/learn/results-and-options).
 
 ## Types Are Static, But Locals Infer
 
@@ -241,8 +242,8 @@ Three differences worth knowing up front:
 - **Numeric types never convert implicitly.** Passing an `int32` where `int64`
   is expected is an error; cast with `as int64` or `.to_float()`. Unsuffixed
   integer literals are `int64`, floats are `float64`.
-- **Generics are explicit**: `list[str]`, `dict[str, int64]`, `Option[int64]`,
-  and type parameters are declared, as in `def first[T](values: list[T]) -> Option[T]`.
+- **Generics are explicit**: `list[str]`, `dict[str, int64]`, `Lookup[int64]`,
+  and type parameters are declared, as in `def first[T](values: list[T]) -> T | None`.
 
 ### If It Returns A Value, Declare The Type
 
@@ -298,19 +299,21 @@ or call `.to_float()` on both operands for true division
 ```
 
 **There is no truthiness.** `if values:` fails — conditions are `bool` and
-nothing else. Write `if values.len() > 0:` or `if value == None:`.
+nothing else. Write `if values.len() > 0:` or `if value is None:`.
 
 **Strings are not indexable.** `s[0]` does not work; a `str` is a sequence of
 Unicode scalar values, `len()` counts those, and slicing (`s[1:4]`) gives you
 an owned copy. Use `s.split("")` style operations or slices instead of
 character indexing.
 
-**`is` does not exist.** Use `== None` for optionals; there is no identity
-comparison.
+**`is` only tests for `None`.** `value is None` and `value is not None` check
+an optional `T | None` and narrow it; there is no identity comparison between
+arbitrary values.
 
 **Reading a non-copy element out of a list by index is rejected**, because it
 would move a value out of a collection you still own. Use `values.get(index)`,
-which hands you an `Option` containing a clone.
+which hands you a `Lookup[T]`: `Lookup.Found(value)` containing a clone, or
+`Lookup.Missing`.
 
 **Top-level bindings live in module storage** and cannot be moved out of it.
 If you want to consume a value with an `own` method, do it inside a function.

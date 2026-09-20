@@ -95,7 +95,7 @@ Current compiler workflow:
 - `cargo run -p aura -- run examples/enums/result_match.au`
   - execute enum construction plus exhaustive `match`
 - `cargo run -p aura -- run examples/enums/result_option.au`
-  - execute built-in `Result[T, E]` and `Option[T]` values with exhaustive `match`
+  - execute built-in `Result[T, E]`, `Lookup[T]`, `Poll[T]`, and `T | None` values with exhaustive `match`
 - `cargo run -p aura -- run examples/error_handling/try_result.au`
   - execute `try expr` over `Result[T, E]`
 - `cargo run -p aura -- run examples/generics/box_and_wrapper.au`

@@ -455,11 +455,11 @@ and `str.from_bytes(payload)`; hexadecimal, base64, typed conversion errors,
 and SHA-256 are taught in [22-bytes.md](22-bytes.md). An explicit `encoding`
 argument remains reserved but unimplemented.
 
-`strip_prefix(...)` and `strip_suffix(...)` return `Option[str]`, so they compose with `match`:
+`strip_prefix(...)` and `strip_suffix(...)` return `str | None`, so they compose with `is not None` or a `match` type pattern:
 
 ```aura fragment
 match trimmed.strip_prefix("aura "):
-    case Some(rest):
+    case str as rest:
         print(rest)     # "repo"
     case None:
         print("no match")

@@ -1,4 +1,4 @@
 def main() -> int32:
     jobs = Queue[int32]()
-    print(jobs.get_or_none(timeout=5ms))
+    print(jobs.poll(timeout=5ms))
     return 0

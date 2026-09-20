@@ -261,7 +261,7 @@ spelling. A user source file whose logical module name is `random` may declare
 its own `Rng` class; that class remains an ordinary user class in checking,
 analysis, MIR lowering, clone-safety classification, and both backends.
 
-Builtin enum types such as `Option`, `Result`, `QueueReceive`, and `process.Error` use the same qualified-member model as user enums. Short-form variant patterns and constructors are available only where the checker can determine a unique expected enum type.
+Builtin enum types such as `Result`, `Lookup`, `Poll`, `QueueReceive`, and `process.Error` use the same qualified-member model as user enums. Short-form variant patterns and constructors are available only where the checker can determine a unique expected enum type.
 
 ## Top-Level Statement Scope
 
