@@ -6498,9 +6498,24 @@ impl<'a> FunctionCompiler<'a> {
             .builder
             .ins()
             .icmp(IntCC::Equal, left.values[0], right.values[0]);
-        let same_tag = self.builder.ins().uextend(types::I64, same_tag);
         let bool_ty = DirectType::Scalar(ScalarKind::Bool);
         let right_words = right.values.clone();
+        // The members are compared only when the tags agree: with different
+        // tags the other side's payload words belong to another member (a
+        // runtime-object member's word would be a null or foreign handle).
+        let compare_block = self.builder.create_block();
+        let differ_block = self.builder.create_block();
+        let merge_block = self.builder.create_block();
+        self.builder.append_block_param(merge_block, types::I64);
+        self.builder
+            .ins()
+            .brif(same_tag, compare_block, &[], differ_block, &[]);
+        self.builder.switch_to_block(differ_block);
+        self.builder.seal_block(differ_block);
+        let zero = self.builder.ins().iconst(types::I64, 0);
+        self.builder.ins().jump(merge_block, &[zero]);
+        self.builder.switch_to_block(compare_block);
+        self.builder.seal_block(compare_block);
         let members_equal =
             self.switch_on_union_tag(&union, &left.values, &bool_ty, |codegen, index, member| {
                 if matches!(member.ty, DirectType::Scalar(ScalarKind::Unit)) {
@@ -6519,7 +6534,12 @@ impl<'a> FunctionCompiler<'a> {
                 let other = codegen.ensure_opaque(other)?;
                 codegen.compile_binary(BinaryOp::Eq, member, other, span)
             })?;
-        let equal = self.builder.ins().band(same_tag, members_equal.values[0]);
+        self.builder
+            .ins()
+            .jump(merge_block, &[members_equal.values[0]]);
+        self.builder.switch_to_block(merge_block);
+        self.builder.seal_block(merge_block);
+        let equal = self.builder.block_params(merge_block)[0];
         let result = if op == BinaryOp::Eq {
             equal
         } else {
