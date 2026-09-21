@@ -405,7 +405,16 @@ pub(super) fn retain_direct_values(
                     .brif(active, retain_block, &[], continue_block, &[]);
                 builder.switch_to_block(retain_block);
                 builder.seal_block(retain_block);
-                builder.ins().call(retain_value, &[handle]);
+                if matches!(union.member(index), Ok(DirectType::Callable(_))) {
+                    call_callable_unary_adapter(
+                        codegen,
+                        builder,
+                        &values[1..2 + CALLABLE_ENVIRONMENT_WORDS],
+                        DESCRIPTOR_RETAIN,
+                    )?;
+                } else {
+                    builder.ins().call(retain_value, &[handle]);
+                }
                 builder.ins().jump(continue_block, &[]);
                 builder.switch_to_block(continue_block);
                 builder.seal_block(continue_block);
@@ -419,7 +428,8 @@ pub(super) fn retain_direct_values(
 }
 
 /// Calls the `drop` or `retain` adapter named by a callable's descriptor on
-/// the value's four words.
+/// the value's four words; a zero descriptor (a moved-from or never-assigned
+/// value) names no shape and is skipped.
 pub(super) fn call_callable_unary_adapter(
     codegen: &mut NativeCodegen<'_>,
     builder: &mut FunctionBuilder<'_>,
@@ -433,6 +443,27 @@ pub(super) fn call_callable_unary_adapter(
             values.len()
         ));
     }
+    let live = builder.ins().icmp_imm(IntCC::NotEqual, values[0], 0);
+    let call_block = builder.create_block();
+    let continue_block = builder.create_block();
+    builder
+        .ins()
+        .brif(live, call_block, &[], continue_block, &[]);
+    builder.switch_to_block(call_block);
+    builder.seal_block(call_block);
+    call_callable_unary_adapter_live(codegen, builder, values, descriptor_offset);
+    builder.ins().jump(continue_block, &[]);
+    builder.switch_to_block(continue_block);
+    builder.seal_block(continue_block);
+    Ok(())
+}
+
+fn call_callable_unary_adapter_live(
+    codegen: &mut NativeCodegen<'_>,
+    builder: &mut FunctionBuilder<'_>,
+    values: &[Value],
+    descriptor_offset: i32,
+) {
     let slot = builder.create_sized_stack_slot(StackSlotData::new(
         StackSlotKind::ExplicitSlot,
         (8 * (1 + CALLABLE_ENVIRONMENT_WORDS)) as u32,
@@ -454,7 +485,6 @@ pub(super) fn call_callable_unary_adapter(
     builder
         .ins()
         .call_indirect(signature, adapter, &[callable_ptr]);
-    Ok(())
 }
 
 impl NativeCodegen<'_> {
@@ -769,8 +799,14 @@ impl NativeCodegen<'_> {
         let env_base = environment_base(&mut builder, callable_ptr, shape.inline());
         let captures = load_captures(&mut builder, env_base, &shape.capture_types);
 
+        // The environment keeps its captures across calls, so a capture the
+        // function takes by value (and releases at its exit) is retained
+        // first; a borrowed or mutable capture is passed as it is.
         let mut lowered_args = Vec::new();
-        for values in &captures {
+        for (index, (values, ty)) in captures.iter().zip(&shape.capture_types).enumerate() {
+            if function.params[index].passing == MirReceiverKind::Value {
+                retain_direct_values(self, &mut builder, values, ty)?;
+            }
             lowered_args.extend(values.iter().copied());
         }
         let mut cursor = 2;
@@ -843,6 +879,405 @@ impl NativeCodegen<'_> {
         try_or_string_error!(
             self.object.define_function(shape.invoke, &mut ctx),
             "failed to define callable invoke adapter: {}"
+        );
+        Ok(())
+    }
+}
+
+/// A callable whose value entered from the runtime as a boxed
+/// `Value::Function`: its words are `[contract descriptor, handle, 0, 0]`
+/// and the descriptor's adapters call, release, retain, and re-box the
+/// handle for the contract's public direct signature.
+#[derive(Clone, Debug)]
+pub(super) struct ContractDescriptor {
+    pub(super) descriptor: DataId,
+    pub(super) invoke: FuncId,
+    pub(super) drop: FuncId,
+    pub(super) retain: FuncId,
+    pub(super) box_value: FuncId,
+    pub(super) param_types: Vec<DirectType>,
+    pub(super) mutable_params: Vec<bool>,
+    pub(super) return_ty: DirectType,
+}
+
+/// The public parameters and return type of a callable contract.
+pub(super) fn contract_parts(
+    signature: &Type,
+) -> std::result::Result<(Vec<FunctionParamContract>, Type), String> {
+    match signature {
+        Type::Function {
+            params,
+            return_type,
+        } => Ok((params.clone(), return_type.as_ref().clone())),
+        Type::Closure {
+            params,
+            return_type,
+            ..
+        } => Ok((params.as_ref().clone(), return_type.as_ref().clone())),
+        Type::Callable(callable) => Ok((callable.params.clone(), callable.return_type.clone())),
+        other => Err(format!(
+            "direct backend expected a callable contract, found `{other}`"
+        )),
+    }
+}
+
+/// `invoke(callable_ptr, supplied_mask, public args...) -> (return words,
+/// mutable-parameter writeback words...)` for a public contract.
+pub(super) fn contract_invoke_signature(
+    param_types: &[DirectType],
+    mutable_params: &[bool],
+    return_ty: &DirectType,
+    call_conv: CallConv,
+) -> Signature {
+    let mut signature = Signature::new(call_conv);
+    signature.params.push(AbiParam::new(types::I64));
+    signature.params.push(AbiParam::new(types::I64));
+    for ty in param_types {
+        for abi in ty.abi_types() {
+            signature.params.push(AbiParam::new(abi));
+        }
+    }
+    for abi in return_ty.abi_types() {
+        signature.returns.push(AbiParam::new(abi));
+    }
+    for (ty, mutable) in param_types.iter().zip(mutable_params) {
+        if *mutable {
+            for abi in ty.abi_types() {
+                signature.returns.push(AbiParam::new(abi));
+            }
+        }
+    }
+    signature
+}
+
+/// The direct parameter types, mutability flags, and return type of a
+/// contract.
+pub(super) fn contract_direct_parts(
+    signature: &Type,
+    classes: &HashMap<String, MirClass>,
+) -> std::result::Result<(Vec<DirectType>, Vec<bool>, DirectType), String> {
+    let (params, return_type) = contract_parts(signature)?;
+    let param_types = function_value_param_types(&params, classes, "callable parameter")?;
+    let mutable_params = params
+        .iter()
+        .map(|param| param.passing == ReceiverKind::BorrowMut)
+        .collect();
+    let return_ty = ensure_direct_type(
+        crate::sema::returned_view_pointee(&return_type),
+        classes,
+        "callable return type",
+    )?;
+    Ok((param_types, mutable_params, return_ty))
+}
+
+/// Declares (once per contract spelling) the boxed descriptor and its
+/// adapters; they are defined at the end of the module.
+pub(super) fn declare_contract_descriptor(
+    object: &mut ObjectModule,
+    contract_descriptors: &mut HashMap<String, ContractDescriptor>,
+    classes: &HashMap<String, MirClass>,
+    call_conv: CallConv,
+    signature: &Type,
+) -> std::result::Result<ContractDescriptor, String> {
+    let key = signature.to_string();
+    if let Some(existing) = contract_descriptors.get(&key) {
+        return Ok(existing.clone());
+    }
+    let (param_types, mutable_params, return_ty) = contract_direct_parts(signature, classes)?;
+    let stem = format!("aura_contract_{}", contract_descriptors.len());
+    let descriptor = try_or_string_error!(
+        object.declare_data(&format!("{stem}_descriptor"), Linkage::Local, false, false),
+        "failed to declare contract descriptor: {}"
+    );
+    let invoke = try_or_string_error!(
+        object.declare_function(
+            &format!("{stem}_invoke"),
+            Linkage::Local,
+            &contract_invoke_signature(&param_types, &mutable_params, &return_ty, call_conv),
+        ),
+        "failed to declare contract invoke adapter: {}"
+    );
+    let drop = try_or_string_error!(
+        object.declare_function(
+            &format!("{stem}_drop"),
+            Linkage::Local,
+            &callable_unary_signature(call_conv)
+        ),
+        "failed to declare contract drop adapter: {}"
+    );
+    let retain = try_or_string_error!(
+        object.declare_function(
+            &format!("{stem}_retain"),
+            Linkage::Local,
+            &callable_unary_signature(call_conv)
+        ),
+        "failed to declare contract retain adapter: {}"
+    );
+    let box_value = try_or_string_error!(
+        object.declare_function(
+            &format!("{stem}_box"),
+            Linkage::Local,
+            &callable_box_signature(call_conv)
+        ),
+        "failed to declare contract box adapter: {}"
+    );
+    let contract = ContractDescriptor {
+        descriptor,
+        invoke,
+        drop,
+        retain,
+        box_value,
+        param_types,
+        mutable_params,
+        return_ty,
+    };
+    contract_descriptors.insert(key, contract.clone());
+    Ok(contract)
+}
+
+/// Calls the `box` adapter named by a callable's descriptor on the value's
+/// four words and returns the owned handle.
+pub(super) fn call_callable_box_adapter(
+    codegen: &mut NativeCodegen<'_>,
+    builder: &mut FunctionBuilder<'_>,
+    values: &[Value],
+) -> std::result::Result<Value, String> {
+    if values.len() != 1 + CALLABLE_ENVIRONMENT_WORDS {
+        return Err(format!(
+            "direct backend expected {} callable words, found {}",
+            1 + CALLABLE_ENVIRONMENT_WORDS,
+            values.len()
+        ));
+    }
+    let slot = builder.create_sized_stack_slot(StackSlotData::new(
+        StackSlotKind::ExplicitSlot,
+        (8 * (1 + CALLABLE_ENVIRONMENT_WORDS)) as u32,
+        3,
+    ));
+    let callable_ptr = builder.ins().stack_addr(types::I64, slot, 0);
+    for (index, value) in values.iter().enumerate() {
+        builder
+            .ins()
+            .store(MemFlags::new(), *value, callable_ptr, (index as i32) * 8);
+    }
+    let adapter = builder
+        .ins()
+        .load(types::I64, MemFlags::new(), values[0], DESCRIPTOR_BOX);
+    let signature = builder
+        .func
+        .import_signature(callable_box_signature(codegen.call_conv));
+    let call = builder
+        .ins()
+        .call_indirect(signature, adapter, &[callable_ptr]);
+    Ok(builder.inst_results(call)[0])
+}
+
+/// The four words of a boxed function value re-entering as an inline
+/// callable of `signature`: the contract descriptor, the handle, and two
+/// zero words.
+pub(super) fn boxed_callable_words(
+    codegen: &mut NativeCodegen<'_>,
+    builder: &mut FunctionBuilder<'_>,
+    handle: Value,
+    signature: &Type,
+) -> std::result::Result<Vec<Value>, String> {
+    let contract = declare_contract_descriptor(
+        &mut codegen.object,
+        &mut codegen.contract_descriptors,
+        &codegen.classes,
+        codegen.call_conv,
+        signature,
+    )?;
+    let global = codegen
+        .object
+        .declare_data_in_func(contract.descriptor, builder.func);
+    let descriptor = builder.ins().symbol_value(types::I64, global);
+    let zero = builder.ins().iconst(types::I64, 0);
+    Ok(vec![descriptor, handle, zero, zero])
+}
+
+impl NativeCodegen<'_> {
+    /// Defines every contract descriptor declared while compiling the
+    /// module's functions.
+    pub(super) fn define_contract_descriptors(&mut self) -> std::result::Result<(), String> {
+        let contracts: Vec<ContractDescriptor> =
+            self.contract_descriptors.values().cloned().collect();
+        for contract in contracts {
+            self.define_contract_handle_adapter(contract.drop, self.release_value, false)?;
+            self.define_contract_handle_adapter(contract.retain, self.retain_value, false)?;
+            self.define_contract_handle_adapter(contract.box_value, self.retain_value, true)?;
+            self.define_contract_invoke(&contract)?;
+            let mut data = DataDescription::new();
+            let mut bytes = vec![0u8; DESCRIPTOR_BYTES];
+            bytes[DESCRIPTOR_ENV_WORDS as usize..DESCRIPTOR_ENV_WORDS as usize + 8]
+                .copy_from_slice(&1u64.to_le_bytes());
+            bytes[DESCRIPTOR_INLINE as usize..DESCRIPTOR_INLINE as usize + 8]
+                .copy_from_slice(&1u64.to_le_bytes());
+            data.define(bytes.into_boxed_slice());
+            for (offset, func_id) in [
+                (DESCRIPTOR_INVOKE, contract.invoke),
+                (DESCRIPTOR_DROP, contract.drop),
+                (DESCRIPTOR_RETAIN, contract.retain),
+                (DESCRIPTOR_BOX, contract.box_value),
+            ] {
+                let func_ref = self.object.declare_func_in_data(func_id, &mut data);
+                data.write_function_addr(offset as u32, func_ref);
+            }
+            try_or_string_error!(
+                self.object.define_data(contract.descriptor, &data),
+                "failed to define contract descriptor: {}"
+            );
+        }
+        Ok(())
+    }
+
+    /// `drop`, `retain`, and `box` of a boxed callable act on the handle in
+    /// word 1; `box` also returns it.
+    fn define_contract_handle_adapter(
+        &mut self,
+        adapter: FuncId,
+        helper: FuncId,
+        returns_handle: bool,
+    ) -> std::result::Result<(), String> {
+        let mut ctx = self.object.make_context();
+        ctx.func.signature = if returns_handle {
+            callable_box_signature(self.call_conv)
+        } else {
+            callable_unary_signature(self.call_conv)
+        };
+        ctx.func.name = UserFuncName::user(0, adapter.as_u32());
+        let mut builder_ctx = FunctionBuilderContext::new();
+        let mut builder = FunctionBuilder::new(&mut ctx.func, &mut builder_ctx);
+        let entry = builder.create_block();
+        builder.append_block_params_for_function_params(entry);
+        builder.switch_to_block(entry);
+        builder.seal_block(entry);
+        let callable_ptr = builder.block_params(entry)[0];
+        let handle = builder
+            .ins()
+            .load(types::I64, MemFlags::new(), callable_ptr, 8);
+        let helper_ref = self.object.declare_func_in_func(helper, builder.func);
+        builder.ins().call(helper_ref, &[handle]);
+        if returns_handle {
+            builder.ins().return_(&[handle]);
+        } else {
+            builder.ins().return_(&[]);
+        }
+        builder.finalize();
+        try_or_string_error!(
+            self.object.define_function(adapter, &mut ctx),
+            "failed to define contract handle adapter: {}"
+        );
+        Ok(())
+    }
+
+    /// Boxes the public arguments into a uniform buffer, binds the
+    /// callee's defaults, calls the function value through the runtime,
+    /// and unboxes the result and the mutable-parameter writebacks.
+    fn define_contract_invoke(
+        &mut self,
+        contract: &ContractDescriptor,
+    ) -> std::result::Result<(), String> {
+        let mut ctx = self.object.make_context();
+        ctx.func.signature = contract_invoke_signature(
+            &contract.param_types,
+            &contract.mutable_params,
+            &contract.return_ty,
+            self.call_conv,
+        );
+        ctx.func.name = UserFuncName::user(0, contract.invoke.as_u32());
+        let mut builder_ctx = FunctionBuilderContext::new();
+        let mut builder = FunctionBuilder::new(&mut ctx.func, &mut builder_ctx);
+        let entry = builder.create_block();
+        builder.append_block_params_for_function_params(entry);
+        builder.switch_to_block(entry);
+        builder.seal_block(entry);
+        let params = builder.block_params(entry).to_vec();
+        let callable_ptr = params[0];
+        let supplied_mask = params[1];
+        let handle = builder
+            .ins()
+            .load(types::I64, MemFlags::new(), callable_ptr, 8);
+        let count = contract.param_types.len();
+        let buffer_slot = builder.create_sized_stack_slot(StackSlotData::new(
+            StackSlotKind::ExplicitSlot,
+            (8 * count.max(1)) as u32,
+            3,
+        ));
+        let buffer = builder.ins().stack_addr(types::I64, buffer_slot, 0);
+        let zero = builder.ins().iconst(types::I64, 0);
+        for index in 0..count {
+            builder
+                .ins()
+                .store(MemFlags::new(), zero, buffer, (index as i32) * 8);
+        }
+        let mut cursor = 2;
+        for (index, ty) in contract.param_types.iter().enumerate() {
+            let width = ty.value_count();
+            let values = params[cursor..cursor + width].to_vec();
+            cursor += width;
+            let bit = builder.ins().band_imm(supplied_mask, 1i64 << index);
+            let supplied = builder.ins().icmp_imm(IntCC::NotEqual, bit, 0);
+            let box_block = builder.create_block();
+            let next_block = builder.create_block();
+            builder
+                .ins()
+                .brif(supplied, box_block, &[], next_block, &[]);
+            builder.switch_to_block(box_block);
+            builder.seal_block(box_block);
+            let boxed = box_thunk_value(self, &mut builder, &values, ty)?;
+            builder
+                .ins()
+                .store(MemFlags::new(), boxed, buffer, (index as i32) * 8);
+            builder.ins().jump(next_block, &[]);
+            builder.switch_to_block(next_block);
+            builder.seal_block(next_block);
+        }
+        let count_value = builder.ins().iconst(types::I64, count as i64);
+        let bind_defaults = self
+            .object
+            .declare_func_in_func(self.function_bind_defaults, builder.func);
+        let keep_defaults_owned = builder.ins().iconst(types::I64, 0);
+        builder.ins().call(
+            bind_defaults,
+            &[handle, buffer, count_value, keep_defaults_owned],
+        );
+        let function_call = self
+            .object
+            .declare_func_in_func(self.function_call, builder.func);
+        let call = builder
+            .ins()
+            .call(function_call, &[handle, buffer, count_value]);
+        let raw_result = builder.inst_results(call)[0];
+        let release_value = self
+            .object
+            .declare_func_in_func(self.release_value, builder.func);
+        let mut returned = unbox_thunk_value(self, &mut builder, raw_result, &contract.return_ty)?;
+        if !matches!(contract.return_ty, DirectType::Opaque(_)) {
+            builder.ins().call(release_value, &[raw_result]);
+        }
+        for (index, (ty, mutable)) in contract
+            .param_types
+            .iter()
+            .zip(&contract.mutable_params)
+            .enumerate()
+        {
+            if !*mutable {
+                continue;
+            }
+            let raw = builder
+                .ins()
+                .load(types::I64, MemFlags::new(), buffer, (index as i32) * 8);
+            returned.extend(unbox_thunk_value(self, &mut builder, raw, ty)?);
+            if !matches!(ty, DirectType::Opaque(_)) {
+                builder.ins().call(release_value, &[raw]);
+            }
+        }
+        builder.ins().return_(&returned);
+        builder.finalize();
+        try_or_string_error!(
+            self.object.define_function(contract.invoke, &mut ctx),
+            "failed to define contract invoke adapter: {}"
         );
         Ok(())
     }

@@ -218,6 +218,8 @@ fn adr0038_direct_view_and_closure_metadata_helpers_preserve_dataflow_invariants
         index,
         place: DirectViewPlace::static_place(place.to_string()),
         ty,
+        env_offset: 0,
+        inline: true,
     };
     let left = HashMap::from([(
         "worker".to_string(),
@@ -1068,6 +1070,12 @@ fn test_function_operand(name: &str, params: Vec<Type>, return_type: Type) -> Op
 
 /// A function operand whose signature matches the lowered declaration, as
 /// the validator authenticates operand contracts against declarations.
+fn object_contains_symbol(object: &[u8], symbol: &str) -> bool {
+    object
+        .windows(symbol.len())
+        .any(|window| window == symbol.as_bytes())
+}
+
 fn declared_function_operand(module: &crate::mir::MirModule, name: &str) -> Operand {
     let declaration = module
         .functions
@@ -7363,16 +7371,20 @@ fn direct_callable_objects_pin_defaults_capability_writebacks_and_task_handoff_a
     );
     let default_main_references =
         object_function_referenced_symbols(&defaults_object, "aura_fn_main");
+    assert!(
+        default_main_references
+            .iter()
+            .any(|symbol| symbol.contains("aura_callable_")),
+        "indirect calls dispatch through a callable descriptor: {default_main_references:?}"
+    );
     for runtime_symbol in [
         "aura_direct_function_value",
         "aura_direct_function_bind_defaults",
         "aura_direct_function_call",
     ] {
         assert!(
-            default_main_references
-                .iter()
-                .any(|symbol| symbol.contains(runtime_symbol)),
-            "indirect calls must use `{runtime_symbol}`: {default_main_references:?}"
+            object_contains_symbol(&defaults_object, runtime_symbol),
+            "the boundary adapters must keep `{runtime_symbol}`"
         );
     }
     for selected in ["first_default", "second_default"] {
@@ -7400,10 +7412,8 @@ fn direct_callable_objects_pin_defaults_capability_writebacks_and_task_handoff_a
             mangle_default_binder_symbol(selected),
         ] {
             assert!(
-                default_main_references
-                    .iter()
-                    .any(|symbol| symbol.contains(&callable_symbol)),
-                "runtime selection must retain `{callable_symbol}` in main: {default_main_references:?}"
+                object_contains_symbol(&defaults_object, &callable_symbol),
+                "runtime selection must retain `{callable_symbol}` for the shape's box adapter"
             );
         }
     }
@@ -7485,11 +7495,9 @@ fn direct_callable_objects_pin_defaults_capability_writebacks_and_task_handoff_a
             mangle_default_binder_symbol(selected),
         ] {
             assert!(
-                task_main_references
-                    .iter()
-                    .any(|symbol| symbol.contains(&callable_symbol)),
-                "the selected task callable must carry `{callable_symbol}`: {task_main_references:?}"
-            );
+            object_contains_symbol(&task_object, &callable_symbol),
+            "the selected task callable must carry `{callable_symbol}` in the shape's box adapter"
+        );
         }
     }
     for legacy_symbol in [
@@ -7568,12 +7576,6 @@ def main() -> int32:
         emit_host_object(&module).expect("closure calls, callbacks, and task handoff should emit");
     let main_references = object_function_referenced_symbols(&object, "aura_fn_main");
     for runtime_symbol in [
-        "aura_direct_function_value",
-        "aura_direct_arg_buffer_new",
-        "aura_direct_arg_buffer_store_owned",
-        "aura_direct_closure_value",
-        "aura_direct_function_bind_defaults",
-        "aura_direct_function_call",
         "aura_direct_task_arg_buffer_guard",
         "aura_direct_task_arg_buffer_disarm",
         "aura_direct_start_task_function_with_frames",
@@ -7585,15 +7587,32 @@ def main() -> int32:
             "closure lowering must use `{runtime_symbol}`: {main_references:?}"
         );
     }
+    assert!(
+        main_references
+            .iter()
+            .any(|symbol| symbol.contains("aura_callable_")),
+        "closure construction names its shape descriptor: {main_references:?}"
+    );
+    for runtime_symbol in [
+        "aura_direct_function_value",
+        "aura_direct_arg_buffer_new",
+        "aura_direct_arg_buffer_store_owned",
+        "aura_direct_closure_value",
+        "aura_direct_function_bind_defaults",
+        "aura_direct_function_call",
+    ] {
+        assert!(
+            object_contains_symbol(&object, runtime_symbol),
+            "the boundary adapters must keep `{runtime_symbol}`"
+        );
+    }
     for callable_symbol in [
         mangle_thunk_symbol(lifted_name),
         mangle_default_binder_symbol(lifted_name),
     ] {
         assert!(
-            main_references
-                .iter()
-                .any(|symbol| symbol.contains(&callable_symbol)),
-            "closure construction must retain `{callable_symbol}`: {main_references:?}"
+            object_contains_symbol(&object, &callable_symbol),
+            "the shape's box adapter must retain `{callable_symbol}`"
         );
     }
     let thunk_references =
@@ -7655,7 +7674,7 @@ def main() -> int32:
             .expect("codegen should initialize");
     missing_thunk.function_thunks.remove(&lifted_name);
     let thunk_error = missing_thunk
-        .define_function(&main)
+        .define_callable_shapes()
         .expect_err("closure construction must require the lifted thunk");
     assert!(
         thunk_error.contains(&format!("does not know function thunk for `{lifted_name}`")),
@@ -7667,7 +7686,7 @@ def main() -> int32:
             .expect("codegen should initialize");
     missing_binder.function_default_binders.remove(&lifted_name);
     let binder_error = missing_binder
-        .define_function(&main)
+        .define_callable_shapes()
         .expect_err("closure construction must require the lifted default binder");
     assert!(
         binder_error.contains(&format!(
@@ -7995,15 +8014,12 @@ def main() -> int32:
     let object = emit_host_object(&mir)
         .expect("a positional argument after a named slot should bind the next free parameter");
     let main_references = object_function_referenced_symbols(&object, "aura_fn_main");
-    for runtime_symbol in [
-        "aura_direct_function_bind_defaults",
-        "aura_direct_function_call",
-    ] {
+    for runtime_symbol in ["aura_callable_"] {
         assert!(
             main_references
                 .iter()
                 .any(|symbol| symbol.contains(runtime_symbol)),
-            "mixed binding must retain the indirect callable ABI through `{runtime_symbol}`: {main_references:?}"
+            "mixed binding must call through the callable descriptor `{runtime_symbol}`: {main_references:?}"
         );
     }
 }
@@ -8844,7 +8860,7 @@ def main() -> int32:
     .expect("codegen should initialize");
     missing_thunk_codegen.function_thunks.remove("worker");
     let missing_thunk_error = missing_thunk_codegen
-        .define_function(&main)
+        .define_callable_shapes()
         .expect_err("task start should reject missing thunks");
     assert!(missing_thunk_error.contains("does not know function thunk for `worker`"));
 
@@ -8858,7 +8874,7 @@ def main() -> int32:
         .function_default_binders
         .remove("worker");
     let missing_binder_error = missing_binder_codegen
-        .define_function(&main)
+        .define_callable_shapes()
         .expect_err("task start should reject missing default binders");
     assert!(
         missing_binder_error.contains("does not know function default binder for `worker`"),

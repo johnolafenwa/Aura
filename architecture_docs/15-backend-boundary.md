@@ -397,6 +397,29 @@ reports the phase's counters (`union_payload_boxes`, `closure_environments`,
 `AURA_RUNTIME_STATS=1` is set, and `benchmarks/representation` records them
 with provenance.
 
+A callable value on the direct backend is four words: a descriptor word
+naming the value's shape (its lowered function, its capture direct types,
+and its call kind) and three environment words. Captures that fit in three
+words live in the value; a wider environment lives in one checked heap
+block named by the first environment word, allocated through
+`aura_direct_callable_env_alloc` (counted as a callable overflow
+allocation; `AU4005` on failure) and freed by the shape's drop adapter. The
+module emits one descriptor and four adapters per shape: `invoke` calls the
+lowered function with the captures as leading direct arguments, fills a
+missing public argument from its default function, stores mutated captures
+back into the environment, and returns the public writebacks; `drop` and
+`retain` act on the handles among the capture words; `box` builds today's
+runtime function value with a closure environment. A call in generated code
+loads `invoke` from the descriptor and calls it with the contract's direct
+signature; a boxed function value entering from the runtime (a thunk
+parameter, a container read, a helper result, or a generic frame whose
+contract differs in layout) carries a per-contract boxed descriptor whose
+adapters call, release, and retain the handle through the runtime. A
+callable member of a union is an owning member whose payload words are
+the four callable words. The interpreter keeps `Value::Function` with an
+`Arc<ClosureEnvironment>` as the reference semantics; the layout is no
+FFI/ABI stability claim.
+
 ## Batch 1 phase 1: callable contracts
 
 A callable contract is complete (Q17 A, Q19 A): slot names or explicit

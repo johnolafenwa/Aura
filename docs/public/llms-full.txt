@@ -3703,11 +3703,16 @@ local loan closures. A stored callable may return a view of one explicit
 parameter but never of a captured receiver. A packed value keeps the closure's existing environment
 as its storage, so packing allocates no second environment on either
 backend. Every concrete union is one inline tagged value on the direct
-backend, a runtime-object member riding along as an owned handle word;
-closure environments remain the explicitly disclosed boxed interim until
-the next pull request of the representation phase lands the ratified
-Q15 A / Q16 A callable layout; no FFI/ABI stability claim and no 0.4 release
-precede that. A `TaskCallable[...]` value is a stored task
+backend, a runtime-object member riding along as an owned handle word.
+On the direct backend a callable value is four words: a descriptor naming
+its shape (the lowered function and its captures) and three environment
+words; captures that fit in three words live in the value itself, a wider
+environment lives in one checked block whose failure raises `AU4005`, and
+a call goes through the descriptor without boxing. The value is boxed into
+a runtime function value only where it leaves generated code: stored into
+a container, started as a task, passed to a runtime helper, or handed to a
+generic frame whose contract differs in layout. No FFI/ABI stability claim
+follows from this layout. A `TaskCallable[...]` value is a stored task
 target: every `TaskGroup` start method takes it by move for one child call,
 whether Shared, Mutable, or Consuming, and a Mutable target's captures are
 child-owned state with no parent writeback (see

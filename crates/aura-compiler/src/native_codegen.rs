@@ -232,7 +232,6 @@ enum DirectType {
     /// named by the first word. The descriptor dispatches the value's
     /// calls, releases, and boundary boxes, so two lambdas of one static
     /// type may share a local.
-    #[allow(dead_code)] // Constructed once the callable shapes land.
     Callable(DirectCallableType),
     Opaque(Type),
 }
@@ -249,7 +248,6 @@ struct DirectCallableType {
 }
 
 impl DirectCallableType {
-    #[allow(dead_code)] // Used once the callable shapes land.
     fn new(signature: Type) -> Self {
         Self { signature }
     }
@@ -280,7 +278,7 @@ impl DirectUnionType {
         let owning = members
             .iter()
             .enumerate()
-            .filter(|(_, ty)| matches!(ty, DirectType::Opaque(_)))
+            .filter(|(_, ty)| matches!(ty, DirectType::Opaque(_) | DirectType::Callable(_)))
             .map(|(index, _)| index)
             .collect();
         Self {
@@ -532,6 +530,7 @@ struct NativeCodegen<'a> {
     function_thunks: HashMap<String, FuncId>,
     function_default_binders: HashMap<String, FuncId>,
     callable_shapes: HashMap<CallableShapeKey, CallableShape>,
+    contract_descriptors: HashMap<String, callables::ContractDescriptor>,
     cleanup_thunks: HashMap<(String, String), FuncId>,
     classes: HashMap<String, MirClass>,
     enums: HashMap<String, MirEnum>,
@@ -707,7 +706,6 @@ struct NativeCodegen<'a> {
     union_tag_test: FuncId,
     union_tag: FuncId,
     union_payload_copy: FuncId,
-    #[allow(dead_code)] // Used once callable construction lands.
     callable_env_alloc: FuncId,
     callable_env_free: FuncId,
     none_test: FuncId,
@@ -1538,6 +1536,7 @@ impl<'a> NativeCodegen<'a> {
             function_thunks,
             function_default_binders,
             callable_shapes,
+            contract_descriptors: HashMap::new(),
             cleanup_thunks,
             classes,
             enums: module
@@ -1933,6 +1932,7 @@ impl<'a> NativeCodegen<'a> {
             }
         }
         self.define_callable_shapes()?;
+        self.define_contract_descriptors()?;
         for function in self
             .module
             .functions
@@ -2401,9 +2401,6 @@ impl<'a> NativeCodegen<'a> {
         let module_constant = self
             .object
             .declare_func_in_func(self.module_constant, builder.func);
-        let closure_value = self
-            .object
-            .declare_func_in_func(self.closure_value, builder.func);
         let closure_capture = self
             .object
             .declare_func_in_func(self.closure_capture, builder.func);
@@ -2770,6 +2767,9 @@ impl<'a> NativeCodegen<'a> {
         let union_payload_copy = self
             .object
             .declare_func_in_func(self.union_payload_copy, builder.func);
+        let callable_env_alloc = self
+            .object
+            .declare_func_in_func(self.callable_env_alloc, builder.func);
         let none_test = self
             .object
             .declare_func_in_func(self.none_test, builder.func);
@@ -3384,6 +3384,7 @@ impl<'a> NativeCodegen<'a> {
             object: &mut self.object,
             string_data: &mut self.string_data,
             callable_shapes: &self.callable_shapes,
+            contract_descriptors: &mut self.contract_descriptors,
             call_conv: self.call_conv,
             cleanup_places,
             cleanup_active_vars,
@@ -3424,7 +3425,6 @@ impl<'a> NativeCodegen<'a> {
             box_bool,
             function_value,
             module_constant,
-            closure_value,
             closure_capture,
             function_call,
             function_bind_defaults,
@@ -3551,6 +3551,7 @@ impl<'a> NativeCodegen<'a> {
             union_tag_test,
             union_tag,
             union_payload_copy,
+            callable_env_alloc,
             none_test,
             value_is_union,
             union_active_payload,
@@ -3852,10 +3853,8 @@ impl<'a> NativeCodegen<'a> {
                 .store(MemFlags::new(), zero, args_ptr, (index as i32) * 8);
             match param_ty {
                 DirectType::Callable(_) => {
-                    return Err(
-                        "direct backend cannot pass an inline callable through a thunk yet"
-                            .to_string(),
-                    );
+                    // The boxed handle is adopted into the callable's words.
+                    lowered_args.extend(unbox_thunk_value(self, &mut builder, raw, param_ty)?);
                 }
                 DirectType::Opaque(_) => lowered_args.push(raw),
                 DirectType::Scalar(ScalarKind::Int32) => {
@@ -4296,6 +4295,10 @@ struct DirectClosureCaptureWriteback {
     index: usize,
     place: DirectViewPlace,
     ty: DirectType,
+    /// The capture's first word in the callable's environment.
+    env_offset: usize,
+    /// Whether the environment lives in the callable's own words.
+    inline: bool,
 }
 
 impl DirectViewPlace {
@@ -4675,6 +4678,7 @@ struct FunctionCompiler<'a> {
     object: &'a mut ObjectModule,
     string_data: &'a mut HashMap<Vec<u8>, DataId>,
     callable_shapes: &'a HashMap<CallableShapeKey, CallableShape>,
+    contract_descriptors: &'a mut HashMap<String, callables::ContractDescriptor>,
     call_conv: CallConv,
     cleanup_places: Vec<String>,
     cleanup_active_vars: HashMap<String, Variable>,
@@ -4715,7 +4719,6 @@ struct FunctionCompiler<'a> {
     box_bool: cranelift_codegen::ir::FuncRef,
     function_value: cranelift_codegen::ir::FuncRef,
     module_constant: cranelift_codegen::ir::FuncRef,
-    closure_value: cranelift_codegen::ir::FuncRef,
     closure_capture: cranelift_codegen::ir::FuncRef,
     function_call: cranelift_codegen::ir::FuncRef,
     function_bind_defaults: cranelift_codegen::ir::FuncRef,
@@ -4845,6 +4848,7 @@ struct FunctionCompiler<'a> {
     union_tag_test: cranelift_codegen::ir::FuncRef,
     union_tag: cranelift_codegen::ir::FuncRef,
     union_payload_copy: cranelift_codegen::ir::FuncRef,
+    callable_env_alloc: cranelift_codegen::ir::FuncRef,
     none_test: cranelift_codegen::ir::FuncRef,
     value_is_union: cranelift_codegen::ir::FuncRef,
     union_active_payload: cranelift_codegen::ir::FuncRef,
@@ -5217,7 +5221,12 @@ impl<'a> FunctionCompiler<'a> {
                 .brif(active, release_block, &[], continue_block, &[]);
             self.builder.switch_to_block(release_block);
             self.builder.seal_block(release_block);
-            self.release_opaque_handle(words[1]);
+            if matches!(union.member(index), Ok(DirectType::Callable(_))) {
+                let callable_words = words[1..2 + CALLABLE_ENVIRONMENT_WORDS].to_vec();
+                self.call_callable_adapter_on_words(&callable_words, callables::DESCRIPTOR_DROP);
+            } else {
+                self.release_opaque_handle(words[1]);
+            }
             self.builder.ins().jump(continue_block, &[]);
             self.builder.switch_to_block(continue_block);
             self.builder.seal_block(continue_block);
@@ -5239,7 +5248,12 @@ impl<'a> FunctionCompiler<'a> {
                 .brif(active, retain_block, &[], continue_block, &[]);
             self.builder.switch_to_block(retain_block);
             self.builder.seal_block(retain_block);
-            let _ = self.retain_opaque_handle(words[1]);
+            if matches!(union.member(index), Ok(DirectType::Callable(_))) {
+                let callable_words = words[1..2 + CALLABLE_ENVIRONMENT_WORDS].to_vec();
+                self.call_callable_adapter_on_words(&callable_words, callables::DESCRIPTOR_RETAIN);
+            } else {
+                let _ = self.retain_opaque_handle(words[1]);
+            }
             self.builder.ins().jump(continue_block, &[]);
             self.builder.switch_to_block(continue_block);
             self.builder.seal_block(continue_block);
@@ -5285,8 +5299,24 @@ impl<'a> FunctionCompiler<'a> {
     }
 
     /// Calls the `drop` or `retain` adapter named by an inline callable's
-    /// descriptor on its four words.
+    /// descriptor on its four words; a zero descriptor (a moved-from or
+    /// never-assigned value) names no shape and is skipped.
     fn call_callable_adapter_on_words(&mut self, words: &[Value], descriptor_offset: i32) {
+        let live = self.builder.ins().icmp_imm(IntCC::NotEqual, words[0], 0);
+        let call_block = self.builder.create_block();
+        let continue_block = self.builder.create_block();
+        self.builder
+            .ins()
+            .brif(live, call_block, &[], continue_block, &[]);
+        self.builder.switch_to_block(call_block);
+        self.builder.seal_block(call_block);
+        self.call_callable_adapter_on_live_words(words, descriptor_offset);
+        self.builder.ins().jump(continue_block, &[]);
+        self.builder.switch_to_block(continue_block);
+        self.builder.seal_block(continue_block);
+    }
+
+    fn call_callable_adapter_on_live_words(&mut self, words: &[Value], descriptor_offset: i32) {
         let slot = self.builder.create_sized_stack_slot(StackSlotData::new(
             StackSlotKind::ExplicitSlot,
             (8 * (1 + CALLABLE_ENVIRONMENT_WORDS)) as u32,
@@ -5311,36 +5341,66 @@ impl<'a> FunctionCompiler<'a> {
             .call_indirect(signature, adapter, &[callable_ptr]);
     }
 
-    /// Releases the captures an inline callable owns; a moved-from value
-    /// (all words zero) is skipped.
-    fn release_callable_words(&mut self, words: &[Value]) {
-        let live = self.builder.ins().icmp_imm(IntCC::NotEqual, words[0], 0);
-        let release_block = self.builder.create_block();
-        let continue_block = self.builder.create_block();
-        self.builder
+    /// Boxes an inline callable through its descriptor's `box` adapter and
+    /// returns the owned handle; the inline value stays alive.
+    fn call_callable_box_on_words(&mut self, words: &[Value]) -> Value {
+        let slot = self.builder.create_sized_stack_slot(StackSlotData::new(
+            StackSlotKind::ExplicitSlot,
+            (8 * (1 + CALLABLE_ENVIRONMENT_WORDS)) as u32,
+            3,
+        ));
+        let callable_ptr = self.builder.ins().stack_addr(types::I64, slot, 0);
+        for (index, word) in words.iter().enumerate() {
+            self.builder
+                .ins()
+                .store(MemFlags::new(), *word, callable_ptr, (index as i32) * 8);
+        }
+        let adapter = self.builder.ins().load(
+            types::I64,
+            MemFlags::new(),
+            words[0],
+            callables::DESCRIPTOR_BOX,
+        );
+        let signature = self
+            .builder
+            .func
+            .import_signature(callables::callable_box_signature(self.call_conv));
+        let call = self
+            .builder
             .ins()
-            .brif(live, release_block, &[], continue_block, &[]);
-        self.builder.switch_to_block(release_block);
-        self.builder.seal_block(release_block);
+            .call_indirect(signature, adapter, &[callable_ptr]);
+        self.builder.inst_results(call)[0]
+    }
+
+    /// The four words of a boxed function value re-entering as an inline
+    /// callable of `signature`.
+    fn boxed_callable_words(
+        &mut self,
+        handle: Value,
+        signature: &Type,
+    ) -> std::result::Result<Vec<Value>, String> {
+        let contract = callables::declare_contract_descriptor(
+            &mut *self.object,
+            &mut *self.contract_descriptors,
+            &self.classes,
+            self.call_conv,
+            signature,
+        )?;
+        let global = self
+            .object
+            .declare_data_in_func(contract.descriptor, self.builder.func);
+        let descriptor = self.builder.ins().symbol_value(types::I64, global);
+        let zero = self.builder.ins().iconst(types::I64, 0);
+        Ok(vec![descriptor, handle, zero, zero])
+    }
+
+    /// Releases the captures an inline callable owns.
+    fn release_callable_words(&mut self, words: &[Value]) {
         self.call_callable_adapter_on_words(words, callables::DESCRIPTOR_DROP);
-        self.builder.ins().jump(continue_block, &[]);
-        self.builder.switch_to_block(continue_block);
-        self.builder.seal_block(continue_block);
     }
 
     fn retain_callable_words(&mut self, words: &[Value]) {
-        let live = self.builder.ins().icmp_imm(IntCC::NotEqual, words[0], 0);
-        let retain_block = self.builder.create_block();
-        let continue_block = self.builder.create_block();
-        self.builder
-            .ins()
-            .brif(live, retain_block, &[], continue_block, &[]);
-        self.builder.switch_to_block(retain_block);
-        self.builder.seal_block(retain_block);
         self.call_callable_adapter_on_words(words, callables::DESCRIPTOR_RETAIN);
-        self.builder.ins().jump(continue_block, &[]);
-        self.builder.switch_to_block(continue_block);
-        self.builder.seal_block(continue_block);
     }
 
     /// The words of an inline callable handed to a new owner: an owned
@@ -5751,6 +5811,15 @@ impl<'a> FunctionCompiler<'a> {
                     } else {
                         None
                     };
+                    let capture_widths = captures
+                        .iter()
+                        .map(|capture| {
+                            ensure_direct_type(&capture.ty, &self.classes, "closure capture")
+                                .map(|ty| ty.value_count())
+                        })
+                        .collect::<std::result::Result<Vec<_>, String>>()?;
+                    let inline_environment =
+                        capture_widths.iter().sum::<usize>() <= CALLABLE_ENVIRONMENT_WORDS;
                     let writebacks = captures
                         .iter()
                         .enumerate()
@@ -5781,7 +5850,13 @@ impl<'a> FunctionCompiler<'a> {
                             } else {
                                 place
                             };
-                            Ok(DirectClosureCaptureWriteback { index, place, ty })
+                            Ok(DirectClosureCaptureWriteback {
+                                index,
+                                place,
+                                ty,
+                                env_offset: capture_widths[..index].iter().sum(),
+                                inline: inline_environment,
+                            })
                         })
                         .collect::<std::result::Result<Vec<_>, String>>()?;
                     if writebacks.is_empty() {
@@ -6298,6 +6373,9 @@ impl<'a> FunctionCompiler<'a> {
         }
     }
 
+    /// An inline callable: the shape's descriptor word and the captures'
+    /// direct words, inline when they fit in three words and otherwise in
+    /// one checked environment block (checkpoint Q15 A / Q16 A).
     fn compile_closure(
         &mut self,
         function: &str,
@@ -6305,59 +6383,70 @@ impl<'a> FunctionCompiler<'a> {
         captures: &[crate::mir::MirClosureCapture],
         consuming: bool,
     ) -> std::result::Result<ValueRef, String> {
-        let function_operand = Operand::Function {
-            name: function.to_string(),
-            signature: Box::new(signature.clone()),
+        let key = CallableShapeKey {
+            function: function.to_string(),
+            captures: captures.len(),
+            consuming,
         };
-        let loaded_function = self.load_operand(&function_operand)?;
-        let function_value = self.ensure_opaque(loaded_function)?;
-        let function_value = self.transfer_owned_opaque_value(&function_value);
-        let count = self.builder.ins().iconst(types::I64, captures.len() as i64);
-        let buffer = if captures.is_empty() {
-            self.builder.ins().iconst(types::I64, 0)
+        let shape = self.callable_shapes.get(&key).cloned().ok_or_else(|| {
+            format!(
+                "direct backend does not know a callable shape for `{function}` with {} captures",
+                captures.len()
+            )
+        })?;
+        if shape.capture_types.len() != captures.len() {
+            return Err(format!(
+                "direct backend callable shape for `{function}` disagrees with its captures"
+            ));
+        }
+        let mut words = Vec::new();
+        for (capture, capture_ty) in captures.iter().zip(&shape.capture_types) {
+            let value = self.load_operand_for_target(&capture.value, capture_ty)?;
+            let value = self.coerce_value(value, capture_ty)?;
+            let transferred = self.transfer_values(&value);
+            for (word, abi) in transferred.iter().zip(capture_ty.abi_types()) {
+                words.push(if abi == types::F64 {
+                    self.builder
+                        .ins()
+                        .bitcast(types::I64, MemFlags::new(), *word)
+                } else {
+                    *word
+                });
+            }
+        }
+        let global = self
+            .object
+            .declare_data_in_func(shape.descriptor, self.builder.func);
+        let descriptor = self.builder.ins().symbol_value(types::I64, global);
+        let zero = self.builder.ins().iconst(types::I64, 0);
+        let mut values = vec![descriptor];
+        if shape.inline() {
+            values.extend(words.iter().copied());
+            while values.len() < 1 + CALLABLE_ENVIRONMENT_WORDS {
+                values.push(zero);
+            }
         } else {
-            let call = self.builder.ins().call(self.arg_buffer_new, &[count]);
-            self.builder.inst_results(call)[0]
+            let size = self
+                .builder
+                .ins()
+                .iconst(types::I64, shape.env_words as i64);
+            let call = self.builder.ins().call(self.callable_env_alloc, &[size]);
+            let block = self.builder.inst_results(call)[0];
+            for (index, word) in words.iter().enumerate() {
+                self.builder
+                    .ins()
+                    .store(MemFlags::new(), *word, block, (index as i32) * 8);
+            }
+            values.push(block);
+            values.push(zero);
+            values.push(zero);
+        }
+        let value = ValueRef {
+            values,
+            ty: DirectType::Callable(DirectCallableType::new(signature.clone())),
         };
-        for (index, capture) in captures.iter().enumerate() {
-            let capture_ty = ensure_direct_type(
-                &capture.ty,
-                &self.classes,
-                &format!("closure capture `{}`", capture.name),
-            )?;
-            let value = self.load_operand_for_target(&capture.value, &capture_ty)?;
-            let value = self.coerce_value(value, &capture_ty)?;
-            let value = self.ensure_opaque(value)?;
-            let value = self.transfer_owned_opaque_value(&value);
-            let index = self.builder.ins().iconst(types::I64, index as i64);
-            self.builder
-                .ins()
-                .call(self.arg_buffer_store_owned, &[buffer, index, value]);
-        }
-        let mode_buffer_size = u32::try_from(captures.len().max(1).saturating_mul(8))
-            .ok()
-            .ok_or("direct backend closure capture-mode buffer is too large".to_string())?;
-        let mode_slot = self.builder.create_sized_stack_slot(StackSlotData::new(
-            StackSlotKind::ExplicitSlot,
-            mode_buffer_size,
-            3,
-        ));
-        let modes = self.builder.ins().stack_addr(types::I64, mode_slot, 0);
-        for (index, capture) in captures.iter().enumerate() {
-            let mutable = self.builder.ins().iconst(
-                types::I64,
-                i64::from(capture.passing == MirReceiverKind::BorrowMut || capture.mutated),
-            );
-            self.builder
-                .ins()
-                .store(MemFlags::new(), mutable, modes, (index as i32) * 8);
-        }
-        let consuming = self.builder.ins().iconst(types::I64, i64::from(consuming));
-        let call = self.builder.ins().call(
-            self.closure_value,
-            &[function_value, buffer, count, modes, consuming],
-        );
-        Ok(self.owned_opaque_result(self.builder.inst_results(call).to_vec(), signature.clone()))
+        self.mark_temporary_callable_owned(&value);
+        Ok(value)
     }
 
     fn compile_vec_literal_for_target(
@@ -7489,6 +7578,10 @@ impl<'a> FunctionCompiler<'a> {
     ) -> std::result::Result<ValueRef, String> {
         let function_type = infer_operand_type(function, &self.variable_types, &self.classes)
             .ok_or("direct backend could not infer the indirect callee type".to_string())?;
+        if let DirectType::Callable(callable) = &function_type {
+            let signature = callable.signature.clone();
+            return self.compile_inline_callable_call(function, args, target, &signature);
+        }
         let (params, return_type) = match function_type {
             DirectType::Opaque(Type::Function {
                 params,
@@ -7661,6 +7754,218 @@ impl<'a> FunctionCompiler<'a> {
             self.owned_opaque_result(vec![raw_result], direct_type_to_type(&return_direct));
         let result = self.coerce_value(boxed_result, &return_direct)?;
         self.coerce_value(result, target)
+    }
+
+    /// A call through an inline callable: the arguments are coerced to the
+    /// contract's direct parameters and passed with a supplied mask to the
+    /// `invoke` adapter named by the descriptor, which fills defaults and
+    /// writes mutated captures back into the environment words.
+    fn compile_inline_callable_call(
+        &mut self,
+        function: &Operand,
+        args: &[MirArg],
+        target: &DirectType,
+        signature: &Type,
+    ) -> std::result::Result<ValueRef, String> {
+        let (params, return_type) = callables::contract_parts(signature)?;
+        if args.len() > params.len() {
+            return Err(format!(
+                "direct backend expected at most {} indirect-call arguments, found {}",
+                params.len(),
+                args.len()
+            ));
+        }
+        let binding = bind_function_value_args(
+            &params,
+            args,
+            "direct backend function value has no parameter named",
+            "direct backend received duplicate indirect-call arguments",
+        )?;
+        let param_types =
+            function_value_param_types(&params, &self.classes, "indirect-call parameter")?;
+        let mutable_params = params
+            .iter()
+            .map(|param| param.passing == ReceiverKind::BorrowMut)
+            .collect::<Vec<_>>();
+        let return_direct = ensure_direct_type(
+            crate::sema::returned_view_pointee(&return_type),
+            &self.classes,
+            "indirect-call return type",
+        )?;
+        let callee_root = match function {
+            Operand::Place(place) if !place.contains('.') => Some(place.clone()),
+            _ => None,
+        };
+        let closure_writebacks = match function {
+            Operand::Place(place) | Operand::MovePlace(place) => self
+                .closure_capture_writebacks
+                .get(place.split('.').next().unwrap_or(place))
+                .cloned()
+                .unwrap_or_default(),
+            _ => Vec::new(),
+        };
+        let loaded = self.load_operand(function)?;
+        let callee_ty = DirectType::Callable(DirectCallableType::new(signature.clone()));
+        let callee = self.coerce_value(loaded, &callee_ty)?;
+        let callee_owned = self.temporary_owns_callable(&callee);
+        let slot = self.builder.create_sized_stack_slot(StackSlotData::new(
+            StackSlotKind::ExplicitSlot,
+            (8 * (1 + CALLABLE_ENVIRONMENT_WORDS)) as u32,
+            3,
+        ));
+        let callable_ptr = self.builder.ins().stack_addr(types::I64, slot, 0);
+        for (index, word) in callee.values.iter().enumerate() {
+            self.builder
+                .ins()
+                .store(MemFlags::new(), *word, callable_ptr, (index as i32) * 8);
+        }
+
+        let mut supplied: Vec<Option<Vec<Value>>> = vec![None; params.len()];
+        let mut mask_bits = 0i64;
+        let mut writebacks = Vec::new();
+        for (argument, index) in args.iter().zip(&binding.source_slots) {
+            let index = *index;
+            let expected = &param_types[index];
+            let loaded_value = self.load_operand_for_target(&argument.value, expected)?;
+            let value = self.coerce_value(loaded_value, expected)?;
+            let transferred = self.transfer_values(&value);
+            supplied[index] = Some(transferred);
+            mask_bits |= 1i64 << index;
+            match (params[index].passing, argument.writeback_place.as_ref()) {
+                (ReceiverKind::BorrowMut, Some(place)) => {
+                    writebacks.push((place.clone(), expected.clone()));
+                }
+                (ReceiverKind::BorrowMut, None) => {
+                    return Err(format!(
+                        "direct backend indirect mutable argument {} has no writeback place",
+                        index + 1
+                    ));
+                }
+                (_, Some(_)) => {
+                    return Err(format!(
+                        "direct backend indirect argument {} unexpectedly requests writeback",
+                        index + 1
+                    ));
+                }
+                (_, None) => {}
+            }
+        }
+        let mask = self.builder.ins().iconst(types::I64, mask_bits);
+        let mut lowered = vec![callable_ptr, mask];
+        for (index, expected) in param_types.iter().enumerate() {
+            match supplied[index].take() {
+                Some(values) => lowered.extend(values),
+                None => lowered.extend(expected.zero_values(&mut self.builder)),
+            }
+        }
+        let invoke = self.builder.ins().load(
+            types::I64,
+            MemFlags::new(),
+            callee.values[0],
+            callables::DESCRIPTOR_INVOKE,
+        );
+        let invoke_signature =
+            self.builder
+                .func
+                .import_signature(callables::contract_invoke_signature(
+                    &param_types,
+                    &mutable_params,
+                    &return_direct,
+                    self.call_conv,
+                ));
+        let inst = self
+            .builder
+            .ins()
+            .call_indirect(invoke_signature, invoke, &lowered);
+        let results = self.builder.inst_results(inst).to_vec();
+
+        // The environment words may have changed (mutated captures), so the
+        // callee's words are read back into its local or owned temporary.
+        let reloaded = (0..1 + CALLABLE_ENVIRONMENT_WORDS)
+            .map(|index| {
+                self.builder.ins().load(
+                    types::I64,
+                    MemFlags::new(),
+                    callable_ptr,
+                    (index as i32) * 8,
+                )
+            })
+            .collect::<Vec<_>>();
+        if let Some(root) = callee_root.as_deref() {
+            if matches!(self.local_type(root)?, DirectType::Callable(_)) {
+                let vars = self.local_vars(root)?;
+                for (var, word) in vars.into_iter().zip(reloaded.iter().copied()) {
+                    self.builder.def_var(var, word);
+                }
+            }
+        } else if callee_owned {
+            self.clear_temporary_callable_owned(&callee);
+            let refreshed = ValueRef {
+                values: reloaded.clone(),
+                ty: callee_ty.clone(),
+            };
+            self.mark_temporary_callable_owned(&refreshed);
+        }
+
+        let result_count = return_direct.value_count();
+        let result = ValueRef {
+            values: results[..result_count].to_vec(),
+            ty: return_direct.clone(),
+        };
+        self.mark_call_result_owned(&result);
+        let mut cursor = result_count;
+        for (place, writeback_ty) in writebacks {
+            let count = writeback_ty.value_count();
+            let writeback = ValueRef {
+                values: results[cursor..cursor + count].to_vec(),
+                ty: writeback_ty,
+            };
+            cursor += count;
+            self.mark_call_result_owned(&writeback);
+            self.store_place(&place, writeback)?;
+        }
+        for writeback in closure_writebacks {
+            let env_base = if writeback.inline {
+                self.builder.ins().iadd_imm(callable_ptr, 8)
+            } else {
+                reloaded[1]
+            };
+            let mut values = Vec::new();
+            for (offset, abi) in writeback.ty.abi_types().into_iter().enumerate() {
+                let word = self.builder.ins().load(
+                    types::I64,
+                    MemFlags::new(),
+                    env_base,
+                    ((writeback.env_offset + offset) as i32) * 8,
+                );
+                values.push(if abi == types::F64 {
+                    self.builder
+                        .ins()
+                        .bitcast(types::F64, MemFlags::new(), word)
+                } else {
+                    word
+                });
+            }
+            let value = ValueRef {
+                values,
+                ty: writeback.ty.clone(),
+            };
+            let value = self.coerce_value(value, &writeback.ty)?;
+            self.store_resolved_view_place(writeback.place, value)?;
+        }
+        self.coerce_value(result, target)
+    }
+
+    /// Marks a call result or writeback owned by its direct type.
+    fn mark_call_result_owned(&mut self, value: &ValueRef) {
+        match &value.ty {
+            DirectType::Opaque(_) => self.mark_temporary_opaque_owned(value),
+            DirectType::Union(union) if union.owns_handles() => {
+                self.mark_temporary_union_owned(value)
+            }
+            DirectType::Callable(_) => self.mark_temporary_callable_owned(value),
+            _ => {}
+        }
     }
 
     fn compile_print(&mut self, args: &[MirArg]) -> std::result::Result<ValueRef, String> {
@@ -9470,6 +9775,24 @@ impl<'a> FunctionCompiler<'a> {
             Operand::Place(place) => self.load_place(place),
             Operand::MovePlace(place) => self.take_place(place),
             Operand::Function { name, signature } => {
+                let key = CallableShapeKey {
+                    function: name.clone(),
+                    captures: 0,
+                    consuming: false,
+                };
+                if let Some(shape) = self.callable_shapes.get(&key).cloned() {
+                    let global = self
+                        .object
+                        .declare_data_in_func(shape.descriptor, self.builder.func);
+                    let descriptor = self.builder.ins().symbol_value(types::I64, global);
+                    let zero = self.builder.ins().iconst(types::I64, 0);
+                    return Ok(ValueRef {
+                        values: vec![descriptor, zero, zero, zero],
+                        ty: DirectType::Callable(DirectCallableType::new(
+                            signature.as_ref().clone(),
+                        )),
+                    });
+                }
                 let thunk_ref = *self.function_thunk_refs.get(name).ok_or_else(|| {
                     format!("direct backend does not know function thunk for `{name}`")
                 })?;
@@ -10020,6 +10343,41 @@ impl<'a> FunctionCompiler<'a> {
             return Ok(value);
         }
 
+        if let (DirectType::Callable(source), DirectType::Callable(destination)) =
+            (&value.ty, target)
+        {
+            // The words do not depend on the contract's spelling; the call
+            // ABI does, so two contracts must agree on their direct parts.
+            let source_parts = callables::contract_direct_parts(&source.signature, &self.classes)?;
+            let destination_parts =
+                callables::contract_direct_parts(&destination.signature, &self.classes)?;
+            if source_parts == destination_parts {
+                let owned = self.temporary_owns_callable(&value);
+                let adapted = ValueRef {
+                    values: value.values,
+                    ty: target.clone(),
+                };
+                if owned {
+                    self.mark_temporary_callable_owned(&adapted);
+                }
+                return Ok(adapted);
+            }
+            // Contracts with different direct parts (a generic frame's
+            // symbolic `T | None` against a concrete union) meet through the
+            // runtime: the value is boxed once and re-enters under the
+            // destination contract's boxed descriptor.
+            let destination_signature = destination.signature.clone();
+            let boxed = self.ensure_opaque(value)?;
+            let handle = self.transfer_opaque_arg(&boxed);
+            let words = self.boxed_callable_words(handle, &destination_signature)?;
+            let adapted = ValueRef {
+                values: words,
+                ty: target.clone(),
+            };
+            self.mark_temporary_callable_owned(&adapted);
+            return Ok(adapted);
+        }
+
         if let DirectType::Union(union) = target {
             let union = union.clone();
             if let DirectType::Opaque(source_ty) = &value.ty {
@@ -10049,6 +10407,29 @@ impl<'a> FunctionCompiler<'a> {
                     || matches!(source_ty, Type::TypeParam(_))
                 {
                     return self.unbox_inline_union(&union, value.values[0]);
+                }
+            }
+            if matches!(value.ty, DirectType::Callable(_)) {
+                if let Some(index) = union
+                    .members
+                    .iter()
+                    .position(|member| member.ty == value.ty)
+                {
+                    // An inline callable member lifts with its captures
+                    // transferred: an owned temporary moves in, a borrowed
+                    // value retains them, and the union owns the words.
+                    let words = self.transfer_callable_words(&value);
+                    let member = ValueRef {
+                        values: words,
+                        ty: value.ty.clone(),
+                    };
+                    let words = self.union_words_from_member(&union, index, member)?;
+                    let lifted = ValueRef {
+                        values: words,
+                        ty: target.clone(),
+                    };
+                    self.mark_temporary_union_owned(&lifted);
+                    return Ok(lifted);
                 }
             }
             // A bare member value lifts into the union it is a member of
@@ -10096,8 +10477,15 @@ impl<'a> FunctionCompiler<'a> {
 
         if matches!(value.ty, DirectType::Opaque(_)) {
             let result = match target {
-                DirectType::Callable(_) => {
-                    return Err("direct backend cannot unbox an inline callable yet".to_string());
+                DirectType::Callable(callable) => {
+                    let handle = self.transfer_opaque_arg(&value);
+                    let words = self.boxed_callable_words(handle, &callable.signature)?;
+                    let lifted = ValueRef {
+                        values: words,
+                        ty: target.clone(),
+                    };
+                    self.mark_temporary_callable_owned(&lifted);
+                    return Ok(lifted);
                 }
                 DirectType::Scalar(ScalarKind::Int32) => {
                     let inst = self.builder.ins().call(self.unbox_i64, &[value.values[0]]);
@@ -10926,8 +11314,15 @@ impl<'a> FunctionCompiler<'a> {
 
     fn ensure_opaque(&mut self, value: ValueRef) -> std::result::Result<ValueRef, String> {
         match value.ty {
-            DirectType::Callable(_) => {
-                Err("direct backend cannot box an inline callable yet".to_string())
+            DirectType::Callable(ref callable) => {
+                let signature = callable.signature.clone();
+                let handle = self.call_callable_box_on_words(&value.values);
+                let boxed = ValueRef {
+                    values: vec![handle],
+                    ty: DirectType::Opaque(signature),
+                };
+                self.mark_temporary_opaque_owned(&boxed);
+                Ok(boxed)
             }
             DirectType::Opaque(_) => Ok(value),
             DirectType::Union(ref union) => {
@@ -16547,6 +16942,9 @@ impl<'a> FunctionCompiler<'a> {
                 Some(DirectType::Opaque(Type::Function { params, .. })) => params,
                 Some(DirectType::Opaque(Type::Closure { params, .. })) => *params,
                 Some(DirectType::Opaque(Type::Callable(callable))) => callable.params,
+                Some(DirectType::Callable(callable)) => {
+                    callables::contract_parts(&callable.signature)?.0
+                }
                 _ => Vec::new(),
             };
         let arg_count_value = self
@@ -17814,7 +18212,7 @@ fn direct_type_inner(
             Some(DirectType::Opaque(Type::Tuple(elements.clone())))
         }
         Type::Function { .. } | Type::Closure { .. } | Type::Callable(_) => {
-            Some(DirectType::Opaque(ty.clone()))
+            Some(DirectType::Callable(DirectCallableType::new(ty.clone())))
         }
         Type::Named(name, args) if args.is_empty() && name == "int32" => {
             Some(DirectType::Scalar(ScalarKind::Int32))
@@ -17968,7 +18366,9 @@ fn infer_rvalue_type(
         Rvalue::UnionTakePayload { member_type, .. } => direct_type(member_type, classes),
         Rvalue::UnionInject { union_type, .. } => direct_type(union_type, classes),
         Rvalue::ModuleConstant { .. } => None,
-        Rvalue::Closure { signature, .. } => Some(DirectType::Opaque(signature.clone())),
+        Rvalue::Closure { signature, .. } => Some(DirectType::Callable(DirectCallableType::new(
+            signature.clone(),
+        ))),
         Rvalue::FormatString { .. } => Some(DirectType::Opaque(Type::named("str"))),
         Rvalue::Unary { op, value, .. } => {
             match (op, infer_operand_type(value, variable_types, classes)?) {
@@ -18035,13 +18435,17 @@ fn infer_rvalue_type(
         },
         Rvalue::Call { callee, args } => match callee {
             CallTarget::Value(function) => {
-                let DirectType::Opaque(
-                    Type::Function { return_type, .. } | Type::Closure { return_type, .. },
-                ) = infer_operand_type(function, variable_types, classes)?
-                else {
-                    return None;
-                };
-                direct_type(&return_type, classes)
+                match infer_operand_type(function, variable_types, classes)? {
+                    DirectType::Callable(callable) => {
+                        let (_, return_type) =
+                            callables::contract_parts(&callable.signature).ok()?;
+                        direct_type(crate::sema::returned_view_pointee(&return_type), classes)
+                    }
+                    DirectType::Opaque(
+                        Type::Function { return_type, .. } | Type::Closure { return_type, .. },
+                    ) => direct_type(&return_type, classes),
+                    _ => None,
+                }
             }
             CallTarget::Extern(call) => direct_type(&call.return_type, classes),
             CallTarget::Name(name) if name == "print" => Some(DirectType::Scalar(ScalarKind::Unit)),
@@ -18537,6 +18941,14 @@ fn infer_rvalue_type(
         } => {
             if *returns_handle {
                 infer_operand_type(function, variable_types, classes).and_then(|ty| match ty {
+                    DirectType::Callable(callable) => {
+                        let (_, return_type) =
+                            callables::contract_parts(&callable.signature).ok()?;
+                        Some(DirectType::Opaque(Type::Named(
+                            "Task".to_string(),
+                            vec![return_type],
+                        )))
+                    }
                     DirectType::Opaque(
                         Type::Function { return_type, .. } | Type::Closure { return_type, .. },
                     ) => Some(DirectType::Opaque(Type::Named(
@@ -19476,7 +19888,9 @@ fn infer_operand_type(
         Operand::Unit => Some(DirectType::Scalar(ScalarKind::Unit)),
         Operand::String(_) => Some(DirectType::Opaque(Type::named("str"))),
         Operand::Duration(_) => Some(DirectType::Opaque(Type::named("Duration"))),
-        Operand::Function { signature, .. } => Some(DirectType::Opaque(signature.as_ref().clone())),
+        Operand::Function { signature, .. } => Some(DirectType::Callable(DirectCallableType::new(
+            signature.as_ref().clone(),
+        ))),
     }
 }
 
@@ -19569,9 +19983,7 @@ fn box_thunk_value(
     ty: &DirectType,
 ) -> std::result::Result<Value, String> {
     match ty {
-        DirectType::Callable(_) => {
-            Err("direct backend cannot box an inline callable in a thunk yet".to_string())
-        }
+        DirectType::Callable(_) => callables::call_callable_box_adapter(codegen, builder, values),
         DirectType::Union(union) => {
             let union_inject = codegen
                 .object
@@ -19689,8 +20101,8 @@ fn unbox_thunk_value(
     ty: &DirectType,
 ) -> std::result::Result<Vec<Value>, String> {
     match ty {
-        DirectType::Callable(_) => {
-            Err("direct backend cannot unbox an inline callable in a thunk yet".to_string())
+        DirectType::Callable(callable) => {
+            callables::boxed_callable_words(codegen, builder, raw, &callable.signature)
         }
         DirectType::Union(union) => {
             let union_tag = codegen
@@ -19719,7 +20131,7 @@ fn unbox_thunk_value(
                     // A scalar or plain-class member was read out of the copy,
                     // so the copy is released; a runtime-object member's handle
                     // is the copy itself and travels with the union words.
-                    if !matches!(member_ty, DirectType::Opaque(_)) {
+                    if !matches!(member_ty, DirectType::Opaque(_) | DirectType::Callable(_)) {
                         let _ = builder.ins().call(release_value, &[payload]);
                     }
                     let mut words = vec![builder.ins().iconst(types::I64, index as i64)];
@@ -19787,7 +20199,7 @@ fn unbox_thunk_value(
                     .call(instance_get_field, &[raw, field_ptr, field_len]);
                 let field_raw = builder.inst_results(inst)[0];
                 values.extend(unbox_thunk_value(codegen, builder, field_raw, &field.ty)?);
-                if !matches!(field.ty, DirectType::Opaque(_)) {
+                if !matches!(field.ty, DirectType::Opaque(_) | DirectType::Callable(_)) {
                     let release_value = codegen
                         .object
                         .declare_func_in_func(codegen.release_value, builder.func);
@@ -19879,7 +20291,16 @@ fn release_direct_values(
                         .brif(active, release_block, &[], continue_block, &[]);
                     builder.switch_to_block(release_block);
                     builder.seal_block(release_block);
-                    builder.ins().call(release_value, &[handle]);
+                    if matches!(union.member(index), Ok(DirectType::Callable(_))) {
+                        callables::call_callable_unary_adapter(
+                            codegen,
+                            builder,
+                            &values[1..2 + CALLABLE_ENVIRONMENT_WORDS],
+                            callables::DESCRIPTOR_DROP,
+                        )?;
+                    } else {
+                        builder.ins().call(release_value, &[handle]);
+                    }
                     builder.ins().jump(continue_block, &[]);
                     builder.switch_to_block(continue_block);
                     builder.seal_block(continue_block);
