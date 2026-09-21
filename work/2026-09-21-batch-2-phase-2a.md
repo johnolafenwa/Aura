@@ -232,6 +232,11 @@ was cloned before the write), which the one-call selection chain removes.
   or entry cannot be a `mut` argument or a mutating-method receiver, and a
   Copy read of `users[1].visits` under a live mutable view of `users[0]` is
   refused conservatively (the read rule checks the collection root).
+- Returned element and entry views (A6) are not yet in: `return view
+  items[0]` is refused (`AU3004`) rather than lowered, since the return
+  path spelled the element as a tuple position and trapped on both
+  backends (pinned by `element_view_return_unsupported` and the
+  `batch1_coverage_diagnostics` test).
 - `A3` invalidation classification (`AU3011` naming the origin and the
   operation) is not yet in: a structural mutation under a live element view
   is refused by the existing `AU3002` view lock.

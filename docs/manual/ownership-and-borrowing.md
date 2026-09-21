@@ -308,6 +308,11 @@ ordinary parameter:
     def name(user: User) -> view str from user:
         return view user.name
 
+A returned view names a root, field path, or fixed tuple position of its
+origin; it cannot yet select a list element or dictionary entry (`return
+view items[0]` is refused with `AU3004`), so return a view of the collection
+and select the element at the call site.
+
     def value_mut(counter: mut Counter) -> view mut int64 from counter:
         return view mut counter.value
 

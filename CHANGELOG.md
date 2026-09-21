@@ -168,7 +168,8 @@ in this file.
   element (`users[i].visits`) is a place read, and `users[i].visits = 5` or
   `users[i].visits += 1` writes through a statement-scoped element loan; the
   element is never copied out and written back. A list element or entry is
-  not yet accepted as a `mut` argument or mutating-method receiver.
+  not yet accepted as a `mut` argument or mutating-method receiver, and a
+  returned view cannot yet select one (`AU3004`).
 
 ## VS Code extension 0.3.4 — 2026-09-06
 

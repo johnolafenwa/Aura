@@ -71,7 +71,9 @@ This page documents known current limits of the Aura compiler and runtime.
   slices, arbitrary temporaries, and escaping enum-payload views are not
   loanable; a list element or dictionary entry cannot yet be passed to a
   `mut` parameter or be the receiver of a mutating method call (bind it with
-  `view mut` first). View-bearing aggregates, module storage, multi-origin
+  `view mut` first), and a returned view cannot yet select a list element
+  or dictionary entry (return a view of the collection and select at the
+  call site). View-bearing aggregates, module storage, multi-origin
   results, returned loan closures, and lifetime-parameterized structural
   callable types remain unavailable. Views
   and loan closures are always non-Transfer.

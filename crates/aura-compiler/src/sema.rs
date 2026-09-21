@@ -3787,6 +3787,17 @@ impl<'a> FunctionChecker<'a> {
                                 "a view return requires an addressable source place",
                             )
                         })?;
+                        // A returned element or entry view (ADR-0061 A6)
+                        // needs the element footprint in the exported
+                        // contract; until it lands, the return path is
+                        // refused rather than lowered.
+                        if self.is_collection_element_expr(value, locals)? {
+                            return Err(Diagnostic::coded_at(
+                                "AU3004",
+                                value.span,
+                                "a returned view cannot yet select a list element or dictionary entry; return a view of the collection and select the element at the call site",
+                            ));
+                        }
                         let returned = self.view_place(value, locals)?.ok_or_else(|| {
                             Diagnostic::coded_at(
                                 "AU3010",
