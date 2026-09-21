@@ -75,6 +75,61 @@ initialization and context managers are phases 3a and 3b.
 6. One complete local `npm run ci` chain and one green hosted run; floors
    move only upward; LSP coverage stays at 100%.
 
+## Step 1: the element and entry loan vertical slice (sites surveyed 2026-09-21)
+
+The first code stage lands `view [mut] name = items[i]` and
+`view [mut] name = table[key]` end to end before contextual reads,
+invalidation classification, iteration, `lookup`, the receiver audit, and
+narrowing follow in their own commits.
+
+1. Checker places (`sema/places.rs`): `PlaceProjection` gains
+   `Element(ElementSelector)` and `Entry(EntrySelector)` where a selector is
+   a literal (`int64` for lists; `str`/`int64`/`bool` literals for keys) or
+   `Dynamic`; `ProjectionPath::overlaps` keeps prefix overlap and adds the
+   literal-only disjointness rule (two literal selectors of the same kind
+   with different values are disjoint; a `Dynamic` selector overlaps every
+   selector of its kind); `Display` renders `[0]`, `["key"]`, and `[?]`;
+   `place_path_type` projects a list's element type and a dictionary's
+   value type. `view_place` (`sema/loans.rs:764`) accepts `Index` on a
+   `list[T]` or `dict[K, V]` object as an element or entry projection
+   (the `AU3004` "indexed collection elements do not have stable view
+   identity" refusal ends; the tuple arm is unchanged); `Stmt::View`
+   checking (`sema.rs:3569`) needs no new rule for the mutable-source and
+   loan-availability checks because they run on the place path.
+2. MIR contract (`mir.rs:741`, `752`): `BeginLoan` and `Reborrow` gain
+   `#[serde(default)] selector: Option<Operand>`; the source string stays
+   the collection place, so every existing consumer that keys on the
+   place string is unchanged. Lowering (`mir.rs:10919`): for an index
+   source, evaluate the index or key once into a typed temporary before
+   the loan begins and pass it as the selector; the loan's local type is
+   the element or value type.
+3. Validator (`mir.rs:1259`, `7397`): a selector operand must be a place
+   assigned before the loan in the same block or a literal; it is never
+   re-read for the loan; an element loan's source must be a `list` or
+   `dict` place; forged-MIR tests refuse a re-evaluated selector, a loan
+   whose source is not a collection, and a selector of the wrong type at
+   `run_mir` and `emit_host_native_object` with one reason.
+4. Interpreter (`mir_runtime.rs:1029` `begin_loan`, `1006`
+   `resolve_loan_place`): the loan record gains the resolved selector
+   value; creation checks bounds or presence once (`AU4003` at the
+   loan-creating expression) before registering; `ReadLoan` and
+   `WriteLoan` resolve the element or entry in the collection's storage;
+   a negative list index normalizes once as `len() + index`.
+5. Direct backend (`native_codegen.rs:5642` `BeginLoan`,
+   `resolve_view_place`, `DirectViewPlace`): a view place gains a computed
+   selector value; element reads and write-through go through runtime
+   helpers on the collection handle that borrow or replace the element in
+   place (never clone-and-write-back); bounds and presence trap with
+   `AU4003` at creation on this backend too; Copy elements may be copied
+   bits as a shared view of a Copy place is today.
+6. Fixtures: `element_view_shared`, `element_view_mutable`,
+   `entry_view_shared`, `entry_view_mutable`, `element_view_field`
+   (`users[i].name`), `element_view_of_field` (`self.tags[0]`),
+   `element_bounds_*` (run-fail `AU4003` on both backends),
+   `element_view_evaluate_once` (`[11, 20, 30]` after rebinding the
+   index); the existing `view_index_place_rejected` check-fail fixture
+   becomes a run-pass fixture.
+
 ## Risks and rules
 
 - Coverage floors (96.46 / 97.33 / 95.23) may only rise; production code
