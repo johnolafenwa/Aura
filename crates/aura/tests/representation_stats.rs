@@ -225,3 +225,79 @@ fn direct_string_class_union_dispatches_without_a_union_box() {
         "a `Dog | Cat` union of classes holding strings dispatches on its tag inline (Q9 A)"
     );
 }
+
+const CALLABLE_LOCAL: &str = "type Adder = Callable[def(value: int64) -> int64]
+
+def make(offset: own int64) -> Adder:
+    return Adder(lambda value: value + offset)
+
+def main():
+    mut total = 0
+    mut index = 0
+    while index < 100000:
+        add = make(index)
+        total = total + add(1)
+        index = index + 1
+    print(total)
+";
+
+const CALLABLE_OVERFLOW: &str = "type Adder = Callable[def(value: int64) -> int64]
+
+def make(a: own int64, b: own int64, c: own int64, d: own int64) -> Adder:
+    return Adder(lambda value: value + a + b + c + d)
+
+def main():
+    mut total = 0
+    mut index = 0
+    while index < 1000:
+        add = make(index, 1, 2, 3)
+        total = total + add(1)
+        index = index + 1
+    print(total)
+";
+
+const CALLABLE_BOUNDARY: &str = "type Step = Callable[def(int64) -> int64]
+
+def main():
+    base: int64 = 10
+    steps: list[Step] = [Step(lambda v: v + base)]
+    for step in steps:
+        print(step(3))
+    worker: def(int64) -> int64 = lambda value: value + base
+    with TaskGroup() as group:
+        task = group.start(worker, 41)
+        print(task.result_or(0, timeout=1s))
+";
+
+#[test]
+fn direct_callable_local_allocates_no_environment() {
+    let (_, direct) = assert_both_backends("repr-callable-local", CALLABLE_LOCAL, "5000050000\n");
+    assert_eq!(
+        direct.closure_environments, 0,
+        "a one-capture callable packs its environment into its own words (Q15 A)"
+    );
+    assert_eq!(direct.callable_overflow_allocations, 0);
+}
+
+#[test]
+fn direct_callable_overflow_allocates_one_block_per_packing() {
+    let (_, direct) = assert_both_backends("repr-callable-overflow", CALLABLE_OVERFLOW, "506500\n");
+    assert_eq!(
+        direct.closure_environments, 0,
+        "a four-capture callable still boxes no environment (Q16 A)"
+    );
+    assert_eq!(
+        direct.callable_overflow_allocations, 1000,
+        "each four-capture packing takes one checked environment block (Q16 A)"
+    );
+}
+
+#[test]
+fn direct_callable_boundaries_box_once_each() {
+    let (_, direct) = assert_both_backends("repr-callable-boundary", CALLABLE_BOUNDARY, "13\n51\n");
+    assert_eq!(
+        direct.closure_environments, 2,
+        "a list store and a task start each box the callable once at the boundary"
+    );
+    assert_eq!(direct.callable_overflow_allocations, 0);
+}

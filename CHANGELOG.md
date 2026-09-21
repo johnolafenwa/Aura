@@ -50,6 +50,15 @@ in this file.
   environments, opaque runtime boxes, and callable overflow allocations and
   report them on standard error when `AURA_RUNTIME_STATS=1` is set;
   `benchmarks/representation` records the counters with provenance.
+- Represent every callable value as four words on the direct backend
+  (checkpoint Q15 A / Q16 A): a descriptor naming the lowered function and
+  its captures, and three environment words. Captures that fit in three
+  words live in the value; a wider environment takes one checked block
+  (`AU4005: cannot allocate callable environment` on failure, counted as a
+  callable overflow allocation); calls, moves, and copies allocate nothing,
+  and a function value is boxed only where it leaves generated code (a
+  container, a task start, a runtime helper, or a generic frame), which the
+  `closure_environments` counter reports.
 - Fix a compiler panic ("checked type pattern") when a `match` scrutinee is a
   trait method call on a union receiver, such as `match pet.label():` with
   `pet: Dog | Cat` and `label(self) -> str | None`; the scrutinee now has

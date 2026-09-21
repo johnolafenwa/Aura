@@ -7870,6 +7870,97 @@ pub extern "C-unwind" fn aura_direct_instance_set_field_owned(
     })
 }
 
+/// Allocates the environment block of an inline callable whose captures need
+/// more than the three inline words (checkpoint Q16 A). The block is
+/// `words` zeroed words preceded by its length and a reference count (a
+/// copied callable shares the block, as a boxed closure shares its
+/// environment); the allocation is counted, and failure raises `AU4005`
+/// rather than aborting.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_callable_env_alloc(words: i64) -> *mut i64 {
+    task_runtime_boundary(|| {
+        let count = match usize::try_from(words) {
+            Ok(count) if count > 0 => count,
+            _ => runtime_error("invalid callable environment size"),
+        };
+        let mut block: Vec<i64> = Vec::new();
+        if block.try_reserve_exact(count + 2).is_err() {
+            runtime_diagnostic_error(Diagnostic::coded(
+                "AU4005",
+                format!("cannot allocate callable environment of {count} words"),
+            ));
+        }
+        block.push(count as i64);
+        block.push(1);
+        block.resize(count + 2, 0);
+        crate::runtime_value::representation_stats::note_callable_overflow_allocation();
+        let base = Box::into_raw(block.into_boxed_slice()) as *mut i64;
+        // SAFETY: the block holds `count + 2` words; the environment starts
+        // after the length and reference-count words.
+        unsafe { base.add(2) }
+    })
+}
+
+/// Adds a reference to a block from `aura_direct_callable_env_alloc` (a
+/// copied callable shares its environment).
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_callable_env_retain(env: *mut i64) {
+    task_runtime_boundary(|| {
+        if env.is_null() {
+            return;
+        }
+        // SAFETY: `env` was returned by `aura_direct_callable_env_alloc`, so
+        // the reference-count word precedes it.
+        unsafe {
+            *env.sub(1) += 1;
+        }
+    })
+}
+
+/// Drops a reference to a block from `aura_direct_callable_env_alloc` and
+/// reports whether it was the last one, in which case the caller releases
+/// the captures and frees the block.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_callable_env_release(env: *mut i64) -> i64 {
+    task_runtime_boundary(|| {
+        if env.is_null() {
+            return 0;
+        }
+        // SAFETY: `env` was returned by `aura_direct_callable_env_alloc`, so
+        // the reference-count word precedes it.
+        unsafe {
+            let count = env.sub(1);
+            if *count <= 0 {
+                runtime_error("attempted to release an already-freed callable environment");
+            }
+            *count -= 1;
+            i64::from(*count == 0)
+        }
+    })
+}
+
+/// Frees a block from `aura_direct_callable_env_alloc` whose last reference
+/// was dropped.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_callable_env_free(env: *mut i64) {
+    task_runtime_boundary(|| {
+        if env.is_null() {
+            return;
+        }
+        // SAFETY: `env` was returned by `aura_direct_callable_env_alloc`, so
+        // the length and reference-count words precede it and the block
+        // spans `count + 2` words.
+        unsafe {
+            let base = env.sub(2);
+            let count = *base as usize;
+            drop(Box::from_raw(std::ptr::slice_from_raw_parts_mut(
+                base,
+                count + 2,
+            )));
+        }
+    })
+}
+
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_arg_buffer_new(count: i64) -> *mut i64 {
     task_runtime_boundary(|| {
@@ -8049,6 +8140,18 @@ fn install_pending_direct_mutable_sinks(pending: DirectPendingMutableSinks) {
     if replaced {
         runtime_error("direct mutable write-through sink handoff was overwritten before use");
     }
+}
+
+/// Converts a pending indirect sink handoff into the callee's own sink list
+/// for a call through an inline callable's invoke adapter; without a
+/// pending handoff it does nothing.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_claim_indirect_mutable_sinks(capture_count: i64) {
+    task_runtime_boundary(|| {
+        let capture_count = usize::try_from(capture_count)
+            .unwrap_or_else(|_| runtime_error("invalid direct capture count"));
+        prepare_indirect_direct_mutable_sinks(capture_count);
+    })
 }
 
 fn prepare_indirect_direct_mutable_sinks(capture_count: usize) {

@@ -220,6 +220,73 @@ lines rather than spend them.
 Floors 96.46 / 97.33 / 95.23 are unchanged; the hosted line margin is about
 20 lines on macOS and 23 on Ubuntu.
 
+## Evidence, third pull request (four-word callables)
+
+- Branch `codex/batch-1-representation-3` from `e09dbcb5` (the second
+  pull request's head; main merges after PR #15 lands). Commits: the
+  inline callable direct type with placeholder arms (`793c07b8`), shape
+  descriptors with their four adapters and the function compiler's
+  ownership arms (`e9483c3e`), and the mapping flip with the calls,
+  boundary boxes, per-contract boxed descriptors, measurement tests, and
+  records (`1b3f0555`).
+- Layout (Q15 A / Q16 A): `[descriptor, w0, w1, w2]`; the descriptor names
+  the shape (lowered function, capture direct types, call kind) and holds
+  the addresses of `invoke`, `drop`, `retain`, and `box`; captures that fit
+  in three words live inline, wider environments take one checked block
+  (`aura_direct_callable_env_alloc`, `AU4005` on failure, counted). A
+  function reference is its zero-capture shape. A boxed function value
+  entering from the runtime carries a per-contract boxed descriptor whose
+  adapters call through the runtime; contracts whose direct parts differ
+  (a generic frame's `T | None` against a concrete union) meet through the
+  runtime with one boundary box.
+- Measurements (`crates/aura/tests/representation_stats.rs`): a
+  one-capture callable packed and called one hundred thousand times
+  reports zero closure environments and zero overflow allocations on the
+  direct backend; one thousand four-capture packings report one thousand
+  overflow blocks and zero environments; a callable stored into a list and
+  another started as a task report two closure environments, one per
+  boundary. The benchmark lane's rows are re-measured below.
+- Defects met on the way: a union holding a callable member crashed at
+  exit because the release path dereferenced a zero descriptor (a
+  never-assigned local); releases and retains now skip a zero descriptor,
+  as the runtime skips a null handle. A by-value capture handed to the
+  lowered function was released by the callee at its exit while the
+  environment still held it; the invoke adapter now retains by-value
+  captures before the call. A callable payload copied out of a boxed union
+  stayed a statement temporary and was released twice. The chain's CLI
+  suite then caught that a call through a callable no longer handed the
+  caller's mutable sinks to the runtime, so a mutation made by a closure
+  with a mutable capture before a trap was not published to the captured
+  place before cleanup; the call installs the indirect sink handoff again
+  and the shape's invoke adapter claims it into the callee's own sink list.
+  A callable whose captures need an overflow block shared that block with
+  every copy but each copy freed it, so a callable capturing a callable
+  (four words, hence a block) lifted into a union crashed at exit; the
+  block now carries a reference count: a copy takes a reference and only
+  the last release drops the captures and frees the block, matching the
+  interpreter's shared closure environment.
+- Suites: every runnable fixture emits a direct object; the fixture runner,
+  the union and callable security suites, the validator coverage suite,
+  and the native unit suites (with six assertions moved from the boxed
+  closure ABI to the descriptor and adapters) pass. The forced backend parity matrix is green (1,274 seconds on
+  this host); the benchmark lane at `a8aac70a` reports zero closure
+  environments for one hundred thousand one-capture packings and for one
+  packing moved one hundred thousand times, and one hundred thousand
+  overflow blocks with zero environments for the four-capture packings
+  (archived in `work/2026-09-20-representation-measurements/`).
+- Complete local `npm run ci` chain green on 2026-09-21 at 14:29 BST for
+  the tree of `cc44f661`: compiler coverage 96.4769% lines (4,314 of
+  122,452 missed) / 97.3806% functions (215 of 8,208) / 95.2933% regions
+  (8,672 of 184,250) against the unchanged floors 96.46 / 97.33 / 95.23, a
+  line margin of about 21 lines. Earlier runs of the branch failed the
+  formatting gate, the CLI trap-writeback test (the sink handoff), the
+  provenance suite's stripped control (refusal wording), and the coverage
+  floors twice (the dead boxed paths, the never-executed error closures,
+  and the placeholder arms were removed; fixtures and unit tests pin the
+  rest). Forced backend parity, LSP and extension suites, reference,
+  tutorials, docs build, audit, clippy, and hygiene pass. Hosted results
+  are recorded here when they finish.
+
 ## Open items
 
 - `.clone()`, rendering, hashing, and every runtime-helper argument of union

@@ -1,0 +1,8 @@
+type Adder = Callable[def(value: int64) -> int64]
+
+def make(offset: own int64) -> Adder:
+    return Adder(lambda value: value + offset)
+
+def main():
+    print(make(41)(1))
+    print(make(1)(make(2)(3)))

@@ -218,6 +218,8 @@ fn adr0038_direct_view_and_closure_metadata_helpers_preserve_dataflow_invariants
         index,
         place: DirectViewPlace::static_place(place.to_string()),
         ty,
+        env_offset: 0,
+        inline: true,
     };
     let left = HashMap::from([(
         "worker".to_string(),
@@ -1068,6 +1070,12 @@ fn test_function_operand(name: &str, params: Vec<Type>, return_type: Type) -> Op
 
 /// A function operand whose signature matches the lowered declaration, as
 /// the validator authenticates operand contracts against declarations.
+fn object_contains_symbol(object: &[u8], symbol: &str) -> bool {
+    object
+        .windows(symbol.len())
+        .any(|window| window == symbol.as_bytes())
+}
+
 fn declared_function_operand(module: &crate::mir::MirModule, name: &str) -> Operand {
     let declaration = module
         .functions
@@ -7363,16 +7371,20 @@ fn direct_callable_objects_pin_defaults_capability_writebacks_and_task_handoff_a
     );
     let default_main_references =
         object_function_referenced_symbols(&defaults_object, "aura_fn_main");
+    assert!(
+        default_main_references
+            .iter()
+            .any(|symbol| symbol.contains("aura_callable_")),
+        "indirect calls dispatch through a callable descriptor: {default_main_references:?}"
+    );
     for runtime_symbol in [
         "aura_direct_function_value",
         "aura_direct_function_bind_defaults",
         "aura_direct_function_call",
     ] {
         assert!(
-            default_main_references
-                .iter()
-                .any(|symbol| symbol.contains(runtime_symbol)),
-            "indirect calls must use `{runtime_symbol}`: {default_main_references:?}"
+            object_contains_symbol(&defaults_object, runtime_symbol),
+            "the boundary adapters must keep `{runtime_symbol}`"
         );
     }
     for selected in ["first_default", "second_default"] {
@@ -7400,10 +7412,8 @@ fn direct_callable_objects_pin_defaults_capability_writebacks_and_task_handoff_a
             mangle_default_binder_symbol(selected),
         ] {
             assert!(
-                default_main_references
-                    .iter()
-                    .any(|symbol| symbol.contains(&callable_symbol)),
-                "runtime selection must retain `{callable_symbol}` in main: {default_main_references:?}"
+                object_contains_symbol(&defaults_object, &callable_symbol),
+                "runtime selection must retain `{callable_symbol}` for the shape's box adapter"
             );
         }
     }
@@ -7485,11 +7495,9 @@ fn direct_callable_objects_pin_defaults_capability_writebacks_and_task_handoff_a
             mangle_default_binder_symbol(selected),
         ] {
             assert!(
-                task_main_references
-                    .iter()
-                    .any(|symbol| symbol.contains(&callable_symbol)),
-                "the selected task callable must carry `{callable_symbol}`: {task_main_references:?}"
-            );
+            object_contains_symbol(&task_object, &callable_symbol),
+            "the selected task callable must carry `{callable_symbol}` in the shape's box adapter"
+        );
         }
     }
     for legacy_symbol in [
@@ -7568,12 +7576,6 @@ def main() -> int32:
         emit_host_object(&module).expect("closure calls, callbacks, and task handoff should emit");
     let main_references = object_function_referenced_symbols(&object, "aura_fn_main");
     for runtime_symbol in [
-        "aura_direct_function_value",
-        "aura_direct_arg_buffer_new",
-        "aura_direct_arg_buffer_store_owned",
-        "aura_direct_closure_value",
-        "aura_direct_function_bind_defaults",
-        "aura_direct_function_call",
         "aura_direct_task_arg_buffer_guard",
         "aura_direct_task_arg_buffer_disarm",
         "aura_direct_start_task_function_with_frames",
@@ -7585,15 +7587,32 @@ def main() -> int32:
             "closure lowering must use `{runtime_symbol}`: {main_references:?}"
         );
     }
+    assert!(
+        main_references
+            .iter()
+            .any(|symbol| symbol.contains("aura_callable_")),
+        "closure construction names its shape descriptor: {main_references:?}"
+    );
+    for runtime_symbol in [
+        "aura_direct_function_value",
+        "aura_direct_arg_buffer_new",
+        "aura_direct_arg_buffer_store_owned",
+        "aura_direct_closure_value",
+        "aura_direct_function_bind_defaults",
+        "aura_direct_function_call",
+    ] {
+        assert!(
+            object_contains_symbol(&object, runtime_symbol),
+            "the boundary adapters must keep `{runtime_symbol}`"
+        );
+    }
     for callable_symbol in [
         mangle_thunk_symbol(lifted_name),
         mangle_default_binder_symbol(lifted_name),
     ] {
         assert!(
-            main_references
-                .iter()
-                .any(|symbol| symbol.contains(&callable_symbol)),
-            "closure construction must retain `{callable_symbol}`: {main_references:?}"
+            object_contains_symbol(&object, &callable_symbol),
+            "the shape's box adapter must retain `{callable_symbol}`"
         );
     }
     let thunk_references =
@@ -7655,7 +7674,7 @@ def main() -> int32:
             .expect("codegen should initialize");
     missing_thunk.function_thunks.remove(&lifted_name);
     let thunk_error = missing_thunk
-        .define_function(&main)
+        .define_callable_shapes()
         .expect_err("closure construction must require the lifted thunk");
     assert!(
         thunk_error.contains(&format!("does not know function thunk for `{lifted_name}`")),
@@ -7667,7 +7686,7 @@ def main() -> int32:
             .expect("codegen should initialize");
     missing_binder.function_default_binders.remove(&lifted_name);
     let binder_error = missing_binder
-        .define_function(&main)
+        .define_callable_shapes()
         .expect_err("closure construction must require the lifted default binder");
     assert!(
         binder_error.contains(&format!(
@@ -7995,15 +8014,12 @@ def main() -> int32:
     let object = emit_host_object(&mir)
         .expect("a positional argument after a named slot should bind the next free parameter");
     let main_references = object_function_referenced_symbols(&object, "aura_fn_main");
-    for runtime_symbol in [
-        "aura_direct_function_bind_defaults",
-        "aura_direct_function_call",
-    ] {
+    for runtime_symbol in ["aura_callable_"] {
         assert!(
             main_references
                 .iter()
                 .any(|symbol| symbol.contains(runtime_symbol)),
-            "mixed binding must retain the indirect callable ABI through `{runtime_symbol}`: {main_references:?}"
+            "mixed binding must call through the callable descriptor `{runtime_symbol}`: {main_references:?}"
         );
     }
 }
@@ -8844,7 +8860,7 @@ def main() -> int32:
     .expect("codegen should initialize");
     missing_thunk_codegen.function_thunks.remove("worker");
     let missing_thunk_error = missing_thunk_codegen
-        .define_function(&main)
+        .define_callable_shapes()
         .expect_err("task start should reject missing thunks");
     assert!(missing_thunk_error.contains("does not know function thunk for `worker`"));
 
@@ -8858,7 +8874,7 @@ def main() -> int32:
         .function_default_binders
         .remove("worker");
     let missing_binder_error = missing_binder_codegen
-        .define_function(&main)
+        .define_callable_shapes()
         .expect_err("task start should reject missing default binders");
     assert!(
         missing_binder_error.contains("does not know function default binder for `worker`"),
@@ -15093,6 +15109,46 @@ fn native_codegen_infers_union_rvalues_unary_not_and_scalar_member_receivers() {
         None,
         "a union whose members are scalars has no method results"
     );
+    let mut callable_types = variable_types.clone();
+    callable_types.insert(
+        "callback".to_string(),
+        DirectType::Callable(super::DirectCallableType::new(callable_signature(
+            vec![],
+            Type::named("int64"),
+        ))),
+    );
+    assert_eq!(
+        infer_rvalue_type(
+            &Rvalue::Call {
+                callee: CallTarget::Member {
+                    object: Operand::Place("callback".to_string()),
+                    field: "speak".to_string(),
+                    receiver_place: Some("callback".to_string()),
+                },
+                args: Vec::new(),
+            },
+            &callable_types,
+            &function_return_types,
+            &classes,
+            &[]
+        ),
+        None,
+        "a callable value has no members to call"
+    );
+    assert_eq!(
+        infer_rvalue_type(
+            &Rvalue::Call {
+                callee: CallTarget::Value(Operand::Place("text".to_string())),
+                args: Vec::new(),
+            },
+            &callable_types,
+            &function_return_types,
+            &classes,
+            &[]
+        ),
+        None,
+        "a call through a non-callable operand has no result type"
+    );
 }
 
 #[test]
@@ -15235,4 +15291,394 @@ fn direct_union_receiver_switch_refuses_a_member_without_the_method() {
         error.contains("direct backend cannot call `.greet` on `None`"),
         "{error}"
     );
+}
+
+fn callable_signature(params: Vec<(&str, Type)>, return_type: Type) -> Type {
+    Type::Function {
+        params: params
+            .into_iter()
+            .map(|(name, ty)| crate::sema::FunctionParamContract {
+                keyword_only: false,
+                name: name.to_string(),
+                ty,
+                passing: crate::ast::ReceiverKind::Value,
+                has_default: false,
+            })
+            .collect(),
+        return_type: Box::new(return_type),
+    }
+}
+
+#[test]
+fn native_codegen_retain_and_release_helpers_cover_every_callable_bearing_shape() {
+    let source = "def main() -> int32:\n    return 0\n";
+    let mir = lower_source_to_mir(source).expect("release helper source should lower");
+    let mut codegen = NativeCodegen::new(&mir, "/tmp/callable_release_helpers.au", source)
+        .expect("codegen should initialize");
+    let mut ctx = Context::new();
+    ctx.func.signature = cranelift_codegen::ir::Signature::new(codegen.call_conv);
+    let mut builder_ctx = FunctionBuilderContext::new();
+    let mut builder = cranelift_frontend::FunctionBuilder::new(&mut ctx.func, &mut builder_ctx);
+    let block = builder.create_block();
+    builder.switch_to_block(block);
+    builder.seal_block(block);
+
+    let word = builder.ins().iconst(types::I64, 0);
+    let callable_ty = DirectType::Callable(super::DirectCallableType::new(callable_signature(
+        vec![],
+        Type::named("int64"),
+    )));
+    let text = DirectType::Opaque(Type::named("str"));
+    let pair = DirectType::PlainClass(PlainClassType {
+        class_name: "Pair".to_string(),
+        fields: vec![
+            PlainClassField {
+                name: "text".to_string(),
+                ty: text.clone(),
+            },
+            PlainClassField {
+                name: "count".to_string(),
+                ty: DirectType::Scalar(ScalarKind::Int64),
+            },
+        ],
+    });
+    let optional_callable = DirectType::Union(super::DirectUnionType::new(
+        crate::sema::optional_type(callable_signature(vec![], Type::named("int64"))),
+        vec![callable_ty.clone(), DirectType::Scalar(ScalarKind::Unit)],
+    ));
+    let optional_text = DirectType::Union(super::DirectUnionType::new(
+        crate::sema::optional_type(Type::named("str")),
+        vec![text.clone(), DirectType::Scalar(ScalarKind::Unit)],
+    ));
+    let plain_optional = DirectType::Union(super::DirectUnionType::new(
+        crate::sema::optional_type(Type::named("int64")),
+        vec![
+            DirectType::Scalar(ScalarKind::Int64),
+            DirectType::Scalar(ScalarKind::Unit),
+        ],
+    ));
+
+    for (ty, count) in [
+        (DirectType::Scalar(ScalarKind::Int64), 1),
+        (text.clone(), 1),
+        (pair.clone(), 2),
+        (optional_text.clone(), 2),
+        (optional_callable.clone(), 5),
+        (plain_optional.clone(), 2),
+        (callable_ty.clone(), 4),
+    ] {
+        let values = vec![word; count];
+        super::callables::retain_direct_values(&mut codegen, &mut builder, &values, &ty)
+            .unwrap_or_else(|error| {
+                panic!(
+                    "retain of {} should compile: {error}",
+                    render_direct_type(&ty)
+                )
+            });
+        release_direct_values(&mut codegen, &mut builder, &values, &ty).unwrap_or_else(|error| {
+            panic!(
+                "release of {} should compile: {error}",
+                render_direct_type(&ty)
+            )
+        });
+    }
+
+    let retain_error =
+        super::callables::retain_direct_values(&mut codegen, &mut builder, &[], &text)
+            .expect_err("an opaque retain needs its handle");
+    assert!(
+        retain_error.contains("retain expected an opaque `str` value"),
+        "{retain_error}"
+    );
+    let retain_error =
+        super::callables::retain_direct_values(&mut codegen, &mut builder, &[word], &pair)
+            .expect_err("a plain class retain needs every field word");
+    assert!(
+        retain_error.contains("retain expected `2` values for `Pair`"),
+        "{retain_error}"
+    );
+    let retain_error =
+        super::callables::retain_direct_values(&mut codegen, &mut builder, &[word], &optional_text)
+            .expect_err("a union retain needs its payload word");
+    assert!(
+        retain_error.contains("retain expected union words"),
+        "{retain_error}"
+    );
+    let adapter_error = super::callables::call_callable_unary_adapter(
+        &mut codegen,
+        &mut builder,
+        &[word, word],
+        super::callables::DESCRIPTOR_DROP,
+    )
+    .expect_err("a callable adapter call needs four words");
+    assert!(
+        adapter_error.contains("expected 4 callable words, found 2"),
+        "{adapter_error}"
+    );
+    let box_error =
+        super::callables::call_callable_box_adapter(&mut codegen, &mut builder, &[word])
+            .expect_err("a callable box call needs four words");
+    assert!(
+        box_error.contains("expected 4 callable words, found 1"),
+        "{box_error}"
+    );
+    let parts_error = super::callables::contract_parts(&Type::named("int64"))
+        .expect_err("an int64 has no callable contract");
+    assert!(
+        parts_error.contains("expected a callable contract, found `int64`"),
+        "{parts_error}"
+    );
+
+    builder.ins().return_(&[]);
+    builder.finalize();
+}
+
+fn shape_test_function(name: &str, param_names: &[&str]) -> MirFunction {
+    MirFunction {
+        name: name.to_string(),
+        module_name: "<test>".to_string(),
+        source_path: None,
+        span: Span::new(1, 1),
+        receiver: None,
+        params: param_names
+            .iter()
+            .map(|param| crate::mir::MirParam {
+                name: param.to_string(),
+                passing: MirReceiverKind::Value,
+                ty: Type::named("int64"),
+                default_function: None,
+                keyword_only: false,
+            })
+            .collect(),
+        local_types: param_names
+            .iter()
+            .map(|param| MirLocalType {
+                name: param.to_string(),
+                ty: Type::named("int64"),
+            })
+            .collect(),
+        return_type: Type::named("int64"),
+        entry: "entry".to_string(),
+        blocks: vec![BasicBlock {
+            label: "entry".to_string(),
+            instructions: Vec::new(),
+            terminator: Terminator::Return(Operand::Int(0)),
+        }],
+    }
+}
+
+fn shape_test_module(main_value: Rvalue, helpers: Vec<MirFunction>) -> crate::mir::MirModule {
+    let mut main = shape_test_function("main", &[]);
+    main.local_types.push(MirLocalType {
+        name: "callee".to_string(),
+        ty: Type::named("int64"),
+    });
+    main.blocks[0].instructions.push(Instruction::Assign {
+        target: "callee".to_string(),
+        value: main_value,
+    });
+    let mut functions = vec![main];
+    functions.extend(helpers);
+    crate::mir::MirModule {
+        unions: Vec::new(),
+        enums: Vec::new(),
+        constants: Vec::new(),
+        functions,
+        classes: Vec::new(),
+        trait_impls: Vec::new(),
+        top_level: None,
+    }
+}
+
+#[test]
+fn direct_callable_shape_declaration_reports_unknown_functions_and_mismatched_captures_and_contracts(
+) {
+    let source = "def main() -> int32:\n    return 0\n";
+    let mir = lower_source_to_mir(source).expect("shape declaration source should lower");
+    let mut codegen = NativeCodegen::new(&mir, "/tmp/callable_shape_declaration.au", source)
+        .expect("codegen should initialize");
+    let classes = HashMap::new();
+    let mut param_types = HashMap::new();
+    param_types.insert(
+        "helper".to_string(),
+        vec![DirectType::Scalar(ScalarKind::Int64)],
+    );
+    let no_params = callable_signature(vec![], Type::named("int64"));
+    let one_param = callable_signature(vec![("value", Type::named("int64"))], Type::named("int64"));
+
+    let missing = shape_test_module(
+        Rvalue::Use(Operand::Function {
+            name: "missing".to_string(),
+            signature: Box::new(no_params.clone()),
+        }),
+        Vec::new(),
+    );
+    let error = super::callables::declare_callable_shapes(
+        &missing,
+        &mut codegen.object,
+        &param_types,
+        &classes,
+        codegen.call_conv,
+    )
+    .expect_err("a reference must name a lowered function");
+    assert!(
+        error.contains("cannot find lowered function `missing` for a callable shape"),
+        "{error}"
+    );
+
+    let capture = |name: &str| crate::mir::MirClosureCapture {
+        name: name.to_string(),
+        value: Operand::Int(1),
+        ty: Type::named("int64"),
+        passing: MirReceiverKind::Value,
+        mutated: false,
+        source_place: None,
+        resolve_source_at_capture: false,
+    };
+    let too_many_captures = shape_test_module(
+        Rvalue::Closure {
+            function: "helper".to_string(),
+            signature: no_params.clone(),
+            captures: vec![capture("a"), capture("b")],
+            consuming: false,
+            mutable: false,
+        },
+        vec![shape_test_function("helper", &["value"])],
+    );
+    let error = super::callables::declare_callable_shapes(
+        &too_many_captures,
+        &mut codegen.object,
+        &param_types,
+        &classes,
+        codegen.call_conv,
+    )
+    .expect_err("a closure cannot capture more values than its function takes");
+    assert!(
+        error.contains("captures 2 values but the function takes 1"),
+        "{error}"
+    );
+
+    let contract_mismatch = shape_test_module(
+        Rvalue::Use(Operand::Function {
+            name: "helper".to_string(),
+            signature: Box::new(no_params.clone()),
+        }),
+        vec![shape_test_function("helper", &["value"])],
+    );
+    let error = super::callables::declare_callable_shapes(
+        &contract_mismatch,
+        &mut codegen.object,
+        &param_types,
+        &classes,
+        codegen.call_conv,
+    )
+    .expect_err("a reference's contract must match the function's public parameters");
+    assert!(
+        error.contains("declares 1 public parameters but its contract `def() -> int64` has 0"),
+        "{error}"
+    );
+
+    let matching = shape_test_module(
+        Rvalue::Use(Operand::Function {
+            name: "helper".to_string(),
+            signature: Box::new(one_param),
+        }),
+        vec![shape_test_function("helper", &["value"])],
+    );
+    let shapes = super::callables::declare_callable_shapes(
+        &matching,
+        &mut codegen.object,
+        &param_types,
+        &classes,
+        codegen.call_conv,
+    )
+    .expect("a matching contract declares its shape");
+    assert_eq!(shapes.len(), 1);
+    assert!(shapes
+        .values()
+        .all(|shape| shape.env_words == 0 && shape.inline()));
+
+    let parts_error = super::callables::contract_direct_parts(&Type::named("int64"), &classes)
+        .expect_err("an int64 has no callable contract");
+    assert!(
+        parts_error.contains("expected a callable contract, found `int64`"),
+        "{parts_error}"
+    );
+}
+
+#[test]
+fn runtime_type_wildcards_are_found_inside_callable_contracts() {
+    use crate::sema::{ClosureCallKind, ClosureCapture, ClosureCaptureMode};
+    let concrete = |ty: Type| crate::sema::FunctionParamContract {
+        keyword_only: false,
+        name: "value".to_string(),
+        ty,
+        passing: crate::ast::ReceiverKind::Value,
+        has_default: false,
+    };
+    let function = |param: Type, ret: Type| Type::Function {
+        params: vec![concrete(param)],
+        return_type: Box::new(ret),
+    };
+    assert!(!super::runtime_type_is_wildcard(&function(
+        Type::named("int64"),
+        Type::named("str")
+    )));
+    assert!(super::runtime_type_is_wildcard(&function(
+        Type::TypeParam("T".to_string()),
+        Type::named("str")
+    )));
+    assert!(super::runtime_type_is_wildcard(&function(
+        Type::named("int64"),
+        Type::named("Unknown")
+    )));
+    let view = Type::ReturnedView(Box::new(crate::sema::ReturnedViewType {
+        mutable: false,
+        pointee: Type::TypeParam("T".to_string()),
+        origin: 0,
+    }));
+    assert!(super::runtime_type_is_wildcard(&view));
+    let callable = |param: Type, ret: Type| {
+        Type::Callable(Box::new(crate::sema::CallableType {
+            task: false,
+            call_kind: ClosureCallKind::Repeatable,
+            params: vec![concrete(param)],
+            return_type: ret,
+        }))
+    };
+    assert!(!super::runtime_type_is_wildcard(&callable(
+        Type::named("int64"),
+        Type::named("int64")
+    )));
+    assert!(super::runtime_type_is_wildcard(&callable(
+        Type::named("int64"),
+        Type::TypeParam("R".to_string())
+    )));
+    let closure = |param: Type, capture: Type, ret: Type| Type::Closure {
+        params: Box::new(vec![concrete(param)]),
+        return_type: Box::new(ret),
+        captures: Box::new(vec![ClosureCapture {
+            name: "state".to_string(),
+            ty: capture,
+            mode: ClosureCaptureMode::MutableView,
+            span: Span::new(1, 1),
+            mutated: false,
+        }]),
+        call_kind: ClosureCallKind::Repeatable,
+    };
+    assert!(!super::runtime_type_is_wildcard(&closure(
+        Type::named("int64"),
+        Type::named("str"),
+        Type::named("bool")
+    )));
+    assert!(super::runtime_type_is_wildcard(&closure(
+        Type::named("int64"),
+        Type::TypeParam("U".to_string()),
+        Type::named("bool")
+    )));
+    assert!(super::runtime_type_is_wildcard(&closure(
+        Type::named("int64"),
+        Type::named("str"),
+        Type::named("Unknown")
+    )));
 }
