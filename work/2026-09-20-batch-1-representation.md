@@ -238,7 +238,13 @@ lines rather than spend them.
   as the runtime skips a null handle. A by-value capture handed to the
   lowered function was released by the callee at its exit while the
   environment still held it; the invoke adapter now retains by-value
-  captures before the call.
+  captures before the call. A callable payload copied out of a boxed union
+  stayed a statement temporary and was released twice. The chain's CLI
+  suite then caught that a call through a callable no longer handed the
+  caller's mutable sinks to the runtime, so a mutation made by a closure
+  with a mutable capture before a trap was not published to the captured
+  place before cleanup; the call installs the indirect sink handoff again
+  and the shape's invoke adapter claims it into the callee's own sink list.
 - Suites: every runnable fixture emits a direct object; the fixture runner,
   the union and callable security suites, the validator coverage suite,
   and the native unit suites (with six assertions moved from the boxed
