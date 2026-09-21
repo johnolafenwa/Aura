@@ -407,8 +407,12 @@ fn assert_stripped_merge_is_poisoned(source: &str, stdout: &str, forge: impl Fn(
     );
     let native = emit_host_native_object(&control)
         .expect_err("the direct backend needs the declared indirect function type");
+    // With the declared type stripped to `int64`, the direct backend refuses
+    // either the store of a callable into that slot (the four-word layout
+    // cannot coerce to a scalar) or the call through it.
     assert!(
-        native.contains("expected an indirect function value"),
+        native.contains("expected an indirect function value")
+            || native.contains("unsupported value coercion from `def"),
         "the stripped control is refused by codegen, not by the validator: {native}"
     );
     let mut encoded = encode(source);

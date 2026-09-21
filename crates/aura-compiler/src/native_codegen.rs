@@ -7575,7 +7575,7 @@ impl<'a> FunctionCompiler<'a> {
             return self.compile_inline_callable_call(function, args, target, &signature);
         }
         Err(format!(
-            "direct backend expected an inline callable callee, found `{}`",
+            "direct backend expected an indirect function value, found `{}`",
             render_direct_type(&function_type)
         ))
     }
