@@ -9821,22 +9821,6 @@ impl<'a> FunctionCompiler<'a> {
 
         if let DirectType::Union(union) = target {
             let union = union.clone();
-            if let DirectType::Union(source) = &value.ty {
-                // Another spelling of the same union (a module-qualified
-                // member versus its local name): the canonical keys, the tag
-                // ordinals, and the word layout agree, so the words are the
-                // value under the target's spelling.
-                if source.union_type == union.union_type
-                    && source.members.len() == union.members.len()
-                    && source.payload_words == union.payload_words
-                    && source.owning == union.owning
-                {
-                    return Ok(ValueRef {
-                        values: value.values,
-                        ty: target.clone(),
-                    });
-                }
-            }
             if let DirectType::Opaque(source_ty) = &value.ty {
                 if let Some(index) = union
                     .members
@@ -10581,6 +10565,7 @@ impl<'a> FunctionCompiler<'a> {
         let tag = words[0];
         let caller_owned = self.owned_opaque_temporaries.clone();
         let member_count = union.members.len();
+        let mut merged_union_owned: Option<bool> = None;
         for index in 0..member_count {
             let matched = self.builder.create_block();
             let next = if index + 1 < member_count {
@@ -10600,9 +10585,24 @@ impl<'a> FunctionCompiler<'a> {
             let member = self.union_member_from_words(union, index, words)?;
             let result = body(self, index, member)?;
             let result = self.coerce_value(result, result_ty)?;
-            // A result the body owns is handed to the merge block; the
-            // caller decides its ownership once for every arm.
+            // A result the body owns is handed to the merge block: an opaque
+            // result's ownership is the caller's decision once for every
+            // arm, and an owned union result (a member call returning
+            // `str | None`) stays owned across the merge, so the arm must
+            // not release its handle with the other temporaries it made.
+            let owns_union = self.temporary_owns_union(&result);
+            match merged_union_owned {
+                Some(expected) if expected != owns_union => {
+                    return Err(format!(
+                        "direct union switch arms disagree on result ownership for `{}`",
+                        union.union_type
+                    ));
+                }
+                Some(_) => {}
+                None => merged_union_owned = Some(owns_union),
+            }
             self.clear_temporary_opaque_owned(&result);
+            self.clear_temporary_union_owned(&result);
             self.release_temporary_owned_since(&caller_owned);
             self.builder.ins().jump(merge, &result.values);
             if let Some(next) = next {
@@ -10613,10 +10613,14 @@ impl<'a> FunctionCompiler<'a> {
         self.builder.switch_to_block(merge);
         self.builder.seal_block(merge);
         self.owned_opaque_temporaries = caller_owned;
-        Ok(ValueRef {
+        let merged = ValueRef {
             values: self.builder.block_params(merge).to_vec(),
             ty: result_ty.clone(),
-        })
+        };
+        if merged_union_owned == Some(true) {
+            self.mark_temporary_union_owned(&merged);
+        }
+        Ok(merged)
     }
 
     /// Boxes an inline union into the runtime's `Value::Union` for a
@@ -16029,32 +16033,6 @@ impl<'a> FunctionCompiler<'a> {
                 &candidates,
             );
         }
-        // A union receiver dispatches on its active member (ADR-0052 A8):
-        // the payload is the receiver, and a mutable method writes back
-        // through the active payload projection so the tag cannot change.
-        let union_receiver_place;
-        let (object, receiver_place) = if let Type::Union(_) = object_ty {
-            let consumes = candidates[0].1.receiver == Some(MirReceiverKind::Value);
-            let union_value = self.ensure_opaque(object)?;
-            let consume_flag = self.builder.ins().iconst(types::I64, i64::from(consumes));
-            let inst = self.builder.ins().call(
-                self.union_active_payload,
-                &[union_value.values[0], consume_flag],
-            );
-            let payload = self.owned_opaque_result(
-                self.builder.inst_results(inst).to_vec(),
-                Type::named("Unknown"),
-            );
-            union_receiver_place = receiver_place.map(|place| {
-                format!(
-                    "{place}.{}",
-                    crate::native_runtime::DIRECT_UNION_ACTIVE_PAYLOAD_PROJECTION
-                )
-            });
-            (payload, union_receiver_place.as_deref())
-        } else {
-            (object, receiver_place)
-        };
         if candidates.len() == 1 {
             let Type::Named(candidate_name, _) = &candidates[0].0 else {
                 return Err(format!(

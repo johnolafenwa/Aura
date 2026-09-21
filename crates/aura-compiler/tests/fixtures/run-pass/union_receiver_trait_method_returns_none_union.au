@@ -1,0 +1,32 @@
+trait Label:
+    def label(self) -> str | None
+
+class Dog:
+    name: str
+
+class Cat:
+    name: str
+
+impl Label for Dog:
+    def label(self) -> str | None:
+        return self.name.clone()
+
+impl Label for Cat:
+    def label(self) -> str | None:
+        return None
+
+def show(pet: Dog | Cat):
+    match pet.label():
+        case str as text:
+            print(text)
+        case None:
+            print("none")
+
+def main():
+    pet: Dog | Cat = Dog(name="rex")
+    kept: str | None = pet.label()
+    print(kept == "rex")
+    show(pet)
+    other: Dog | Cat = Cat(name="tom")
+    print(other.label() == None)
+    show(other)

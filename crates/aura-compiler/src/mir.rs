@@ -20929,6 +20929,22 @@ impl<'a> Lowerer<'a> {
                         {
                             return Some(runtime_ty);
                         }
+                        if let Type::Union(union) = &receiver_type {
+                            // A union receiver dispatches on its active
+                            // member (ADR-0052 A8); the checker requires every
+                            // member to implement the method with one result
+                            // type, so the first implementing member names it.
+                            return union.members.iter().find_map(|member| {
+                                self.trait_method_for_receiver(member, field).map(
+                                    |(method, substitutions)| {
+                                        substitute_type(
+                                            &method.signature.return_type,
+                                            &substitutions,
+                                        )
+                                    },
+                                )
+                            });
+                        }
                         self.trait_method_for_receiver(&receiver_type, field).map(
                             |(method, substitutions)| {
                                 substitute_type(&method.signature.return_type, &substitutions)
