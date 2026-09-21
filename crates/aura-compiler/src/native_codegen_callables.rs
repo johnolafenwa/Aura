@@ -155,7 +155,6 @@ pub(super) fn declare_callable_shapes(
     module: &MirModule,
     object: &mut ObjectModule,
     function_param_types: &HashMap<String, Vec<DirectType>>,
-    function_return_types: &HashMap<String, DirectType>,
     classes: &HashMap<String, MirClass>,
     call_conv: CallConv,
 ) -> std::result::Result<HashMap<CallableShapeKey, CallableShape>, String> {
@@ -166,7 +165,7 @@ pub(super) fn declare_callable_shapes(
             .iter()
             .chain(module.top_level.iter())
             .find(|function| function.name == key.function)
-            .ok_or_else(|| {
+            .ok_or({
                 format!(
                     "direct backend cannot find lowered function `{}` for a callable shape",
                     key.function
@@ -176,12 +175,6 @@ pub(super) fn declare_callable_shapes(
             .get(&key.function)
             .cloned()
             .unwrap_or_default();
-        if !function_return_types.contains_key(&key.function) {
-            return Err(format!(
-                "direct backend does not know return type for `{}`",
-                key.function
-            ));
-        }
         if function.params.len() != param_types.len() || key.captures > param_types.len() {
             return Err(format!(
                 "direct backend callable shape for `{}` captures {} values but the function takes {}",
@@ -365,7 +358,7 @@ pub(super) fn retain_direct_values(
             let retain_value = codegen
                 .object
                 .declare_func_in_func(codegen.retain_value, builder.func);
-            let value = values.first().copied().ok_or_else(|| {
+            let value = values.first().copied().ok_or({
                 format!(
                     "direct backend retain expected an opaque `{}` value",
                     render_direct_type(ty)
@@ -378,7 +371,7 @@ pub(super) fn retain_direct_values(
             let mut start = 0;
             for field in &class.fields {
                 let end = start + field.ty.value_count();
-                let slice = values.get(start..end).ok_or_else(|| {
+                let slice = values.get(start..end).ok_or({
                     format!(
                         "direct backend retain expected `{}` values for `{}`",
                         class
@@ -651,7 +644,7 @@ impl NativeCodegen<'_> {
             .chain(self.module.top_level.iter())
             .find(|function| function.name == key.function)
             .cloned()
-            .ok_or_else(|| format!("direct backend cannot find `{}`", key.function))?;
+            .ok_or(format!("direct backend cannot find `{}`", key.function))?;
         let mut ctx = self.object.make_context();
         ctx.func.signature = callable_box_signature(self.call_conv);
         ctx.func.name = UserFuncName::user(0, shape.box_value.as_u32());
@@ -663,21 +656,18 @@ impl NativeCodegen<'_> {
         builder.seal_block(entry);
         let callable_ptr = builder.block_params(entry)[0];
 
-        let thunk_id = *self.function_thunks.get(&key.function).ok_or_else(|| {
+        let thunk_id = *self.function_thunks.get(&key.function).ok_or({
             format!(
                 "direct backend does not know function thunk for `{}`",
                 key.function
             )
         })?;
-        let binder_id = *self
-            .function_default_binders
-            .get(&key.function)
-            .ok_or_else(|| {
-                format!(
-                    "direct backend does not know function default binder for `{}`",
-                    key.function
-                )
-            })?;
+        let binder_id = *self.function_default_binders.get(&key.function).ok_or({
+            format!(
+                "direct backend does not know function default binder for `{}`",
+                key.function
+            )
+        })?;
         let thunk_ref = self.object.declare_func_in_func(thunk_id, builder.func);
         let binder_ref = self.object.declare_func_in_func(binder_id, builder.func);
         let thunk_ptr = builder.ins().func_addr(types::I64, thunk_ref);
@@ -809,7 +799,7 @@ impl NativeCodegen<'_> {
             .chain(self.module.top_level.iter())
             .find(|function| function.name == key.function)
             .cloned()
-            .ok_or_else(|| format!("direct backend cannot find `{}`", key.function))?;
+            .ok_or(format!("direct backend cannot find `{}`", key.function))?;
         let param_types = self
             .function_param_types
             .get(&key.function)
@@ -819,16 +809,16 @@ impl NativeCodegen<'_> {
             .function_return_types
             .get(&key.function)
             .cloned()
-            .ok_or_else(|| {
+            .ok_or({
                 format!(
                     "direct backend does not know return type for `{}`",
                     key.function
                 )
             })?;
-        let target_id = *self
-            .functions
-            .get(&key.function)
-            .ok_or_else(|| format!("direct backend does not know function `{}`", key.function))?;
+        let target_id = *self.functions.get(&key.function).ok_or(format!(
+            "direct backend does not know function `{}`",
+            key.function
+        ))?;
         let mut ctx = self.object.make_context();
         ctx.func.signature = contract_invoke_signature(
             &shape.contract_param_types,
@@ -890,7 +880,7 @@ impl NativeCodegen<'_> {
                 .brif(missing, default_block, &[], merge_block, &supplied);
             builder.switch_to_block(default_block);
             builder.seal_block(default_block);
-            let default_id = *self.functions.get(default_name).ok_or_else(|| {
+            let default_id = *self.functions.get(default_name).ok_or({
                 format!(
                     "direct backend is missing default function `{default_name}` for `{}`",
                     key.function

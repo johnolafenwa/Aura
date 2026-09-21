@@ -1526,7 +1526,6 @@ impl<'a> NativeCodegen<'a> {
             module,
             &mut object,
             &function_param_types,
-            &function_return_types,
             &classes,
             call_conv,
         )?;
@@ -2304,11 +2303,6 @@ impl<'a> NativeCodegen<'a> {
             let func_ref = self.object.declare_func_in_func(*func_id, builder.func);
             function_thunk_refs.insert(name.clone(), func_ref);
         }
-        let mut function_default_binder_refs = HashMap::new();
-        for (name, func_id) in &self.function_default_binders {
-            let func_ref = self.object.declare_func_in_func(*func_id, builder.func);
-            function_default_binder_refs.insert(name.clone(), func_ref);
-        }
         let mut cleanup_thunk_refs = HashMap::new();
         for place in &cleanup_places {
             if let Some(func_id) = self
@@ -2402,9 +2396,6 @@ impl<'a> NativeCodegen<'a> {
         let box_bool = self
             .object
             .declare_func_in_func(self.box_bool, builder.func);
-        let function_value = self
-            .object
-            .declare_func_in_func(self.function_value, builder.func);
         let module_constant = self
             .object
             .declare_func_in_func(self.module_constant, builder.func);
@@ -3328,24 +3319,6 @@ impl<'a> NativeCodegen<'a> {
         let start_task_call = self
             .object
             .declare_func_in_func(self.start_task_call, builder.func);
-        let function_frame_metadata = self
-            .module
-            .functions
-            .iter()
-            .chain(self.module.top_level.iter())
-            .map(|candidate| {
-                (
-                    candidate.name.clone(),
-                    (
-                        candidate
-                            .source_path
-                            .clone()
-                            .unwrap_or_else(|| self.program_path.clone()),
-                        candidate.span,
-                    ),
-                )
-            })
-            .collect();
         let current_function_name = public_direct_function_name(&function.name);
         let current_function_path = function
             .source_path
@@ -3360,12 +3333,10 @@ impl<'a> NativeCodegen<'a> {
             next_variable_index: variable_index,
             function_refs,
             function_thunk_refs,
-            function_default_binder_refs,
             cleanup_thunk_refs,
             function_return_types: self.function_return_types.clone(),
             function_param_types: self.function_param_types.clone(),
             function_writeback_types: self.function_writeback_types.clone(),
-            function_frame_metadata,
             current_function_name,
             current_function_path,
             writeback_locals,
@@ -3424,7 +3395,6 @@ impl<'a> NativeCodegen<'a> {
             box_uint_literal,
             box_f64,
             box_bool,
-            function_value,
             module_constant,
             function_bind_defaults,
             box_unit,
@@ -4652,12 +4622,10 @@ struct FunctionCompiler<'a> {
     next_variable_index: usize,
     function_refs: HashMap<String, cranelift_codegen::ir::FuncRef>,
     function_thunk_refs: HashMap<String, cranelift_codegen::ir::FuncRef>,
-    function_default_binder_refs: HashMap<String, cranelift_codegen::ir::FuncRef>,
     cleanup_thunk_refs: HashMap<String, cranelift_codegen::ir::FuncRef>,
     function_return_types: HashMap<String, DirectType>,
     function_param_types: HashMap<String, Vec<DirectType>>,
     function_writeback_types: HashMap<String, Vec<DirectType>>,
-    function_frame_metadata: HashMap<String, (String, Span)>,
     current_function_name: String,
     current_function_path: String,
     writeback_locals: Vec<(String, DirectType)>,
@@ -4716,7 +4684,6 @@ struct FunctionCompiler<'a> {
     box_uint_literal: cranelift_codegen::ir::FuncRef,
     box_f64: cranelift_codegen::ir::FuncRef,
     box_bool: cranelift_codegen::ir::FuncRef,
-    function_value: cranelift_codegen::ir::FuncRef,
     module_constant: cranelift_codegen::ir::FuncRef,
     function_bind_defaults: cranelift_codegen::ir::FuncRef,
     box_unit: cranelift_codegen::ir::FuncRef,
@@ -6386,17 +6353,10 @@ impl<'a> FunctionCompiler<'a> {
             consuming,
             contract: signature.to_string(),
         };
-        let shape = self.callable_shapes.get(&key).cloned().ok_or_else(|| {
-            format!(
-                "direct backend does not know a callable shape for `{function}` with {} captures",
-                captures.len()
-            )
-        })?;
-        if shape.capture_types.len() != captures.len() {
-            return Err(format!(
-                "direct backend callable shape for `{function}` disagrees with its captures"
-            ));
-        }
+        let shape = self.callable_shapes.get(&key).cloned().ok_or(format!(
+            "direct backend does not know a callable shape for `{function}` with {} captures",
+            captures.len()
+        ))?;
         let mut words = Vec::new();
         for (capture, capture_ty) in captures.iter().zip(&shape.capture_types) {
             let value = self.load_operand_for_target(&capture.value, capture_ty)?;
@@ -9630,67 +9590,18 @@ impl<'a> FunctionCompiler<'a> {
                     consuming: false,
                     contract: signature.to_string(),
                 };
-                if let Some(shape) = self.callable_shapes.get(&key).cloned() {
-                    let global = self
-                        .object
-                        .declare_data_in_func(shape.descriptor, self.builder.func);
-                    let descriptor = self.builder.ins().symbol_value(types::I64, global);
-                    let zero = self.builder.ins().iconst(types::I64, 0);
-                    return Ok(ValueRef {
-                        values: vec![descriptor, zero, zero, zero],
-                        ty: DirectType::Callable(DirectCallableType::new(
-                            signature.as_ref().clone(),
-                        )),
-                    });
-                }
-                let thunk_ref = *self.function_thunk_refs.get(name).ok_or_else(|| {
-                    format!("direct backend does not know function thunk for `{name}`")
-                })?;
-                let thunk_ptr = self.builder.ins().func_addr(types::I64, thunk_ref);
-                let binder_ref = *self.function_default_binder_refs.get(name).ok_or_else(|| {
-                    format!("direct backend does not know function default binder for `{name}`")
-                })?;
-                let binder_ptr = self.builder.ins().func_addr(types::I64, binder_ref);
-                let (name_ptr, name_len) = self.string_constant(name.as_bytes())?;
-                let signature_json = match serde_json::to_vec(signature) {
-                    Ok(signature_json) => signature_json,
-                    Err(error) => {
-                        return Err(format!(
-                            "failed to serialize function signature for `{name}`: {error}"
-                        ))
-                    }
-                };
-                let (signature_ptr, signature_len) = self.string_constant(&signature_json)?;
-                let (path, span) = match self.function_frame_metadata.get(name).cloned() {
-                    Some(metadata) => metadata,
-                    None => {
-                        return Err(format!(
-                            "direct backend is missing source-frame metadata for function `{name}`"
-                        ))
-                    }
-                };
-                let (path_ptr, path_len) = self.string_constant(path.as_bytes())?;
-                let line = self.builder.ins().iconst(types::I64, span.line as i64);
-                let column = self.builder.ins().iconst(types::I64, span.column as i64);
-                let call = self.builder.ins().call(
-                    self.function_value,
-                    &[
-                        thunk_ptr,
-                        binder_ptr,
-                        name_ptr,
-                        name_len,
-                        signature_ptr,
-                        signature_len,
-                        path_ptr,
-                        path_len,
-                        line,
-                        column,
-                    ],
-                );
-                Ok(self.owned_opaque_result(
-                    self.builder.inst_results(call).to_vec(),
-                    signature.as_ref().clone(),
-                ))
+                let shape = self.callable_shapes.get(&key).cloned().ok_or(format!(
+                    "direct backend does not know a callable shape for `{name}`"
+                ))?;
+                let global = self
+                    .object
+                    .declare_data_in_func(shape.descriptor, self.builder.func);
+                let descriptor = self.builder.ins().symbol_value(types::I64, global);
+                let zero = self.builder.ins().iconst(types::I64, 0);
+                Ok(ValueRef {
+                    values: vec![descriptor, zero, zero, zero],
+                    ty: DirectType::Callable(DirectCallableType::new(signature.as_ref().clone())),
+                })
             }
             Operand::Int(value) => {
                 if let Ok(narrowed) = i64::try_from(*value) {
@@ -10268,29 +10179,6 @@ impl<'a> FunctionCompiler<'a> {
                     || matches!(source_ty, Type::TypeParam(_))
                 {
                     return self.unbox_inline_union(&union, value.values[0]);
-                }
-            }
-            if matches!(value.ty, DirectType::Callable(_)) {
-                if let Some(index) = union
-                    .members
-                    .iter()
-                    .position(|member| member.ty == value.ty)
-                {
-                    // An inline callable member lifts with its captures
-                    // transferred: an owned temporary moves in, a borrowed
-                    // value retains them, and the union owns the words.
-                    let words = self.transfer_callable_words(&value);
-                    let member = ValueRef {
-                        values: words,
-                        ty: value.ty.clone(),
-                    };
-                    let words = self.union_words_from_member(&union, index, member)?;
-                    let lifted = ValueRef {
-                        values: words,
-                        ty: target.clone(),
-                    };
-                    self.mark_temporary_union_owned(&lifted);
-                    return Ok(lifted);
                 }
             }
             // A bare member value lifts into the union it is a member of
