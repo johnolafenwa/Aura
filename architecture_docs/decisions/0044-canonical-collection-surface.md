@@ -373,3 +373,21 @@ tagged replacement and records the Batch 2 optional dict.get review.
 
 Implementation is in Batch 1 phase 1; this dated amendment extends the
 recorded baseline without claiming the feature is already delivered.
+
+## 2026-09-21 — Batch 2 phase 2a amendment: `lookup` and the receiver-table audit
+
+Per the Batch 2–3 design checkpoint (sections C1, C2, and H1, ratified
+2026-09-21): `list` and `dict` gain one arm-scoped `lookup` member whose
+result exists only as a `match` scrutinee and whose `Found` payload is a
+shared (bare) or mutable (`match mut`) element or entry loan; there is no
+app-facing `V | None` `dict.get`, which would hide a clone of the value. The
+builtin receiver table is audited so that operations on Copy runtime
+handles (`Queue[T]` puts and close, repeatable `Task[T]` operations) are
+shared receivers while every operation that mutates the value or a
+non-Copy host resource keeps its documented `mut` requirement; the audited
+table is enforced at every call site through `require_mutable_receiver` and
+is the single source for the checker, the MIR validator, hover, and the
+Manual's API tables, pinned by a characterization test. `Span[T]` (phase 2b)
+is a view type and therefore not a union member. Details:
+[ADR-0061](0061-collection-element-loans-and-slice-views.md), 2026-09-21
+section.

@@ -77,3 +77,15 @@ syntax or collection operation.
 - `crates/aurora-compiler/tests/fixtures/check-fail/map_compound_assignment_noncopy_value_rejected.au`
   pins the copy-only compound-assignment rule and its explicit `get`/`remove`
   exits.
+
+## 2026-09-21 — Batch 2 phase 2a amendment: `AU3005` guidance
+
+With element and entry loans ([ADR-0061](0061-collection-element-loans-and-slice-views.md),
+2026-09-21 section), an indexed read of a non-Copy element into an owned
+position keeps this ADR's three-way clone-safety classification, and the
+`AU3005` guidance now names `view` (a shared or mutable element view) as
+the first suggestion when the use is a read, before `.clone()` and the
+transferring methods (`pop`, `set`, `remove`). A bare indexed read in a
+shared-read context (an argument, a shared receiver, an equality or
+rendering operand, an f-string, a bare `match` scrutinee) is a contextual
+element loan and is no longer `AU3005`.
