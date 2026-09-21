@@ -173,11 +173,14 @@ narrower in mechanism and wider in what programs it accepts:
   `[k:i:N]`, `[k:b:<bool>]`, `[k:s:<hex>]`) followed by the projection; the
   direct backend's `DirectViewAlternative` gains `elements`
   (`DirectElementSelector { variable, selector_ty, element_type, kind,
-  projection, span }`) and four runtime helpers
-  (`aura_direct_vec_index_path`, `aura_direct_vec_set_index_path_in_place`,
-  `aura_direct_map_index_path`, `aura_direct_map_set_index_path_in_place`)
-  that read or replace the projected value inside the element in place; an
-  owned dictionary key is held by the loan and released at `EndLoan`.
+  projection, span }`) and two runtime helpers,
+  `aura_direct_element_path_load` and `aura_direct_element_path_store`,
+  that walk one selection chain (`[i]`, `[k]`, and projection steps with a
+  buffer of selector words) inside the collection in one call and read or
+  replace only the value reached, so a nested view through an element or
+  entry view (`view mut row = rows[0]; view mut cell = row[1]`) writes in
+  place too; an owned dictionary key is held by the loan and released at
+  `EndLoan`.
 
 Defects met on the way, all fixed and pinned: `view name = users[1].name`
 lowered to the tuple spelling `users.1.name` and trapped on both backends
@@ -187,7 +190,11 @@ crashed the direct binary (a scalar key was passed unboxed); a string key
 leaked once per read (the runtime borrows a lookup key); the checker
 accepted `users[0].visits = 5` under a live view of `users[0]` and the
 validator refused it as an internal error (the tuple/element bridge in
-`PlaceProjection` and the indexed `member_access_path`).
+`PlaceProjection` and the indexed `member_access_path`); a nested element
+view through an element view was refused by the validator (an element
+reborrow selects inside its parent's value, not its parent's source) and
+would have written into a clone on the direct backend (the prefix element
+was cloned before the write), which the one-call selection chain removes.
 
 ## Evidence
 
@@ -197,7 +204,8 @@ validator refused it as an internal error (the tuple/element bridge in
   230]`), `entry_view_shared`, `entry_view_mutable` (`str`, `int64`, `bool`
   keys, class and union values), `element_place_assignment` (field
   assignment and compound assignment through elements and entries, a
-  loop-binding reborrow); run-fail `element_view_out_of_bounds` and
+  loop-binding reborrow), `element_view_nested` (views through element and
+  entry views, written in place); run-fail `element_view_out_of_bounds` and
   `entry_view_missing_key` (`AU4003` at the index expression); check-fail
   `element_view_write_locked`, `element_view_dynamic_locks_collection`,
   `element_view_source_mutated` (`AU3002`), and the earlier
@@ -227,6 +235,7 @@ validator refused it as an internal error (the tuple/element bridge in
 - `A3` invalidation classification (`AU3011` naming the origin and the
   operation) is not yet in: a structural mutation under a live element view
   is refused by the existing `AU3002` view lock.
-- Nested element views (`grid[i][j]`, `table[key][i]`) are refused by the
-  copy rule at the inner index until contextual reads land; the lowering
-  and both backends already accept a chain of element selectors.
+- A nested index in one expression (`grid[i][j]`, `table[key][i]`) is
+  refused by the copy rule at the inner index until contextual reads land;
+  the same selection through two views (`view mut row = rows[i]; view mut
+  cell = row[j]`) works on both backends.

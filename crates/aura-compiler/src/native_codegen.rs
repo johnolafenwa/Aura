@@ -643,10 +643,8 @@ struct NativeCodegen<'a> {
     vec_index_option: FuncId,
     vec_take_index_in_place: FuncId,
     vec_set_index_in_place: FuncId,
-    vec_index_path: FuncId,
-    vec_set_index_path_in_place: FuncId,
-    map_index_path: FuncId,
-    map_set_index_path_in_place: FuncId,
+    element_path_load: FuncId,
+    element_path_store: FuncId,
     array_zeros: FuncId,
     array_full: FuncId,
     array_from_vec: FuncId,
@@ -1177,10 +1175,8 @@ impl<'a> NativeCodegen<'a> {
             vec_index_option => ("aura_direct_vec_index_option", [types::I64, types::I64], Some(types::I64)),
             vec_take_index_in_place => ("aura_direct_vec_take_index_in_place", [types::I64, types::I64], Some(types::I64)),
             vec_set_index_in_place => ("aura_direct_vec_set_index_in_place", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
-            vec_index_path => ("aura_direct_vec_index_path", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
-            vec_set_index_path_in_place => ("aura_direct_vec_set_index_path_in_place", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
-            map_index_path => ("aura_direct_map_index_path", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
-            map_set_index_path_in_place => ("aura_direct_map_set_index_path_in_place", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
+            element_path_load => ("aura_direct_element_path_load", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
+            element_path_store => ("aura_direct_element_path_store", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             array_zeros => ("aura_direct_array_zeros", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             array_full => ("aura_direct_array_full", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             array_from_vec => ("aura_direct_array_from_vec", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
@@ -1674,10 +1670,8 @@ impl<'a> NativeCodegen<'a> {
             vec_index_option,
             vec_take_index_in_place,
             vec_set_index_in_place,
-            vec_index_path,
-            vec_set_index_path_in_place,
-            map_index_path,
-            map_set_index_path_in_place,
+            element_path_load,
+            element_path_store,
             array_zeros,
             array_full,
             array_from_vec,
@@ -2588,18 +2582,12 @@ impl<'a> NativeCodegen<'a> {
         let vec_set_index_in_place = self
             .object
             .declare_func_in_func(self.vec_set_index_in_place, builder.func);
-        let vec_index_path = self
+        let element_path_load = self
             .object
-            .declare_func_in_func(self.vec_index_path, builder.func);
-        let vec_set_index_path_in_place = self
+            .declare_func_in_func(self.element_path_load, builder.func);
+        let element_path_store = self
             .object
-            .declare_func_in_func(self.vec_set_index_path_in_place, builder.func);
-        let map_index_path = self
-            .object
-            .declare_func_in_func(self.map_index_path, builder.func);
-        let map_set_index_path_in_place = self
-            .object
-            .declare_func_in_func(self.map_set_index_path_in_place, builder.func);
+            .declare_func_in_func(self.element_path_store, builder.func);
         let array_zeros = self
             .object
             .declare_func_in_func(self.array_zeros, builder.func);
@@ -3482,10 +3470,8 @@ impl<'a> NativeCodegen<'a> {
             vec_index_option,
             vec_take_index_in_place,
             vec_set_index_in_place,
-            vec_index_path,
-            vec_set_index_path_in_place,
-            map_index_path,
-            map_set_index_path_in_place,
+            element_path_load,
+            element_path_store,
             array_zeros,
             array_full,
             array_from_vec,
@@ -4286,6 +4272,17 @@ struct DirectViewAlternative {
     elements: Vec<DirectElementSelector>,
 }
 
+/// The runtime operands of one selection chain (see
+/// `FunctionCompiler::element_path_operands`).
+struct DirectElementPathOperands {
+    path_ptr: Value,
+    path_len: Value,
+    selectors_ptr: Value,
+    count: Value,
+    line: Value,
+    column: Value,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum DirectElementKind {
     List,
@@ -4816,10 +4813,8 @@ struct FunctionCompiler<'a> {
     vec_index_option: cranelift_codegen::ir::FuncRef,
     vec_take_index_in_place: cranelift_codegen::ir::FuncRef,
     vec_set_index_in_place: cranelift_codegen::ir::FuncRef,
-    vec_index_path: cranelift_codegen::ir::FuncRef,
-    vec_set_index_path_in_place: cranelift_codegen::ir::FuncRef,
-    map_index_path: cranelift_codegen::ir::FuncRef,
-    map_set_index_path_in_place: cranelift_codegen::ir::FuncRef,
+    element_path_load: cranelift_codegen::ir::FuncRef,
+    element_path_store: cranelift_codegen::ir::FuncRef,
     array_zeros: cranelift_codegen::ir::FuncRef,
     array_full: cranelift_codegen::ir::FuncRef,
     array_from_vec: cranelift_codegen::ir::FuncRef,
@@ -9878,128 +9873,128 @@ impl<'a> FunctionCompiler<'a> {
         (line, column)
     }
 
-    /// Loads one view alternative: its static place, then every element or
-    /// entry selection the loan applied to it.
+    /// Loads one view alternative: its static place, then the chain of
+    /// element and entry selections the loan applied to it, in one runtime
+    /// walk that clones only the value reached.
     fn load_alternative(
         &mut self,
         alternative: &DirectViewAlternative,
     ) -> std::result::Result<ValueRef, String> {
-        let mut value = self.load_static_place(&alternative.place)?;
-        for selector in &alternative.elements {
-            value = self.load_element(value, selector)?;
-        }
-        Ok(value)
-    }
-
-    /// The selected element or entry of a collection value, read as an owned
-    /// copy the caller coerces to the view's type; a missing position or
-    /// key traps with the runtime's indexing diagnostic.
-    fn load_element(
-        &mut self,
-        collection: ValueRef,
-        selector: &DirectElementSelector,
-    ) -> std::result::Result<ValueRef, String> {
-        let collection = self.ensure_opaque(collection)?;
-        let selected = self.builder.use_var(selector.variable);
-        let (line, column) = self.span_operands(selector.span);
-        let (path_ptr, path_len) = self.string_constant(selector.projection.as_bytes())?;
-        let inst = match selector.kind {
-            DirectElementKind::List => self.builder.ins().call(
-                self.vec_index_path,
-                &[
-                    collection.values[0],
-                    selected,
-                    path_ptr,
-                    path_len,
-                    line,
-                    column,
-                ],
-            ),
-            DirectElementKind::Dict => {
-                // The runtime borrows the key for a lookup: the loan's own
-                // key handle is passed as is, and a scalar key is boxed
-                // into a statement temporary.
-                let key = ValueRef {
-                    values: vec![selected],
-                    ty: selector.selector_ty.clone(),
-                };
-                let key = self.ensure_opaque(key)?;
-                self.builder.ins().call(
-                    self.map_index_path,
-                    &[
-                        collection.values[0],
-                        key.values[0],
-                        path_ptr,
-                        path_len,
-                        line,
-                        column,
-                    ],
-                )
-            }
+        let value = self.load_static_place(&alternative.place)?;
+        let Some(last) = alternative.elements.last() else {
+            return Ok(value);
         };
-        Ok(self.owned_opaque_result(
-            self.builder.inst_results(inst).to_vec(),
-            selector.element_type.clone(),
-        ))
+        let element_type = last.element_type.clone();
+        let collection = self.ensure_opaque(value)?;
+        let path = self.element_path_operands(&alternative.elements)?;
+        let inst = self.builder.ins().call(
+            self.element_path_load,
+            &[
+                collection.values[0],
+                path.path_ptr,
+                path.path_len,
+                path.selectors_ptr,
+                path.count,
+                path.line,
+                path.column,
+            ],
+        );
+        Ok(self.owned_opaque_result(self.builder.inst_results(inst).to_vec(), element_type))
     }
 
     /// Stores through one view alternative: a static place directly, or the
-    /// selected element or entry of the collection in place (never a clone
-    /// written back).
+    /// value its selection chain reaches inside the collection, replaced in
+    /// place (never a clone written back).
     fn store_alternative(
         &mut self,
         alternative: &DirectViewAlternative,
         value: ValueRef,
     ) -> std::result::Result<(), String> {
-        let Some((last, prefix)) = alternative.elements.split_last() else {
+        if alternative.elements.is_empty() {
             return self.store_static_place(&alternative.place, value);
-        };
-        let mut collection = self.load_static_place(&alternative.place)?;
-        for selector in prefix {
-            collection = self.load_element(collection, selector)?;
         }
+        let collection = self.load_static_place(&alternative.place)?;
         let collection = self.ensure_opaque(collection)?;
-        let selected = self.builder.use_var(last.variable);
-        let (line, column) = self.span_operands(last.span);
-        let (path_ptr, path_len) = self.string_constant(last.projection.as_bytes())?;
+        let path = self.element_path_operands(&alternative.elements)?;
         let stored = self.ensure_opaque(value)?;
         let stored = self.transfer_owned_opaque_value(&stored);
-        let result = match last.kind {
-            DirectElementKind::List => self.builder.ins().call(
-                self.vec_set_index_path_in_place,
-                &[
-                    collection.values[0],
-                    selected,
-                    path_ptr,
-                    path_len,
-                    stored,
-                    line,
-                    column,
-                ],
-            ),
-            DirectElementKind::Dict => {
-                let key = ValueRef {
-                    values: vec![selected],
-                    ty: last.selector_ty.clone(),
-                };
-                let key = self.ensure_opaque(key)?;
-                let key = self.transfer_owned_opaque_value(&key);
-                self.builder.ins().call(
-                    self.map_set_index_path_in_place,
-                    &[
-                        collection.values[0],
-                        key,
-                        path_ptr,
-                        path_len,
-                        stored,
-                        line,
-                        column,
-                    ],
-                )
-            }
-        };
+        let result = self.builder.ins().call(
+            self.element_path_store,
+            &[
+                collection.values[0],
+                path.path_ptr,
+                path.path_len,
+                path.selectors_ptr,
+                path.count,
+                stored,
+                path.line,
+                path.column,
+            ],
+        );
         self.release_opaque_handle(self.builder.inst_results(result)[0]);
         Ok(())
+    }
+
+    /// The runtime operands of a selection chain: its path (`[i]`, `[k]`,
+    /// and projection steps), a stack buffer of the selector words (list
+    /// positions, and dictionary keys as borrowed handles, a scalar key
+    /// boxed into a statement temporary), and the innermost index
+    /// expression's position for traps.
+    fn element_path_operands(
+        &mut self,
+        elements: &[DirectElementSelector],
+    ) -> std::result::Result<DirectElementPathOperands, String> {
+        let mut path = String::new();
+        for selector in elements {
+            if !path.is_empty() {
+                path.push('.');
+            }
+            path.push_str(match selector.kind {
+                DirectElementKind::List => "[i]",
+                DirectElementKind::Dict => "[k]",
+            });
+            if !selector.projection.is_empty() {
+                path.push('.');
+                path.push_str(&selector.projection);
+            }
+        }
+        let (path_ptr, path_len) = self.string_constant(path.as_bytes())?;
+        let slot = self.builder.create_sized_stack_slot(StackSlotData::new(
+            StackSlotKind::ExplicitSlot,
+            (8 * elements.len()) as u32,
+            3,
+        ));
+        let selectors_ptr = self.builder.ins().stack_addr(types::I64, slot, 0);
+        for (index, selector) in elements.iter().enumerate() {
+            let selected = self.builder.use_var(selector.variable);
+            let word = match selector.kind {
+                DirectElementKind::List => selected,
+                DirectElementKind::Dict => {
+                    let key = ValueRef {
+                        values: vec![selected],
+                        ty: selector.selector_ty.clone(),
+                    };
+                    self.ensure_opaque(key)?.values[0]
+                }
+            };
+            self.builder
+                .ins()
+                .store(MemFlags::new(), word, selectors_ptr, (index as i32) * 8);
+        }
+        let count = self.builder.ins().iconst(types::I64, elements.len() as i64);
+        let span = elements
+            .last()
+            .map(|selector| selector.span)
+            .unwrap_or(Span::new(0, 0));
+        let (line, column) = self.span_operands(span);
+        Ok(DirectElementPathOperands {
+            path_ptr,
+            path_len,
+            selectors_ptr,
+            count,
+            line,
+            column,
+        })
     }
 
     fn load_static_place(&mut self, place: &str) -> std::result::Result<ValueRef, String> {

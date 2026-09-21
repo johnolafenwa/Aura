@@ -23265,6 +23265,61 @@ fn element_trap_message(invoke: impl FnOnce() + Send + 'static) -> String {
     element_trap(invoke).message
 }
 
+fn element_path_load(collection: usize, path: &'static str, selectors: &[i64]) -> Value {
+    let loaded = super::aura_direct_element_path_load(
+        collection as *mut OpaqueValue,
+        path.as_ptr(),
+        path.len(),
+        selectors.as_ptr(),
+        selectors.len(),
+        3,
+        9,
+    );
+    unsafe { take_value(loaded) }
+}
+
+fn element_path_store(collection: usize, path: &'static str, selectors: &[i64], value: Value) {
+    expect_unit(super::aura_direct_element_path_store(
+        collection as *mut OpaqueValue,
+        path.as_ptr(),
+        path.len(),
+        selectors.as_ptr(),
+        selectors.len(),
+        boxed_value(value),
+        3,
+        9,
+    ));
+}
+
+fn element_load_trap(collection: usize, path: &'static str, selectors: Vec<i64>) -> Diagnostic {
+    element_trap(move || {
+        let _ = super::aura_direct_element_path_load(
+            collection as *mut OpaqueValue,
+            path.as_ptr(),
+            path.len(),
+            selectors.as_ptr(),
+            selectors.len(),
+            3,
+            9,
+        );
+    })
+}
+
+fn element_store_trap(collection: usize, path: &'static str, selectors: Vec<i64>) -> Diagnostic {
+    element_trap(move || {
+        let _ = super::aura_direct_element_path_store(
+            collection as *mut OpaqueValue,
+            path.as_ptr(),
+            path.len(),
+            selectors.as_ptr(),
+            selectors.len(),
+            boxed_value(Value::Int(IntegerValue::from_i64(1))),
+            4,
+            2,
+        );
+    })
+}
+
 #[test]
 fn adr0061_direct_element_path_helpers_read_and_write_inside_elements() {
     fn profile(name: &str, visits: i64) -> Value {
@@ -23288,35 +23343,22 @@ fn adr0061_direct_element_path_helpers_read_and_write_inside_elements() {
     let users = boxed_value(Value::Vec(VecValue {
         element_type: Type::named("Profile"),
         elements: vec![profile("ada", 1), profile("linus", 2)],
-    }));
+    })) as usize;
 
-    // The whole element, a projected field through a negative position.
-    let element = super::aura_direct_vec_index_path(users, 1, "".as_ptr(), 0, 3, 9);
-    assert_eq!(field_visits(&unsafe { take_value(element) }), "2");
-    let visits = super::aura_direct_vec_index_path(users, -1, "visits".as_ptr(), 6, 3, 9);
-    assert_eq!(unsafe { take_value(visits) }.render(), "2");
+    // The whole element, then a projected field through a negative position.
+    assert_eq!(field_visits(&element_path_load(users, "[i]", &[1])), "2");
+    assert_eq!(element_path_load(users, "[i].visits", &[-1]).render(), "2");
 
     // Writes reach the field, or replace the element, in place.
-    expect_unit(super::aura_direct_vec_set_index_path_in_place(
+    element_path_store(
         users,
-        0,
-        "visits".as_ptr(),
-        6,
-        boxed_value(Value::Int(IntegerValue::from_i64(41))),
-        3,
-        9,
-    ));
-    expect_unit(super::aura_direct_vec_set_index_path_in_place(
-        users,
-        1,
-        "".as_ptr(),
-        0,
-        boxed_value(profile("grace", 5)),
-        3,
-        9,
-    ));
+        "[i].visits",
+        &[0],
+        Value::Int(IntegerValue::from_i64(41)),
+    );
+    element_path_store(users, "[i]", &[1], profile("grace", 5));
     unsafe {
-        super::with_value(users, |value| match value {
+        super::with_value(users as *mut OpaqueValue, |value| match value {
             Value::Vec(vector) => {
                 assert_eq!(field_visits(&vector.elements[0]), "41");
                 assert_eq!(field_visits(&vector.elements[1]), "5");
@@ -23325,18 +23367,8 @@ fn adr0061_direct_element_path_helpers_read_and_write_inside_elements() {
         })
     };
 
-    // Traps name the index expression.
-    let users_address = users as usize;
-    let out_of_bounds = element_trap(move || {
-        let _ = super::aura_direct_vec_index_path(
-            users_address as *mut OpaqueValue,
-            5,
-            "".as_ptr(),
-            0,
-            3,
-            9,
-        );
-    });
+    // Traps name the index expression; a write never inserts.
+    let out_of_bounds = element_load_trap(users, "[i]", vec![5]);
     assert_eq!(out_of_bounds.span, Some(Span::new(3, 9)));
     assert!(
         out_of_bounds
@@ -23345,57 +23377,40 @@ fn adr0061_direct_element_path_helpers_read_and_write_inside_elements() {
         "{}",
         out_of_bounds.message
     );
-    let write_out_of_bounds = element_trap(move || {
-        let _ = super::aura_direct_vec_set_index_path_in_place(
-            users_address as *mut OpaqueValue,
-            2,
-            "visits".as_ptr(),
-            6,
-            boxed_value(Value::Int(IntegerValue::from_i64(1))),
-            4,
-            2,
-        );
-    });
+    let write_out_of_bounds = element_store_trap(users, "[i].visits", vec![2]);
     assert_eq!(write_out_of_bounds.span, Some(Span::new(4, 2)));
     assert!(write_out_of_bounds
         .message
         .contains("list index `2` is out of bounds for length `2`"));
-    let malformed = element_trap_message(move || {
-        let _ = super::aura_direct_vec_index_path(
-            users_address as *mut OpaqueValue,
-            0,
-            "visits..name".as_ptr(),
-            12,
-            0,
-            0,
-        );
-    });
-    assert!(malformed.contains("invalid element projection path `visits..name`"));
-    let missing_field = element_trap_message(move || {
-        let _ = super::aura_direct_vec_index_path(
-            users_address as *mut OpaqueValue,
-            0,
-            "age".as_ptr(),
-            3,
-            0,
-            0,
-        );
-    });
-    assert!(missing_field.contains("class `Profile` has no field `age` in path `age`"));
-    let write_missing_field = element_trap_message(move || {
-        let _ = super::aura_direct_vec_set_index_path_in_place(
-            users_address as *mut OpaqueValue,
-            0,
-            "age.inner".as_ptr(),
-            9,
-            boxed_value(Value::Int(IntegerValue::from_i64(1))),
-            0,
-            0,
-        );
-    });
-    assert!(write_missing_field.contains("has no field `age`"));
+    for (path, selectors, expected) in [
+        ("", vec![], "direct runtime received an empty element path"),
+        ("[i]..name", vec![0], "invalid element path `[i]..name`"),
+        (
+            "[i].age",
+            vec![0],
+            "class `Profile` has no field `age` in path `[i].age`",
+        ),
+        (
+            "[i].[i]",
+            vec![0],
+            "names more selections than were supplied",
+        ),
+        (
+            "[i]",
+            vec![0, 1],
+            "names fewer selections than were supplied",
+        ),
+        ("[i].visits.[i]", vec![0, 0], "indexes non-list `integer`"),
+        ("[i].[k]", vec![0, 0], "keys non-dict `Profile`"),
+        ("[k]", vec![0], "keys non-dict `list`"),
+    ] {
+        let message = element_load_trap(users, path, selectors.clone()).message;
+        assert!(message.contains(expected), "{path}: {message}");
+        let message = element_store_trap(users, path, selectors).message;
+        assert!(message.contains(expected), "{path}: {message}");
+    }
 
-    // Tuple positions, enum payloads, and non-projectable elements.
+    // Tuple positions and non-projectable elements.
     let pairs = boxed_value(Value::Vec(VecValue {
         element_type: Type::Tuple(vec![Type::named("int64"), Type::named("str")]),
         elements: vec![Value::Tuple(TupleValue {
@@ -23405,168 +23420,84 @@ fn adr0061_direct_element_path_helpers_read_and_write_inside_elements() {
                 Value::String("one".to_string()),
             ],
         })],
-    }));
-    let label = super::aura_direct_vec_index_path(pairs, 0, "1".as_ptr(), 1, 0, 0);
-    assert_eq!(unsafe { take_value(label) }.render(), "one");
-    let pairs_address = pairs as usize;
-    let bad_position = element_trap_message(move || {
-        let _ = super::aura_direct_vec_index_path(
-            pairs_address as *mut OpaqueValue,
-            0,
-            "left".as_ptr(),
-            4,
-            0,
-            0,
-        );
-    });
-    assert!(bad_position.contains("tuple projection `left` is not a fixed position"));
-    let out_of_tuple = element_trap_message(move || {
-        let _ = super::aura_direct_vec_index_path(
-            pairs_address as *mut OpaqueValue,
-            0,
-            "7".as_ptr(),
-            1,
-            0,
-            0,
-        );
-    });
-    assert!(out_of_tuple.contains("tuple of length 2 has no element at index 7"));
+    })) as usize;
+    assert_eq!(element_path_load(pairs, "[i].1", &[0]).render(), "one");
+    element_path_store(pairs, "[i].0", &[0], Value::Int(IntegerValue::from_i64(41)));
+    assert_eq!(element_path_load(pairs, "[i].0", &[0]).render(), "41");
+    for (path, expected) in [
+        (
+            "[i].left",
+            "tuple projection `left` is not a fixed position",
+        ),
+        ("[i].7", "tuple of length 2 has no element at index 7"),
+    ] {
+        assert!(element_load_trap(pairs, path, vec![0])
+            .message
+            .contains(expected));
+        assert!(element_store_trap(pairs, path, vec![0])
+            .message
+            .contains(expected));
+    }
     let numbers = boxed_value(Value::Vec(VecValue {
         element_type: Type::named("int64"),
         elements: vec![Value::Int(IntegerValue::from_i64(3))],
-    }));
-    let numbers_address = numbers as usize;
-    let not_projectable = element_trap_message(move || {
-        let _ = super::aura_direct_vec_index_path(
-            numbers_address as *mut OpaqueValue,
-            0,
-            "visits".as_ptr(),
-            6,
-            0,
-            0,
-        );
-    });
-    assert!(not_projectable.contains("cannot access field `visits` on non-instance"));
+    })) as usize;
+    assert!(element_load_trap(numbers, "[i].visits", vec![0])
+        .message
+        .contains("cannot access field `[i].visits` on non-instance"));
+    assert!(element_store_trap(numbers, "[i].visits", vec![0])
+        .message
+        .contains("cannot access field `[i].visits` on non-instance"));
 
-    // Dictionary entries: borrowed keys for reads, owned keys for writes.
-    let people = boxed_value(Value::Map(MapValue {
+    // Dictionary entries (borrowed keys), nested lists inside entries, and
+    // a nested element written in place through two selections.
+    let table = boxed_value(Value::Map(MapValue {
         key_type: Type::named("str"),
-        value_type: Type::named("Profile"),
-        entries: vec![(Value::String("ada".to_string()), profile("ada", 7))],
-    }));
-    let key = string_value("ada");
-    let visits = super::aura_direct_map_index_path(people, key, "visits".as_ptr(), 6, 5, 6);
-    assert_eq!(unsafe { take_value(visits) }.render(), "7");
-    let whole = super::aura_direct_map_index_path(people, key, "".as_ptr(), 0, 5, 6);
-    assert_eq!(field_visits(&unsafe { take_value(whole) }), "7");
-    expect_unit(super::aura_direct_map_set_index_path_in_place(
-        people,
-        string_value("ada"),
-        "visits".as_ptr(),
-        6,
-        boxed_value(Value::Int(IntegerValue::from_i64(8))),
-        5,
-        6,
-    ));
-    expect_unit(super::aura_direct_map_set_index_path_in_place(
-        people,
-        string_value("ada"),
-        "".as_ptr(),
-        0,
-        boxed_value(profile("ada", 9)),
-        5,
-        6,
-    ));
-    unsafe {
-        super::with_value(people, |value| match value {
-            Value::Map(map) => assert_eq!(field_visits(&map.entries[0].1), "9"),
-            other => panic!("expected a dict, found {other:?}"),
-        })
-    };
-    let people_address = people as usize;
-    let missing_key = element_trap(move || {
-        let _ = super::aura_direct_map_index_path(
-            people_address as *mut OpaqueValue,
-            string_value("linus"),
-            "".as_ptr(),
-            0,
-            5,
-            6,
-        );
-    });
+        value_type: Type::Named("list".to_string(), vec![Type::named("int64")]),
+        entries: vec![(
+            Value::String("a".to_string()),
+            Value::Vec(VecValue {
+                element_type: Type::named("int64"),
+                elements: vec![
+                    Value::Int(IntegerValue::from_i64(5)),
+                    Value::Int(IntegerValue::from_i64(6)),
+                ],
+            }),
+        )],
+    })) as usize;
+    let key = string_value("a") as usize;
+    assert_eq!(
+        element_path_load(table, "[k].[i]", &[key as i64, 1]).render(),
+        "6"
+    );
+    element_path_store(
+        table,
+        "[k].[i]",
+        &[key as i64, 0],
+        Value::Int(IntegerValue::from_i64(15)),
+    );
+    assert_eq!(
+        element_path_load(table, "[k]", &[key as i64]).render(),
+        "[15, 6]"
+    );
+    let missing = string_value("missing") as usize;
+    let missing_key = element_load_trap(table, "[k]", vec![missing as i64]);
     assert_eq!(missing_key.code, "AU4003");
-    assert_eq!(missing_key.span, Some(Span::new(5, 6)));
+    assert_eq!(missing_key.span, Some(Span::new(3, 9)));
     assert!(missing_key
         .message
-        .contains("dict key `linus` was not present"));
-    let write_missing_key = element_trap(move || {
-        let _ = super::aura_direct_map_set_index_path_in_place(
-            people_address as *mut OpaqueValue,
-            string_value("linus"),
-            "visits".as_ptr(),
-            6,
-            boxed_value(Value::Int(IntegerValue::from_i64(1))),
-            0,
-            0,
-        );
-    });
+        .contains("dict key `missing` was not present"));
+    let write_missing_key = element_store_trap(table, "[k].[i]", vec![missing as i64, 0]);
     assert_eq!(write_missing_key.code, "AU4003");
-    assert_eq!(write_missing_key.span, None);
     assert!(write_missing_key
         .message
-        .contains("dict key `linus` was not present"));
-    let write_bad_path = element_trap_message(move || {
-        let _ = super::aura_direct_map_set_index_path_in_place(
-            people_address as *mut OpaqueValue,
-            string_value("ada"),
-            "age.inner".as_ptr(),
-            9,
-            boxed_value(Value::Int(IntegerValue::from_i64(1))),
-            0,
-            0,
-        );
-    });
-    assert!(write_bad_path.contains("has no field `age`"));
-    let read_bad_path = element_trap_message(move || {
-        let _ = super::aura_direct_map_index_path(
-            people_address as *mut OpaqueValue,
-            string_value("ada"),
-            ".".as_ptr(),
-            1,
-            0,
-            0,
-        );
-    });
-    assert!(read_bad_path.contains("invalid element projection path `.`"));
-    let write_malformed = element_trap_message(move || {
-        let _ = super::aura_direct_vec_set_index_path_in_place(
-            users_address as *mut OpaqueValue,
-            0,
-            ".".as_ptr(),
-            1,
-            boxed_value(Value::Int(IntegerValue::from_i64(1))),
-            0,
-            0,
-        );
-    });
-    assert!(write_malformed.contains("invalid element projection path `.`"));
-    let write_map_malformed = element_trap_message(move || {
-        let _ = super::aura_direct_map_set_index_path_in_place(
-            people_address as *mut OpaqueValue,
-            string_value("ada"),
-            ".".as_ptr(),
-            1,
-            boxed_value(Value::Int(IntegerValue::from_i64(1))),
-            0,
-            0,
-        );
-    });
-    assert!(write_map_malformed.contains("invalid element projection path `.`"));
+        .contains("dict key `missing` was not present"));
     unsafe {
-        release_value(users);
-        release_value(pairs);
-        release_value(numbers);
-        release_value(people);
-        release_value(key);
+        release_value(users as *mut OpaqueValue);
+        release_value(pairs as *mut OpaqueValue);
+        release_value(numbers as *mut OpaqueValue);
+        release_value(table as *mut OpaqueValue);
+        release_value(key as *mut OpaqueValue);
+        release_value(missing as *mut OpaqueValue);
     }
 }

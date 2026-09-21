@@ -2316,7 +2316,22 @@ impl<'a> MirLoanValidationContext<'a> {
         place: &str,
         projection: &str,
     ) -> std::result::Result<(), String> {
-        let Some(collection) = self.place_type(function, place)? else {
+        let collection = self.place_type(function, place)?;
+        self.validate_element_loan_type_of(function, loan, collection, place, projection)
+    }
+
+    /// `validate_element_loan_type` for a collection whose type is already
+    /// known: an element reborrow selects inside its parent loan's value,
+    /// not inside the parent's own source collection.
+    fn validate_element_loan_type_of(
+        &self,
+        function: &MirFunction,
+        loan: &str,
+        collection: Option<Type>,
+        place: &str,
+        projection: &str,
+    ) -> std::result::Result<(), String> {
+        let Some(collection) = collection else {
             return Ok(());
         };
         let element = match &collection {
@@ -7666,8 +7681,14 @@ fn validate_loan_instruction(
             let expanded_path_bytes = sources.iter().map(String::len).sum::<usize>();
             budget.reserve(function, loan, expanded_path_bytes)?;
             validate_active_loan_path_budget(function, loan, state, expanded_path_bytes)?;
+            context.validate_element_loan_type_of(
+                function,
+                loan,
+                context.root_type(function, parent),
+                parent,
+                projection,
+            )?;
             for source in &sources {
-                context.validate_element_loan_type(function, loan, source, projection)?;
                 validate_projected_place_access(function, source, context, state, None)?;
             }
             validate_new_loan_overlap(

@@ -15789,13 +15789,23 @@ def main():
     print(counts)
     print(flags)
 "#,
-        // Element loans through a loop binding reborrow the iteration view.
+        // Element loans through a loop binding, and nested element views
+        // through an element or entry view (a chain of selections).
         r#"
 def main():
     mut rows = [[1, 2], [3, 4]]
     for row in rows:
         view cell = row[1]
         print(cell)
+    view mut row = rows[0]
+    view mut cell = row[1]
+    cell = 9
+    mut table: dict[str, list[int64]] = {"a": [5, 6]}
+    view mut entry = table["a"]
+    view mut slot = entry[0]
+    slot += 10
+    print(rows)
+    print(table)
 "#,
     ];
     for source in sources {
