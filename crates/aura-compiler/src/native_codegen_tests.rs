@@ -15252,3 +15252,143 @@ fn direct_union_receiver_switch_refuses_a_member_without_the_method() {
         "{error}"
     );
 }
+
+fn callable_signature(params: Vec<(&str, Type)>, return_type: Type) -> Type {
+    Type::Function {
+        params: params
+            .into_iter()
+            .map(|(name, ty)| crate::sema::FunctionParamContract {
+                keyword_only: false,
+                name: name.to_string(),
+                ty,
+                passing: crate::ast::ReceiverKind::Value,
+                has_default: false,
+            })
+            .collect(),
+        return_type: Box::new(return_type),
+    }
+}
+
+#[test]
+fn native_codegen_retain_and_release_helpers_cover_every_callable_bearing_shape() {
+    let source = "def main() -> int32:\n    return 0\n";
+    let mir = lower_source_to_mir(source).expect("release helper source should lower");
+    let mut codegen = NativeCodegen::new(&mir, "/tmp/callable_release_helpers.au", source)
+        .expect("codegen should initialize");
+    let mut ctx = Context::new();
+    ctx.func.signature = cranelift_codegen::ir::Signature::new(codegen.call_conv);
+    let mut builder_ctx = FunctionBuilderContext::new();
+    let mut builder = cranelift_frontend::FunctionBuilder::new(&mut ctx.func, &mut builder_ctx);
+    let block = builder.create_block();
+    builder.switch_to_block(block);
+    builder.seal_block(block);
+
+    let word = builder.ins().iconst(types::I64, 0);
+    let callable_ty = DirectType::Callable(super::DirectCallableType::new(callable_signature(
+        vec![],
+        Type::named("int64"),
+    )));
+    let text = DirectType::Opaque(Type::named("str"));
+    let pair = DirectType::PlainClass(PlainClassType {
+        class_name: "Pair".to_string(),
+        fields: vec![
+            PlainClassField {
+                name: "text".to_string(),
+                ty: text.clone(),
+            },
+            PlainClassField {
+                name: "count".to_string(),
+                ty: DirectType::Scalar(ScalarKind::Int64),
+            },
+        ],
+    });
+    let optional_callable = DirectType::Union(super::DirectUnionType::new(
+        crate::sema::optional_type(callable_signature(vec![], Type::named("int64"))),
+        vec![callable_ty.clone(), DirectType::Scalar(ScalarKind::Unit)],
+    ));
+    let optional_text = DirectType::Union(super::DirectUnionType::new(
+        crate::sema::optional_type(Type::named("str")),
+        vec![text.clone(), DirectType::Scalar(ScalarKind::Unit)],
+    ));
+    let plain_optional = DirectType::Union(super::DirectUnionType::new(
+        crate::sema::optional_type(Type::named("int64")),
+        vec![
+            DirectType::Scalar(ScalarKind::Int64),
+            DirectType::Scalar(ScalarKind::Unit),
+        ],
+    ));
+
+    for (ty, count) in [
+        (DirectType::Scalar(ScalarKind::Int64), 1),
+        (text.clone(), 1),
+        (pair.clone(), 2),
+        (optional_text.clone(), 2),
+        (optional_callable.clone(), 5),
+        (plain_optional.clone(), 2),
+        (callable_ty.clone(), 4),
+    ] {
+        let values = vec![word; count];
+        super::callables::retain_direct_values(&mut codegen, &mut builder, &values, &ty)
+            .unwrap_or_else(|error| {
+                panic!(
+                    "retain of {} should compile: {error}",
+                    render_direct_type(&ty)
+                )
+            });
+        release_direct_values(&mut codegen, &mut builder, &values, &ty).unwrap_or_else(|error| {
+            panic!(
+                "release of {} should compile: {error}",
+                render_direct_type(&ty)
+            )
+        });
+    }
+
+    let retain_error =
+        super::callables::retain_direct_values(&mut codegen, &mut builder, &[], &text)
+            .expect_err("an opaque retain needs its handle");
+    assert!(
+        retain_error.contains("retain expected an opaque `str` value"),
+        "{retain_error}"
+    );
+    let retain_error =
+        super::callables::retain_direct_values(&mut codegen, &mut builder, &[word], &pair)
+            .expect_err("a plain class retain needs every field word");
+    assert!(
+        retain_error.contains("retain expected `2` values for `Pair`"),
+        "{retain_error}"
+    );
+    let retain_error =
+        super::callables::retain_direct_values(&mut codegen, &mut builder, &[word], &optional_text)
+            .expect_err("a union retain needs its payload word");
+    assert!(
+        retain_error.contains("retain expected union words"),
+        "{retain_error}"
+    );
+    let adapter_error = super::callables::call_callable_unary_adapter(
+        &mut codegen,
+        &mut builder,
+        &[word, word],
+        super::callables::DESCRIPTOR_DROP,
+    )
+    .expect_err("a callable adapter call needs four words");
+    assert!(
+        adapter_error.contains("expected 4 callable words, found 2"),
+        "{adapter_error}"
+    );
+    let box_error =
+        super::callables::call_callable_box_adapter(&mut codegen, &mut builder, &[word])
+            .expect_err("a callable box call needs four words");
+    assert!(
+        box_error.contains("expected 4 callable words, found 1"),
+        "{box_error}"
+    );
+    let parts_error = super::callables::contract_parts(&Type::named("int64"))
+        .expect_err("an int64 has no callable contract");
+    assert!(
+        parts_error.contains("expected a callable contract, found `int64`"),
+        "{parts_error}"
+    );
+
+    builder.ins().return_(&[]);
+    builder.finalize();
+}

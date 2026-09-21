@@ -1,0 +1,22 @@
+def add_to(total: mut int64, by: int64) -> int64:
+    total = total + by
+    return total
+
+def scale(ratio: mut float64, by: float64) -> float64:
+    ratio = ratio * by
+    return ratio
+
+def main():
+    mut total: int64 = 0
+    a: int64 = 1
+    b: int64 = 2
+    c: int64 = 3
+    d: int64 = 4
+    mut adder: def(int64) -> int64 = lambda [mut total, a, b, c, d] v: add_to(total, v + a + b + c + d)
+    print(adder(0))
+    print(adder(10))
+    print(total)
+    mut ratio: float64 = 1.5
+    mut scaler: def(float64) -> float64 = lambda [mut ratio] by: scale(ratio, by)
+    print(scaler(2.0))
+    print(ratio)

@@ -708,6 +708,8 @@ struct NativeCodegen<'a> {
     union_payload_copy: FuncId,
     callable_env_alloc: FuncId,
     callable_env_free: FuncId,
+    callable_env_retain: FuncId,
+    callable_env_release: FuncId,
     none_test: FuncId,
     value_is_union: FuncId,
     union_active_payload: FuncId,
@@ -1236,6 +1238,8 @@ impl<'a> NativeCodegen<'a> {
             union_payload_copy => ("aura_direct_union_payload_copy", [types::I64, types::I64], Some(types::I64)),
             callable_env_alloc => ("aura_direct_callable_env_alloc", [types::I64], Some(types::I64)),
             callable_env_free => ("aura_direct_callable_env_free", [types::I64], None),
+            callable_env_retain => ("aura_direct_callable_env_retain", [types::I64], None),
+            callable_env_release => ("aura_direct_callable_env_release", [types::I64], Some(types::I64)),
             none_test => ("aura_direct_none_test", [types::I64], Some(types::I64)),
             value_is_union => ("aura_direct_value_is_union", [types::I64], Some(types::I64)),
             union_active_payload => ("aura_direct_union_active_payload", [types::I64, types::I64], Some(types::I64)),
@@ -1728,6 +1732,8 @@ impl<'a> NativeCodegen<'a> {
             union_payload_copy,
             callable_env_alloc,
             callable_env_free,
+            callable_env_retain,
+            callable_env_release,
             none_test,
             value_is_union,
             union_active_payload,
@@ -16801,9 +16807,6 @@ impl<'a> FunctionCompiler<'a> {
         let function_value = self.ensure_opaque(function_value)?;
         let function_params =
             match infer_operand_type(function, &self.variable_types, &self.classes) {
-                Some(DirectType::Opaque(Type::Function { params, .. })) => params,
-                Some(DirectType::Opaque(Type::Closure { params, .. })) => *params,
-                Some(DirectType::Opaque(Type::Callable(callable))) => callable.params,
                 Some(DirectType::Callable(callable)) => {
                     callables::contract_parts(&callable.signature)?.0
                 }
@@ -18303,9 +18306,6 @@ fn infer_rvalue_type(
                             callables::contract_parts(&callable.signature).ok()?;
                         direct_type(crate::sema::returned_view_pointee(&return_type), classes)
                     }
-                    DirectType::Opaque(
-                        Type::Function { return_type, .. } | Type::Closure { return_type, .. },
-                    ) => direct_type(&return_type, classes),
                     _ => None,
                 }
             }
@@ -18811,12 +18811,6 @@ fn infer_rvalue_type(
                             vec![return_type],
                         )))
                     }
-                    DirectType::Opaque(
-                        Type::Function { return_type, .. } | Type::Closure { return_type, .. },
-                    ) => Some(DirectType::Opaque(Type::Named(
-                        "Task".to_string(),
-                        vec![*return_type],
-                    ))),
                     _ => None,
                 })
             } else {

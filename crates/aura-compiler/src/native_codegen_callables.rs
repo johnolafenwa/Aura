@@ -555,15 +555,43 @@ impl NativeCodegen<'_> {
         builder.seal_block(entry);
         let callable_ptr = builder.block_params(entry)[0];
         let env_base = environment_base(&mut builder, callable_ptr, shape.inline());
-        let captures = load_captures(&mut builder, env_base, &shape.capture_types);
-        for (values, ty) in captures.iter().zip(&shape.capture_types) {
-            release_direct_values(self, &mut builder, values, ty)?;
-        }
         if !shape.inline() {
+            // Copies share the block; only the last reference releases the
+            // captures and frees it.
+            let env_release = self
+                .object
+                .declare_func_in_func(self.callable_env_release, builder.func);
+            let call = builder.ins().call(env_release, &[env_base]);
+            let last = builder.inst_results(call)[0];
+            let release_block = builder.create_block();
+            let done_block = builder.create_block();
+            builder
+                .ins()
+                .brif(last, release_block, &[], done_block, &[]);
+            builder.switch_to_block(release_block);
+            builder.seal_block(release_block);
+            let captures = load_captures(&mut builder, env_base, &shape.capture_types);
+            for (values, ty) in captures.iter().zip(&shape.capture_types) {
+                release_direct_values(self, &mut builder, values, ty)?;
+            }
             let env_free = self
                 .object
                 .declare_func_in_func(self.callable_env_free, builder.func);
             builder.ins().call(env_free, &[env_base]);
+            builder.ins().jump(done_block, &[]);
+            builder.switch_to_block(done_block);
+            builder.seal_block(done_block);
+            builder.ins().return_(&[]);
+            builder.finalize();
+            try_or_string_error!(
+                self.object.define_function(shape.drop, &mut ctx),
+                "failed to define callable drop adapter: {}"
+            );
+            return Ok(());
+        }
+        let captures = load_captures(&mut builder, env_base, &shape.capture_types);
+        for (values, ty) in captures.iter().zip(&shape.capture_types) {
+            release_direct_values(self, &mut builder, values, ty)?;
         }
         builder.ins().return_(&[]);
         builder.finalize();
@@ -586,9 +614,18 @@ impl NativeCodegen<'_> {
         builder.seal_block(entry);
         let callable_ptr = builder.block_params(entry)[0];
         let env_base = environment_base(&mut builder, callable_ptr, shape.inline());
-        let captures = load_captures(&mut builder, env_base, &shape.capture_types);
-        for (values, ty) in captures.iter().zip(&shape.capture_types) {
-            retain_direct_values(self, &mut builder, values, ty)?;
+        if !shape.inline() {
+            // A copy shares the block, so it takes a reference instead of
+            // retaining each capture.
+            let env_retain = self
+                .object
+                .declare_func_in_func(self.callable_env_retain, builder.func);
+            builder.ins().call(env_retain, &[env_base]);
+        } else {
+            let captures = load_captures(&mut builder, env_base, &shape.capture_types);
+            for (values, ty) in captures.iter().zip(&shape.capture_types) {
+                retain_direct_values(self, &mut builder, values, ty)?;
+            }
         }
         builder.ins().return_(&[]);
         builder.finalize();

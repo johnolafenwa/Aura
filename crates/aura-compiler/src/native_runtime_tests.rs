@@ -23126,3 +23126,118 @@ fn direct_union_tag_and_payload_copy_serve_inline_union_boundaries() {
         "direct union payload copy member mismatch"
     );
 }
+
+#[test]
+fn direct_callable_environment_blocks_allocate_count_and_free() {
+    let before = crate::runtime_value::representation_stats::snapshot();
+    let env = super::aura_direct_callable_env_alloc(5);
+    assert!(!env.is_null());
+    // SAFETY: the block holds five zeroed words after its length word.
+    unsafe {
+        for index in 0..5 {
+            assert_eq!(*env.add(index), 0);
+        }
+        *env.add(4) = 42;
+        assert_eq!(*env.sub(2), 5, "the length word precedes the environment");
+        assert_eq!(*env.sub(1), 1, "a fresh block has one reference");
+    }
+    super::aura_direct_callable_env_retain(env);
+    assert_eq!(
+        super::aura_direct_callable_env_release(env),
+        0,
+        "a shared block survives"
+    );
+    assert_eq!(
+        super::aura_direct_callable_env_release(env),
+        1,
+        "the last reference frees"
+    );
+    let env_addr = env as usize;
+    assert_eq!(
+        capture_direct_boundary_error_message(move || {
+            super::aura_direct_callable_env_release(env_addr as *mut i64);
+        }),
+        "attempted to release an already-freed callable environment"
+    );
+    super::aura_direct_callable_env_retain(std::ptr::null_mut());
+    assert_eq!(
+        super::aura_direct_callable_env_release(std::ptr::null_mut()),
+        0
+    );
+    let delta = crate::runtime_value::representation_stats::snapshot().since(before);
+    assert_eq!(
+        delta.callable_overflow_allocations, 1,
+        "each environment block counts as one callable overflow allocation"
+    );
+    super::aura_direct_callable_env_free(env);
+    super::aura_direct_callable_env_free(std::ptr::null_mut());
+    assert_eq!(
+        capture_direct_boundary_error_message(|| {
+            super::aura_direct_callable_env_alloc(0);
+        }),
+        "invalid callable environment size"
+    );
+    assert_eq!(
+        capture_direct_boundary_error_message(|| {
+            super::aura_direct_callable_env_alloc(-1);
+        }),
+        "invalid callable environment size"
+    );
+}
+
+#[test]
+fn direct_callable_invoke_claims_indirect_mutable_sinks_into_parameter_order() {
+    // Without a pending handoff the claim is a no-op.
+    super::aura_direct_claim_indirect_mutable_sinks(2);
+    super::with_direct_task_runtime_state(|state| {
+        assert!(state.pending_mutable_sinks.is_none());
+    });
+
+    let public = [11i64, 0, 13];
+    let capture_indices = [1i64];
+    let capture_sinks = [7i64];
+    super::aura_direct_set_next_indirect_mutable_sinks(
+        public.as_ptr(),
+        public.len() as i64,
+        capture_indices.as_ptr(),
+        capture_sinks.as_ptr(),
+        capture_indices.len() as i64,
+    );
+    super::aura_direct_claim_indirect_mutable_sinks(2);
+    let claimed = super::with_direct_task_runtime_state(|state| state.pending_mutable_sinks.take());
+    match claimed {
+        Some(super::DirectPendingMutableSinks::Direct(combined)) => {
+            assert_eq!(
+                combined,
+                vec![0, 7, 11, 0, 13],
+                "capture sinks land at their capture index, public sinks follow the captures"
+            );
+        }
+        _ => panic!("the claim must leave a direct sink list"),
+    }
+
+    // The boundary helper runs its closure on its own thread, so the
+    // out-of-range handoff is installed there too.
+    assert_eq!(
+        capture_direct_boundary_error_message(move || {
+            let public = [11i64, 0, 13];
+            let capture_indices = [3i64];
+            let capture_sinks = [7i64];
+            super::aura_direct_set_next_indirect_mutable_sinks(
+                public.as_ptr(),
+                public.len() as i64,
+                capture_indices.as_ptr(),
+                capture_sinks.as_ptr(),
+                1,
+            );
+            super::aura_direct_claim_indirect_mutable_sinks(2);
+        }),
+        "direct closure mutable sink index 3 is out of bounds for 2 captures"
+    );
+    assert_eq!(
+        capture_direct_boundary_error_message(|| {
+            super::aura_direct_claim_indirect_mutable_sinks(-1);
+        }),
+        "invalid direct capture count"
+    );
+}

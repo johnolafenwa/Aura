@@ -1,0 +1,40 @@
+class Point:
+    x: int64
+    y: int64
+
+type Tool = Callable[def() -> int64]
+
+def main():
+    ratio: float64 = 2.5
+    flag: bool = true
+    origin: Point = Point(x=3, y=4)
+    maybe: int64 | None = 7
+    label: str | None = "tag"
+    inner: def(int64) -> int64 = lambda v: v * 2
+    scale: def(float64) -> float64 = lambda v: v * ratio
+    choose: def(int64) -> int64 = lambda v: v if flag else 0 - v
+    shift: def(int64) -> int64 = lambda v: v + origin.x + origin.y
+    fallback: def(int64) -> int64 = lambda v: match maybe:
+        case int64 as known:
+            v + known
+        case None:
+            v
+    describe: def(str) -> str = lambda s: match label:
+        case str as text:
+            s + ":" + text
+        case None:
+            s.clone()
+    outer: def(int64) -> int64 = lambda v: inner(v) + 1
+    print(scale(4.0))
+    print(choose(5))
+    print(shift(10))
+    print(fallback(1))
+    print(describe("a"))
+    print(outer(20))
+    tool: Tool = Tool(lambda: shift(0))
+    stored: Tool | None = tool
+    match stored:
+        case Tool as callback:
+            print(callback())
+        case None:
+            print("none")
