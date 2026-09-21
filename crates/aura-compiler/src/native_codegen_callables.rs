@@ -17,6 +17,11 @@ pub(super) struct CallableShapeKey {
     pub(super) function: String,
     pub(super) captures: usize,
     pub(super) consuming: bool,
+    /// The public contract recorded at the construction site, rendered;
+    /// the shape's `invoke` takes this contract's direct signature and
+    /// marshals to the lowered function's own parameter types (a
+    /// specialized reference to a generic function differs from it).
+    pub(super) contract: String,
 }
 
 /// The module objects that implement one shape.
@@ -33,6 +38,10 @@ pub(super) struct CallableShape {
     pub(super) capture_types: Vec<DirectType>,
     /// Total environment words; inline when at most three.
     pub(super) env_words: usize,
+    /// The contract's direct parameter types, mutability, and return type.
+    pub(super) contract_param_types: Vec<DirectType>,
+    pub(super) contract_mutable_params: Vec<bool>,
+    pub(super) contract_return_ty: DirectType,
 }
 
 impl CallableShape {
@@ -65,42 +74,6 @@ pub(super) fn callable_box_signature(call_conv: CallConv) -> Signature {
     signature
 }
 
-/// `invoke(callable_ptr, supplied_mask, public args...) -> (return words,
-/// public writeback words...)`: the shape's public direct signature.
-pub(super) fn callable_invoke_signature(
-    function: &MirFunction,
-    captures: usize,
-    param_types: &[DirectType],
-    return_ty: &DirectType,
-    call_conv: CallConv,
-) -> std::result::Result<Signature, String> {
-    if param_types.len() != function.params.len() || captures > function.params.len() {
-        return Err(format!(
-            "direct backend callable shape for `{}` disagrees with its parameters",
-            function.name
-        ));
-    }
-    let mut signature = Signature::new(call_conv);
-    signature.params.push(AbiParam::new(types::I64));
-    signature.params.push(AbiParam::new(types::I64));
-    for ty in &param_types[captures..] {
-        for abi in ty.abi_types() {
-            signature.params.push(AbiParam::new(abi));
-        }
-    }
-    for abi in return_ty.abi_types() {
-        signature.returns.push(AbiParam::new(abi));
-    }
-    for (param, ty) in function.params.iter().zip(param_types).skip(captures) {
-        if param.passing == MirReceiverKind::BorrowMut {
-            for abi in ty.abi_types() {
-                signature.returns.push(AbiParam::new(abi));
-            }
-        }
-    }
-    Ok(signature)
-}
-
 /// Every shape a module constructs: `Closure` rvalues and `Function`
 /// operands, found by walking the functions' serialized form so no
 /// instruction or operand variant is missed.
@@ -129,15 +102,16 @@ fn collect_shapes_in_json(
                     closure.get("captures").and_then(|v| v.as_array()),
                     closure.get("signature"),
                 ) {
-                    let key = CallableShapeKey {
-                        function: function.to_string(),
-                        captures: captures.len(),
-                        consuming: closure
-                            .get("consuming")
-                            .and_then(|v| v.as_bool())
-                            .unwrap_or(false),
-                    };
                     if let Ok(signature) = serde_json::from_value::<Type>(signature.clone()) {
+                        let key = CallableShapeKey {
+                            function: function.to_string(),
+                            captures: captures.len(),
+                            consuming: closure
+                                .get("consuming")
+                                .and_then(|v| v.as_bool())
+                                .unwrap_or(false),
+                            contract: signature.to_string(),
+                        };
                         if seen.insert(key.clone()) {
                             shapes.push((key, signature));
                         }
@@ -149,12 +123,13 @@ fn collect_shapes_in_json(
                     operand.get("name").and_then(|v| v.as_str()),
                     operand.get("signature"),
                 ) {
-                    let key = CallableShapeKey {
-                        function: name.to_string(),
-                        captures: 0,
-                        consuming: false,
-                    };
                     if let Ok(signature) = serde_json::from_value::<Type>(signature.clone()) {
+                        let key = CallableShapeKey {
+                            function: name.to_string(),
+                            captures: 0,
+                            consuming: false,
+                            contract: signature.to_string(),
+                        };
                         if seen.insert(key.clone()) {
                             shapes.push((key, signature));
                         }
@@ -181,6 +156,7 @@ pub(super) fn declare_callable_shapes(
     object: &mut ObjectModule,
     function_param_types: &HashMap<String, Vec<DirectType>>,
     function_return_types: &HashMap<String, DirectType>,
+    classes: &HashMap<String, MirClass>,
     call_conv: CallConv,
 ) -> std::result::Result<HashMap<CallableShapeKey, CallableShape>, String> {
     let mut shapes = HashMap::new();
@@ -200,16 +176,13 @@ pub(super) fn declare_callable_shapes(
             .get(&key.function)
             .cloned()
             .unwrap_or_default();
-        let return_ty = function_return_types
-            .get(&key.function)
-            .cloned()
-            .ok_or_else(|| {
-                format!(
-                    "direct backend does not know return type for `{}`",
-                    key.function
-                )
-            })?;
-        if key.captures > param_types.len() {
+        if !function_return_types.contains_key(&key.function) {
+            return Err(format!(
+                "direct backend does not know return type for `{}`",
+                key.function
+            ));
+        }
+        if function.params.len() != param_types.len() || key.captures > param_types.len() {
             return Err(format!(
                 "direct backend callable shape for `{}` captures {} values but the function takes {}",
                 key.function,
@@ -219,13 +192,28 @@ pub(super) fn declare_callable_shapes(
         }
         let capture_types = param_types[..key.captures].to_vec();
         let env_words = capture_types.iter().map(DirectType::value_count).sum();
+        let (contract_param_types, contract_mutable_params, contract_return_ty) =
+            contract_direct_parts(&signature, classes)?;
+        if contract_param_types.len() != param_types.len() - key.captures {
+            return Err(format!(
+                "direct backend callable shape for `{}` declares {} public parameters but its contract `{}` has {}",
+                key.function,
+                param_types.len() - key.captures,
+                key.contract,
+                contract_param_types.len()
+            ));
+        }
         let stem = format!("aura_callable_{index}");
         let descriptor = try_or_string_error!(
             object.declare_data(&format!("{stem}_descriptor"), Linkage::Local, false, false),
             "failed to declare callable descriptor: {}"
         );
-        let invoke_signature =
-            callable_invoke_signature(function, key.captures, &param_types, &return_ty, call_conv)?;
+        let invoke_signature = contract_invoke_signature(
+            &contract_param_types,
+            &contract_mutable_params,
+            &contract_return_ty,
+            call_conv,
+        );
         let invoke = try_or_string_error!(
             object.declare_function(&format!("{stem}_invoke"), Linkage::Local, &invoke_signature),
             "failed to declare callable invoke adapter: {}"
@@ -265,10 +253,36 @@ pub(super) fn declare_callable_shapes(
                 signature,
                 capture_types,
                 env_words,
+                contract_param_types,
+                contract_mutable_params,
+                contract_return_ty,
             },
         );
     }
     Ok(shapes)
+}
+
+/// Direct values of `from` converted to `to` through the runtime's boxed
+/// form, as a thunk converts a parameter; equal types pass through.
+fn marshal_direct_values(
+    codegen: &mut NativeCodegen<'_>,
+    builder: &mut FunctionBuilder<'_>,
+    values: &[Value],
+    from: &DirectType,
+    to: &DirectType,
+) -> std::result::Result<Vec<Value>, String> {
+    if from == to {
+        return Ok(values.to_vec());
+    }
+    let handle = box_thunk_value(codegen, builder, values, from)?;
+    let converted = unbox_thunk_value(codegen, builder, handle, to)?;
+    if !matches!(to, DirectType::Opaque(_) | DirectType::Callable(_)) {
+        let release_value = codegen
+            .object
+            .declare_func_in_func(codegen.release_value, builder.func);
+        builder.ins().call(release_value, &[handle]);
+    }
+    Ok(converted)
 }
 
 /// An environment word as a direct value of `abi`, and back.
@@ -779,13 +793,12 @@ impl NativeCodegen<'_> {
             .get(&key.function)
             .ok_or_else(|| format!("direct backend does not know function `{}`", key.function))?;
         let mut ctx = self.object.make_context();
-        ctx.func.signature = callable_invoke_signature(
-            &function,
-            key.captures,
-            &param_types,
-            &return_ty,
+        ctx.func.signature = contract_invoke_signature(
+            &shape.contract_param_types,
+            &shape.contract_mutable_params,
+            &shape.contract_return_ty,
             self.call_conv,
-        )?;
+        );
         ctx.func.name = UserFuncName::user(0, shape.invoke.as_u32());
         let mut builder_ctx = FunctionBuilderContext::new();
         let mut builder = FunctionBuilder::new(&mut ctx.func, &mut builder_ctx);
@@ -812,9 +825,14 @@ impl NativeCodegen<'_> {
         let mut cursor = 2;
         for (index, param) in function.params.iter().enumerate().skip(key.captures) {
             let ty = &param_types[index];
-            let count = ty.value_count();
+            let contract_ty = &shape.contract_param_types[index - key.captures];
+            let count = contract_ty.value_count();
             let supplied = params[cursor..cursor + count].to_vec();
             cursor += count;
+            // The caller passes the contract's direct value; the lowered
+            // function takes its own parameter type (a type parameter is a
+            // boxed handle), so the value is marshalled when they differ.
+            let supplied = marshal_direct_values(self, &mut builder, &supplied, contract_ty, ty)?;
             let Some(default_name) = param.default_function.as_ref() else {
                 lowered_args.extend(supplied);
                 continue;
@@ -854,7 +872,13 @@ impl NativeCodegen<'_> {
         let inst = builder.ins().call(target_ref, &lowered_args);
         let results = builder.inst_results(inst).to_vec();
         let return_count = return_ty.value_count();
-        let mut returned = results[..return_count].to_vec();
+        let mut returned = marshal_direct_values(
+            self,
+            &mut builder,
+            &results[..return_count],
+            &return_ty,
+            &shape.contract_return_ty,
+        )?;
         let mut cursor = return_count;
         let mut env_offset = 0i32;
         for (index, param) in function.params.iter().enumerate() {
@@ -870,7 +894,15 @@ impl NativeCodegen<'_> {
                 continue;
             }
             if param.passing == MirReceiverKind::BorrowMut {
-                returned.extend_from_slice(&results[cursor..cursor + count]);
+                let contract_ty = &shape.contract_param_types[index - key.captures];
+                let writeback = marshal_direct_values(
+                    self,
+                    &mut builder,
+                    &results[cursor..cursor + count],
+                    ty,
+                    contract_ty,
+                )?;
+                returned.extend(writeback);
                 cursor += count;
             }
         }

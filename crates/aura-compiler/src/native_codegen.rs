@@ -1523,6 +1523,7 @@ impl<'a> NativeCodegen<'a> {
             &mut object,
             &function_param_types,
             &function_return_types,
+            &classes,
             call_conv,
         )?;
         Ok(Self {
@@ -6387,6 +6388,7 @@ impl<'a> FunctionCompiler<'a> {
             function: function.to_string(),
             captures: captures.len(),
             consuming,
+            contract: signature.to_string(),
         };
         let shape = self.callable_shapes.get(&key).cloned().ok_or_else(|| {
             format!(
@@ -9779,6 +9781,7 @@ impl<'a> FunctionCompiler<'a> {
                     function: name.clone(),
                     captures: 0,
                     consuming: false,
+                    contract: signature.to_string(),
                 };
                 if let Some(shape) = self.callable_shapes.get(&key).cloned() {
                     let global = self
@@ -10341,6 +10344,17 @@ impl<'a> FunctionCompiler<'a> {
                 self.tag_opaque_runtime_type(&value, target_ty)?;
             }
             return Ok(value);
+        }
+
+        if let (DirectType::Scalar(ScalarKind::Unit), DirectType::Callable(_)) = (&value.ty, target)
+        {
+            // The unit placeholder of an unreachable fall-through (every
+            // checked path returns a callable) is the absent callable: all
+            // words zero, which releases and retains skip.
+            return Ok(ValueRef {
+                values: target.zero_values(&mut self.builder),
+                ty: target.clone(),
+            });
         }
 
         if let (DirectType::Callable(source), DirectType::Callable(destination)) =
@@ -11299,9 +11313,11 @@ impl<'a> FunctionCompiler<'a> {
                     direct_type_to_type(&member_ty),
                 );
                 let member = codegen.coerce_value(payload, &member_ty)?;
-                // The payload copy is owned; an opaque member's handle leaves the
-                // statement's temporaries and travels with the union words.
+                // The payload copy is owned; an opaque member's handle (or a
+                // callable member's boxed words) leaves the statement's
+                // temporaries and travels with the union words.
                 codegen.clear_temporary_opaque_owned(&member);
+                codegen.clear_temporary_callable_owned(&member);
                 let words = codegen.union_words_from_member(union, index, member)?;
                 Ok(ValueRef {
                     values: words,
