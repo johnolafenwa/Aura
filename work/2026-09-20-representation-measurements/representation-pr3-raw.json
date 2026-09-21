@@ -1,0 +1,273 @@
+{
+  "aura": "/Users/johnolafenwa/source2/Aurora/target/debug/aura",
+  "commit": "a8aac70a9ae8c4d7b8e8d249b8652ddc892b74df",
+  "records": {
+    "callable_move": {
+      "direct": {
+        "binary_bytes": 4565784,
+        "elapsed_s": 2.230974583999995,
+        "stats": {
+          "callable_overflow_allocations": 0,
+          "closure_environments": 0,
+          "opaque_boxes": 1,
+          "union_payload_boxes": 0
+        },
+        "stdout": "42\n"
+      },
+      "mir": {
+        "elapsed_s": 3.5173764999999833,
+        "stats": {
+          "callable_overflow_allocations": 0,
+          "closure_environments": 1,
+          "opaque_boxes": 0,
+          "union_payload_boxes": 0
+        },
+        "stdout": "42\n"
+      }
+    },
+    "callable_pack_inline": {
+      "direct": {
+        "binary_bytes": 4565784,
+        "elapsed_s": 2.368222125000017,
+        "stats": {
+          "callable_overflow_allocations": 0,
+          "closure_environments": 0,
+          "opaque_boxes": 1,
+          "union_payload_boxes": 0
+        },
+        "stdout": "5000050000\n"
+      },
+      "mir": {
+        "elapsed_s": 11.384678707999996,
+        "stats": {
+          "callable_overflow_allocations": 0,
+          "closure_environments": 100000,
+          "opaque_boxes": 0,
+          "union_payload_boxes": 0
+        },
+        "stdout": "5000050000\n"
+      }
+    },
+    "callable_pack_overflow": {
+      "direct": {
+        "binary_bytes": 4568416,
+        "elapsed_s": 2.4561248750000004,
+        "stats": {
+          "callable_overflow_allocations": 100000,
+          "closure_environments": 0,
+          "opaque_boxes": 1,
+          "union_payload_boxes": 0
+        },
+        "stdout": "5000650000\n"
+      },
+      "mir": {
+        "elapsed_s": 17.158549290999986,
+        "stats": {
+          "callable_overflow_allocations": 0,
+          "closure_environments": 100000,
+          "opaque_boxes": 0,
+          "union_payload_boxes": 0
+        },
+        "stdout": "5000650000\n"
+      }
+    },
+    "union_class_field": {
+      "direct": {
+        "binary_bytes": 3657944,
+        "elapsed_s": 2.208679499999988,
+        "stats": {
+          "callable_overflow_allocations": 0,
+          "closure_environments": 0,
+          "opaque_boxes": 1,
+          "union_payload_boxes": 0
+        },
+        "stdout": "5000050000\n"
+      },
+      "mir": {
+        "elapsed_s": 9.71980195799999,
+        "stats": {
+          "callable_overflow_allocations": 0,
+          "closure_environments": 0,
+          "opaque_boxes": 0,
+          "union_payload_boxes": 100000
+        },
+        "stdout": "5000050000\n"
+      }
+    },
+    "union_scalar_local": {
+      "direct": {
+        "binary_bytes": 3657944,
+        "elapsed_s": 12.20711737500001,
+        "stats": {
+          "callable_overflow_allocations": 0,
+          "closure_environments": 0,
+          "opaque_boxes": 1,
+          "union_payload_boxes": 0
+        },
+        "stdout": "499999500000\n"
+      },
+      "mir": {
+        "elapsed_s": 77.540802167,
+        "stats": {
+          "callable_overflow_allocations": 0,
+          "closure_environments": 0,
+          "opaque_boxes": 0,
+          "union_payload_boxes": 2000000
+        },
+        "stdout": "499999500000\n"
+      }
+    },
+    "union_string_local": {
+      "direct": {
+        "binary_bytes": 4572648,
+        "elapsed_s": 2.59946283299999,
+        "stats": {
+          "callable_overflow_allocations": 0,
+          "closure_environments": 0,
+          "opaque_boxes": 100001,
+          "union_payload_boxes": 0
+        },
+        "stdout": "300000\n"
+      },
+      "mir": {
+        "elapsed_s": 7.230034916999998,
+        "stats": {
+          "callable_overflow_allocations": 0,
+          "closure_environments": 0,
+          "opaque_boxes": 0,
+          "union_payload_boxes": 100000
+        },
+        "stdout": "300000\n"
+      }
+    }
+  },
+  "schema_version": 1,
+  "summary": {
+    "callable_move": {
+      "direct": {
+        "binary_bytes": 4565784,
+        "elapsed_s": 2.230974583999995,
+        "stats": {
+          "callable_overflow_allocations": 0,
+          "closure_environments": 0,
+          "opaque_boxes": 1,
+          "union_payload_boxes": 0
+        }
+      },
+      "mir": {
+        "elapsed_s": 3.5173764999999833,
+        "stats": {
+          "callable_overflow_allocations": 0,
+          "closure_environments": 1,
+          "opaque_boxes": 0,
+          "union_payload_boxes": 0
+        }
+      }
+    },
+    "callable_pack_inline": {
+      "direct": {
+        "binary_bytes": 4565784,
+        "elapsed_s": 2.368222125000017,
+        "stats": {
+          "callable_overflow_allocations": 0,
+          "closure_environments": 0,
+          "opaque_boxes": 1,
+          "union_payload_boxes": 0
+        }
+      },
+      "mir": {
+        "elapsed_s": 11.384678707999996,
+        "stats": {
+          "callable_overflow_allocations": 0,
+          "closure_environments": 100000,
+          "opaque_boxes": 0,
+          "union_payload_boxes": 0
+        }
+      }
+    },
+    "callable_pack_overflow": {
+      "direct": {
+        "binary_bytes": 4568416,
+        "elapsed_s": 2.4561248750000004,
+        "stats": {
+          "callable_overflow_allocations": 100000,
+          "closure_environments": 0,
+          "opaque_boxes": 1,
+          "union_payload_boxes": 0
+        }
+      },
+      "mir": {
+        "elapsed_s": 17.158549290999986,
+        "stats": {
+          "callable_overflow_allocations": 0,
+          "closure_environments": 100000,
+          "opaque_boxes": 0,
+          "union_payload_boxes": 0
+        }
+      }
+    },
+    "union_class_field": {
+      "direct": {
+        "binary_bytes": 3657944,
+        "elapsed_s": 2.208679499999988,
+        "stats": {
+          "callable_overflow_allocations": 0,
+          "closure_environments": 0,
+          "opaque_boxes": 1,
+          "union_payload_boxes": 0
+        }
+      },
+      "mir": {
+        "elapsed_s": 9.71980195799999,
+        "stats": {
+          "callable_overflow_allocations": 0,
+          "closure_environments": 0,
+          "opaque_boxes": 0,
+          "union_payload_boxes": 100000
+        }
+      }
+    },
+    "union_scalar_local": {
+      "direct": {
+        "binary_bytes": 3657944,
+        "elapsed_s": 12.20711737500001,
+        "stats": {
+          "callable_overflow_allocations": 0,
+          "closure_environments": 0,
+          "opaque_boxes": 1,
+          "union_payload_boxes": 0
+        }
+      },
+      "mir": {
+        "elapsed_s": 77.540802167,
+        "stats": {
+          "callable_overflow_allocations": 0,
+          "closure_environments": 0,
+          "opaque_boxes": 0,
+          "union_payload_boxes": 2000000
+        }
+      }
+    },
+    "union_string_local": {
+      "direct": {
+        "binary_bytes": 4572648,
+        "elapsed_s": 2.59946283299999,
+        "stats": {
+          "callable_overflow_allocations": 0,
+          "closure_environments": 0,
+          "opaque_boxes": 100001,
+          "union_payload_boxes": 0
+        }
+      },
+      "mir": {
+        "elapsed_s": 7.230034916999998,
+        "stats": {
+          "callable_overflow_allocations": 0,
+          "closure_environments": 0,
+          "opaque_boxes": 0,
+          "union_payload_boxes": 100000
+        }
+      }
+    }
+  }
+}

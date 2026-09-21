@@ -206,6 +206,45 @@ lines rather than spend them.
   line margin of about 21 lines; forced backend parity, LSP and extension
   suites, reference, tutorials, docs build, audit, clippy, and hygiene pass.
 
+## Evidence, third pull request (four-word callables)
+
+- Branch `codex/batch-1-representation-3` from `e09dbcb5` (the second
+  pull request's head; main merges after PR #15 lands). Commits: the
+  inline callable direct type with placeholder arms (`793c07b8`), shape
+  descriptors with their four adapters and the function compiler's
+  ownership arms (`e9483c3e`), and the mapping flip with the calls,
+  boundary boxes, per-contract boxed descriptors, measurement tests, and
+  records (`1b3f0555`).
+- Layout (Q15 A / Q16 A): `[descriptor, w0, w1, w2]`; the descriptor names
+  the shape (lowered function, capture direct types, call kind) and holds
+  the addresses of `invoke`, `drop`, `retain`, and `box`; captures that fit
+  in three words live inline, wider environments take one checked block
+  (`aura_direct_callable_env_alloc`, `AU4005` on failure, counted). A
+  function reference is its zero-capture shape. A boxed function value
+  entering from the runtime carries a per-contract boxed descriptor whose
+  adapters call through the runtime; contracts whose direct parts differ
+  (a generic frame's `T | None` against a concrete union) meet through the
+  runtime with one boundary box.
+- Measurements (`crates/aura/tests/representation_stats.rs`): a
+  one-capture callable packed and called one hundred thousand times
+  reports zero closure environments and zero overflow allocations on the
+  direct backend; one thousand four-capture packings report one thousand
+  overflow blocks and zero environments; a callable stored into a list and
+  another started as a task report two closure environments, one per
+  boundary. The benchmark lane's rows are re-measured below.
+- Defects met on the way: a union holding a callable member crashed at
+  exit because the release path dereferenced a zero descriptor (a
+  never-assigned local); releases and retains now skip a zero descriptor,
+  as the runtime skips a null handle. A by-value capture handed to the
+  lowered function was released by the callee at its exit while the
+  environment still held it; the invoke adapter now retains by-value
+  captures before the call.
+- Suites: every runnable fixture emits a direct object; the fixture runner,
+  the union and callable security suites, the validator coverage suite,
+  and the native unit suites (with six assertions moved from the boxed
+  closure ABI to the descriptor and adapters) pass. Parity matrix, chain,
+  and hosted results are recorded here when they finish.
+
 ## Open items
 
 - `.clone()`, rendering, hashing, and every runtime-helper argument of union

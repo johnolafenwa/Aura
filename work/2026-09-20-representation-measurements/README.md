@@ -14,3 +14,7 @@ second pull request re-measures the same programs.
 `representation-pr2-raw.json` is the second pull request's report (owned-handle
 union members) at commit `aba80f87d49b0d1992cf08ec3286b55e8836a862`, taken the same way; the archive lands in the
 commit that follows the measured one.
+
+`representation-pr3-raw.json` is the third pull request's report (four-word
+callables) at commit `a8aac70a9ae8c4d7b8e8d249b8652ddc892b74df`, taken the same way; the archive lands in the
+commit that follows the measured one.
