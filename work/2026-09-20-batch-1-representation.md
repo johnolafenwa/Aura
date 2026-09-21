@@ -245,6 +245,12 @@ lines rather than spend them.
   with a mutable capture before a trap was not published to the captured
   place before cleanup; the call installs the indirect sink handoff again
   and the shape's invoke adapter claims it into the callee's own sink list.
+  A callable whose captures need an overflow block shared that block with
+  every copy but each copy freed it, so a callable capturing a callable
+  (four words, hence a block) lifted into a union crashed at exit; the
+  block now carries a reference count: a copy takes a reference and only
+  the last release drops the captures and frees the block, matching the
+  interpreter's shared closure environment.
 - Suites: every runnable fixture emits a direct object; the fixture runner,
   the union and callable security suites, the validator coverage suite,
   and the native unit suites (with six assertions moved from the boxed
