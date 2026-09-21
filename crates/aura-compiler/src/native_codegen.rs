@@ -9446,12 +9446,8 @@ impl<'a> FunctionCompiler<'a> {
             )?,
         };
         match &ty {
-            DirectType::Callable(_) => Err(format!(
-                "direct backend cannot construct callable type `{}` as a class",
-                class_name
-            )),
-            DirectType::Union(_) => Err(format!(
-                "direct backend cannot construct union type `{}` as a class",
+            DirectType::Union(_) | DirectType::Callable(_) => Err(format!(
+                "direct backend cannot construct `{}` as a class: it is not a class type",
                 class_name
             )),
             DirectType::PlainClass(class_ty) => {
@@ -10013,9 +10009,6 @@ impl<'a> FunctionCompiler<'a> {
         field: &str,
     ) -> std::result::Result<ValueRef, String> {
         match &object.ty {
-            DirectType::Callable(_) => Err(format!(
-                "direct backend cannot read field `{field}` of a callable value"
-            )),
             DirectType::PlainClass(_) => {
                 let (start, end, field_ty) = required_direct_field_slice(&object.ty, field)?;
                 Ok(ValueRef {
@@ -10071,7 +10064,7 @@ impl<'a> FunctionCompiler<'a> {
                     Ok(loaded)
                 }
             }
-            DirectType::Scalar(_) => Err(format!(
+            DirectType::Scalar(_) | DirectType::Callable(_) => Err(format!(
                 "direct backend does not know field `{}` on `{}`",
                 field,
                 render_direct_type(&object.ty)

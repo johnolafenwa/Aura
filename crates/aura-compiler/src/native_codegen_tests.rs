@@ -15392,3 +15392,176 @@ fn native_codegen_retain_and_release_helpers_cover_every_callable_bearing_shape(
     builder.ins().return_(&[]);
     builder.finalize();
 }
+
+fn shape_test_function(name: &str, param_names: &[&str]) -> MirFunction {
+    MirFunction {
+        name: name.to_string(),
+        module_name: "<test>".to_string(),
+        source_path: None,
+        span: Span::new(1, 1),
+        receiver: None,
+        params: param_names
+            .iter()
+            .map(|param| crate::mir::MirParam {
+                name: param.to_string(),
+                passing: MirReceiverKind::Value,
+                ty: Type::named("int64"),
+                default_function: None,
+                keyword_only: false,
+            })
+            .collect(),
+        local_types: param_names
+            .iter()
+            .map(|param| MirLocalType {
+                name: param.to_string(),
+                ty: Type::named("int64"),
+            })
+            .collect(),
+        return_type: Type::named("int64"),
+        entry: "entry".to_string(),
+        blocks: vec![BasicBlock {
+            label: "entry".to_string(),
+            instructions: Vec::new(),
+            terminator: Terminator::Return(Operand::Int(0)),
+        }],
+    }
+}
+
+fn shape_test_module(main_value: Rvalue, helpers: Vec<MirFunction>) -> crate::mir::MirModule {
+    let mut main = shape_test_function("main", &[]);
+    main.local_types.push(MirLocalType {
+        name: "callee".to_string(),
+        ty: Type::named("int64"),
+    });
+    main.blocks[0].instructions.push(Instruction::Assign {
+        target: "callee".to_string(),
+        value: main_value,
+    });
+    let mut functions = vec![main];
+    functions.extend(helpers);
+    crate::mir::MirModule {
+        unions: Vec::new(),
+        enums: Vec::new(),
+        constants: Vec::new(),
+        functions,
+        classes: Vec::new(),
+        trait_impls: Vec::new(),
+        top_level: None,
+    }
+}
+
+#[test]
+fn direct_callable_shape_declaration_reports_unknown_functions_and_mismatched_captures_and_contracts(
+) {
+    let source = "def main() -> int32:\n    return 0\n";
+    let mir = lower_source_to_mir(source).expect("shape declaration source should lower");
+    let mut codegen = NativeCodegen::new(&mir, "/tmp/callable_shape_declaration.au", source)
+        .expect("codegen should initialize");
+    let classes = HashMap::new();
+    let mut param_types = HashMap::new();
+    param_types.insert(
+        "helper".to_string(),
+        vec![DirectType::Scalar(ScalarKind::Int64)],
+    );
+    let no_params = callable_signature(vec![], Type::named("int64"));
+    let one_param = callable_signature(vec![("value", Type::named("int64"))], Type::named("int64"));
+
+    let missing = shape_test_module(
+        Rvalue::Use(Operand::Function {
+            name: "missing".to_string(),
+            signature: Box::new(no_params.clone()),
+        }),
+        Vec::new(),
+    );
+    let error = super::callables::declare_callable_shapes(
+        &missing,
+        &mut codegen.object,
+        &param_types,
+        &classes,
+        codegen.call_conv,
+    )
+    .expect_err("a reference must name a lowered function");
+    assert!(
+        error.contains("cannot find lowered function `missing` for a callable shape"),
+        "{error}"
+    );
+
+    let capture = |name: &str| crate::mir::MirClosureCapture {
+        name: name.to_string(),
+        value: Operand::Int(1),
+        ty: Type::named("int64"),
+        passing: MirReceiverKind::Value,
+        mutated: false,
+        source_place: None,
+        resolve_source_at_capture: false,
+    };
+    let too_many_captures = shape_test_module(
+        Rvalue::Closure {
+            function: "helper".to_string(),
+            signature: no_params.clone(),
+            captures: vec![capture("a"), capture("b")],
+            consuming: false,
+            mutable: false,
+        },
+        vec![shape_test_function("helper", &["value"])],
+    );
+    let error = super::callables::declare_callable_shapes(
+        &too_many_captures,
+        &mut codegen.object,
+        &param_types,
+        &classes,
+        codegen.call_conv,
+    )
+    .expect_err("a closure cannot capture more values than its function takes");
+    assert!(
+        error.contains("captures 2 values but the function takes 1"),
+        "{error}"
+    );
+
+    let contract_mismatch = shape_test_module(
+        Rvalue::Use(Operand::Function {
+            name: "helper".to_string(),
+            signature: Box::new(no_params.clone()),
+        }),
+        vec![shape_test_function("helper", &["value"])],
+    );
+    let error = super::callables::declare_callable_shapes(
+        &contract_mismatch,
+        &mut codegen.object,
+        &param_types,
+        &classes,
+        codegen.call_conv,
+    )
+    .expect_err("a reference's contract must match the function's public parameters");
+    assert!(
+        error.contains("declares 1 public parameters but its contract `def() -> int64` has 0"),
+        "{error}"
+    );
+
+    let matching = shape_test_module(
+        Rvalue::Use(Operand::Function {
+            name: "helper".to_string(),
+            signature: Box::new(one_param),
+        }),
+        vec![shape_test_function("helper", &["value"])],
+    );
+    let shapes = super::callables::declare_callable_shapes(
+        &matching,
+        &mut codegen.object,
+        &param_types,
+        &classes,
+        codegen.call_conv,
+    )
+    .expect("a matching contract declares its shape");
+    assert_eq!(shapes.len(), 1);
+    assert!(shapes
+        .values()
+        .all(|shape| shape.env_words == 0 && shape.inline()));
+
+    let parts_error = super::callables::contract_direct_parts(&Type::named("int64"), &classes)
+        .expect_err("an int64 has no callable contract");
+    assert!(
+        parts_error.contains("expected a callable contract, found `int64`"),
+        "{parts_error}"
+    );
+}
