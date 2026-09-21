@@ -563,7 +563,6 @@ struct NativeCodegen<'a> {
     unregister_cleanup: FuncId,
     refresh_cleanup: FuncId,
     set_next_mutable_sinks: FuncId,
-    set_next_indirect_mutable_sinks: FuncId,
     current_mutable_sink: FuncId,
     mutable_sink_new: FuncId,
     mutable_sink_project: FuncId,
@@ -580,7 +579,6 @@ struct NativeCodegen<'a> {
     function_value: FuncId,
     module_constant: FuncId,
     closure_value: FuncId,
-    closure_capture: FuncId,
     function_call: FuncId,
     function_bind_defaults: FuncId,
     box_unit: FuncId,
@@ -1091,7 +1089,6 @@ impl<'a> NativeCodegen<'a> {
             unregister_cleanup => ("aura_direct_unregister_cleanup", [types::I64], None),
             refresh_cleanup => ("aura_direct_refresh_cleanup", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             set_next_mutable_sinks => ("aura_direct_set_next_mutable_sinks", [types::I64, types::I64], None),
-            set_next_indirect_mutable_sinks => ("aura_direct_set_next_indirect_mutable_sinks", [types::I64, types::I64, types::I64, types::I64, types::I64], None),
             current_mutable_sink => ("aura_direct_current_mutable_sink", [types::I64], Some(types::I64)),
             mutable_sink_new => ("aura_direct_mutable_sink_new", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             mutable_sink_project => ("aura_direct_mutable_sink_project", [types::I64, types::I64, types::I64], Some(types::I64)),
@@ -1108,7 +1105,6 @@ impl<'a> NativeCodegen<'a> {
             function_value => ("aura_direct_function_value", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             module_constant => ("aura_direct_module_constant", [types::I64, types::I64, types::I64], Some(types::I64)),
             closure_value => ("aura_direct_closure_value", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
-            closure_capture => ("aura_direct_closure_capture", [types::I64, types::I64], Some(types::I64)),
             function_call => ("aura_direct_function_call", [types::I64, types::I64, types::I64], Some(types::I64)),
             function_bind_defaults => ("aura_direct_function_bind_defaults", [types::I64, types::I64, types::I64, types::I64], None),
             box_unit => ("aura_direct_box_unit", [], Some(types::I64)),
@@ -1583,7 +1579,6 @@ impl<'a> NativeCodegen<'a> {
             unregister_cleanup,
             refresh_cleanup,
             set_next_mutable_sinks,
-            set_next_indirect_mutable_sinks,
             current_mutable_sink,
             mutable_sink_new,
             mutable_sink_project,
@@ -1600,7 +1595,6 @@ impl<'a> NativeCodegen<'a> {
             function_value,
             module_constant,
             closure_value,
-            closure_capture,
             function_call,
             function_bind_defaults,
             box_unit,
@@ -2365,9 +2359,6 @@ impl<'a> NativeCodegen<'a> {
         let set_next_mutable_sinks = self
             .object
             .declare_func_in_func(self.set_next_mutable_sinks, builder.func);
-        let set_next_indirect_mutable_sinks = self
-            .object
-            .declare_func_in_func(self.set_next_indirect_mutable_sinks, builder.func);
         let current_mutable_sink = self
             .object
             .declare_func_in_func(self.current_mutable_sink, builder.func);
@@ -2402,12 +2393,6 @@ impl<'a> NativeCodegen<'a> {
         let module_constant = self
             .object
             .declare_func_in_func(self.module_constant, builder.func);
-        let closure_capture = self
-            .object
-            .declare_func_in_func(self.closure_capture, builder.func);
-        let function_call = self
-            .object
-            .declare_func_in_func(self.function_call, builder.func);
         let function_bind_defaults = self
             .object
             .declare_func_in_func(self.function_bind_defaults, builder.func);
@@ -3411,7 +3396,6 @@ impl<'a> NativeCodegen<'a> {
             unregister_cleanup,
             refresh_cleanup,
             set_next_mutable_sinks,
-            set_next_indirect_mutable_sinks,
             current_mutable_sink,
             mutable_sink_new,
             mutable_sink_project,
@@ -3426,8 +3410,6 @@ impl<'a> NativeCodegen<'a> {
             box_bool,
             function_value,
             module_constant,
-            closure_capture,
-            function_call,
             function_bind_defaults,
             box_unit,
             string_literal,
@@ -4705,7 +4687,6 @@ struct FunctionCompiler<'a> {
     unregister_cleanup: cranelift_codegen::ir::FuncRef,
     refresh_cleanup: cranelift_codegen::ir::FuncRef,
     set_next_mutable_sinks: cranelift_codegen::ir::FuncRef,
-    set_next_indirect_mutable_sinks: cranelift_codegen::ir::FuncRef,
     current_mutable_sink: cranelift_codegen::ir::FuncRef,
     mutable_sink_new: cranelift_codegen::ir::FuncRef,
     mutable_sink_project: cranelift_codegen::ir::FuncRef,
@@ -4720,8 +4701,6 @@ struct FunctionCompiler<'a> {
     box_bool: cranelift_codegen::ir::FuncRef,
     function_value: cranelift_codegen::ir::FuncRef,
     module_constant: cranelift_codegen::ir::FuncRef,
-    closure_capture: cranelift_codegen::ir::FuncRef,
-    function_call: cranelift_codegen::ir::FuncRef,
     function_bind_defaults: cranelift_codegen::ir::FuncRef,
     box_unit: cranelift_codegen::ir::FuncRef,
     string_literal: cranelift_codegen::ir::FuncRef,
@@ -7584,178 +7563,10 @@ impl<'a> FunctionCompiler<'a> {
             let signature = callable.signature.clone();
             return self.compile_inline_callable_call(function, args, target, &signature);
         }
-        let (params, return_type) = match function_type {
-            DirectType::Opaque(Type::Function {
-                params,
-                return_type,
-            }) => (params, return_type),
-            DirectType::Opaque(Type::Closure {
-                params,
-                return_type,
-                ..
-            }) => (*params, return_type),
-            DirectType::Opaque(Type::Callable(callable)) => {
-                (callable.params, Box::new(callable.return_type))
-            }
-            _ => {
-                return Err("direct backend expected an indirect function value".to_string());
-            }
-        };
-        if args.len() > params.len() {
-            return Err(format!(
-                "direct backend expected at most {} indirect-call arguments, found {}",
-                params.len(),
-                args.len()
-            ));
-        }
-        let binding = bind_function_value_args(
-            &params,
-            args,
-            "direct backend function value has no parameter named",
-            "direct backend received duplicate indirect-call arguments",
-        )?;
-        let param_types =
-            function_value_param_types(&params, &self.classes, "indirect-call parameter")?;
-        let return_direct = ensure_direct_type(
-            crate::sema::returned_view_pointee(&return_type),
-            &self.classes,
-            "indirect-call return type",
-        )?;
-
-        let closure_writebacks = match function {
-            Operand::Place(place) | Operand::MovePlace(place) => self
-                .closure_capture_writebacks
-                .get(place.split('.').next().unwrap_or(place))
-                .cloned()
-                .unwrap_or_default(),
-            _ => Vec::new(),
-        };
-        let loaded_function = self.load_operand(function)?;
-        let function = self.ensure_opaque(loaded_function)?;
-        let count = self.builder.ins().iconst(types::I64, params.len() as i64);
-        let buffer_size = u32::try_from(params.len().max(1).saturating_mul(8))
-            .ok()
-            .ok_or("direct backend indirect-call buffer is too large".to_string())?;
-        let buffer_slot = self.builder.create_sized_stack_slot(StackSlotData::new(
-            StackSlotKind::ExplicitSlot,
-            buffer_size,
-            3,
-        ));
-        let buffer = self.builder.ins().stack_addr(types::I64, buffer_slot, 0);
-        let zero = self.builder.ins().iconst(types::I64, 0);
-        for index in 0..params.len() {
-            self.builder
-                .ins()
-                .store(MemFlags::new(), zero, buffer, (index as i32) * 8);
-        }
-        let mut writebacks = Vec::new();
-        // Evaluate supplied expressions in source order while writing each
-        // captured value to its declaration slot.
-        for (argument, index) in args.iter().zip(&binding.source_slots) {
-            let index = *index;
-            let expected = &param_types[index];
-            let passing = params[index].passing;
-            let loaded_value = self.load_operand_for_target(&argument.value, expected)?;
-            let value = self.coerce_value(loaded_value, expected)?;
-            let value = self.ensure_opaque(value)?;
-            let transferred = self.transfer_opaque_arg(&value);
-            self.builder
-                .ins()
-                .store(MemFlags::new(), transferred, buffer, (index as i32) * 8);
-            match (passing, argument.writeback_place.as_ref()) {
-                (ReceiverKind::BorrowMut, Some(place)) => {
-                    writebacks.push((index, place.clone(), expected.clone()));
-                }
-                (ReceiverKind::BorrowMut, None) => {
-                    return Err(format!(
-                        "direct backend indirect mutable argument {} has no writeback place",
-                        index + 1
-                    ));
-                }
-                (_, Some(_)) => {
-                    return Err(format!(
-                        "direct backend indirect argument {} unexpectedly requests writeback",
-                        index + 1
-                    ));
-                }
-                (_, None) => {}
-            }
-        }
-        let keep_defaults_owned = self.builder.ins().iconst(types::I64, 0);
-        self.builder.ins().call(
-            self.function_bind_defaults,
-            &[function.values[0], buffer, count, keep_defaults_owned],
-        );
-        for (index, supplied) in binding.slots.iter().enumerate() {
-            if supplied.is_some() {
-                continue;
-            }
-            let raw =
-                self.builder
-                    .ins()
-                    .load(types::I64, MemFlags::new(), buffer, (index as i32) * 8);
-            self.tag_raw_opaque_runtime_type(raw, &param_types[index])?;
-        }
-        let mut public_sinks = Vec::new();
-        let mut capture_sinks = Vec::new();
-        if !writebacks.is_empty() || !closure_writebacks.is_empty() {
-            public_sinks = (0..params.len())
-                .map(|_| self.builder.ins().iconst(types::I64, 0))
-                .collect();
-            for (index, place, _) in &writebacks {
-                public_sinks[*index] = self.mutable_sink_for_place(place)?;
-            }
-            for writeback in &closure_writebacks {
-                capture_sinks.push((
-                    writeback.index,
-                    self.mutable_sink_for_resolved_place(writeback.place.clone())?,
-                ));
-            }
-            self.install_indirect_mutable_sinks(&public_sinks, &capture_sinks)?;
-        }
-        let call = self
-            .builder
-            .ins()
-            .call(self.function_call, &[function.values[0], buffer, count]);
-        let raw_result = self.builder.inst_results(call)[0];
-        self.release_mutable_sinks(public_sinks.iter().copied());
-        self.release_mutable_sinks(capture_sinks.iter().map(|(_, sink)| *sink));
-
-        for (index, place, writeback_ty) in writebacks {
-            let raw =
-                self.builder
-                    .ins()
-                    .load(types::I64, MemFlags::new(), buffer, (index as i32) * 8);
-            let zero = self.builder.ins().iconst(types::I64, 0);
-            self.builder
-                .ins()
-                .store(MemFlags::new(), zero, buffer, (index as i32) * 8);
-            let boxed = ValueRef {
-                values: vec![raw],
-                ty: DirectType::Opaque(direct_type_to_type(&writeback_ty)),
-            };
-            self.mark_temporary_opaque_owned(&boxed);
-            let writeback = self.coerce_value(boxed, &writeback_ty)?;
-            self.store_place(&place, writeback)?;
-        }
-        for writeback in closure_writebacks {
-            let index = self
-                .builder
-                .ins()
-                .iconst(types::I64, writeback.index as i64);
-            let call = self
-                .builder
-                .ins()
-                .call(self.closure_capture, &[function.values[0], index]);
-            let raw = self.builder.inst_results(call)[0];
-            let boxed = self.owned_opaque_result(vec![raw], direct_type_to_type(&writeback.ty));
-            let value = self.coerce_value(boxed, &writeback.ty)?;
-            self.store_resolved_view_place(writeback.place, value)?;
-        }
-        let boxed_result =
-            self.owned_opaque_result(vec![raw_result], direct_type_to_type(&return_direct));
-        let result = self.coerce_value(boxed_result, &return_direct)?;
-        self.coerce_value(result, target)
+        Err(format!(
+            "direct backend expected an inline callable callee, found `{}`",
+            render_direct_type(&function_type)
+        ))
     }
 
     /// A call through an inline callable: the arguments are coerced to the
@@ -12011,65 +11822,6 @@ impl<'a> FunctionCompiler<'a> {
         self.builder
             .ins()
             .call(self.set_next_mutable_sinks, &[pointer, count]);
-        Ok(())
-    }
-
-    fn install_indirect_mutable_sinks(
-        &mut self,
-        public_sinks: &[Value],
-        capture_sinks: &[(usize, Value)],
-    ) -> std::result::Result<(), String> {
-        let store_buffer = |compiler: &mut Self,
-                            values: &[Value]|
-         -> std::result::Result<Value, String> {
-            if values.is_empty() {
-                return Ok(compiler.builder.ins().iconst(types::I64, 0));
-            }
-            let byte_len = u32::try_from(values.len().saturating_mul(8))
-                .map_err(|_| "direct mutable sink buffer is too large".to_string())?;
-            let slot = compiler.builder.create_sized_stack_slot(StackSlotData::new(
-                StackSlotKind::ExplicitSlot,
-                byte_len,
-                3,
-            ));
-            let pointer = compiler.builder.ins().stack_addr(types::I64, slot, 0);
-            for (index, value) in values.iter().copied().enumerate() {
-                compiler
-                    .builder
-                    .ins()
-                    .store(MemFlags::new(), value, pointer, (index as i32) * 8);
-            }
-            Ok(pointer)
-        };
-        let public_ptr = store_buffer(self, public_sinks)?;
-        let capture_indices = capture_sinks
-            .iter()
-            .map(|(index, _)| self.builder.ins().iconst(types::I64, *index as i64))
-            .collect::<Vec<_>>();
-        let capture_values = capture_sinks
-            .iter()
-            .map(|(_, sink)| *sink)
-            .collect::<Vec<_>>();
-        let capture_indices_ptr = store_buffer(self, &capture_indices)?;
-        let capture_values_ptr = store_buffer(self, &capture_values)?;
-        let public_count = self
-            .builder
-            .ins()
-            .iconst(types::I64, public_sinks.len() as i64);
-        let capture_count = self
-            .builder
-            .ins()
-            .iconst(types::I64, capture_sinks.len() as i64);
-        self.builder.ins().call(
-            self.set_next_indirect_mutable_sinks,
-            &[
-                public_ptr,
-                public_count,
-                capture_indices_ptr,
-                capture_values_ptr,
-                capture_count,
-            ],
-        );
         Ok(())
     }
 
