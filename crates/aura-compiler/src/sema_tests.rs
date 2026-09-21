@@ -31163,6 +31163,18 @@ fn adr0061_element_places_read_fields_in_place_and_refuse_element_arguments() {
             "must be a mutable place",
         ),
         (
+            "def bump(value: mut int64):\n    value += 1\n\ndef main():\n    mut values = [1, 2]\n    bump((values[1]))\n",
+            "must be a mutable place",
+        ),
+        (
+            "class Profile:\n    name: str\n    visits: int64\n\ndef bump(value: mut int64):\n    value += 1\n\ndef main():\n    mut users = [Profile(name=\"ada\", visits=1)]\n    bump(users[0].visits)\n",
+            "must be a mutable place",
+        ),
+        (
+            "class Profile:\n    name: str\n    visits: int64\n\ndef bump(value: mut int64):\n    value += 1\n\ndef main():\n    mut people: dict[str, Profile] = {\"ada\": Profile(name=\"ada\", visits=1)}\n    bump(people[\"ada\"].visits)\n",
+            "must be a mutable place",
+        ),
+        (
             "class Profile:\n    name: str\n    visits: int64\n\ndef bump(profile: mut Profile):\n    profile.visits += 1\n\ndef main():\n    mut users = [Profile(name=\"ada\", visits=1)]\n    bump(users[0])\n",
             "cannot implicitly copy `Profile` out of a list index",
         ),

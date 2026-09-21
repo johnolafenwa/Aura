@@ -23492,6 +23492,95 @@ fn adr0061_direct_element_path_helpers_read_and_write_inside_elements() {
     assert!(write_missing_key
         .message
         .contains("dict key `missing` was not present"));
+    // Traps without a position keep their message and code.
+    let unspanned = element_trap(move || {
+        let _ = super::aura_direct_element_path_load(
+            users as *mut OpaqueValue,
+            "[i]".as_ptr(),
+            3,
+            [9i64].as_ptr(),
+            1,
+            0,
+            0,
+        );
+    });
+    assert_eq!(unspanned.span, None);
+    assert!(unspanned
+        .message
+        .contains("list index `9` is out of bounds for length `2`"));
+    let unspanned_key = element_trap(move || {
+        let _ = super::aura_direct_element_path_store(
+            table as *mut OpaqueValue,
+            "[k]".as_ptr(),
+            3,
+            [missing as i64].as_ptr(),
+            1,
+            boxed_value(Value::Int(IntegerValue::from_i64(1))),
+            0,
+            0,
+        );
+    });
+    assert_eq!(unspanned_key.code, "AU4003");
+    assert_eq!(unspanned_key.span, None);
+    assert!(unspanned_key
+        .message
+        .contains("dict key `missing` was not present"));
+
+    // Enum payloads and the active union member inside elements.
+    let shapes = boxed_value(Value::Vec(VecValue {
+        element_type: Type::named("Shape"),
+        elements: vec![Value::EnumVariant(EnumVariantValue {
+            enum_name: "Shape".to_string(),
+            variant_name: "Circle".to_string(),
+            payloads: vec![Value::Int(IntegerValue::from_i64(5))],
+        })],
+    })) as usize;
+    let circle = "[i].__variant_payload_Circle_0";
+    assert_eq!(element_path_load(shapes, circle, &[0]).render(), "5");
+    element_path_store(shapes, circle, &[0], Value::Int(IntegerValue::from_i64(6)));
+    assert_eq!(element_path_load(shapes, circle, &[0]).render(), "6");
+    for path in [
+        "[i].__variant_payload_Square_0",
+        "[i].__variant_payload_Circle_3",
+    ] {
+        assert!(element_load_trap(shapes, path, vec![0])
+            .message
+            .contains("does not select the active variant"));
+        assert!(element_store_trap(shapes, path, vec![0])
+            .message
+            .contains("does not select the active variant"));
+    }
+    assert!(element_load_trap(shapes, "[i].radius", vec![0])
+        .message
+        .contains("invalid enum payload projection"));
+    let unions = boxed_value(Value::Vec(VecValue {
+        element_type: Type::named("int64"),
+        elements: vec![Value::Union(Box::new(crate::runtime_value::UnionValue {
+            union_type: Type::named("int64"),
+            member_index: 0,
+            payload: Value::Int(IntegerValue::from_i64(7)),
+        }))],
+    })) as usize;
+    assert_eq!(
+        element_path_load(unions, "[i].__union_payload_0", &[0]).render(),
+        "7"
+    );
+    element_path_store(
+        unions,
+        "[i].__union_payload_0",
+        &[0],
+        Value::Int(IntegerValue::from_i64(8)),
+    );
+    assert_eq!(
+        element_path_load(unions, "[i].__union_payload_0", &[0]).render(),
+        "8"
+    );
+    assert!(element_load_trap(unions, "[i].__union_payload_1", vec![0])
+        .message
+        .contains("does not select the active member"));
+    assert!(element_store_trap(unions, "[i].__union_payload_1", vec![0])
+        .message
+        .contains("does not select the active member"));
     unsafe {
         release_value(users as *mut OpaqueValue);
         release_value(pairs as *mut OpaqueValue);
@@ -23499,5 +23588,7 @@ fn adr0061_direct_element_path_helpers_read_and_write_inside_elements() {
         release_value(table as *mut OpaqueValue);
         release_value(key as *mut OpaqueValue);
         release_value(missing as *mut OpaqueValue);
+        release_value(shapes as *mut OpaqueValue);
+        release_value(unions as *mut OpaqueValue);
     }
 }

@@ -11901,10 +11901,17 @@ impl<'a> Lowerer<'a> {
             self.local_types.entry(target).or_insert(ty);
         }
 
-        if let Some((collection, selector, projection, span)) =
-            self.element_assign_target(&assign.target)
+        if let Some((collection, selector, projection, span, target_expr)) =
+            self.element_assign_target(&assign.target, assign.span)
         {
-            self.lower_element_place_assign(assign, collection, selector, projection, span);
+            self.lower_element_place_assign(
+                assign,
+                collection,
+                selector,
+                projection,
+                span,
+                &target_expr,
+            );
             return;
         }
 
@@ -12124,33 +12131,33 @@ impl<'a> Lowerer<'a> {
         });
     }
 
-    /// `users[i].visits = v`, `users[i].visits += v`, `rows[i][0] = v`: an
-    /// assignment whose target projects inside a list element or dictionary
-    /// entry. `None` when the target is not such a place (a plain index
-    /// assignment replaces or inserts the element and stays a member call).
+    /// `users[i].visits = v` and `users[i].visits += v`: an assignment whose
+    /// target is a field inside a list element or dictionary entry. `None`
+    /// when the target is not such a place (a plain index assignment
+    /// replaces or inserts the element and stays a member call; tuple
+    /// positions are not assignable).
     fn element_assign_target(
         &mut self,
         target: &AssignTarget,
-    ) -> Option<(String, Operand, String, Span)> {
-        let (object, last) = match target {
-            AssignTarget::Member { object, field } => (object, field.clone()),
-            AssignTarget::Index { object, index }
-                if matches!(self.infer_expr_type(object), Some(Type::Tuple(_))) =>
-            {
-                let ExprKind::Int(position) = index.kind else {
-                    return None;
-                };
-                (object, usize::try_from(position).ok()?.to_string())
-            }
-            _ => return None,
+        span: Span,
+    ) -> Option<(String, Operand, String, Span, Expr)> {
+        let AssignTarget::Member { object, field } = target else {
+            return None;
         };
-        let (collection, selector, projection, span) = self.element_loan_source(object)?;
+        let (collection, selector, projection, index_span) = self.element_loan_source(object)?;
         let projection = if projection.is_empty() {
-            last
+            field.clone()
         } else {
-            format!("{projection}.{last}")
+            format!("{projection}.{field}")
         };
-        Some((collection, selector, projection, span))
+        let target_expr = Expr {
+            kind: ExprKind::Member {
+                object: object.clone(),
+                field: field.clone(),
+            },
+            span,
+        };
+        Some((collection, selector, projection, index_span, target_expr))
     }
 
     /// Writes through a mutable element loan that lives for the statement:
@@ -12163,25 +12170,9 @@ impl<'a> Lowerer<'a> {
         selector: Operand,
         projection: String,
         span: Span,
+        target_expr: &Expr,
     ) {
-        let target_expr = match &assign.target {
-            AssignTarget::Member { object, field } => Expr {
-                kind: ExprKind::Member {
-                    object: object.clone(),
-                    field: field.clone(),
-                },
-                span: assign.span,
-            },
-            AssignTarget::Index { object, index } => Expr {
-                kind: ExprKind::Index {
-                    object: object.clone(),
-                    index: index.clone(),
-                },
-                span: assign.span,
-            },
-            AssignTarget::Name(_) => unreachable!("element place targets project a collection"),
-        };
-        let ty = self.infer_expr_type(&target_expr);
+        let ty = self.infer_expr_type(target_expr);
         let typed_temp = |lowerer: &mut Self| match ty.clone() {
             Some(ty) => lowerer.new_typed_temp(ty),
             None => lowerer.new_temp(),

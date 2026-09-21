@@ -6702,11 +6702,7 @@ fn direct_element_selector_words<'s>(
     selectors_ptr: *const i64,
     selector_count: usize,
 ) -> &'s [i64] {
-    if selector_count == 0 {
-        &[]
-    } else {
-        unsafe { slice::from_raw_parts(selectors_ptr, selector_count) }
-    }
+    unsafe { slice::from_raw_parts(selectors_ptr, selector_count) }
 }
 
 /// Reads the value an element path reaches inside `collection`: an element

@@ -13253,6 +13253,31 @@ def main():
         "invalid MIR element loan `first` in `main` has type `str` for `users[..]` of `list[Profile]`",
     );
 
+    let mut scalar_parent = module.clone();
+    let forged = element_loan_mut(&mut scalar_parent, "second");
+    if let Instruction::BeginElementLoan {
+        loan,
+        selector,
+        projection,
+        mutable,
+        span,
+        ..
+    } = forged.clone()
+    {
+        *forged = Instruction::ReborrowElement {
+            loan,
+            parent: "first".to_string(),
+            selector,
+            projection,
+            mutable,
+            span,
+        };
+    }
+    assert_public_boundaries_reject(
+        &scalar_parent,
+        "invalid MIR element loan `second` in `main` selects from `Profile`, which is not a list or dictionary",
+    );
+
     let mut inactive_parent = module.clone();
     let forged = element_loan_mut(&mut inactive_parent, "first");
     if let Instruction::BeginElementLoan {
