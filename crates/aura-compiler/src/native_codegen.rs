@@ -223,7 +223,34 @@ enum DirectType {
     /// value owns nothing and crosses into the runtime as `Value::Union` only
     /// at container and helper boundaries.
     Union(DirectUnionType),
+    /// An inline callable: a descriptor word naming the value's shape (its
+    /// lowered function and capture layout) followed by three environment
+    /// words (checkpoint Q15 A / Q16 A). Captures that fit in three words
+    /// live inline; a wider environment lives in one checked heap block
+    /// named by the first word. The descriptor dispatches the value's
+    /// calls, releases, and boundary boxes, so two lambdas of one static
+    /// type may share a local.
+    #[allow(dead_code)] // Constructed once the callable shapes land.
+    Callable(DirectCallableType),
     Opaque(Type),
+}
+
+/// The words after a callable's descriptor.
+const CALLABLE_ENVIRONMENT_WORDS: usize = 3;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct DirectCallableType {
+    /// The value's static contract (`Type::Function`, `Type::Closure`, or
+    /// `Type::Callable`), which fixes the public direct signature of a
+    /// call through the value.
+    signature: Type,
+}
+
+impl DirectCallableType {
+    #[allow(dead_code)] // Used once the callable shapes land.
+    fn new(signature: Type) -> Self {
+        Self { signature }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -311,6 +338,7 @@ impl DirectType {
                 }
                 types
             }
+            DirectType::Callable(_) => vec![types::I64; 1 + CALLABLE_ENVIRONMENT_WORDS],
             DirectType::Opaque(_) => vec![types::I64],
         }
     }
@@ -322,7 +350,10 @@ impl DirectType {
     fn scalar_kind(&self) -> Option<ScalarKind> {
         match self {
             DirectType::Scalar(kind) => Some(*kind),
-            DirectType::PlainClass(_) | DirectType::Union(_) | DirectType::Opaque(_) => None,
+            DirectType::PlainClass(_)
+            | DirectType::Union(_)
+            | DirectType::Callable(_)
+            | DirectType::Opaque(_) => None,
         }
     }
 
@@ -343,6 +374,9 @@ impl DirectType {
                 }
                 values
             }
+            DirectType::Callable(_) => (0..1 + CALLABLE_ENVIRONMENT_WORDS)
+                .map(|_| builder.ins().iconst(types::I64, 0))
+                .collect(),
             DirectType::Opaque(_) => vec![builder.ins().iconst(types::I64, 0)],
         }
     }
@@ -3793,6 +3827,12 @@ impl<'a> NativeCodegen<'a> {
                 .ins()
                 .store(MemFlags::new(), zero, args_ptr, (index as i32) * 8);
             match param_ty {
+                DirectType::Callable(_) => {
+                    return Err(
+                        "direct backend cannot pass an inline callable through a thunk yet"
+                            .to_string(),
+                    );
+                }
                 DirectType::Opaque(_) => lowered_args.push(raw),
                 DirectType::Scalar(ScalarKind::Int32) => {
                     let inst = builder.ins().call(unbox_i64, &[raw]);
@@ -4036,6 +4076,7 @@ impl<'a> NativeCodegen<'a> {
         let args_ptr = builder.block_params(entry)[0];
         let raw = builder.ins().load(types::I64, MemFlags::new(), args_ptr, 0);
         match &place_ty {
+            DirectType::Callable(_) => {}
             DirectType::Union(_) => {}
             DirectType::PlainClass(class_ty) => {
                 let close_method = self
@@ -8980,6 +9021,9 @@ impl<'a> FunctionCompiler<'a> {
         }
 
         match object.ty.clone() {
+            DirectType::Callable(_) => Err(format!(
+                "direct backend cannot call `.{field}` on a callable value"
+            )),
             DirectType::Union(union) => self.compile_union_member_call(
                 &union,
                 &object.values,
@@ -9139,6 +9183,10 @@ impl<'a> FunctionCompiler<'a> {
             )?,
         };
         match &ty {
+            DirectType::Callable(_) => Err(format!(
+                "direct backend cannot construct callable type `{}` as a class",
+                class_name
+            )),
             DirectType::Union(_) => Err(format!(
                 "direct backend cannot construct union type `{}` as a class",
                 class_name
@@ -9731,6 +9779,9 @@ impl<'a> FunctionCompiler<'a> {
         field: &str,
     ) -> std::result::Result<ValueRef, String> {
         match &object.ty {
+            DirectType::Callable(_) => Err(format!(
+                "direct backend cannot read field `{field}` of a callable value"
+            )),
             DirectType::PlainClass(_) => {
                 let (start, end, field_ty) = required_direct_field_slice(&object.ty, field)?;
                 Ok(ValueRef {
@@ -9895,6 +9946,9 @@ impl<'a> FunctionCompiler<'a> {
 
         if matches!(value.ty, DirectType::Opaque(_)) {
             let result = match target {
+                DirectType::Callable(_) => {
+                    return Err("direct backend cannot unbox an inline callable yet".to_string());
+                }
                 DirectType::Scalar(ScalarKind::Int32) => {
                     let inst = self.builder.ins().call(self.unbox_i64, &[value.values[0]]);
                     ValueRef {
@@ -10714,6 +10768,9 @@ impl<'a> FunctionCompiler<'a> {
 
     fn ensure_opaque(&mut self, value: ValueRef) -> std::result::Result<ValueRef, String> {
         match value.ty {
+            DirectType::Callable(_) => {
+                Err("direct backend cannot box an inline callable yet".to_string())
+            }
             DirectType::Opaque(_) => Ok(value),
             DirectType::Union(ref union) => {
                 let union = union.clone();
@@ -11780,7 +11837,7 @@ impl<'a> FunctionCompiler<'a> {
                     return Ok(());
                 }
             }
-            DirectType::Scalar(_) | DirectType::Union(_) => {}
+            DirectType::Scalar(_) | DirectType::Union(_) | DirectType::Callable(_) => {}
         }
         Ok(())
     }
@@ -17068,6 +17125,7 @@ fn direct_type_contains_unknown(ty: &DirectType) -> bool {
     }
 
     match ty {
+        DirectType::Callable(callable) => type_contains_unknown(&callable.signature),
         DirectType::Scalar(_) => false,
         DirectType::PlainClass(class) => class
             .fields
@@ -18242,6 +18300,7 @@ fn infer_rvalue_type(
                     }
                 }
                 match object_ty {
+                    DirectType::Callable(_) => None,
                     DirectType::Union(union) if field == "clone" => Some(DirectType::Union(union)),
                     DirectType::Union(union) => union.members.iter().find_map(|member| {
                         let class_name = match &member.ty {
@@ -19272,6 +19331,7 @@ fn render_direct_type(ty: &DirectType) -> String {
         DirectType::Scalar(ScalarKind::Unit) => "None".to_string(),
         DirectType::PlainClass(class) => class.class_name.clone(),
         DirectType::Union(union) => union.union_type.to_string(),
+        DirectType::Callable(callable) => callable.signature.to_string(),
         DirectType::Opaque(ty) => ty.to_string(),
     }
 }
@@ -19349,6 +19409,9 @@ fn box_thunk_value(
     ty: &DirectType,
 ) -> std::result::Result<Value, String> {
     match ty {
+        DirectType::Callable(_) => {
+            Err("direct backend cannot box an inline callable in a thunk yet".to_string())
+        }
         DirectType::Union(union) => {
             let union_inject = codegen
                 .object
@@ -19466,6 +19529,9 @@ fn unbox_thunk_value(
     ty: &DirectType,
 ) -> std::result::Result<Vec<Value>, String> {
     match ty {
+        DirectType::Callable(_) => {
+            Err("direct backend cannot unbox an inline callable in a thunk yet".to_string())
+        }
         DirectType::Union(union) => {
             let union_tag = codegen
                 .object
@@ -19629,6 +19695,11 @@ fn release_direct_values(
     ty: &DirectType,
 ) -> std::result::Result<(), String> {
     match ty {
+        DirectType::Callable(_) => {
+            return Err(
+                "direct backend cannot release an inline callable in a thunk yet".to_string(),
+            );
+        }
         DirectType::Union(union) => {
             if union.owns_handles() {
                 let release_value = codegen
@@ -19774,6 +19845,7 @@ fn direct_type_to_type(ty: &DirectType) -> Type {
         DirectType::Scalar(ScalarKind::Unit) => Type::Unit,
         DirectType::PlainClass(class) => Type::named(&class.class_name),
         DirectType::Union(union) => union.union_type.clone(),
+        DirectType::Callable(callable) => callable.signature.clone(),
         DirectType::Opaque(ty) => ty.clone(),
     }
 }
