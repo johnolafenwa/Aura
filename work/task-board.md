@@ -1,6 +1,6 @@
 # Task Board
 
-Last updated: 2026-09-20
+Last updated: 2026-09-21
 
 ## Batch 1 representation phase (in progress) and Batch 2–3 design checkpoint (ratified)
 
@@ -14,8 +14,14 @@ Last updated: 2026-09-20
   the four-word callable layout (Q15 A / Q16 A) with the measured table
   re-recorded. First pull request verification: complete local chain green
   at `ee8f1d74` on 2026-09-20 (coverage 96.4690 / 97.3506 / 95.2864 against
-  floors 96.46 / 97.33 / 95.23, unchanged); hosted: PR #14 Ubuntu green,
-  macOS rerun pending after the known native-cache contention flake.
+  floors 96.46 / 97.33 / 95.23, unchanged); hosted:
+  [PR #14](https://github.com/johnolafenwa/Aura/pull/14) merged `5578afee`
+  as `4c029a8c` after branch CI `35531010620` passed on both platforms
+  (macOS on its second attempt after the native-cache contention flake;
+  Docs `35531010740`); main CI `35543350414` and Docs `35543350437` are
+  green. Hosted coverage totals are in the work-note evidence table
+  (about 96.47 / 97.35 / 95.29 on both platforms, a line margin of about
+  12 lines).
 - Batch 2–3 checkpoint: `architecture_docs/17-batch-2-3-design-checkpoint.md`
   drafted and ratified 2026-09-20 under the owner's delegated instruction
   (Pythonic without breaking safety or performance); all 28 questions A.
