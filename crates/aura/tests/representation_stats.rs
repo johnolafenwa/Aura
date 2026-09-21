@@ -281,8 +281,7 @@ fn direct_callable_local_allocates_no_environment() {
 
 #[test]
 fn direct_callable_overflow_allocates_one_block_per_packing() {
-    let (_, direct) =
-        assert_both_backends("repr-callable-overflow", CALLABLE_OVERFLOW, "506500\n");
+    let (_, direct) = assert_both_backends("repr-callable-overflow", CALLABLE_OVERFLOW, "506500\n");
     assert_eq!(
         direct.closure_environments, 0,
         "a four-capture callable still boxes no environment (Q16 A)"
