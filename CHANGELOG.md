@@ -43,11 +43,17 @@ in this file.
   occupies its own words, a string, list, or other runtime-object member
   occupies one owned handle word, and injections, tag tests, payload reads,
   pattern matches, equality, `.clone()`, and trait dispatch run without a
-  runtime allocation; a plain class may hold an inline union of scalars,
-  `None`, or plain classes as a flattened field. Both runtimes count union payload boxes, closure
+  runtime allocation, and a trait method returning `str | None` on a union
+  receiver keeps its result owned across the dispatch; a plain class may
+  hold an inline union of scalars, `None`, or plain classes as a flattened
+  field. Both runtimes count union payload boxes, closure
   environments, opaque runtime boxes, and callable overflow allocations and
   report them on standard error when `AURA_RUNTIME_STATS=1` is set;
   `benchmarks/representation` records the counters with provenance.
+- Fix a compiler panic ("checked type pattern") when a `match` scrutinee is a
+  trait method call on a union receiver, such as `match pet.label():` with
+  `pet: Dog | Cat` and `label(self) -> str | None`; the scrutinee now has
+  the result type the checker verified for every member.
 - Refuse reading a bound's method as a member of a type-parameter value
   (`value: int64 = item.size` where `item: T` and `T: Size`) with `AU2005`;
   the checker previously typed it as the method's result and both backends
