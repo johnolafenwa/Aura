@@ -99,12 +99,11 @@ shared validator keeps its refusals pinned at `run_mir` and
    board; the phase 1 review's finding 11 closed by reference.
 
 R0 and the inline-member half of R1 (unions whose members are all scalars,
-`None`, or plain classes) merge as the first pull request; the
-owned-handle half of R1 (`str | None` and every union with a runtime-object
-member) shares its ownership machinery with the four-word callable
-environment and merges with R2 and R3 as the second, so each stays
-reviewable and each carries its own green local chain and hosted run. The
-coverage floors may only rise.
+`None`, or plain classes) merged as the first pull request. The owned-handle
+half of R1 (`str | None` and every union with a runtime-object member) is
+the second, and the four-word callable environment (R2) with the records
+(R3) the third, so each stays reviewable and each carries its own green
+local chain and hosted run. The coverage floors may only rise.
 
 ## Risks and rules
 
@@ -165,6 +164,48 @@ Floors 96.46 / 97.33 / 95.23 are unchanged; the hosted line margin is about
 12 lines on either platform, so the second pull request must add covered
 lines rather than spend them.
 
+## Evidence, second pull request (owned-handle unions)
+
+- Eight run-pass fixtures (`none_union_string_local`, `none_union_list_local`,
+  `none_union_string_parameters_and_function_value`,
+  `union_string_class_members_trait_dispatch`,
+  `none_union_string_elements_in_list`, `none_union_string_moves_and_fields`,
+  `none_union_string_return`,
+  `union_receiver_trait_method_returns_none_union`) run on both backends
+  with identical output and pass the runtime's exit leak check; three
+  measurement tests assert zero direct-backend union boxes for a string
+  local, a list local, and a `Dog | Cat` union of classes holding strings;
+  the fixture suite, the union security suites, the validator coverage
+  suite, and the native unit tests pass; every runnable fixture emits a
+  direct object. Parity matrix and chain results are recorded below when
+  they finish.
+- The first complete chain on the branch (`cfab3a44`, 2026-09-21 02:20 BST)
+  passed every gate except the compiler line floor: 96.44% lines (4,309 of
+  121,029 missed) against 96.46, with functions 97.37% and regions 95.23%
+  passing. The uncovered lines inside the branch's hunks were a coercion
+  arm no program reaches (two spellings of one union already share a
+  layout through canonical keys), the opaque-union receiver branch of the
+  runtime member-call path (every concrete union is inline and the checker
+  refuses method calls on a union naming a type parameter), the thunk-side
+  release of an owning union, and error arms; the dead arms are removed
+  and the rest are pinned by unit tests.
+- Probing the coverage gaps found two more defects, fixed and pinned by
+  `union_receiver_trait_method_returns_none_union`: on the direct backend a
+  trait method returning `str | None` called on a `Dog | Cat` receiver had
+  its result released inside the tag switch and retained again afterwards
+  (AU4001 at run time); the tag switch now carries an owned union result
+  across its merge. In lowering, `match pet.label():` over that call
+  panicked the compiler ("checked type pattern") because the expression
+  inference had no result type for a union-receiver trait call; it now
+  resolves the type through the first implementing member, as the checker
+  requires every member to agree.
+- Complete local `npm run ci` chain green on 2026-09-21 at 04:44 BST for
+  the tree of `16da1096`: compiler coverage 96.4777% lines (4,263 of
+  121,028 missed) / 97.3826% functions (213 of 8,138) / 95.2840% regions
+  (8,563 of 181,573) against the unchanged floors 96.46 / 97.33 / 95.23, a
+  line margin of about 21 lines; forced backend parity, LSP and extension
+  suites, reference, tutorials, docs build, audit, clippy, and hygiene pass.
+
 ## Open items
 
 - `.clone()`, rendering, hashing, and every runtime-helper argument of union
@@ -178,9 +219,16 @@ lines rather than spend them.
   tests `None` through `UnionTagTest`), so the direct backend has no inline
   arms for them; the second pull request adds the take when non-Copy members
   go inline.
-- Unions with a runtime-object member remain boxed on both backends until
-  the second pull request lands owned-handle words with tag-selected retain
-  and release.
+- Unions with a runtime-object member are inline on the direct backend as
+  of the second pull request; the interpreter keeps its boxed `Value::Union`
+  as the reference semantics. Five defects the owned handles surfaced are
+  fixed and pinned: the thunk boundary released a payload copy it had
+  handed to the callee; a call result of owning-union type was retained
+  instead of adopted, leaking one reference per return; a payload write
+  under `match mut` released the old handle twice; a tag switch released an
+  owned union result before its merge; and lowering had no result type for
+  a trait call on a union receiver (the runtime's exit leak check and the
+  fixture suite catch all five on every fixture).
 - The interpreter boxes a union payload twice per `match` over a local
   (injection plus the scrutinee copy of a type pattern); it is a reference
   number, not an ABI claim, but the second box is avoidable.

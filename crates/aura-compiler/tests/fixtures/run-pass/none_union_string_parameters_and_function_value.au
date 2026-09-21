@@ -1,0 +1,24 @@
+def describe(label: str | None) -> str | None:
+    match label:
+        case str as text:
+            return text + "!"
+        case None:
+            return None
+
+def main():
+    match describe("ada"):
+        case str as text:
+            print(text)
+        case None:
+            print("none")
+    match describe(None):
+        case str as text:
+            print(text)
+        case None:
+            print("none")
+    step: def(label: str | None) -> (str | None) = describe
+    match step("via value"):
+        case str as text:
+            print(text)
+        case None:
+            print("none")

@@ -3702,12 +3702,12 @@ Owned callable storage holds owned captures only; loan captures stay in
 local loan closures. A stored callable may return a view of one explicit
 parameter but never of a captured receiver. A packed value keeps the closure's existing environment
 as its storage, so packing allocates no second environment on either
-backend. A union whose members are all scalars, `None`, or plain classes is
-one inline tagged value on the direct backend; a union with a string, list,
-or other runtime-object member, and every closure environment, remain the
-explicitly disclosed boxed interim until the second pull request of the
-representation phase lands the ratified Q15 A / Q16 A callable layout; no
-FFI/ABI stability claim and no 0.4 release precede that. A `TaskCallable[...]` value is a stored task
+backend. Every concrete union is one inline tagged value on the direct
+backend, a runtime-object member riding along as an owned handle word;
+closure environments remain the explicitly disclosed boxed interim until
+the next pull request of the representation phase lands the ratified
+Q15 A / Q16 A callable layout; no FFI/ABI stability claim and no 0.4 release
+precede that. A `TaskCallable[...]` value is a stored task
 target: every `TaskGroup` start method takes it by move for one child call,
 whether Shared, Mutable, or Consuming, and a Mutable target's captures are
 child-owned state with no parent writeback (see
@@ -14754,24 +14754,24 @@ ends. `benchmarks/representation` holds the programs and
 `scripts/bench-representation.py` records the counters, the direct binary's
 size, and wall time with commit provenance; the numbers below are the
 counters, which are deterministic for these programs, measured at
-`6f19ac88` and archived with a checksum manifest in
+`aba80f87` and archived with a checksum manifest in
 [work/2026-09-20-representation-measurements](https://github.com/johnolafenwa/Aura/blob/main/work/2026-09-20-representation-measurements).
 
 | Program | Interpreter | Direct backend |
 | --- | --- | --- |
 | `union_scalar_local` (one million `int64 \| None` injections and tag tests) | 2,000,000 union boxes | 0 union boxes |
 | `union_class_field` (one hundred thousand `Point \| None` class fields) | 100,000 union boxes | 0 union boxes |
+| `union_string_local` (one hundred thousand `str \| None` injections and matches) | 100,000 union boxes | 0 union boxes |
 | `callable_pack_inline` (one hundred thousand one-capture packings) | 100,000 environments | 100,000 environments |
 | `callable_pack_overflow` (one hundred thousand four-capture packings) | 100,000 environments | 100,000 environments |
 | `callable_move` (one packing moved one hundred thousand times) | 1 environments | 1 environments |
 
-A union whose members are all inline (scalars, `None`, plain classes) is one
-tagged value in registers and locals on the direct backend, so its
-injections allocate nothing; the interpreter's boxes are reference numbers
-for its `Value` model, not an ABI claim. Unions with a runtime-object
-member and every closure environment still allocate; the four-word callable
-layout (Q15 A / Q16 A) and the owned-handle union members are the phase's
-second pull request, and these rows are re-measured there.
+Every concrete union is one tagged value in registers and locals on the
+direct backend, a runtime-object member riding along as an owned handle
+word, so injections allocate no union box; the interpreter's boxes are
+reference numbers for its `Value` model, not an ABI claim. Closure
+environments still allocate; the four-word callable layout (Q15 A / Q16 A)
+is the phase's next pull request, and these rows are re-measured there.
 
 ## Executable Size
 

@@ -1,0 +1,12 @@
+def main():
+    mut total = 0
+    mut index = 0
+    while index < 100000:
+        label: str | None = "ada"
+        match label:
+            case str as text:
+                total = total + text.len()
+            case None:
+                total = total - 1
+        index = index + 1
+    print(total)

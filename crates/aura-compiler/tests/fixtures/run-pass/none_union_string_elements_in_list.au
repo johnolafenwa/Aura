@@ -1,0 +1,23 @@
+def main():
+    mut labels: list[str | None] = []
+    first: str | None = "ada"
+    labels.append(first)
+    labels.append(None)
+    labels.append("linus")
+    match labels.get(0):
+        case Lookup.Found(label):
+            match label:
+                case str as text:
+                    print(text)
+                case None:
+                    print("none")
+        case Lookup.Missing:
+            print("missing")
+    print(labels.len())
+    moved: str | None = "grace"
+    holder = moved
+    match holder:
+        case str as text:
+            print(text)
+        case None:
+            print("none")

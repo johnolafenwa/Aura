@@ -188,3 +188,40 @@ fn direct_union_element_read_reenters_inline_from_the_list() {
         "the list boxes its two elements and hands out one copy for the read; the inline local adds none"
     );
 }
+
+const STRING_UNION_LOCAL: &str = "def main():\n    mut label: str | None = \"ada\"\n    match label:\n        case str as text:\n            print(text)\n        case None:\n            print(\"none\")\n    label = None\n    print(label == None)\n";
+
+const LIST_UNION_LOCAL: &str = "def main():\n    items: list[int64] | None = [1, 2, 3]\n    match items:\n        case list[int64] as values:\n            print(values.len())\n        case None:\n            print(\"none\")\n";
+
+const STRING_CLASS_UNION_TRAIT: &str = "trait Greet:\n    def greet(mut self) -> str\n\nclass Dog:\n    name: str\n    barks: int64\n\nclass Cat:\n    name: str\n\nimpl Greet for Dog:\n    def greet(mut self) -> str:\n        self.barks = self.barks + 1\n        return self.name + \" woof\"\n\nimpl Greet for Cat:\n    def greet(mut self) -> str:\n        return self.name + \" meow\"\n\ndef main():\n    mut pet: Dog | Cat = Dog(name=\"rex\", barks=0)\n    print(pet.greet())\n    match pet:\n        case Dog as dog:\n            print(dog.barks)\n        case Cat as cat:\n            print(cat.name)\n";
+
+#[test]
+fn direct_string_union_local_allocates_no_union_box() {
+    let (_, direct) = assert_both_backends("repr-string-union", STRING_UNION_LOCAL, "ada\ntrue\n");
+    assert_eq!(
+        direct.union_payload_boxes, 0,
+        "a `str | None` local holds its string as an owned handle word (Q9 A)"
+    );
+}
+
+#[test]
+fn direct_list_union_local_allocates_no_union_box() {
+    let (_, direct) = assert_both_backends("repr-list-union", LIST_UNION_LOCAL, "3\n");
+    assert_eq!(
+        direct.union_payload_boxes, 0,
+        "a `list[int64] | None` local holds its list as an owned handle word (Q9 A)"
+    );
+}
+
+#[test]
+fn direct_string_class_union_dispatches_without_a_union_box() {
+    let (_, direct) = assert_both_backends(
+        "repr-string-class-union",
+        STRING_CLASS_UNION_TRAIT,
+        "rex woof\n1\n",
+    );
+    assert_eq!(
+        direct.union_payload_boxes, 0,
+        "a `Dog | Cat` union of classes holding strings dispatches on its tag inline (Q9 A)"
+    );
+}

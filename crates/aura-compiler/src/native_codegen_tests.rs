@@ -13547,6 +13547,15 @@ fn native_codegen_builtin_member_tables_and_trait_lookup_cover_additional_paths(
     let option_type = |inner: Type| crate::sema::optional_type(inner);
     let result_direct =
         |ok: Type, err: Type| DirectType::Opaque(Type::Named("Result".to_string(), vec![ok, err]));
+    let inline_option_over_opaque = |member: Type| -> DirectType {
+        DirectType::Union(super::DirectUnionType::new(
+            option_type(member.clone()),
+            vec![
+                DirectType::Opaque(member),
+                DirectType::Scalar(ScalarKind::Unit),
+            ],
+        ))
+    };
     let direct_named = |name: &str| DirectType::Opaque(named_type(name));
     let direct_vec = |inner: Type| DirectType::Opaque(vec_type(inner));
     let io_error = named_type("io.Error");
@@ -13585,17 +13594,17 @@ fn native_codegen_builtin_member_tables_and_trait_lookup_cover_additional_paths(
         (
             named_type("process.Child"),
             "stdin",
-            DirectType::Opaque(option_type(named_type("process.Pipe"))),
+            inline_option_over_opaque(named_type("process.Pipe")),
         ),
         (
             named_type("process.Child"),
             "stdout",
-            DirectType::Opaque(option_type(named_type("process.Pipe"))),
+            inline_option_over_opaque(named_type("process.Pipe")),
         ),
         (
             named_type("process.Child"),
             "stderr",
-            DirectType::Opaque(option_type(named_type("process.Pipe"))),
+            inline_option_over_opaque(named_type("process.Pipe")),
         ),
         (
             named_type("process.Child"),
@@ -14935,5 +14944,295 @@ def main():
         out_of_bounds.contains("tuple projection `4`")
             && out_of_bounds.contains("is out of bounds"),
         "{out_of_bounds}"
+    );
+}
+
+#[test]
+fn native_codegen_release_helpers_release_owning_union_handles_by_tag() {
+    let source = "def main() -> int32:\n    return 0\n";
+    let mir = lower_source_to_mir(source).expect("release helper source should lower");
+    let mut codegen = NativeCodegen::new(&mir, "/tmp/release_owning_union.au", source)
+        .expect("codegen should initialize");
+
+    let mut ctx = Context::new();
+    ctx.func.signature = cranelift_codegen::ir::Signature::new(codegen.call_conv);
+    let mut builder_ctx = FunctionBuilderContext::new();
+    let mut builder = cranelift_frontend::FunctionBuilder::new(&mut ctx.func, &mut builder_ctx);
+    let block = builder.create_block();
+    builder.switch_to_block(block);
+    builder.seal_block(block);
+
+    let text = DirectType::Opaque(Type::named("str"));
+    let optional_text = super::DirectUnionType::new(
+        crate::sema::optional_type(Type::named("str")),
+        vec![text.clone(), DirectType::Scalar(ScalarKind::Unit)],
+    );
+    assert!(optional_text.owns_handles());
+    assert_eq!(optional_text.owning, vec![0]);
+    let inline_pair = super::DirectUnionType::new(
+        crate::sema::optional_type(Type::named("int64")),
+        vec![
+            DirectType::Scalar(ScalarKind::Int64),
+            DirectType::Scalar(ScalarKind::Unit),
+        ],
+    );
+    assert!(!inline_pair.owns_handles());
+
+    let tag = builder.ins().iconst(types::I64, 0);
+    let handle = builder.ins().iconst(types::I64, 7);
+    let instructions_before = builder.func.dfg.num_insts();
+    release_direct_values(
+        &mut codegen,
+        &mut builder,
+        &[tag, handle],
+        &DirectType::Union(optional_text),
+    )
+    .expect("an owning union releases its active handle under a tag switch");
+    let owning_instructions = builder.func.dfg.num_insts() - instructions_before;
+    assert!(
+        owning_instructions >= 4,
+        "the owning member needs a compare, a branch, a release call, and a jump"
+    );
+
+    let instructions_before = builder.func.dfg.num_insts();
+    release_direct_values(
+        &mut codegen,
+        &mut builder,
+        &[tag, handle],
+        &DirectType::Union(inline_pair),
+    )
+    .expect("an all-inline union releases nothing");
+    assert_eq!(builder.func.dfg.num_insts(), instructions_before);
+
+    builder.ins().return_(&[]);
+    builder.finalize();
+}
+
+#[test]
+fn native_codegen_infers_union_rvalues_unary_not_and_scalar_member_receivers() {
+    let optional_int = crate::sema::optional_type(Type::named("int64"));
+    let variable_types = HashMap::from([
+        ("text".to_string(), DirectType::Opaque(Type::named("str"))),
+        (
+            "maybe".to_string(),
+            direct_type(&optional_int, &HashMap::new()).expect("int64 | None is inline"),
+        ),
+    ]);
+    let function_return_types = HashMap::new();
+    let classes = HashMap::new();
+    let inline_optional_int = DirectType::Union(super::DirectUnionType::new(
+        optional_int.clone(),
+        vec![
+            DirectType::Scalar(ScalarKind::Int64),
+            DirectType::Scalar(ScalarKind::Unit),
+        ],
+    ));
+
+    assert_eq!(
+        infer_rvalue_type(
+            &Rvalue::UnionInject {
+                value: Operand::Int(4),
+                union_type: optional_int.clone(),
+                member_type: Type::named("int64"),
+                member_index: 0,
+            },
+            &variable_types,
+            &function_return_types,
+            &classes,
+            &[]
+        ),
+        Some(inline_optional_int.clone()),
+        "an injection has the union's inline layout"
+    );
+    assert_eq!(
+        infer_rvalue_type(
+            &Rvalue::UnionTakePayload {
+                place: "maybe".to_string(),
+                union_type: optional_int.clone(),
+                member_type: Type::named("int64"),
+                member_index: 0,
+            },
+            &variable_types,
+            &function_return_types,
+            &classes,
+            &[]
+        ),
+        Some(DirectType::Scalar(ScalarKind::Int64)),
+        "a payload take has the member's type"
+    );
+    assert_eq!(
+        infer_rvalue_type(
+            &Rvalue::Unary {
+                op: UnaryOp::Not,
+                value: Operand::Place("text".to_string()),
+                span: Span::new(1, 1),
+            },
+            &variable_types,
+            &function_return_types,
+            &classes,
+            &[]
+        ),
+        Some(DirectType::Scalar(ScalarKind::Bool)),
+        "logical not yields a bool whatever the operand's direct type"
+    );
+    assert_eq!(
+        infer_rvalue_type(
+            &Rvalue::Call {
+                callee: CallTarget::Member {
+                    object: Operand::Place("maybe".to_string()),
+                    field: "speak".to_string(),
+                    receiver_place: Some("maybe".to_string()),
+                },
+                args: Vec::new(),
+            },
+            &variable_types,
+            &function_return_types,
+            &classes,
+            &[]
+        ),
+        None,
+        "a union whose members are scalars has no method results"
+    );
+}
+
+#[test]
+fn direct_union_member_calls_report_clone_arity_and_unknown_results() {
+    let optional_int = crate::sema::optional_type(Type::named("int64"));
+    let Type::Union(union) = optional_int.clone() else {
+        panic!("optional int64 is a union");
+    };
+    let inject = Rvalue::UnionInject {
+        value: Operand::Int(4),
+        union_type: optional_int.clone(),
+        member_type: Type::named("int64"),
+        member_index: 0,
+    };
+    let mut clone_with_argument = module_with_main_member_call_result_type(
+        "maybe",
+        optional_int.clone(),
+        inject.clone(),
+        optional_int.clone(),
+        "clone",
+        vec![MirArg {
+            name: None,
+            value: Operand::Int(1),
+            writeback_place: None,
+        }],
+    );
+    clone_with_argument.unions = vec![crate::union_layout::plan_union_layout(&union, |_| true)];
+    let clone_arity_error =
+        emit_host_object(&clone_with_argument).expect_err("a union clone takes no arguments");
+    assert!(
+        clone_arity_error.contains("`clone` does not take arguments"),
+        "{clone_arity_error}"
+    );
+
+    let mut unknown_method = module_with_main_member_call_result_type(
+        "maybe",
+        optional_int.clone(),
+        inject,
+        Type::named("int32"),
+        "speak",
+        Vec::new(),
+    );
+    unknown_method.unions = vec![crate::union_layout::plan_union_layout(&union, |_| true)];
+    let unknown_method_error =
+        emit_host_object(&unknown_method).expect_err("scalar union members have no methods");
+    assert!(
+        unknown_method_error.contains("speak"),
+        "{unknown_method_error}"
+    );
+}
+
+#[test]
+fn direct_runtime_member_calls_report_unknown_members_and_to_float_arity() {
+    let unknown_member = module_with_main_member_call_result_type(
+        "text",
+        Type::named("str"),
+        Rvalue::Use(Operand::String("probe".to_string())),
+        Type::named("int32"),
+        "bogus",
+        Vec::new(),
+    );
+    let unknown_member_error = emit_host_object(&unknown_member)
+        .expect_err("an unknown runtime member cannot be compiled");
+    assert!(
+        unknown_member_error.contains("does not know runtime member `str.bogus`"),
+        "{unknown_member_error}"
+    );
+
+    let to_float_with_argument = module_with_main_member_call_result_type(
+        "wide",
+        Type::named("int128"),
+        Rvalue::Use(Operand::Int(7)),
+        Type::named("float64"),
+        "to_float",
+        vec![MirArg {
+            name: None,
+            value: Operand::Int(1),
+            writeback_place: None,
+        }],
+    );
+    let arity_error =
+        emit_host_object(&to_float_with_argument).expect_err("`to_float` takes no arguments");
+    assert!(arity_error.contains("to_float"), "{arity_error}");
+}
+
+#[test]
+fn direct_union_receiver_switch_refuses_a_member_without_the_method() {
+    let source = "trait Greet:\n    def greet(self) -> str\n\nclass Dog:\n    legs: int64\n\nimpl Greet for Dog:\n    def greet(self) -> str:\n        return \"woof\"\n\ndef main():\n    pet: Dog | None = Dog(legs=4)\n    match pet:\n        case Dog as dog:\n            print(dog.greet())\n        case None:\n            print(\"none\")\n";
+    let mut module = lower_source_to_mir(source).expect("union receiver source should lower");
+    let main = module
+        .functions
+        .iter_mut()
+        .find(|function| function.name == "main")
+        .expect("main should lower");
+    let union_local = main
+        .local_types
+        .iter()
+        .find(|local| matches!(local.ty, Type::Union(_)))
+        .map(|local| local.name.clone())
+        .expect("main declares the union local");
+    main.local_types.push(MirLocalType {
+        name: "probe".to_string(),
+        ty: Type::named("str"),
+    });
+    let entry_label = main.entry.clone();
+    let entry = main
+        .blocks
+        .iter_mut()
+        .find(|block| block.label == entry_label)
+        .expect("main has an entry block");
+    let call_index = entry
+        .instructions
+        .iter()
+        .rposition(|instruction| {
+            matches!(instruction, Instruction::Assign { target, .. } if *target == union_local)
+        })
+        .expect("the union local is assigned in the entry block")
+        + 1;
+    entry.instructions.insert(
+        call_index,
+        Instruction::Assign {
+            target: "probe".to_string(),
+            value: Rvalue::Call {
+                callee: CallTarget::Member {
+                    object: Operand::Place(union_local.clone()),
+                    field: "greet".to_string(),
+                    receiver_place: Some(union_local.clone()),
+                },
+                args: Vec::new(),
+            },
+        },
+    );
+    let main = main.clone();
+    let mut codegen = NativeCodegen::new(&module, "/tmp/union_receiver_switch.au", source)
+        .expect("codegen should initialize");
+    let error = codegen
+        .define_function(&main)
+        .expect_err("the `None` member has no `greet`");
+    assert!(
+        error.contains("direct backend cannot call `.greet` on `None`"),
+        "{error}"
     );
 }

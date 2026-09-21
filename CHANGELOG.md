@@ -38,14 +38,22 @@ in this file.
   `None` (the former `Option.None` spelling printed `Option.None`, while the
   unit value previously rendered as empty text, giving `[, 1]` and
   `Result.Ok()`).
-- Represent a union whose members are all scalars, `None`, or plain classes
-  as one inline tagged value on the direct backend (checkpoint Q9 A): its
-  injections, tag tests, payload reads, pattern matches, and trait dispatch
-  run without a runtime allocation, and a plain class may hold such a union
-  as a flattened field. Both runtimes count union payload boxes, closure
+- Represent every concrete union as one inline tagged value on the direct
+  backend (checkpoint Q9 A): a scalar, `None`, or plain-class member
+  occupies its own words, a string, list, or other runtime-object member
+  occupies one owned handle word, and injections, tag tests, payload reads,
+  pattern matches, equality, `.clone()`, and trait dispatch run without a
+  runtime allocation, and a trait method returning `str | None` on a union
+  receiver keeps its result owned across the dispatch; a plain class may
+  hold an inline union of scalars, `None`, or plain classes as a flattened
+  field. Both runtimes count union payload boxes, closure
   environments, opaque runtime boxes, and callable overflow allocations and
   report them on standard error when `AURA_RUNTIME_STATS=1` is set;
   `benchmarks/representation` records the counters with provenance.
+- Fix a compiler panic ("checked type pattern") when a `match` scrutinee is a
+  trait method call on a union receiver, such as `match pet.label():` with
+  `pet: Dog | Cat` and `label(self) -> str | None`; the scrutinee now has
+  the result type the checker verified for every member.
 - Refuse reading a bound's method as a member of a type-parameter value
   (`value: int64 = item.size` where `item: T` and `T: Size`) with `AU2005`;
   the checker previously typed it as the method's result and both backends

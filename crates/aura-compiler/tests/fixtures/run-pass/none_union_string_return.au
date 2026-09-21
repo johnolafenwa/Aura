@@ -1,0 +1,11 @@
+def make(flag: bool) -> str | None:
+    if flag:
+        return "made"
+    return None
+
+def main():
+    match make(true):
+        case str as text:
+            print(text)
+        case None:
+            print("none")

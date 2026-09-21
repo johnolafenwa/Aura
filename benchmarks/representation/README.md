@@ -14,6 +14,7 @@ reference numbers.
 | --- | --- |
 | `union_scalar_local.au` | One million `int64 \| None` injections and tag tests in a loop |
 | `union_class_field.au` | A plain class with a `Point \| None` field constructed and read one hundred thousand times |
+| `union_string_local.au` | One hundred thousand `str \| None` injections and matches; the string member is an owned handle word |
 | `callable_pack_inline.au` | One hundred thousand packings of a one-capture lambda into `Callable[...]`, each called once |
 | `callable_pack_overflow.au` | One hundred thousand packings of a four-capture lambda (32 bytes, over the 24-byte inline buffer) |
 | `callable_move.au` | One packed value moved through one hundred thousand locals and called once |
