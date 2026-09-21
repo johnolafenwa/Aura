@@ -15109,6 +15109,46 @@ fn native_codegen_infers_union_rvalues_unary_not_and_scalar_member_receivers() {
         None,
         "a union whose members are scalars has no method results"
     );
+    let mut callable_types = variable_types.clone();
+    callable_types.insert(
+        "callback".to_string(),
+        DirectType::Callable(super::DirectCallableType::new(callable_signature(
+            vec![],
+            Type::named("int64"),
+        ))),
+    );
+    assert_eq!(
+        infer_rvalue_type(
+            &Rvalue::Call {
+                callee: CallTarget::Member {
+                    object: Operand::Place("callback".to_string()),
+                    field: "speak".to_string(),
+                    receiver_place: Some("callback".to_string()),
+                },
+                args: Vec::new(),
+            },
+            &callable_types,
+            &function_return_types,
+            &classes,
+            &[]
+        ),
+        None,
+        "a callable value has no members to call"
+    );
+    assert_eq!(
+        infer_rvalue_type(
+            &Rvalue::Call {
+                callee: CallTarget::Value(Operand::Place("text".to_string())),
+                args: Vec::new(),
+            },
+            &callable_types,
+            &function_return_types,
+            &classes,
+            &[]
+        ),
+        None,
+        "a call through a non-callable operand has no result type"
+    );
 }
 
 #[test]
@@ -15564,4 +15604,81 @@ fn direct_callable_shape_declaration_reports_unknown_functions_and_mismatched_ca
         parts_error.contains("expected a callable contract, found `int64`"),
         "{parts_error}"
     );
+}
+
+#[test]
+fn runtime_type_wildcards_are_found_inside_callable_contracts() {
+    use crate::sema::{ClosureCallKind, ClosureCapture, ClosureCaptureMode};
+    let concrete = |ty: Type| crate::sema::FunctionParamContract {
+        keyword_only: false,
+        name: "value".to_string(),
+        ty,
+        passing: crate::ast::ReceiverKind::Value,
+        has_default: false,
+    };
+    let function = |param: Type, ret: Type| Type::Function {
+        params: vec![concrete(param)],
+        return_type: Box::new(ret),
+    };
+    assert!(!super::runtime_type_is_wildcard(&function(
+        Type::named("int64"),
+        Type::named("str")
+    )));
+    assert!(super::runtime_type_is_wildcard(&function(
+        Type::TypeParam("T".to_string()),
+        Type::named("str")
+    )));
+    assert!(super::runtime_type_is_wildcard(&function(
+        Type::named("int64"),
+        Type::named("Unknown")
+    )));
+    let view = Type::ReturnedView(Box::new(crate::sema::ReturnedViewType {
+        mutable: false,
+        pointee: Type::TypeParam("T".to_string()),
+        origin: 0,
+    }));
+    assert!(super::runtime_type_is_wildcard(&view));
+    let callable = |param: Type, ret: Type| {
+        Type::Callable(Box::new(crate::sema::CallableType {
+            task: false,
+            call_kind: ClosureCallKind::Repeatable,
+            params: vec![concrete(param)],
+            return_type: ret,
+        }))
+    };
+    assert!(!super::runtime_type_is_wildcard(&callable(
+        Type::named("int64"),
+        Type::named("int64")
+    )));
+    assert!(super::runtime_type_is_wildcard(&callable(
+        Type::named("int64"),
+        Type::TypeParam("R".to_string())
+    )));
+    let closure = |param: Type, capture: Type, ret: Type| Type::Closure {
+        params: Box::new(vec![concrete(param)]),
+        return_type: Box::new(ret),
+        captures: Box::new(vec![ClosureCapture {
+            name: "state".to_string(),
+            ty: capture,
+            mode: ClosureCaptureMode::MutableView,
+            span: Span::new(1, 1),
+            mutated: false,
+        }]),
+        call_kind: ClosureCallKind::Repeatable,
+    };
+    assert!(!super::runtime_type_is_wildcard(&closure(
+        Type::named("int64"),
+        Type::named("str"),
+        Type::named("bool")
+    )));
+    assert!(super::runtime_type_is_wildcard(&closure(
+        Type::named("int64"),
+        Type::TypeParam("U".to_string()),
+        Type::named("bool")
+    )));
+    assert!(super::runtime_type_is_wildcard(&closure(
+        Type::named("int64"),
+        Type::named("str"),
+        Type::named("Unknown")
+    )));
 }

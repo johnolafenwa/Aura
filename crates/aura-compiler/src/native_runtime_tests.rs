@@ -23183,6 +23183,15 @@ fn direct_callable_environment_blocks_allocate_count_and_free() {
         }),
         "invalid callable environment size"
     );
+    // An environment the allocator cannot provide raises AU4005 instead of
+    // aborting (checkpoint Q16 A).
+    let too_wide = i64::MAX / 8;
+    assert_eq!(
+        capture_direct_boundary_error_message(move || {
+            super::aura_direct_callable_env_alloc(too_wide);
+        }),
+        format!("cannot allocate callable environment of {too_wide} words")
+    );
 }
 
 #[test]
