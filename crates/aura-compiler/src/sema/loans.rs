@@ -781,6 +781,35 @@ impl<'a> FunctionChecker<'a> {
             }
             ExprKind::Index { object, index } => {
                 let object_ty = self.type_of_member_object_expr(object, locals)?;
+                // A list element or a dictionary entry is a place projection
+                // selected by its index or key (ADR-0061, 2026-09-21 section,
+                // A1); the selector is evaluated once when a loan begins.
+                let collection = match &object_ty {
+                    Type::Named(name, args) if name == "list" && args.len() == 1 => Some(true),
+                    Type::Named(name, args) if name == "dict" && args.len() == 2 => Some(false),
+                    _ => None,
+                };
+                if let Some(is_list) = collection {
+                    let selector = match &index.kind {
+                        ExprKind::Int(value) => i128::try_from(*value)
+                            .map(super::places::PlaceSelector::Int)
+                            .unwrap_or(super::places::PlaceSelector::Dynamic),
+                        ExprKind::String(value) => super::places::PlaceSelector::Str(value.clone()),
+                        ExprKind::Bool(value) => super::places::PlaceSelector::Bool(*value),
+                        _ => super::places::PlaceSelector::Dynamic,
+                    };
+                    let conservative = self.view_expr_has_conservative_footprint(object, locals)?;
+                    let place = self.view_place(object, locals)?.map(|place| {
+                        if conservative {
+                            place
+                        } else if is_list {
+                            place.with_element(selector)
+                        } else {
+                            place.with_entry(selector)
+                        }
+                    });
+                    return Ok(place.map(|place| self.canonicalize_view_place(place, locals)));
+                }
                 let Type::Tuple(elements) = object_ty else {
                     return Err(Diagnostic::coded_at(
                         "AU3004",

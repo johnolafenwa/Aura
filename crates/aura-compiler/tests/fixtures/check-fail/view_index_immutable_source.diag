@@ -1,0 +1,5 @@
+error[AU3004]: mutable view source `values[0]` is not mutable
+ --> crates/aura-compiler/tests/fixtures/check-fail/view_index_immutable_source.au:3:21
+  |
+3 |     view mut item = values[0]
+  |                     ^

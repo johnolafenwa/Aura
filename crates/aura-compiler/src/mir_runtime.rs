@@ -228,8 +228,10 @@ fn reject_untrusted_extern_calls(module: &MirModule) -> Result<()> {
             },
             Instruction::Safepoint
             | Instruction::BeginLoan { .. }
+            | Instruction::BeginElementLoan { .. }
             | Instruction::BeginReturnedLoan { .. }
             | Instruction::Reborrow { .. }
+            | Instruction::ReborrowElement { .. }
             | Instruction::ReadLoan { .. }
             | Instruction::EndLoan { .. }
             | Instruction::ReturnLoan { .. }
@@ -273,8 +275,10 @@ fn function_uses_lightweight_tasks(function: &MirFunction) -> bool {
                 Instruction::Assign { value, .. } => rvalue_uses_lightweight_tasks(value),
                 Instruction::Safepoint
                 | Instruction::BeginLoan { .. }
+                | Instruction::BeginElementLoan { .. }
                 | Instruction::BeginReturnedLoan { .. }
                 | Instruction::Reborrow { .. }
+                | Instruction::ReborrowElement { .. }
                 | Instruction::ReadLoan { .. }
                 | Instruction::WriteLoan { .. }
                 | Instruction::EndLoan { .. }
@@ -589,8 +593,10 @@ fn validate_runtime_loan_expansion_complexity(
     {
         let loan = match instruction {
             Instruction::BeginLoan { loan, .. }
+            | Instruction::BeginElementLoan { loan, .. }
             | Instruction::BeginReturnedLoan { loan, .. }
-            | Instruction::Reborrow { loan, .. } => loan,
+            | Instruction::Reborrow { loan, .. }
+            | Instruction::ReborrowElement { loan, .. } => loan,
             _ => continue,
         };
         definitions.entry(loan).or_default().push(instruction);
@@ -1026,6 +1032,73 @@ impl Env {
         }
     }
 
+    /// Begins a loan of one list element or dictionary entry of the
+    /// collection at `source` (a place or an active loan), selected by
+    /// `selector`. Bounds or presence are checked once here, before the loan
+    /// exists, with the diagnostics a direct read raises; the loan's source
+    /// then names the selected slot, which reads and writes reach through
+    /// the place walkers (ADR-0061, 2026-09-21 section, A2).
+    fn begin_element_loan(
+        &mut self,
+        loan: &str,
+        source: &str,
+        selector: Value,
+        mutable: bool,
+    ) -> Result<()> {
+        let resolved = self.resolve_loan_place(source)?;
+        let collection = self.place_ref(&resolved)?;
+        let segment = match collection {
+            Value::Vec(vector) => {
+                let Value::Int(value) = &selector else {
+                    return Err(Diagnostic::new("list indices must be integers"));
+                };
+                let Some(supplied) = value.as_i128() else {
+                    return Err(Diagnostic::new(
+                        "list index is outside the supported signed range",
+                    ));
+                };
+                let len = vector.elements.len() as i128;
+                let normalized = if supplied < 0 {
+                    len + supplied
+                } else {
+                    supplied
+                };
+                let Some(index) = usize::try_from(normalized)
+                    .ok()
+                    .filter(|index| *index < vector.elements.len())
+                else {
+                    return Err(Diagnostic::coded(
+                        "AU4003",
+                        format!(
+                            "list index `{supplied}` is out of bounds for length `{}`",
+                            vector.elements.len()
+                        ),
+                    ));
+                };
+                element_index_segment(index)
+            }
+            Value::Map(map) => {
+                if !map
+                    .entries
+                    .iter()
+                    .any(|(candidate, _)| *candidate == selector)
+                {
+                    return Err(Diagnostic::coded(
+                        "AU4003",
+                        format!("dict key `{}` was not present", selector.render()),
+                    ));
+                }
+                entry_key_segment(&selector)?
+            }
+            _ => {
+                return Err(Diagnostic::new(format!(
+                    "cannot begin element loan `{loan}` on non-collection MIR place `{source}`"
+                )));
+            }
+        };
+        self.begin_loan(loan, &format!("{source}.{segment}"), mutable)
+    }
+
     fn begin_loan(&mut self, loan: &str, source: &str, mutable: bool) -> Result<()> {
         if loan.is_empty() || loan.contains('.') {
             return Err(Diagnostic::new(format!(
@@ -1245,6 +1318,26 @@ impl Env {
                         instance.class_name, segment, place
                     ))
                 })?,
+                Value::Vec(vector) if segment.starts_with('[') => {
+                    let index = parse_element_index_segment(segment, place)?;
+                    vector.elements.get(index).ok_or_else(|| {
+                        Diagnostic::new(format!(
+                            "list MIR place `{place}` has no element at index {index}"
+                        ))
+                    })?
+                }
+                Value::Map(map) if segment.starts_with('[') => {
+                    let key = parse_entry_key_segment(segment, place)?;
+                    map.entries
+                        .iter()
+                        .find(|(candidate, _)| *candidate == key)
+                        .map(|(_, value)| value)
+                        .ok_or_else(|| {
+                            Diagnostic::new(format!(
+                                "dict MIR place `{place}` has no entry for the loaned key"
+                            ))
+                        })?
+                }
                 Value::Tuple(tuple) => {
                     let tuple_index = segment.parse::<usize>().map_err(|_| {
                         Diagnostic::new(format!(
@@ -1582,6 +1675,81 @@ fn array_place_mut<'a>(env: &'a mut Env, place: &str) -> Result<&'a mut ArrayVal
     Ok(checked_mir_array_mut(env.place_mut(place)?))
 }
 
+/// The place segment naming a loaned list element: `[i:<index>]`.
+fn element_index_segment(index: usize) -> String {
+    format!("[i:{index}]")
+}
+
+/// The place segment naming a loaned dictionary entry: the key encoded so
+/// that no `.` can split it (`[k:i:<int>]`, `[k:b:<bool>]`, or
+/// `[k:s:<hex utf-8>]`).
+fn entry_key_segment(key: &Value) -> Result<String> {
+    Ok(match key {
+        Value::Int(value) => format!("[k:i:{}]", value.as_i128().unwrap_or_default()),
+        Value::Bool(value) => format!("[k:b:{value}]"),
+        Value::String(value) => {
+            let hex = value
+                .bytes()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>();
+            format!("[k:s:{hex}]")
+        }
+        _ => {
+            return Err(Diagnostic::new(
+                "dict entry loans require an int64, bool, or str key",
+            ))
+        }
+    })
+}
+
+fn parse_element_index_segment(segment: &str, place: &str) -> Result<usize> {
+    segment
+        .strip_prefix("[i:")
+        .and_then(|rest| rest.strip_suffix(']'))
+        .and_then(|digits| digits.parse::<usize>().ok())
+        .ok_or_else(|| {
+            Diagnostic::new(format!(
+                "invalid element selector `{segment}` in MIR place `{place}`"
+            ))
+        })
+}
+
+fn parse_entry_key_segment(segment: &str, place: &str) -> Result<Value> {
+    let invalid = || {
+        Diagnostic::new(format!(
+            "invalid entry selector `{segment}` in MIR place `{place}`"
+        ))
+    };
+    let body = segment
+        .strip_prefix("[k:")
+        .and_then(|rest| rest.strip_suffix(']'))
+        .ok_or_else(invalid)?;
+    if let Some(digits) = body.strip_prefix("i:") {
+        let value = digits.parse::<i64>().map_err(|_| invalid())?;
+        return Ok(Value::Int(IntegerValue::from_i64(value)));
+    }
+    if let Some(flag) = body.strip_prefix("b:") {
+        return match flag {
+            "true" => Ok(Value::Bool(true)),
+            "false" => Ok(Value::Bool(false)),
+            _ => Err(invalid()),
+        };
+    }
+    if let Some(hex) = body.strip_prefix("s:") {
+        if hex.len() % 2 != 0 {
+            return Err(invalid());
+        }
+        let bytes = (0..hex.len())
+            .step_by(2)
+            .map(|at| u8::from_str_radix(&hex[at..at + 2], 16).map_err(|_| invalid()))
+            .collect::<Result<Vec<u8>>>()?;
+        return String::from_utf8(bytes)
+            .map(Value::String)
+            .map_err(|_| invalid());
+    }
+    Err(invalid())
+}
+
 fn split_place_segments(place: &str) -> Result<Vec<String>> {
     if place.is_empty() {
         return Err(Diagnostic::new("empty MIR place"));
@@ -1702,6 +1870,39 @@ fn write_nested_place(
                 ))
             })?;
             write_nested_place(child, rest, value, full_place)
+        }
+        Value::Vec(vector) if segment.starts_with('[') => {
+            let index = parse_element_index_segment(segment, full_place)?;
+            let slot = vector.elements.get_mut(index).ok_or_else(|| {
+                Diagnostic::new(format!(
+                    "list MIR place `{full_place}` has no element at index {index}"
+                ))
+            })?;
+            if rest.is_empty() {
+                *slot = value;
+                Ok(())
+            } else {
+                write_nested_place(slot, rest, value, full_place)
+            }
+        }
+        Value::Map(map) if segment.starts_with('[') => {
+            let key = parse_entry_key_segment(segment, full_place)?;
+            let slot = map
+                .entries
+                .iter_mut()
+                .find(|(candidate, _)| *candidate == key)
+                .map(|(_, value)| value)
+                .ok_or_else(|| {
+                    Diagnostic::new(format!(
+                        "dict MIR place `{full_place}` has no entry for the loaned key"
+                    ))
+                })?;
+            if rest.is_empty() {
+                *slot = value;
+                Ok(())
+            } else {
+                write_nested_place(slot, rest, value, full_place)
+            }
         }
         Value::Tuple(tuple) => {
             let index = segment.parse::<usize>().map_err(|_| {
@@ -3391,6 +3592,26 @@ impl MirRuntime {
                         yield_now_with_runtime_scheduler();
                     }
                 }
+                Ok(None)
+            }
+            Instruction::BeginElementLoan {
+                loan,
+                source,
+                selector,
+                mutable,
+            } => {
+                let selector = self.evaluate_operand(selector, env)?;
+                env.begin_element_loan(loan, source, selector, *mutable)?;
+                Ok(None)
+            }
+            Instruction::ReborrowElement {
+                loan,
+                parent,
+                selector,
+                mutable,
+            } => {
+                let selector = self.evaluate_operand(selector, env)?;
+                env.begin_element_loan(loan, parent, selector, *mutable)?;
                 Ok(None)
             }
             Instruction::BeginLoan {

@@ -5643,6 +5643,12 @@ impl<'a> FunctionCompiler<'a> {
                 let source = self.resolve_view_place(source)?;
                 self.view_places.insert(loan.clone(), source);
             }
+            Instruction::BeginElementLoan { loan, .. }
+            | Instruction::ReborrowElement { loan, .. } => {
+                return Err(format!(
+                    "direct backend does not yet support element loan `{loan}`"
+                ));
+            }
             Instruction::BeginReturnedLoan {
                 loan,
                 origin,
@@ -17544,6 +17550,8 @@ fn validate_function_in_reachable(
         for instruction in &block.instructions {
             match instruction {
                 Instruction::Safepoint => {}
+                Instruction::BeginElementLoan { selector, .. }
+                | Instruction::ReborrowElement { selector, .. } => validate_operand(selector)?,
                 Instruction::BeginLoan { .. }
                 | Instruction::BeginReturnedLoan { .. }
                 | Instruction::Reborrow { .. }

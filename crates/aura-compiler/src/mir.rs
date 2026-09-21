@@ -743,6 +743,18 @@ pub enum Instruction {
         source: String,
         mutable: bool,
     },
+    /// A loan of one list element or dictionary entry of the collection
+    /// place `source`, selected by `selector`, which was evaluated exactly
+    /// once before the loan begins and is never re-read (ADR-0061,
+    /// 2026-09-21 section). Creation checks bounds or presence and traps
+    /// with `AU4003`; the loan's reads and writes reach the selected slot in
+    /// the collection's storage.
+    BeginElementLoan {
+        loan: String,
+        source: String,
+        selector: Operand,
+        mutable: bool,
+    },
     BeginReturnedLoan {
         loan: String,
         origin: String,
@@ -753,6 +765,14 @@ pub enum Instruction {
         loan: String,
         parent: String,
         projection: String,
+        mutable: bool,
+    },
+    /// An element or entry loan taken through an existing view `parent` of
+    /// a collection (a loop binding or a view of a list or dictionary).
+    ReborrowElement {
+        loan: String,
+        parent: String,
+        selector: Operand,
         mutable: bool,
     },
     ReadLoan {
@@ -1407,8 +1427,10 @@ fn function_returned_view_contract(
     for instruction in &instructions {
         let name = match instruction {
             Instruction::BeginLoan { loan, .. }
+            | Instruction::BeginElementLoan { loan, .. }
             | Instruction::BeginReturnedLoan { loan, .. }
-            | Instruction::Reborrow { loan, .. } => loan,
+            | Instruction::Reborrow { loan, .. }
+            | Instruction::ReborrowElement { loan, .. } => loan,
             _ => continue,
         };
         definitions.entry(name).or_default().push(instruction);
@@ -2256,6 +2278,43 @@ impl<'a> MirLoanValidationContext<'a> {
             };
         }
         Ok(Some(ty))
+    }
+
+    /// An element or entry loan's local has the collection's element or
+    /// value type (ADR-0061, 2026-09-21 section).
+    fn validate_element_loan_type(
+        &self,
+        function: &MirFunction,
+        loan: &str,
+        place: &str,
+    ) -> std::result::Result<(), String> {
+        let Some(collection) = self.place_type(function, place)? else {
+            return Ok(());
+        };
+        let element = match &collection {
+            Type::Named(name, args) if name == "list" && args.len() == 1 => args[0].clone(),
+            Type::Named(name, args) if name == "dict" && args.len() == 2 => args[1].clone(),
+            other => {
+                return Err(format!(
+                    "invalid MIR element loan `{loan}` in `{}` selects from `{other}`, which is not a list or dictionary",
+                    function.name
+                ));
+            }
+        };
+        let Some(expected) = self.root_type(function, loan) else {
+            return Ok(());
+        };
+        if matches!(element, Type::TypeParam(_))
+            || matches!(expected, Type::TypeParam(_))
+            || element == expected
+            || crate::union_runtime::member_matches(&element, &expected)
+        {
+            return Ok(());
+        }
+        Err(format!(
+            "invalid MIR element loan `{loan}` in `{}` has type `{expected}` for an element of `{collection}`",
+            function.name
+        ))
     }
 
     fn validate_projected_loan_type(
@@ -5785,6 +5844,37 @@ fn validate_new_loan_overlap(
     Ok(())
 }
 
+/// An element or entry loan's selector is a literal or a place the function
+/// declares; it was assigned before the loan began and is never re-read
+/// for the loan (ADR-0061, 2026-09-21 section, A2).
+fn validate_element_loan_selector(
+    function: &MirFunction,
+    loan: &str,
+    selector: &Operand,
+) -> std::result::Result<(), String> {
+    match selector {
+        Operand::Int(_) | Operand::String(_) | Operand::Bool(_) => Ok(()),
+        Operand::Place(place) => {
+            if place.contains('.')
+                || !function
+                    .local_types
+                    .iter()
+                    .any(|local| local.name == *place)
+            {
+                return Err(format!(
+                    "invalid MIR element loan `{loan}` in `{}` selects with undeclared place `{place}`",
+                    function.name
+                ));
+            }
+            Ok(())
+        }
+        other => Err(format!(
+            "invalid MIR element loan `{loan}` in `{}` selects with unsupported operand {other:?}",
+            function.name
+        )),
+    }
+}
+
 fn validate_mir_loan_name(function: &MirFunction, loan: &str) -> std::result::Result<(), String> {
     if loan.contains('.') {
         return Err(format!(
@@ -7394,6 +7484,122 @@ fn validate_loan_instruction(
         state.pending_handoff = None;
     }
     match instruction {
+        Instruction::BeginElementLoan {
+            loan,
+            source,
+            selector,
+            mutable,
+        } => {
+            validate_mir_loan_name(function, loan)?;
+            validate_canonical_mir_place(function, source)?;
+            validate_element_loan_selector(function, loan, selector)?;
+            if state.loans.contains_key(loan) {
+                return Err(format!(
+                    "invalid MIR in `{}` begins already-active element loan `{loan}`",
+                    function.name
+                ));
+            }
+            let source_root = source.split('.').next().unwrap_or_default();
+            if loan == source_root {
+                return Err(format!(
+                    "invalid MIR element loan `{loan}` in `{}` shadows its source root",
+                    function.name
+                ));
+            }
+            if state.loans.contains_key(source_root) {
+                return Err(format!(
+                    "invalid MIR element loan `{loan}` in `{}` must use ReborrowElement for parent `{source_root}`",
+                    function.name
+                ));
+            }
+            if !known_roots.contains(source_root) {
+                return Err(format!(
+                    "invalid MIR element loan `{loan}` in `{}` has unknown source `{source}`",
+                    function.name
+                ));
+            }
+            if *mutable && !context.root_allows_mutable_loan(function, source_root) {
+                return Err(format!(
+                    "invalid mutable MIR element loan `{loan}` in `{}` escalates shared input `{source_root}`",
+                    function.name
+                ));
+            }
+            // The element loan's footprint is the whole collection for the
+            // validator's overlap rule; the checker proves literal-only
+            // disjointness between two element loans of one collection.
+            let sources = vec![source.clone()];
+            context.validate_element_loan_type(function, loan, source)?;
+            validate_projected_place_access(function, source, context, state, None)?;
+            validate_active_loan_path_budget(function, loan, state, source.len())?;
+            validate_new_loan_overlap(function, loan, &sources, *mutable, None, &state.loans)?;
+            state.ended.remove(loan);
+            insert_validated_loan(
+                state,
+                loan.clone(),
+                ValidatedLoan {
+                    sources: sources.into(),
+                    mutable: *mutable,
+                    parent: None,
+                    returned_descriptor: false,
+                    active_children: 0,
+                },
+            );
+        }
+        Instruction::ReborrowElement {
+            loan,
+            parent,
+            selector,
+            mutable,
+        } => {
+            validate_mir_loan_name(function, loan)?;
+            validate_element_loan_selector(function, loan, selector)?;
+            if state.loans.contains_key(loan) {
+                return Err(format!(
+                    "invalid MIR in `{}` begins already-active element reborrow `{loan}`",
+                    function.name
+                ));
+            }
+            let Some(parent_loan) = state.loans.get(parent) else {
+                return Err(format!(
+                    "invalid MIR element reborrow `{loan}` in `{}` has inactive parent `{parent}`",
+                    function.name
+                ));
+            };
+            if *mutable && !parent_loan.mutable {
+                return Err(format!(
+                    "invalid mutable MIR element reborrow `{loan}` in `{}` escalates shared parent `{parent}`",
+                    function.name
+                ));
+            }
+            let sources = parent_loan.sources.iter().cloned().collect::<Vec<_>>();
+            let expanded_path_bytes = sources.iter().map(String::len).sum::<usize>();
+            budget.reserve(function, loan, expanded_path_bytes)?;
+            validate_active_loan_path_budget(function, loan, state, expanded_path_bytes)?;
+            for source in &sources {
+                context.validate_element_loan_type(function, loan, source)?;
+                validate_projected_place_access(function, source, context, state, None)?;
+            }
+            validate_new_loan_overlap(
+                function,
+                loan,
+                &sources,
+                *mutable,
+                Some(parent),
+                &state.loans,
+            )?;
+            state.ended.remove(loan);
+            insert_validated_loan(
+                state,
+                loan.clone(),
+                ValidatedLoan {
+                    sources: sources.into(),
+                    mutable: *mutable,
+                    parent: Some(parent.clone()),
+                    returned_descriptor: false,
+                    active_children: 0,
+                },
+            );
+        }
         Instruction::BeginLoan {
             loan,
             source,
@@ -10950,6 +11156,7 @@ impl<'a> Lowerer<'a> {
                 // projection (`choose(pair).value`). Handle that before the
                 // generic place renderer, which cannot name the call result
                 // and would otherwise invent an unusable `<expr>.value` path.
+                let mut element_selector = None;
                 let source = if returned_source.is_some() {
                     let source = self
                         .lower_returned_view_into_loan(
@@ -10961,6 +11168,14 @@ impl<'a> Lowerer<'a> {
                         .expect("checked returned-view source should lower into a loan");
                     returned_descriptor = true;
                     source
+                } else if let Some((collection, selector)) = self.element_loan_source(&view.source)
+                {
+                    // `view name = items[i]`: the collection is the loan's
+                    // source place and the selector is evaluated once, now
+                    // (the place renderer would spell the index as a tuple
+                    // position).
+                    element_selector = Some(selector);
+                    collection
                 } else if let Some(source) = self.render_place_expr_option(&view.source) {
                     source
                 } else {
@@ -10996,6 +11211,22 @@ impl<'a> Lowerer<'a> {
                     // The call above transfers the exact selected projection
                     // into the new caller-side descriptor.
                     self.returned_view_descriptors.insert(loan_name.clone());
+                } else if let Some(selector) = element_selector {
+                    if self.view_sources.contains_key(root) {
+                        self.emit(Instruction::ReborrowElement {
+                            loan: loan_name.clone(),
+                            parent: root.to_string(),
+                            selector,
+                            mutable: view.mutable,
+                        });
+                    } else {
+                        self.emit(Instruction::BeginElementLoan {
+                            loan: loan_name.clone(),
+                            source: source.clone(),
+                            selector,
+                            mutable: view.mutable,
+                        });
+                    }
                 } else if self.view_sources.contains_key(root) {
                     let projection = source
                         .strip_prefix(root)
@@ -20147,6 +20378,37 @@ impl<'a> Lowerer<'a> {
             span,
             HashMap::new(),
         )
+    }
+
+    /// The collection place and the once-evaluated selector of an element
+    /// or entry view source (`items[i]`, `table[key]`), or `None` when the
+    /// expression is not an index of a list or dictionary place.
+    fn element_loan_source(&mut self, expr: &Expr) -> Option<(String, Operand)> {
+        let ExprKind::Index { object, index } = &grouped_mir_expr(expr).kind else {
+            return None;
+        };
+        let selector_ty = match self.infer_expr_type(object)? {
+            Type::Named(name, args) if name == "list" && args.len() == 1 => Type::named("int64"),
+            Type::Named(name, args) if name == "dict" && args.len() == 2 => args[0].clone(),
+            _ => return None,
+        };
+        let collection = self.render_place_expr_option(object)?;
+        let lowered = self.lower_expr_with_expected(index, Some(&selector_ty));
+        let selector = match lowered {
+            Operand::Place(place) => {
+                // A place read must not be retargeted by a later rebinding:
+                // copy the selector into a fresh temporary now.
+                let temp = self.new_typed_temp(selector_ty);
+                self.emit(Instruction::Assign {
+                    target: temp.clone(),
+                    value: Rvalue::Use(Operand::Place(place)),
+                });
+                Operand::Place(temp)
+            }
+            Operand::MovePlace(place) => Operand::Place(place),
+            literal => literal,
+        };
+        Some((collection, selector))
     }
 
     fn infer_expr_type(&self, expr: &Expr) -> Option<Type> {

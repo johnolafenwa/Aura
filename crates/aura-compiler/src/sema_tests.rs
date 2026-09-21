@@ -28460,8 +28460,8 @@ def probe(value: bool):
 fn adr0038_additional_view_diagnostics_cover_call_and_tuple_place_edges() {
     let cases = [
         (
-            "def main():\n    mut values = [1]\n    view mut item = values[0]\n",
-            "indexed collection elements do not have stable view identity",
+            "def main():\n    values = [1]\n    view mut item = values[0]\n",
+            "is not mutable",
         ),
         (
             "def bump(value: mut int64):\n    value += 1\n\ndef main():\n    mut values = [1, 2]\n    bump(values[0])\n",
