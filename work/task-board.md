@@ -21,7 +21,11 @@ Last updated: 2026-09-21
   Docs `35531010740`); main CI `35543350414` and Docs `35543350437` are
   green. Hosted coverage totals are in the work-note evidence table
   (about 96.47 / 97.35 / 95.29 on both platforms, a line margin of about
-  12 lines).
+  12 lines). Second pull request verification: complete local chain green
+  at `16da1096` on 2026-09-21 (coverage 96.4777 / 97.3826 / 95.2840 against
+  the unchanged floors, a line margin of about 21 lines after two dead arms
+  were removed and the owned-handle paths gained unit tests); hosted
+  integration pending.
 - Batch 2–3 checkpoint: `architecture_docs/17-batch-2-3-design-checkpoint.md`
   drafted and ratified 2026-09-20 under the owner's delegated instruction
   (Pythonic without breaking safety or performance); all 28 questions A.

@@ -199,6 +199,12 @@ lines rather than spend them.
   inference had no result type for a union-receiver trait call; it now
   resolves the type through the first implementing member, as the checker
   requires every member to agree.
+- Complete local `npm run ci` chain green on 2026-09-21 at 04:44 BST for
+  the tree of `16da1096`: compiler coverage 96.4777% lines (4,263 of
+  121,028 missed) / 97.3826% functions (213 of 8,138) / 95.2840% regions
+  (8,563 of 181,573) against the unchanged floors 96.46 / 97.33 / 95.23, a
+  line margin of about 21 lines; forced backend parity, LSP and extension
+  suites, reference, tutorials, docs build, audit, clippy, and hygiene pass.
 
 ## Open items
 
