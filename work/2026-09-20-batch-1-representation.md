@@ -242,8 +242,13 @@ lines rather than spend them.
 - Suites: every runnable fixture emits a direct object; the fixture runner,
   the union and callable security suites, the validator coverage suite,
   and the native unit suites (with six assertions moved from the boxed
-  closure ABI to the descriptor and adapters) pass. Parity matrix, chain,
-  and hosted results are recorded here when they finish.
+  closure ABI to the descriptor and adapters) pass. The forced backend parity matrix is green (1,274 seconds on
+  this host); the benchmark lane at `a8aac70a` reports zero closure
+  environments for one hundred thousand one-capture packings and for one
+  packing moved one hundred thousand times, and one hundred thousand
+  overflow blocks with zero environments for the four-capture packings
+  (archived in `work/2026-09-20-representation-measurements/`). Chain and
+  hosted results are recorded here when they finish.
 
 ## Open items
 
