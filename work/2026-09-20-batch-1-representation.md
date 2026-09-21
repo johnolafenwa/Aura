@@ -273,8 +273,19 @@ Floors 96.46 / 97.33 / 95.23 are unchanged; the hosted line margin is about
   environments for one hundred thousand one-capture packings and for one
   packing moved one hundred thousand times, and one hundred thousand
   overflow blocks with zero environments for the four-capture packings
-  (archived in `work/2026-09-20-representation-measurements/`). Chain and
-  hosted results are recorded here when they finish.
+  (archived in `work/2026-09-20-representation-measurements/`).
+- Complete local `npm run ci` chain green on 2026-09-21 at 14:29 BST for
+  the tree of `cc44f661`: compiler coverage 96.4769% lines (4,314 of
+  122,452 missed) / 97.3806% functions (215 of 8,208) / 95.2933% regions
+  (8,672 of 184,250) against the unchanged floors 96.46 / 97.33 / 95.23, a
+  line margin of about 21 lines. Earlier runs of the branch failed the
+  formatting gate, the CLI trap-writeback test (the sink handoff), the
+  provenance suite's stripped control (refusal wording), and the coverage
+  floors twice (the dead boxed paths, the never-executed error closures,
+  and the placeholder arms were removed; fixtures and unit tests pin the
+  rest). Forced backend parity, LSP and extension suites, reference,
+  tutorials, docs build, audit, clippy, and hygiene pass. Hosted results
+  are recorded here when they finish.
 
 ## Open items
 

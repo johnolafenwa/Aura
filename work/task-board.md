@@ -15,7 +15,10 @@ Last updated: 2026-09-21
   re-recorded (branch `codex/batch-1-representation-3`: a descriptor word
   naming the shape plus three environment words, overflow in one checked
   block, boxing only at boundaries; the boxed indirect-call path is
-  removed). First pull request verification: complete local chain green
+  removed). Third pull request verification: complete local chain green
+  at `cc44f661` on 2026-09-21 (coverage 96.4769 / 97.3806 / 95.2933 against
+  the unchanged floors, a line margin of about 21 lines); hosted
+  integration pending. First pull request verification: complete local chain green
   at `ee8f1d74` on 2026-09-20 (coverage 96.4690 / 97.3506 / 95.2864 against
   floors 96.46 / 97.33 / 95.23, unchanged); hosted:
   [PR #14](https://github.com/johnolafenwa/Aura/pull/14) merged `5578afee`
