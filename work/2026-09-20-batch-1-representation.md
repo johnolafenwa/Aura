@@ -284,8 +284,24 @@ Floors 96.46 / 97.33 / 95.23 are unchanged; the hosted line margin is about
   floors twice (the dead boxed paths, the never-executed error closures,
   and the placeholder arms were removed; fixtures and unit tests pin the
   rest). Forced backend parity, LSP and extension suites, reference,
-  tutorials, docs build, audit, clippy, and hygiene pass. Hosted results
-  are recorded here when they finish.
+  tutorials, docs build, audit, clippy, and hygiene pass.
+- Hosted integration, third pull request:
+  [PR #16](https://github.com/johnolafenwa/Aura/pull/16) merged `5cf6655e`
+  as `c308f9ba` after branch CI `35606036720` passed on Ubuntu 24.04 and
+  macOS 15 on its first attempt (Docs `35606036719`); main CI `35621435983` is
+  green on both platforms (Docs `35621435975`).
+
+| Hosted run | Lines | Functions | Regions |
+| --- | --- | --- | --- |
+| Branch CI `35606036720`, macOS 15 (job `106353233581`) | 96.4793% (4,311 of 122,452 missed) | 97.3806% (215 of 8,208) | 95.2955% (8,668 of 184,250) |
+| Branch CI `35606036720`, Ubuntu 24.04 (job `106353233793`) | 96.4769% (4,314 of 122,452) | 97.3806% (215 of 8,208) | 95.2923% (8,674 of 184,250) |
+| Local chain, `cc44f661` | 96.4769% (4,314 of 122,452) | 97.3806% (215 of 8,208) | 95.2933% (8,672 of 184,250) |
+
+Floors 96.46 / 97.33 / 95.23 are unchanged; the hosted line margin is about
+24 lines on macOS and 21 on Ubuntu. With this merge the representation
+phase is complete: every concrete union and every callable value is inline
+on the direct backend, measured, with no FFI/ABI claim and no 0.4 release
+before it.
 
 ## Open items
 
