@@ -205,6 +205,20 @@ lines rather than spend them.
   (8,563 of 181,573) against the unchanged floors 96.46 / 97.33 / 95.23, a
   line margin of about 21 lines; forced backend parity, LSP and extension
   suites, reference, tutorials, docs build, audit, clippy, and hygiene pass.
+- Hosted integration, second pull request:
+  [PR #15](https://github.com/johnolafenwa/Aura/pull/15) merged `e09dbcb5`
+  as `150f64cc` after branch CI `35558636280` passed on Ubuntu 24.04 and
+  macOS 15 on its first attempt (Docs `35558636292`); main CI `35566991383` is
+  green on both platforms (Docs `35566991384`).
+
+| Hosted run | Lines | Functions | Regions |
+| --- | --- | --- | --- |
+| Branch CI `35558636280`, macOS 15 (job `106207079214`) | 96.4766% (4,264 of 121,028 missed) | 97.3826% (213 of 8,138) | 95.2840% (8,563 of 181,573) |
+| Branch CI `35558636280`, Ubuntu 24.04 (job `106207079391`) | 96.4791% (4,261 of 121,028) | 97.3826% (213 of 8,138) | 95.2840% (8,563 of 181,573) |
+| Local chain, `16da1096` | 96.4777% (4,263 of 121,028) | 97.3826% (213 of 8,138) | 95.2840% (8,563 of 181,573) |
+
+Floors 96.46 / 97.33 / 95.23 are unchanged; the hosted line margin is about
+20 lines on macOS and 23 on Ubuntu.
 
 ## Evidence, third pull request (four-word callables)
 
