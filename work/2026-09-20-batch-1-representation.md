@@ -145,6 +145,25 @@ coverage floors may only rise.
   (reference numbers for the interpreter, layout claims for the direct
   backend): recorded in the performance chapter's representation table and
   archived in `work/2026-09-20-representation-measurements/`.
+- Hosted integration, first pull request:
+  [PR #14](https://github.com/johnolafenwa/Aura/pull/14) merged `5578afee`
+  as `4c029a8c` after branch CI `35531010620` passed on Ubuntu 24.04 and
+  macOS 15 on its second attempt (the first macOS attempt hit the known
+  native-cache contention flake in
+  `direct_run_json_distinguishes_normal_nonzero_status_from_a_runtime_trap`;
+  Docs `35531010740`); main CI `35543350414` is green on both platforms
+  (Docs `35543350437`; the Tutorial Examples workflow is path-filtered and
+  had nothing to run for this merge).
+
+| Hosted run | Lines | Functions | Regions |
+| --- | --- | --- | --- |
+| Branch CI `35531010620`, macOS 15 (job `106150926161`) | 96.4705% (4,260 of 120,698 missed) | 97.3506% (215 of 8,115) | 95.2878% (8,524 of 180,891) |
+| Branch CI `35531010620`, Ubuntu 24.04 (job `106150926648`) | 96.4697% (4,261 of 120,698) | 97.3506% (215 of 8,115) | 95.2856% (8,528 of 180,891) |
+| Local chain, `ee8f1d74` | 96.4690% (4,262 of 120,698) | 97.3506% (215 of 8,115) | 95.2864% (8,527 of 180,891) |
+
+Floors 96.46 / 97.33 / 95.23 are unchanged; the hosted line margin is about
+12 lines on either platform, so the second pull request must add covered
+lines rather than spend them.
 
 ## Open items
 
