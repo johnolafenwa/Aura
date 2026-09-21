@@ -1043,7 +1043,9 @@ impl Env {
         loan: &str,
         source: &str,
         selector: Value,
+        projection: &str,
         mutable: bool,
+        span: crate::diag::Span,
     ) -> Result<()> {
         let resolved = self.resolve_loan_place(source)?;
         let collection = self.place_ref(&resolved)?;
@@ -1067,8 +1069,9 @@ impl Env {
                     .ok()
                     .filter(|index| *index < vector.elements.len())
                 else {
-                    return Err(Diagnostic::coded(
+                    return Err(Diagnostic::coded_at(
                         "AU4003",
+                        span,
                         format!(
                             "list index `{supplied}` is out of bounds for length `{}`",
                             vector.elements.len()
@@ -1083,8 +1086,9 @@ impl Env {
                     .iter()
                     .any(|(candidate, _)| *candidate == selector)
                 {
-                    return Err(Diagnostic::coded(
+                    return Err(Diagnostic::coded_at(
                         "AU4003",
+                        span,
                         format!("dict key `{}` was not present", selector.render()),
                     ));
                 }
@@ -1096,7 +1100,12 @@ impl Env {
                 )));
             }
         };
-        self.begin_loan(loan, &format!("{source}.{segment}"), mutable)
+        let place = if projection.is_empty() {
+            format!("{source}.{segment}")
+        } else {
+            format!("{source}.{segment}.{projection}")
+        };
+        self.begin_loan(loan, &place, mutable)
     }
 
     fn begin_loan(&mut self, loan: &str, source: &str, mutable: bool) -> Result<()> {
@@ -3598,20 +3607,20 @@ impl MirRuntime {
                 loan,
                 source,
                 selector,
+                projection,
                 mutable,
-            } => {
-                let selector = self.evaluate_operand(selector, env)?;
-                env.begin_element_loan(loan, source, selector, *mutable)?;
-                Ok(None)
+                span,
             }
-            Instruction::ReborrowElement {
+            | Instruction::ReborrowElement {
                 loan,
-                parent,
+                parent: source,
                 selector,
+                projection,
                 mutable,
+                span,
             } => {
                 let selector = self.evaluate_operand(selector, env)?;
-                env.begin_element_loan(loan, parent, selector, *mutable)?;
+                env.begin_element_loan(loan, source, selector, projection, *mutable, *span)?;
                 Ok(None)
             }
             Instruction::BeginLoan {

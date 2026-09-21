@@ -12998,6 +12998,7 @@ fn batch1_index_helpers_follow_groups_and_reject_non_constants() {
 fn batch1_loan_ancestor_walks_stop_on_cycles() {
     let loan = |parent: Option<&str>, returned: bool| ValidatedLoan {
         sources: Vec::<String>::new().into(),
+        footprints: None,
         mutable: false,
         parent: parent.map(str::to_owned),
         returned_descriptor: returned,
@@ -13036,6 +13037,7 @@ fn batch1_loan_path_budgets_reject_oversized_expansions() {
         "big".to_string(),
         ValidatedLoan {
             sources: vec![format!("{huge}a"), format!("{huge}b")].into(),
+            footprints: None,
             mutable: false,
             parent: None,
             returned_descriptor: false,
@@ -13139,4 +13141,140 @@ fn batch1_union_argument_specialization_edge_cases() {
         &mut substitutions,
     ));
     assert!(substitutions.is_empty());
+}
+
+fn element_loan_mut<'a>(module: &'a mut MirModule, name: &str) -> &'a mut Instruction {
+    module
+        .functions
+        .iter_mut()
+        .flat_map(|function| &mut function.blocks)
+        .flat_map(|block| &mut block.instructions)
+        .find(|instruction| {
+            matches!(instruction, Instruction::BeginElementLoan { loan, .. } if loan == name)
+        })
+        .expect("the lowered source should begin the element loan")
+}
+
+#[test]
+fn adr0061_element_loan_contracts_are_refused_at_every_public_boundary() {
+    let source = r#"
+class Profile:
+    name: str
+    visits: int64
+
+def main():
+    mut users = [Profile(name="ada", visits=1), Profile(name="linus", visits=2)]
+    view mut first = users[0]
+    view mut second = users[1]
+    first.visits += 1
+    second.visits += 10
+    print(users[0].visits)
+    print(users[1].visits)
+"#;
+    let module = crate::lower_source_to_mir(source).expect("element views should lower");
+    let output = crate::run_mir(&module).expect("literal-disjoint mutable element loans execute");
+    assert_eq!(output.stdout, "2\n12\n");
+
+    let mut overlapping = module.clone();
+    if let Instruction::BeginElementLoan { selector, .. } =
+        element_loan_mut(&mut overlapping, "second")
+    {
+        *selector = Operand::Int(0);
+    }
+    assert_public_boundaries_reject(
+        &overlapping,
+        "invalid MIR loan `second` in `main` overlaps active mutable loan `first`",
+    );
+
+    let mut dynamic = module.clone();
+    if let Instruction::BeginElementLoan { selector, .. } = element_loan_mut(&mut dynamic, "second")
+    {
+        *selector = Operand::Place("users".to_string());
+    }
+    assert_public_boundaries_reject(
+        &dynamic,
+        "invalid MIR loan `second` in `main` overlaps active mutable loan `first`",
+    );
+
+    let mut malformed = module.clone();
+    if let Instruction::BeginElementLoan { projection, .. } =
+        element_loan_mut(&mut malformed, "first")
+    {
+        *projection = "visits..name".to_string();
+    }
+    assert_public_boundaries_reject(
+        &malformed,
+        "invalid MIR element loan `first` in `main` has malformed projection `visits..name`",
+    );
+
+    let mut undeclared = module.clone();
+    if let Instruction::BeginElementLoan { selector, .. } =
+        element_loan_mut(&mut undeclared, "first")
+    {
+        *selector = Operand::Place("nope".to_string());
+    }
+    assert_public_boundaries_reject(
+        &undeclared,
+        "invalid MIR element loan `first` in `main` selects with undeclared place `nope`",
+    );
+
+    let mut unsupported = module.clone();
+    if let Instruction::BeginElementLoan { selector, .. } =
+        element_loan_mut(&mut unsupported, "first")
+    {
+        *selector = Operand::Unit;
+    }
+    assert_public_boundaries_reject(
+        &unsupported,
+        "invalid MIR element loan `first` in `main` selects with unsupported operand",
+    );
+
+    let mut not_a_collection = module.clone();
+    if let Instruction::BeginElementLoan { source, .. } =
+        element_loan_mut(&mut not_a_collection, "second")
+    {
+        *source = "first".to_string();
+    }
+    assert_public_boundaries_reject(
+        &not_a_collection,
+        "invalid MIR element loan `second` in `main` must use ReborrowElement for parent `first`",
+    );
+
+    let mut mistyped = module.clone();
+    for function in &mut mistyped.functions {
+        for local in &mut function.local_types {
+            if local.name == "first" {
+                local.ty = Type::named("str");
+            }
+        }
+    }
+    assert_public_boundaries_reject(
+        &mistyped,
+        "invalid MIR element loan `first` in `main` has type `str` for `users[..]` of `list[Profile]`",
+    );
+
+    let mut inactive_parent = module.clone();
+    let forged = element_loan_mut(&mut inactive_parent, "first");
+    if let Instruction::BeginElementLoan {
+        loan,
+        selector,
+        projection,
+        mutable,
+        span,
+        ..
+    } = forged.clone()
+    {
+        *forged = Instruction::ReborrowElement {
+            loan,
+            parent: "second".to_string(),
+            selector,
+            projection,
+            mutable,
+            span,
+        };
+    }
+    assert_public_boundaries_reject(
+        &inactive_parent,
+        "invalid MIR element reborrow `first` in `main` has inactive parent `second`",
+    );
 }

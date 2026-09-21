@@ -60,6 +60,13 @@ impl PlaceProjection {
             (Self::Tuple(left), Self::Tuple(right)) => left != right,
             (Self::Element(left), Self::Element(right))
             | (Self::Entry(left), Self::Entry(right)) => left.disjoint_from(right),
+            // A syntactic position spelled on a list or an integer-keyed
+            // dictionary (`items.0` from the place builders) names that
+            // element or entry.
+            (Self::Tuple(position), Self::Element(selector) | Self::Entry(selector))
+            | (Self::Element(selector) | Self::Entry(selector), Self::Tuple(position)) => {
+                PlaceSelector::Int(*position as i128).disjoint_from(selector)
+            }
             _ => true,
         }
     }
@@ -133,6 +140,17 @@ impl ProjectionPath {
                     | (PlaceProjection::Entry(mine), PlaceProjection::Entry(theirs)) => {
                         mine == theirs || matches!(theirs, PlaceSelector::Dynamic)
                     }
+                    (
+                        PlaceProjection::Tuple(position),
+                        PlaceProjection::Element(theirs) | PlaceProjection::Entry(theirs),
+                    ) => {
+                        PlaceSelector::Int(*position as i128) == *theirs
+                            || matches!(theirs, PlaceSelector::Dynamic)
+                    }
+                    (
+                        PlaceProjection::Element(mine) | PlaceProjection::Entry(mine),
+                        PlaceProjection::Tuple(position),
+                    ) => *mine == PlaceSelector::Int(*position as i128),
                     _ => left == right,
                 })
     }
@@ -359,6 +377,24 @@ impl<'a> FunctionChecker<'a> {
             ExprKind::Member { object, field } => {
                 let parent = self.member_access_path(object)?;
                 Some(parent.with_field(field.clone()))
+            }
+            // An indexed element or entry is a place of its collection: a
+            // literal position is spelled as the syntactic position (one
+            // slot with the element selector under the overlap rule), a
+            // literal key as that entry, anything else as a dynamic
+            // selection that overlaps every slot (ADR-0061, 2026-09-21
+            // section).
+            ExprKind::Index { object, index } => {
+                let parent = self.member_access_path(object)?;
+                Some(match &index.kind {
+                    ExprKind::Int(value) => match usize::try_from(*value) {
+                        Ok(position) => parent.with_tuple(position),
+                        Err(_) => parent.with_element(PlaceSelector::Dynamic),
+                    },
+                    ExprKind::String(value) => parent.with_entry(PlaceSelector::Str(value.clone())),
+                    ExprKind::Bool(value) => parent.with_entry(PlaceSelector::Bool(*value)),
+                    _ => parent.with_element(PlaceSelector::Dynamic),
+                })
             }
             _ => None,
         }

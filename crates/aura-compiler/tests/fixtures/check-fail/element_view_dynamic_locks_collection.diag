@@ -1,0 +1,7 @@
+error[AU3002]: cannot mutate `users[1].visits` while mutable view `selected` remains live
+ --> crates/aura-compiler/tests/fixtures/check-fail/element_view_dynamic_locks_collection.au:10:5
+   |
+10 |     users[1].visits = 5
+   |     ^
+  = related crates/aura-compiler/tests/fixtures/check-fail/element_view_dynamic_locks_collection.au:9:5: view `selected` starts here
+  = related crates/aura-compiler/tests/fixtures/check-fail/element_view_dynamic_locks_collection.au:11:11: last use of view `selected` keeps this loan live

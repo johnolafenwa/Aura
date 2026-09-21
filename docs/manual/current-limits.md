@@ -66,11 +66,14 @@ This page documents known current limits of the Aura compiler and runtime.
   dynamic/negative tuple indexing, or tuple-to-collection conversion. Unpack a
   tuple to take ownership of a non-copy element.
 - Views have identity only for local/parameter/receiver roots, existing views,
-  class-field paths, and fixed tuple positions. Collection indexes and keys,
-  set elements, arbitrary temporaries, and escaping enum-payload views are not
-  loanable. View-bearing aggregates, module storage, multi-origin results,
-  returned loan closures, and lifetime-parameterized structural callable
-  types remain unavailable. Views
+  class-field paths, fixed tuple positions, list elements, and dictionary
+  entries (with field and tuple projections inside an element). Set elements,
+  slices, arbitrary temporaries, and escaping enum-payload views are not
+  loanable; a list element or dictionary entry cannot yet be passed to a
+  `mut` parameter or be the receiver of a mutating method call (bind it with
+  `view mut` first). View-bearing aggregates, module storage, multi-origin
+  results, returned loan closures, and lifetime-parameterized structural
+  callable types remain unavailable. Views
   and loan closures are always non-Transfer.
 - Statement match arms cannot be inline. Expression match arms may use a same-line expression after `case pattern:` or an indented expression body.
 - `for` loop bindings cannot shadow names already visible in the same scope.

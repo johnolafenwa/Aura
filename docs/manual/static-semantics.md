@@ -282,9 +282,12 @@ returns `None`. `insert` clamps its position to `0..=len`.
 
 A direct read produces `T` or `V` only when that element/value type is
 copyable. For a non-copy list element, use `get(index)` for an explicit
-cloned optional read only when the element type is clone-safe. For a non-copy
-dictionary value, use `get(key)` only when the value type is clone-safe, or
-`remove(key)` to transfer ownership. These non-copy
+cloned optional read only when the element type is clone-safe, or bind the
+element in place with `view name = values[index]`. For a non-copy
+dictionary value, use `get(key)` only when the value type is clone-safe,
+`remove(key)` to transfer ownership, or a `view` of the entry. A field access
+through an element (`values[index].field`) reads or assigns the field in
+place without copying the element. These non-copy
 direct-read rejections use `AU3005`; a non-copy indexed compound assignment
 uses `AU3006` because its initial read has the same ownership problem. A missing dictionary key
 in a direct read is runtime diagnostic `AU4003`. Integer indexing is not

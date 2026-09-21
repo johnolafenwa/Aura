@@ -1,0 +1,33 @@
+class Profile:
+    name: str
+    visits: int64
+
+
+def main():
+    mut values = [10, 20, 30]
+    view mut first = values[0]
+    first += 1
+    print(first)
+    print(values)
+    mut names = ["ada", "linus"]
+    view mut name = names[1]
+    name = name + "!"
+    print(names)
+    mut users = [Profile(name="ada", visits=1), Profile(name="linus", visits=2)]
+    view mut ada = users[0]
+    ada.visits += 10
+    print(ada.visits)
+    view mut linus_visits = users[1].visits
+    linus_visits *= 3
+    print(users[1].visits)
+    view mut left = values[1]
+    view mut right = values[2]
+    left += 100
+    right += 200
+    print(values)
+    mut index = 0
+    view mut selected = values[index]
+    index = 2
+    selected = 7
+    print(values)
+    print(index)

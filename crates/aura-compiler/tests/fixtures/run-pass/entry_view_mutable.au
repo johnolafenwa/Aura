@@ -1,0 +1,29 @@
+class Profile:
+    name: str
+    visits: int64
+
+
+def main():
+    mut counts: dict[str, int64] = {"ready": 1, "done": 2}
+    view mut ready = counts["ready"]
+    ready += 1
+    print(counts["ready"])
+    key = "done"
+    view mut done = counts[key]
+    done *= 10
+    print(counts)
+    mut flags: dict[bool, int64] = {true: 1, false: 0}
+    view mut yes = flags[true]
+    yes += 1
+    print(flags[true])
+    mut people: dict[str, Profile] = {"ada": Profile(name="ada", visits=0)}
+    view mut ada = people["ada"]
+    ada.visits += 3
+    print(ada.visits)
+    view mut visits = people["ada"].visits
+    visits *= 2
+    print(people["ada"].visits)
+    mut boxes: dict[str, int64 | str] = {"a": "x"}
+    view mut slot = boxes["a"]
+    slot = 9
+    print(boxes)

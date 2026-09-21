@@ -6419,6 +6419,248 @@ pub extern "C-unwind" fn aura_direct_map_set_index_in_place(
     })
 }
 
+/// The projections a place path spells past a collection element: class
+/// fields, tuple positions, enum payloads, and the active union payload.
+fn direct_projection_segments(path: &str) -> std::result::Result<Vec<&str>, String> {
+    if path.is_empty() {
+        return Ok(Vec::new());
+    }
+    let segments = path.split('.').collect::<Vec<_>>();
+    if segments.iter().any(|segment| segment.is_empty()) {
+        return Err(format!("invalid element projection path `{path}`"));
+    }
+    Ok(segments)
+}
+
+/// Borrows the value at `segments` inside `value` (ADR-0061, 2026-09-21
+/// section): an element or entry loan's projected read clones only the
+/// value it reaches, never the element that holds it.
+fn direct_value_at_path<'a>(
+    value: &'a Value,
+    segments: &[&str],
+    full_path: &str,
+) -> std::result::Result<&'a Value, String> {
+    let Some((projection, rest)) = segments.split_first() else {
+        return Ok(value);
+    };
+    let nested = match value {
+        Value::EnumVariant(variant) => {
+            let index = direct_enum_projection_index(variant, projection)?;
+            &variant.payloads[index]
+        }
+        Value::Union(union) => {
+            if !direct_union_projection(union, projection) {
+                return Err(
+                    "union payload projection does not select the active member".to_string()
+                );
+            }
+            &union.payload
+        }
+        Value::Instance(instance) => instance.fields.get(*projection).ok_or_else(|| {
+            format!(
+                "class `{}` has no field `{}` in path `{full_path}`",
+                instance.class_name, projection
+            )
+        })?,
+        Value::Tuple(tuple) => {
+            let index = projection.parse::<usize>().map_err(|_| {
+                format!(
+                    "tuple projection `{projection}` is not a fixed position in path `{full_path}`"
+                )
+            })?;
+            tuple.elements.get(index).ok_or_else(|| {
+                format!(
+                    "tuple of length {} has no element at index {index} in path `{full_path}`",
+                    tuple.elements.len()
+                )
+            })?
+        }
+        other => {
+            return Err(format!(
+                "cannot access field `{full_path}` on non-instance `{}`",
+                value_type_name(other)
+            ))
+        }
+    };
+    direct_value_at_path(nested, rest, full_path)
+}
+
+enum DirectPathWriteError {
+    /// The selected position or key is not in the collection.
+    Absent,
+    Path(String),
+}
+
+fn direct_vec_index_error(index: i64, len: usize, line: i64, column: i64) -> ! {
+    let message = format!("list index `{index}` is out of bounds for length `{len}`");
+    match runtime_span(line, column) {
+        Some(span) => runtime_error_at(span, message),
+        None => runtime_error(message),
+    }
+}
+
+fn direct_map_missing_key_error(key: &Value, line: i64, column: i64) -> ! {
+    let message = format!("dict key `{}` was not present", key.render());
+    match runtime_span(line, column) {
+        Some(span) => runtime_diagnostic_error(Diagnostic::coded_at("AU4003", span, message)),
+        None => runtime_diagnostic_error(Diagnostic::coded("AU4003", message)),
+    }
+}
+
+/// Reads the projection `path` of the list element at `index`: an element
+/// loan's read on the direct backend (ADR-0061, 2026-09-21 section). An
+/// empty path reads the element itself; a missing position traps as list
+/// indexing does.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_vec_index_path(
+    vec: *mut OpaqueValue,
+    index: i64,
+    path_ptr: *const u8,
+    path_len: usize,
+    line: i64,
+    column: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let path = decode_bytes(path_ptr, path_len);
+        let segments =
+            direct_projection_segments(&path).unwrap_or_else(|message| runtime_error(message));
+        let (value, len) = with_vector(vec, |vector| {
+            (
+                normalize_vec_index(index, vector.elements.len())
+                    .and_then(|normalized| vector.elements.get(normalized))
+                    .map(|element| {
+                        direct_value_at_path(element, &segments, &path)
+                            .map(try_clone_array_containing_value)
+                    }),
+                vector.elements.len(),
+            )
+        });
+        let Some(value) = value else {
+            direct_vec_index_error(index, len, line, column)
+        };
+        let value = value.unwrap_or_else(|message| runtime_error(message));
+        boxed_value(direct_array_result(value, line, column))
+    })
+}
+
+/// Replaces the projection `path` of the list element at `index` in place:
+/// an element loan's write-through on the direct backend. An empty path
+/// replaces the element itself; neither the list nor the element is cloned.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_vec_set_index_path_in_place(
+    vec: *mut OpaqueValue,
+    index: i64,
+    path_ptr: *const u8,
+    path_len: usize,
+    value: *mut OpaqueValue,
+    line: i64,
+    column: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let path = decode_bytes(path_ptr, path_len);
+        let segments =
+            direct_projection_segments(&path).unwrap_or_else(|message| runtime_error(message));
+        let value = unsafe { consume_owned_value(value) };
+        let result = with_vector_mut(vec, |vector| {
+            let len = vector.elements.len();
+            let Some(element) = normalize_vec_index(index, len)
+                .and_then(|normalized| vector.elements.get_mut(normalized))
+            else {
+                return Err(DirectPathWriteError::Absent);
+            };
+            if segments.is_empty() {
+                *element = value;
+                return Ok(());
+            }
+            set_direct_instance_field_owned(element, &segments, &path, value)
+                .map_err(DirectPathWriteError::Path)
+        });
+        match result {
+            Ok(()) => boxed_value(Value::Unit),
+            Err(DirectPathWriteError::Absent) => {
+                let len = with_vector(vec, |vector| vector.elements.len());
+                direct_vec_index_error(index, len, line, column)
+            }
+            Err(DirectPathWriteError::Path(message)) => runtime_error(message),
+        }
+    })
+}
+
+/// Reads the projection `path` of the entry at `key` (borrowed): an entry
+/// loan's read on the direct backend. A missing key traps with `AU4003`.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_map_index_path(
+    map: *mut OpaqueValue,
+    key: *mut OpaqueValue,
+    path_ptr: *const u8,
+    path_len: usize,
+    line: i64,
+    column: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let path = decode_bytes(path_ptr, path_len);
+        let segments =
+            direct_projection_segments(&path).unwrap_or_else(|message| runtime_error(message));
+        let key = unsafe { take_value(key) };
+        let value = with_map(map, |map| {
+            map.entries
+                .iter()
+                .find(|(candidate, _)| *candidate == key)
+                .map(|(_, value)| {
+                    direct_value_at_path(value, &segments, &path)
+                        .map(try_clone_array_containing_value)
+                })
+        });
+        let Some(value) = value else {
+            direct_map_missing_key_error(&key, line, column)
+        };
+        let value = value.unwrap_or_else(|message| runtime_error(message));
+        boxed_value(direct_array_result(value, line, column))
+    })
+}
+
+/// Replaces the projection `path` of the entry at `key` (owned) in place: an
+/// entry loan's write-through on the direct backend. The entry must exist;
+/// a loan never inserts.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_map_set_index_path_in_place(
+    map: *mut OpaqueValue,
+    key: *mut OpaqueValue,
+    path_ptr: *const u8,
+    path_len: usize,
+    value: *mut OpaqueValue,
+    line: i64,
+    column: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let path = decode_bytes(path_ptr, path_len);
+        let segments =
+            direct_projection_segments(&path).unwrap_or_else(|message| runtime_error(message));
+        let key = unsafe { consume_owned_value(key) };
+        let value = unsafe { consume_owned_value(value) };
+        let result = with_map_mut(map, |map| {
+            let Some((_, entry)) = map
+                .entries
+                .iter_mut()
+                .find(|(candidate, _)| *candidate == key)
+            else {
+                return Err(DirectPathWriteError::Absent);
+            };
+            if segments.is_empty() {
+                *entry = value;
+                return Ok(());
+            }
+            set_direct_instance_field_owned(entry, &segments, &path, value)
+                .map_err(DirectPathWriteError::Path)
+        });
+        match result {
+            Ok(()) => boxed_value(Value::Unit),
+            Err(DirectPathWriteError::Absent) => direct_map_missing_key_error(&key, line, column),
+            Err(DirectPathWriteError::Path(message)) => runtime_error(message),
+        }
+    })
+}
+
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_map_clear_in_place(map: *mut OpaqueValue) -> *mut OpaqueValue {
     task_runtime_boundary(|| {

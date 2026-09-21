@@ -1,0 +1,4 @@
+def main():
+    values: dict[str, int32] = {"present": 1}
+    view item = values["missing"]
+    print(item)

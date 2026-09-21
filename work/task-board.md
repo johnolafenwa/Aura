@@ -2,6 +2,22 @@
 
 Last updated: 2026-09-21
 
+## Batch 2 phase 2a (element and entry loans; in progress)
+
+- Branch `codex/batch-2-phase-2a` from `c308f9ba`; work note
+  `2026-09-21-batch-2-phase-2a.md`; design authority ADR-0061's 2026-09-21
+  section (checkpoint M2). Step 1, the element and entry loan vertical
+  slice, is in the tree: `view [mut] name = items[i]` / `table[key]` with
+  field and tuple projections inside the element, evaluated once, `AU4003`
+  at the index expression on both backends; literal-only disjointness in
+  the checker and the validator; field reads through an element as place
+  reads and element-field assignment through a statement-scoped loan.
+  Next: contextual reads at arguments, receivers, operands, and scrutinees;
+  the A3 invalidation classification (`AU3011`); iteration unification;
+  `lookup`; the receiver-table audit; owned bindings as mutable places;
+  script-scope narrowing. Verification: recorded in the work note as the
+  local chain and hosted runs complete.
+
 ## Batch 1 representation phase (in progress) and Batch 2–3 design checkpoint (ratified)
 
 - Representation phase: branch `codex/batch-1-representation` from

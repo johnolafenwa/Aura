@@ -1,0 +1,6 @@
+error[AU4003]: dict key `missing` was not present
+ --> crates/aura-compiler/tests/fixtures/run-fail/entry_view_missing_key.au:3:24
+  |
+3 |     view item = values["missing"]
+  |                        ^
+  = note: Aura call chain (innermost first): main at 1:1

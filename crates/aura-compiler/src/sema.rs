@@ -969,6 +969,10 @@ struct FunctionChecker<'a> {
     suppress_narrowing: Rc<std::cell::Cell<bool>>,
     /// Owned lambda captures the current lambda body mutates in place (C2).
     mutated_captures: Rc<RefCell<BTreeSet<String>>>,
+    /// The index expression currently typed as a place read: the object of
+    /// a member access, whose element or entry is projected rather than
+    /// copied (ADR-0061, 2026-09-21 section, contextual reads).
+    index_place_read: Rc<std::cell::Cell<Option<crate::diag::Span>>>,
     rng_clone_obligations: Rc<RefCell<BTreeSet<String>>>,
     array_equality_obligations: Rc<RefCell<BTreeSet<String>>>,
     expr_result_entries: Rc<RefCell<HashMap<usize, ExprResultEntry>>>,
@@ -1806,6 +1810,7 @@ impl<'a> FunctionChecker<'a> {
             active_match_borrow_places: Rc::new(RefCell::new(Vec::new())),
             suppress_narrowing: Rc::new(std::cell::Cell::new(false)),
             mutated_captures: Rc::new(RefCell::new(BTreeSet::new())),
+            index_place_read: Rc::new(std::cell::Cell::new(None)),
             rng_clone_obligations: Rc::new(RefCell::new(BTreeSet::new())),
             array_equality_obligations: Rc::new(RefCell::new(BTreeSet::new())),
             expr_result_entries: Rc::new(RefCell::new(HashMap::new())),
@@ -1859,6 +1864,7 @@ impl<'a> FunctionChecker<'a> {
             narrowed_reads: self.narrowed_reads.clone(),
             suppress_narrowing: self.suppress_narrowing.clone(),
             mutated_captures: self.mutated_captures.clone(),
+            index_place_read: self.index_place_read.clone(),
         }
     }
 
@@ -1898,6 +1904,7 @@ impl<'a> FunctionChecker<'a> {
             narrowed_reads: self.narrowed_reads.clone(),
             suppress_narrowing: self.suppress_narrowing.clone(),
             mutated_captures: self.mutated_captures.clone(),
+            index_place_read: self.index_place_read.clone(),
         }
     }
 
@@ -1933,6 +1940,7 @@ impl<'a> FunctionChecker<'a> {
             narrowed_reads: self.narrowed_reads.clone(),
             suppress_narrowing: self.suppress_narrowing.clone(),
             mutated_captures: self.mutated_captures.clone(),
+            index_place_read: self.index_place_read.clone(),
         }
     }
 
@@ -1968,6 +1976,7 @@ impl<'a> FunctionChecker<'a> {
             narrowed_reads: self.narrowed_reads.clone(),
             suppress_narrowing: self.suppress_narrowing.clone(),
             mutated_captures: self.mutated_captures.clone(),
+            index_place_read: self.index_place_read.clone(),
         }
     }
 
@@ -7914,7 +7923,9 @@ impl<'a> FunctionChecker<'a> {
                         &index_moved_places,
                         expr.span,
                     )?;
-                    if !self.is_copy_type(&element_ty) {
+                    if !self.is_copy_type(&element_ty)
+                        && self.index_place_read.get() != Some(expr.span)
+                    {
                         return Err(Diagnostic::coded_at(
                             "AU3005",
                             expr.span,
@@ -7958,7 +7969,9 @@ impl<'a> FunctionChecker<'a> {
                         &index_moved_places,
                         expr.span,
                     )?;
-                    if !self.is_copy_type(value_ty) {
+                    if !self.is_copy_type(value_ty)
+                        && self.index_place_read.get() != Some(expr.span)
+                    {
                         return Err(Diagnostic::coded_at(
                             "AU3005",
                             expr.span,
@@ -14846,6 +14859,16 @@ impl<'a> FunctionChecker<'a> {
                             format!("tuple has no position {index}"),
                         )
                     })
+                } else if vec_element_type(&object_ty).is_some()
+                    || map_key_value_types(&object_ty).is_some()
+                {
+                    // `items[i].field`: the element or entry is a place read
+                    // here, never a copy of the selected value (ADR-0061,
+                    // 2026-09-21 section, contextual reads).
+                    let previous = self.index_place_read.replace(Some(expr.span));
+                    let result = self.type_of_expr(expr, locals);
+                    self.index_place_read.set(previous);
+                    result
                 } else {
                     self.type_of_expr(expr, locals)
                 }

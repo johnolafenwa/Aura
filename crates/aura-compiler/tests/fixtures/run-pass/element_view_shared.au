@@ -1,0 +1,25 @@
+class Profile:
+    name: str
+    visits: int64
+
+
+def main():
+    values = [10, 20, 30]
+    view second = values[1]
+    print(second)
+    i = 2
+    view last = values[i]
+    print(last)
+    names = ["ada", "linus"]
+    view name = names[0]
+    print(name)
+    users = [Profile(name="ada", visits=1), Profile(name="linus", visits=2)]
+    view first = users[0]
+    print(first.name)
+    print(first.visits)
+    view linus_visits = users[1].visits
+    print(linus_visits)
+    pairs = [(1, "one"), (2, "two")]
+    view label = pairs[1][1]
+    print(label)
+    print(values)

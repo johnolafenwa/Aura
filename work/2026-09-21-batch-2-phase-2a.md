@@ -142,10 +142,91 @@ narrowing follow in their own commits.
 - Fixture stems pass the identity gate; sidecars end without a trailing
   blank line.
 
+## Step 1 as landed (2026-09-21)
+
+The vertical slice landed with two departures from the survey above, both
+narrower in mechanism and wider in what programs it accepts:
+
+- MIR keeps `BeginLoan`/`Reborrow` untouched and adds `BeginElementLoan
+  { loan, source, selector, projection, mutable, span }` and
+  `ReborrowElement { loan, parent, selector, projection, mutable, span }`.
+  `selector` is a literal (`Int`, `String`, `Bool`) or a declared undotted
+  local copied before the loan; `projection` is the dotted path inside the
+  element (`visits`, `0`, `inner.name`), empty for the element itself;
+  `span` is the index expression, named by the `AU4003` trap on both
+  backends. The validator's footprint of a literal-selected loan is the one
+  slot (`users.[sel:i:0]`, `[sel:s:<hex>]`, `[sel:b:<bool>]`), so two
+  literal-disjoint mutable element loans of one collection validate as the
+  checker allows; a place selector keeps the whole collection.
+- The checker's contextual reads landed for one context now rather than
+  later: an index used as the object of a field access is a place read
+  (`users[i].visits`, `people[key].name`), and an assignment whose target
+  projects inside an element (`users[i].visits = 5`, `+= 1`) lowers to a
+  statement-scoped mutable element loan (`BeginElementLoan`/`WriteLoan`/
+  `EndLoan`), never a clone-and-write-back. `member_access_path` spells
+  indexed places (`users[0].visits` is `users.0.visits`, an element under
+  the overlap rule; a computed index is a dynamic selector), so the view
+  lock rules (`AU3002`) apply to element writes. A list element or entry as
+  a `mut` argument or mutating-method receiver stays refused (the argument
+  message gains a `view mut` help) until contextual arguments land.
+- The interpreter encodes the selected slot as a place segment (`[i:N]`,
+  `[k:i:N]`, `[k:b:<bool>]`, `[k:s:<hex>]`) followed by the projection; the
+  direct backend's `DirectViewAlternative` gains `elements`
+  (`DirectElementSelector { variable, selector_ty, element_type, kind,
+  projection, span }`) and four runtime helpers
+  (`aura_direct_vec_index_path`, `aura_direct_vec_set_index_path_in_place`,
+  `aura_direct_map_index_path`, `aura_direct_map_set_index_path_in_place`)
+  that read or replace the projected value inside the element in place; an
+  owned dictionary key is held by the loan and released at `EndLoan`.
+
+Defects met on the way, all fixed and pinned: `view name = users[1].name`
+lowered to the tuple spelling `users.1.name` and trapped on both backends
+(element projections); a field read through an element view failed on the
+direct backend (`users.name`); an entry view with a `bool` or `int64` key
+crashed the direct binary (a scalar key was passed unboxed); a string key
+leaked once per read (the runtime borrows a lookup key); the checker
+accepted `users[0].visits = 5` under a live view of `users[0]` and the
+validator refused it as an internal error (the tuple/element bridge in
+`PlaceProjection` and the indexed `member_access_path`).
+
 ## Evidence
 
-- Recorded as the stages complete.
+- Fixtures (identical on MIR and forced direct execution): run-pass
+  `element_view_shared`, `element_view_mutable` (write-through, class and
+  string elements, literal-disjoint mutable views, evaluate-once `[7, 120,
+  230]`), `entry_view_shared`, `entry_view_mutable` (`str`, `int64`, `bool`
+  keys, class and union values), `element_place_assignment` (field
+  assignment and compound assignment through elements and entries, a
+  loop-binding reborrow); run-fail `element_view_out_of_bounds` and
+  `entry_view_missing_key` (`AU4003` at the index expression); check-fail
+  `element_view_write_locked`, `element_view_dynamic_locks_collection`,
+  `element_view_source_mutated` (`AU3002`), and the earlier
+  `view_index_immutable_source`.
+- Forged-MIR contracts refused at `run_mir`, `run_serialized_mir`, and
+  `emit_host_native_object` with one reason: same-slot and dynamic overlap,
+  malformed projection, undeclared and unsupported selectors, a loan whose
+  source is an active loan, a mistyped loan local, and an element reborrow
+  of an inactive parent (`adr0061_element_loan_contracts_are_refused_at_every_public_boundary`).
+- Unit tests: the checker's contextual reads, refusals, and lock rules
+  (`adr0061_element_places_read_fields_in_place_and_refuse_element_arguments`);
+  the direct view-place projection inside an element and the direct
+  compilation of every element and entry form
+  (`adr0061_direct_view_place_projection_reaches_inside_an_element`,
+  `adr0061_direct_codegen_compiles_element_and_entry_loans`); the runtime
+  path helpers' reads, in-place writes, and traps
+  (`adr0061_direct_element_path_helpers_read_and_write_inside_elements`).
+- Chain: recorded below when the local `npm run ci` completes.
 
 ## Open items
 
-- None yet.
+- Contextual element reads at arguments, receivers, operands, and
+  scrutinees (checkpoint M2) are the next step; until then a list element
+  or entry cannot be a `mut` argument or a mutating-method receiver, and a
+  Copy read of `users[1].visits` under a live mutable view of `users[0]` is
+  refused conservatively (the read rule checks the collection root).
+- `A3` invalidation classification (`AU3011` naming the origin and the
+  operation) is not yet in: a structural mutation under a live element view
+  is refused by the existing `AU3002` view lock.
+- Nested element views (`grid[i][j]`, `table[key][i]`) are refused by the
+  copy rule at the inner index until contextual reads land; the lowering
+  and both backends already accept a chain of element selectors.

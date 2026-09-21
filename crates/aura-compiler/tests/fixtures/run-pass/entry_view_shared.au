@@ -1,0 +1,24 @@
+class Profile:
+    name: str
+    visits: int64
+
+
+def main():
+    counts: dict[str, int64] = {"ready": 1, "done": 2}
+    view ready = counts["ready"]
+    print(ready)
+    key = "done"
+    view done = counts[key]
+    print(done)
+    flags: dict[bool, str] = {true: "yes", false: "no"}
+    view yes = flags[true]
+    print(yes)
+    codes: dict[int64, str] = {7: "seven"}
+    view seven = codes[7]
+    print(seven)
+    people: dict[str, Profile] = {"ada": Profile(name="ada", visits=3)}
+    view ada = people["ada"]
+    print(ada.visits)
+    view ada_name = people["ada"].name
+    print(ada_name)
+    print(counts)

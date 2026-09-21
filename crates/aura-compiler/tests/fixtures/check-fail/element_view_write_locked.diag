@@ -1,0 +1,7 @@
+error[AU3002]: cannot mutate `users[0].visits` while shared view `first` remains live
+ --> crates/aura-compiler/tests/fixtures/check-fail/element_view_write_locked.au:9:5
+  |
+9 |     users[0].visits = 5
+  |     ^
+  = related crates/aura-compiler/tests/fixtures/check-fail/element_view_write_locked.au:8:5: view `first` starts here
+  = related crates/aura-compiler/tests/fixtures/check-fail/element_view_write_locked.au:10:11: last use of view `first` keeps this loan live

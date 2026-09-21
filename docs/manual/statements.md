@@ -156,18 +156,36 @@ See [Ownership And Borrowing](/manual/ownership-and-borrowing) for moves, partia
 `view name = place` creates an immutable shared alias, and `view mut name =
 place` creates a non-rebindable mutable write-through alias. The initializer
 must resolve to a supported addressable root, field path, fixed tuple position,
-or existing view; collection indexes and computed temporaries are rejected.
+list element, dictionary entry, or existing view, with any field or tuple
+projection inside the element; computed temporaries are rejected.
 
     mut pair = (1, 2)
     view mut second = pair[1]
     second = 7
     print(pair)
 
+    mut users = [Profile(name="ada", visits=1)]
+    view mut visits = users[0].visits
+    visits += 1
+    print(users[0].visits)
+
 The binding's pointee type is inferred. Assigning through a mutable view
-changes the source; it does not retarget the view. Static final-use analysis
+changes the source; it does not retarget the view. An element or entry
+selector is evaluated once, when the view is created: a position outside
+the list or an absent key fails there with `AU4003`, and rebinding the index
+variable later does not move the view. Static final-use analysis
 ends its loan as early as control flow safely permits. Overlapping mutation,
 move, rebind, cleanup, or another mutable loan is rejected while it remains
-live. Scope and control-flow exits release active loans before outer cleanup.
+live; two views of different literal positions or keys of one collection are
+disjoint, a computed selector overlaps every element, and any structural
+mutation of the collection (`append`, `remove`, `clear`, ...) overlaps every
+element view. Scope and control-flow exits release active loans before outer
+cleanup.
+
+An assignment whose target projects inside an element or entry
+(`users[i].visits = 5`, `users[i].visits += 1`) writes through a mutable
+element loan that lasts for the statement; the element is updated in place,
+never copied out and written back.
 
 ## Expression Statements
 

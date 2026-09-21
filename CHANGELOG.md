@@ -156,6 +156,19 @@ in this file.
 - Document the native semantic boundary and incremental Batch 1 builder plan.
 - Correct the documented compiler coverage floors and `aura test` lifecycle and
   parameterized-registration support.
+- Add element and entry views (ADR-0061, Batch 2 phase 2a): `view name =
+  items[i]`, `view mut name = table[key]`, and projections inside an element
+  such as `view mut visits = users[i].visits` bind one list element or
+  dictionary entry in place on both backends. The selector is evaluated once
+  at creation, where an out-of-range position or absent key fails with
+  `AU4003` at the index expression; the checker treats two views of
+  different literal positions or keys as disjoint, a computed selector as
+  overlapping every element, and any structural mutation of the collection
+  as overlapping every element view (`AU3002`). A field access through an
+  element (`users[i].visits`) is a place read, and `users[i].visits = 5` or
+  `users[i].visits += 1` writes through a statement-scoped element loan; the
+  element is never copied out and written back. A list element or entry is
+  not yet accepted as a `mut` argument or mutating-method receiver.
 
 ## VS Code extension 0.3.4 — 2026-09-06
 

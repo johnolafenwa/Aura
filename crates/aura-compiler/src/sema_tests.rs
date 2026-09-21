@@ -28786,9 +28786,16 @@ def main():
         "internal error: bound collection argument is missing"
     );
 
-    assert!(!checker
-        .is_mutable_place(&index("items", expr(ExprKind::Int(0))), &mut locals)
-        .expect("list indexing is not a stable mutable place"));
+    // A list element is a mutable place exactly when its list is
+    // (ADR-0061, 2026-09-21 section, A1).
+    assert_eq!(
+        checker
+            .is_mutable_place(&index("items", expr(ExprKind::Int(0))), &mut locals)
+            .expect("list indexing follows the list's mutability"),
+        checker
+            .is_mutable_place(&name("items"), &mut locals)
+            .expect("the list root is a place")
+    );
     assert!(!checker
         .is_mutable_place(&index("tuple", name("value")), &mut locals,)
         .expect("dynamic tuple indexing is not a mutable place"));
@@ -28891,16 +28898,16 @@ def main():
         )
         .expect("disjoint active loans do not conflict");
 
-    let not_a_tuple = checker
+    // A syntactic position on a list is its element (ADR-0061, 2026-09-21
+    // section): the place builders spell `items[0]` as `items.0`.
+    let element = checker
         .place_path_type(
             &PlacePath::root("items".to_string()).with_tuple(0),
             &locals,
             Span::new(4, 1),
         )
-        .expect_err("tuple projection on a list must fail");
-    assert!(not_a_tuple
-        .message
-        .contains("cannot project tuple position"));
+        .expect("a position on a list projects its element type");
+    assert!(element.is_some());
     let unknown_namespace = checker
         .resolve_member_type(
             &Type::Module("missing.module".to_string()),
@@ -31138,4 +31145,50 @@ fn explicit_specialization_ast_keeps_the_same_callable_adapter_diagnostic() {
     assert_eq!(specialized.code, indexed.code);
     assert_eq!(specialized.message, indexed.message);
     assert!(specialized.message.contains("Step(identity[int64])"));
+}
+
+#[test]
+fn adr0061_element_places_read_fields_in_place_and_refuse_element_arguments() {
+    let accepted = "class Profile:\n    name: str\n    visits: int64\n\ndef main():\n    mut users = [Profile(name=\"ada\", visits=1), Profile(name=\"linus\", visits=2)]\n    print(users[0].visits)\n    users[1].visits += 1\n    view mut ada = users[0]\n    view mut linus = users[1]\n    ada.visits += 1\n    linus.visits += 1\n    view shared = users[0]\n    users[1].visits = 5\n    print(shared.visits)\n    mut people: dict[str, Profile] = {\"ada\": Profile(name=\"ada\", visits=0)}\n    people[\"ada\"].visits = 3\n    print(people[\"ada\"].name)\n    mut pairs = [(1, \"one\")]\n    view label = pairs[0][1]\n    print(label)\n";
+    crate::check_source(accepted)
+        .expect("field reads and writes through elements are place accesses, and literal-disjoint element views coexist");
+
+    let cases = [
+        (
+            "class Profile:\n    name: str\n    visits: int64\n\ndef main():\n    mut users = [Profile(name=\"ada\", visits=1)]\n    taken = users[0].name\n    print(taken)\n",
+            "cannot implicitly copy `Profile` out of a list index",
+        ),
+        (
+            "def bump(value: mut int64):\n    value += 1\n\ndef main():\n    mut values = [1, 2]\n    bump(values[0])\n",
+            "must be a mutable place",
+        ),
+        (
+            "class Profile:\n    name: str\n    visits: int64\n\ndef bump(profile: mut Profile):\n    profile.visits += 1\n\ndef main():\n    mut users = [Profile(name=\"ada\", visits=1)]\n    bump(users[0])\n",
+            "cannot implicitly copy `Profile` out of a list index",
+        ),
+        (
+            "class Profile:\n    name: str\n    visits: int64\n\ndef main():\n    mut users = [Profile(name=\"ada\", visits=1)]\n    view first = users[0]\n    users[0].visits = 5\n    print(first.visits)\n",
+            "cannot mutate `users[0].visits` while shared view `first` remains live",
+        ),
+        (
+            "class Profile:\n    name: str\n    visits: int64\n\ndef main():\n    mut users = [Profile(name=\"ada\", visits=1), Profile(name=\"linus\", visits=2)]\n    i = 0\n    view mut selected = users[i]\n    users[1].visits = 5\n    print(selected.visits)\n",
+            "cannot mutate `users[1].visits` while mutable view `selected` remains live",
+        ),
+        (
+            "def main():\n    mut table: dict[int64, str] = {7: \"seven\"}\n    view mut seven = table[7]\n    table[7] = \"eight\"\n    print(seven)\n",
+            "while mutable view `seven` remains live",
+        ),
+        (
+            "def main():\n    mut values = [1, 2]\n    view mut first = values[0]\n    view mut again = values[0]\n    first += 1\n    again += 1\n",
+            "while mutable loan held by `first` remains live",
+        ),
+    ];
+    for (source, expected) in cases {
+        let error = crate::check_source(source).expect_err(expected);
+        assert!(
+            error.message.contains(expected),
+            "expected `{expected}`, found `{}`",
+            error.message
+        );
+    }
 }

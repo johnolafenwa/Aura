@@ -643,6 +643,10 @@ struct NativeCodegen<'a> {
     vec_index_option: FuncId,
     vec_take_index_in_place: FuncId,
     vec_set_index_in_place: FuncId,
+    vec_index_path: FuncId,
+    vec_set_index_path_in_place: FuncId,
+    map_index_path: FuncId,
+    map_set_index_path_in_place: FuncId,
     array_zeros: FuncId,
     array_full: FuncId,
     array_from_vec: FuncId,
@@ -1173,6 +1177,10 @@ impl<'a> NativeCodegen<'a> {
             vec_index_option => ("aura_direct_vec_index_option", [types::I64, types::I64], Some(types::I64)),
             vec_take_index_in_place => ("aura_direct_vec_take_index_in_place", [types::I64, types::I64], Some(types::I64)),
             vec_set_index_in_place => ("aura_direct_vec_set_index_in_place", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
+            vec_index_path => ("aura_direct_vec_index_path", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
+            vec_set_index_path_in_place => ("aura_direct_vec_set_index_path_in_place", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
+            map_index_path => ("aura_direct_map_index_path", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
+            map_set_index_path_in_place => ("aura_direct_map_set_index_path_in_place", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             array_zeros => ("aura_direct_array_zeros", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             array_full => ("aura_direct_array_full", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             array_from_vec => ("aura_direct_array_from_vec", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
@@ -1666,6 +1674,10 @@ impl<'a> NativeCodegen<'a> {
             vec_index_option,
             vec_take_index_in_place,
             vec_set_index_in_place,
+            vec_index_path,
+            vec_set_index_path_in_place,
+            map_index_path,
+            map_set_index_path_in_place,
             array_zeros,
             array_full,
             array_from_vec,
@@ -2576,6 +2588,18 @@ impl<'a> NativeCodegen<'a> {
         let vec_set_index_in_place = self
             .object
             .declare_func_in_func(self.vec_set_index_in_place, builder.func);
+        let vec_index_path = self
+            .object
+            .declare_func_in_func(self.vec_index_path, builder.func);
+        let vec_set_index_path_in_place = self
+            .object
+            .declare_func_in_func(self.vec_set_index_path_in_place, builder.func);
+        let map_index_path = self
+            .object
+            .declare_func_in_func(self.map_index_path, builder.func);
+        let map_set_index_path_in_place = self
+            .object
+            .declare_func_in_func(self.map_set_index_path_in_place, builder.func);
         let array_zeros = self
             .object
             .declare_func_in_func(self.array_zeros, builder.func);
@@ -3348,6 +3372,7 @@ impl<'a> NativeCodegen<'a> {
             return_type: function.return_type.clone(),
             owned_opaque_temporaries: OwnedTemporaries::default(),
             view_places: HashMap::new(),
+            view_element_keys: HashMap::new(),
             view_selector_vars,
             view_selector_tags,
             closure_selector_vars,
@@ -3457,6 +3482,10 @@ impl<'a> NativeCodegen<'a> {
             vec_index_option,
             vec_take_index_in_place,
             vec_set_index_in_place,
+            vec_index_path,
+            vec_set_index_path_in_place,
+            map_index_path,
+            map_set_index_path_in_place,
             array_zeros,
             array_full,
             array_from_vec,
@@ -4250,6 +4279,32 @@ struct DirectViewAlternative {
     place: String,
     conditions: Vec<(Variable, i64)>,
     union_payloads: Vec<DirectUnionPayload>,
+    /// Element or entry selections applied, in order, after the static
+    /// place is loaded: a view of `items[i]` names the list place plus one
+    /// selector whose value was evaluated once when the loan began
+    /// (ADR-0061, 2026-09-21 section).
+    elements: Vec<DirectElementSelector>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DirectElementKind {
+    List,
+    Dict,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct DirectElementSelector {
+    variable: Variable,
+    selector_ty: DirectType,
+    /// The type the selection reaches: the element, or its `projection`.
+    element_type: Type,
+    kind: DirectElementKind,
+    /// Fields, tuple positions, and payload projections read or written
+    /// inside the selected element, as a dotted path (empty for the
+    /// element itself).
+    projection: String,
+    /// The index expression a bounds or presence trap names.
+    span: Span,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -4277,6 +4332,7 @@ impl DirectViewPlace {
                 place,
                 conditions: Vec::new(),
                 union_payloads: Vec::new(),
+                elements: Vec::new(),
             }],
         }
     }
@@ -4286,7 +4342,17 @@ impl DirectViewPlace {
             return self;
         }
         for alternative in &mut self.alternatives {
-            alternative.place = format!("{}.{}", alternative.place, projection);
+            // A projection of an element view reaches inside the selected
+            // element, not past the collection place.
+            if let Some(selector) = alternative.elements.last_mut() {
+                if selector.projection.is_empty() {
+                    selector.projection = projection.to_string();
+                } else {
+                    selector.projection = format!("{}.{projection}", selector.projection);
+                }
+            } else {
+                alternative.place = format!("{}.{}", alternative.place, projection);
+            }
         }
         self
     }
@@ -4638,6 +4704,8 @@ struct FunctionCompiler<'a> {
     owned_opaque_temporaries: OwnedTemporaries,
     view_places: HashMap<String, DirectViewPlace>,
     view_selector_vars: HashMap<String, Variable>,
+    /// Owned dictionary keys held by entry loans, released at `EndLoan`.
+    view_element_keys: HashMap<String, Variable>,
     view_selector_tags: HashMap<String, HashMap<String, i64>>,
     closure_selector_vars: HashMap<String, Variable>,
     closure_selector_tags: HashMap<(String, usize), i64>,
@@ -4748,6 +4816,10 @@ struct FunctionCompiler<'a> {
     vec_index_option: cranelift_codegen::ir::FuncRef,
     vec_take_index_in_place: cranelift_codegen::ir::FuncRef,
     vec_set_index_in_place: cranelift_codegen::ir::FuncRef,
+    vec_index_path: cranelift_codegen::ir::FuncRef,
+    vec_set_index_path_in_place: cranelift_codegen::ir::FuncRef,
+    map_index_path: cranelift_codegen::ir::FuncRef,
+    map_set_index_path_in_place: cranelift_codegen::ir::FuncRef,
     array_zeros: cranelift_codegen::ir::FuncRef,
     array_full: cranelift_codegen::ir::FuncRef,
     array_from_vec: cranelift_codegen::ir::FuncRef,
@@ -5643,11 +5715,23 @@ impl<'a> FunctionCompiler<'a> {
                 let source = self.resolve_view_place(source)?;
                 self.view_places.insert(loan.clone(), source);
             }
-            Instruction::BeginElementLoan { loan, .. }
-            | Instruction::ReborrowElement { loan, .. } => {
-                return Err(format!(
-                    "direct backend does not yet support element loan `{loan}`"
-                ));
+            Instruction::BeginElementLoan {
+                loan,
+                source,
+                selector,
+                projection,
+                span,
+                ..
+            }
+            | Instruction::ReborrowElement {
+                loan,
+                parent: source,
+                selector,
+                projection,
+                span,
+                ..
+            } => {
+                self.begin_element_loan(loan, source, selector, projection, *span)?;
             }
             Instruction::BeginReturnedLoan {
                 loan,
@@ -5719,6 +5803,7 @@ impl<'a> FunctionCompiler<'a> {
                             },
                             conditions,
                             union_payloads: origin.union_payloads.clone(),
+                            elements: origin.elements.clone(),
                         };
                         if !alternatives.contains(&alternative) {
                             alternatives.push(alternative);
@@ -5751,6 +5836,10 @@ impl<'a> FunctionCompiler<'a> {
             }
             Instruction::EndLoan { loan } => {
                 self.view_places.remove(loan);
+                if let Some(variable) = self.view_element_keys.remove(loan) {
+                    let key = self.builder.use_var(variable);
+                    self.release_opaque_handle(key);
+                }
             }
             Instruction::ReturnLoan { loan, origin } => {
                 self.emit_returned_view_projection(loan, origin)?;
@@ -9712,9 +9801,205 @@ impl<'a> FunctionCompiler<'a> {
     fn load_place(&mut self, place: &str) -> std::result::Result<ValueRef, String> {
         let resolved = self.resolve_view_place(place)?;
         if resolved.alternatives.len() == 1 && resolved.alternatives[0].conditions.is_empty() {
-            return self.load_static_place(&resolved.alternatives[0].place);
+            return self.load_alternative(&resolved.alternatives[0]);
         }
         self.load_selected_view_place(place, resolved)
+    }
+
+    /// Begins an element or entry loan on the direct backend: the selector
+    /// is evaluated once into its own variable (a non-Copy key is owned by
+    /// the loan and released with it), the collection is probed so a
+    /// missing position or key traps now, and every alternative of the
+    /// collection's view place gains the selection.
+    fn begin_element_loan(
+        &mut self,
+        loan: &str,
+        source: &str,
+        selector: &Operand,
+        projection: &str,
+        span: Span,
+    ) -> std::result::Result<(), String> {
+        let collection_ty = direct_type_to_type(&self.type_of_place(source)?);
+        let (kind, selector_ty) = match &collection_ty {
+            Type::Named(name, args) if name == "list" && args.len() == 1 => (
+                DirectElementKind::List,
+                DirectType::Scalar(ScalarKind::Int64),
+            ),
+            Type::Named(name, args) if name == "dict" && args.len() == 2 => (
+                DirectElementKind::Dict,
+                ensure_direct_type(&args[0], &self.classes, "dictionary key")?,
+            ),
+            other => {
+                return Err(format!(
+                    "direct backend cannot begin element loan `{loan}` on `{other}`"
+                ));
+            }
+        };
+        // The loan's local carries the type the selection reaches.
+        let element_type = direct_type_to_type(&self.local_type(loan)?);
+        let loaded = self.load_operand_for_target(selector, &selector_ty)?;
+        let selected = self.coerce_value(loaded, &selector_ty)?;
+        let words = self.transfer_values(&selected);
+        let abi = selector_ty.abi_types()[0];
+        let variable = Variable::from_u32(self.next_variable_index as u32);
+        self.next_variable_index += 1;
+        self.builder.declare_var(variable, abi);
+        self.builder.def_var(variable, words[0]);
+        if matches!(selector_ty, DirectType::Opaque(_)) {
+            self.view_element_keys.insert(loan.to_string(), variable);
+        }
+        let selector = DirectElementSelector {
+            variable,
+            selector_ty,
+            element_type,
+            kind,
+            projection: projection.to_string(),
+            span,
+        };
+        let mut resolved = self.resolve_view_place(source)?;
+        for alternative in &mut resolved.alternatives {
+            alternative.elements.push(selector.clone());
+        }
+        self.view_places.insert(loan.to_string(), resolved);
+        // Bounds or presence are checked once at creation: probe the
+        // selected slot through the loan and drop the copy.
+        let baseline = self.owned_opaque_temporaries.clone();
+        let probe = self.load_place(loan)?;
+        drop(probe);
+        self.release_temporary_owned_since(&baseline);
+        Ok(())
+    }
+
+    /// A span as the line and column words the runtime's indexing helpers
+    /// take.
+    fn span_operands(&mut self, span: Span) -> (Value, Value) {
+        let line = self.builder.ins().iconst(types::I64, span.line as i64);
+        let column = self.builder.ins().iconst(types::I64, span.column as i64);
+        (line, column)
+    }
+
+    /// Loads one view alternative: its static place, then every element or
+    /// entry selection the loan applied to it.
+    fn load_alternative(
+        &mut self,
+        alternative: &DirectViewAlternative,
+    ) -> std::result::Result<ValueRef, String> {
+        let mut value = self.load_static_place(&alternative.place)?;
+        for selector in &alternative.elements {
+            value = self.load_element(value, selector)?;
+        }
+        Ok(value)
+    }
+
+    /// The selected element or entry of a collection value, read as an owned
+    /// copy the caller coerces to the view's type; a missing position or
+    /// key traps with the runtime's indexing diagnostic.
+    fn load_element(
+        &mut self,
+        collection: ValueRef,
+        selector: &DirectElementSelector,
+    ) -> std::result::Result<ValueRef, String> {
+        let collection = self.ensure_opaque(collection)?;
+        let selected = self.builder.use_var(selector.variable);
+        let (line, column) = self.span_operands(selector.span);
+        let (path_ptr, path_len) = self.string_constant(selector.projection.as_bytes())?;
+        let inst = match selector.kind {
+            DirectElementKind::List => self.builder.ins().call(
+                self.vec_index_path,
+                &[
+                    collection.values[0],
+                    selected,
+                    path_ptr,
+                    path_len,
+                    line,
+                    column,
+                ],
+            ),
+            DirectElementKind::Dict => {
+                // The runtime borrows the key for a lookup: the loan's own
+                // key handle is passed as is, and a scalar key is boxed
+                // into a statement temporary.
+                let key = ValueRef {
+                    values: vec![selected],
+                    ty: selector.selector_ty.clone(),
+                };
+                let key = self.ensure_opaque(key)?;
+                self.builder.ins().call(
+                    self.map_index_path,
+                    &[
+                        collection.values[0],
+                        key.values[0],
+                        path_ptr,
+                        path_len,
+                        line,
+                        column,
+                    ],
+                )
+            }
+        };
+        Ok(self.owned_opaque_result(
+            self.builder.inst_results(inst).to_vec(),
+            selector.element_type.clone(),
+        ))
+    }
+
+    /// Stores through one view alternative: a static place directly, or the
+    /// selected element or entry of the collection in place (never a clone
+    /// written back).
+    fn store_alternative(
+        &mut self,
+        alternative: &DirectViewAlternative,
+        value: ValueRef,
+    ) -> std::result::Result<(), String> {
+        let Some((last, prefix)) = alternative.elements.split_last() else {
+            return self.store_static_place(&alternative.place, value);
+        };
+        let mut collection = self.load_static_place(&alternative.place)?;
+        for selector in prefix {
+            collection = self.load_element(collection, selector)?;
+        }
+        let collection = self.ensure_opaque(collection)?;
+        let selected = self.builder.use_var(last.variable);
+        let (line, column) = self.span_operands(last.span);
+        let (path_ptr, path_len) = self.string_constant(last.projection.as_bytes())?;
+        let stored = self.ensure_opaque(value)?;
+        let stored = self.transfer_owned_opaque_value(&stored);
+        let result = match last.kind {
+            DirectElementKind::List => self.builder.ins().call(
+                self.vec_set_index_path_in_place,
+                &[
+                    collection.values[0],
+                    selected,
+                    path_ptr,
+                    path_len,
+                    stored,
+                    line,
+                    column,
+                ],
+            ),
+            DirectElementKind::Dict => {
+                let key = ValueRef {
+                    values: vec![selected],
+                    ty: last.selector_ty.clone(),
+                };
+                let key = self.ensure_opaque(key)?;
+                let key = self.transfer_owned_opaque_value(&key);
+                self.builder.ins().call(
+                    self.map_set_index_path_in_place,
+                    &[
+                        collection.values[0],
+                        key,
+                        path_ptr,
+                        path_len,
+                        stored,
+                        line,
+                        column,
+                    ],
+                )
+            }
+        };
+        self.release_opaque_handle(self.builder.inst_results(result)[0]);
+        Ok(())
     }
 
     fn load_static_place(&mut self, place: &str) -> std::result::Result<ValueRef, String> {
@@ -9809,6 +10094,7 @@ impl<'a> FunctionCompiler<'a> {
                     place: String::new(),
                     conditions,
                     union_payloads: Vec::new(),
+                    elements: Vec::new(),
                 });
                 let set_block = self.builder.create_block();
                 let next_block = self.builder.create_block();
@@ -9867,7 +10153,7 @@ impl<'a> FunctionCompiler<'a> {
                     .brif(selected, load_block, &[], next_block, &[]);
                 self.builder.switch_to_block(load_block);
                 self.owned_opaque_temporaries = caller_owned.clone();
-                let value = self.load_static_place(&alternative.place)?;
+                let value = self.load_alternative(&alternative)?;
                 let value = self.coerce_value(value, &target_ty)?;
                 let value_is_owned = self.temporary_owns_opaque(&value);
                 if let Some(expected) = merged_owned {
@@ -9887,7 +10173,7 @@ impl<'a> FunctionCompiler<'a> {
                 self.builder.seal_block(next_block);
             } else {
                 self.owned_opaque_temporaries = caller_owned.clone();
-                let value = self.load_static_place(&alternative.place)?;
+                let value = self.load_alternative(&alternative)?;
                 let value = self.coerce_value(value, &target_ty)?;
                 let value_is_owned = self.temporary_owns_opaque(&value);
                 if let Some(expected) = merged_owned {
@@ -10509,7 +10795,7 @@ impl<'a> FunctionCompiler<'a> {
         value: ValueRef,
     ) -> std::result::Result<(), String> {
         if resolved.alternatives.len() == 1 && resolved.alternatives[0].conditions.is_empty() {
-            return self.store_static_place(&resolved.alternatives[0].place, value);
+            return self.store_alternative(&resolved.alternatives[0], value);
         }
         self.store_selected_view_place(resolved, value)
     }
@@ -10564,7 +10850,7 @@ impl<'a> FunctionCompiler<'a> {
                     .brif(selected, store_block, &[], next_block, &[]);
                 self.builder.switch_to_block(store_block);
                 self.owned_opaque_temporaries = caller_owned.clone();
-                self.store_static_place(&alternative.place, value.clone())?;
+                self.store_alternative(&alternative, value.clone())?;
                 self.release_temporary_owned_since(&caller_owned);
                 self.builder.ins().jump(merge, &[]);
                 self.builder.seal_block(store_block);
@@ -10572,7 +10858,7 @@ impl<'a> FunctionCompiler<'a> {
                 self.builder.seal_block(next_block);
             } else {
                 self.owned_opaque_temporaries = caller_owned.clone();
-                self.store_static_place(&alternative.place, value.clone())?;
+                self.store_alternative(&alternative, value.clone())?;
                 self.release_temporary_owned_since(&caller_owned);
                 self.builder.ins().jump(merge, &[]);
             }

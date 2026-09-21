@@ -1,0 +1,10 @@
+class Profile:
+    name: str
+    visits: int64
+
+
+def main():
+    mut users = [Profile(name="ada", visits=1), Profile(name="linus", visits=2)]
+    view first = users[0]
+    users[0].visits = 5
+    print(first.visits)
