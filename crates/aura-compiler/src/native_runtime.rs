@@ -7870,6 +7870,54 @@ pub extern "C-unwind" fn aura_direct_instance_set_field_owned(
     })
 }
 
+/// Allocates the environment block of an inline callable whose captures need
+/// more than the three inline words (checkpoint Q16 A). The block is
+/// `words` zeroed words preceded by its length; the allocation is counted,
+/// and failure raises `AU4005` rather than aborting.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_callable_env_alloc(words: i64) -> *mut i64 {
+    task_runtime_boundary(|| {
+        let count = match usize::try_from(words) {
+            Ok(count) if count > 0 => count,
+            _ => runtime_error("invalid callable environment size"),
+        };
+        let mut block: Vec<i64> = Vec::new();
+        if block.try_reserve_exact(count + 1).is_err() {
+            runtime_diagnostic_error(Diagnostic::coded(
+                "AU4005",
+                format!("cannot allocate callable environment of {count} words"),
+            ));
+        }
+        block.push(count as i64);
+        block.resize(count + 1, 0);
+        crate::runtime_value::representation_stats::note_callable_overflow_allocation();
+        let base = Box::into_raw(block.into_boxed_slice()) as *mut i64;
+        // SAFETY: the block holds `count + 1` words; the environment starts
+        // after the length word.
+        unsafe { base.add(1) }
+    })
+}
+
+/// Frees a block from `aura_direct_callable_env_alloc`.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_callable_env_free(env: *mut i64) {
+    task_runtime_boundary(|| {
+        if env.is_null() {
+            return;
+        }
+        // SAFETY: `env` was returned by `aura_direct_callable_env_alloc`, so
+        // the length word precedes it and the block spans `count + 1` words.
+        unsafe {
+            let base = env.sub(1);
+            let count = *base as usize;
+            drop(Box::from_raw(std::ptr::slice_from_raw_parts_mut(
+                base,
+                count + 1,
+            )));
+        }
+    })
+}
+
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_arg_buffer_new(count: i64) -> *mut i64 {
     task_runtime_boundary(|| {

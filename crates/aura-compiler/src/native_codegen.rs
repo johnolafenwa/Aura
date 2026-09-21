@@ -29,6 +29,8 @@ use crate::native_runtime::{
 use crate::sema::{lookup_type, optional_type};
 use crate::sema::{substitute_type, FunctionParamContract, Type};
 
+use callables::{CallableShape, CallableShapeKey};
+
 const DIRECT_TO_FLOAT_ARITY_ERROR: &str =
     "direct backend expected `to_float()` to take no arguments";
 const WIDE_INTEGER_BINARY_ERROR: &str =
@@ -417,6 +419,8 @@ struct ValueRef {
 struct OwnedTemporaries {
     opaque: HashSet<Value>,
     unions: HashMap<Value, (Vec<Value>, DirectUnionType)>,
+    /// Inline callables the statement owns, keyed by the descriptor word.
+    callables: HashMap<Value, Vec<Value>>,
 }
 
 impl OwnedTemporaries {
@@ -435,6 +439,7 @@ impl OwnedTemporaries {
     fn clear(&mut self) {
         self.opaque.clear();
         self.unions.clear();
+        self.callables.clear();
     }
 }
 
@@ -526,6 +531,7 @@ struct NativeCodegen<'a> {
     functions: HashMap<String, FuncId>,
     function_thunks: HashMap<String, FuncId>,
     function_default_binders: HashMap<String, FuncId>,
+    callable_shapes: HashMap<CallableShapeKey, CallableShape>,
     cleanup_thunks: HashMap<(String, String), FuncId>,
     classes: HashMap<String, MirClass>,
     enums: HashMap<String, MirEnum>,
@@ -701,6 +707,9 @@ struct NativeCodegen<'a> {
     union_tag_test: FuncId,
     union_tag: FuncId,
     union_payload_copy: FuncId,
+    #[allow(dead_code)] // Used once callable construction lands.
+    callable_env_alloc: FuncId,
+    callable_env_free: FuncId,
     none_test: FuncId,
     value_is_union: FuncId,
     union_active_payload: FuncId,
@@ -1227,6 +1236,8 @@ impl<'a> NativeCodegen<'a> {
             union_tag_test => ("aura_direct_union_tag_test", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             union_tag => ("aura_direct_union_tag", [types::I64], Some(types::I64)),
             union_payload_copy => ("aura_direct_union_payload_copy", [types::I64, types::I64], Some(types::I64)),
+            callable_env_alloc => ("aura_direct_callable_env_alloc", [types::I64], Some(types::I64)),
+            callable_env_free => ("aura_direct_callable_env_free", [types::I64], None),
             none_test => ("aura_direct_none_test", [types::I64], Some(types::I64)),
             value_is_union => ("aura_direct_value_is_union", [types::I64], Some(types::I64)),
             union_active_payload => ("aura_direct_union_active_payload", [types::I64, types::I64], Some(types::I64)),
@@ -1509,6 +1520,13 @@ impl<'a> NativeCodegen<'a> {
             function_writeback_types.insert(function.name.clone(), writebacks);
         }
 
+        let callable_shapes = callables::declare_callable_shapes(
+            module,
+            &mut object,
+            &function_param_types,
+            &function_return_types,
+            call_conv,
+        )?;
         Ok(Self {
             module,
             reachable_blocks,
@@ -1519,6 +1537,7 @@ impl<'a> NativeCodegen<'a> {
             functions,
             function_thunks,
             function_default_binders,
+            callable_shapes,
             cleanup_thunks,
             classes,
             enums: module
@@ -1707,6 +1726,8 @@ impl<'a> NativeCodegen<'a> {
             union_tag_test,
             union_tag,
             union_payload_copy,
+            callable_env_alloc,
+            callable_env_free,
             none_test,
             value_is_union,
             union_active_payload,
@@ -1911,6 +1932,7 @@ impl<'a> NativeCodegen<'a> {
                 self.define_function_default_binder(function)?;
             }
         }
+        self.define_callable_shapes()?;
         for function in self
             .module
             .functions
@@ -3361,6 +3383,8 @@ impl<'a> NativeCodegen<'a> {
             closure_capture_writebacks: HashMap::new(),
             object: &mut self.object,
             string_data: &mut self.string_data,
+            callable_shapes: &self.callable_shapes,
+            call_conv: self.call_conv,
             cleanup_places,
             cleanup_active_vars,
             cleanup_registration_vars,
@@ -4650,6 +4674,8 @@ struct FunctionCompiler<'a> {
     closure_capture_writebacks: HashMap<String, Vec<DirectClosureCaptureWriteback>>,
     object: &'a mut ObjectModule,
     string_data: &'a mut HashMap<Vec<u8>, DataId>,
+    callable_shapes: &'a HashMap<CallableShapeKey, CallableShape>,
+    call_conv: CallConv,
     cleanup_places: Vec<String>,
     cleanup_active_vars: HashMap<String, Variable>,
     cleanup_registration_vars: HashMap<String, Variable>,
@@ -5107,6 +5133,10 @@ impl<'a> FunctionCompiler<'a> {
         for (words, union) in unions.into_values() {
             self.release_union_words(&union, &words);
         }
+        let callables = std::mem::take(&mut self.owned_opaque_temporaries.callables);
+        for words in callables.into_values() {
+            self.release_callable_words(&words);
+        }
         self.owned_opaque_temporaries.clear();
     }
 
@@ -5131,6 +5161,18 @@ impl<'a> FunctionCompiler<'a> {
         for tag in created {
             if let Some((words, union)) = self.owned_opaque_temporaries.unions.remove(&tag) {
                 self.release_union_words(&union, &words);
+            }
+        }
+        let created = self
+            .owned_opaque_temporaries
+            .callables
+            .keys()
+            .filter(|descriptor| !baseline.callables.contains_key(descriptor))
+            .copied()
+            .collect::<Vec<_>>();
+        for descriptor in created {
+            if let Some(words) = self.owned_opaque_temporaries.callables.remove(&descriptor) {
+                self.release_callable_words(&words);
             }
         }
     }
@@ -5218,12 +5260,107 @@ impl<'a> FunctionCompiler<'a> {
         value.values.clone()
     }
 
-    /// Argument or field words for any direct value: opaque handles and
-    /// owning unions transfer, everything else copies.
+    fn temporary_owns_callable(&self, value: &ValueRef) -> bool {
+        matches!(value.ty, DirectType::Callable(_))
+            && self
+                .owned_opaque_temporaries
+                .callables
+                .contains_key(&value.values[0])
+    }
+
+    fn mark_temporary_callable_owned(&mut self, value: &ValueRef) {
+        if matches!(value.ty, DirectType::Callable(_)) {
+            self.owned_opaque_temporaries
+                .callables
+                .insert(value.values[0], value.values.clone());
+        }
+    }
+
+    fn clear_temporary_callable_owned(&mut self, value: &ValueRef) {
+        if matches!(value.ty, DirectType::Callable(_)) {
+            self.owned_opaque_temporaries
+                .callables
+                .remove(&value.values[0]);
+        }
+    }
+
+    /// Calls the `drop` or `retain` adapter named by an inline callable's
+    /// descriptor on its four words.
+    fn call_callable_adapter_on_words(&mut self, words: &[Value], descriptor_offset: i32) {
+        let slot = self.builder.create_sized_stack_slot(StackSlotData::new(
+            StackSlotKind::ExplicitSlot,
+            (8 * (1 + CALLABLE_ENVIRONMENT_WORDS)) as u32,
+            3,
+        ));
+        let callable_ptr = self.builder.ins().stack_addr(types::I64, slot, 0);
+        for (index, word) in words.iter().enumerate() {
+            self.builder
+                .ins()
+                .store(MemFlags::new(), *word, callable_ptr, (index as i32) * 8);
+        }
+        let adapter =
+            self.builder
+                .ins()
+                .load(types::I64, MemFlags::new(), words[0], descriptor_offset);
+        let signature = self
+            .builder
+            .func
+            .import_signature(callables::callable_unary_signature(self.call_conv));
+        self.builder
+            .ins()
+            .call_indirect(signature, adapter, &[callable_ptr]);
+    }
+
+    /// Releases the captures an inline callable owns; a moved-from value
+    /// (all words zero) is skipped.
+    fn release_callable_words(&mut self, words: &[Value]) {
+        let live = self.builder.ins().icmp_imm(IntCC::NotEqual, words[0], 0);
+        let release_block = self.builder.create_block();
+        let continue_block = self.builder.create_block();
+        self.builder
+            .ins()
+            .brif(live, release_block, &[], continue_block, &[]);
+        self.builder.switch_to_block(release_block);
+        self.builder.seal_block(release_block);
+        self.call_callable_adapter_on_words(words, callables::DESCRIPTOR_DROP);
+        self.builder.ins().jump(continue_block, &[]);
+        self.builder.switch_to_block(continue_block);
+        self.builder.seal_block(continue_block);
+    }
+
+    fn retain_callable_words(&mut self, words: &[Value]) {
+        let live = self.builder.ins().icmp_imm(IntCC::NotEqual, words[0], 0);
+        let retain_block = self.builder.create_block();
+        let continue_block = self.builder.create_block();
+        self.builder
+            .ins()
+            .brif(live, retain_block, &[], continue_block, &[]);
+        self.builder.switch_to_block(retain_block);
+        self.builder.seal_block(retain_block);
+        self.call_callable_adapter_on_words(words, callables::DESCRIPTOR_RETAIN);
+        self.builder.ins().jump(continue_block, &[]);
+        self.builder.switch_to_block(continue_block);
+        self.builder.seal_block(continue_block);
+    }
+
+    /// The words of an inline callable handed to a new owner: an owned
+    /// temporary moves, a borrowed value retains its captures.
+    fn transfer_callable_words(&mut self, value: &ValueRef) -> Vec<Value> {
+        if self.temporary_owns_callable(value) {
+            self.clear_temporary_callable_owned(value);
+            return value.values.clone();
+        }
+        self.retain_callable_words(&value.values);
+        value.values.clone()
+    }
+
+    /// Argument or field words for any direct value: opaque handles,
+    /// owning unions, and inline callables transfer, everything else copies.
     fn transfer_values(&mut self, value: &ValueRef) -> Vec<Value> {
         match &value.ty {
             DirectType::Opaque(_) => vec![self.transfer_opaque_arg(value)],
             DirectType::Union(union) if union.owns_handles() => self.transfer_union_words(value),
+            DirectType::Callable(_) => self.transfer_callable_words(value),
             _ => value.values.clone(),
         }
     }
@@ -5240,6 +5377,15 @@ impl<'a> FunctionCompiler<'a> {
                     .collect::<Vec<_>>();
                 self.release_union_words(&union, &words);
             }
+            return Ok(());
+        }
+        if matches!(ty, DirectType::Callable(_)) {
+            let vars = self.local_vars(name)?;
+            let words = vars
+                .iter()
+                .map(|var| self.builder.use_var(*var))
+                .collect::<Vec<_>>();
+            self.release_callable_words(&words);
             return Ok(());
         }
         if !matches!(ty, DirectType::Opaque(_)) {
@@ -5282,6 +5428,9 @@ impl<'a> FunctionCompiler<'a> {
     }
 
     fn export_return_value(&mut self, value: ValueRef) -> Vec<Value> {
+        if matches!(value.ty, DirectType::Callable(_)) {
+            return self.transfer_callable_words(&value);
+        }
         if let DirectType::Union(union) = &value.ty {
             if union.owns_handles() {
                 return self.transfer_union_words(&value);
@@ -9708,6 +9857,7 @@ impl<'a> FunctionCompiler<'a> {
             };
             self.mark_temporary_opaque_owned(&moved);
             self.mark_temporary_union_owned(&moved);
+            self.mark_temporary_callable_owned(&moved);
             return Ok(moved);
         }
 
@@ -10387,6 +10537,14 @@ impl<'a> FunctionCompiler<'a> {
         let vars = self.local_vars(name)?;
         if matches!(&expected, DirectType::Union(union) if union.owns_handles()) {
             let stored = self.transfer_union_words(&value);
+            self.release_root_if_opaque(name)?;
+            for (var, compiled) in vars.into_iter().zip(stored) {
+                self.builder.def_var(var, compiled);
+            }
+            return Ok(());
+        }
+        if matches!(expected, DirectType::Callable(_)) {
+            let stored = self.transfer_callable_words(&value);
             self.release_root_if_opaque(name)?;
             for (var, compiled) in vars.into_iter().zip(stored) {
                 self.builder.def_var(var, compiled);
@@ -11759,6 +11917,7 @@ impl<'a> FunctionCompiler<'a> {
                 DirectType::Union(union) if union.owns_handles() => {
                     self.mark_temporary_union_owned(value)
                 }
+                DirectType::Callable(_) => self.mark_temporary_callable_owned(value),
                 _ => {}
             }
             cursor += count;
@@ -11769,6 +11928,7 @@ impl<'a> FunctionCompiler<'a> {
         };
         // The callee exported one owned reference; the caller adopts it.
         match &result.ty {
+            DirectType::Callable(_) => self.mark_temporary_callable_owned(&result),
             DirectType::Opaque(_) => self.mark_temporary_opaque_owned(&result),
             DirectType::Union(union) if union.owns_handles() => {
                 self.mark_temporary_union_owned(&result)
@@ -17689,7 +17849,7 @@ fn direct_type_inner(
                         return Some(DirectType::Opaque(Type::Named(name.clone(), vec![])));
                     };
                     let owns_handles = match &field_ty {
-                        DirectType::Opaque(_) => true,
+                        DirectType::Opaque(_) | DirectType::Callable(_) => true,
                         DirectType::Union(union) => union.owns_handles(),
                         _ => false,
                     };
@@ -19696,9 +19856,12 @@ fn release_direct_values(
 ) -> std::result::Result<(), String> {
     match ty {
         DirectType::Callable(_) => {
-            return Err(
-                "direct backend cannot release an inline callable in a thunk yet".to_string(),
-            );
+            callables::call_callable_unary_adapter(
+                codegen,
+                builder,
+                values,
+                callables::DESCRIPTOR_DROP,
+            )?;
         }
         DirectType::Union(union) => {
             if union.owns_handles() {
@@ -20073,6 +20236,9 @@ fn collect_task_start_targets(
     }
     targets
 }
+
+#[path = "native_codegen_callables.rs"]
+mod callables;
 
 #[cfg(test)]
 #[path = "native_codegen_tests.rs"]
