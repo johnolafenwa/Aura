@@ -868,6 +868,13 @@ impl NativeCodegen<'_> {
             lowered_args.extend(builder.block_params(merge_block).to_vec());
         }
 
+        // A caller's indirect sink handoff (public sinks by contract index,
+        // capture sinks by capture index) becomes the callee's own sink list.
+        let claim_sinks = self
+            .object
+            .declare_func_in_func(self.claim_indirect_mutable_sinks, builder.func);
+        let capture_count = builder.ins().iconst(types::I64, key.captures as i64);
+        builder.ins().call(claim_sinks, &[capture_count]);
         let target_ref = self.object.declare_func_in_func(target_id, builder.func);
         let inst = builder.ins().call(target_ref, &lowered_args);
         let results = builder.inst_results(inst).to_vec();

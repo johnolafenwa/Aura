@@ -563,6 +563,8 @@ struct NativeCodegen<'a> {
     unregister_cleanup: FuncId,
     refresh_cleanup: FuncId,
     set_next_mutable_sinks: FuncId,
+    set_next_indirect_mutable_sinks: FuncId,
+    claim_indirect_mutable_sinks: FuncId,
     current_mutable_sink: FuncId,
     mutable_sink_new: FuncId,
     mutable_sink_project: FuncId,
@@ -1089,6 +1091,8 @@ impl<'a> NativeCodegen<'a> {
             unregister_cleanup => ("aura_direct_unregister_cleanup", [types::I64], None),
             refresh_cleanup => ("aura_direct_refresh_cleanup", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             set_next_mutable_sinks => ("aura_direct_set_next_mutable_sinks", [types::I64, types::I64], None),
+            set_next_indirect_mutable_sinks => ("aura_direct_set_next_indirect_mutable_sinks", [types::I64, types::I64, types::I64, types::I64, types::I64], None),
+            claim_indirect_mutable_sinks => ("aura_direct_claim_indirect_mutable_sinks", [types::I64], None),
             current_mutable_sink => ("aura_direct_current_mutable_sink", [types::I64], Some(types::I64)),
             mutable_sink_new => ("aura_direct_mutable_sink_new", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             mutable_sink_project => ("aura_direct_mutable_sink_project", [types::I64, types::I64, types::I64], Some(types::I64)),
@@ -1579,6 +1583,8 @@ impl<'a> NativeCodegen<'a> {
             unregister_cleanup,
             refresh_cleanup,
             set_next_mutable_sinks,
+            set_next_indirect_mutable_sinks,
+            claim_indirect_mutable_sinks,
             current_mutable_sink,
             mutable_sink_new,
             mutable_sink_project,
@@ -2359,6 +2365,9 @@ impl<'a> NativeCodegen<'a> {
         let set_next_mutable_sinks = self
             .object
             .declare_func_in_func(self.set_next_mutable_sinks, builder.func);
+        let set_next_indirect_mutable_sinks = self
+            .object
+            .declare_func_in_func(self.set_next_indirect_mutable_sinks, builder.func);
         let current_mutable_sink = self
             .object
             .declare_func_in_func(self.current_mutable_sink, builder.func);
@@ -3396,6 +3405,7 @@ impl<'a> NativeCodegen<'a> {
             unregister_cleanup,
             refresh_cleanup,
             set_next_mutable_sinks,
+            set_next_indirect_mutable_sinks,
             current_mutable_sink,
             mutable_sink_new,
             mutable_sink_project,
@@ -4687,6 +4697,7 @@ struct FunctionCompiler<'a> {
     unregister_cleanup: cranelift_codegen::ir::FuncRef,
     refresh_cleanup: cranelift_codegen::ir::FuncRef,
     set_next_mutable_sinks: cranelift_codegen::ir::FuncRef,
+    set_next_indirect_mutable_sinks: cranelift_codegen::ir::FuncRef,
     current_mutable_sink: cranelift_codegen::ir::FuncRef,
     mutable_sink_new: cranelift_codegen::ir::FuncRef,
     mutable_sink_project: cranelift_codegen::ir::FuncRef,
@@ -7646,7 +7657,7 @@ impl<'a> FunctionCompiler<'a> {
             mask_bits |= 1i64 << index;
             match (params[index].passing, argument.writeback_place.as_ref()) {
                 (ReceiverKind::BorrowMut, Some(place)) => {
-                    writebacks.push((place.clone(), expected.clone()));
+                    writebacks.push((index, place.clone(), expected.clone()));
                 }
                 (ReceiverKind::BorrowMut, None) => {
                     return Err(format!(
@@ -7662,6 +7673,23 @@ impl<'a> FunctionCompiler<'a> {
                 }
                 (_, None) => {}
             }
+        }
+        let mut public_sinks = Vec::new();
+        let mut capture_sinks = Vec::new();
+        if !writebacks.is_empty() || !closure_writebacks.is_empty() {
+            public_sinks = (0..params.len())
+                .map(|_| self.builder.ins().iconst(types::I64, 0))
+                .collect();
+            for (index, place, _) in &writebacks {
+                public_sinks[*index] = self.mutable_sink_for_place(place)?;
+            }
+            for writeback in &closure_writebacks {
+                capture_sinks.push((
+                    writeback.index,
+                    self.mutable_sink_for_resolved_place(writeback.place.clone())?,
+                ));
+            }
+            self.install_indirect_mutable_sinks(&public_sinks, &capture_sinks)?;
         }
         let mask = self.builder.ins().iconst(types::I64, mask_bits);
         let mut lowered = vec![callable_ptr, mask];
@@ -7691,6 +7719,8 @@ impl<'a> FunctionCompiler<'a> {
             .ins()
             .call_indirect(invoke_signature, invoke, &lowered);
         let results = self.builder.inst_results(inst).to_vec();
+        self.release_mutable_sinks(public_sinks.iter().copied());
+        self.release_mutable_sinks(capture_sinks.iter().map(|(_, sink)| *sink));
 
         // The environment words may have changed (mutated captures), so the
         // callee's words are read back into its local or owned temporary.
@@ -7727,7 +7757,7 @@ impl<'a> FunctionCompiler<'a> {
         };
         self.mark_call_result_owned(&result);
         let mut cursor = result_count;
-        for (place, writeback_ty) in writebacks {
+        for (_, place, writeback_ty) in writebacks {
             let count = writeback_ty.value_count();
             let writeback = ValueRef {
                 values: results[cursor..cursor + count].to_vec(),
@@ -11822,6 +11852,70 @@ impl<'a> FunctionCompiler<'a> {
         self.builder
             .ins()
             .call(self.set_next_mutable_sinks, &[pointer, count]);
+        Ok(())
+    }
+
+    /// Hands the caller's mutable sinks to the runtime for a call through a
+    /// callable value: public sinks by parameter index and capture sinks by
+    /// capture index, which the callee's claim combines into its own
+    /// parameter order. A trap inside the callee publishes its mutable
+    /// parameters through the sinks before cleanup.
+    fn install_indirect_mutable_sinks(
+        &mut self,
+        public_sinks: &[Value],
+        capture_sinks: &[(usize, Value)],
+    ) -> std::result::Result<(), String> {
+        let store_buffer = |compiler: &mut Self,
+                            values: &[Value]|
+         -> std::result::Result<Value, String> {
+            if values.is_empty() {
+                return Ok(compiler.builder.ins().iconst(types::I64, 0));
+            }
+            let byte_len = u32::try_from(values.len().saturating_mul(8))
+                .map_err(|_| "direct mutable sink buffer is too large".to_string())?;
+            let slot = compiler.builder.create_sized_stack_slot(StackSlotData::new(
+                StackSlotKind::ExplicitSlot,
+                byte_len,
+                3,
+            ));
+            let pointer = compiler.builder.ins().stack_addr(types::I64, slot, 0);
+            for (index, value) in values.iter().copied().enumerate() {
+                compiler
+                    .builder
+                    .ins()
+                    .store(MemFlags::new(), value, pointer, (index as i32) * 8);
+            }
+            Ok(pointer)
+        };
+        let public_ptr = store_buffer(self, public_sinks)?;
+        let capture_indices = capture_sinks
+            .iter()
+            .map(|(index, _)| self.builder.ins().iconst(types::I64, *index as i64))
+            .collect::<Vec<_>>();
+        let capture_values = capture_sinks
+            .iter()
+            .map(|(_, sink)| *sink)
+            .collect::<Vec<_>>();
+        let capture_indices_ptr = store_buffer(self, &capture_indices)?;
+        let capture_values_ptr = store_buffer(self, &capture_values)?;
+        let public_count = self
+            .builder
+            .ins()
+            .iconst(types::I64, public_sinks.len() as i64);
+        let capture_count = self
+            .builder
+            .ins()
+            .iconst(types::I64, capture_sinks.len() as i64);
+        self.builder.ins().call(
+            self.set_next_indirect_mutable_sinks,
+            &[
+                public_ptr,
+                public_count,
+                capture_indices_ptr,
+                capture_values_ptr,
+                capture_count,
+            ],
+        );
         Ok(())
     }
 

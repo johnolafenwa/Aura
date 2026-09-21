@@ -8099,6 +8099,18 @@ fn install_pending_direct_mutable_sinks(pending: DirectPendingMutableSinks) {
     }
 }
 
+/// Converts a pending indirect sink handoff into the callee's own sink list
+/// for a call through an inline callable's invoke adapter; without a
+/// pending handoff it does nothing.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_claim_indirect_mutable_sinks(capture_count: i64) {
+    task_runtime_boundary(|| {
+        let capture_count = usize::try_from(capture_count)
+            .unwrap_or_else(|_| runtime_error("invalid direct capture count"));
+        prepare_indirect_direct_mutable_sinks(capture_count);
+    })
+}
+
 fn prepare_indirect_direct_mutable_sinks(capture_count: usize) {
     let pending = with_direct_task_runtime_state(|state| state.pending_mutable_sinks.take());
     let Some(pending) = pending else {
