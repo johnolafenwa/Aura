@@ -28,7 +28,7 @@ Last updated: 2026-09-22
   and the step-1 merge remain pending. See the work note for full evidence
   and the Daybreak access limitation.
 
-## Batch 1 representation phase (in progress) and Batch 2–3 design checkpoint (ratified)
+## Batch 1 representation phase (complete) and Batch 2–3 design checkpoint (ratified)
 
 - Representation phase: branch `codex/batch-1-representation` from
   `2339f9f4`; work note `2026-09-20-batch-1-representation.md`. First pull
@@ -43,8 +43,13 @@ Last updated: 2026-09-22
   block, boxing only at boundaries; the boxed indirect-call path is
   removed). Third pull request verification: complete local chain green
   at `cc44f661` on 2026-09-21 (coverage 96.4769 / 97.3806 / 95.2933 against
-  the unchanged floors, a line margin of about 21 lines); hosted
-  integration pending. First pull request verification: complete local chain green
+  the unchanged floors, a line margin of about 21 lines); hosted:
+  [PR #16](https://github.com/johnolafenwa/Aura/pull/16) merged `5cf6655e`
+  as `c308f9ba` after branch CI `35606036720` passed on both platforms on
+  its first attempt (Docs `35606036719`); main CI `35621435983` and Docs
+  `35621435975` are green. Hosted coverage totals are in the work-note
+  evidence table (about 96.48 / 97.38 / 95.29 on both platforms). The
+  representation phase is complete. First pull request verification: complete local chain green
   at `ee8f1d74` on 2026-09-20 (coverage 96.4690 / 97.3506 / 95.2864 against
   floors 96.46 / 97.33 / 95.23, unchanged); hosted:
   [PR #14](https://github.com/johnolafenwa/Aura/pull/14) merged `5578afee`
@@ -67,8 +72,9 @@ Last updated: 2026-09-22
   drafted and ratified 2026-09-20 under the owner's delegated instruction
   (Pythonic without breaking safety or performance); all 28 questions A.
   Implementation (2a element/entry loans, 2b slice views, 3a initialization
-  and exit actions, 3b context managers) begins after the representation
-  phase merges, starting with the ADR-0059/0060/0061 reconciliation stage.
+  and exit actions, 3b context managers) begins now that the representation
+  phase has merged, starting with the ADR-0059/0060/0061 reconciliation
+  stage.
 
 ## Batch 1 phase 2 (H2, Option removal; complete)
 
