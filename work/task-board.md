@@ -2,6 +2,17 @@
 
 Last updated: 2026-09-22
 
+## Aura 0.3.4 preview release (complete)
+
+- Released 2026-09-22 from `main` at `0d517519` as `v0.3.4-preview`, with
+  every user-facing document rewritten in the AGENTS.md style and the
+  documentation tests removed. Local chain green at `3da266fc` (96.47 /
+  97.41 / 95.30); hosted CI `35764567940` green on both platforms. Details
+  are in `2026-09-22-v0.3.4-preview-release.md`.
+- Next: the documentation example check (`docs/example-check`), script
+  bindings after the first statement (`lang/script-bindings`), then phase 2a
+  item 1.
+
 ## Batch 2 phase 2a (element and entry loans; in progress)
 
 - Branch `codex/batch-2-phase-2a` from `c308f9ba`; work note
