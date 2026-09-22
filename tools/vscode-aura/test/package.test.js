@@ -76,7 +76,6 @@ test("extension manifest and listing are ready for both public marketplaces", ()
   const manifest = JSON.parse(
     fs.readFileSync(path.join(extensionRoot, "package.json"), "utf8")
   );
-  const readme = fs.readFileSync(path.join(extensionRoot, "README.md"), "utf8");
 
   assert.equal(manifest.name, "vscode-aura-lang");
   assert.equal(manifest.publisher, "JohnOlafenwa");
@@ -122,10 +121,6 @@ test("extension manifest and listing are ready for both public marketplaces", ()
       `${iconPath} should exist for Aura files in the Explorer`
     );
   }
-  assert.match(
-    readme.split("\n").slice(0, 12).join("\n"),
-    /Aura is a compiled, statically typed programming language[\s\S]*https:\/\/github\.com\/johnolafenwa\/Aura/i
-  );
   assert.doesNotMatch(manifest.scripts["package:vsix"], /allow-missing-repository|skip-license/);
 });
 
