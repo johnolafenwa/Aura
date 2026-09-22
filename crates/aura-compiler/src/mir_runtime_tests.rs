@@ -54,6 +54,157 @@ fn test_function_operand(name: &str, params: Vec<Type>, return_type: Type) -> Op
 }
 
 #[test]
+fn adr0061_element_place_segments_round_trip_keys_and_refuse_invalid_encodings() {
+    for key in [
+        Value::Int(IntegerValue::from_i64(-7)),
+        Value::Bool(false),
+        Value::Bool(true),
+        Value::String(String::new()),
+        Value::String("a.b[0] λ".to_string()),
+    ] {
+        let segment = super::entry_key_segment(&key).unwrap();
+        assert_eq!(
+            super::parse_entry_key_segment(&segment, "entries").unwrap(),
+            key
+        );
+    }
+    assert_eq!(
+        super::parse_element_index_segment("[i:12]", "items").unwrap(),
+        12
+    );
+    for segment in ["12", "[i:12", "[i:-1]", "[i:x]"] {
+        assert_eq!(
+            super::parse_element_index_segment(segment, "items")
+                .unwrap_err()
+                .message,
+            format!("invalid element selector `{segment}` in MIR place `items`")
+        );
+    }
+    for segment in [
+        "key",
+        "[k:i:1",
+        "[k:i:no]",
+        "[k:b:yes]",
+        "[k:s:f]",
+        "[k:s:gg]",
+        "[k:s:ff]",
+        "[k:x:1]",
+    ] {
+        assert_eq!(
+            super::parse_entry_key_segment(segment, "entries")
+                .unwrap_err()
+                .message,
+            format!("invalid entry selector `{segment}` in MIR place `entries`")
+        );
+    }
+    assert_eq!(
+        super::entry_key_segment(&Value::Unit).unwrap_err().message,
+        "dict entry loans require an int64, bool, or str key"
+    );
+}
+
+#[test]
+fn adr0061_element_place_walkers_report_missing_slots_without_changing_values() {
+    let mut env = Env::default();
+    env.define_typed(
+        "items",
+        Type::Named("list".to_string(), vec![Type::named("int64")]),
+        Value::Vec(VecValue {
+            element_type: Type::named("int64"),
+            elements: vec![Value::Int(IntegerValue::from_i64(3))],
+        }),
+    );
+    env.define_typed(
+        "entries",
+        Type::Named(
+            "dict".to_string(),
+            vec![Type::named("str"), Type::named("int64")],
+        ),
+        Value::Map(MapValue {
+            key_type: Type::named("str"),
+            value_type: Type::named("int64"),
+            entries: vec![(
+                Value::String("a".to_string()),
+                Value::Int(IntegerValue::from_i64(4)),
+            )],
+        }),
+    );
+    for (root, segment, message) in [
+        (
+            "items",
+            "[i:1]",
+            "list MIR place `items.[i:1]` has no element at index 1",
+        ),
+        (
+            "entries",
+            "[k:s:62]",
+            "dict MIR place `entries.[k:s:62]` has no entry for the loaned key",
+        ),
+    ] {
+        let place = format!("{root}.{segment}");
+        assert_eq!(env.place_ref(&place).unwrap_err().message, message);
+        let value = env.values.get_mut(root).unwrap();
+        let before = value.render();
+        assert_eq!(
+            super::write_nested_place(value, &[segment], Value::Unit, &place)
+                .unwrap_err()
+                .message,
+            message
+        );
+        assert_eq!(value.render(), before);
+    }
+    assert_eq!(env.place_ref("items.[i:0]").unwrap().render(), "3");
+    assert_eq!(env.place_ref("entries.[k:s:61]").unwrap().render(), "4");
+    assert_eq!(
+        env.begin_element_loan(
+            "bad",
+            "items",
+            Value::Bool(true),
+            "",
+            false,
+            Span::new(1, 1)
+        )
+        .unwrap_err()
+        .message,
+        "list indices must be integers"
+    );
+    assert!(!env.loans.contains_key("bad"));
+    assert_eq!(
+        env.begin_element_loan(
+            "too_large",
+            "items",
+            Value::Int(IntegerValue::from_literal(u128::MAX)),
+            "",
+            false,
+            Span::new(1, 1),
+        )
+        .unwrap_err()
+        .message,
+        "list index is outside the supported signed range"
+    );
+    assert!(!env.loans.contains_key("too_large"));
+    env.define_typed(
+        "number",
+        Type::named("int64"),
+        Value::Int(IntegerValue::from_i64(1)),
+    );
+    assert_eq!(
+        env.begin_element_loan(
+            "bad",
+            "number",
+            Value::Int(IntegerValue::from_i64(0)),
+            "",
+            false,
+            Span::new(1, 1)
+        )
+        .unwrap_err()
+        .message,
+        "cannot begin element loan `bad` on non-collection MIR place `number`"
+    );
+    assert!(!env.loans.contains_key("bad"));
+}
+
+#[test]
 fn adr0038_runtime_loan_ledger_enforces_capability_and_parent_lifecycle() {
     let mut env = Env::default();
     env.define_typed(

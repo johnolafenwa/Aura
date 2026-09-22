@@ -21,13 +21,18 @@ fn assert_public_boundaries_reject(module: &MirModule, expected: &str) {
     assert!(runtime.message.contains(expected), "{}", runtime.message);
 
     let serialized = serde_json::to_vec(module).expect("invalid MIR should serialize");
-    let runtime = crate::run_serialized_mir(&serialized, "<forged>", "")
+    let serialized_runtime = crate::run_serialized_mir(&serialized, "<forged>", "")
         .expect_err("serialized public MIR execution must reject invalid MIR");
-    assert!(runtime.message.contains(expected), "{}", runtime.message);
+    assert_eq!(serialized_runtime.message, runtime.message);
 
     let direct = crate::native_codegen::emit_host_object(module)
         .expect_err("the direct backend must use the common MIR validator");
     assert!(direct.contains(expected), "{direct}");
+    assert_eq!(
+        runtime.message.strip_prefix("invalid MIR loan flow: "),
+        Some(direct.as_str()),
+        "all public boundaries must report the same shared validator reason"
+    );
 }
 
 fn add_test_returned_view_callee(
@@ -155,7 +160,21 @@ fn adr0038_returned_contract_analysis_bounds_cumulative_alias_expansion() {
             error.contains("loan-path byte limit"),
             "{encoding}: {error}"
         );
-        assert_public_boundaries_reject(&module, "loan-path byte limit");
+        // Serialized input has an earlier expansion budget than the shared
+        // flow validator. Both guards must reject this resource-limit case,
+        // though they identify the limit at different stages.
+        let runtime = crate::run_mir(&module).expect_err("in-memory MIR must be bounded");
+        let serialized = serde_json::to_vec(&module).unwrap();
+        let embedded = crate::run_serialized_mir(&serialized, "<forged>", "")
+            .expect_err("serialized MIR must be bounded");
+        let direct = crate::native_codegen::emit_host_object(&module)
+            .expect_err("native MIR must be bounded");
+        for reason in [&runtime.message, &embedded.message, &direct] {
+            assert!(
+                reason.contains("loan-path byte limit"),
+                "{encoding}: {reason}"
+            );
+        }
     }
 }
 
@@ -13143,6 +13162,123 @@ fn batch1_union_argument_specialization_edge_cases() {
     assert!(substitutions.is_empty());
 }
 
+#[test]
+fn adr0061_projected_element_assignments_reborrow_the_collection_view() {
+    let source = r#"
+class Profile:
+    visits: int64
+
+class User:
+    profile: Profile
+
+class Inventory:
+    users: list[User]
+
+def main():
+    mut users = [User(profile=Profile(visits=1))]
+    view mut selected = users
+    selected[0].profile.visits = 4
+    selected[0].profile.visits += 3
+    print(selected[0].profile.visits)
+    mut pairs = [(Profile(visits=2), Profile(visits=5))]
+    view mut pair = pairs[0][1]
+    pair.visits += 10
+    print(pair.visits)
+    mut inventory = Inventory(users=[User(profile=Profile(visits=8))])
+    view mut storage = inventory
+    storage.users[0].profile.visits = 9
+    storage.users[0].profile.visits += 1
+    print(storage.users[0].profile.visits)
+"#;
+    let module = crate::lower_source_to_mir(source).expect("projected element writes should lower");
+    let main = module.functions.iter().find(|f| f.name == "main").unwrap();
+    let instructions = main
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .collect::<Vec<_>>();
+    let reborrowed = instructions
+        .iter()
+        .filter_map(|instruction| match instruction {
+            Instruction::ReborrowElement {
+                loan,
+                parent,
+                projection,
+                mutable: true,
+                ..
+            } if parent == "selected" && projection == "profile.visits" => Some(loan),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(reborrowed.len(), 2);
+    for loan in reborrowed {
+        assert!(instructions.iter().any(|instruction| {
+            matches!(instruction, Instruction::WriteLoan { loan: written, .. } if written == loan)
+        }));
+        assert!(instructions.iter().any(|instruction| {
+            matches!(instruction, Instruction::EndLoan { loan: ended } if ended == loan)
+        }));
+    }
+    assert!(instructions.iter().any(|instruction| {
+        matches!(instruction, Instruction::BeginElementLoan { loan, projection, .. }
+            if loan == "pair" && projection == "1")
+    }));
+    assert_eq!(crate::run_mir(&module).unwrap().stdout, "7\n15\n10\n");
+    assert!(crate::emit_host_native_object(&module).is_ok());
+}
+
+#[test]
+fn adr0061_element_reborrows_cannot_escalate_shared_collection_capabilities() {
+    let shared_input = crate::lower_source_to_mir(
+        "def read(items: list[int64]):\n    view selected = items[0]\n    print(selected)\ndef main():\n    items = [7]\n    read(items)\n",
+    )
+    .unwrap();
+    assert_eq!(crate::run_mir(&shared_input).unwrap().stdout, "7\n");
+    crate::emit_host_native_object(&shared_input).unwrap();
+    let mut escalated_input = shared_input;
+    if let Instruction::BeginElementLoan { mutable, .. } =
+        element_loan_mut(&mut escalated_input, "selected")
+    {
+        *mutable = true;
+    }
+    assert_public_boundaries_reject(
+        &escalated_input,
+        "invalid mutable MIR element loan `selected` in `read` escalates shared input `items`",
+    );
+
+    let nested = crate::lower_source_to_mir(
+        "def main():\n    mut groups = [[7]]\n    view row = groups[0]\n    view cell = row[0]\n    print(cell)\n",
+    )
+    .unwrap();
+    assert_eq!(crate::run_mir(&nested).unwrap().stdout, "7\n");
+    crate::emit_host_native_object(&nested).unwrap();
+    for duplicate in [false, true] {
+        let mut invalid = nested.clone();
+        let instruction = invalid
+            .functions
+            .iter_mut()
+            .flat_map(|f| &mut f.blocks)
+            .flat_map(|b| &mut b.instructions)
+            .find(|i| matches!(i, Instruction::ReborrowElement { loan, .. } if loan == "cell"))
+            .unwrap();
+        if let Instruction::ReborrowElement { loan, mutable, .. } = instruction {
+            if duplicate {
+                *loan = "row".to_string();
+            } else {
+                *mutable = true;
+            }
+        }
+        assert_public_boundaries_reject(
+            &invalid,
+            if duplicate {
+                "invalid MIR in `main` begins already-active element reborrow `row`"
+            } else {
+                "invalid mutable MIR element reborrow `cell` in `main` escalates shared parent `row`"
+            },
+        );
+    }
+}
+
 fn element_loan_mut<'a>(module: &'a mut MirModule, name: &str) -> &'a mut Instruction {
     module
         .functions
@@ -13174,6 +13310,33 @@ def main():
     let module = crate::lower_source_to_mir(source).expect("element views should lower");
     let output = crate::run_mir(&module).expect("literal-disjoint mutable element loans execute");
     assert_eq!(output.stdout, "2\n12\n");
+
+    let mut duplicate = module.clone();
+    if let Instruction::BeginElementLoan { loan, .. } = element_loan_mut(&mut duplicate, "second") {
+        *loan = "first".to_string();
+    }
+    assert_public_boundaries_reject(
+        &duplicate,
+        "invalid MIR in `main` begins already-active element loan `first`",
+    );
+
+    let mut shadowed = module.clone();
+    if let Instruction::BeginElementLoan { loan, .. } = element_loan_mut(&mut shadowed, "first") {
+        *loan = "users".to_string();
+    }
+    assert_public_boundaries_reject(
+        &shadowed,
+        "invalid MIR element loan `users` in `main` shadows its source root",
+    );
+
+    let mut unknown = module.clone();
+    if let Instruction::BeginElementLoan { source, .. } = element_loan_mut(&mut unknown, "first") {
+        *source = "absent".to_string();
+    }
+    assert_public_boundaries_reject(
+        &unknown,
+        "invalid MIR element loan `first` in `main` has unknown source `absent`",
+    );
 
     let mut overlapping = module.clone();
     if let Instruction::BeginElementLoan { selector, .. } =

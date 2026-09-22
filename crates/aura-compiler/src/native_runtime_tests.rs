@@ -23592,3 +23592,90 @@ fn adr0061_direct_element_path_helpers_read_and_write_inside_elements() {
         release_value(unions as *mut OpaqueValue);
     }
 }
+
+#[test]
+fn adr0061_direct_entry_paths_borrow_keys_and_check_selector_counts() {
+    let table = boxed_value(Value::Map(MapValue {
+        key_type: Type::named("str"),
+        value_type: Type::named("int64"),
+        entries: vec![(
+            Value::String("ready".to_string()),
+            Value::Int(IntegerValue::from_i64(1)),
+        )],
+    })) as usize;
+    let key = string_value("ready") as usize;
+    for expected in [2, 3] {
+        element_path_store(
+            table,
+            "[k]",
+            &[key as i64],
+            Value::Int(IntegerValue::from_i64(expected)),
+        );
+        assert_eq!(
+            element_path_load(table, "[k]", &[key as i64]).render(),
+            expected.to_string()
+        );
+        // Each read and write borrows this same handle, whose lifetime
+        // belongs to the loan's caller until EndLoan releases it.
+        assert_eq!(
+            unsafe { take_value(key as *mut OpaqueValue) }.render(),
+            "ready"
+        );
+    }
+    for diagnostic in [
+        element_load_trap(table, "[k]", vec![]),
+        element_store_trap(table, "[k]", vec![]),
+    ] {
+        assert_eq!(
+            diagnostic.message,
+            "element path `[k]` names more selections than were supplied"
+        );
+    }
+    // Refusing an incomplete selector buffer leaves the entry unchanged.
+    assert_eq!(element_path_load(table, "[k]", &[key as i64]).render(), "3");
+    unsafe {
+        release_value(key as *mut OpaqueValue);
+        release_value(table as *mut OpaqueValue);
+    }
+}
+
+#[test]
+fn adr0061_direct_element_paths_keep_collection_field_and_tuple_storage() {
+    let list_type = Type::Named("list".to_string(), vec![Type::named("int64")]);
+    let root = boxed_value(Value::Instance(InstanceValue {
+        class_name: "Shelves".to_string(),
+        fields: BTreeMap::from([(
+            "pairs".to_string(),
+            Value::Tuple(TupleValue {
+                element_types: vec![list_type.clone(), list_type],
+                elements: vec![
+                    Value::Vec(VecValue {
+                        element_type: Type::named("int64"),
+                        elements: vec![Value::Int(IntegerValue::from_i64(5))],
+                    }),
+                    Value::Vec(VecValue {
+                        element_type: Type::named("int64"),
+                        elements: vec![Value::Int(IntegerValue::from_i64(7))],
+                    }),
+                ],
+            }),
+        )]),
+    })) as usize;
+    assert_eq!(element_path_load(root, "pairs.1.[i]", &[0]).render(), "7");
+    element_path_store(
+        root,
+        "pairs.1.[i]",
+        &[0],
+        Value::Int(IntegerValue::from_i64(17)),
+    );
+    // Read the original root, not the copied result of a field extraction.
+    unsafe {
+        super::with_value(root as *mut OpaqueValue, |value| {
+            let Value::Instance(instance) = value else {
+                panic!("expected the original collection owner");
+            };
+            assert_eq!(instance.fields["pairs"].render(), "([5], [17])");
+        });
+        release_value(root as *mut OpaqueValue);
+    }
+}

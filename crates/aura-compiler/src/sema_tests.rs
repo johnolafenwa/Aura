@@ -31204,3 +31204,332 @@ fn adr0061_element_places_read_fields_in_place_and_refuse_element_arguments() {
         );
     }
 }
+
+#[test]
+fn adr0061_projection_paths_keep_literal_disjointness_and_syntactic_position_identity() {
+    use super::places::PlaceSelector;
+
+    let root = ProjectionPath::default();
+    for project in [
+        ProjectionPath::with_element as fn(&ProjectionPath, PlaceSelector) -> ProjectionPath,
+        ProjectionPath::with_entry,
+    ] {
+        for (left, right) in [
+            (PlaceSelector::Int(0), PlaceSelector::Int(1)),
+            (
+                PlaceSelector::Str("ada".to_string()),
+                PlaceSelector::Str("linus".to_string()),
+            ),
+            (PlaceSelector::Bool(false), PlaceSelector::Bool(true)),
+        ] {
+            let left = project(&root, left);
+            let right = project(&root, right);
+            let dynamic = project(&root, PlaceSelector::Dynamic);
+            assert!(!left.overlaps(&right));
+            assert!(!right.overlaps(&left));
+            assert!(left.overlaps(&dynamic));
+            assert!(dynamic.overlaps(&left));
+            assert!(left.with_field("value").is_descendant_of_or_equal(&left));
+            assert!(left.with_field("value").is_descendant_of_or_equal(&dynamic));
+            assert!(!dynamic.is_descendant_of_or_equal(&left));
+            assert!(!left.is_descendant_of_or_equal(&right));
+        }
+
+        let tuple = root.with_tuple(2);
+        let selected = project(&root, PlaceSelector::Int(2));
+        let other = project(&root, PlaceSelector::Int(3));
+        let dynamic = project(&root, PlaceSelector::Dynamic);
+        assert!(tuple.overlaps(&selected));
+        assert!(selected.overlaps(&tuple));
+        assert!(!tuple.overlaps(&other));
+        assert!(!other.overlaps(&tuple));
+        assert!(tuple.is_descendant_of_or_equal(&selected));
+        assert!(selected.is_descendant_of_or_equal(&tuple));
+        assert!(tuple.is_descendant_of_or_equal(&dynamic));
+        assert!(!dynamic.is_descendant_of_or_equal(&tuple));
+        assert!(!tuple.is_descendant_of_or_equal(&other));
+        assert!(!other.is_descendant_of_or_equal(&tuple));
+    }
+    assert_eq!(
+        root.with_element(PlaceSelector::Int(-1)).to_string(),
+        "[-1]"
+    );
+    assert_eq!(
+        root.with_entry(PlaceSelector::Str("a\"b".to_string()))
+            .with_field("value")
+            .to_string(),
+        "[\"a\\\"b\"].value"
+    );
+    assert_eq!(
+        root.with_entry(PlaceSelector::Bool(true)).to_string(),
+        "[true]"
+    );
+    assert_eq!(root.with_element(PlaceSelector::Dynamic).to_string(), "[?]");
+}
+
+#[test]
+fn adr0061_member_paths_preserve_literal_keys_and_conservative_computed_selections() {
+    use super::places::PlaceSelector;
+
+    let program = crate::check_source("def main():\n    pass\n").unwrap();
+    let (type_names, type_arities) = type_maps_from_program(&program);
+    let checker = checker(
+        &program.module_name,
+        &type_names,
+        &type_arities,
+        &program.classes,
+        &program.enums,
+        &program.functions,
+        &program.traits,
+        &program.trait_impls,
+        &program.imported_modules,
+        &program.module_registry,
+    );
+    let root = PlacePath::root("values");
+    for (source, expected) in [
+        ("values[2].visits", root.with_tuple(2).with_field("visits")),
+        (
+            "values[\"ada\"].visits",
+            root.with_entry(PlaceSelector::Str("ada".to_string()))
+                .with_field("visits"),
+        ),
+        (
+            "values[false].visits",
+            root.with_entry(PlaceSelector::Bool(false))
+                .with_field("visits"),
+        ),
+        (
+            "(values[index]).visits",
+            root.with_element(PlaceSelector::Dynamic)
+                .with_field("visits"),
+        ),
+        (
+            "values[1 + 1].visits",
+            root.with_element(PlaceSelector::Dynamic)
+                .with_field("visits"),
+        ),
+        (
+            "values[-1].visits",
+            root.with_element(PlaceSelector::Dynamic)
+                .with_field("visits"),
+        ),
+    ] {
+        let expression = crate::parser::parse_expression(source).unwrap();
+        assert_eq!(
+            checker.member_access_path(&expression),
+            Some(expected),
+            "{source}"
+        );
+    }
+    let oversized_index = expr(ExprKind::Index {
+        object: Box::new(expr(ExprKind::Name("values".to_string()))),
+        index: Box::new(expr(ExprKind::Int(u128::MAX))),
+    });
+    assert_eq!(
+        checker.member_access_path(&oversized_index),
+        Some(root.with_element(PlaceSelector::Dynamic))
+    );
+}
+
+#[test]
+fn adr0061_contextual_member_reads_restore_owned_read_rules_and_identify_element_projections() {
+    let program = crate::check_source(
+        "class Profile:\n    name: str\n    visits: int64\n\ndef main():\n    pass\n",
+    )
+    .unwrap();
+    let (type_names, type_arities) = type_maps_from_program(&program);
+    let checker = checker(
+        &program.module_name,
+        &type_names,
+        &type_arities,
+        &program.classes,
+        &program.enums,
+        &program.functions,
+        &program.traits,
+        &program.trait_impls,
+        &program.imported_modules,
+        &program.module_registry,
+    );
+    let mut locals = HashMap::new();
+    for (name, ty) in [
+        (
+            "users",
+            Type::Named("list".to_string(), vec![Type::named("Profile")]),
+        ),
+        (
+            "people",
+            Type::Named(
+                "dict".to_string(),
+                vec![Type::named("str"), Type::named("Profile")],
+            ),
+        ),
+        (
+            "pairs",
+            Type::Named(
+                "list".to_string(),
+                vec![Type::Tuple(vec![Type::named("int64"), Type::named("str")])],
+            ),
+        ),
+        (
+            "pair",
+            Type::Tuple(vec![Type::named("int64"), Type::named("int64")]),
+        ),
+        ("profile", Type::named("Profile")),
+    ] {
+        locals.insert(
+            name.to_string(),
+            local_binding(ty, true, true, ReceiverKind::Value, false, &[]),
+        );
+    }
+    for source in ["users[0]", "people[\"ada\"]"] {
+        let expression = crate::parser::parse_expression(source).unwrap();
+        assert_eq!(
+            checker
+                .type_of_member_object_expr(&expression, &mut locals)
+                .unwrap(),
+            Type::named("Profile"),
+            "{source} must be read in place while resolving its member"
+        );
+        assert_eq!(checker.index_place_read.get(), None);
+        let error = checker
+            .type_of_expr(&expression, &mut locals)
+            .expect_err("an owned read must still require a copyable element");
+        assert_eq!(error.code, "AU3005", "{source}");
+    }
+    let outer_read = Some(Span::new(20, 3));
+    checker.index_place_read.set(outer_read);
+    for source in ["users[\"wrong\"]", "people[0]"] {
+        let expression = crate::parser::parse_expression(source).unwrap();
+        assert!(checker
+            .type_of_member_object_expr(&expression, &mut locals)
+            .is_err());
+        assert_eq!(
+            checker.index_place_read.get(),
+            outer_read,
+            "{source}: a failed nested read must restore the outer context"
+        );
+    }
+    checker.index_place_read.set(None);
+    for (source, expected) in [
+        ("users[0]", true),
+        ("(users[0]).visits", true),
+        ("people[\"ada\"].name", true),
+        ("pairs[0][1]", true),
+        ("pair[0]", false),
+        ("profile.visits", false),
+    ] {
+        let expression = crate::parser::parse_expression(source).unwrap();
+        assert_eq!(
+            checker
+                .is_collection_element_expr(&expression, &mut locals)
+                .unwrap(),
+            expected,
+            "{source}"
+        );
+    }
+}
+
+#[test]
+fn adr0061_returned_element_and_entry_projections_keep_the_step_one_refusal() {
+    for source in [
+        "def first(values: list[int64]) -> view int64 from values:\n    return view values[0]\n",
+        "def first(values: mut list[int64]) -> view mut int64 from values:\n    return view mut values[0]\n",
+        "def named(values: dict[str, int64]) -> view int64 from values:\n    return view values[\"first\"]\n",
+        "class Profile:\n    visits: int64\n\ndef visits(values: list[Profile]) -> view int64 from values:\n    return view (values[0].visits)\n",
+        "def label(values: list[(int64, str)]) -> view str from values:\n    return view values[0][1]\n",
+    ] {
+        let error = crate::check_source(source).expect_err("returned element footprints are deferred until the A6 stage");
+        assert_eq!(error.code, "AU3004", "{source}: {error:?}");
+        assert_eq!(error.message, "a returned view cannot yet select a list element or dictionary entry; return a view of the collection and select the element at the call site", "{source}");
+    }
+}
+
+#[test]
+fn adr0061_typed_element_and_entry_paths_resolve_values_and_reject_wrong_projection_kinds() {
+    use super::places::PlaceSelector;
+
+    let program =
+        crate::check_source("class Profile:\n    visits: int64\n\ndef main():\n    pass\n")
+            .unwrap();
+    let (type_names, type_arities) = type_maps_from_program(&program);
+    let checker = checker(
+        &program.module_name,
+        &type_names,
+        &type_arities,
+        &program.classes,
+        &program.enums,
+        &program.functions,
+        &program.traits,
+        &program.trait_impls,
+        &program.imported_modules,
+        &program.module_registry,
+    );
+    let locals = HashMap::from([
+        (
+            "users".to_string(),
+            local_binding(
+                Type::Named("list".to_string(), vec![Type::named("Profile")]),
+                true,
+                true,
+                ReceiverKind::Value,
+                false,
+                &[],
+            ),
+        ),
+        (
+            "people".to_string(),
+            local_binding(
+                Type::Named(
+                    "dict".to_string(),
+                    vec![Type::named("int64"), Type::named("Profile")],
+                ),
+                true,
+                true,
+                ReceiverKind::Value,
+                false,
+                &[],
+            ),
+        ),
+    ]);
+    for path in [
+        PlacePath::root("users").with_tuple(2),
+        PlacePath::root("users").with_element(PlaceSelector::Int(2)),
+        PlacePath::root("users").with_element(PlaceSelector::Dynamic),
+        PlacePath::root("people").with_tuple(2),
+        PlacePath::root("people").with_entry(PlaceSelector::Int(2)),
+        PlacePath::root("people").with_entry(PlaceSelector::Dynamic),
+    ] {
+        assert_eq!(
+            checker
+                .place_path_type(&path, &locals, Span::new(1, 1))
+                .unwrap(),
+            Some(Type::named("Profile")),
+            "{path}"
+        );
+        assert_eq!(
+            checker
+                .place_path_type(&path.with_field("visits"), &locals, Span::new(1, 1))
+                .unwrap(),
+            Some(Type::named("int64")),
+            "{path}.visits"
+        );
+    }
+    for (path, expected) in [
+        (
+            PlacePath::root("people").with_element(PlaceSelector::Int(2)),
+            "cannot project an element from `dict[int64, Profile]`",
+        ),
+        (
+            PlacePath::root("users").with_entry(PlaceSelector::Int(2)),
+            "cannot project an entry from `list[Profile]`",
+        ),
+    ] {
+        let span = Span::new(3, 7);
+        let error = checker
+            .place_path_type(&path, &locals, span)
+            .expect_err("a path must retain the collection's projection kind");
+        assert_eq!(error.code, "AU3004");
+        assert_eq!(error.message, expected);
+        assert_eq!(error.span, Some(span));
+    }
+}
