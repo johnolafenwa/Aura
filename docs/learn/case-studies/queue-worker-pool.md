@@ -1,6 +1,11 @@
 # Case Study: A Queue Worker Pool
 
-This case study builds a small worker pool. The interesting part is not parallel speed; it is the shape of the program. A parent scope owns the task group, queues move owned jobs between tasks, producers close queues when they are finished, and the parent can cancel the whole thing deliberately when it has seen enough.
+This case study builds a small worker pool. The point is the program's shape, not parallel speed:
+
+- A parent scope owns the task group.
+- Queues move owned jobs between tasks.
+- Producers close queues when they finish.
+- The parent can cancel the whole pool once it has seen enough.
 
 The program is a good template to copy.
 
@@ -8,16 +13,16 @@ The program is a good template to copy.
 
 The pool needs four things:
 
-- a **`Job`** type for the work being done
-- a **producer** that supplies jobs to a queue
+- a **`Job`** type for the work
+- a **producer** that puts jobs on a queue
 - one or more **consumers** that read jobs and produce results
-- a **parent** that owns the task group and decides when the pool has finished
+- a **parent** that owns the task group and decides when the pool is done
 
-`TaskGroup` is where the parent lives. `Queue[Job]` and `Queue[str]` are the two channels. `QueueReceive[T]` describes what a receive produces. Cancellation is the tool the parent uses when it stops waiting.
+The parent lives in a `TaskGroup`. `Queue[Job]` and `Queue[str]` are the two channels. `QueueReceive[T]` describes what a receive produces. The parent uses cancellation when it stops waiting.
 
 ## Step 1: The Work Itself
 
-A job is a small record, and the worker function explicitly takes ownership:
+A job is a small record. The worker function takes ownership of it:
 
 ```aura
 class Job:
@@ -28,11 +33,11 @@ def handle(job: own Job) -> str:
     return "done " + job.id.to_string() + " " + job.payload
 ```
 
-`handle` consuming the job is the right choice: once a worker starts on a unit of work, no other part of the program needs that owned value.
+Consuming the job is the right choice. Once a worker starts on a unit of work, no other part of the program needs that owned value.
 
 ## Step 2: The Producer
 
-A producer puts jobs into a queue and closes the queue when it has nothing more to send:
+A producer puts jobs on a queue and closes the queue when it has nothing more to send:
 
 ```aura
 def produce(jobs: Queue[Job]):
@@ -42,11 +47,13 @@ def produce(jobs: Queue[Job]):
     jobs.close()
 ```
 
-Closing is part of the protocol. A consumer that sees the queue close knows its receive loop is finished normally, not "maybe more work later." Queue handles are copy values, so passing `jobs` into the producer does not remove it from the parent's scope.
+Closing is part of the protocol. A consumer that sees the queue close knows its receive loop ended normally, and that no more work will come.
+
+Queue handles are copy values, so passing `jobs` to the producer does not remove it from the parent's scope.
 
 ## Step 3: The Consumer
 
-A consumer reads jobs until the queue closes, the surrounding task group is cancelled, or all producers finish:
+A consumer reads jobs until the queue closes, the task group is cancelled, or all producers finish:
 
 ```aura
 def consume(name: str, jobs: Queue[Job], results: Queue[str]):
@@ -55,14 +62,13 @@ def consume(name: str, jobs: Queue[Job], results: Queue[str]):
         results.put(result)
 ```
 
-The bare `for` loop does the receive structurally and each item arrives already
-owned by `job`. Queue iteration is not collection-place traversal, so `own`
-and `mut` modifiers are rejected. There is no sentinel value,
-no magic token, no special return code — closing the queue is the signal.
+The plain `for` loop performs each receive, and each item arrives already owned by `job`. Queue iteration is not a walk over a collection's places, so the `own` and `mut` modifiers are rejected here.
+
+There is no sentinel value, magic token, or special return code. Closing the queue is the signal.
 
 ## Step 4: The Parent
 
-The parent owns the task group, the queues, and the decision about when the pool has finished:
+The parent owns the task group, the queues, and the decision about when the pool is done:
 
 ```aura
 jobs = Queue[Job](capacity=8)
@@ -94,23 +100,23 @@ The parent does five things, in order:
 1. Starts the producer.
 2. Starts the workers.
 3. Collects the expected number of results.
-4. Cancels the group if the pool has stopped making progress.
+4. Cancels the group if the pool stops making progress.
 5. Leaves the `with` block, which waits for every child to finish.
 
 ## Closing Result Queues
 
-This example knew how many results to expect, so counting is the simplest shape. When the number is not known ahead of time, there are two reasonable options:
+This example knows how many results to expect, so counting is the simplest shape. When the count is unknown, you have two reasonable options:
 
-- Let the final worker close the result queue. This works, but it requires coordination: one worker must not close while another still needs to send.
-- Introduce a coordinator task that owns the decision to close. This is usually cleaner; the worker pool does its work and an extra task owns the lifecycle question.
+- **Let the final worker close the result queue.** This works but needs coordination. One worker must not close the queue while another still needs to send.
+- **Add a coordinator task that decides when to close.** This is usually cleaner. The workers do the work, and one extra task owns the lifecycle decision.
 
-Avoid making every worker guess. The benefit of structured concurrency is knowing exactly who is responsible for each decision.
+Do not make every worker guess. Structured concurrency pays off when you know exactly who owns each decision.
 
 ## Bounded Queues And Backpressure
 
-`Queue[Job](capacity=8)` limits how many jobs can be in flight at once. When workers are slower than the producer, `put` waits for space — which stops memory from growing without bound when the workload is bursty.
+`Queue[Job](capacity=8)` limits how many jobs can be in flight at once. When workers are slower than the producer, `put` waits for space. That keeps memory from growing without bound under a bursty workload.
 
-Use a timeout when the producer should fail fast:
+Pass a timeout when the producer should fail fast:
 
 ```aura
 match jobs.put(Job(id=4, payload="notify"), timeout=100ms):
@@ -126,12 +132,16 @@ match jobs.put(Job(id=4, payload="notify"), timeout=100ms):
         print("full")
 ```
 
-The unsent job comes back inside the `SendError` variant, so the caller can log it, retry later, or feed it to a different queue.
+The unsent job comes back inside the `SendError` variant. The caller can log it, retry later, or send it to a different queue.
 
-`try_put` is the non-blocking variant — useful for polling-style producers.
+`try_put` is the non-blocking variant. Use it for polling-style producers.
 
 ## Why This Shape Works
 
-The parent scope owns the concurrency. Jobs are owned values, not shared mutable state. Queues are the only communication path between the producer and the workers. Cancellation is visible and comes from one place. No task runs without a scope that will eventually wait for it.
+- The parent scope owns the concurrency.
+- Jobs are owned values, not shared mutable state.
+- Queues are the only path between the producer and the workers.
+- Cancellation is visible and comes from one place.
+- Every task runs inside a scope that waits for it.
 
-If you can answer "which task created this, and which scope waits for it" for every task in the program, the program is on the right track. This is the concurrency style to copy first.
+Ask two questions of every task in a program: which task created it, and which scope waits for it? If you can always answer both, the program is on the right track. Copy this concurrency style first.

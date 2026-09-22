@@ -1,29 +1,52 @@
 # Performance
 
-Aura records exact workloads, pinned source commits, raw observations, and
-content hashes. These measurements guide engineering; they are not language
-semantic guarantees or ratified numeric targets.
+This page records Aura's performance measurements. Each one has an exact
+workload, pinned source commits, raw observations, and content hashes. The
+measurements guide engineering. They are not language semantic guarantees or
+ratified numeric targets.
 
 ## Current Measurements
 
-The earlier 7 September 2026 post-reboot session covers foundations items 1–4
-and pinned Rust baselines. Item 7 adds a later quiet-host Array comparison,
-labeled separately below. The release-performance and Array reports are
-**contractual** under their runner rules. The standalone integer/Rust and
-per-call profiling comparisons are **diagnostic-grade**, with their limits
-disclosed below.
+The numbers come from two sessions:
 
-The host is Mac14,9 / Apple M2 Pro (10 cores, 16 GiB), arm64 macOS 26.5.2
-(build 25F84). Boot identity is `1788744561`, 7 September 2026 at 02:29:21 BST.
-CPython is Xcode 3.9.6 at
-`/Applications/Xcode.app/Contents/Developer/usr/bin/python3`, with NumPy 2.0.2.
-Rust is 1.95.0 (`59807616e`, LLVM 22.1.2); concurrent references pin tokio 1.53.1.
+- **Foundations session.** It ran on 7 September 2026, after a reboot. It
+  measured the foundations changes and pinned Rust baselines.
+- **Array session.** A later quiet-host Array comparison, labeled separately
+  below.
 
-The compiler bases are after merge `50531b45797ae765ec8d885165c13042617ab567`
-and before tag `v0.3.3-preview`, `d3cc6b96104dd597687a98e9624f800a0cb3cf1e`.
-The original task/TCP inputs pass int64 range values to int32 task parameters
-and fail checking at both bases. The release measurements use clean detached
-commits with the same two explicitly authorized `as int32` corrections:
+Each report has a grade. A contractual report passes its runner's
+qualification rules. A diagnostic-grade report has limits, which this page
+states next to its numbers.
+
+| Report | Grade |
+| --- | --- |
+| Release performance | **Contractual** under its runner rules |
+| Numeric Arrays | **Contractual** under its runner rules |
+| Standalone integer loops against Rust | **Diagnostic-grade** |
+| Per-call profiling | **Diagnostic-grade** |
+
+The foundations host:
+
+| Item | Value |
+| --- | --- |
+| Machine | Mac14,9 / Apple M2 Pro (10 cores, 16 GiB) |
+| OS | arm64 macOS 26.5.2 (build 25F84) |
+| Boot identity | `1788744561`, 7 September 2026 at 02:29:21 BST |
+| CPython | Xcode 3.9.6 at `/Applications/Xcode.app/Contents/Developer/usr/bin/python3`, with NumPy 2.0.2 |
+| Rust | 1.95.0 (`59807616e`, LLVM 22.1.2) |
+| Concurrent references | tokio 1.53.1 |
+
+### Source Commits
+
+The compiler bases are:
+
+- **After:** merge `50531b45797ae765ec8d885165c13042617ab567`.
+- **Before:** tag `v0.3.3-preview`, `d3cc6b96104dd597687a98e9624f800a0cb3cf1e`.
+
+The original task and TCP inputs pass int64 range values to int32 task
+parameters, so they fail checking at both bases. The release measurements use
+clean detached commits with the same two explicitly authorized `as int32`
+corrections:
 
 | Release measurement | Corrected source commit |
 | --- | --- |
@@ -31,19 +54,19 @@ commits with the same two explicitly authorized `as int32` corrections:
 | Before | `ddeaddf74301322fc96d8c09742ea12faa1dd8c3` |
 
 Each corrected commit differs from its base by those two casts only. Compiler
-and runner sources are unchanged. Arrays and standalone integer results were
-collected earlier in the same boot session at the original bases; their
+and runner sources are unchanged. The Array and standalone integer results
+were collected earlier in the same boot session, at the original bases. Their
 unaltered inputs and exact identities are recorded separately. The evidence
-includes the initial failures, approval record, identical diffs, and a Git
-bundle containing both corrected commits.
+includes the initial failures, the approval record, identical diffs, and a Git
+bundle that contains both corrected commits.
 
 ### Control-Plane Workloads
 
-The harness validates exact READY/GO/DONE records and checksums, times GO to
-DONE, rotates 11 pairs, and excludes one warmup per lane. Both before and after
-reports have clean detached sources, three empty quiet-host inventories, and
-successful input/hash rechecks. No override or Rust exclusion was used. Ratios
-are ratios of medians; lower is faster.
+The harness validates exact READY/GO/DONE records and checksums and times GO
+to DONE. It rotates 11 pairs and excludes one warmup per lane. The before and
+after reports both have clean detached sources, three empty quiet-host
+inventories, and successful input and hash rechecks. No override or Rust
+exclusion was used. Ratios are ratios of medians. Lower is faster.
 
 | Exact protocol workload | Aura median | CPython median | Rust median | Aura / CPython | Aura / Rust |
 | --- | ---: | ---: | ---: | ---: | ---: |
@@ -52,64 +75,75 @@ are ratios of medians; lower is faster.
 | 20-client delayed loopback TCP fan-out | 104.268375 ms | 108.793000 ms | 104.597250 ms | 0.958411 | 0.996856 |
 | 16-cycle retrying HTTP worker | 428.814667 ms | 522.391625 ms | 472.607250 ms | 0.820868 | 0.907338 |
 
-TCP uses 20 pre-bound loopback listeners with 100 ms handlers. Aura rejects
-transfer of an accepted `TcpStream` into a handler task (`AU3008`), so a single
-listener would serialize handler work. Tasks include creation and joining of
-all 10,000 tasks after GO. Retry runs use the same local fixture, status/delay
-schedule, 112 requests and checksum 18112 in all three languages.
+Workload details:
+
+- **TCP** uses 20 pre-bound loopback listeners with 100 ms handlers. Aura
+  rejects moving an accepted `TcpStream` into a handler task with `AU3008`. A
+  single listener would therefore serialize handler work.
+- **Tasks** includes creating and joining all 10,000 tasks after GO.
+- **Retry** runs use the same local fixture, status and delay schedule, 112
+  requests, and checksum 18112 in all three languages.
 
 ### Integer Loops
 
 The **contractual release V6** comparison includes process startup. Python has
 one arbitrary-precision integer lane, paired with each Aura fixed width.
-Startup-adjusted estimates subtract the same-repetition startup observation;
-nonpositive adjustments are retained in raw evidence and excluded only from
-the estimate. All 11 whole-process observations remain in each median.
+
+A startup-adjusted estimate subtracts the startup observation from the same
+repetition. Nonpositive adjustments stay in the raw evidence and are excluded
+only from the estimate. All 11 whole-process observations stay in each median.
 
 | Exact 10,000,000-iteration comparison | Aura whole process | CPython whole process | Aura startup-adjusted | CPython startup-adjusted | Valid adjusted pairs |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | Aura `int32` / CPython integer | 28.954291 ms | 328.618208 ms | 24.342791 ms | 298.047876 ms | 11/11 |
 | Aura `int64` / CPython integer | 12.772500 ms | 328.618208 ms | 6.126791 ms | 294.897875 ms | 9/11 |
 
-Two int64 adjustments are nonpositive in each before/after run. The table's
-CPython adjusted medians use the same valid pairs as their Aura row. After
+Two int64 adjustments are nonpositive in each before and after run. Each
+CPython adjusted median uses the same valid pairs as its Aura row. The after
 startup medians are Aura 5.610000 ms and CPython 23.895667 ms. The raw report
-also records dispersion; startup subtraction is an estimate, not a pure kernel
+also records dispersion. Startup subtraction is an estimate, not a pure kernel
 measurement.
 
-The **diagnostic standalone** runner separately compares Aura and Rust with
-11 alternating pairs, excluded warmups and exact `10000000` output. It was run
-at original after merge `50531b45797ae765ec8d885165c13042617ab567`. External
-pre/post inventories were quiet, but this runner lacks the release suite's
-three-phase host inventory and full input/binary hash rechecks. Its medians
-must not be mixed with the release V6 observations above when forming ratios.
+The **diagnostic standalone** runner compares Aura and Rust separately. It uses
+11 alternating pairs, excluded warmups, and exact `10000000` output. It ran at
+the original after merge `50531b45797ae765ec8d885165c13042617ab567`. External
+inventories before and after were quiet. This runner lacks the release suite's
+three-phase host inventory and full input and binary hash rechecks. Do not mix
+its medians with the release V6 observations above when forming ratios.
 
 | Standalone checked loop | Aura median | Rust median | Aura / Rust | Paired median ratio |
 | --- | ---: | ---: | ---: | ---: |
 | `int32` | 24.325417 ms | 16.429334 ms | 1.480609 | 1.478258 |
 | `int64` | 9.778250 ms | 16.337417 ms | 0.598519 | 0.594855 |
 
-The Rust loop places an optimizer barrier on each counter update; that cost
+The Rust loop places an optimizer barrier on each counter update. That cost
 and process startup are part of this exact reference. These results do not
 establish a general compiler-speed ranking. The before standalone runner emits
-only rounded minima; before/after integer medians therefore come from the
-qualified release V6 runner, not those minima.
+only rounded minima. The before and after integer medians therefore come from
+the qualified release V6 runner, not from those minima.
 
 ### Numeric Arrays
 
-The item 7 measurements are labeled **quiet host, not post-reboot; contractual re-measure scheduled with the 0.3.4 release session.**
-Both runs are contractual under the runner's qualification rules: clean detached
-sources, 11 rotating pairs, excluded warmups, exact protocol/checksum validation,
-three empty host inventories and successful input/hash rechecks. No override
-was used. The host is Mac14,9 / Apple M2 Pro / 16 GiB, with Xcode CPython 3.9.6,
-NumPy 2.0.2 and Rust 1.95.0. Measurements are single-threaded, per operation;
-ratios are ratios of medians.
+These measurements carry the label "quiet host, not post-reboot; contractual
+re-measure scheduled with the 0.3.4 release session."
 
-Before is merge base `a368dce7e7b335c1c0cb800ba5240501a21f02bc`;
-after is implementation head `d9fc79921ba9fed1116634ec9994bcb599aa9f90`.
-Each clean checkout used its own unchanged runner in the same measurement
-session, after the full local gates. Later publication edits do not change
-compiler/runtime sources.
+Both runs are contractual under the runner's qualification rules:
+
+- clean detached sources
+- 11 rotating pairs and excluded warmups
+- exact protocol and checksum validation
+- three empty host inventories
+- successful input and hash rechecks
+
+No override was used. The host is Mac14,9 / Apple M2 Pro / 16 GiB, with Xcode
+CPython 3.9.6, NumPy 2.0.2, and Rust 1.95.0. Measurements are single-threaded
+and per operation. Ratios are ratios of medians.
+
+Before is merge base `a368dce7e7b335c1c0cb800ba5240501a21f02bc`. After is
+implementation head `d9fc79921ba9fed1116634ec9994bcb599aa9f90`. Each clean
+checkout used its own unchanged runner in the same measurement session, after
+the full local gates. Later publication edits do not change compiler or
+runtime sources.
 
 | Workload (one million `float64` elements) | Aura before | Aura after | Change in time | Before Aura / Rust | After Aura / Rust |
 | --- | ---: | ---: | ---: | ---: | ---: |
@@ -123,27 +157,32 @@ compiler/runtime sources.
 | NumPy sum | 0.173397 ms | 0.172073 ms | -0.7639% |
 | Rust sum | 0.858312 ms | 0.858677 ms | +0.0425% |
 
-Addition meets the task's 1.5x Rust target at 1.006524x, with 79.9591% less
-Aura time; its after Aura/NumPy ratio is 1.006974. The sum ratio is 6.682308
-against NumPy. That gap is chiefly the deterministic reduction-order policy:
-Aura remains within 1.34x of Rust under the same left-to-right order.
-Addition allocates a fresh owned result; sum reuses its input. These exact
+Addition meets the work's 1.5x Rust target at 1.006524x, with 79.9591% less
+Aura time. Its after Aura/NumPy ratio is 1.006974.
+
+The sum ratio against NumPy is 6.682308. The deterministic reduction-order
+policy causes most of that gap. Under the same left-to-right order, Aura stays
+within 1.34x of Rust.
+
+Addition allocates a fresh owned result. Sum reuses its input. These exact
 workloads do not establish a general language or Array-API performance ranking.
 
 [Before raw](https://github.com/johnolafenwa/Aura/blob/main/work/2026-09-08-pre-batch-1-items-6-7/arrays-before-raw.json),
 [after raw](https://github.com/johnolafenwa/Aura/blob/main/work/2026-09-08-pre-batch-1-items-6-7/arrays-after-raw.json),
 [comparison and controls](https://github.com/johnolafenwa/Aura/blob/main/work/2026-09-08-pre-batch-1-items-6-7/array-publication-comparison.json),
 and [SHA256SUMS](https://github.com/johnolafenwa/Aura/blob/main/work/2026-09-08-pre-batch-1-items-6-7/SHA256SUMS)
-retain all observations and source/binary identities.
+keep all observations and source and binary identities.
 
 ## Optimization Level
 
-This earlier items 1–4 comparison predates the item 7 kernel rewrite.
-The same-session before/after comparison includes Cranelift `speed`, Cargo
-release-profile tuning and user link/strip changes. It does not isolate the
-optimization flag's causal effect. Protocol rows use GO-to-DONE medians,
-integer rows use whole-process medians, and Array rows use per-operation
-medians. Positive change means slower.
+This comparison is from the foundations session. It predates the Array kernel
+rewrite measured above.
+
+The same-session before and after comparison includes three changes: Cranelift
+`speed`, Cargo release-profile tuning, and user link and strip changes. It
+does not isolate the causal effect of the optimization flag. Protocol rows use
+GO-to-DONE medians. Integer rows use whole-process medians. Array rows use
+per-operation medians. A positive change means slower.
 
 | Exact workload | Aura before | Aura after | Change in time |
 | --- | ---: | ---: | ---: |
@@ -156,11 +195,11 @@ medians. Positive change means slower.
 | Array add, per operation | 1.124738 ms | 1.205427 ms | +7.1740% |
 | Array sum, per operation | 1.149820 ms | 1.148677 ms | -0.0994% |
 
-The foundations bundle reduces fib and integer medians by about 16–21%, leaves
-the task/network/retry comparisons much closer, and makes Array addition
-7.1740% slower while Array reduction is essentially unchanged.
+The foundations changes reduce the fib and integer medians by about 16–21%.
+The task, network, and retry comparisons move much less. Array addition is
+7.1740% slower, and Array reduction is essentially unchanged.
 
-The same-session controls are:
+The same-session controls:
 
 | Control | Before median | After median | Drift |
 | --- | ---: | ---: | ---: |
@@ -173,50 +212,76 @@ The same-session controls are:
 | NumPy Array add, per operation | 0.247242 ms | 0.247190 ms | -0.0208% |
 | NumPy Array sum, per operation | 0.169047 ms | 0.168981 ms | -0.0394% |
 
-Every control, including CPython startup, drifts by less than 5%; no repeated
-before/after pair was required. No numeric speed target is ratified. The
-measurements and dispersion from this M2 Pro host are inputs to the Batch 7
-decision.
+Every control drifts by less than 5%, including CPython startup. No repeated
+before and after pair was needed. No numeric speed target is ratified. The
+measurements and dispersion from this M2 Pro host feed later performance
+decisions.
 
 ## Current Performance Gaps
 
-Aura fib and task creation take 29.664884 and 29.068501 times their exact Rust
-comparisons; TCP is near parity and the retry workload favors Aura. Array
-addition/reduction now cost 1.006974/6.682308 times NumPy, or
-1.006524/1.339087 times the same-session Rust kernels. These are workload-specific gaps; scheduling, runtime
-implementation, allocation and optimizer-barrier choices affect interpretation.
+| Workload | Aura compared with its reference |
+| --- | --- |
+| fib | 29.664884 times the exact Rust comparison |
+| Task creation | 29.068501 times the exact Rust comparison |
+| TCP | near parity |
+| Retry | favors Aura |
+| Array addition | 1.006974 times NumPy, 1.006524 times the same-session Rust kernel |
+| Array reduction | 6.682308 times NumPy, 1.339087 times the same-session Rust kernel |
 
-### Per-call Attribution
+These gaps are specific to these workloads. Scheduling, runtime
+implementation, allocation, and optimizer-barrier choices affect how to read
+them.
 
-Eleven symbol-preserving xctrace recordings attribute 49.29% of recovered
-Fibonacci samples to call-frame push/pop and metadata validation, 37.38% to
-other runtime work, and 6.28% to scalar argument/result moves. The unprofiled
-estimate is 33.85854 ns per logical recursive call. A safe frame-storage
-experiment improved time by 11.10%, below the required 20%, and was reverted.
-No call-overhead fix ships in this item. The [boundary note](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/15-backend-boundary.md#per-call-cost-attribution)
-contains all eight categories, sample exclusions and Batch 7 options.
+### Per-Call Attribution
+
+Eleven symbol-preserving xctrace recordings attribute recovered Fibonacci
+samples as follows:
+
+| Category | Share of recovered samples |
+| --- | ---: |
+| Call-frame push/pop and metadata validation | 49.29% |
+| Other runtime work | 37.38% |
+| Scalar argument and result moves | 6.28% |
+
+The unprofiled estimate is 33.85854 ns per logical recursive call. A safe
+frame-storage experiment improved time by 11.10%. That is below the required
+20%, so it was reverted. This work shipped no call-overhead fix. The
+[boundary note](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/15-backend-boundary.md#per-call-cost-attribution)
+has all eight categories, the sample exclusions, and the options considered
+for future work.
 
 ## Performance Direction
 
 Performance work will address task creation and scheduling, native loop and
-call-boundary optimization, allocation/copying, and numeric kernels while
-preserving ownership, checked arithmetic, deterministic reductions, and
-MIR/direct parity. The Array kernels execute Rust runtime code, so replacing
-the native emitter alone does not establish a solution to these gaps.
+call-boundary optimization, allocation and copying, and numeric kernels. It
+will keep ownership, checked arithmetic, deterministic reductions, and
+MIR/direct parity. The Array kernels run Rust runtime code. Replacing the
+native emitter alone does not solve these gaps.
 
 ## Evidence And Reproduction
 
-The earlier items 1–4 [session evidence directory](https://github.com/johnolafenwa/Aura/blob/main/work/2026-09-07-foundations-measurements) retains unchanged raw and summary
-JSON, commands, compiler/source/binary identities, interpreter/toolchain and
-boot/host records, warmups, observations, dispersion, hash rechecks, and failure
-logs. Eleven ten-minute host retries preceded the earlier independent runs;
-the approved continuation's host checks were quiet immediately. No timed
-observations were collected during host refusals, and no override was used.
+The foundations
+[session evidence directory](https://github.com/johnolafenwa/Aura/blob/main/work/2026-09-07-foundations-measurements)
+keeps:
 
-The earlier session [SHA256SUMS](https://github.com/johnolafenwa/Aura/blob/main/work/2026-09-07-foundations-measurements/SHA256SUMS) covers every evidence file.
-The initial partial manifest is preserved as `initial-SHA256SUMS`; each summary
-links its raw report by SHA-256. Temporary paths inside raw reports are retained
-unchanged; the copied basenames below identify the versioned files.
+- unchanged raw and summary JSON
+- commands
+- compiler, source, and binary identities
+- interpreter, toolchain, boot, and host records
+- warmups, observations, and dispersion
+- hash rechecks and failure logs
+
+Eleven ten-minute host retries preceded the earlier independent runs. For the
+approved continuation, the host checks were quiet immediately. No timed
+observations were collected while the host check refused a run, and no
+override was used.
+
+The session
+[SHA256SUMS](https://github.com/johnolafenwa/Aura/blob/main/work/2026-09-07-foundations-measurements/SHA256SUMS)
+covers every evidence file. The initial partial manifest is kept as
+`initial-SHA256SUMS`. Each summary links its raw report by SHA-256. Raw reports
+keep their original temporary paths. The copied basenames below identify the
+versioned files.
 
 | Evidence | SHA-256 |
 | --- | --- |
@@ -227,7 +292,7 @@ unchanged; the copied basenames below identify the versioned files.
 | [aura-foundations-after-integer-loops.json](https://github.com/johnolafenwa/Aura/blob/main/work/2026-09-07-foundations-measurements/aura-foundations-after-integer-loops.json) | `8747324a496b9280eb10bf54013b5dd06d358d3a4acf11772501b6b7dbf60dfb` |
 | [SHA256SUMS](https://github.com/johnolafenwa/Aura/blob/main/work/2026-09-07-foundations-measurements/SHA256SUMS) | `911dc4a7901357b33679ad260923c56d0c8216440b200a0eb12e426ea60cac67` |
 
-Retrieve the exact corrected sources from the
+Get the exact corrected sources from the
 [verified Git bundle](https://github.com/johnolafenwa/Aura/blob/main/work/2026-09-07-foundations-measurements/approved/approved-measurement-commits.bundle).
 The repository must already contain the two base commits listed above:
 
@@ -250,31 +315,33 @@ npm run bench:release-performance -- --label foundations-after-rust --aura targe
 
 In the before checkout, run its own release runner with label
 `foundations-before` and before-specific output paths. Compiler and runner
-sources remain frozen during each run. The original-base Array and standalone
-integer commands are:
+sources stay frozen during each run.
+
+The original-base Array and standalone integer commands are:
 
 ```bash
 python3 scripts/bench-direct-integer-loops.py --aura target/release/aura --repeats 11 --raw-json /tmp/aura-foundations-after-integer-loops.json
 python3 scripts/bench-numeric-arrays.py --label foundations-after-rust --aura target/release/aura --python /Applications/Xcode.app/Contents/Developer/usr/bin/python3 --pairs 11 --raw-json /tmp/aura-foundations-after-arrays-raw.json --summary-json /tmp/aura-foundations-after-arrays-summary.json
 ```
 
-For before Arrays, use the original tag's own runner, the same interpreter and
-11 pairs, label `foundations-before`, and before-specific JSON paths. For its
-standalone integer runner, only `--repeats 11` is supported. Keep the distinct
-measurement families and source identities separate.
+For the before Arrays, use the original tag's own runner with the same
+interpreter, 11 pairs, label `foundations-before`, and before-specific JSON
+paths. The before standalone integer runner supports only `--repeats 11`. Keep
+the measurement families and their source identities separate.
 
 ## Representation
 
-The Batch 1 representation phase measures allocation behavior with the
-runtime's own counters rather than a host allocator: every union payload
-box, closure environment, opaque runtime box, and callable overflow
-allocation is counted on both backends, and a process run with
-`AURA_RUNTIME_STATS=1` prints the totals on standard error when its program
-ends. `benchmarks/representation` holds the programs and
+These measurements count allocations with the runtime's own counters, not a
+host allocator. On both backends, the runtime counts every union payload box,
+closure environment, opaque runtime box, and callable overflow allocation. A
+process run with `AURA_RUNTIME_STATS=1` prints the totals on standard error
+when its program ends.
+
+`benchmarks/representation` holds the programs.
 `scripts/bench-representation.py` records the counters, the direct binary's
-size, and wall time with commit provenance; the numbers below are the
-counters, which are deterministic for these programs, measured at
-`a8aac70a` and archived with a checksum manifest in
+size, and wall time, with commit provenance. The table shows the counters,
+which are deterministic for these programs. They were measured at `a8aac70a`
+and archived with a checksum manifest in
 [work/2026-09-20-representation-measurements](https://github.com/johnolafenwa/Aura/blob/main/work/2026-09-20-representation-measurements).
 
 | Program | Interpreter | Direct backend |
@@ -286,28 +353,35 @@ counters, which are deterministic for these programs, measured at
 | `callable_pack_overflow` (one hundred thousand four-capture packings) | 100,000 environments | 0 environments, 100,000 overflow blocks |
 | `callable_move` (one packing moved one hundred thousand times) | 1 environment | 0 environments |
 
-Every concrete union is one tagged value in registers and locals on the
-direct backend, a runtime-object member riding along as an owned handle
-word, so injections allocate no union box; the interpreter's boxes are
-reference numbers for its `Value` model, not an ABI claim. A callable value
-is four words on the direct backend (Q15 A / Q16 A): captures that fit in
-three words live in the value, a wider environment takes one checked
-block counted as a callable overflow allocation, and packing, calling, and
-moving allocate no closure environment; the direct backend boxes a
-callable only where it leaves generated code (a container, a task start,
-a runtime helper, or a generic frame), which the closure-environment
-counter reports.
+**Unions.** On the direct backend, every concrete union is one tagged value in
+registers and locals. A runtime-object member rides along as an owned handle
+word. Injections allocate no union box. The interpreter's box counts are
+reference numbers for its `Value` model, not an ABI claim.
+
+**Callables.** On the direct backend, a callable value is four words.
+
+- Captures that fit in three words live in the value.
+- A wider environment takes one checked block, counted as a callable overflow
+  allocation.
+- Packing, calling, and moving allocate no closure environment.
+- The direct backend boxes a callable only where it leaves generated code: a
+  container, a task start, a runtime helper, or a generic frame. The
+  closure-environment counter reports these boxes.
+
+Design record:
+[first-class callables and binding contracts](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/decisions/0058-first-class-callables-and-binding-contracts.md)
 
 ## Executable Size
 
-Current counts are exact executable bytes from a clean detached release build
-at `d9fc79921ba9fed1116634ec9994bcb599aa9f90`. They include the maintained
-reference agent as it was at that commit (version 0, `examples/agents/tool_runner/`,
-initial source commit `fc0361bc76b8b47d300a3089b1b4bb7c2b739dfc`). The package
-is now version 1 (Batch 1 phase 1: an owned-callable registry with a
-factory closure and a packed bound method); its release size is re-measured
-by the same bench at the phase-end head, and the table row below remains the
-version-0 measurement until then.
+The current counts are exact executable bytes from a clean detached release
+build at `d9fc79921ba9fed1116634ec9994bcb599aa9f90`. They include the
+maintained reference agent as it was at that commit: version 0,
+`examples/agents/tool_runner/`, initial source commit
+`fc0361bc76b8b47d300a3089b1b4bb7c2b739dfc`.
+
+The package is at version 1, an owned-callable registry with a factory closure
+and a packed bound method. The table row below is still the version-0
+measurement. The same bench re-measures the version-1 release size later.
 
 | Executable | Tuned release bytes |
 | --- | ---: |
@@ -315,23 +389,28 @@ version-0 measurement until then.
 | Native hello world | 1,586,968 |
 | Reference agent version 0 (`tool_runner`) | 3,199,712 |
 
-The profile uses level 3, fat LTO, one codegen unit, no debug data and stripped
-compiler symbols, retaining unwinding and Aura diagnostic metadata. User
-executables use unused-section removal and debug/local-symbol stripping;
-the separately installed runtime archive retains its linkable symbols.
+The compiler profile uses level 3, fat LTO, one codegen unit, and no debug
+data, and strips compiler symbols. It keeps unwinding and Aura diagnostic
+metadata. User executables use unused-section removal and debug and
+local-symbol stripping. The separately installed runtime archive keeps its
+linkable symbols.
+
 Both programs ran with Cargo unavailable. Hello world matched its single-print
-output; the agent matched every byte of its package's pinned stdout.
+output. The agent matched every byte of its package's pinned stdout.
 
 [Size provenance](https://github.com/johnolafenwa/Aura/blob/main/work/2026-09-08-pre-batch-1-items-6-7/executable-sizes.json)
-records the exact commit, commands, profile settings, source/package identities,
-compiler and executable SHA-256 hashes, toolchain and standalone output.
-The final PR head is rebuilt and checked against this table after publication
-commits; that exact-head report is retained in the completion evidence.
-The clean size checkout and target are removed after hashing.
+records the exact commit, commands, profile settings, source and package
+identities, compiler and executable SHA-256 hashes, toolchain, and standalone
+output. The final pull request head was rebuilt and checked against this table
+after the publication commits. That exact-head report is kept in the
+completion evidence. The clean size checkout and target are removed after
+hashing.
 
-The following items 1–4 comparison predates item 7. The older tag has
-no equivalent `tool_runner` package, so no before-size reduction is claimed
-for the new reference agent.
+### Foundations Size Comparison
+
+This comparison is from the foundations session and predates the Array kernel
+rewrite. The older tag has no equivalent `tool_runner` package, so the table
+claims no before-size reduction for the reference agent.
 
 | Executable | Before: v0.3.3-preview, Cargo default | After: Cargo default | After: tuned release | Reduction from before |
 | --- | ---: | ---: | ---: | ---: |
@@ -339,14 +418,20 @@ for the new reference agent.
 | Native hello world | 23,646,792 | 1,702,088 | 1,586,968 | 93.29% |
 | Retrying-network-worker example | 23,715,816 | 4,049,240 | 3,666,600 | 84.54% |
 
-The earlier after-default control explicitly sets the documented release
-values through `CARGO_PROFILE_RELEASE_*` in a separate target directory. It
-retains Cranelift speed and the user-executable link/strip steps. The before
-ref is `v0.3.3-preview` (`d3cc6b96104dd597687a98e9624f800a0cb3cf1e`); exact
-earlier commits, hashes and commands remain in the
-[original size evidence](https://github.com/johnolafenwa/Aura/blob/main/work/2026-09-07-pre-batch-1-executable-sizes.json).
-Both size sessions use Mac14,9 / Apple M2 Pro, arm64 macOS 26.5.2, Rust 1.95.0
-(`59807616e`, LLVM 22.1.2), and Apple clang 21.0.0 (`clang-2100.1.1.101`).
+The after-default control sets the documented release values through
+`CARGO_PROFILE_RELEASE_*` in a separate target directory. It keeps Cranelift
+speed and the user-executable link and strip steps. The before ref is
+`v0.3.3-preview` (`d3cc6b96104dd597687a98e9624f800a0cb3cf1e`). The
+[original size evidence](https://github.com/johnolafenwa/Aura/blob/main/work/2026-09-07-pre-batch-1-executable-sizes.json)
+keeps the exact earlier commits, hashes, and commands.
+
+Both size sessions use:
+
+- Mac14,9 / Apple M2 Pro, arm64 macOS 26.5.2
+- Rust 1.95.0 (`59807616e`, LLVM 22.1.2)
+- Apple clang 21.0.0 (`clang-2100.1.1.101`)
+
+### Reproducing The Size Table
 
 Reproduce the current table from the desired final ref:
 
@@ -356,23 +441,28 @@ python3 scripts/bench-binary-size.py \
   --output /tmp/aura-executable-sizes.json
 ```
 
-Omit `--after-only` and pass `--before-ref v0.3.3-preview` to collect the
-before/default/tuned profile comparison. The script explicitly records
-that the older reference-agent subject is absent; it never substitutes
-a different program. The hello input is identical single-print source, staged
+To collect the before, default, and tuned profile comparison, omit
+`--after-only` and pass `--before-ref v0.3.3-preview`. The script records that
+the older reference-agent subject is absent. It never substitutes a different
+program. The hello input is identical single-print source. It is staged
 outside old source trees that predate its maintained path.
 
-### Cargo 1.95 default-profile check
+### Cargo 1.95 Default-Profile Check
 
-The [pinned Cargo reference](https://github.com/rust-lang/cargo/blob/rust-1.95.0/src/doc/src/reference/profiles.md)
-lists `strip = "none"` in the release defaults, not `debuginfo`. Per the session's
-conditional decision, the size column, source JSON, and size script are retained
-without remeasurement. The column explicitly sets `strip=none`; it is not an
-experiment with the setting omitted. Cargo's
+The
+[pinned Cargo reference](https://github.com/rust-lang/cargo/blob/rust-1.95.0/src/doc/src/reference/profiles.md)
+lists `strip = "none"` in the release defaults, not `debuginfo`. Under the
+session's conditional decision, the size column, source JSON, and size script
+are kept without remeasurement.
+
+The column sets `strip=none` explicitly. It is not an experiment with the
+setting omitted. When the option is omitted and no compiled package needs
+debug information, Cargo's
 [deferred strip implementation](https://github.com/rust-lang/cargo/blob/rust-1.95.0/src/cargo/core/profiles.rs)
-can strip pre-existing debug information automatically when the option is
-omitted and no compiled package needs it. That distinction limits the existing
-column's interpretation as a default-profile control.
+can strip pre-existing debug information automatically. That difference limits
+how far the column works as a default-profile control.
 
-The [reference check](https://github.com/johnolafenwa/Aura/blob/main/work/2026-09-07-foundations-measurements/approved/cargo-default-strip-recheck.json) records Cargo's
-exact version, reference URL and source hash, relevant lines, and this decision.
+The
+[reference check](https://github.com/johnolafenwa/Aura/blob/main/work/2026-09-07-foundations-measurements/approved/cargo-default-strip-recheck.json)
+records Cargo's exact version, the reference URL and source hash, the relevant
+lines, and this decision.

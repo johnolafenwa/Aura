@@ -1,25 +1,25 @@
 # aura-compiler
 
-This crate contains the Aura compiler bootstrap library.
+This crate is the Aura compiler bootstrap library.
 
-The Batch 1 type-foundation surface includes transparent aliases, normalized
-unions, contextual member injection, and exhaustive `Type as name` patterns.
-Shared, mutable, and owned matching lower through common tag, loan, and take
-operations consumed by both execution backends. The compiler service and
-persisted semantic artifacts use schema 9 for these checked contracts.
-The Option library remains until the separate phase 2 migration.
+Its type system includes transparent aliases, normalized unions, contextual
+member injection, and exhaustive `Type as name` patterns. Shared, mutable, and
+owned matches lower to common tag, loan, and take operations that both
+execution backends consume. The compiler service and persisted semantic
+artifacts use semantic interface schema 16. Aura has no builtin
+`Option` type.
 
 ## Testing Approach
 
-This crate should be developed test-first.
-
-The intended layers are:
+Develop this crate test-first. The tests come in layers:
 
 - unit tests for small compiler helpers
-- fixture tests for parse/check/run/diagnostic behavior
+- fixture tests for parse, check, run, and diagnostic behavior
 - machine-readable analysis tests for diagnostics, symbols, hover, and definition data
 - example smoke tests for maintained `.au` programs
 - MIR structure tests for backend staging
+
+MIR is the compiler's mid-level intermediate representation.
 
 ## Fixture Categories
 
@@ -31,7 +31,8 @@ Fixture tests live under:
 - `tests/fixtures/check-fail`
 - `tests/fixtures/run-pass`
 
-When adding a new language feature, prefer starting with a failing fixture in one of those directories.
+Start a new language feature with a failing fixture in one of these
+directories.
 
 ## Verification
 
@@ -42,24 +43,27 @@ RUST_MIN_STACK=33554432 cargo test
 npm run coverage:compiler
 ```
 
-That runs:
+The test command runs:
 
 - the compiler crate unit tests
 - the maintained example smoke tests
 - the fixture-based compiler tests
 - the CLI product tests that exercise compiler behavior through `aura`
 
-The coverage command uses `cargo-llvm-cov` to measure the current compiler production-code baseline. It runs the workspace tests, excludes `crates/aura/**` from the report, and ignores extracted `src/*_tests.rs` helper modules.
+The coverage command uses `cargo-llvm-cov` to measure compiler production code.
+It runs the workspace tests and excludes `crates/aura/**` from the report. It
+also ignores the extracted `src/*_tests.rs` helper modules.
 
 ## Coverage Direction
 
-The compiler crate is moving toward a stricter coverage policy, but the immediate priority is behavior-first fixture coverage for the implemented language subset.
-
-For this package, exact parse/check/run/diagnostic regression cases are more valuable than chasing line coverage mechanically.
+The crate is moving toward a stricter coverage policy. For now, the priority is
+fixture coverage of the behavior the language implements. Exact parse, check,
+run, and diagnostic regression cases are worth more here than line coverage
+for its own sake.
 
 ### Coverage Prerequisites
 
-Compiler coverage depends on:
+Compiler coverage needs:
 
 - `cargo-llvm-cov`
 - the Rust `llvm-tools-preview` component

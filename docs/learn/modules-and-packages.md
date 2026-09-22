@@ -1,8 +1,9 @@
 # Organizing Code
 
-A single-file program is a fine way to start. At some point, though, helper types want a home, public APIs want to be marked as such, and dependencies want to be named somewhere the compiler can read them. That is what Aura's module and package system is for.
-
-This chapter walks from a single file to a package with dependencies.
+This page takes a program from a single file to a package with dependencies.
+A single file is a fine place to start. As a program grows, helper types need
+a home, public APIs need marking, and dependencies need a place where the
+compiler can read them. Aura's modules and packages cover all three.
 
 ## Local Modules
 
@@ -28,11 +29,15 @@ import helpers.math
 print(helpers.math.double(21))
 ```
 
-Only declarations marked `public` are visible outside the file. `internal(...)` may be called from within `helpers/math.au`, but importers cannot reach it. This is not a convention; the compiler enforces it.
+Only declarations marked `public` are visible outside the file. Code inside
+`helpers/math.au` may call `internal(...)`, but importers cannot reach it.
+The compiler enforces this. It is not a convention.
 
 ## Two Styles Of Import
 
-`import helpers.math` brings the whole module namespace in, so calls read `helpers.math.double(21)`. When a single name is the local concept, use `from ... import ...` to pull the name directly:
+`import helpers.math` brings in the whole module namespace, so calls read
+`helpers.math.double(21)`. Use `from ... import ...` to bring in a single
+name directly:
 
 ```aura
 from helpers.math import double
@@ -40,12 +45,15 @@ from helpers.math import double
 print(double(21))
 ```
 
-Both styles are useful. A quick rule: when a file imports many names from a module, keep the module prefix; when the imported name is the central concept of the file, drop it.
+A quick rule for choosing:
+
+- When a file imports many names from a module, keep the module prefix.
+- When the imported name is the central concept of the file, drop the prefix.
 
 ## Choosing Local Import Names
 
-Use `as` when the complete module path is too long for repeated use or when
-two modules export the same concise name:
+Use `as` when the full module path is too long to repeat, or when two modules
+export the same short name:
 
 ```aura
 import helpers.math as integer_math
@@ -55,22 +63,25 @@ print(integer_math.double(21))
 counter = ReadableCounter(value=2)
 ```
 
-The alias is the only local name introduced by that import entry. It changes
-how the importer spells the name, while the declaration keeps its original
-module identity, type, visibility, and behavior. A from-import may mix direct
-and aliased entries:
+The alias is the only local name that the import entry introduces. It
+changes how the importer spells the name. The declaration keeps its original
+module identity, type, visibility, and behavior.
+
+A from-import may mix direct and aliased entries:
 
 ```aura
 from helpers.math import double as twice, empty
 ```
 
-Both styles also preserve the full callable contract. If a public generic
-helper performs a clone-producing operation, its inferred clone-safety
-obligation follows the import and is checked where the helper is specialized.
+Both import styles keep the full callable contract. Suppose a public generic
+helper performs an operation that produces a clone. Its inferred clone-safety
+requirement follows the import, and the compiler checks it where the helper
+is specialized.
 
 ## Packages
 
-A **package** is a directory with an `Aura.toml` manifest and usually a `src/` directory:
+A package is a directory with an `Aura.toml` manifest, and usually a `src/`
+directory:
 
 ```
 app/
@@ -86,13 +97,17 @@ version = "0.1.0"
 edition = "2026"
 ```
 
-Manifest package names must be valid Aura identifiers — letters, digits, and underscores. Hyphenated names are rejected because `import my-util.math` would not parse as an Aura expression.
+A package name must be a valid Aura identifier: letters, digits, and
+underscores. See [Package Names Are Import Roots](#package-names-are-import-roots)
+for why hyphens are rejected.
 
-Commands that take a source file inside a package infer the nearest package root automatically. `aura run src/main.au` from inside `app/` works the same as running it from the repo root.
+A command that takes a source file inside a package finds the nearest package
+root automatically. Running `aura run src/main.au` from inside `app/` works
+the same as running it from the repo root.
 
 ## Dependencies
 
-Dependencies live under `[dependencies]` in the manifest:
+Dependencies go under `[dependencies]` in the manifest:
 
 ```toml
 [dependencies]
@@ -100,10 +115,14 @@ util = { path = "../util" }
 jsonx = { git = "https://github.com/example/jsonx.git", branch = "main" }
 ```
 
-- **Path dependencies** point at another local package. Good for related crates in the same repository or workspace.
-- **Git dependencies** point at a git repository. Optional `rev`, `tag`, or `branch` selectors pin the version; without one, the dependency defaults to `branch = "main"`.
+- **Path dependencies** point at another local package. They suit related
+  packages in the same repository or workspace.
+- **Git dependencies** point at a git repository. An optional `rev`, `tag`,
+  or `branch` selector pins the version. Without one, the dependency defaults
+  to `branch = "main"`.
 
-Both shapes are pinned by exact revision (or canonical path) in `Aura.lock`. Repeat runs resolve the same code until you ask for an update:
+`Aura.lock` pins both kinds by exact revision or canonical path. Repeat runs
+resolve the same code until you ask for an update:
 
 ```bash
 aura deps update
@@ -112,7 +131,7 @@ aura deps update util
 
 ## Package Names Are Import Roots
 
-A dependency is imported by its package name:
+You import a dependency by its package name:
 
 ```aura
 import util.math
@@ -120,22 +139,25 @@ import util.math
 print(util.math.double(10))
 ```
 
-Because the import syntax uses the package name directly, a manifest that declares `name = "my-app"` is rejected: `import my-app.foo` would try to subtract `app.foo` from `my`.
+Because the import uses the package name directly, a manifest that declares
+`name = "my-app"` is rejected. `import my-app.foo` would try to subtract
+`app.foo` from `my`.
 
 ## Workspaces
 
-When several packages live together, a **workspace** manifest coordinates them:
+When several packages live together, a workspace manifest coordinates them:
 
 ```toml
 [workspace]
 members = ["app", "util"]
 ```
 
-Each member is still an ordinary package with its own `Aura.toml`. The workspace root owns the shared `Aura.lock`.
+Each member is still an ordinary package with its own `Aura.toml`. The
+workspace root owns the shared `Aura.lock`.
 
 ## A Good Module Boundary
 
-A module boundary should usually hide representation and expose behaviour:
+A module boundary should usually hide the representation and expose behavior:
 
 ```aura
 public class Counter:
@@ -148,12 +170,18 @@ public class Counter:
         return self.value
 ```
 
-Callers see `Counter.inc()` and `Counter.get()`; they never reach `.value` directly. The internal representation is free to change in ways the external contract does not.
+Callers see `Counter.inc()` and `Counter.get()`. They never reach `.value`
+directly, so the internal representation can change without breaking the
+external contract.
 
-Keep helper functions private unless another module genuinely needs them. A smaller public surface is easier to keep stable.
+Keep helper functions private unless another module needs them. A smaller
+public surface is easier to keep stable.
 
 ## Notes On Editor Tooling
 
-`aura analyze` and `aura complete` can read an editor buffer through `--stdin` while resolving imports relative to the file being edited. These stdin-mode commands deliberately do not write `Aura.lock`. Lockfile changes happen only when you `check`, `run`, `build`, or explicitly `deps update`.
+`aura analyze` and `aura complete` can read an editor buffer through
+`--stdin` and resolve imports relative to the file being edited. In stdin
+mode these commands do not write `Aura.lock`. The lockfile changes only when
+you run `check`, `run`, `build`, or `deps update`.
 
 Reference: [Packages](/manual/packages), [CLI And Tooling](/manual/cli-and-tooling).

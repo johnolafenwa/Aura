@@ -4,37 +4,41 @@ The **Aura Programming Language** extension provides `.au` syntax
 highlighting, indentation, snippets, diagnostics, completion, hover,
 go-to-definition, and document symbols.
 
-The extension includes its JavaScript editor client and language-server
-transport. Semantic analysis comes from the actual compiler server exposed by
-`aura lsp`, so install the [Aura CLI](/install/) first and verify:
+The extension bundles its JavaScript editor client and the language-server
+transport. Semantic analysis comes from the compiler's own server, which
+`aura lsp` starts. Install the [Aura CLI](/install/) first, then check that it
+works:
 
 ```bash
 aura --version
 aura help
 ```
 
+Next, install the extension with one of the methods below. Then
+[verify language support](#verify-language-support).
+
 ## Install From Visual Studio Marketplace
 
-Open the Extensions view in VS Code, search for **Aura Programming Language**
-from publisher **JohnOlafenwa**, and select **Install**.
+1. Open the Extensions view in VS Code.
+2. Search for **Aura Programming Language** from publisher **JohnOlafenwa**.
+3. Select **Install**.
+4. Reload VS Code.
 
 - [Open the Visual Studio Marketplace listing](https://marketplace.visualstudio.com/items?itemName=JohnOlafenwa.vscode-aura-lang)
 
-The equivalent terminal command is:
+To install from a terminal instead, run this command and then reload VS Code:
 
 ```bash
 code --install-extension JohnOlafenwa.vscode-aura-lang
 ```
 
-Reload VS Code after installation.
-
 ## Install From Open VSX
 
-Editors using Open VSX, including VSCodium, can install the same extension:
+Editors that use Open VSX, such as VSCodium, can install the same extension:
 
 - [Open the Open VSX listing](https://open-vsx.org/extension/JohnOlafenwa/vscode-aura-lang)
 
-In VSCodium, search for **Aura Programming Language** in Extensions or run:
+In VSCodium, search for **Aura Programming Language** in Extensions, or run:
 
 ```bash
 codium --install-extension JohnOlafenwa.vscode-aura-lang
@@ -42,32 +46,33 @@ codium --install-extension JohnOlafenwa.vscode-aura-lang
 
 ## Install The Release VSIX Manually
 
-Download `aura-language.vsix` from the
-[v0.3.3-preview release](https://github.com/johnolafenwa/Aura/releases/tag/v0.3.3-preview).
-Then open the Command Palette and choose **Extensions: Install from VSIX...**.
+A VSIX file is a packaged VS Code extension.
 
-The command-line form is:
+1. Download `aura-language.vsix` from the
+   [v0.3.4-preview release](https://github.com/johnolafenwa/Aura/releases/tag/v0.3.4-preview).
+2. Open the Command Palette and choose **Extensions: Install from VSIX...**.
+
+To install from a terminal instead:
 
 ```bash
 code --install-extension ./aura-language.vsix
 ```
 
-VS Code does not automatically update extensions installed from a VSIX by
-default. Install the next release's VSIX manually when upgrading through this
-path.
+By default, VS Code does not update extensions installed from a VSIX. To
+upgrade, install the next release's VSIX by hand.
 
 ## Install In WSL
 
-First complete [Install Aura On Windows With WSL](/install/windows-wsl).
-Open the project from the Ubuntu terminal with `code .` and confirm that the
-remote status bar shows **WSL: Ubuntu**.
+The Aura extension and the `aura` CLI must both run in the Windows Subsystem
+for Linux (WSL) environment. An extension installed only in the local Windows
+extension host cannot reliably reach the Linux compiler server.
 
-Open Extensions in that remote window, find **Aura Programming Language**, and
-select **Install in WSL: Ubuntu**. The Aura extension and the `aura` CLI must
-both run in the WSL environment. Installing the extension only in the local
-Windows extension host cannot reach the Linux compiler server reliably.
-
-Verify the remote environment in VS Code's integrated terminal:
+1. Complete [Install Aura On Windows With WSL](/install/windows-wsl).
+2. From the Ubuntu terminal, open the project with `code .`.
+3. Check that the remote status bar shows **WSL: Ubuntu**.
+4. In that remote window, open Extensions, find
+   **Aura Programming Language**, and select **Install in WSL: Ubuntu**.
+5. In VS Code's integrated terminal, verify the remote environment:
 
 ```bash
 command -v aura
@@ -76,14 +81,14 @@ aura --version
 
 ## Use A Specific Aura Binary
 
-The extension normally launches `aura` from `PATH`. To use another binary,
-start VS Code with `AURA_LSP_AURA_PATH` set to its absolute path:
+The extension launches `aura` from `PATH`. To use a different binary, start
+VS Code with `AURA_LSP_AURA_PATH` set to that binary's absolute path:
 
 ```bash
 AURA_LSP_AURA_PATH="$HOME/tools/aura/bin/aura" code /path/to/project
 ```
 
-For WSL, run that command from the WSL terminal so the path is a Linux path.
+In WSL, run this command from the WSL terminal so the path is a Linux path.
 
 ## Verify Language Support
 
@@ -96,35 +101,35 @@ def greet(name: str) -> str:
 print(greet("Aura"))
 ```
 
-Confirm all of the following:
+Check each of the following:
 
 1. The language mode in the lower-right corner reads **Aura**.
-2. Keywords, strings, types, and interpolation receive Aura highlighting.
-3. An incomplete or invalid expression produces an `AU####` diagnostic.
+2. Keywords, strings, types, and interpolation get Aura highlighting.
+3. An incomplete or invalid expression shows an `AU####` diagnostic.
 4. Completion appears after a binding or member-access prefix.
-5. Hover shows compiler-owned type information.
+5. Hover shows type information from the compiler.
 
 ## Troubleshooting
 
 ### The file opens as plain text
 
-Confirm the filename ends in `.au`. Select the language mode in the lower-right
-corner and choose **Aura**.
+Check that the filename ends in `.au`. Click the language mode in the
+lower-right corner and choose **Aura**.
 
 ### Syntax colors work but semantic features do not
 
-Syntax highlighting is bundled with the extension, while semantic features
-need `aura lsp`. Open VS Code's integrated terminal and run:
+Syntax highlighting is bundled with the extension. Semantic features need
+`aura lsp`. Open VS Code's integrated terminal and run:
 
 ```bash
 command -v aura
 aura --version
 ```
 
-Restart VS Code after fixing `PATH`, or launch it with
+After you fix `PATH`, restart VS Code. You can also launch it with
 `AURA_LSP_AURA_PATH` as shown above.
 
 ### Inspect the language-server output
 
 Open **View → Output**, then select **Aura Language Server**. Startup and
-request failures appear there without requiring a separate server package.
+request failures appear there. You do not need a separate server package.

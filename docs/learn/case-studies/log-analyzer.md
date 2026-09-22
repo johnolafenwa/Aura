@@ -1,10 +1,10 @@
 # Case Study: A Log Analyzer
 
-This case study walks end-to-end through a small program that turns free-form log text into a small structured report. It is deliberately modest — no regular expressions, no command-line flags, no database — because the point is to see how Aura code grows as text enters the program and becomes typed data.
+This case study builds a small program that turns free-form log text into a structured report. It leaves out regular expressions, command-line flags, and databases on purpose. The point is to watch text enter the program and become typed data.
 
 ## The Input
 
-The program will consume lines that look like this:
+The program reads lines like these:
 
 ```
 INFO api started
@@ -13,11 +13,15 @@ ERROR worker failed
 INFO worker recovered
 ```
 
-The report it produces answers three questions: how many entries of each severity arrived, which services appeared, and how many lines could not be parsed.
+The report answers three questions:
+
+- How many entries of each severity arrived?
+- Which services appeared?
+- How many lines could not be parsed?
 
 ## Step 1: Model The Parsed Line
 
-A valid log entry has three pieces: a level, a service, and a message. A class with three fields says exactly that:
+A valid log entry has three parts: a level, a service, and a message. A class with three fields says exactly that:
 
 ```aura
 class LogLine:
@@ -26,11 +30,11 @@ class LogLine:
     message: str
 ```
 
-The original text is kept in `message` so later code can print or inspect the unmodified line if it wants to.
+`message` keeps the original text, so later code can print or inspect the unmodified line.
 
 ## Step 2: Parse One Line
 
-A line that cannot be parsed is not a crash. It is an expected, measurable absence of data. That makes `LogLine | None` the right return type:
+A line that cannot be parsed is not a crash. It is an expected, countable absence of data, so the return type is `LogLine | None`:
 
 ```aura
 def parse_line(line: str) -> LogLine | None:
@@ -55,11 +59,13 @@ def parse_line(line: str) -> LogLine | None:
     return LogLine(level=level, service=service, message=clean)
 ```
 
-`return None` selects the absence member of `LogLine | None`, and the final `return` injects the constructed `LogLine` into the union without a wrapper. `parts.get(0)` returns `Lookup[str]`; `match own` moves the found string out of that result so `level` owns it. The `parts.len() < 3` guard makes the two fallback arms unreachable, but keeping the `match` exhaustive is a cheap insurance policy. When the parser grows — a later revision might accept quoted strings or nested fields — the exhaustive shape makes the change hard to get wrong.
+- `return None` selects the absence member of `LogLine | None`. The final `return` puts the new `LogLine` into the union without a wrapper.
+- `parts.get(0)` returns `Lookup[str]`. `match own` moves the found string out of that result, so `level` owns it.
+- The `parts.len() < 3` guard makes the two fallback arms unreachable. The exhaustive `match` is still cheap insurance. If the parser later accepts quoted strings or nested fields, that shape makes the change hard to get wrong.
 
 ## Step 3: Count With A dict
 
-Counting uses a dictionary from string to integer. The helper is deliberately small:
+Counting uses a dictionary from string to integer. The helper is small:
 
 ```aura
 def increment(counts: mut dict[str, int32], key: own str):
@@ -72,13 +78,11 @@ def increment(counts: mut dict[str, int32], key: own str):
     counts[key] = current + 1
 ```
 
-The small ownership detail is now visible in the signature. `dict.get` shares
-`key`; indexed assignment then consumes it because the dictionary retains the key. No clone
-is needed.
+The signature shows the ownership detail. `dict.get` borrows `key`. The indexed assignment then consumes it, because the dictionary keeps the key. No clone is needed.
 
 ## Step 4: The Report
 
-Now pull the pieces together:
+Now put the pieces together:
 
 ```aura
 lines = ["INFO api started", "WARN api slow", "ERROR worker failed", "INFO worker recovered", "badline"]
@@ -103,20 +107,19 @@ print("services: " + services.len().to_string())
 print("skipped: " + skipped.to_string())
 ```
 
-The type pattern `LogLine as entry` selects a parsed line and `None` selects a skipped one. `match own` consumes the parsed value, so the arm can move `entry.service` into the set while cloning only the level it still needs.
+The type pattern `LogLine as entry` selects a parsed line, and `None` selects a skipped one. `match own` consumes the parsed value. The arm can then move `entry.service` into the set and clone only the level.
 
-The three report variables are visible at the top of the aggregation loop. There is no hidden state.
+The three report variables sit at the top of the loop, with no hidden state:
 
 - `levels` counts known severities.
-- `services` deduplicates service names.
-- `skipped` counts rows that failed to parse.
+- `services` removes duplicate service names.
+- `skipped` counts lines that failed to parse.
 
-When a run produces the wrong output, the fix is nearly always visible in those three bindings.
+When a run prints the wrong output, the cause is almost always visible in those three bindings.
 
 ## Why This Shape Scales
 
-Nothing in this program assumes a particular input size. Changing the input
-from an inline list to a file is localised:
+Nothing in the program assumes an input size. Reading from a file instead of an inline list changes only the start:
 
 ```aura
 import fs
@@ -125,17 +128,17 @@ text = try fs.read_to_string("app.log")
 lines = text.split("\n")
 ```
 
-The parser keeps returning `LogLine | None`. The counter keeps mutating a dictionary owned by its caller. The set keeps owning service names. The program's structure does not move.
+The parser still returns `LogLine | None`. The counter still changes a dictionary its caller owns. The set still owns the service names.
 
-That is the argument for typing data at the boundary: when the input source changes, the program's core stays exactly where it was.
+That is the case for typing data at the boundary. When the input source changes, the core of the program stays where it was.
 
 ## Extensions To Try
 
-The analyzer is small on purpose. A few directions you might push it:
+The analyzer is small on purpose. Some ways to extend it:
 
 - Add a `dict[str, int32]` that counts services as well as levels.
-- Turn `level` into an enum — `LogLevel.Info`, `LogLevel.Warn`, `LogLevel.Error` — and treat unknown levels as skipped.
+- Turn `level` into an enum, such as `LogLevel.Info`, `LogLevel.Warn`, and `LogLevel.Error`, and treat unknown levels as skipped.
 - Print the most frequent service by iterating over `services` and looking up counts.
 - Read from standard input with `io.read_line()` in a loop.
 
-Each extension should fit into the structure without rearranging it.
+Each extension should fit the existing structure without rearranging it.

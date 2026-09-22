@@ -1,11 +1,12 @@
 # Working With Collections
 
-Aura uses `list[T]`, `dict[K, V]`, and `set[T]`. Each collection has one exact
-static element shape, deterministic ownership, and explicit absence.
+Aura has three collection types: `list[T]`, `dict[K, V]`, and `set[T]`. Each
+one holds a single static element type. Ownership of the elements is
+deterministic, and lookups report absence explicitly.
 
 ## Lists
 
-A list preserves order and allows duplicates:
+A list keeps its elements in order and allows duplicates:
 
 ```aura
 mut names: list[str] = ["Ada", "Grace"]
@@ -13,14 +14,14 @@ names.append("Katherine")
 print(names)
 ```
 
-An empty list needs an annotation or constructor:
+An empty list needs a type annotation or a constructor:
 
 ```aura
 mut names: list[str] = []
 mut scores = list[int32]()
 ```
 
-Positions use `int64`. Negative positions count from the end:
+Positions are `int64`. A negative position counts from the end:
 
 ```aura
 mut values = [10, 20, 30]
@@ -33,11 +34,14 @@ match values.get(-2):
         print("missing")
 ```
 
-Use `get` when an invalid position is ordinary input. It returns `Lookup[T]`
-and requires clone-safe `T`: a valid position is `Lookup.Found(value)` with a
-cloned element, and an invalid one is `Lookup.Missing`, so an element that is
-itself `None` stays distinct from an absent one. Direct indexing, `pop`, `set`,
-and `swap` trap on invalid positions.
+Use `get` when an invalid position is ordinary input. It returns `Lookup[T]`:
+
+- A valid position gives `Lookup.Found(value)`, where `value` is a clone of
+  the element. For this reason `get` requires a clone-safe `T`.
+- An invalid position gives `Lookup.Missing`.
+
+This keeps an element that is itself `None` distinct from a missing one.
+Direct indexing, `pop`, `set`, and `swap` trap on an invalid position.
 
 The core mutations have Python-shaped names and typed ownership:
 
@@ -50,13 +54,14 @@ last = values.pop()
 values.remove(20)
 ```
 
-`insert` clamps its position to the range from zero through the current
-length. `pop()` removes the final element and returns it. `remove(value)`
-removes the first equal value. An absent value traps with `AU4008`; test
-membership first when absence is expected.
+- `insert` clamps its position to the range from zero through the current
+  length.
+- `pop()` removes the last element and returns it.
+- `remove(value)` removes the first equal value. If the value is absent, it
+  traps with `AU4008`. Test membership first when absence is expected.
 
-`index(value)` returns the first equal position, and `count(value)` counts all
-equal elements:
+`index(value)` returns the position of the first equal element.
+`count(value)` counts every equal element:
 
 ```aura
 values = [3, 1, 3, 2]
@@ -64,7 +69,7 @@ print(values.index(3))
 print(values.count(3))
 ```
 
-List and string slices return fresh owned values:
+Slicing a list or a string returns a fresh owned value:
 
 ```aura
 values = [10, 20, 30, 40]
@@ -76,13 +81,13 @@ text = "A🎉Z"
 celebration = text[1:2]
 ```
 
-Slice positions count elements for lists and Unicode scalar values for `str`.
+A list slice counts elements. A `str` slice counts Unicode scalar values.
 Bounds are half-open. Invalid or reversed bounds trap with `AU4003`.
 
 ### Eager Algorithms
 
-`map` and `filter` return fresh owned lists. Sorting is stable and mutates the
-receiver:
+`map` and `filter` return fresh owned lists. `sort` is stable and changes the
+list it is called on:
 
 ```aura
 def doubled(value: int32) -> int32:
@@ -109,23 +114,23 @@ def main():
     descending_natural.sort(reverse=true)
 ```
 
-A key function runs once per element before the list changes. Equal keys keep
-their input order. `copy()` requires clone-safe elements and returns storage
-independent from the source.
+A key function runs once per element before the list changes. Elements with
+equal keys keep their input order. `copy()` requires clone-safe elements and
+returns storage that is independent of the source.
 
-Use capacity control for workloads that know their size:
+When a workload knows its size, control the capacity:
 
 ```aura
 mut values = list[int32].with_capacity(1_000)
 values.reserve(500)
 ```
 
-Capacity calls do not change list contents. Negative requests trap with
-`AU4003`; allocation failures trap with `AU4005`.
+Capacity calls do not change the list's contents. A negative request traps
+with `AU4003`. An allocation failure traps with `AU4005`.
 
 ## Dictionaries
 
-A dictionary preserves key insertion order:
+A dictionary keeps its keys in insertion order:
 
 ```aura
 mut counts: dict[str, int32] = {"ready": 2}
@@ -133,7 +138,7 @@ counts["done"] = 1
 counts["ready"] = 3
 ```
 
-Use `in` for membership and `get` for a lookup that reports absence:
+Use `in` to test membership. Use `get` for a lookup that reports absence:
 
 ```aura
 if "ready" in counts:
@@ -146,13 +151,15 @@ match counts.get("missing"):
         print("not found")
 ```
 
-`get` has no default argument. It returns `Lookup.Found(value)` with a cloned
-value, or `Lookup.Missing` when the key is absent, and therefore requires
-clone-safe `V`. `remove(key)` transfers the value into `Lookup.Found(value)`
-when present and returns `Lookup.Missing` when absent.
+`get` takes no default argument. It returns `Lookup.Found(value)` with a
+cloned value, or `Lookup.Missing` when the key is absent. For this reason it
+requires a clone-safe `V`.
+
+`remove(key)` moves the value out into `Lookup.Found(value)` when the key is
+present. It returns `Lookup.Missing` when the key is absent.
 
 `keys()`, `values()`, and `items()` return eager owned lists in insertion
-order. Items are tuples:
+order. Each item is a tuple:
 
 ```aura
 for key, value in counts.items():
@@ -160,22 +167,22 @@ for key, value in counts.items():
 ```
 
 `copy()` duplicates the dictionary into independent owned storage.
-`update(other)` transfers entries from another
-dictionary. An existing key keeps its insertion position; a new key is added
-at the end.
+`update(other)` moves the entries of another dictionary into this one. An
+existing key keeps its position. A new key goes at the end.
 
 ## Sets
 
-A set stores one value per equality class. A non-empty set literal needs a set
-context, and an empty set uses its constructor:
+A set stores one value per equality class. A non-empty set literal needs a
+set context, such as a `set[...]` annotation. An empty set uses its
+constructor:
 
 ```aura
 mut seen: set[int32] = {1, 2, 2, 3}
 mut names = set[str]()
 ```
 
-Membership uses `in` and `not in`. Mutation uses `add`, `remove`, and
-`discard`:
+Test membership with `in` and `not in`. Change the set with `add`, `remove`,
+and `discard`:
 
 ```aura
 seen.add(5)
@@ -186,16 +193,18 @@ if 2 in seen:
 seen.discard(99)
 ```
 
-`remove` traps with `AU4008` when the value is absent. `discard` is silent.
-Both return `None`. `copy`, `clear`, `reserve`, and `with_capacity` follow the
-same ownership and capacity rules as the other collection types.
+`remove` traps with `AU4008` when the value is absent. `discard` does nothing
+when the value is absent. Both return `None`.
 
-Sets render with braces when non-empty and as `set()` when empty. Program logic
-must not depend on set iteration order.
+`copy`, `clear`, `reserve`, and `with_capacity` follow the same ownership and
+capacity rules as the other collection types.
+
+A non-empty set prints with braces. An empty set prints as `set()`. Program
+logic must not depend on the order in which a set iterates.
 
 ## Comprehensions
 
-Comprehensions eagerly create fresh owned collections:
+A comprehension builds a fresh owned collection right away:
 
 ```aura
 values = [1, 2, 3, 4]
@@ -204,15 +213,19 @@ even = {value for value in values if value % 2 == 0}
 labels = {value: str(value) for value in values}
 ```
 
-Nested clauses run in outer-major order and filters run from left to right.
-Collection sources are shared and frozen during a comprehension. A non-Copy
-value reached through shared iteration needs an explicit `.clone()` before it
-can enter the new collection.
+- Nested `for` clauses run in outer-major order.
+- Filters run from left to right.
+- The source collections are shared and frozen while the comprehension runs.
+- A value that is not a copy type, reached through shared iteration, needs an
+  explicit `.clone()` before it can go into the new collection.
 
 ## Choosing A Collection
 
-Use `list[T]` when order or duplicates matter. Use `dict[K, V]` for keyed
-lookup and updates. Use `set[T]` for uniqueness and membership.
+| Need | Use |
+| --- | --- |
+| Order or duplicates matter | `list[T]` |
+| Keyed lookup and updates | `dict[K, V]` |
+| Uniqueness and membership | `set[T]` |
 
-The normative method signatures, failure codes, evaluation order, and backend
-contract are in [Collections](/manual/collections).
+[Collections](/manual/collections) in the Manual gives the exact method
+signatures, failure codes, evaluation order, and backend contract.

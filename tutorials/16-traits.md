@@ -1,15 +1,20 @@
 # Traits
 
-Traits define shared behavior that different types can implement. If you know Python's abstract base classes or Go's interfaces, traits serve a similar purpose -- they let you write code that works with any type that provides the required methods.
+A trait names behavior that different types can implement. Traits play the
+role of Python's abstract base classes or Go's interfaces. Code written
+against a trait works with any type that provides the trait's methods.
 
 ## Declaring A Trait
 
-A trait lists method signatures. Methods may omit a body or provide a default implementation:
+A trait lists method signatures. A method can leave out its body:
 
 ```aura check-pass
 trait Greeter:
     def greet(self) -> str
 ```
+
+A method can also provide a default implementation, which may call the
+trait's other methods:
 
 ```aura check-pass
 trait Named:
@@ -18,28 +23,29 @@ trait Named:
         return "name=" + self.name()
 ```
 
-Empty marker traits use `pass`:
+An empty marker trait uses `pass`:
 
 ```aura check-pass
 trait Marker:
     pass
 ```
 
-Generic traits use the same `Name[T]` syntax as classes:
+A generic trait uses the same `Name[T]` syntax as a class:
 
 ```aura check-pass
 trait Mapper[T]:
     def map(self, value: own T) -> T
 ```
 
-Trait methods and impl methods may also use `Self` in parameter and return positions:
+Trait methods and impl methods can use `Self` in parameter and return
+positions:
 
 ```aura check-pass
 trait Combine:
     def combine(self, other: Self) -> Self
 ```
 
-Traits may also inherit from other traits:
+A trait can inherit from another trait:
 
 ```aura check-pass
 trait Named:
@@ -50,11 +56,12 @@ trait Labelled: Named:
         return "name=" + self.name()
 ```
 
-When a type implements `Labelled`, it must also implement `Named`. Generic bounds such as `T: Labelled` inherit the methods and obligations of the supertraits.
+A type that implements `Labelled` must also implement `Named`. A bound such as
+`T: Labelled` inherits the methods and obligations of the supertraits.
 
 ## Implementing A Trait
 
-Use `impl Trait for Type:` to provide the trait's methods for a concrete type:
+`impl Trait for Type:` provides the trait's methods for a concrete type:
 
 ```aura fragment
 class User:
@@ -65,7 +72,7 @@ impl Greeter for User:
         return "hello " + self.name
 ```
 
-You can also implement traits for specialized generic instances:
+You can implement a trait for one specialized instance of a generic class:
 
 ```aura fragment
 class Box[T]:
@@ -76,7 +83,7 @@ impl Greeter for Box[str]:
         return self.value.clone()
 ```
 
-Open generic impl headers work too:
+An open generic impl header covers every instance:
 
 ```aura fragment
 impl[T] Showable for Box[T]:
@@ -84,7 +91,7 @@ impl[T] Showable for Box[T]:
         return "box"
 ```
 
-And generic traits can be implemented for generic classes:
+A generic trait can be implemented for a generic class:
 
 ```aura fragment
 impl Mapper[T] for Box[T]:
@@ -94,8 +101,8 @@ impl Mapper[T] for Box[T]:
 
 ## Clone-Safety Is Part Of The Trait Contract
 
-When a generic trait default method performs a clone-producing operation,
-Aura infers a clone-safety obligation as part of that method's contract:
+When a generic trait default method clones, Aura infers a clone-safety
+obligation as part of that method's contract:
 
 ```aura check-pass
 trait Duplicator[T]:
@@ -104,31 +111,38 @@ trait Duplicator[T]:
 ```
 
 The requirement follows `T` and `Self` through every implementation, concrete
-call, associated call, and bounded generic call. A safe specialization works;
-one containing `random.Rng` is rejected with `AU3007`.
+call, associated call, and bounded generic call. A safe specialization works.
+One that contains `random.Rng` is rejected with `AU3007`. Operator dispatch
+enforces the selected trait method's inferred contract, and so does the
+`From.from` method that `try` selects.
 
-A signature-only trait method has no inferred obligation. An explicit `impl`
-may satisfy the trait contract but may not strengthen it by adding hidden
-generic clone-producing behavior. Aura 0.3 has no written clone-safety bound,
-so put that behavior in a default trait body when it is part of the intended
-contract.
+The contract comes only from default bodies:
+
+- A signature-only trait method has no inferred obligation.
+- An explicit `impl` may satisfy the trait contract, but it may not
+  strengthen it with hidden generic clone-producing behavior.
+- Aura 0.3 has no written clone-safety bound. When cloning is part of the
+  intended contract, put it in a default trait body.
+
+See [examples/traits/clone_safety_contract.au](../examples/traits/clone_safety_contract.au) for a runnable default-method contract.
 
 ## Trait Bounds On Generic Functions
 
-Generic functions can require that a type parameter implements a trait using inline bounds:
+An inline bound requires a type parameter to implement a trait:
 
 ```aura fragment
 def speak[T: Greeter](value: T):
     print(value.greet())
 ```
 
-At the call site, Aura checks that the concrete type implements the required trait:
+At the call site, Aura checks that the concrete type implements the trait.
+This call prints `hello aura`:
 
 ```aura fragment
 speak(value=User(name="aura"))   # User implements Greeter, so this works
 ```
 
-Multiple bounds use `+`:
+Join multiple bounds with `+`:
 
 ```aura fragment
 def use_both[T: A + B](value: T) -> int32:
@@ -137,7 +151,7 @@ def use_both[T: A + B](value: T) -> int32:
 
 ## Trait Bounds On Classes And Enums
 
-Class and enum type parameters can also carry trait bounds:
+Class and enum type parameters can carry bounds too:
 
 ```aura fragment
 class Wrapper[T: Greeter]:
@@ -148,16 +162,18 @@ See [15-generics.md](15-generics.md) for more on generic type parameters.
 
 ## Specialized Generic Trait Bounds
 
-Bounds can be specialized, which is useful when the trait itself is generic:
+A bound on a generic trait can name its type argument:
 
 ```aura fragment
 def apply[T: Mapper[int32]](mapper: T, value: int32) -> int32:
     return mapper.map(value=value)
 ```
 
-This says: `T` must implement `Mapper` specifically for `int32`.
+This bound means `T` must implement `Mapper` for `int32` specifically.
 
-Specialized dispatch works across multiple implementing types in the same program:
+Several types can implement the same trait in one program. Each call
+dispatches to the implementation for its concrete type, so `show` prints
+`dog` for a `Dog` and `cat` for a `Cat`:
 
 ```aura check-pass
 trait Describe:
@@ -181,14 +197,18 @@ def show[T: Describe](animal: T) -> None:
     print(animal.describe())
 ```
 
-See [examples/traits/generic_dispatch_multiple_types.au](../examples/traits/generic_dispatch_multiple_types.au), [examples/traits/generic_trait_bounds.au](../examples/traits/generic_trait_bounds.au), and [examples/traits/specialized_trait_dispatch.au](../examples/traits/specialized_trait_dispatch.au).
+Runnable examples:
 
-See [examples/traits/supertraits.au](../examples/traits/supertraits.au) for a runnable supertrait example.
-See [examples/traits/self_parameters.au](../examples/traits/self_parameters.au) for a runnable `Self`-parameter example.
+- [examples/traits/generic_dispatch_multiple_types.au](../examples/traits/generic_dispatch_multiple_types.au)
+- [examples/traits/generic_trait_bounds.au](../examples/traits/generic_trait_bounds.au)
+- [examples/traits/specialized_trait_dispatch.au](../examples/traits/specialized_trait_dispatch.au)
+- [examples/traits/supertraits.au](../examples/traits/supertraits.au), for supertraits
+- [examples/traits/self_parameters.au](../examples/traits/self_parameters.au), for `Self` parameters
 
 ## Associated Methods
 
-Traits can declare methods without a receiver. They are called through the implementing type name:
+A trait method without a receiver is an associated method. Call it through
+the implementing type's name. This prints `7`:
 
 ```aura check-pass
 trait Factory:
@@ -208,7 +228,7 @@ See [examples/traits/trait_associated_factory.au](../examples/traits/trait_assoc
 
 ## Operator Traits
 
-Aura supports operator overloading through traits. When you implement the right trait, standard operators like `+` and `-` work with your types:
+Implement an operator trait and the matching operator works on your type:
 
 | Operator | Trait | Method |
 |----------|-------|--------|
@@ -225,13 +245,14 @@ Aura supports operator overloading through traits. When you implement the right 
 | `-a` | `Neg[Out]` | `neg(self) -> Out` |
 | `not a` | `Not[Out]` | `not(self) -> Out` |
 
-Builtin numeric floor division and `Duration // int64` take precedence. When
-neither rule applies, `//` and `//=` resolve through
-`FloorDiv.floor_div`. Equal integer operands with `/` are rejected before
-trait dispatch, while `/` on an applicable non-numeric user type still
-resolves through `Div.div`.
+Builtin rules win over trait dispatch:
 
-Example:
+- Builtin numeric floor division and `Duration // int64` take precedence.
+  When neither applies, `//` and `//=` resolve through `FloorDiv.floor_div`.
+- Equal integer operands with `/` are rejected before trait dispatch. `/` on
+  an applicable non-numeric user type still resolves through `Div.div`.
+
+These impls give `Point` a `+` and a unary `-`:
 
 ```aura fragment
 class Point:
@@ -247,7 +268,7 @@ impl Neg[Point] for Point:
         return Point(x=0 - self.x, y=0 - self.y)
 ```
 
-With these impls, you can use `+` and `-` with `Point` values, including through generic bounds:
+The operators also work through generic bounds:
 
 ```aura fragment
 def add_all[T: Add[T, T]](left: T, right: T) -> T:
@@ -256,10 +277,7 @@ def add_all[T: Add[T, T]](left: T, right: T) -> T:
 
 See [examples/traits/operator_traits.au](../examples/traits/operator_traits.au).
 
-Operator dispatch enforces the selected trait method's inferred clone-safety
-contract. The `From.from` method selected by `try` does the same.
-
-Ordering traits work the same way for `<`, `<=`, `>`, and `>=`:
+The ordering trait `Ord[Rhs]` backs `<`, `<=`, `>`, and `>=`:
 
 ```aura check-pass
 trait Ord[Rhs]:
@@ -269,7 +287,7 @@ trait Ord[Rhs]:
     def ge(self, rhs: Rhs) -> bool
 ```
 
-This lets you write generic ordered code such as:
+A bound on `Ord` lets you write generic ordered code:
 
 ```aura fragment
 def choose_smaller[T: Ord[T]](left: own T, right: own T) -> T:
@@ -282,7 +300,7 @@ See [examples/traits/ordering_traits.au](../examples/traits/ordering_traits.au).
 
 ## Traits On Builtin Types
 
-A trait can also target a builtin type, not only your own classes and enums:
+A trait can target a builtin type as well as your own classes and enums:
 
 ```aura check-pass
 trait Describe:
@@ -297,28 +315,33 @@ impl Describe for str:
         return f"text of {self.len()}"
 ```
 
-The one restriction is that the method name must not already be a builtin
-member of that target. A method named `len` would be rejected with `AU2006`,
-because the builtin `len` always wins at every call site and the trait body
-would silently never run:
+The method name must not already be a builtin member of the target. The
+builtin member always wins at the call site, so the trait body would never
+run. The checker rejects the collision with `AU2006`. For a method named
+`len`:
 
 ```text
 error[AU2006]: trait method `len` collides with builtin method `list.len`
   = help: rename the trait method; builtin methods cannot be shadowed by trait implementations
 ```
 
-This holds for every builtin target: the runtime handles such as `Queue[T]`,
-`Task[T]`, `TaskGroup`, `random.Rng`, and `fs.File`, and the builtin value
-types such as `str`, `list[T]`, `dict[K, V]`, `set[T]`, `Duration`, and the
-scalar types.
+To fix it, rename the trait method.
+
+The rule covers every builtin target:
+
+- runtime handles such as `Queue[T]`, `Task[T]`, `TaskGroup`, `random.Rng`,
+  and `fs.File`
+- builtin value types such as `str`, `list[T]`, `dict[K, V]`, `set[T]`,
+  `Duration`, and the scalar types
 
 See [examples/traits/builtin_target_traits.au](../examples/traits/builtin_target_traits.au).
 
 ## Current Limits
 
-The implemented trait surface supports:
+The trait surface supports:
 
-- trait declarations (signature-only methods, default methods, marker traits with `pass`)
+- trait declarations with signature-only methods, default methods, or `pass`
+  for a marker trait
 - `impl Trait for Type:` blocks
 - specialized impls like `impl Trait for GenericType[ConcreteType]:`
 - generic trait declarations and generic impl headers
@@ -327,13 +350,11 @@ The implemented trait surface supports:
 - specialized bounds like `T: Mapper[int32]`
 - multiple bounds with `T: A + B`
 - direct trait-method calls on concrete types
-- trait implementations for builtin targets, for method names that do not
+- trait implementations for builtin targets, when the method name does not
   collide with a builtin member of that target
 - `Self` in trait and impl method parameter and return positions
 - associated methods without `self`
 - operator traits for `+`, `-`, `*`, `/`, `//`, `%`, `<`, `<=`, `>`, `>=`,
   unary `-`, and `not`
-- inferred clone-safety contracts from trait defaults, with explicit impls
-  forbidden from strengthening them
-
-See [examples/traits/clone_safety_contract.au](../examples/traits/clone_safety_contract.au) for a runnable default-method contract.
+- inferred clone-safety contracts from trait defaults, which explicit impls
+  may not strengthen

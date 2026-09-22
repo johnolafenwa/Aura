@@ -1,18 +1,20 @@
 # Case Study: A Supervised Process Runner
 
-This case study builds a small service supervisor. The goal is to manage named child processes, watch what happens to them, and guarantee cleanup when the surrounding program exits — whether that exit is normal or a runtime error unwinding through the scope.
+This case study builds a small service supervisor. It manages named child processes, watches what happens to them, and guarantees cleanup when the surrounding program exits. The exit may be normal or a runtime error unwinding through the scope.
 
-The program uses `process.supervisor()`, named children, a restart policy, process groups, and the `process.SupervisorWait` / `process.SupervisorEvent` enums.
+It uses `process.supervisor()`, named children, a restart policy, process groups, and the `process.SupervisorWait` and `process.SupervisorEvent` enums.
 
 ## When To Use A Supervisor
 
-Three levels of process management in Aura, roughly from simplest to richest:
+Aura has three levels of process management:
 
-- `process.run(...)` for a single command that should execute to completion and produce a `Completed` record.
-- `process.start(...)` for a single child whose lifetime overlaps with the parent and whose pipes the parent needs to interact with.
-- `process.supervisor()` for a set of named children with a lifecycle policy.
+| API | Use it for |
+| --- | --- |
+| `process.run(...)` | One command that runs to completion and produces a `Completed` record. |
+| `process.start(...)` | One child whose lifetime overlaps the parent's, with pipes the parent talks to. |
+| `process.supervisor()` | A set of named children with a lifecycle policy. |
 
-When the program needs to reject duplicate names, restart failed children according to a policy, and observe exits as an event stream, `supervisor` is the right primitive.
+Choose a supervisor when the program must reject duplicate names, restart failed children under a policy, and observe exits as a stream of events.
 
 ## Starting A Child
 
@@ -27,17 +29,13 @@ with supervisor = process.supervisor():
             print(error)
 ```
 
-`group=true` puts the child in its own process group on supported Unix hosts.
-Termination can then reach the leader and every descendant, which makes
-cleanup reliable when a child starts more processes.
+`group=true` puts the child in its own process group on supported Unix hosts. Termination then reaches the leader and every descendant, so cleanup is reliable even when a child starts more processes.
 
-Names are unique within a supervisor. Starting another child with the same name
-returns `Result.Err` and preserves the existing child. Name integrity is a
-correctness property for every lifecycle operation that follows.
+Names are unique within a supervisor. Starting another child with the same name returns `Result.Err` and keeps the existing child. Every later lifecycle operation relies on names staying unique.
 
 ## Waiting For Events
 
-A supervisor produces events while children start, exit, and restart. The `wait` method returns a structured `SupervisorWait` outcome:
+A supervisor produces events as children start, exit, and restart. `wait` returns a structured `SupervisorWait` outcome:
 
 ```aura
 match supervisor.wait(timeout=2s):
@@ -53,9 +51,9 @@ match supervisor.wait(timeout=2s):
         print("cancelled")
 ```
 
-Each event carries the child's name, its status or error, and how many restarts have happened. That is enough for most log-style reporting and for retry policies that only a program's own logic would understand.
+Each event carries the child's name, its status or error, and the number of restarts so far. That covers most log-style reporting and any retry policy the program's own logic needs.
 
-When "timed out or no event" can collapse to the same branch, `wait_or_none` maps a timeout to `None` inside a `Result`:
+When a timeout and "no event" can share a branch, use `wait_or_none`. It maps a timeout to `None` inside a `Result`:
 
 ```aura
 match own supervisor.wait_or_none(timeout=500ms):
@@ -67,7 +65,7 @@ match own supervisor.wait_or_none(timeout=500ms):
         print(error)
 ```
 
-The payload is `process.SupervisorEvent | None`, so the nested type pattern `process.SupervisorEvent as event` selects an event and `None` selects the timeout. `match own` consumes the returned `Result`, so the arm owns the event it prints.
+The payload is `process.SupervisorEvent | None`. The nested type pattern `process.SupervisorEvent as event` selects an event, and `None` selects the timeout. `match own` consumes the returned `Result`, so the arm owns the event it prints.
 
 ## Restart Policy
 
@@ -81,11 +79,13 @@ The payload is `process.SupervisorEvent | None`, so the nested type pattern `pro
 
 The supervisor's `start` method also accepts:
 
-- `backoff`, the delay before restarting (minimum `10ms` when restarts are enabled)
-- `max_restarts`, where omitting it means unlimited and `-1` is accepted as an explicit "unlimited"
-- `group`, which defaults to `true` for supervised children
+| Parameter | Meaning |
+| --- | --- |
+| `backoff` | The delay before a restart. The minimum is `10ms` when restarts are enabled. |
+| `max_restarts` | Omit it for unlimited restarts. `-1` is also accepted as an explicit "unlimited". |
+| `group` | Defaults to `true` for supervised children. |
 
-Restart policy is a question with a real answer. Letting `Always` retry a config error a hundred times is a cost; letting `Never` turn a transient failure into an outage is a different cost. Pick the policy that fits the child, not the supervisor.
+Each policy has a cost. `Always` can retry a config error a hundred times. `Never` can turn a transient failure into an outage. Pick the policy that fits each child, not the supervisor as a whole.
 
 ## Scoped Cleanup
 
@@ -103,13 +103,9 @@ with supervisor = process.supervisor():
             print("cancelled")
 ```
 
-When execution leaves the `with` block, the supervisor closes and stops every
-managed child. One scoped rule covers normal returns and runtime errors, so no
-return path needs a separate `close()` call.
+When execution leaves the `with` block, the supervisor closes and stops every child it manages. One scoped rule covers normal returns and runtime errors, so no return path needs its own `close()` call.
 
-Explicitly call `supervisor.stop()` when stopping the whole managed set is a
-meaningful branch inside the program, such as a user-requested pipeline
-shutdown. Scope exit handles ordinary cleanup.
+Call `supervisor.stop()` when stopping the whole managed set is a real branch in the program, such as a user-requested pipeline shutdown. Scope exit handles ordinary cleanup.
 
 ## A Template To Copy
 
@@ -136,9 +132,11 @@ def loop_until_event(supervisor: process.Supervisor) -> Result[None, process.Err
             return Result.Ok(None)
 ```
 
-Everything important is in the type: the resource's lifetime is bound to the
-`with` block; the wait outcome is a structured enum; recoverable failures are
-returned; and cleanup runs on normal returns and runtime unwinding.
+The important facts are all in the types:
 
-This applies the worker-pool shape from the previous case study to
-subprocesses. When it becomes familiar, it becomes the default.
+- The `with` block bounds the resource's lifetime.
+- The wait outcome is a structured enum.
+- Recoverable failures are returned.
+- Cleanup runs on normal returns and on runtime unwinding.
+
+This is the worker-pool shape from the previous case study, applied to subprocesses. Once it is familiar, make it your default.

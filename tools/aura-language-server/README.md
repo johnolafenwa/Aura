@@ -1,8 +1,9 @@
 # Aura Language Server
 
-This package contains the Aura Language Server Protocol implementation.
+This package is the Aura Language Server Protocol (LSP) implementation. It is
+a thin JavaScript transport. Semantic analysis comes from the Aura compiler.
 
-Current LSP features:
+The server provides:
 
 - completion items
 - member completion after `.`
@@ -10,76 +11,91 @@ Current LSP features:
 - hover
 - go-to-definition
 - document diagnostics
+- signature help, references, and rename
 
-Current compiler-backed analysis covers:
+Compiler-backed analysis supplies all of these. It also covers:
 
-- completion items
-- document diagnostics
-- document symbols
-- hover
-- go-to-definition
 - contextual lambda parameter scope, captured-name navigation, callable hover,
   and closure ownership diagnostics
 - progressively scoped comprehension targets, including hover, exact
   go-to-definition, nested-clause completion, and owned result-type inference
-- incomplete comprehension clauses and filters retain exact `AU1101`
+- incomplete comprehension clauses and filters, which keep exact `AU1101`
   diagnostics, broad recovery completions, and safe empty hover responses
-- owned list/str slices use compiler-owned result types, exact endpoint
-  diagnostics, retained-source ownership analysis, and hover/navigation for
-  names inside base and endpoint expressions
-- incomplete or reserved slice forms preserve the compiler's exact `AU2005`
-  step/assignment guidance without JavaScript-side reinterpretation
+- owned list and str slices, with compiler-owned result types, exact endpoint
+  diagnostics, retained-source ownership analysis, and hover and navigation
+  for names inside base and endpoint expressions
+- incomplete or reserved slice forms, which keep the compiler's exact `AU2005`
+  step and assignment guidance with no JavaScript-side reinterpretation
 - global numeric `Array[T]` constructors, members, multidimensional indexing,
-  first-axis slices, operator result types, and exact compiler-owned
-  dtype/shape diagnostics
+  first-axis slices, operator result types, and exact compiler-owned dtype and
+  shape diagnostics
 - extern C and opaque-handle symbols, hover, definitions, completions, and
   package-authorization diagnostics
+
+## Compiler Service
 
 The server starts one persistent compiler service:
 
 - `aura lsp`
 
-Requests and responses are newline-delimited JSON and carry compiler-owned
-`semantic_interface_version: 16`. Every request must include the exact field:
+Requests and responses are newline-delimited JSON. Each carries the
+compiler-owned `semantic_interface_version: 16`. Every request must include
+that exact field:
 
 ```json
 {"id":1,"semantic_interface_version":16,"method":"analyze","path":"/absolute/app.au","source":"print(1)\n"}
 ```
 
-This identity is distinct from the public diagnostic document's numeric schema
-version. The transport rejects and disposes a compiler with a missing or
-different semantic identity, invalidates all cached document analysis, and uses
-lexical recovery for the failed request. Responses remain bounded to 16 MiB.
-With a matching compiler, the server caches analysis per document version,
-debounces changes, cancels obsolete completion work, guards asynchronous
-responses by document version, and invalidates only changed documents and their
-dependents.
+This identity is separate from the numeric schema version of the public
+diagnostic document. If the compiler reports a missing or different semantic
+identity, the transport:
 
-Compiler diagnostics keep the stable `AU####` code, related source spans,
+- rejects and disposes that compiler
+- invalidates all cached document analysis
+- uses lexical recovery for the failed request
+
+Responses are bounded to 16 MiB. With a matching compiler, the server:
+
+- caches analysis per document version
+- debounces changes
+- cancels obsolete completion work
+- guards asynchronous responses by document version
+- invalidates only changed documents and their dependents
+
+## Diagnostics
+
+Compiler diagnostics keep their stable `AU####` code, related source spans,
 notes, help, and machine-applicable edits through the LSP mapping. The bridge
-does not classify or recreate semantic diagnostics independently.
-`Diagnostic.data` also preserves the compiler-owned `call_frames` and
-`task_ancestry` arrays. Their frame spans use zero-based `line`,
-`start_character`, and `end_character` coordinates and retain each frame's
-optional `file_path`; the bridge neither parses human backtrace notes nor
-reconstructs paths or ancestry. Compiler responses always include both arrays.
-Compile-time diagnostics normally carry empty frame arrays today, while the
-populated shape is ready for editor workflows that present runtime diagnostics.
-Failed structured assertions may also carry an optional `assertion_operands`
-array in `Diagnostic.data`. Each operand preserves the compiler-owned `label`,
+does not classify or recreate semantic diagnostics on its own.
+
+`Diagnostic.data` also carries the compiler-owned `call_frames` and
+`task_ancestry` arrays. Compiler responses always include both.
+
+- Frame spans use zero-based `line`, `start_character`, and `end_character`
+  coordinates.
+- Each frame keeps its optional `file_path`.
+- The bridge does not parse human backtrace notes or reconstruct paths or
+  ancestry.
+- Compile-time diagnostics normally carry empty frame arrays. The populated
+  shape is available to editor workflows that present runtime diagnostics.
+
+A failed structured assertion may also carry an optional `assertion_operands`
+array in `Diagnostic.data`. Each operand keeps the compiler-owned `label`,
 `type`, rendered `value`, and `truncated` flag. The field is absent when the
-diagnostic has no captured assertion operands; the bridge does not infer or
+diagnostic has no captured assertion operands. The bridge does not infer or
 re-render values.
 
-If the compiler process cannot be started, the lexical recovery layer provides only:
+## Lexical Recovery
+
+If the compiler process cannot start, a lexical recovery layer provides only:
 
 - recovered top-level declarations, extern C functions, opaque handles, and
   nested method declarations
 - top-level keywords, builtins, and recovered declaration completions
 - same-file hover and definition for recovered declarations
 
-The recovery path deliberately has no semantic diagnostics or member inference.
-Incomplete buffers are normally handled by compiler recovery; JavaScript is a
+Recovery has no semantic diagnostics or member inference by design. Compiler
+recovery normally handles incomplete buffers. The JavaScript layer is a
 recovery layer, not a second Aura type system.
 
 ## Development
@@ -92,52 +108,50 @@ From the repo root:
 - `npm run test:lsp`
 - `npm run coverage:lsp`
 
-The build command provides `target/debug/aura` while working in this checkout.
-To install the actual compiler-owned server binary on `PATH` for use from any
-Aura workspace, run:
+The build command provides `target/debug/aura` for work in this checkout. To
+install the compiler-owned server binary on `PATH` for any Aura workspace, run:
 
 ```bash
 cargo install --path crates/aura --locked --force
 ```
 
-That installs the `aura` executable; the editor launches its `aura lsp`
-subcommand over stdio. You do not need to run `aura lsp` separately.
+That installs the `aura` executable. The editor launches its `aura lsp`
+subcommand over stdio, so you never run `aura lsp` yourself.
 
-The VS Code extension bundles this package's JavaScript transport, which then
-starts `aura lsp` for compiler-owned semantic analysis. After installing or
-building `aura` as described above, rebuild, package, and force-install the
-transport so VS Code does not keep an older local VSIX:
+The VS Code extension bundles this package's JavaScript transport, which
+starts `aura lsp`. After you install or build `aura`, rebuild, package, and
+force-install the transport so VS Code does not keep an older local VSIX:
 
 ```bash
 npm run package:extension
 code --install-extension tools/vscode-aura/aura-language.vsix --force
 ```
 
-Run **Developer: Reload Window** afterward. For a workspace outside this
+Then run **Developer: Reload Window**. For a workspace outside this
 repository, put `aura` on `PATH` or set `AURA_LSP_AURA_PATH` to its absolute
-path before launching VS Code.
+path before you launch VS Code.
 
 ## Architecture
 
-- `src/server.js`
-  - LSP transport and request handlers
-- `src/compiler_bridge.js`
-  - owns the persistent compiler process and machine-readable request lifecycle
-- `src/recovery.js`
-  - lexical compiler-unavailable recovery only
+| File | Role |
+| --- | --- |
+| `src/server.js` | LSP transport and request handlers |
+| `src/compiler_bridge.js` | Owns the persistent compiler process and the machine-readable request lifecycle |
+| `src/recovery.js` | Lexical recovery for when the compiler is unavailable, and nothing else |
 
-The current direction is:
+Two rules shape the design:
 
-- keep diagnostics and navigation on compiler-owned analysis
-- keep recovery lexical so semantic behavior has exactly one implementation
+- Diagnostics and navigation come from compiler-owned analysis.
+- Recovery stays lexical, so semantic behavior has exactly one implementation.
 
 ## Signature help, references, and rename
 
 The compiler owns these queries. The language server advertises signature
-help, references, and rename with prepare support, forwards the current source,
-and discards cancelled or stale responses. Rename edits include the document
-version. Builtins, keywords, imported-package definitions, and changes that
-would collide or change binding are refused. No lexical rename fallback is used.
+help, references, and rename with prepare support. It forwards the current
+source and discards cancelled or stale responses. Rename edits include the
+document version. The compiler refuses to rename builtins, keywords, and
+imported-package definitions, and refuses any change that would collide or
+change binding. There is no lexical rename fallback.
 
 ```sh
 aura signature-help --line 5 --character 22 --stdin /project/main.au
@@ -146,11 +160,14 @@ aura prepare-rename --line 5 --character 7 --stdin /project/main.au
 aura rename --line 5 --character 7 --new-name answer --stdin /project/main.au
 ```
 
-Each command reads source from stdin and returns JSON. Signature help reports
-the complete rendered contract, parameter labels, and active parameter,
-including stored `Callable`/`TaskCallable` values, keyword-only slots, and
-`= ...` defaults. References return occurrence ranges; rename returns the
-selected range and edits after the compiler rechecks binding preservation.
-A refused signature/rename query returns `null`; an unresolved references
-query returns an empty array. These commands also accept a source file in
-place of `--stdin <virtual-path>` and do not change source or package lockfiles.
+Each command reads source from stdin and returns JSON.
+
+| Query | Result |
+| --- | --- |
+| Signature help | The complete rendered contract, parameter labels, and the active parameter. This covers stored `Callable` and `TaskCallable` values, keyword-only slots, and `= ...` defaults. |
+| References | Occurrence ranges. An unresolved query returns an empty array. |
+| Rename | The selected range and edits, after the compiler rechecks that bindings are preserved. |
+
+A refused signature-help or rename query returns `null`. These commands also
+accept a source file in place of `--stdin <virtual-path>`. They never change
+source files or package lockfiles.

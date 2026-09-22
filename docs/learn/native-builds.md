@@ -1,10 +1,16 @@
 # Running And Shipping
 
-Aura has two execution paths: the MIR runtime behind `aura run`, and the native code generator behind `aura build`. They target the same language surface and are exercised by the same test suite, but they fit slightly different moments in a project.
+Aura has two execution paths. `aura run` uses the MIR runtime, and
+`aura build` uses the native code generator. MIR is Aura's mid-level
+intermediate representation. Both paths target the same language surface, and
+the same test suite exercises both. They suit different moments in a project.
 
 ## `aura run`
 
-`aura run` parses, type-checks, lowers the program to Aura's mid-level intermediate representation, and executes that representation. It is fast to start and shares code paths with the rest of the tooling, so compiler diagnostics, traces, and editor integrations behave the same as the code you are editing.
+`aura run` parses and type-checks the program, lowers it to MIR, and executes
+the MIR. It starts fast and shares code paths with the rest of the tooling.
+Compiler diagnostics, traces, and editor integrations therefore behave the
+same way for the code you are editing.
 
 Use `run` for:
 
@@ -21,13 +27,16 @@ aura build -o ./app examples/basics/main_function.au
 ./app
 ```
 
-The resulting binary is self-contained: it does not need the original `.au` source to run, and it does not re-invoke the compiler at launch. The build pipeline still needs the host C compiler to produce the artifact.
+The binary is self-contained. It does not need the original `.au` source to
+run, and it does not call the compiler again at launch. The build still needs
+the host C compiler to produce the binary.
 
 Use `build` when:
 
-- you want a standalone executable you can ship or deploy
-- you are validating native behaviour for a controlled deployment on the direct backend
-- a program's runtime characteristics are part of what you are testing
+- you want a standalone executable to ship or deploy
+- you are validating native behaviour on the direct backend for a controlled
+  deployment
+- the program's runtime characteristics are part of what you are testing
 
 ## Backends
 
@@ -36,12 +45,15 @@ aura build --backend auto -o ./app app.au
 aura build --backend direct -o ./app app.au
 ```
 
-`auto` is the default. It first tries the direct native backend and may fall back to a standalone launcher that embeds checked MIR and the MIR runtime. Selecting `direct` explicitly forbids fallback and is useful when CI must prove direct emission remains available.
+`auto` is the default. It first tries the direct native backend. It may fall
+back to a standalone launcher that embeds checked MIR and the MIR runtime.
+`direct` forbids fallback. Use it when CI must prove that direct emission
+still works.
 
 ## Runtime Diagnostics
 
-Built binaries embed source and frame metadata for runtime failures. A simple
-failure at minimum renders its stable code, file, line, and caret:
+Built binaries embed source and frame metadata for runtime failures. Even a
+simple failure shows its stable code, file, line, and caret:
 
 ```
 error[AU4003]: list index `10` is out of bounds for length `3`
@@ -51,25 +63,30 @@ error[AU4003]: list index `10` is out of bounds for length `3`
   |                      ^
 ```
 
-Arithmetic traps, list bounds errors, recursion-limit failures, and resource cleanup paths are expected to behave identically between `aura run` and the native binary. If you observe a difference, it is a bug worth reporting.
+Arithmetic traps, list bounds errors, recursion-limit failures, and resource
+cleanup paths should behave the same under `aura run` and in the native
+binary. If you see a difference, report it as a bug.
 
-The frame data is captured once at the trap site, before runtime cleanup can
-discard the active call/task state. Human output synthesizes readable
-call-chain and, for child failures, task-ancestry notes from those typed
-records. When `aura run
---backend direct --format json` launches the binary, a private bounded channel
-returns the same schema-version-1 diagnostic to the CLI; tools never need to
-parse the human text. The internal transport uses a separate trap marker so a
-missing record is not confused with `main` returning status `1`; its
-descriptors are hidden and close-on-exec before user code starts.
+The binary captures the frame data once, at the trap site. This happens
+before runtime cleanup can discard the active call and task state. From those
+typed records, the human output builds readable call-chain notes. For child
+task failures, it also adds task-ancestry notes.
+
+When `aura run --backend direct --format json` launches the binary, a private
+bounded channel returns the same schema-version-1 diagnostic to the CLI.
+Tools never need to parse the human text. The channel uses a separate trap
+marker, so a missing record is not confused with `main` returning status `1`.
+Its descriptors are hidden and set to close-on-exec before user code starts.
 
 ## A Checklist Before Shipping
 
 Before a native binary goes anywhere important:
 
 - Run `aura check` on the source.
-- Run the program through `aura run` to confirm behaviour interactively.
-- Build with `aura build` and run the binary against the same scenarios.
-- For programs that do I/O or start processes, run them against the real resources — files that exist, sockets that are open, services that are reachable — in the built executable, not only through `aura run`.
+- Run the program with `aura run` to confirm its behaviour interactively.
+- Build it with `aura build` and run the binary against the same scenarios.
+- For programs that do I/O or start processes, test the built executable
+  against real resources, not only through `aura run`. Use files that exist,
+  sockets that are open, and services that are reachable.
 
 Reference: [CLI And Tooling](/manual/cli-and-tooling).

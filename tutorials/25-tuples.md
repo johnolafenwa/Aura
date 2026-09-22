@@ -1,8 +1,8 @@
 # Tuples
 
-Tuples bundle a fixed number of values that may have different types. They are
-useful when a function has two or three natural results but defining a class
-would add more ceremony than meaning.
+A tuple bundles a fixed number of values, which may have different types. Use
+one when a function has two or three natural results and a class would add
+more ceremony than meaning.
 
 ## Values And Types
 
@@ -13,11 +13,11 @@ pair = ("Aura", 7)
 only = (true,)
 ```
 
-`(value)` still means grouping. The comma in `(value,)` is therefore required
-for a singleton. Aura has no empty tuple, and a tuple with two or more
-elements does not take a trailing comma.
+`(value)` is still grouping, so a one-element tuple needs its comma:
+`(value,)`. Aura has no empty tuple. A tuple with two or more elements does
+not take a trailing comma.
 
-Tuple types mirror tuple values:
+Tuple types look like tuple values:
 
 ```aura check-pass
 def version() -> (str, int64):
@@ -29,7 +29,7 @@ The order and number of element types matter. `(str, int64)` and
 
 ## Unpacking A Return Value
 
-Use a comma-separated target to give each result a name:
+Use a comma-separated target to name each result:
 
 ```aura fragment
 name, number = version()
@@ -37,16 +37,16 @@ print(name)
 print(number)
 ```
 
-Tuple value expressions require parentheses, but the top-level assignment
-target does not: write `name, number = pair`, not a naked tuple expression.
-Nested targets use parentheses:
+A tuple value expression needs parentheses, but a top-level assignment target
+does not. Write `name, number = pair`. A naked tuple expression without
+parentheses is not allowed. Nested targets use parentheses:
 
 ```aura check-pass
 label, (x, y) = ("point", (3, 4))
 ```
 
-The right side is evaluated once, and its complete recursive shape must match
-the target.
+The right side is evaluated once. Its full recursive shape must match the
+target.
 
 ## Copy And Move Behavior
 
@@ -58,8 +58,8 @@ x, y = point
 print(point[0]) # point is still usable
 ```
 
-A tuple containing `str`, `list`, or another move value is itself a move
-value. Unpacking it moves the whole source and gives owned leaf bindings:
+A tuple that holds a `str`, a `list`, or another move value is itself a move
+value. Unpacking it moves the whole source and gives you owned leaf bindings:
 
 ```aura check-pass
 def main():
@@ -70,13 +70,14 @@ def main():
     # print(record) would be a use-after-move error
 ```
 
-Aura deliberately reports reuse of the original tuple. Positional partial
-moves are not exposed.
+Aura reports any reuse of the original tuple. It does not expose partial moves
+of single positions.
 
 ## Structural Equality
 
-`==` and `!=` compare tuples recursively, element by element. Both operands
-must have exactly the same tuple type, and every element must support equality:
+`==` and `!=` compare tuples element by element, recursively. Both operands
+must have exactly the same tuple type, and every element must support
+equality:
 
 ```aura check-pass
 baseline = ("Aura", (7, true))
@@ -88,16 +89,17 @@ assert baseline != changed
 assert same != changed
 ```
 
-Tuple equality reads and retains both operands. This also applies to non-copy
-tuples such as these, which contain `str`: each
-binding remains usable in a later comparison.
+Tuple equality reads both operands and keeps them. That holds for non-copy
+tuples too. These tuples contain a `str`, yet each binding stays usable in a
+later comparison.
 
-Tuple ordering is deliberately separate. `<`, `<=`, `>`, and `>=` are rejected
-for tuple operands; compare the intended elements explicitly instead.
+Tuple ordering is a separate matter. The checker rejects `<`, `<=`, `>`, and
+`>=` on tuple operands. Compare the elements you care about explicitly
+instead.
 
 ## Constant Indexes
 
-Indexing is available for the small read-only case:
+You can index a tuple for a small read-only case:
 
 ```aura check-pass
 point = (3, 4)
@@ -105,23 +107,29 @@ print(point[1])
 ```
 
 The index must be a non-negative integer literal, must be in bounds, and must
-select a copy element. A variable index or a non-copy element is rejected.
-Unpack the tuple when you need ownership of a non-copy element.
+select a copy element. The checker rejects a variable index or a non-copy
+element. To take ownership of a non-copy element, unpack the tuple.
 
 ## Unpacking In Loops
 
-A `for` target may recursively unpack tuple items:
+A `for` target can unpack tuple items recursively:
 
 ```aura check-pass
 for label, count in [("ready", 2), ("done", 3)]:
     print(f"{label}:{count}")
 ```
 
-Bare collection iteration keeps the collection and gives non-copy tuple leaves
-shared access. `own` collection iteration gives owned leaves. Bare Queue
-iteration receives each tuple already owned. `mut` iteration with a
-tuple target is not supported because the minimal tuple surface does not
-reconstruct and write a changed tuple back into the collection.
+What each leaf gets depends on the loop form:
+
+| Loop form | Result |
+| --- | --- |
+| Bare collection iteration | Keeps the collection. Non-copy tuple leaves get shared access. |
+| `own` collection iteration | Gives owned leaves. |
+| Bare Queue iteration | Receives each tuple already owned. |
+| `mut` iteration with a tuple target | Not supported. |
+
+`mut` iteration is not supported because Aura does not rebuild a changed
+tuple and write it back into the collection.
 
 ## Tuple Patterns
 
@@ -134,15 +142,23 @@ match ((1, 2), true):
         print(flag)
 ```
 
-`match own` consumes a non-copy tuple as one whole value. Bare `match` keeps it
-and gives shared access to non-copy leaves.
-`match mut` with a tuple pattern is not supported.
+`match own` consumes a non-copy tuple as one whole value. A bare `match` keeps
+it and gives shared access to non-copy leaves. `match mut` with a tuple
+pattern is not supported.
 
 ## What Tuples Are Not
 
-Tuples are not small vectors. Beyond structural `==` and `!=`, the current
-surface has no tuple ordering, iteration, methods, named elements, rest/star
-unpacking, slicing, dynamic indexing, or implicit conversion to `list`.
+Tuples are not small vectors. Apart from structural `==` and `!=`, tuples have
+none of these:
+
+- ordering
+- iteration
+- methods
+- named elements
+- rest or star unpacking
+- slicing
+- dynamic indexing
+- implicit conversion to `list`
 
 Run the maintained example:
 
@@ -162,5 +178,5 @@ done:3
 true
 ```
 
-For the complete contract, including diagnostics and backend parity, see the
-normative [Tuples Manual page](../docs/manual/tuples.md).
+The normative [Tuples Manual page](../docs/manual/tuples.md) has the complete
+contract, including diagnostics and backend parity.

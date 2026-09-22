@@ -1,8 +1,6 @@
 # Resource Management
 
-When you open a file, a network connection, or a task group, you need to ensure it gets cleaned up even if something goes wrong. Aura's `with` statement provides deterministic scoped cleanup -- the resource is always closed when the block exits, whether by normal completion or early `return`.
-
-If you are coming from Python, this works like Python's `with` statement and context managers.
+A `with` statement closes a resource when its block exits. Use it for files, network connections, and task groups. Cleanup runs whether the block finishes normally or leaves early with `return`. It works like Python's `with` statement and context managers.
 
 ## `with` Binds A Scoped Resource
 
@@ -16,19 +14,19 @@ def load_text(path: str) -> Result[str, io.Error]:
     # file.close() is called automatically here, even on early return
 ```
 
-The bound resource:
+Inside the block, `file` is a mutable local binding. When the block exits, Aura calls the resource's `close(mut self)`. This happens:
 
-- is available inside the block as a mutable local binding
-- always runs `close(mut self)` when the block exits
-- cleanup runs on normal fallthrough, on early `return`, and after `try` propagation
+- when the block falls through normally
+- on an early `return`
+- after `try` propagates an error
 
 See [examples/resources/with_resource.au](../examples/resources/with_resource.au).
 
 ## The Resource Protocol
 
-In the current compiler, a `with` resource may be:
+A `with` resource can be any of these:
 
-- a user-defined class with:
+- a user-defined class with a `close` method:
 
 ```aura fragment
 def close(mut self):
@@ -39,11 +37,11 @@ def close(mut self):
 - a builtin `net.TcpListener`
 - a `TaskGroup`
 
-For user-defined classes, `close(...)` must take `mut self`, no extra parameters, and return `None`.
+A user-defined `close` must take `mut self`, take no other parameters, and return `None`.
 
 ## `with ... as ...` For Task Groups
 
-`TaskGroup()` is the one non-class value that supports `with`:
+A `TaskGroup` ties child tasks to a lexical scope. Open one with `with ... as ...`:
 
 ```aura fragment
 with TaskGroup() as group:
@@ -53,19 +51,17 @@ with TaskGroup() as group:
 # for which no live task can provide a wakeup
 ```
 
-Task groups tie child tasks to a lexical scope. When the `with` block ends,
-Aura waits for child tasks to finish. A child blocked in a queue wait is
-cancelled only when no live task can wake it; temporary queue backpressure does
-not become cancellation merely because the host is busy. A true deadlock with
-no reachable sender, receiver, or queue closer is cancelled so shutdown does
-not hang forever. You can also cancel early with `group.cancel()`. Queue
-iteration with `for value in queue:` inside the same `with TaskGroup()` scope
-observes that cancellation and exits cleanly.
+When the block ends, Aura waits for the child tasks to finish. A child blocked on a queue is cancelled only when no live task can wake it:
 
-See [examples/concurrency/task_group_queue_sum.au](../examples/concurrency/task_group_queue_sum.au) and [examples/concurrency/task_group_cancel.au](../examples/concurrency/task_group_cancel.au).
+- Temporary queue backpressure is not cancelled, even when the host is busy.
+- A true deadlock, with no reachable sender, receiver, or queue closer, is cancelled so shutdown does not hang forever.
+
+To cancel early, call `group.cancel()`. A `for value in queue:` loop inside the same `with TaskGroup()` scope sees the cancellation and exits cleanly.
+
+See [examples/concurrency/task_group_queue_sum.au](../examples/concurrency/task_group_queue_sum.au) and [examples/concurrency/task_group_cancel.au](../examples/concurrency/task_group_cancel.au). [13-concurrency.md](13-concurrency.md) covers task groups in full.
 
 ## Current Limits
 
-- builtin resources use the fixed file/TCP/task-group surface; there is no broader enter/exit protocol yet
-- user-defined resources still require `close(mut self)` with no extra parameters
-- no borrowed resource bindings
+- Builtin resources are limited to the file, TCP, and task-group types above. There is no general enter/exit protocol.
+- A user-defined resource must have `close(mut self)` with no other parameters.
+- A `with` binding cannot borrow its resource.

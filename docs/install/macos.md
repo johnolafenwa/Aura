@@ -1,7 +1,7 @@
 # Install Aura On macOS
 
-Aura publishes separate macOS 15 archives for Apple silicon and Intel. The
-installer uses `uname` to select the correct archive.
+Aura publishes separate macOS 15 archives for Apple silicon and Intel Macs.
+The installer uses `uname` to pick the right one.
 
 ## 1. Confirm The Mac Architecture
 
@@ -14,35 +14,33 @@ uname -m
 - `arm64` means Apple silicon.
 - `x86_64` means Intel.
 
-Both results are supported. Other macOS architectures do not have a release
-archive.
+Both are supported. No other macOS architecture has a release archive.
 
 ## 2. Install Aura
 
-macOS includes `curl`, `tar`, and `shasum`, which are the tools used by the
-verified installer:
+The installer uses `curl`, `tar`, and `shasum`, which macOS already includes:
 
 ```bash
 curl -fsSL https://johnolafenwa.github.io/Aura/install.sh | sh
 ```
 
-The script downloads the matching `v0.3.3-preview` archive and checks it
-against the release's `SHA256SUMS` file before copying anything into the
-installation prefix.
+The script downloads the matching `v0.3.4-preview` archive. It checks the
+archive against the release's `SHA256SUMS` file before it copies anything
+into the installation prefix.
 
 ## 3. Add Aura To zsh
 
-The default installation location is `~/.local/bin/aura`. Add that directory
-to the zsh login environment once:
+If `aura --version` already works, `~/.local/bin` is already on `PATH` and you
+can skip this step.
+
+Aura installs to `~/.local/bin/aura` by default. Add that directory to your
+zsh login environment. You only need to do this once:
 
 ```bash
 grep -qxF 'export PATH="$HOME/.local/bin:$PATH"' "$HOME/.zshrc" || \
   printf '%s\n' 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.zshrc"
 source "$HOME/.zshrc"
 ```
-
-If `aura --version` already works, the directory was already on `PATH` and
-this step is unnecessary.
 
 ## 4. Verify The Installation
 
@@ -51,11 +49,10 @@ command -v aura
 aura --version
 ```
 
-The command path should end in `.local/bin/aura`, and the version should begin
-with:
+The command path ends in `.local/bin/aura`. The version begins with:
 
 ```text
-aura 0.3.3-preview
+aura 0.3.4-preview
 ```
 
 ## 5. Run A Program
@@ -75,14 +72,15 @@ aura run hello.au
 
 ## 6. Enable Native Builds
 
-The default MIR execution path does not need Xcode. Direct native execution
-and `aura build` need Apple's linker and C toolchain. Install them with:
+`aura run` uses the default MIR execution path, which does not need Xcode.
+MIR is Aura's mid-level intermediate representation. Direct native execution
+and `aura build` need Apple's linker and C toolchain. Install them:
 
 ```bash
 xcode-select --install
 ```
 
-After the installer completes, verify and build:
+When the installer finishes, verify the toolchain, then build and run:
 
 ```bash
 xcode-select -p
@@ -92,21 +90,21 @@ aura build -o hello hello.au
 
 ## Upgrade Aura
 
-Upgrade the installed CLI and runtime to the current published preview:
+To upgrade the installed CLI and runtime to the current published preview:
 
 ```bash
 aura upgrade
 aura --version
 ```
 
-The command preserves the active install prefix and uses the same verified
+`aura upgrade` keeps the active install prefix. It uses the same verified
 installer as a fresh installation.
 
 ## Troubleshooting
 
 ### `aura: command not found`
 
-Confirm the file exists and reload the shell:
+Check that the file exists, then reload the shell:
 
 ```bash
 ls -l "$HOME/.local/bin/aura"
@@ -115,13 +113,12 @@ source "$HOME/.zshrc"
 
 ### The installer reports an unsupported architecture
 
-Run `uname -m`. Aura currently publishes macOS archives only for `arm64` and
-`x86_64`.
+Run `uname -m`. Aura publishes macOS archives only for `arm64` and `x86_64`.
 
 ### Native linking fails
 
 Run `xcode-select -p`. If it fails, install or repair the Xcode command-line
-tools before using `aura build` or `--backend direct`.
+tools before you use `aura build` or `--backend direct`.
 
 Continue with the [VS Code extension guide](/install/vscode) or
 [Getting Aura Running](/learn/install-and-run).

@@ -1,8 +1,7 @@
 # Install Aura
 
-Aura 0.3 is distributed as a self-contained command-line tool with its private
-native runtime. Choose the guide for the operating system where `aura` will
-run:
+Aura 0.3 ships as a self-contained command-line tool with its own private
+native runtime. Pick the guide for the operating system where `aura` will run:
 
 | Platform | Release archive | Guide |
 | --- | --- | --- |
@@ -11,21 +10,25 @@ run:
 | Ubuntu 24.04 or compatible glibc Linux, x86-64 | `x86_64-unknown-linux-gnu` | [Install on Linux](/install/linux) |
 | Windows 11, x86-64 | Linux archive inside WSL 2 | [Install on Windows with WSL](/install/windows-wsl) |
 
-The installer detects the supported archive automatically, verifies its
-SHA-256 checksum, and installs under `~/.local`:
+Every guide follows the same three steps.
+
+1. Run the installer. It detects the supported archive, verifies its SHA-256
+   checksum, and installs under `~/.local`.
 
 ```bash
 curl -fsSL https://johnolafenwa.github.io/Aura/install.sh | sh
 ```
 
-Verify the result in the same terminal after adding `~/.local/bin` to `PATH`:
+2. Add `~/.local/bin` to `PATH`.
+
+3. Verify the result in the same terminal:
 
 ```bash
 aura --version
 ```
 
-The expected release identity begins with `aura 0.3.3-preview`. The remaining
-text is the source commit used to build the binary.
+The output begins with `aura 0.3.4-preview`. The rest of the line is the
+source commit the binary was built from.
 
 ## What Gets Installed
 
@@ -43,33 +46,34 @@ The default layout is:
     └── LICENSE
 ```
 
-Set `AURA_INSTALL_PREFIX` when another prefix is required:
+To install under a different prefix, set `AURA_INSTALL_PREFIX`:
 
 ```bash
 AURA_INSTALL_PREFIX="$HOME/tools/aura" \
   sh -c "$(curl -fsSL https://johnolafenwa.github.io/Aura/install.sh)"
 ```
 
-Add the selected prefix's `bin` directory to `PATH` after installation.
+Then add that prefix's `bin` directory to `PATH`.
 
 ## Editor Setup
 
-Install the [Aura Programming Language extension](/install/vscode) after the
-CLI works. The extension supplies the editor client, syntax grammar, and
-snippets. Compiler-backed diagnostics, completion, hover, definitions, and
-symbols use the installed `aura lsp` server.
+Once the CLI works, install the
+[Aura Programming Language extension](/install/vscode). The extension
+provides the editor client, syntax grammar, and snippets. Diagnostics,
+completion, hover, definitions, and symbols come from the compiler through the
+installed `aura lsp` server.
 
 ## Native Builds
 
-`aura run` and `aura check` work after installing the archive. Direct native
-execution and `aura build` also require a host C toolchain:
+`aura run` and `aura check` work as soon as the archive is installed. Direct
+native execution and `aura build` also need a host C toolchain:
 
 - macOS: Xcode command-line tools
 - Ubuntu and WSL: `build-essential`
 
-The platform guides include the exact commands.
+Each platform guide gives the exact commands.
 
 ## Next Step
 
-Continue with [Getting Aura Running](/learn/install-and-run) to create a source
-file, run it, check it, and build a native executable.
+Continue with [Getting Aura Running](/learn/install-and-run) to create a
+source file, run it, check it, and build a native executable.

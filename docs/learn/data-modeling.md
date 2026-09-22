@@ -1,8 +1,13 @@
 # Shaping Data
 
-Most programs get easier to read once the data has names. A loose bag of strings and integers becomes a `Job` with an `id`, a `queue`, and an `attempts` counter. A value that is "sometimes a number and sometimes an error" becomes a `Result` with two variants. Shared behaviour lives on the type.
+This page shows how to give your data names and pick the right shape for it.
+A loose bag of strings and integers becomes a `Job` with an `id`, a `queue`,
+and an `attempts` counter. A value that is sometimes a number and sometimes
+an error becomes a `Result` with two variants. Shared behavior lives on the
+type.
 
-This chapter introduces Aura's two data shapes — **classes** and **enums** — together with **methods**, **copy classes**, and **generics**. It is deliberately not a feature checklist. The through-line is how to decide which shape fits your domain.
+Aura has two data shapes, classes and enums. The page also covers methods,
+copy classes, and generics.
 
 ## When To Use What
 
@@ -10,14 +15,13 @@ A useful first cut:
 
 - Use a **class** when every field is present at the same time.
 - Use an **enum** when exactly one variant is present at a time.
-- Use a **method** when behaviour belongs to the type.
-- Use a **free function** when behaviour coordinates several types.
-
-The rest of the chapter fills those decisions in.
+- Use a **method** when the behavior belongs to one type.
+- Use a **free function** when the behavior coordinates several types.
 
 ## Start With A Class
 
-Imagine a small job runner. A job has an identifier, a queue name, and an attempt count:
+Take a small job runner. A job has an identifier, a queue name, and an
+attempt count:
 
 ```aura
 class Job:
@@ -32,10 +36,11 @@ Construct an instance with named fields:
 job = Job(id=42, queue="image")
 ```
 
-Fields can have defaults. The caller above did not supply `attempts`, so it starts at `0`.
+A field can have a default. The caller above does not supply `attempts`, so
+it starts at `0`.
 
-By default, classes are **move types**. A bare class parameter borrows; write
-`own` to transfer ownership:
+Classes are move types by default. A bare class parameter borrows the value.
+Write `own` to transfer ownership:
 
 ```aura
 def consume(job: own Job):
@@ -46,18 +51,20 @@ consume(job)
 # job has been moved into consume; using it again is a compile error.
 ```
 
-When a helper only needs to look at a job, borrow it:
+When a helper only needs to read a job, borrow it:
 
 ```aura
 def describe(job: Job) -> str:
     return job.queue + "#" + job.id.to_string()
 ```
 
-The caller keeps the value and can use it again. The call site writes `describe(job)`; Aura reads the borrow form from the parameter type.
+The caller keeps the value and can use it again. The call site writes
+`describe(job)`. Aura reads the borrow from the parameter type.
 
 ## Add Methods
 
-Methods are functions declared inside a class. The **receiver** — how `self` is named in the signature — says what the method is allowed to do.
+A method is a function declared inside a class. Its receiver is the way
+`self` appears in the signature, and it says what the method may do.
 
 ```aura
 class Job:
@@ -80,18 +87,15 @@ job.bump()
 print(job.label())
 ```
 
-Receiver forms:
-
 | Receiver | What it can do |
 | --- | --- |
-| `self` | Read fields without taking ownership; this is the default spelling. |
-| `self` | Explicit synonym for shared `self`. |
+| `self` | Read fields without taking ownership. This is the default spelling. |
 | `mut self` | Mutate fields on a mutable receiver. |
 | `own self` | Consume the instance. |
 | no receiver | Associated method called on the type, not an instance. |
 
-A borrowed method cannot move an owned field out of `self`. When the field type
-supports cloning, clone when you need to return an owned copy:
+A borrowed method cannot move an owned field out of `self`. When the field
+type supports cloning, clone it to return an owned copy:
 
 ```aura
 class User:
@@ -101,9 +105,11 @@ class User:
         return self.name.clone()
 ```
 
-Returning `self.name` directly would move the `str` through a shared borrow, which the compiler rejects. The clone makes the intention explicit and the reader does not have to guess.
+Returning `self.name` directly would move the `str` out through a shared
+borrow, and the compiler rejects that. The clone makes the intent explicit.
 
-An associated method is called on the type itself — useful for constructors and factories:
+An associated method is called on the type itself. It is useful for
+constructors and factories:
 
 ```aura
 class Counter:
@@ -119,7 +125,8 @@ counter = Counter.zero()
 
 ## Copy Classes
 
-Some records are so small that treating them as move values is more ceremony than it is worth. When every field is itself a copy type, declare the class `copy class`:
+Some records are so small that moving them is more ceremony than it is worth.
+When every field is a copy type, declare the class as a `copy class`:
 
 ```aura
 copy class Offset:
@@ -127,7 +134,7 @@ copy class Offset:
     y: int32
 ```
 
-Copy classes duplicate on assignment:
+A copy class duplicates on assignment:
 
 ```aura
 a = Offset(x=1, y=2)
@@ -136,11 +143,14 @@ print(a.x)
 print(b.x)
 ```
 
-This is not a way to opt out of ownership when it feels inconvenient. Reach for `copy class` when duplication is part of the type's nature — coordinates, simple numeric measurements, identifiers made entirely of copyable fields.
+Do not use `copy class` to escape ownership when it feels inconvenient. Use
+it when duplication is part of the type's nature: coordinates, simple numeric
+measurements, and identifiers made only of copyable fields.
 
 ## Model Alternatives With Enums
 
-An enum describes a value that is exactly one of several shapes. A job in flight, for instance, is always in one of four states: queued, running, done, or failed.
+An enum describes a value that is exactly one of several shapes. A job in
+flight, for example, is always queued, running, done, or failed:
 
 ```aura
 enum JobState:
@@ -156,7 +166,7 @@ Construct a variant by naming it:
 state = JobState.Running(worker="worker-a")
 ```
 
-`match` then inspects the variant exhaustively:
+`match` inspects the variant and must cover every case:
 
 ```aura
 def render_state(state: JobState) -> str:
@@ -171,13 +181,19 @@ def render_state(state: JobState) -> str:
             "failed: " + message
 ```
 
-Two details are worth noticing. `match state` inspects the enum without taking ownership, which is important because `state` is itself a `JobState`. And the `_duration` name uses the leading underscore convention for a pattern binding that the body does not read.
+Two details matter here:
 
-When each state carries different data, an enum almost always reads better than a class with many optional fields.
+- `match state` inspects the enum without taking ownership of it.
+- `_duration` starts with an underscore. That is the convention for a pattern
+  binding the body does not read.
+
+When each state carries different data, an enum almost always reads better
+than a class with many optional fields.
 
 ## Combine Classes And Enums
 
-A class can own an enum, and often should. This shape — a stable record with a changing state — is one of the cleanest patterns in Aura.
+A class can own an enum, and often should. A stable record with a changing
+state is one of the cleanest patterns in Aura:
 
 ```aura
 class TrackedJob:
@@ -191,11 +207,13 @@ class TrackedJob:
         self.state = JobState.Failed(message=message)
 ```
 
-The fields that never change live on the class. The field that does change is an enum, so the compiler can help make sure every transition is handled.
+The fields that never change live on the class. The field that changes is an
+enum, so the compiler can help you handle every transition.
 
 ## Generic Data
 
-Classes and enums can be parameterised by type. `Box[T]` holds some `T`; `Load[T]` represents a value that has either arrived, is still absent, or has failed:
+Classes and enums can take type parameters. `Box[T]` holds some `T`.
+`Load[T]` is a value that has arrived, is still absent, or has failed:
 
 ```aura
 class Box[T]:
@@ -207,16 +225,24 @@ enum Load[T]:
     Failed(message: str)
 ```
 
-Generic types let you write utility data structures without giving up the type of the stored value. [Generics And Traits](/manual/generics-and-traits) in the Manual covers the details.
+Generic types let you write utility data structures and keep the type of the
+stored value. [Generics And Traits](/manual/generics-and-traits) in the Manual
+covers the details.
 
 ## Design Notes
 
 Three habits keep Aura data types clean:
 
-- **Prefer small classes with meaningful fields.** A class with ten unrelated fields is often two classes waiting for names.
-- **Prefer enums for domain states.** `JobState.Failed(message=...)` is harder to misuse than a `"failed"` string plus a maybe-empty error field.
-- **Prefer methods for type-local behaviour.** A function that reads one class's fields usually belongs to that class. A function that coordinates several types is usually a free function.
+- **Prefer small classes** with meaningful fields. A class with ten unrelated
+  fields is often two classes waiting for names.
+- **Prefer enums** for domain states. `JobState.Failed(message=...)` is
+  harder to misuse than a `"failed"` string plus an error field that may be
+  empty.
+- **Prefer methods** for behavior local to one type. A function that reads
+  one class's fields usually belongs to that class. A function that
+  coordinates several types is usually a free function.
 
-The next chapter takes the same ideas into Aura's standard collections — where the classes and enums we just built start to form programs.
+The next chapter, [Collections](/learn/collections), puts these classes and
+enums into Aura's standard collections.
 
 Reference: [Classes](/manual/classes), [Enums And Pattern Matching](/manual/enums-and-match).

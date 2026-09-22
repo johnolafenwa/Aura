@@ -1,10 +1,10 @@
 # Calling A Small C API
 
-Aura's FFI v0 is for small, reviewed bindings to trusted C symbols that are
-already visible in the running process. It deliberately does not expose raw
-pointers or arbitrary library loading.
+Aura's Foreign Function Interface (FFI) v0 is for small, reviewed bindings to
+trusted C symbols that are already visible in the running process. It does
+not expose raw pointers or arbitrary library loading.
 
-Start with a package because standalone files cannot opt in to FFI:
+Start with a package, because a standalone file cannot opt in to FFI:
 
 ```toml
 [package]
@@ -14,7 +14,7 @@ edition = "2026"
 allow_ffi = true
 ```
 
-Then declare a bodyless C function and call it directly:
+Then declare a C function with no body and call it directly:
 
 ```aura
 public extern "C" def getpid() -> int32
@@ -31,21 +31,29 @@ aura run --backend mir examples/packages/ffi_getpid/src/main.au
 aura run --backend direct examples/packages/ffi_getpid/src/main.au
 ```
 
-Both commands print `true`. The manifest opt-in is a review boundary: it says
-that the package contains native declarations whose correctness Aura cannot
+Both commands print `true`.
+
+The `allow_ffi` opt-in in the manifest is a review boundary. It marks the
+package as containing native declarations whose correctness Aura cannot
 prove.
 
 ## The Safe Surface Is Small
 
-Use fixed-width scalars (`int32`, `uint64`, `float32`, and their supported
-peers) for ordinary C values. `int` is accepted as the exact `int64` alias,
-but an explicit width makes an ABI declaration easier to review.
+Use fixed-width scalars for ordinary C values. These include `int32`,
+`uint64`, `float32`, and their supported peers. `int` is accepted as the
+exact alias for `int64`, but an explicit width makes an ABI declaration
+easier to review. ABI stands for application binary interface.
 
-A bare `str` parameter passes temporary UTF-8 bytes and a byte length. A
-bare `list[uint8]` passes read-only bytes and a length. `mut list[uint8]` uses a
-same-length scratch buffer for fixed-length copy-in/out. Empty views use a
-null pointer with length zero. The C function must not retain those pointers,
-and the string view is not promised to end in a NUL byte.
+Strings and byte lists pass as temporary views:
+
+| Parameter | What C receives |
+| --- | --- |
+| bare `str` | Temporary UTF-8 bytes and a byte length |
+| bare `list[uint8]` | Read-only bytes and a length |
+| `mut list[uint8]` | A same-length scratch buffer, for fixed-length copy-in and copy-out |
+
+An empty view passes a null pointer with length zero. The C function must not
+keep these pointers. The string view is not guaranteed to end in a NUL byte.
 
 Use an opaque handle when C owns an object whose layout Aura should not see:
 
@@ -56,17 +64,19 @@ public extern "C" def inspect(handle: Handle) -> int32
 public extern "C" def close(handle: own Handle) -> None
 ```
 
-The bare parameter shares the pointer for one synchronous call. `own Handle`
-consumes it. Opaque handles cannot be cloned or sent to another Aura task,
-and a binding must call the appropriate native close/free function.
+- A bare `Handle` parameter shares the pointer for one synchronous call.
+- An `own Handle` parameter consumes it.
+- An opaque handle cannot be cloned or sent to another Aura task.
+- A binding must call the matching native close or free function.
 
 ## What Aura Does Not Promise
 
 The compiler checks the Aura declaration, not the native implementation. A
-wrong C signature, retained temporary pointer, or out-of-bounds native write
-can corrupt or terminate the process. Native aborts, signals, and unwinds are
-not translated into Aura failures. Calls are synchronous and occupy their
+wrong C signature, a retained temporary pointer, or an out-of-bounds native
+write can corrupt or end the process. Aura does not translate native aborts,
+signals, or unwinds into Aura failures. Calls are synchronous and occupy the
 current Aura worker.
 
-The complete ABI table, manifest dependency-report rule, diagnostics, and
-backend contract are in [Foreign Function Interface (FFI) v0](/manual/ffi).
+[Foreign Function Interface (FFI) v0](/manual/ffi) in the Manual has the
+complete ABI table, the manifest dependency-report rule, the diagnostics, and
+the backend contract.

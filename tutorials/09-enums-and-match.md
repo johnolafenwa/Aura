@@ -1,62 +1,6 @@
 # Enums And Match
 
-Enums let you define a type that can be one of several variants. Combined with `match`, they give you exhaustive pattern matching -- the compiler guarantees you handle every case.
-
-## Matching A Union Member
-
-Use a union when the alternatives are existing types, and select a member
-with `case Type as name`:
-
-```aura check-pass
-def main():
-    mut value: int64 | str | None = 41
-    match mut value:
-        case int64 as number:
-            number += 1
-            print(number)
-        case str as text:
-            print(text)
-        case None:
-            print("missing")
-    print(value)
-```
-
-The output is `42` on two lines. The integer arm changes the existing payload.
-It cannot replace that payload with a string; a tag change requires assigning
-the whole `value` after the arm ends. An ordinary `match value` borrows its
-non-Copy payload, while `match own value` consumes it after a guard commits.
-Guards do not count toward coverage, so include an unguarded arm for every
-member or a final `_`. Type arms also work inside an enum payload pattern.
-
-See [union_type_patterns.au](../examples/enums/union_type_patterns.au).
-There is no builtin `Option` type or `T?` suffix; `T | None` is the only optional spelling.
-
-## Testing For `None`
-
-A union with a `None` member does not need a `match` for the common
-"present or missing" question. `is None` and `is not None` narrow the tested
-place for the branch they select:
-
-```aura check-pass
-def describe(value: str | None):
-    if value is None:
-        print("missing")
-        return
-    print(value.len())
-
-def main():
-    describe(None)
-    describe("aura")
-```
-
-Inside the `else` branch, and after an `if value is None: return`, `value` is
-a plain `str`. The same works for `mut` locals, class fields, and views, and
-through `not`, `and`, and `or`. Assigning to the place, matching it with
-`match mut`, or passing it to a call with `mut` access ends the narrowing;
-using the member afterwards reports `AU2014`, so test the value again. Only
-`is None` and `is not None` narrow; `== None` compares without narrowing.
-
-See [union_narrowing.au](../examples/enums/union_narrowing.au).
+An enum is a type whose value is one of several named variants. `match` picks an arm by variant, and the compiler checks that the arms cover every case. This chapter also shows how `match` and `is None` work on union types such as `int64 | str | None`.
 
 ## Declaring An Enum
 
@@ -67,11 +11,11 @@ enum TrafficLight:
     Green
 ```
 
-Each variant belongs to the enum's namespace: `TrafficLight.Red`, `TrafficLight.Yellow`, etc.
+Each variant lives in the enum's namespace: `TrafficLight.Red`, `TrafficLight.Yellow`, and `TrafficLight.Green`.
 
 ## Variants With Payloads
 
-Variants can carry a single value:
+A variant can carry a single value, called its payload:
 
 ```aura check-pass
 enum ParseResult:
@@ -82,13 +26,11 @@ ok = ParseResult.Success(42)
 bad = ParseResult.Failure("invalid input")
 ```
 
-Variant payloads are owned constructor positions. `Failure(str)` therefore
-acts like `Failure(own str)`, and the same is true of builtins such as
-`Lookup.Found(own T)` and `Result.Err(own E)`.
+A payload position is owned. `Failure(str)` acts like `Failure(own str)`. Builtin enums work the same way, as in `Lookup.Found(own T)` and `Result.Err(own E)`.
 
 ## Generic Enums
 
-Enums can be generic:
+An enum can take type parameters:
 
 ```aura check-pass
 enum Wrapper[T]:
@@ -96,7 +38,7 @@ enum Wrapper[T]:
     Empty
 ```
 
-You can provide explicit type arguments when the compiler needs help:
+When the compiler cannot infer the type arguments, write them explicitly:
 
 ```aura check-pass
 wrapped = Result[int32, str].Ok(7)
@@ -106,7 +48,7 @@ See [examples/enums/explicit_type_args.au](../examples/enums/explicit_type_args.
 
 ## Exhaustive `match`
 
-Aura's `match` requires you to handle every variant. If you miss one, the compiler reports an error:
+A `match` must handle every variant. If an arm is missing, the compiler reports an error. This function covers both variants of `ParseResult`:
 
 ```aura fragment
 def value_or_zero(result: own ParseResult) -> int32:
@@ -120,7 +62,7 @@ def value_or_zero(result: own ParseResult) -> int32:
 
 ### Wildcard Arms
 
-Use `case _:` to match any remaining variants:
+`case _:` matches every variant that no earlier arm matched:
 
 ```aura fragment
 match light:
@@ -132,7 +74,7 @@ match light:
 
 ### Payload Bindings
 
-When a case matches a payload variant, the payload becomes a local binding:
+When an arm matches a variant with a payload, the name in the pattern becomes a local binding for that payload:
 
 ```aura fragment
 case ParseResult.Success(value):
@@ -141,7 +83,7 @@ case ParseResult.Success(value):
 
 ### Unqualified Variants
 
-When the scrutinee type is already known, you can omit the enum name:
+When the compiler already knows the scrutinee's type, you can leave out the enum name. The scrutinee is the value being matched.
 
 ```aura check-pass
 result: Result[str, str] = Result.Ok("ok")
@@ -153,13 +95,11 @@ match result:
         print(message)
 ```
 
-This is especially convenient with built-in enums like `Result` and `Lookup`.
+This is most useful with builtin enums such as `Result` and `Lookup`.
 
 ## Borrowed Matching
 
-Bare `match` inspects without consuming the value. Write `match own` when an
-arm must receive owned payloads. This distinction matters for non-copy types
-(see [06-ownership-and-borrowing.md](06-ownership-and-borrowing.md)):
+A bare `match` inspects the value without consuming it. Write `match own` when an arm must receive owned payloads. The difference matters for non-copy types, as [06-ownership-and-borrowing.md](06-ownership-and-borrowing.md) explains.
 
 ```aura check-pass
 result: Result[str, str] = Result.Ok("ok")
@@ -173,7 +113,7 @@ match result:
 # result is still valid here
 ```
 
-Use `match mut` when you need to modify the matched value:
+Write `match mut` when an arm must modify the matched value:
 
 ```aura check-pass
 mut result: Result[str, str] = Result.Ok("hello")
@@ -184,13 +124,11 @@ match mut result:
         pass
 ```
 
-The scrutinee may be a field such as `holder.state`. Reassigning that field, `holder`, or an ancestor field makes its payload bindings stale, while changing a separate sibling field is allowed. See [examples/enums/match_borrow_mut_fields.au](../examples/enums/match_borrow_mut_fields.au).
-
-See [examples/enums/match_borrow.au](../examples/enums/match_borrow.au).
+The scrutinee can be a field such as `holder.state`. Reassigning that field, `holder`, or an ancestor field makes the arm's payload bindings stale. Changing a separate sibling field is allowed. See [examples/enums/match_borrow_mut_fields.au](../examples/enums/match_borrow_mut_fields.au) and [examples/enums/match_borrow.au](../examples/enums/match_borrow.au).
 
 ## Literal Match Patterns
 
-You can also match on literal values of `bool`, integer, and `str`:
+A pattern can be a literal `bool`, integer, or `str` value:
 
 ```aura check-pass
 def describe_number(value: int32) -> str:
@@ -203,7 +141,7 @@ def describe_number(value: int32) -> str:
             return "many"
 ```
 
-Boolean matches are exhaustive when they cover both `true` and `false`:
+A `bool` match is exhaustive when it covers both `true` and `false`:
 
 ```aura check-pass
 def describe_flag(flag: bool) -> str:
@@ -214,11 +152,15 @@ def describe_flag(flag: bool) -> str:
             return "no"
 ```
 
-Integer and `str` matches always need a final wildcard arm because the domain is open-ended.
+Integer and `str` matches always need a final wildcard arm, because their set of possible values is open-ended. See [examples/control_flow/match_literals.au](../examples/control_flow/match_literals.au).
 
-See [examples/control_flow/match_literals.au](../examples/control_flow/match_literals.au).
+`match` also supports:
 
-Nested patterns, expression-form `match`, floating-point literal patterns, keyword payload arguments, and multi-payload variants are also supported:
+- nested patterns
+- expression-form `match`, which produces a value
+- floating-point literal patterns
+- keyword payload arguments
+- variants with several payloads
 
 ```aura check-pass
 enum Inner:
@@ -240,8 +182,7 @@ See [examples/enums/rich_match.au](../examples/enums/rich_match.au).
 
 ## Guards And Or-Patterns
 
-A guard adds an exact Boolean condition after structural matching. An
-or-pattern lets one arm accept several structural alternatives:
+A guard is an `if` condition on an arm. It runs after the pattern matches, and it must be exactly `bool`. An or-pattern lets one arm accept several alternatives, separated by `|`:
 
 ```aura fragment
 match code:
@@ -253,14 +194,14 @@ match code:
         print("other")
 ```
 
-Alternatives are tested left to right and must bind the same names with the
-same types and capabilities. A false guard continues to the next arm. Guarded
-arms do not make a match exhaustive, so keep an unguarded fallback when the
-remaining domain is open.
+The rules:
 
-A lowercase name at the top level binds the complete scrutinee. The guarded
-form makes that name available to the condition, and the unguarded form is the
-final catch-all:
+- Alternatives are tried left to right.
+- Every alternative must bind the same names, with the same types and capabilities.
+- When a guard is false, matching continues with the next arm.
+- Guarded arms do not count toward exhaustiveness. Keep an unguarded fallback when the remaining values are open-ended.
+
+A lowercase name at the top level of a pattern binds the whole scrutinee. With a guard, the condition can use that name. Without a guard, the arm is the final catch-all:
 
 ```aura fragment
 return match value:
@@ -268,13 +209,14 @@ return match value:
     case whole: 0 - whole
 ```
 
-In `match own`, a guard can inspect a non-copy candidate but cannot move it.
-Extraction happens only after a true guard. In `match mut`, mutations made by
-a guard remain visible when the guard is false or propagates a failure.
+Guards interact with `match own` and `match mut`:
+
+- In `match own`, a guard can inspect a non-copy candidate but cannot move it. The payload is extracted only after the guard is true.
+- In `match mut`, changes a guard makes stay visible when the guard is false or propagates a failure.
 
 See [examples/enums/match_guards_and_or_patterns.au](../examples/enums/match_guards_and_or_patterns.au).
 
-Expression-form `match` is not limited to `return`. It also works in binding and argument positions, and an arm value may itself be a nested block-form expression:
+Expression-form `match` works in more places than `return`. You can use it as a binding's value or as a call argument. An arm's value can itself be a nested block-form `match`:
 
 ```aura fragment
 value = match outer:
@@ -291,6 +233,65 @@ emit(match outer:
 
 See [examples/enums/match_expression_positions.au](../examples/enums/match_expression_positions.au).
 
-Built-in `Result[T, E]`, optional `T | None` unions, `Lookup[T]`, and `SendError[T]` are covered in the next chapter.
+## Matching A Union Member
 
-See [examples/enums/result_match.au](../examples/enums/result_match.au) and [examples/enums/wildcard_match.au](../examples/enums/wildcard_match.au).
+A union such as `int64 | str | None` holds a value of one of several existing types. Use a union when the alternatives are existing types. Select a member with `case Type as name`:
+
+```aura check-pass
+def main():
+    mut value: int64 | str | None = 41
+    match mut value:
+        case int64 as number:
+            number += 1
+            print(number)
+        case str as text:
+            print(text)
+        case None:
+            print("missing")
+    print(value)
+```
+
+This prints `42` on two lines, because the integer arm changes the payload in place. An arm cannot replace the payload with a value of another member type. To change which member the union holds, assign the whole `value` after the arm ends.
+
+The three forms behave as they do for enums:
+
+- `match value` borrows a non-copy payload.
+- `match mut value` lets the arm modify the payload.
+- `match own value` consumes the payload after a guard commits.
+
+Guards do not count toward coverage. Include an unguarded arm for every member, or a final `_`. Type arms also work inside an enum payload pattern.
+
+Aura has no builtin `Option` type and no `T?` suffix. `T | None` is the only way to write an optional value. See [union_type_patterns.au](../examples/enums/union_type_patterns.au).
+
+## Testing For `None`
+
+To ask whether a `T | None` value is present, you do not need a `match`. `is None` and `is not None` narrow the tested place in the branch they select:
+
+```aura check-pass
+def describe(value: str | None):
+    if value is None:
+        print("missing")
+        return
+    print(value.len())
+
+def main():
+    describe(None)
+    describe("aura")
+```
+
+After `if value is None: return`, and inside an `else` branch, `value` is a plain `str`. Narrowing works the same way for:
+
+- `mut` locals, class fields, and views
+- conditions combined with `not`, `and`, and `or`
+
+These actions end the narrowing:
+
+- assigning to the place
+- matching it with `match mut`
+- passing it to a call with `mut` access
+
+Using the member after that reports `AU2014`. To fix it, test the value again. Only `is None` and `is not None` narrow. `== None` compares without narrowing.
+
+See [union_narrowing.au](../examples/enums/union_narrowing.au).
+
+The next chapter covers the builtin `Result[T, E]`, optional `T | None` unions, `Lookup[T]`, and `SendError[T]`. See [examples/enums/result_match.au](../examples/enums/result_match.au) and [examples/enums/wildcard_match.au](../examples/enums/wildcard_match.au).

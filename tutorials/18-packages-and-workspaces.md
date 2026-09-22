@@ -1,10 +1,13 @@
 # Packages And Workspaces
 
-Aura supports a package system built around `Aura.toml` manifest files. Packages let you organize larger projects with multiple source directories, share code through local path and git dependencies, and group related packages into workspaces.
+This chapter covers Aura's package system. A package is a directory with an
+`Aura.toml` manifest and a `src/` directory. Packages can depend on local
+paths and git repositories, and a workspace groups several packages under one
+root.
 
 ## Single Package
 
-A package has an `Aura.toml` manifest and source files under `src/`:
+A package keeps its manifest at the root and its source files under `src/`:
 
 ```text
 my-app/
@@ -28,13 +31,15 @@ Run the package by pointing `aura` at a file under `src/`:
 cargo run -p aura -- run my-app/src/main.au
 ```
 
-The compiler treats the directory containing `Aura.toml` as the package root and `src/` as the source root. Local imports resolve relative to `src/`:
+The compiler treats the directory that holds `Aura.toml` as the package root
+and `src/` as the source root. Local imports resolve relative to `src/`:
 
 ```aura fragment
 import helpers.math    # resolves to src/helpers/math.au
 ```
 
-An alias changes the local spelling without changing that resolution path:
+An alias changes the local spelling. It does not change how the path
+resolves:
 
 ```aura fragment
 import helpers.math as integer_math
@@ -43,26 +48,27 @@ from helpers.math import double as twice
 
 ## Local Path Dependencies
 
-Declare dependencies relative to the manifest directory:
+Declare a dependency with a path relative to the manifest directory:
 
 ```toml
 [dependencies]
 util = { path = "../util" }
 ```
 
-Then import through the package name:
+Then import it through the package name:
 
 ```aura fragment
 import util.math
 ```
 
-The dependency package must have its own `Aura.toml` with a matching `name`. Transitive dependencies are resolved through the package graph.
+The dependency must have its own `Aura.toml` with a matching `name`.
+Transitive dependencies resolve through the package graph.
 
 See [examples/packages/local_path_dependencies/app/src/main.au](../examples/packages/local_path_dependencies/app/src/main.au).
 
 ## Git Dependencies
 
-Dependencies can also come from git repositories:
+A dependency can also come from a git repository:
 
 ```toml
 [dependencies]
@@ -72,20 +78,22 @@ release_math = { git = "https://github.com/example/math.git", branch = "release"
 frozen_math = { git = "https://github.com/example/math.git", rev = "4f2c9d8b7e..." }
 ```
 
-Git dependencies support three selectors:
+Git dependencies accept three selectors:
 
-- `branch = "name"` -- track a branch (default: `"main"` when no selector is provided)
-- `tag = "v1.0.0"` -- pin to a specific tag
-- `rev = "abc123..."` -- pin to an exact commit
+| Selector | Meaning |
+| --- | --- |
+| `branch = "name"` | Track a branch. With no selector, the default is `"main"`. |
+| `tag = "v1.0.0"` | Pin to a specific tag. |
+| `rev = "abc123..."` | Pin to an exact commit. |
 
-Imports work the same way as path dependencies -- use the package name:
+You import a git dependency by package name, as with a path dependency:
 
 ```aura fragment
 import util.math
 import jsonx.parser
 ```
 
-The complete dependency path may be aliased after it resolves:
+You can alias the full dependency path after it resolves:
 
 ```aura fragment
 import util.math as util_math
@@ -94,7 +102,7 @@ from jsonx.parser import parse as parse_json
 
 ## Workspaces
 
-Workspace roots group related packages under a single top-level manifest:
+A workspace root groups related packages under one top-level manifest:
 
 ```toml
 [workspace]
@@ -112,40 +120,46 @@ my-workspace/
     src/math.au
 ```
 
-Member packages keep their own `[package]` section and dependency lists. The workspace root only declares membership.
+Each member keeps its own `[package]` section and dependency list. The
+workspace root only declares membership.
 
 See [examples/packages/workspace/Aura.toml](../examples/packages/workspace/Aura.toml) and [examples/packages/workspace/app/src/main.au](../examples/packages/workspace/app/src/main.au).
 
 ## Lockfiles
 
-Aura writes an `Aura.lock` file to record the resolved dependency graph:
+Aura writes an `Aura.lock` file that records the resolved dependency graph.
+Its location depends on the project shape:
 
-- for standalone packages: beside `Aura.toml`
-- for workspace members: at the workspace root
+- For a standalone package, it sits beside `Aura.toml`.
+- For workspace members, it sits at the workspace root.
 
 The lockfile records:
 
-- local path dependencies with their relative paths
-- git dependencies with their source URL and the exact pinned revision
+- each local path dependency with its relative path
+- each git dependency with its source URL and the exact pinned revision
 
-This ensures reproducible builds. Later runs use the pinned revisions from the lockfile until you explicitly update it.
+This makes builds reproducible. Later runs use the pinned revisions until you
+update the lockfile yourself.
 
-When you want to refresh moving git references, use the CLI update command from inside the package or workspace:
+To refresh moving git references, run the update command from inside the
+package or workspace:
 
 ```bash
 aura deps update
 aura deps update util
 ```
 
-`aura deps update` refreshes all branch/tag/default-main git dependencies in the current package graph. `aura deps update util` refreshes only the named git dependency.
+`aura deps update` refreshes every branch, tag, and default-`main` git
+dependency in the current package graph. `aura deps update util` refreshes
+only the named git dependency.
 
 ## Current Limits
 
-The package system is intentionally local-first:
+The package system is local-first:
 
-- supported dependency forms: `{ path = "..." }` and `{ git = "...", branch/tag/rev = "..." }`
-- version-only registry dependencies like `util = "0.1.0"` are rejected with a clear diagnostic
-- no registry, publish, or install flows yet
-- no version solving
-
-This is deliberate -- Aura supports real multi-package development before taking on registry infrastructure.
+- The supported dependency forms are `{ path = "..." }` and
+  `{ git = "...", branch/tag/rev = "..." }`.
+- A version-only registry dependency such as `util = "0.1.0"` is rejected
+  with a clear diagnostic.
+- There is no registry, publish, or install flow.
+- There is no version solving.

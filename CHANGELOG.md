@@ -5,174 +5,140 @@ versioning for release artifacts while it remains a technical preview; a minor
 preview release may still contain source and API incompatibilities called out
 in this file.
 
-## 0.3.4 — Unreleased (technical preview)
+## VS Code extension 0.3.5 — 2026-09-22
 
-- Preserve write-through element and entry loans when their collection is
-  reached through a field, tuple, union payload, or returned collection view
-  on the direct backend; updates now reach the original collection storage.
-- Remove the builtin `Option[T]` type, its `Option.Some`/`Option.None`
-  constructors, and the `T?` type suffix. `T | None` is the sole optional
-  spelling (ADR-0052); `Option[int64]` is now an ordinary unknown type and `T?`
-  an ordinary parse error, with no migration diagnostic. A user may declare an
-  ordinary enum named `Option`.
-- Add the compiler-provided `Lookup[T]` (`Found(value)` / `Missing`) and
-  `Poll[T]` (`Ready(value)` / `Unavailable`) outcome enums. `list.get`,
-  `dict.get`, and `dict.remove` return `Lookup[T]`; `Queue.get_or_none` and
-  `Task.result_or_none` are renamed `poll` and return `Poll[T]`.
-- Convert every other optional library signature to `T | None`: `str.strip_prefix`
-  and `strip_suffix`, `Array.get` and `set`, `io.read_line`, `sys.env`,
-  `path.parent`, `file_name`, and `extension`, the `json.as_*` and `into_*`
-  accessors and the `json.dumps` `indent` parameter, the network stream and
-  socket `read_*`/`recv*` results, `process.start`/`run`/`Supervisor.start`
-  `cwd` parameters, `process.Child.stdin`/`stdout`/`stderr`, and the
-  `wait_or_none`/`read_line`/`read_bytes` results. Both backends agree on every
-  replacement; the semantic-interface schema is now version 16.
-- A recursive optional class field is spelled `next: indirect Node | None`; the
-  `indirect` marker on the member marks the field as the former `indirect Node?`
-  did.
-- Require identical complete callable contracts at bare destinations (`AU2015`);
-  permitted restrictions now require explicit alias or callable constructors.
-  A callable value bound into a union destination such as
-  `(def(value: int64) -> int64) | None`, including a generic `T | None`
-  parameter, now meets the same rule at the checker; previously only the MIR
-  validator refused the program.
-- Render the unit value `None` as `None` in `print`, `str`, f-string
-  interpolation, and container rendering; an absent `T | None` value prints
-  `None` (the former `Option.None` spelling printed `Option.None`, while the
-  unit value previously rendered as empty text, giving `[, 1]` and
-  `Result.Ok()`).
-- Represent every concrete union as one inline tagged value on the direct
-  backend (checkpoint Q9 A): a scalar, `None`, or plain-class member
-  occupies its own words, a string, list, or other runtime-object member
-  occupies one owned handle word, and injections, tag tests, payload reads,
-  pattern matches, equality, `.clone()`, and trait dispatch run without a
-  runtime allocation, and a trait method returning `str | None` on a union
-  receiver keeps its result owned across the dispatch; a plain class may
-  hold an inline union of scalars, `None`, or plain classes as a flattened
-  field. Both runtimes count union payload boxes, closure
-  environments, opaque runtime boxes, and callable overflow allocations and
-  report them on standard error when `AURA_RUNTIME_STATS=1` is set;
-  `benchmarks/representation` records the counters with provenance.
-- Represent every callable value as four words on the direct backend
-  (checkpoint Q15 A / Q16 A): a descriptor naming the lowered function and
-  its captures, and three environment words. Captures that fit in three
-  words live in the value; a wider environment takes one checked block
-  (`AU4005: cannot allocate callable environment` on failure, counted as a
-  callable overflow allocation); calls, moves, and copies allocate nothing,
-  and a function value is boxed only where it leaves generated code (a
-  container, a task start, a runtime helper, or a generic frame), which the
-  `closure_environments` counter reports.
-- Fix a compiler panic ("checked type pattern") when a `match` scrutinee is a
-  trait method call on a union receiver, such as `match pet.label():` with
-  `pet: Dog | Cat` and `label(self) -> str | None`; the scrutinee now has
-  the result type the checker verified for every member.
-- Refuse reading a bound's method as a member of a type-parameter value
-  (`value: int64 = item.size` where `item: T` and `T: Size`) with `AU2005`;
-  the checker previously typed it as the method's result and both backends
-  trapped at runtime on a missing field.
-- Add compiler-owned signature help, references, and rename with prepare support
-  to the CLI and language server, including binding-preserving rename checks.
-- Update `rustls` to 0.23.45 (with `rustls-webpki` and `aws-lc-sys`) for
-  RUSTSEC-2026-0285, which the dependency audit gate reports on every tree.
-- Fix the task boundary for stored `TaskCallable` targets: every argument
-  slot, including an omitted default or a keyword-bound slot, must be
-  Transfer, and a target whose result is a view of its arguments is refused
-  (`AU3008`); the shared MIR validator enforces both independently.
-- Fix generic enum inference for named payloads and explicit imported type
-  arguments, repeated parentheses around a specialized constructor, generic
-  imported associated view calls, stored task targets returning callables,
-  loop-guard narrowing on every iteration, union values satisfying generic
-  trait bounds, trait-method values exposing the trait's contract, binding a
-  method through a Copy view, and `control.retry` with a packed worker.
-- Reject bare tuple trait-implementation targets, as documented, and make
-  named `Array` constructors a shared validator contract on both backends.
-- Measure the interpreter's task-stack headroom against the writable stack:
-  the probe excludes the guard page and reserves a profile-dependent margin,
-  and the documented child stack default is 768 KiB everywhere.
-- Resolve type aliases and packed `Callable` calls in editor analysis and
-  tokenize aliases, `|`, contextual `is`, and `Callable` in the extension.
-- Add first-class union types under the ratified Batch 1 phase 1 checkpoint
-  (ADR-0052): `A | B` annotations normalize and deduplicate their members,
-  transparent `type` aliases expand at every use, values inject into a union
-  with a checked shared layout, `match` accepts type patterns with
-  exhaustiveness checking, and conditional tests narrow a stable union place
-  for the guarded flow. Generic functions and classes accept union type
-  arguments with union-aware inference. A union is Copy, clone-safe, and
-  Transfer exactly when every member is; equality, hashing, and trait dispatch
-  go through the active member; one declared handle type plus `None` may be an
-  extern C result as a single nullable pointer.
-- Make callable contracts complete (ADR-0058): parameter names, keyword-only
-  markers, and default promises belong to every function, lambda, and callable
-  type, and a written destination admits only safe restrictions of a value's
-  contract. `Callable[...]` and `TaskCallable[...]` store owned callables
-  through explicit packing, Mutable closures may mutate their owned captures,
-  and every `TaskGroup` start method accepts a stored `TaskCallable` target.
-- Bind `receiver.method` as a closure over the receiver, use `Class.method` as
-  a function value, and spell a generic method value's type arguments as
-  `method[T]`. A stored callable contract may return a view of one named
-  parameter (`def(pair: Pair) -> view str from pair`), and `list.map`,
-  `list.filter`, keyed `list.sort`, `Array.map`, and `control.retry` borrow a
-  packed Shared callable whose contract matches the site.
-- Run the program entry on a 16 MiB root task stack and report `AU4005` when a
-  task's stack cannot hold another call instead of faulting. The semantic
-  interface schema is 14, so older caches are rejected and rebuilt.
-- Upgrade `examples/agents/tool_runner/` to version 1 with a `Callable`
-  registry contract, a factory-owned closure, and a packed bound receiver; the
-  VS Code grammar tokenizes stored view contracts in type positions.
-- Add the maintained `examples/agents/tool_runner/` reference package with a
-  named-function tool registry, explicit typed JSON request/result methods,
-  typed errors, retry, child Queue streaming, and structured resource cleanup.
-  Both backends produce the same pinned stdout.
-- Add cache-keyed `AURA_NATIVE_KEEP_SYMBOLS=1` for profiling native user binaries,
-  and publish Fibonacci call-cost attribution and future optimization options.
-- Vectorize shared float32/float64 Array elementwise kernels and scalar
-  broadcasts while retaining exact reductions, division traps and integer modes.
-  Both runtime paths pass the frozen 1,008-case pre-change bit/diagnostic corpus
-  in debug and release. Quiet-host clean-detached addition falls from 1.244818
-  to 0.249473 ms (79.96% less time), reaching 1.0065x Rust; sequential sum
-  remains within 1.34x Rust. A post-reboot re-measure accompanies 0.3.4.
-- Check every Aura source under `benchmarks/` in the CLI regression, repairing
-  stale int32 task/Queue arguments in three scalable-runtime inputs.
+- Bundles language server 0.3.4, which speaks semantic interface version 16.
+- Adds signature help, find references, and rename with a prepare step. Rename
+  refuses an edit that would change which binding a name refers to.
+- Highlights union types, `type` aliases, `|`, the contextual `is`, `Callable`,
+  and stored view contracts in type positions.
 
-- Enable Cranelift speed optimization, validated by the full forced-backend gate.
-- Tune release artifacts with fat LTO, one codegen unit, stripped compiler
-  symbols, platform section collection and user debug/local-symbol stripping;
-  preserve unwinding and Aura source diagnostics. On the measured arm64 macOS
-  host, tuned compiler/hello/worker executables are 29.35%/93.29%/84.54% smaller
-  than clean v0.3.3-preview builds; see the Performance chapter for byte counts
-  and provenance.
-- Add pinned Rust baseline programs and lanes to all three timing harnesses,
-  protocol smoke checks, and clean-ref executable-size tooling.
-- Publish the earlier items 1–4 post-reboot foundations measurements:
-  fib/int32/int64 medians improve
-  by 19.06%/20.56%/15.69%; Array add becomes 7.17% slower and sum is essentially
-  unchanged. All CPython/NumPy controls drift by less than 5%. The comparison
-  includes profile/link tuning alongside Cranelift speed.
-- Publish contractual Rust control-plane and Array comparisons, plus separately
-  qualified diagnostic standalone integer comparisons. Correct the task/TCP
-  benchmark argument widths identically at both measurement bases, and add a
-  CLI regression checking every release benchmark input. Exact corrected source
-  commits, raw evidence and hashes are retained; no Rust workload was excluded.
-- Verify Cargo 1.95's documented `strip="none"` release default and retain the
-  existing size bytes, with explicit-setting versus omitted-setting behavior
-  documented in the Performance chapter.
-- Document the native semantic boundary and incremental Batch 1 builder plan.
-- Correct the documented compiler coverage floors and `aura test` lifecycle and
-  parameterized-registration support.
-- Add element and entry views (ADR-0061, Batch 2 phase 2a): `view name =
-  items[i]`, `view mut name = table[key]`, and projections inside an element
-  such as `view mut visits = users[i].visits` bind one list element or
-  dictionary entry in place on both backends. The selector is evaluated once
-  at creation, where an out-of-range position or absent key fails with
-  `AU4003` at the index expression; the checker treats two views of
-  different literal positions or keys as disjoint, a computed selector as
-  overlapping every element, and any structural mutation of the collection
-  as overlapping every element view (`AU3002`). A field access through an
-  element (`users[i].visits`) is a place read, and `users[i].visits = 5` or
-  `users[i].visits += 1` writes through a statement-scoped element loan; the
-  element is never copied out and written back. A list element or entry is
-  not yet accepted as a `mut` argument or mutating-method receiver, and a
-  returned view cannot yet select one (`AU3004`).
+## 0.3.4 — 2026-09-22 (technical preview)
+
+Aura 0.3.4 adds union types, complete callable contracts, element and entry
+views, and a faster direct backend. It removes `Option[T]` in favour of
+`T | None`. Source written for 0.3.3 that uses `Option` needs the changes
+listed under "Breaking changes".
+
+### Breaking changes
+
+- `Option[T]`, `Option.Some`, `Option.None`, and the `T?` suffix are gone.
+  Write `T | None` instead. `Option[int64]` is now an unknown type and `T?` is
+  a parse error. You may declare your own enum named `Option`.
+- `list.get`, `dict.get`, and `dict.remove` return the new `Lookup[T]` enum,
+  with `Found(value)` and `Missing`.
+- `Queue.get_or_none` and `Task.result_or_none` are renamed `poll`. They
+  return the new `Poll[T]` enum, with `Ready(value)` and `Unavailable`.
+- Every other optional library result or parameter is now `T | None`. This
+  covers `str.strip_prefix` and `strip_suffix`, `Array.get` and `set`,
+  `io.read_line`, `sys.env`, `path.parent`, `file_name`, and `extension`,
+  the `json.as_*` and `into_*` accessors, the `json.dumps` `indent`
+  parameter, the network `read_*` and `recv*` results, the `cwd` parameter of
+  `process.start`, `run`, and `Supervisor.start`, `process.Child.stdin`,
+  `stdout`, and `stderr`, and the `wait_or_none`, `read_line`, and
+  `read_bytes` results.
+- A recursive optional class field is written `next: indirect Node | None`.
+- A callable value must match its destination's complete contract, including
+  parameter names, keyword-only markers, and defaults (`AU2015`). A narrower
+  contract needs an explicit alias or callable constructor. The rule also
+  applies when the destination is a union such as
+  `(def(value: int64) -> int64) | None`.
+- `None` prints as `None` in `print`, `str`, f-strings, and containers. It
+  used to print as empty text, so `[, 1]` is now `[None, 1]`.
+- The semantic interface schema is version 16. Editor caches from older
+  versions are rebuilt.
+
+### Language
+
+- **Union types.** `A | B` annotations, `type` aliases, type patterns in
+  `match` with exhaustiveness checking, and narrowing after a conditional
+  test. Generic code accepts union type arguments. A union is Copy,
+  clone-safe, or Transfer exactly when every member is. Equality, hashing,
+  and trait calls go to the active member. One handle type plus `None` can be
+  an extern C result, passed as a nullable pointer.
+- **Complete callable contracts.** Parameter names, keyword-only markers, and
+  defaults are part of every function, lambda, and callable type.
+  `Callable[...]` and `TaskCallable[...]` store owned callables, and every
+  `TaskGroup` start method accepts a stored `TaskCallable`.
+- **Method values.** `receiver.method` is a closure over the receiver,
+  `Class.method` is a function value, and `method[T]` fixes a generic
+  method's type arguments. A stored callable may return a view of one named
+  parameter, such as `def(pair: Pair) -> view str from pair`.
+- **Element and entry views.** `view name = items[i]`,
+  `view mut name = table[key]`, and projections such as
+  `view mut visits = users[i].visits` bind one list element or dictionary
+  entry in place. The index is evaluated once, and a missing position or key
+  fails there with `AU4003`. Two views of different literal positions or keys
+  can coexist. A computed index, or a structural change such as `append`,
+  conflicts with every element view (`AU3002`).
+- **Field access through an element.** `users[i].visits` reads the field in
+  place, and `users[i].visits = 5` or `+= 1` writes it in place.
+
+### Performance
+
+- Unions and callables are inline values on the direct backend. A union is
+  one tagged value, and a callable is four words with up to three words of
+  captures inline, so calls, moves, and copies allocate nothing. A larger
+  closure environment takes one checked block, and failure to allocate it is
+  `AU4005`. A callable is boxed only where it leaves generated code: a
+  container, a task start, or a runtime helper.
+- Cranelift now optimizes for speed.
+- Release builds use fat LTO, one codegen unit, and stripped symbols. On the
+  measured arm64 macOS host the compiler is 29.35% smaller than
+  `v0.3.3-preview`, and the hello and worker executables are 93.29% and 84.54%
+  smaller. The Performance chapter has the byte counts.
+- Shared `float32` and `float64` Array elementwise kernels and scalar
+  broadcasts are vectorized, with exact reductions, division traps, and
+  integer modes unchanged. On a quiet host, clean detached addition falls from
+  1.244818 ms to 0.249473 ms, within 1.0065x of Rust.
+- The `fib`, `int32`, and `int64` benchmarks improve by 19.06%, 20.56%, and
+  15.69% at the median.
+- The program entry runs on a 16 MiB stack. A task whose stack cannot hold
+  another call fails with `AU4005` instead of crashing. Child tasks default to
+  768 KiB.
+- `AURA_RUNTIME_STATS=1` reports union boxes, closure environments, runtime
+  boxes, and callable overflow allocations on standard error.
+  `AURA_NATIVE_KEEP_SYMBOLS=1` keeps symbols in native binaries for profiling.
+
+### Tooling
+
+- The CLI and language server add signature help, references, and rename.
+- Editor analysis resolves type aliases and packed `Callable` calls.
+- `examples/agents/tool_runner/` is a maintained reference package: a tool
+  registry with typed JSON requests and results, typed errors, retry, Queue
+  streaming, and resource cleanup.
+- The benchmark lanes gain pinned Rust baselines, and every Aura source under
+  `benchmarks/` is checked by the CLI tests.
+
+### Fixes
+
+- A `match` on a trait method call through a union receiver no longer panics
+  the compiler.
+- Reading a trait bound's method as a field of a type-parameter value is
+  refused with `AU2005` instead of trapping at run time.
+- A stored `TaskCallable` target must be Transfer in every argument slot, and
+  a target that returns a view of its arguments is refused (`AU3008`).
+- Generic enum inference, imported type arguments, parenthesized specialized
+  constructors, loop-guard narrowing, union values meeting trait bounds,
+  method binding through a Copy view, and `control.retry` with a packed
+  worker all work as documented.
+- A bare tuple is refused as a trait implementation target.
+- In a top-level script, assigning through a view (`view mut second =
+  pair[1]` then `second = 7`) writes through the view. It used to be read as
+  a new module constant and refused with `AU3004`.
+- A view of an immutable top-level binding is refused with a clear `AU3004`
+  message. The binding is a module constant, which has no place to lend; bind
+  it with `mut` or inside a function. It used to pass the checker and then
+  fail as an internal MIR error.
+- `rustls` is 0.23.45, which addresses RUSTSEC-2026-0285.
+
+### Current limits
+
+- A list element or dictionary entry cannot yet be a `mut` argument, the
+  receiver of a mutating method, or the result of `return view`. Bind it with
+  `view mut` first.
+- A nested index in one expression, such as `grid[i][j]` on a non-Copy
+  element, is refused. Take the inner element with a view first.
 
 ## VS Code extension 0.3.4 — 2026-09-06
 

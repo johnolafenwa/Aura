@@ -1,8 +1,16 @@
 # Structured Concurrency
 
-Concurrent programs get hard to reason about when child work has no parent. A task started deep inside a function might run forever, fail silently, or leak a resource. The fix Aura builds into the language is called **structured concurrency**: every task is created within a scope, and leaving that scope waits for, cancels, or otherwise accounts for the children.
+This page covers structured concurrency in Aura. Every task starts inside a
+scope, and leaving that scope waits for, cancels, or otherwise accounts for
+its children. Child work with no parent is hard to reason about. A task
+started deep inside a function might run forever, fail silently, or leak a
+resource.
 
-This chapter introduces that scope — the `TaskGroup` — and the two other primitives that make it useful: `Task[T]`, a handle to a task's result, and `Queue[T]`, a typed channel for moving values between tasks.
+Three types do the work:
+
+- `TaskGroup` is the scope that owns child tasks.
+- `Task[T]` is a handle to one task's result.
+- `Queue[T]` is a typed channel that moves values between tasks.
 
 ## Start One Task
 
@@ -30,30 +38,41 @@ with group = TaskGroup():
             print("cancelled")
 ```
 
-The `with` block defines the task's lifetime. Leaving the block waits for children the program started and accounts for any failures. Nothing is hidden, and nothing keeps running in the background after the block ends.
+The `with` block sets the task's lifetime. Leaving the block waits for every
+child the program started and accounts for any failures. Nothing keeps
+running in the background after the block ends.
 
-`TaskResult[T]` has four cases — `Ready`, `Error`, `TimedOut`, and `Cancelled` — because those are the four things that can happen to a child task, and a reasonable program might want different behaviour for each.
+`TaskResult[T]` has one case for each thing that can happen to a child task:
+`Ready`, `Error`, `TimedOut`, and `Cancelled`. A program can handle each one
+differently.
 
-`Task[T]` is always safe to transfer between tasks, but it is copyable only
-when `T` is repeatable: a copy value, a `Queue[...]` handle, or a
-recursively repeatable `Task[...]` handle. A non-copy owned result gives the
-task handle one observation right. `result`, `poll`, and `result_or`
-consume that right on the first attempt, even if the attempt times out, is
-cancelled, fails, returns `Poll.Unavailable`, or selects a fallback.
+`Task[T]` is always safe to transfer between tasks. It is copyable only when
+`T` is repeatable. A repeatable type is a copy value, a `Queue[...]` handle,
+or a `Task[...]` handle whose own result is repeatable.
 
-A result that is not structurally `Transfer`, such as `random.Rng` or a live
-host resource, is rejected before the task is scheduled with `AU3008`.
-`AU3009` instead reports an operation that would duplicate a valid
-single-consumer result right.
+When the result is an owned value that is not a copy type, the handle has one
+observation right. The first call to `result`, `poll`, or `result_or` uses it
+up. That holds even when the attempt times out, is cancelled, fails, returns
+`Poll.Unavailable`, or selects a fallback.
 
-The timeout is a signed nanosecond `Duration`. Literals cover integral `ms`,
-`s`, and `m` values; `Duration.ms(n)`, `Duration.seconds(n)`, checked
-arithmetic, and comparisons handle runtime-computed backoff. A negative or
-host-unrepresentable wait is invalid and never means “wait forever.”
+Two diagnostics guard task results. `Transfer` is the property of values that
+can move to another task, described under
+[Ownership When Starting Tasks](#ownership-when-starting-tasks).
+
+| Code | Cause | Fix |
+| --- | --- | --- |
+| `AU3008` | The result is not structurally `Transfer`, such as `random.Rng` or a live host resource. The compiler rejects it before the task is scheduled. | Return a value that can be transferred. |
+| `AU3009` | An operation would duplicate a valid single-consumer result right. | Observe the result once. |
+
+The timeout is a `Duration`, a signed count of nanoseconds. Literals cover
+integral `ms`, `s`, and `m` values. For backoff computed at runtime, use
+`Duration.ms(n)`, `Duration.seconds(n)`, checked arithmetic, and comparisons.
+A negative wait, or one the host cannot represent, is invalid. It never means
+"wait forever."
 
 ## Fire-And-Forget Inside A Scope
 
-When the program does not need a handle to a child's result, use `start_soon`:
+Use `start_soon` when the program does not need the child's result:
 
 ```aura
 def say(label: str):
@@ -64,14 +83,15 @@ with group = TaskGroup():
     group.start_soon(say, "check")
 ```
 
-"Fire and forget" still has a parent here. The children are only forgotten by the local code; the runtime is still responsible for them.
+A fire-and-forget child still has a parent. The local code forgets it, but
+the runtime stays responsible for it.
 
 ## Choosing A Custom Task Stack
 
-Ordinary tasks use a guarded 768 KiB stack. That is the safe default for
-application code and keeps large task populations economical. If measurement
-shows that one child has a different task-local stack requirement, use a
-collision-free stack override:
+Ordinary tasks use a guarded 768 KiB stack. This default is safe for
+application code and keeps large numbers of tasks economical. If measurement
+shows that one child needs a different stack size, give that child its own
+stack:
 
 ```aura
 def deep_worker(depth: int32) -> int32:
@@ -81,34 +101,34 @@ with group = TaskGroup():
     task = group.start_with_stack(1024 * 1024, deep_worker, 128)
 ```
 
-Use `start_soon_with_stack(bytes, function, ...)` when the child does not
-return a retained handle. The byte count is exact `int64` and must be from
-256 KiB through 64 MiB inclusive. Aura rejects smaller and larger values.
-Accepted capacities are rounded upward to the host page size and
-guard-protected.
+Use `start_soon_with_stack(bytes, function, ...)` when you do not need a
+handle to the child. The byte count is an exact `int64` from 256 KiB through
+64 MiB inclusive. Aura rejects smaller and larger values. It rounds an
+accepted size up to the host page size and guard-protects it.
 
-Treat 256 KiB as an opt-in minimum only for a measured shallow task. It is not
-the ordinary default: Aura's complete compiled HTTP example faulted when
-256 KiB was the global task default during integration and succeeded with the
-then-current 512 KiB default; the maintained default is now 768 KiB. The
-lower-level runtime round trip that succeeds with
-256 KiB protocol callers intentionally omits compiled Aura execution
-frames; it proves that deep protocol frames run on service workers, not that
-every complete Aura task is safe at 256 KiB.
+Treat 256 KiB as an opt-in minimum for a measured shallow task only. It is
+not a safe default. In testing, Aura's complete compiled HTTP example faulted
+with a 256 KiB global task default and succeeded with 512 KiB.
 
-The method name is deliberately separate from `start`: a forwarded target may
-have its own parameter named `stack_size`, so Aura does not steal a named
-argument from the child. Prefer the ordinary methods until profiling
-demonstrates a need; a larger reservation is not a performance hint.
+A lower-level runtime round trip does succeed with 256 KiB protocol callers.
+That test leaves out compiled Aura execution frames on purpose. It shows that
+deep protocol frames run on service workers. It does not show that every
+complete Aura task is safe at 256 KiB.
+
+These methods are named separately from `start` because a forwarded target
+may have its own parameter named `stack_size`. Aura does not take a named
+argument away from the child. Keep the ordinary methods until profiling shows
+a need. A larger reservation is not a performance hint.
 
 ## Ownership When Starting Tasks
 
-Starting a task creates **owned captures**. Each argument moves or copies into
-task-owned storage before the child can outlive the caller. The target may then
-borrow that capture or consume it; it never borrows the caller's stack value.
+Starting a task creates owned captures. Each argument moves or copies into
+task-owned storage before the child can outlive the caller. The target may
+borrow that capture or consume it. It never borrows a value on the caller's
+stack.
 
-When both the parent and the child want the same clone-safe move value, clone
-before starting:
+When the parent and the child both need the same clone-safe move value, clone
+it before starting the task:
 
 ```aura
 def worker(label: str):
@@ -120,26 +140,32 @@ with group = TaskGroup():
     print(label)
 ```
 
-Copy types (numbers, `bool`, `Duration`, queue handles, and task handles with
-repeatable results) pass through unchanged. Bare shared parameters borrow the
-task-owned capture, `own` parameters consume it, and `mut` targets are rejected
-because detached capture has no caller-visible writeback.
+Each kind of argument passes differently:
 
-Every captured argument and the target result must be structurally `Transfer`
-after generic specialization. Copy data, `str`, structurally transferable
-collections and user data, and Queue/Task handle identities can cross.
-Capability views, `random.Rng`, `TaskGroup`, and live file, process, or network
-resources cannot. The compiler derives `Transfer`; user code cannot implement
-it as a trait. Queue and Task handle state is synchronized for cross-worker
-use; all other captures and results remain owned, share-nothing `Transfer`
-values.
+- Copy types pass through unchanged. These include numbers, `bool`,
+  `Duration`, queue handles, and task handles with repeatable results.
+- A bare shared parameter borrows the task-owned capture.
+- An `own` parameter consumes the capture.
+- A `mut` parameter is rejected, because a detached capture has no writeback
+  the caller could see.
+
+Every captured argument and the target's result must be structurally
+`Transfer` after generic specialization. The compiler derives `Transfer`.
+User code cannot implement it as a trait.
+
+| Can cross into a task | Cannot cross |
+| --- | --- |
+| Copy data, `str`, structurally transferable collections and user data, Queue and Task handle identities | Capability views, `random.Rng`, `TaskGroup`, live file, process, and network resources |
+
+Queue and Task handle state is synchronized for use across workers. Every
+other capture and result is an owned, share-nothing `Transfer` value.
 
 ## `Queue[T]`: Typed Channels
 
-A queue moves values between tasks. Handles to the same queue are copy values,
-so passing one to a producer does not take it away from the parent. Queue
-construction, `put`, and `try_put` require a structurally `Transfer` payload;
-receiving moves one admitted value to the consumer.
+A queue moves values between tasks. Handles to one queue are copy values, so
+passing a handle to a producer does not take it away from the parent.
+Creating a queue, `put`, and `try_put` all require a structurally `Transfer`
+payload. Each receive moves one value to the consumer.
 
 ```aura
 def producer(jobs: Queue[int32]):
@@ -156,23 +182,32 @@ with group = TaskGroup():
         print(job)
 ```
 
-Two things are happening in that `for` loop. The consumer receives each value
-already owned until one of three things is true: the queue is closed,
-cancellation interrupts the loop, or every producer in the surrounding task
-group has completed. Queue is not a place traversal, so explicit `own` and
-`mut` loop modifiers are rejected. The last case means the
-program can often rely on normal exit to drain the queue; explicitly calling
-`close()` is still the clearest signal.
+The `for` loop receives each value already owned. The loop ends when any of
+these is true:
+
+- the queue is closed
+- cancellation interrupts the loop
+- every producer in the surrounding task group has completed
+
+Because of the last case, a program can often rely on normal exit to drain
+the queue. Calling `close()` is still the clearest signal.
+
+A queue loop receives values. It does not walk elements stored in place, so
+the explicit `own` and `mut` loop modifiers are rejected.
 
 ## Bounded Queues And Backpressure
 
-`Queue[T]()` creates an unbounded queue. An unbounded queue is convenient but risky: a fast producer and a slow consumer will let memory grow without limit. A **bounded** queue says how many values are allowed in flight:
+`Queue[T]()` creates an unbounded queue. It is convenient, but a fast
+producer and a slow consumer let memory grow without limit. A bounded queue
+sets how many values may be in flight:
 
 ```aura
 jobs = Queue[str](capacity=2)
 ```
 
-When a bounded queue is full, `put` waits until space is available, a timeout expires, the queue closes, or the task is cancelled. The failure shape is `SendError[T]`, which carries the unsent value back to the caller:
+When a bounded queue is full, `put` waits until space frees up, a timeout
+expires, the queue closes, or the task is cancelled. A failure is a
+`SendError[T]`, which hands the unsent value back to the caller:
 
 ```aura
 match jobs.put("compile", timeout=50ms):
@@ -188,11 +223,13 @@ match jobs.put("compile", timeout=50ms):
         print("cancelled")
 ```
 
-`try_put` is the non-waiting variant. Use it when waiting would be wrong — for example, when a polling loop has other work to do if the queue is full.
+`try_put` does not wait. Use it when waiting would be wrong, such as in a
+polling loop that has other work to do while the queue is full.
 
 ## A Worker Pool
 
-A common shape has one producer and several workers. Each worker reads the same queue until the producer closes it:
+A common shape has one producer and several workers. Every worker reads the
+same queue until the producer closes it:
 
 ```aura
 def worker(name: str, jobs: Queue[int32]):
@@ -212,14 +249,20 @@ with group = TaskGroup():
     group.start_soon(worker, "b", jobs)
 ```
 
-The parent owns the shape of the system: it decides how many workers to spawn and what capacity the queue has. The producer owns the decision to close the queue. Each worker owns only the job it is currently processing.
+Each part owns one decision:
 
-Leaving the `with` block waits for the producer to finish and for each worker to drain the queue.
+- The parent sets the shape of the system: how many workers to start and the
+  queue's capacity.
+- The producer decides when to close the queue.
+- Each worker owns only the job it is processing.
+
+Leaving the `with` block waits for the producer to finish and for each worker
+to drain the queue.
 
 ## Waiting On Queues, Tasks, And Deadlines
 
-Use `select(...)` when one operation may become ready through different source
-kinds:
+Use `select(...)` when the next event may come from sources of different
+kinds. It is an ordinary builtin call:
 
 ```aura
 outcome = select(messages, task, 50ms)
@@ -237,18 +280,20 @@ match own outcome:
         print("cancelled")
 ```
 
-The Queue sources in one call share a payload type, and the Task sources share
-a result type. Missing categories use `None` in `SelectOutcome[Q, T]`.
-Cancellation wins; otherwise the lowest original argument index wins a tie.
-The runtime registers one composite wait and removes every loser when a source
-wins. A losing Queue remains unchanged. A non-repeatable Task right is
-consumed at entry and abandoned if another source wins.
-
-Selection uses the ordinary builtin call shown above.
+- All Queue sources in one call share a payload type. All Task sources share
+  a result type.
+- A category with no sources uses `None` in `SelectOutcome[Q, T]`.
+- Cancellation always wins. Otherwise, on a tie, the lowest original argument
+  index wins.
+- The runtime registers one composite wait. When a source wins, the runtime
+  removes every loser.
+- A losing Queue stays unchanged. A non-repeatable Task right is consumed on
+  entry and abandoned if another source wins.
 
 ## Waiting For Several Tasks
 
-Sometimes a program needs to wait on a batch of tasks at once. `wait_any` returns when the first one finishes:
+Sometimes a program needs to wait on a batch of tasks. `wait_any` returns when
+the first one finishes:
 
 ```aura
 tasks: list[Task[int32]] = []
@@ -268,7 +313,8 @@ with group = TaskGroup():
             print("cancelled")
 ```
 
-`wait_all` returns when every task has either produced a value or one has failed:
+`wait_all` returns when every task has produced a value, or when one has
+failed:
 
 ```aura
 match wait_all(tasks, timeout=1s):
@@ -283,21 +329,31 @@ match wait_all(tasks, timeout=1s):
         print("cancelled")
 ```
 
-The `Error(index, message)` variant reports **which** task failed. That is usually more useful than a bare error.
+`Error(index, message)` reports which task failed. That is usually more
+useful than a bare error.
 
-With repeatable `T`, the handles and observations remain reusable. With a
-non-repeatable but transferable `T`, either helper consumes the complete task
-list on its first attempt, including timeout, cancellation, and failure.
-`wait_any` deliberately abandons the observation rights of unchosen tasks. A
-Queue receive transfers one owned item; it never observes task-result storage.
+With a repeatable `T`, the handles and their observations stay reusable. With
+a `T` that is transferable but not repeatable, either helper consumes the
+whole task list on its first attempt. That includes an attempt that times
+out, is cancelled, or fails. `wait_any` abandons the observation rights of
+the tasks it does not choose. A Queue receive moves one owned item. It never
+reads task-result storage.
 
 ## Cancellation Is Cooperative
 
-Calling `group.cancel()` signals child tasks. Tasks observe cancellation at
-**scheduler-aware waits**: `sleep`, queue sends and receives, task-result
-waits, socket waits, HTTP calls, and process waits. Compiler-inserted loop
-safepoints schedule sibling work but deliberately do not inspect cancellation,
-so a CPU-bound loop that must stop on request should check `cancelled()` itself:
+`group.cancel()` signals the child tasks. A task observes cancellation only at
+scheduler-aware waits:
+
+- `sleep`
+- queue sends and receives
+- task-result waits
+- socket waits
+- HTTP calls
+- process waits
+
+The compiler inserts safepoints in loops. They schedule sibling work, but they
+do not check for cancellation. A CPU-bound loop that must stop on request
+checks `cancelled()` itself:
 
 ```aura
 def ticker():
@@ -311,81 +367,56 @@ with group = TaskGroup():
     group.cancel()
 ```
 
-Cancellation is not an exception that lands at arbitrary points in the code. It is a request that tasks observe at well-defined boundaries. That makes cancelled code easy to reason about — and easy to test.
+Cancellation is not an exception that can land anywhere in the code. It is a
+request that tasks observe at well-defined points. That makes cancelled code
+easy to reason about and easy to test.
+
+## How Tasks Are Scheduled
 
 Aura 0.3 runs task bodies on cooperative pinned workers on both maintained
-backends. The runtime uses the available parallelism reported by the host by
-default; provisional
-`AURA_WORKERS=<positive integer>` selects an explicit count. A task receives
-a stable assignment when it is spawned. Its coroutine stack never migrates,
-work is not stolen, and `yield_now()` yields only to runnable work on that
-worker.
+backends.
 
-Every loop backedge includes an automatic scheduling check. Normal loop tails
-and `continue` take the check; `break` and `return` leave without it. This
-keeps a tight loop from freezing timers, queues, and sockets assigned to the
-same worker indefinitely, but one long loop body or long straight-line
-computation can still delay same-worker siblings. Ordinary tasks request a
-guarded 768 KiB coroutine stack, with an explicit per-child override available
-through the two `_with_stack` methods. Scheduler waits are event-driven:
-descriptors stay registered, deadlines are kept in a timer heap, and Queue,
-task-completion, and blocking-pool events notify the responsible worker
-directly. An idle worker sleeps until local work, an event, or a deadline
-becomes ready. The scheduler uses no periodic tick.
+- By default, the runtime uses the available parallelism that the host
+  reports. The provisional `AURA_WORKERS=<positive integer>` setting selects
+  an explicit count.
+- A task gets a stable worker assignment when it is spawned. Its coroutine
+  stack never migrates, and no worker steals work.
+- `yield_now()` yields only to runnable work on the same worker.
+- Scheduling, the order in which independent tasks complete, and the order of
+  printed output are unspecified.
+- Aura exposes no worker identity or affinity API.
+- Cancellation and diagnostics stay per task.
 
-Queue and Task handles are the cross-worker channels. Other captures and
-results remain owned `Transfer` values, so the model stays share-nothing.
-Cancellation and diagnostics remain per task. Scheduling, independent task
-completion, and printed-output order are unspecified; Aura exposes no worker
-identity or affinity API. Pinned workers enable multicore task execution;
-preemption and work stealing are unavailable, and speedup depends on the
-workload.
+Pinned workers let tasks run on several cores. Preemption and work stealing
+are not available, and any speedup depends on the workload.
 
-Deep HTTP, TLS, and maintained Unix WebSocket library frames run on a bounded
-protocol-step service with deep native worker stacks. Each step is bounded and
-nonblocking; the child gets ownership of its protocol state back before
-observing cancellation or returning to reactor readiness waiting. Ordinary
-application tasks use the guarded 768 KiB default stack; protocol workers
-carry the deepest maintained third-party library frames.
+Queue and Task handles are the channels between workers. All other captures
+and results stay owned `Transfer` values, so the model stays share-nothing.
 
-The protocol-step pool starts lazily and lives until the Aura process exits;
-there is no 0.2 shutdown or join call. File reads, resolver work, and listener
-binding continue through the generic blocking-I/O pool. For TLS assets, that
-generic pool reads the bytes and the protocol workers perform PEM parsing and
-rustls construction.
+### Loop Scheduling Checks
 
-The generic pool is a separate operational control.
-`AURA_BLOCKING_WORKERS=<positive integer>` requests an exact worker count;
-without it Aura derives a `2..=8` default from host parallelism with fallback
-`4`. `AURA_BLOCKING_QUEUE_CAPACITY=<positive integer>` optionally limits
-accepted jobs still waiting in the FIFO queue. It does not count running jobs
-or callers waiting for admission, and omitting it preserves an unbounded
-queue. A full bounded queue parks the Aura task without blocking its pinned
-worker. Cancellation or timeout before queue insertion prevents the host job
-from running. After insertion, Aura can stop waiting but cannot retract the
-host operation; its late result is discarded. The bound controls accepted
-pending backlog, not admission waiters or a stuck OS call, so unrelated
-blocking-I/O host work still cannot run until some worker returns when every
-worker is occupied.
+Every loop backedge includes an automatic scheduling check. A backedge is the
+jump from the end of a loop body back to its start. Normal loop tails and
+`continue` take the check. `break` and `return` leave without it.
 
-The runtime accepts larger task counts; 10,000 sleepers is the maintained
-memory-capacity bound. In the clean Mac14,9 Phase 5.10 measurement at `181204b`,
-three 100,000-sleeper plus 1,000-timer runs peaked at 1,170,735,104,
-1,921,531,904, and 2,001,305,600 bytes of whole-process RSS. Two runs exceeded
-the proposed 1.5 GiB bound. On this host, one 16 KiB resident page for each of
-the 101,000 stackful children alone requires
-1,654,784,000 bytes before scheduler metadata or the root runtime. The lower
-Phase 5.9 result depended on macOS memory compression. The 10,000-sleeper,
-standalone-timer, idle-CPU, starvation, and
-mandatory multicore gates all pass.
+The check keeps a tight loop from freezing the timers, queues, and sockets on
+its worker forever. One long loop body, or a long stretch of straight-line
+code, can still delay siblings on the same worker.
 
-MIR execution checks every loop backedge and yields every 8 backedges. Native
-concurrent programs use a function-local 4,096-iteration fuel budget, and
-sequential native programs remove checks that cannot have a sibling to
-schedule. Interleaving and ready-task order remain unspecified.
+How often a check yields depends on how the program runs. MIR is Aura's
+mid-level intermediate representation, which the default `aura run` runtime
+executes.
 
-`yield_now()` adds an explicit cooperative scheduling point between
-application-chosen chunks:
+| Execution | Behavior |
+| --- | --- |
+| MIR | Checks every loop backedge and yields every 8 backedges. |
+| Native, concurrent program | Uses a function-local budget of 4,096 iterations. |
+| Native, sequential program | Removes checks that cannot have a sibling to schedule. |
+
+Interleaving and ready-task order stay unspecified.
+
+`yield_now()` adds an explicit cooperative scheduling point between chunks
+that the application chooses:
 
 ```aura
 def crunch():
@@ -396,21 +427,89 @@ def crunch():
         yield_now()
 ```
 
-It gives runnable siblings an opportunity to proceed, but does not sleep,
-promise that another task runs, or check cancellation. Use `cancelled()` when
-the task must also respond to a cancellation request.
+`yield_now()` gives runnable siblings a chance to proceed. It does not sleep,
+does not promise that another task runs, and does not check cancellation. Use
+`cancelled()` when the task must also respond to a cancellation request.
+
+### Event-Driven Waits
+
+Scheduler waits are event-driven:
+
+- Descriptors stay registered.
+- Deadlines live in a timer heap.
+- Queue, task-completion, and blocking-pool events notify the responsible
+  worker directly.
+
+An idle worker sleeps until local work, an event, or a deadline is ready. The
+scheduler uses no periodic tick.
+
+### Protocol And Blocking-I/O Pools
+
+Deep HTTP, TLS, and maintained Unix WebSocket library frames run on a bounded
+protocol-step service with deep native worker stacks. Each step is bounded and
+nonblocking. The child gets its protocol state back before it observes
+cancellation or returns to waiting on reactor readiness.
+
+Ordinary application tasks keep the guarded 768 KiB default stack. The
+protocol workers carry the deepest maintained third-party library frames.
+
+The protocol-step pool starts lazily and lives until the Aura process exits.
+There is no 0.2 shutdown or join call.
+
+File reads, resolver work, and listener binding go through the generic
+blocking-I/O pool. For TLS assets, the generic pool reads the bytes, and the
+protocol workers perform PEM parsing and rustls construction.
+
+The blocking-I/O pool has its own controls:
+
+| Variable | Effect |
+| --- | --- |
+| `AURA_BLOCKING_WORKERS=<positive integer>` | Requests an exact worker count. Without it, Aura derives a `2..=8` default from host parallelism, with fallback `4`. |
+| `AURA_BLOCKING_QUEUE_CAPACITY=<positive integer>` | Limits the accepted jobs still waiting in the first-in, first-out queue. Without it, the queue is unbounded. |
+
+The queue capacity does not count running jobs or callers waiting for
+admission. When the bounded queue is full, the Aura task parks without
+blocking its pinned worker.
+
+- If the task is cancelled or times out before its job enters the queue, the
+  host job never runs.
+- After the job enters the queue, Aura can stop waiting, but it cannot
+  retract the host operation. Aura discards the late result.
+
+The bound controls the accepted pending backlog. It does not control
+admission waiters or a stuck operating system call. When every worker is
+busy, unrelated blocking-I/O host work still cannot run until some worker
+returns.
+
+### Memory Capacity
+
+The runtime accepts larger task counts, but 10,000 sleepers is the maintained
+memory-capacity bound. The 10,000-sleeper, standalone-timer, idle-CPU,
+starvation, and mandatory multicore tests all pass.
+
+In a clean measurement on a Mac14,9 at
+revision `181204b`, three runs of 100,000 sleepers plus 1,000 timers peaked at
+1,170,735,104, 1,921,531,904, and 2,001,305,600 bytes of whole-process
+resident set size. Two runs exceeded the proposed 1.5 GiB bound.
+
+On this host, one 16 KiB resident page for each of the 101,000 stackful
+children needs 1,654,784,000 bytes by itself. That is before scheduler
+metadata or the root runtime. An earlier, lower result depended on macOS
+memory compression.
 
 ## The Shape Worth Copying
 
 Good Aura concurrency tends to look the same across programs:
 
 - one `with TaskGroup()` per concurrent operation
-- queues owned by the parent, closed by the producers
+- queues owned by the parent and closed by the producers
 - task results inspected through `TaskResult`, `wait_any`, or `wait_all`
-- long CPU loops that check `cancelled()` when cancellation matters and use
-  explicit yields when a particular chunk boundary should schedule siblings
-- no detached background work; Aura 0.3 exposes no detached task form
+- long CPU loops that check `cancelled()` when cancellation matters, and use
+  explicit yields where a chunk boundary should schedule siblings
+- no detached background work, since Aura 0.3 has no detached task form
 
-If you can say, for each child task, which scope created it and which scope waits for it, the program is usually on the right track.
+For each child task, you should be able to say which scope created it and
+which scope waits for it. If you can, the program is usually on the right
+track.
 
 Reference: [Concurrency](/manual/concurrency).

@@ -1,40 +1,36 @@
 # Release-performance workloads
 
-This directory contains the Aura and CPython inputs established for Batch 6.
-The maintained runner now also builds equivalent pinned Rust inputs from
-`../rust_baselines/` and records all three lanes with host and source provenance.
+This directory holds the Aura and CPython inputs for the release-performance
+comparison, first set up for Batch 6. The runner also builds equivalent pinned
+Rust inputs from `../rust_baselines/`. It records all three lanes with host
+and source provenance.
 
 ## Workloads
 
-- `fib30.au` and `fib30.py` run the same naive recursive `fib(30)` algorithm
-  and must produce `832040`.
-- `tasks_10000.au` and `tasks_10000.py` create exactly 10,000 tasks after the
-  measurement starts, join every task, and must produce the checksum
-  `49995000`.
-- `tcp_fanout.au` and `tcp_fanout.py` run 20 concurrent loopback clients and
-  20 delayed handlers. Each client receives `pong`, producing the checksum
-  `80`. Aura uses 20 pre-bound ephemeral listeners because Aura 0.2 does
-  not permit transferring an accepted `TcpStream` to a handler task
-  (`AU3008`); a single listener would serialize handler work rather than
-  measure fan-out.
-- `retrying_worker.au` and `retrying_worker.py` execute 16 identical HTTP
-  retry cycles. Each cycle covers recovery after `503`, rate limiting with
-  `429`, and exhausted `503` retries. A valid run serves 112 requests, has
-  288 ms of specified retry delay, and produces the checksum `18112`.
-- `python_int_loop.py` and `python_startup.py` are the CPython counterparts to
-  the accepted Aura V6 sources in `../direct_integer_loops/`. Python has one
-  arbitrary-precision integer lane, so the same Python loop is paired
-  separately with Aura's `int32` and `int64` lanes.
+| Files | Work | Valid result |
+| --- | --- | --- |
+| `fib30.au`, `fib30.py` | The same naive recursive `fib(30)` algorithm | `832040` |
+| `tasks_10000.au`, `tasks_10000.py` | Create exactly 10,000 tasks after the measurement starts, then join every task | Checksum `49995000` |
+| `tcp_fanout.au`, `tcp_fanout.py` | 20 concurrent loopback clients and 20 delayed handlers. Each client receives `pong`. | Checksum `80` |
+| `retrying_worker.au`, `retrying_worker.py` | 16 identical HTTP retry cycles. Each cycle covers recovery after `503`, rate limiting with `429`, and exhausted `503` retries. | 112 requests served, 288 ms of specified retry delay, checksum `18112` |
+| `python_int_loop.py`, `python_startup.py` | CPython counterparts to the accepted Aura V6 sources in `../direct_integer_loops/` | |
 
-The numeric-Array comparison is intentionally not rerun by this harness. Its
-separately qualified NumPy evidence is linked in the raw and summary reports
-and merged into the consolidated benchmark note.
+For `tcp_fanout`, Aura uses 20 pre-bound ephemeral listeners. Aura 0.2 does
+not permit transferring an accepted `TcpStream` to a handler task (`AU3008`).
+A single listener would serialize handler work instead of measuring fan-out.
+
+Python has one arbitrary-precision integer lane. The same Python loop is
+therefore paired separately with Aura's `int32` and `int64` lanes.
+
+This harness does not rerun the numeric-Array comparison. The raw and summary
+reports link its separately qualified NumPy evidence, and the consolidated
+benchmark note merges it.
 
 ## Measurement protocol
 
 The fib, task, TCP, and retry inputs use exact `READY`/`GO`/`DONE` records.
-The host starts timing only after receiving and validating `READY`, then sends
-the exact `GO` record. For example:
+The host starts timing only after it receives and validates `READY`. It then
+sends the exact `GO` record. For example:
 
 ```text
 READY release-performance fib30 30
@@ -59,17 +55,18 @@ DONE release-performance retrying-worker 112 18112
 ```
 
 Any unexpected record, checksum, standard-error output, timeout, or nonzero
-exit invalidates the run. V6 remains a whole-process comparison so the exact
-accepted sources are reused. The runner reports raw whole-process durations
-as primary evidence and also reports same-repetition startup subtraction as a
-loop-only estimate. Nonpositive adjusted samples are retained as invalid
-observations and excluded from the estimate rather than invalidating unrelated
-measurements.
+exit invalidates the run.
+
+V6 stays a whole-process comparison so the exact accepted sources are reused.
+The runner reports raw whole-process durations as the primary evidence. It
+also reports same-repetition startup subtraction as a loop-only estimate.
+Nonpositive adjusted samples are kept as invalid observations and excluded
+from the estimate. They do not invalidate unrelated measurements.
 
 ## Reproducing the qualified run
 
-Run from a clean detached checkout on the accepted post-reboot Mac14,9 host
-with no competing sustained-CPU process:
+Run from a clean detached checkout on the accepted Mac14,9 host after a
+reboot, with no competing sustained-CPU process:
 
 ```bash
 /Applications/Xcode.app/Contents/Developer/usr/bin/python3 \
@@ -82,14 +79,21 @@ with no competing sustained-CPU process:
   --summary-json /tmp/aura-foundations-after-release-summary.json
 ```
 
-The runner requires exactly 11 rotating pairs, performs one excluded warmup
-per lane, builds a fresh locked release compiler and all Aura workload
-binaries before timing, verifies CPython identity, clears known
-runtime-affecting environment overrides, and rechecks the repository and input
-hashes after timing. It records three quiet-host inventories, boot and hardware
-identity, commands, raw observations, hashes, median, MAD, nearest-rank p95,
-best, and paired Aura/CPython and Aura/Rust ratios for protocol workloads. The summary links the exact raw report
-by SHA-256.
+The runner:
+
+- requires exactly 11 rotating pairs
+- performs one excluded warmup per lane
+- builds a fresh locked release compiler and all Aura workload binaries before
+  timing
+- verifies CPython identity
+- clears known runtime-affecting environment overrides
+- rechecks the repository and input hashes after timing
+
+It records three quiet-host inventories, boot and hardware identity, commands,
+raw observations, and hashes. It also records the median, median absolute
+deviation (MAD), nearest-rank p95, best, and paired Aura/CPython and Aura/Rust
+ratios for protocol workloads. The summary links the exact raw report by
+SHA-256.
 
 `--allow-competing-processes` exists only for explicitly non-contractual
 diagnostic runs. Do not use it for release evidence.
@@ -97,23 +101,31 @@ diagnostic runs. Do not use it for release evidence.
 ## Rust comparison lane (0.3.4 foundations)
 
 The runner builds pinned Rust 1.95.0 references from `benchmarks/rust_baselines/`
-with `--release --locked`, fat LTO, and one codegen unit. Report schema is now 2.
-It records source/lockfile and binary SHA-256 identities and paired Aura/Rust
-samples. Protocol smoke checks are not performance evidence.
+with `--release --locked`, fat link-time optimization (LTO), and one codegen
+unit. The report uses schema 2. It records source, lockfile, and binary SHA-256
+identities and paired Aura/Rust samples. Protocol smoke checks are not
+performance evidence.
 
-The 7 September 2026 runs are contractual at corrected after
-`4e1e48c81bae6c62a54af763a4046901820038ec` and before
-`ddeaddf74301322fc96d8c09742ea12faa1dd8c3`. Both include the identical two casts
-from int64 range values to int32 task parameters; initial unchanged inputs
-failed at both bases. Compiler/runner sources remain unchanged. The
-[Git bundle](https://github.com/johnolafenwa/Aura/blob/main/work/2026-09-07-foundations-measurements/approved/approved-measurement-commits.bundle) preserves both
-exact commits; its prerequisites are merge `50531b4` and tag `d3cc6b9`.
+The 7 September 2026 runs are contractual at the corrected after commit
+`4e1e48c81bae6c62a54af763a4046901820038ec` and the before commit
+`ddeaddf74301322fc96d8c09742ea12faa1dd8c3`. Both include the same two casts
+from int64 range values to int32 task parameters. The initial unchanged inputs
+failed at both bases. Compiler and runner sources remain unchanged. The
+[Git bundle](https://github.com/johnolafenwa/Aura/blob/main/work/2026-09-07-foundations-measurements/approved/approved-measurement-commits.bundle)
+preserves both exact commits. Its prerequisites are merge `50531b4` and tag
+`d3cc6b9`.
 
-Both reports have 11 rotating pairs, excluded warmups, exact protocol/checksum
-validation, three empty inventories, clean detached sources and input hash
-rechecks. No override or Rust exclusion was used. The same Mac14,9/M2 Pro boot
-and Xcode CPython 3.9.6 interpreter were used; every CPython control drifted by
-less than 5%, so no repeat was required.
+Both reports have:
+
+- 11 rotating pairs and excluded warmups
+- exact protocol and checksum validation
+- three empty inventories
+- clean detached sources and input hash rechecks
+- no override and no Rust exclusion
+
+Both used the same Mac14,9/M2 Pro boot and the Xcode CPython 3.9.6
+interpreter. Every CPython control drifted by less than 5%, so no repeat was
+required.
 
 | Exact protocol workload | Aura median | CPython median | Rust median | Aura / CPython | Aura / Rust |
 | --- | ---: | ---: | ---: | ---: | ---: |
@@ -122,30 +134,40 @@ less than 5%, so no repeat was required.
 | 20-client delayed loopback TCP fan-out | 104.268375 ms | 108.793000 ms | 104.597250 ms | 0.958411 | 0.996856 |
 | 16-cycle retrying HTTP worker | 428.814667 ms | 522.391625 ms | 472.607250 ms | 0.820868 | 0.907338 |
 
-Ratios are ratios of medians. The [Performance chapter](../../docs/manual/performance.md)
-records before/after effects, V6 medians, startup-adjustment exclusions, and
-all controls. After raw SHA-256: `a2a31328af601c32783519d9658ab164d9b415046b03b5b7856b6e09c4c79441`.
-Before raw SHA-256: `16aead5c0c9fe73ff2155e66b74edf982c8ec81958ab7ae3b4b2a6ae82498ec7`.
-The [manifest](https://github.com/johnolafenwa/Aura/blob/main/work/2026-09-07-foundations-measurements/SHA256SUMS) covers both raw/summary reports and source records.
-Run the command above in the corrected after checkout; run the before checkout's
-own runner with label `foundations-before` and distinct output paths.
+Ratios are ratios of medians. The
+[Performance chapter](../../docs/manual/performance.md) records before/after
+effects, V6 medians, startup-adjustment exclusions, and all controls.
 
-See [the Rust baseline contract](../rust_baselines/README.md) for exact workload,
-allocation, arithmetic, scheduling, and protocol equivalence. The integer-loop
-lane retains its whole-process checksum protocol; other lanes use READY/GO/DONE.
+- After raw SHA-256: `a2a31328af601c32783519d9658ab164d9b415046b03b5b7856b6e09c4c79441`
+- Before raw SHA-256: `16aead5c0c9fe73ff2155e66b74edf982c8ec81958ab7ae3b4b2a6ae82498ec7`
+
+The [manifest](https://github.com/johnolafenwa/Aura/blob/main/work/2026-09-07-foundations-measurements/SHA256SUMS)
+covers both raw and summary reports and the source records. Run the command
+above in the corrected after checkout. In the before checkout, run that
+checkout's own runner with label `foundations-before` and distinct output
+paths.
+
+See [the Rust baseline contract](../rust_baselines/README.md) for exact
+workload, allocation, arithmetic, scheduling, and protocol equivalence. The
+integer-loop lane keeps its whole-process checksum protocol. The other lanes
+use READY/GO/DONE.
 
 ## Item 7 profiling and task-cost follow-up
 
-`AURA_NATIVE_KEEP_SYMBOLS=1` keeps user-binary symbols and participates in the
-native cache identity. Build the profiling compiler/runtime with
+`AURA_NATIVE_KEEP_SYMBOLS=1` keeps user-binary symbols and is part of the
+native cache identity. To profile, build the compiler and runtime with
 `CARGO_PROFILE_RELEASE_STRIP=none`, then build `fib30.au` with symbols kept.
+
 The [per-call attribution](../../architecture_docs/15-backend-boundary.md#per-call-cost-attribution)
-records eleven xctrace traces, all eight categories and the diagnostic estimate
-of 33.85854 ns per logical call. A safe storage experiment improved 11.10%, below
-the 20% adoption gate, and was reverted. No call-overhead change ships.
+records eleven xctrace traces, all eight categories, and a diagnostic estimate
+of 33.85854 ns per logical call. A safe storage experiment improved 11.10%.
+That is below the 20% adoption gate, so the experiment was reverted. No
+call-overhead change ships.
 
 The [Task stack reuse proposal](../../architecture_docs/decisions/0032-guarded-lightweight-task-stacks.md#future-extension-task-stack-reuse)
 scopes Batch 8 against the observed 9.869 microseconds per Aura task and 0.340
-microseconds per tokio task. It does not assign the entire gap to allocation;
-no scheduler code changes in item 7. The CLI now checks every Aura input under
-`benchmarks/`, including the scalable-runtime inputs.
+microseconds per tokio task. It does not assign the entire gap to allocation.
+No scheduler code changes in item 7.
+
+The CLI checks every Aura input under `benchmarks/`, including the
+scalable-runtime inputs.
