@@ -1,0 +1,3 @@
+names = ["ada", "linus"]
+view first = names[0]
+print(first)

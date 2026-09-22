@@ -1,0 +1,8 @@
+mut pair = (1, 2)
+view mut second = pair[1]
+second = 7
+print(pair)
+mut names = ["ada", "linus"]
+view mut first = names[0]
+first = "grace"
+print(names)

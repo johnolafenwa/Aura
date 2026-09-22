@@ -1041,6 +1041,9 @@ const template = `def check(values: Vec[int64]):
             relative = path.relative_to(ROOT).as_posix()
             if relative == "personal/file_ops.au":
                 continue
+            # Documentation prose is not gated by tests.
+            if path.suffix == ".md" or relative.startswith("docs/"):
+                continue
             if _dedicated_noncanonical_surface_path(relative):
                 stale.append(f"path: {relative}: dedicated noncanonical surface")
 

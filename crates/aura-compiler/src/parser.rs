@@ -133,13 +133,21 @@ impl Parser {
                 items.push(self.parse_item()?);
             } else {
                 let statement = self.parse_stmt()?;
-                if let Stmt::Assign(AssignStmt {
-                    mutable: true,
-                    target: AssignTarget::Name(name),
-                    ..
-                }) = &statement
-                {
-                    top_level_local_names.insert(name.clone());
+                // A `mut` binding or a view is a script local: a later
+                // `name = value` assigns to it rather than declaring a
+                // module constant.
+                match &statement {
+                    Stmt::Assign(AssignStmt {
+                        mutable: true,
+                        target: AssignTarget::Name(name),
+                        ..
+                    }) => {
+                        top_level_local_names.insert(name.clone());
+                    }
+                    Stmt::View(view) => {
+                        top_level_local_names.insert(view.name.clone());
+                    }
+                    _ => {}
                 }
                 top_level_stmts.push(statement);
             }
