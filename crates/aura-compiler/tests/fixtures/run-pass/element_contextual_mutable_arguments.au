@@ -1,0 +1,42 @@
+class Profile:
+    name: str
+    visits: int64
+
+def bump(value: mut int64):
+    value += 1
+
+def adjust(left: mut int64, right: mut int64):
+    left += 10
+    right += 20
+
+def visit(profile: mut Profile):
+    profile.visits += 3
+
+def replace(profile: mut Profile):
+    profile = Profile(name="new", visits=40)
+    profile.visits += 2
+
+type Visitor = def(mut Profile) -> None
+
+def main():
+    mut values: list[int64] = [1, 2]
+    bump(values[0])
+    bump((values[1]))
+    adjust(values[0], values[1])
+    print(values)
+    mut users = [Profile(name="ada", visits=4), Profile(name="linus", visits=5)]
+    mut people: dict[str, Profile] = {"grace": Profile(name="grace", visits=6)}
+    bump(users[0].visits)
+    bump(people["grace"].visits)
+    visit(users[0])
+    callback = Visitor(visit)
+    callback(users[1])
+    callback(people["grace"])
+    print(users[0].visits)
+    print(users[1].visits)
+    print(people["grace"].visits)
+    replace(users[0])
+    print(users[0].name)
+    print(users[0].visits)
+    print(users[1].name)
+    print(users[1].visits)

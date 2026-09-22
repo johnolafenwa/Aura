@@ -232,6 +232,7 @@ fn reject_untrusted_extern_calls(module: &MirModule) -> Result<()> {
             | Instruction::BeginReturnedLoan { .. }
             | Instruction::Reborrow { .. }
             | Instruction::ReborrowElement { .. }
+            | Instruction::BeginUnionLoan { .. }
             | Instruction::ReadLoan { .. }
             | Instruction::EndLoan { .. }
             | Instruction::ReturnLoan { .. }
@@ -279,6 +280,7 @@ fn function_uses_lightweight_tasks(function: &MirFunction) -> bool {
                 | Instruction::BeginReturnedLoan { .. }
                 | Instruction::Reborrow { .. }
                 | Instruction::ReborrowElement { .. }
+                | Instruction::BeginUnionLoan { .. }
                 | Instruction::ReadLoan { .. }
                 | Instruction::WriteLoan { .. }
                 | Instruction::EndLoan { .. }
@@ -560,10 +562,12 @@ fn runtime_loan_expansion_for_instruction<'a>(
     visiting: &mut BTreeSet<&'a str>,
 ) -> RuntimeLoanExpansion {
     match instruction {
-        Instruction::BeginLoan { source, .. } => RuntimeLoanExpansion {
-            alternatives: 1,
-            path_bytes: source.len(),
-        },
+        Instruction::BeginLoan { source, .. } | Instruction::BeginUnionLoan { source, .. } => {
+            RuntimeLoanExpansion {
+                alternatives: 1,
+                path_bytes: source.len(),
+            }
+        }
         Instruction::BeginReturnedLoan {
             origin,
             projections,
@@ -593,6 +597,7 @@ fn validate_runtime_loan_expansion_complexity(
     {
         let loan = match instruction {
             Instruction::BeginLoan { loan, .. }
+            | Instruction::BeginUnionLoan { loan, .. }
             | Instruction::BeginElementLoan { loan, .. }
             | Instruction::BeginReturnedLoan { loan, .. }
             | Instruction::Reborrow { loan, .. }
@@ -905,8 +910,10 @@ struct MirRuntime {
     /// Projection returned by the most recently completed child call and
     /// awaiting BeginReturnedLoan in the current frame.
     pending_returned_view_projection: Option<String>,
+    pending_returned_view_physical_projection: Option<String>,
     /// Projection selected by ReturnLoan for the current function itself.
     outgoing_returned_view_projection: Option<String>,
+    outgoing_returned_view_physical_projection: Option<String>,
 }
 
 #[derive(Clone)]
@@ -921,6 +928,7 @@ struct CallOutcome {
     updated_receiver: Option<Value>,
     updated_params: Vec<(usize, Value)>,
     returned_view_projection: Option<String>,
+    returned_view_physical_projection: Option<String>,
 }
 
 enum CallValueOutcome {
@@ -977,12 +985,51 @@ fn try_clone_mir_value(value: &Value) -> Result<Value> {
     try_clone_array_containing_value(value)
 }
 
-#[derive(Default)]
-struct Env {
+trait PlaceStorage: Send {
+    fn storage_ref(&self, place: &str) -> Result<&Value>;
+    fn storage_mut(&mut self, place: &str) -> Result<&mut Value>;
+    fn storage_write(&mut self, place: &str, value: Value) -> Result<()>;
+    fn storage_identity(&self, place: &str) -> Result<(u64, String)>;
+    fn storage_union_member(&self, place: &str) -> Result<Option<Type>>;
+}
+
+#[derive(Clone)]
+struct BorrowedBinding {
+    source: String,
+    mutable: bool,
+}
+
+struct Env<'a> {
+    frame_id: u64,
+    parent: Option<&'a mut dyn PlaceStorage>,
+    borrowed_bindings: HashMap<String, BorrowedBinding>,
+    read_aliases: HashMap<String, String>,
+    union_presentations: HashMap<String, Type>,
+    union_members: HashMap<String, Type>,
+    loan_logical_sources: HashMap<String, String>,
     values: HashMap<String, Value>,
     shared_values: HashMap<String, Arc<Value>>,
     types: HashMap<String, Type>,
     loans: BTreeMap<String, RuntimeLoan>,
+}
+
+impl Default for Env<'_> {
+    fn default() -> Self {
+        static NEXT_FRAME: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        Self {
+            frame_id: NEXT_FRAME.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            parent: None,
+            borrowed_bindings: HashMap::new(),
+            read_aliases: HashMap::new(),
+            union_presentations: HashMap::new(),
+            union_members: HashMap::new(),
+            loan_logical_sources: HashMap::new(),
+            values: HashMap::new(),
+            shared_values: HashMap::new(),
+            types: HashMap::new(),
+            loans: BTreeMap::new(),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -1008,15 +1055,219 @@ fn mir_array_place_clone_count() -> usize {
     MIR_ARRAY_PLACE_CLONE_COUNT.with(Cell::get)
 }
 
-impl Env {
+impl PlaceStorage for Env<'_> {
+    fn storage_ref(&self, place: &str) -> Result<&Value> {
+        self.place_ref(place)
+    }
+    fn storage_mut(&mut self, place: &str) -> Result<&mut Value> {
+        self.place_mut(place)
+    }
+    fn storage_write(&mut self, place: &str, value: Value) -> Result<()> {
+        self.write_place(place, value)
+    }
+    fn storage_identity(&self, place: &str) -> Result<(u64, String)> {
+        self.canonical_place(place)
+    }
+    fn storage_union_member(&self, place: &str) -> Result<Option<Type>> {
+        self.union_member_type(place)
+    }
+}
+
+impl Env<'_> {
+    fn union_member_type(&self, place: &str) -> Result<Option<Type>> {
+        if let Some(member) = self.union_members.get(place) {
+            return Ok(Some(member.clone()));
+        }
+        if let Some(source) = self.read_aliases.get(place) {
+            return self.union_member_type(source);
+        }
+        if let Some(loan) = self.loans.get(place) {
+            return self.union_member_type(&loan.source);
+        }
+        if let Some(parent_place) = self.parent_place(place) {
+            return self
+                .parent
+                .as_deref()
+                .ok_or_else(|| Diagnostic::new("borrowed MIR frame has no parent"))?
+                .storage_union_member(&parent_place);
+        }
+        let value = self.place_ref(place)?;
+        if matches!(value, Value::Union(_)) {
+            return Ok(crate::union_runtime::member_identity(value));
+        }
+        Ok(self
+            .types
+            .get(place)
+            .filter(|ty| !matches!(ty, Type::Union(_) | Type::TypeParam(_)))
+            .cloned())
+    }
+
+    fn union_member_index(&self, place: &str, target: &crate::sema::UnionType) -> Result<usize> {
+        let value = self.place_ref(place)?;
+        if !matches!(value, Value::Union(_)) {
+            if let Some(active) = self.union_member_type(place)? {
+                return target
+                    .members
+                    .iter()
+                    .position(|member| crate::union_runtime::member_matches(&active, member))
+                    .or_else(|| {
+                        target
+                            .members
+                            .iter()
+                            .position(|member| matches!(member, Type::TypeParam(_)))
+                    })
+                    .ok_or_else(|| {
+                        Diagnostic::new("borrowed union member type identity mismatch")
+                    });
+            }
+        }
+        crate::union_runtime::aligned_member_index(value, target, "borrowed union projection")
+            .map_err(Diagnostic::new)
+    }
+
+    fn canonical_place(&self, place: &str) -> Result<(u64, String)> {
+        let resolved = self.resolve_loan_place(place)?;
+        if let Some(parent_place) = self.parent_place(&resolved) {
+            return self
+                .parent
+                .as_deref()
+                .ok_or_else(|| Diagnostic::new("borrowed MIR frame has no parent"))?
+                .storage_identity(&parent_place);
+        }
+        let resolved = resolved
+            .split('.')
+            .map(|segment| {
+                if segment.starts_with("__union_payload_") {
+                    "__union_storage_payload"
+                } else {
+                    segment
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(".");
+        Ok((self.frame_id, resolved))
+    }
+
+    fn places_overlap(&self, left: &str, right: &str) -> Result<bool> {
+        let (left_frame, left) = self.canonical_place(left)?;
+        let (right_frame, right) = self.canonical_place(right)?;
+        Ok(left_frame == right_frame && crate::mir::mir_place_paths_overlap(&left, &right))
+    }
+
+    fn define_borrowed(&mut self, name: &str, ty: Type, source: String, mutable: bool) {
+        if matches!(ty, Type::Union(_)) {
+            self.union_presentations
+                .insert(name.to_string(), ty.clone());
+        }
+        self.types.insert(name.to_string(), ty);
+        self.borrowed_bindings
+            .insert(name.to_string(), BorrowedBinding { source, mutable });
+    }
+
+    fn define_read_alias(&mut self, target: &str, source: &str) -> Result<()> {
+        self.place_ref(source)?;
+        self.values.remove(target);
+        self.shared_values.remove(target);
+        self.read_aliases
+            .insert(target.to_string(), source.to_string());
+        Ok(())
+    }
+
+    fn presented_place(&self, place: &str) -> Result<String> {
+        let mut resolved = place.to_string();
+        // A presentation changes only how the next union payload is selected;
+        // it never introduces owned storage or changes the physical union tag.
+        for _ in 0..split_place_segments(place)?.len() {
+            let mut changed = false;
+            let mut presentations = self.union_presentations.iter().collect::<Vec<_>>();
+            presentations.sort_by_key(|(prefix, _)| std::cmp::Reverse(prefix.len()));
+            for (prefix, ty) in presentations {
+                let Some(suffix) = resolved.strip_prefix(&format!("{prefix}.")) else {
+                    continue;
+                };
+                let (segment, rest) = suffix.split_once('.').unwrap_or((suffix, ""));
+                let Some(index) = segment
+                    .strip_prefix("__union_payload_")
+                    .and_then(|index| index.parse::<usize>().ok())
+                else {
+                    continue;
+                };
+                let Type::Union(target) = ty else { continue };
+                let value = self.place_ref(prefix)?;
+                let active = self.union_member_index(prefix, target)?;
+                if active != index {
+                    return Err(Diagnostic::new(
+                        "union payload projection does not select the active member",
+                    ));
+                }
+                let physical = match value {
+                    Value::Union(_) => format!("{prefix}.__union_storage_payload"),
+                    _ => prefix.clone(),
+                };
+                let next = if rest.is_empty() {
+                    physical
+                } else {
+                    format!("{physical}.{rest}")
+                };
+                if next != resolved {
+                    resolved = next;
+                    changed = true;
+                }
+                break;
+            }
+            if !changed {
+                break;
+            }
+            // Physical payload markers cannot match a logical projection;
+            // continue only to route a distinct enclosing/nested wrapper.
+        }
+        Ok(resolved)
+    }
+
+    fn parent_place(&self, place: &str) -> Option<String> {
+        let (root, suffix) = place.split_once('.').unwrap_or((place, ""));
+        self.borrowed_bindings.get(root).map(|binding| {
+            if suffix.is_empty() {
+                binding.source.clone()
+            } else {
+                format!("{}.{}", binding.source, suffix)
+            }
+        })
+    }
+
     fn resolve_loan_place(&self, place: &str) -> Result<String> {
         let mut resolved = place.to_string();
         let mut seen = std::collections::BTreeSet::new();
         loop {
+            resolved = self.presented_place(&resolved)?;
             let (root, suffix) = resolved
                 .split_once('.')
                 .map(|(root, suffix)| (root, Some(suffix)))
                 .unwrap_or((resolved.as_str(), None));
+            if let Some(source) = self.read_aliases.get(root) {
+                let source_root = source.split('.').next().unwrap_or_default();
+                if !self.loans.contains_key(source_root)
+                    && !self.read_aliases.contains_key(source_root)
+                    && !self.borrowed_bindings.contains_key(source_root)
+                {
+                    return Err(Diagnostic::new(format!(
+                        "read alias `{root}` outlived its source loan `{source_root}`"
+                    )));
+                }
+                if self.loan_is_suspended(source_root) {
+                    return Err(Diagnostic::new(format!(
+                        "cannot read suspended MIR loan `{source_root}`"
+                    )));
+                }
+                if !seen.insert(root.to_string()) {
+                    return Err(Diagnostic::new("cyclic MIR read alias"));
+                }
+                resolved = match suffix {
+                    Some(suffix) => format!("{source}.{suffix}"),
+                    None => source.clone(),
+                };
+                continue;
+            }
             let Some(loan) = self.loans.get(root) else {
                 return Ok(resolved);
             };
@@ -1038,6 +1289,7 @@ impl Env {
     /// exists, with the diagnostics a direct read raises; the loan's source
     /// then names the selected slot, which reads and writes reach through
     /// the place walkers (ADR-0061, 2026-09-21 section, A2).
+    #[cfg(test)]
     fn begin_element_loan(
         &mut self,
         loan: &str,
@@ -1047,6 +1299,18 @@ impl Env {
         mutable: bool,
         span: crate::diag::Span,
     ) -> Result<()> {
+        let place = self.selected_element_place(loan, source, &selector, projection, span)?;
+        self.begin_loan(loan, &place, mutable)
+    }
+
+    fn selected_element_place(
+        &self,
+        loan: &str,
+        source: &str,
+        selector: &Value,
+        projection: &str,
+        span: Span,
+    ) -> Result<String> {
         let resolved = self.resolve_loan_place(source)?;
         let collection = self.place_ref(&resolved)?;
         let segment = match collection {
@@ -1081,18 +1345,18 @@ impl Env {
                 element_index_segment(index)
             }
             Value::Map(map) => {
-                if !map
+                let Some(index) = map
                     .entries
                     .iter()
-                    .any(|(candidate, _)| *candidate == selector)
-                {
+                    .position(|(candidate, _)| *candidate == *selector)
+                else {
                     return Err(Diagnostic::coded_at(
                         "AU4003",
                         span,
                         format!("dict key `{}` was not present", selector.render()),
                     ));
-                }
-                entry_key_segment(&selector)?
+                };
+                format!("[e:{index}]")
             }
             _ => {
                 return Err(Diagnostic::new(format!(
@@ -1105,7 +1369,7 @@ impl Env {
         } else {
             format!("{source}.{segment}.{projection}")
         };
-        self.begin_loan(loan, &place, mutable)
+        Ok(place)
     }
 
     fn begin_loan(&mut self, loan: &str, source: &str, mutable: bool) -> Result<()> {
@@ -1140,10 +1404,14 @@ impl Env {
                 "cannot create mutable MIR reborrow `{loan}` from shared loan `{source_root}`"
             )));
         }
+        let logical_source = source.to_string();
         let source = self.resolve_loan_place(source)?;
         if !self
-            .values
+            .borrowed_bindings
             .contains_key(source.split('.').next().unwrap_or_default())
+            && !self
+                .values
+                .contains_key(source.split('.').next().unwrap_or_default())
             && !self
                 .shared_values
                 .contains_key(source.split('.').next().unwrap_or_default())
@@ -1164,15 +1432,15 @@ impl Env {
             if ancestors.contains(active_name) {
                 continue;
             }
-            if crate::mir::mir_place_paths_overlap(&source, &active.source)
-                && (mutable || active.mutable)
-            {
+            if self.places_overlap(&source, &active.source)? && (mutable || active.mutable) {
                 return Err(Diagnostic::new(format!(
                     "cannot begin MIR loan `{loan}` because it overlaps active {} loan `{active_name}`",
                     if active.mutable { "mutable" } else { "shared" }
                 )));
             }
         }
+        self.loan_logical_sources
+            .insert(loan.to_string(), logical_source);
         self.loans.insert(
             loan.to_string(),
             RuntimeLoan {
@@ -1212,8 +1480,27 @@ impl Env {
     }
 
     fn returned_view_projection(&self, loan: &str, origin: &str) -> Result<String> {
-        let source = self.resolve_loan_place(loan)?;
-        let origin = self.resolve_loan_place(origin)?;
+        let logical_place = |place: &str| -> Result<String> {
+            let mut place = place.to_string();
+            let mut seen = std::collections::BTreeSet::new();
+            loop {
+                let (root, suffix) = place.split_once('.').unwrap_or((&place, ""));
+                let Some(loan) = self.loans.get(root) else {
+                    return Ok(place);
+                };
+                if !seen.insert(root.to_string()) {
+                    return Err(Diagnostic::new("cyclic returned MIR loan"));
+                }
+                let source = self.loan_logical_sources.get(root).unwrap_or(&loan.source);
+                place = if suffix.is_empty() {
+                    source.clone()
+                } else {
+                    format!("{source}.{suffix}")
+                };
+            }
+        };
+        let source = logical_place(loan)?;
+        let origin = logical_place(origin)?;
         if source == origin {
             return Ok(String::new());
         }
@@ -1233,6 +1520,9 @@ impl Env {
                 "cannot end MIR loan `{loan}` while a child reborrow remains active"
             )));
         }
+        self.union_presentations.remove(loan);
+        self.union_members.remove(loan);
+        self.loan_logical_sources.remove(loan);
         self.loans
             .remove(loan)
             .map(|_| ())
@@ -1247,57 +1537,20 @@ impl Env {
     }
 
     fn read_member(&self, place: &str, field: &str) -> Result<Value> {
-        let resolved_place = self.resolve_loan_place(place)?;
-        let place = resolved_place.as_str();
-        let segments = split_place_segments(place)?;
-        let (root, rest) = segments
-            .split_first()
-            .expect("split_place_segments rejects empty MIR places");
-        let mut current = if let Some(value) = self.shared_values.get(root) {
-            value.as_ref()
-        } else {
-            self.values
-                .get(root)
-                .ok_or_else(|| Diagnostic::new(format!("unknown MIR place `{}`", place)))?
-        };
-        let mut index = 0usize;
-        while index < rest.len() {
-            let segment = &rest[index];
-            let Value::Instance(instance) = current else {
-                return Err(Diagnostic::new(format!(
-                    "cannot access field `{}` on non-instance MIR place `{}`",
-                    segment, place
-                )));
-            };
-            current = match instance.fields.get(segment) {
-                Some(value) => value,
-                None => {
-                    return Err(Diagnostic::new(format!(
-                        "class `{}` has no field `{}` in MIR place `{}`",
-                        instance.class_name, segment, place
-                    )));
-                }
-            };
-            index += 1;
-        }
-        let Value::Instance(instance) = current else {
-            return Err(Diagnostic::new(format!(
-                "cannot access field `{}` on non-instance MIR place `{}`",
-                field, place
-            )));
-        };
-        match instance.fields.get(field) {
-            Some(value) => try_clone_mir_value(value),
-            None => Err(Diagnostic::new(format!(
-                "class `{}` has no field `{}` in MIR place `{}`",
-                instance.class_name, field, place
-            ))),
-        }
+        try_clone_mir_value(self.place_ref(&format!("{place}.{field}"))?)
     }
 
     fn place_ref(&self, place: &str) -> Result<&Value> {
         let resolved_place = self.resolve_loan_place(place)?;
+        let resolved_place = self.presented_place(&resolved_place)?;
         let place = resolved_place.as_str();
+        if let Some(parent_place) = self.parent_place(place) {
+            return self
+                .parent
+                .as_deref()
+                .ok_or_else(|| Diagnostic::new("borrowed MIR frame has no parent"))?
+                .storage_ref(&parent_place);
+        }
         let segments = split_place_segments(place)?;
         let (root, rest) = segments
             .split_first()
@@ -1334,6 +1587,17 @@ impl Env {
                             "list MIR place `{place}` has no element at index {index}"
                         ))
                     })?
+                }
+                Value::Map(map) if segment.starts_with("[e:") => {
+                    let index = parse_entry_ordinal(segment, place)?;
+                    &map.entries
+                        .get(index)
+                        .ok_or_else(|| {
+                            Diagnostic::new(format!(
+                                "dict MIR place `{place}` has no entry at index {index}"
+                            ))
+                        })?
+                        .1
                 }
                 Value::Map(map) if segment.starts_with('[') => {
                     let key = parse_entry_key_segment(segment, place)?;
@@ -1379,9 +1643,11 @@ impl Env {
         }
         if !self.loans.contains_key(original_root) {
             let resolved = self.resolve_loan_place(place)?;
-            if self.loans.values().any(|loan| {
-                loan.mutable && crate::mir::mir_place_paths_overlap(&resolved, &loan.source)
-            }) {
+            let mut overlaps = false;
+            for loan in self.loans.values() {
+                overlaps |= loan.mutable && self.places_overlap(&resolved, &loan.source)?;
+            }
+            if overlaps {
                 return Err(Diagnostic::new(format!(
                     "cannot read MIR place `{place}` while a mutable loan remains active"
                 )));
@@ -1429,7 +1695,15 @@ impl Env {
     fn place_mut(&mut self, place: &str) -> Result<&mut Value> {
         self.ensure_place_mutation_allowed(place)?;
         let resolved_place = self.resolve_loan_place(place)?;
+        let resolved_place = self.presented_place(&resolved_place)?;
         let place = resolved_place.as_str();
+        if let Some(parent_place) = self.parent_place(place) {
+            return self
+                .parent
+                .as_deref_mut()
+                .ok_or_else(|| Diagnostic::new("borrowed MIR frame has no parent"))?
+                .storage_mut(&parent_place);
+        }
         let segments = split_place_segments(place)?;
         let (root, rest) = segments
             .split_first()
@@ -1525,13 +1799,22 @@ impl Env {
     fn write_place(&mut self, place: &str, value: Value) -> Result<()> {
         self.ensure_place_mutation_allowed(place)?;
         let resolved_place = self.resolve_loan_place(place)?;
+        let resolved_place = self.presented_place(&resolved_place)?;
         let place = resolved_place.as_str();
+        if let Some(parent_place) = self.parent_place(place) {
+            return self
+                .parent
+                .as_deref_mut()
+                .ok_or_else(|| Diagnostic::new("borrowed MIR frame has no parent"))?
+                .storage_write(&parent_place, value);
+        }
         let segments = split_place_segments(place)?;
         let (root, rest) = segments
             .split_first()
             .expect("split_place_segments rejects empty MIR places");
 
         if rest.is_empty() {
+            self.read_aliases.remove(root);
             self.shared_values.remove(root);
             self.values.insert((*root).to_string(), value);
             return Ok(());
@@ -1550,6 +1833,20 @@ impl Env {
 
     fn ensure_place_mutation_allowed(&self, place: &str) -> Result<()> {
         let original_root = place.split('.').next().unwrap_or_default();
+        if self.read_aliases.contains_key(original_root) {
+            return Err(Diagnostic::new(format!(
+                "cannot write shared MIR read alias `{original_root}`"
+            )));
+        }
+        if self
+            .borrowed_bindings
+            .get(original_root)
+            .is_some_and(|binding| !binding.mutable)
+        {
+            return Err(Diagnostic::new(format!(
+                "cannot write shared MIR parameter `{original_root}`"
+            )));
+        }
         if let Some(loan) = self.loans.get(original_root) {
             if !loan.mutable {
                 return Err(Diagnostic::new(format!(
@@ -1564,11 +1861,11 @@ impl Env {
             return Ok(());
         }
         let resolved = self.resolve_loan_place(place)?;
-        if self
-            .loans
-            .values()
-            .any(|loan| crate::mir::mir_place_paths_overlap(&resolved, &loan.source))
-        {
+        let mut overlaps = false;
+        for loan in self.loans.values() {
+            overlaps |= self.places_overlap(&resolved, &loan.source)?;
+        }
+        if overlaps {
             return Err(Diagnostic::new(format!(
                 "cannot write locked MIR place `{place}` while a loan remains active"
             )));
@@ -1578,17 +1875,20 @@ impl Env {
 
     fn ensure_place_move_allowed(&self, place: &str) -> Result<()> {
         let original_root = place.split('.').next().unwrap_or_default();
-        if self.loans.contains_key(original_root) {
+        if self.loans.contains_key(original_root)
+            || self.read_aliases.contains_key(original_root)
+            || self.borrowed_bindings.contains_key(original_root)
+        {
             return Err(Diagnostic::new(format!(
                 "cannot move through active MIR loan `{original_root}`"
             )));
         }
         let resolved = self.resolve_loan_place(place)?;
-        if self
-            .loans
-            .values()
-            .any(|loan| crate::mir::mir_place_paths_overlap(&resolved, &loan.source))
-        {
+        let mut overlaps = false;
+        for loan in self.loans.values() {
+            overlaps |= self.places_overlap(&resolved, &loan.source)?;
+        }
+        if overlaps {
             return Err(Diagnostic::new(format!(
                 "cannot move locked MIR place `{place}` while a loan remains active"
             )));
@@ -1685,6 +1985,18 @@ fn array_place_mut<'a>(env: &'a mut Env, place: &str) -> Result<&'a mut ArrayVal
 }
 
 /// The place segment naming a loaned list element: `[i:<index>]`.
+fn parse_entry_ordinal(segment: &str, place: &str) -> Result<usize> {
+    segment
+        .strip_prefix("[e:")
+        .and_then(|value| value.strip_suffix(']'))
+        .and_then(|value| value.parse().ok())
+        .ok_or_else(|| {
+            Diagnostic::new(format!(
+                "invalid entry ordinal `{segment}` in MIR place `{place}`"
+            ))
+        })
+}
+
 fn element_index_segment(index: usize) -> String {
     format!("[i:{index}]")
 }
@@ -1692,6 +2004,7 @@ fn element_index_segment(index: usize) -> String {
 /// The place segment naming a loaned dictionary entry: the key encoded so
 /// that no `.` can split it (`[k:i:<int>]`, `[k:b:<bool>]`, or
 /// `[k:s:<hex utf-8>]`).
+#[cfg(test)]
 fn entry_key_segment(key: &Value) -> Result<String> {
     Ok(match key {
         Value::Int(value) => format!("[k:i:{}]", value.as_i128().unwrap_or_default()),
@@ -1801,6 +2114,9 @@ fn split_place_segments(place: &str) -> Result<Vec<String>> {
 }
 
 fn check_union_projection(union: &crate::runtime_value::UnionValue, segment: &str) -> Result<()> {
+    if segment == "__union_storage_payload" {
+        return Ok(());
+    }
     let index = segment
         .strip_prefix("__union_payload_")
         .and_then(|value| value.parse::<usize>().ok());
@@ -1887,6 +2203,24 @@ fn write_nested_place(
                     "list MIR place `{full_place}` has no element at index {index}"
                 ))
             })?;
+            if rest.is_empty() {
+                *slot = value;
+                Ok(())
+            } else {
+                write_nested_place(slot, rest, value, full_place)
+            }
+        }
+        Value::Map(map) if segment.starts_with("[e:") => {
+            let index = parse_entry_ordinal(segment, full_place)?;
+            let slot = &mut map
+                .entries
+                .get_mut(index)
+                .ok_or_else(|| {
+                    Diagnostic::new(format!(
+                        "dict MIR place `{full_place}` has no entry at index {index}"
+                    ))
+                })?
+                .1;
             if rest.is_empty() {
                 *slot = value;
                 Ok(())
@@ -2010,6 +2344,40 @@ fn nested_place_mut<'a>(
                 instance.class_name, segment
             ))
         })?,
+        Value::Vec(vector) if segment.starts_with('[') => {
+            let index = parse_element_index_segment(segment, full_place)?;
+            vector.elements.get_mut(index).ok_or_else(|| {
+                Diagnostic::new(format!(
+                    "list MIR place `{full_place}` has no element at index {index}"
+                ))
+            })?
+        }
+        Value::Map(map) if segment.starts_with('[') => {
+            if segment.starts_with("[e:") {
+                let index = parse_entry_ordinal(segment, full_place)?;
+                &mut map
+                    .entries
+                    .get_mut(index)
+                    .ok_or_else(|| {
+                        Diagnostic::new(format!(
+                            "dict MIR place `{full_place}` has no entry at index {index}"
+                        ))
+                    })?
+                    .1
+            } else {
+                let key = parse_entry_key_segment(segment, full_place)?;
+                &mut map
+                    .entries
+                    .iter_mut()
+                    .find(|(candidate, _)| *candidate == key)
+                    .ok_or_else(|| {
+                        Diagnostic::new(format!(
+                            "dict MIR place `{full_place}` has no entry for the loaned key"
+                        ))
+                    })?
+                    .1
+            }
+        }
         Value::Tuple(tuple) => {
             let index = segment.parse::<usize>().map_err(|_| {
                 Diagnostic::new(format!(
@@ -2557,7 +2925,9 @@ impl MirRuntime {
             return_type_stack: Vec::new(),
             constant_states: Arc::new(Mutex::new(HashMap::new())),
             pending_returned_view_projection: None,
+            pending_returned_view_physical_projection: None,
             outgoing_returned_view_projection: None,
+            outgoing_returned_view_physical_projection: None,
         }
     }
 
@@ -2733,7 +3103,10 @@ impl MirRuntime {
             env,
         )?;
         let value = outcome.value.into_result()?;
-        self.publish_returned_view_projection(outcome.returned_view_projection);
+        self.publish_returned_view_handoff(
+            outcome.returned_view_projection,
+            outcome.returned_view_physical_projection,
+        );
         Ok(value)
     }
 
@@ -3137,13 +3510,22 @@ impl MirRuntime {
     }
 
     fn resolve_place_type(&self, place: &str, env: &Env) -> Option<Type> {
+        let root = place.split('.').next()?;
+        if env.place_type(root).is_none()
+            && (env.loans.contains_key(root) || env.read_aliases.contains_key(root))
+        {
+            let resolved = env.resolve_loan_place(place).ok()?;
+            if resolved != place {
+                return self.resolve_place_type(&resolved, env);
+            }
+        }
         let segments = split_place_segments(place).ok()?;
         let (root, rest) = segments.split_first()?;
         let mut current = if let Some(ty) = env.place_type(root).cloned() {
             ty
         } else {
-            let value = env.read_place(root).ok()?;
-            self.infer_runtime_value_type(&value)?
+            let value = env.place_ref(root).ok()?;
+            self.infer_runtime_value_type(value)?
         };
 
         let mut index = 0usize;
@@ -3153,6 +3535,25 @@ impl MirRuntime {
                 Type::Tuple(elements) => {
                     let tuple_index = segment.parse::<usize>().ok()?;
                     elements.get(tuple_index)?.clone()
+                }
+                Type::Union(union) => {
+                    let index = segment
+                        .strip_prefix("__union_payload_")?
+                        .parse::<usize>()
+                        .ok()?;
+                    union.members.get(index)?.clone()
+                }
+                Type::Named(name, args)
+                    if (name == "list" || name == "List" || name == "Vec")
+                        && segment.starts_with('[') =>
+                {
+                    args.first()?.clone()
+                }
+                Type::Named(name, args)
+                    if (name == "dict" || name == "Dict" || name == "Map")
+                        && segment.starts_with('[') =>
+                {
+                    args.get(1)?.clone()
                 }
                 Type::Named(class_name, args) => {
                     let class = self.classes.get(&class_name)?;
@@ -3240,10 +3641,37 @@ impl MirRuntime {
         concrete_function_type: Option<&Type>,
         receiver_type: Option<&Type>,
     ) -> Result<CallOutcome> {
+        self.call_function_with_bindings(
+            function,
+            receiver,
+            args,
+            expected_return_type,
+            concrete_function_type,
+            receiver_type,
+            None,
+            HashMap::new(),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn call_function_with_bindings(
+        &mut self,
+        function: &MirFunction,
+        receiver: Option<Value>,
+        args: Vec<EvaluatedMirArg>,
+        expected_return_type: Option<&Type>,
+        concrete_function_type: Option<&Type>,
+        receiver_type: Option<&Type>,
+        parent: Option<&mut dyn PlaceStorage>,
+        bindings: HashMap<String, BorrowedBinding>,
+    ) -> Result<CallOutcome> {
         // A returned-view projection belongs to one Aura invocation. In
         // particular, cleanup runs after ReturnLoan and may itself call a
         // returned-view function. Keep that nested handoff inside the nested
         // call and return the completed descriptor alongside the value.
+        let caller_physical_projection = self.pending_returned_view_physical_projection.take();
+        let caller_outgoing_physical_projection =
+            self.outgoing_returned_view_physical_projection.take();
         let caller_projection = self.pending_returned_view_projection.take();
         let caller_outgoing_projection = self.outgoing_returned_view_projection.take();
         let outcome = self.call_function_with_receiver_type_unscoped(
@@ -3253,16 +3681,23 @@ impl MirRuntime {
             expected_return_type,
             concrete_function_type,
             receiver_type,
+            parent,
+            bindings,
         );
         // A callee can directly consume a returned view without forwarding
         // it. Discard that unconsumed child token; only ReturnLoan constitutes
         // this invocation's outgoing handoff.
         self.pending_returned_view_projection = None;
+        self.pending_returned_view_physical_projection = None;
         let returned_view_projection = self.outgoing_returned_view_projection.take();
+        let physical_projection = self.outgoing_returned_view_physical_projection.take();
         self.pending_returned_view_projection = caller_projection;
+        self.pending_returned_view_physical_projection = caller_physical_projection;
+        self.outgoing_returned_view_physical_projection = caller_outgoing_physical_projection;
         self.outgoing_returned_view_projection = caller_outgoing_projection;
         outcome.map(|mut outcome| {
             outcome.returned_view_projection = returned_view_projection;
+            outcome.returned_view_physical_projection = physical_projection;
             outcome
         })
     }
@@ -3276,6 +3711,8 @@ impl MirRuntime {
         expected_return_type: Option<&Type>,
         concrete_function_type: Option<&Type>,
         receiver_type: Option<&Type>,
+        parent: Option<&mut dyn PlaceStorage>,
+        bindings: HashMap<String, BorrowedBinding>,
     ) -> Result<CallOutcome> {
         // The headroom excludes the allocator's guard layout, so a probe that
         // passes leaves at least the reserve of writable stack for the frames
@@ -3349,7 +3786,10 @@ impl MirRuntime {
                 }
             }
 
-            let mut env = Env::default();
+            let mut env = Env {
+                parent,
+                ..Env::default()
+            };
             for local in &function.local_types {
                 env.set_place_type(&local.name, substitute_type(&local.ty, &substitutions));
             }
@@ -3364,13 +3804,26 @@ impl MirRuntime {
                     .cloned()
                     .or_else(|| self.infer_runtime_value_type(&receiver))
                     .unwrap_or(Type::named("Unknown"));
-                env.define_typed("self", receiver_ty, receiver);
+                if let Some(binding) = bindings.get("self") {
+                    env.define_borrowed(
+                        "self",
+                        receiver_ty,
+                        binding.source.clone(),
+                        binding.mutable,
+                    );
+                } else {
+                    env.define_typed("self", receiver_ty, receiver);
+                }
             }
 
             for (param, argument) in function.params.iter().zip(bound_args) {
                 let ty = substitute_type(&param.ty, &substitutions);
-                let value = self.coerce_value_to_type(argument.value, &ty, None)?;
-                env.define_typed(&param.name, ty, value);
+                if let Some(binding) = bindings.get(&param.name) {
+                    env.define_borrowed(&param.name, ty, binding.source.clone(), binding.mutable);
+                } else {
+                    let value = self.coerce_value_to_type(argument.value, &ty, None)?;
+                    env.define_typed(&param.name, ty, value);
+                }
             }
 
             let return_type = substitute_type(&function.return_type, &substitutions);
@@ -3383,14 +3836,18 @@ impl MirRuntime {
                 Err(payload) => panic::resume_unwind(payload),
             };
             self.return_type_stack.pop();
-            let updated_receiver = if function.receiver == Some(MirReceiverKind::BorrowMut) {
+            let updated_receiver = if function.receiver == Some(MirReceiverKind::BorrowMut)
+                && !env.borrowed_bindings.contains_key("self")
+            {
                 Some(try_clone_mir_value(env.place_ref("self")?)?)
             } else {
                 None
             };
             let mut updated_params = Vec::new();
             for (index, param) in function.params.iter().enumerate() {
-                if param.passing == MirReceiverKind::BorrowMut {
+                if param.passing == MirReceiverKind::BorrowMut
+                    && !env.borrowed_bindings.contains_key(&param.name)
+                {
                     updated_params.push((index, try_clone_mir_value(env.place_ref(&param.name)?)?));
                 }
             }
@@ -3399,6 +3856,7 @@ impl MirRuntime {
                 updated_receiver,
                 updated_params,
                 returned_view_projection: None,
+                returned_view_physical_projection: None,
             })
         })();
         self.call_depth -= 1;
@@ -3407,8 +3865,94 @@ impl MirRuntime {
         outcome
     }
 
-    fn publish_returned_view_projection(&mut self, projection: Option<String>) {
+    fn prepare_user_args(
+        &mut self,
+        function: &MirFunction,
+        args: &[MirArg],
+        env: &mut Env,
+    ) -> Result<(Vec<EvaluatedMirArg>, HashMap<String, BorrowedBinding>)> {
+        let mut evaluated = Vec::with_capacity(args.len());
+        let mut bindings = HashMap::new();
+        let mut positional = 0;
+        for argument in args {
+            let param = if let Some(name) = &argument.name {
+                function.params.iter().find(|param| &param.name == name)
+            } else {
+                let param = function.params.get(positional);
+                positional += 1;
+                param
+            };
+            let ty = self.resolve_operand_type(&argument.value, env);
+            let value = match (&argument.value, param) {
+                (Operand::Place(place), Some(param)) if param.passing != MirReceiverKind::Value => {
+                    env.place_ref(place)?;
+                    bindings.insert(
+                        param.name.clone(),
+                        BorrowedBinding {
+                            source: place.clone(),
+                            mutable: param.passing == MirReceiverKind::BorrowMut,
+                        },
+                    );
+                    Value::Unit
+                }
+                _ => self.evaluate_owned_operand(&argument.value, env)?,
+            };
+            evaluated.push(EvaluatedMirArg {
+                name: argument.name.clone(),
+                value,
+                ty,
+                writeback_place: argument.writeback_place.clone(),
+            });
+        }
+        Ok((evaluated, bindings))
+    }
+
+    fn call_prepared_user_function(
+        &mut self,
+        function: &MirFunction,
+        args: &[MirArg],
+        env: &mut Env,
+        expected_return_type: Option<&Type>,
+        signature: Option<&Type>,
+        receiver: Option<(&str, Type)>,
+    ) -> Result<Value> {
+        let (arguments, mut bindings) = self.prepare_user_args(function, args, env)?;
+        let receiver_type = receiver.as_ref().map(|(_, ty)| ty.clone());
+        let receiver_value = receiver.map(|(place, _)| {
+            bindings.insert(
+                "self".to_string(),
+                BorrowedBinding {
+                    source: place.to_string(),
+                    mutable: function.receiver == Some(MirReceiverKind::BorrowMut),
+                },
+            );
+            Value::Unit
+        });
+        let outcome = self.call_function_with_bindings(
+            function,
+            receiver_value,
+            arguments,
+            expected_return_type,
+            signature,
+            receiver_type.as_ref(),
+            Some(env),
+            bindings,
+        )?;
+        let value = outcome.value.into_result()?;
+        self.publish_returned_view_handoff(
+            outcome.returned_view_projection,
+            outcome.returned_view_physical_projection,
+        );
+        Ok(value)
+    }
+
+    fn publish_returned_view_handoff(
+        &mut self,
+        projection: Option<String>,
+        physical: Option<String>,
+    ) {
         self.pending_returned_view_projection = projection;
+        self.pending_returned_view_physical_projection = physical;
     }
 
     fn bind_function_args(
@@ -3619,8 +4163,17 @@ impl MirRuntime {
                 mutable,
                 span,
             } => {
-                let selector = self.evaluate_operand(selector, env)?;
-                env.begin_element_loan(loan, source, selector, projection, *mutable, *span)?;
+                let selected = {
+                    let selector = borrow_mir_operand(selector, env)?;
+                    env.selected_element_place(
+                        loan,
+                        source,
+                        selector.as_value(),
+                        projection,
+                        *span,
+                    )?
+                };
+                env.begin_loan(loan, &selected, *mutable)?;
                 Ok(None)
             }
             Instruction::BeginLoan {
@@ -3650,6 +4203,10 @@ impl MirRuntime {
                         "MIR returned loan `{loan}` selected undeclared projection `{projection}`"
                     )));
                 }
+                let projection = self
+                    .pending_returned_view_physical_projection
+                    .take()
+                    .unwrap_or(projection);
                 let source = if projection.is_empty() {
                     origin.clone()
                 } else {
@@ -3672,9 +4229,39 @@ impl MirRuntime {
                 env.begin_loan(loan, &source, *mutable)?;
                 Ok(None)
             }
+            Instruction::BeginUnionLoan {
+                loan,
+                source,
+                union_type,
+                member_type,
+                ..
+            } => {
+                let member = self
+                    .resolve_place_type(source, env)
+                    .filter(|ty| !matches!(ty, Type::Union(_) | Type::TypeParam(_)))
+                    .unwrap_or_else(|| member_type.clone());
+                env.begin_loan(loan, source, false)?;
+                env.union_presentations
+                    .insert(loan.clone(), union_type.clone());
+                env.union_members.insert(loan.clone(), member);
+                if env.place_type(loan).is_none() {
+                    env.set_place_type(loan, union_type.clone());
+                }
+                Ok(None)
+            }
             Instruction::ReadLoan { target, loan } => {
-                let value = env.read_place(loan)?;
-                env.write_place(target, value)?;
+                let ty = self
+                    .resolve_place_type(target, env)
+                    .or_else(|| self.resolve_place_type(loan, env));
+                if ty
+                    .as_ref()
+                    .is_some_and(|ty| crate::mir::type_is_copy_in_mir(ty, &self.module))
+                {
+                    let value = env.read_place(loan)?;
+                    env.write_place(target, value)?;
+                } else {
+                    env.define_read_alias(target, loan)?;
+                }
                 Ok(None)
             }
             Instruction::WriteLoan { loan, value } => {
@@ -3701,6 +4288,19 @@ impl MirRuntime {
             }
             Instruction::ReturnLoan { loan, origin } => {
                 let projection = env.returned_view_projection(loan, origin)?;
+                let source = env.presented_place(&env.resolve_loan_place(loan)?)?;
+                let physical_origin = env.presented_place(&env.resolve_loan_place(origin)?)?;
+                let physical = if source == physical_origin {
+                    String::new()
+                } else {
+                    source
+                        .strip_prefix(&format!("{physical_origin}."))
+                        .ok_or_else(|| {
+                            Diagnostic::new("returned view is outside its physical origin")
+                        })?
+                        .to_string()
+                };
+                self.outgoing_returned_view_physical_projection = Some(physical);
                 let loan_root = loan.split('.').next().unwrap_or_default();
                 if env.loans.contains_key(loan_root) {
                     env.end_loan(loan_root)?;
@@ -3772,7 +4372,11 @@ impl MirRuntime {
     ) -> Result<BlockOutcome> {
         match terminator {
             Terminator::Return(value) => Ok(BlockOutcome::Return(
-                self.evaluate_owned_operand(value, env)?,
+                if self.outgoing_returned_view_projection.is_some() {
+                    Value::Unit
+                } else {
+                    self.evaluate_owned_operand(value, env)?
+                },
             )),
             Terminator::Goto(label) => Ok(BlockOutcome::Goto(label.clone())),
             Terminator::Branch {
@@ -3818,11 +4422,11 @@ impl MirRuntime {
                 arms,
                 otherwise,
             } => {
-                let scrutinee = self.evaluate_operand(scrutinee, env)?;
-                let Value::EnumVariant(variant) = scrutinee else {
+                let scrutinee = borrow_mir_operand(scrutinee, env)?;
+                let Value::EnumVariant(variant) = scrutinee.as_value() else {
                     return Err(Diagnostic::new(format!(
                         "MIR `match` expected an enum value, found `{}`",
-                        scrutinee.render()
+                        scrutinee.as_value().render()
                     )));
                 };
                 for arm in arms {
@@ -3954,6 +4558,36 @@ impl MirRuntime {
         cancel_before_cleanup: bool,
     ) -> Result<()> {
         let resource_type = self.resolve_place_type(place, env);
+        if let Value::Instance(instance) = env.place_ref(place)? {
+            let class = self.classes.get(&instance.class_name).ok_or_else(|| {
+                Diagnostic::new(format!("unknown MIR class `{}`", instance.class_name))
+            })?;
+            let method = class.methods.iter().find(|method| method.name == "close").cloned().ok_or_else(|| Diagnostic::new(format!("class `{}` cannot be used with MIR `with` because it has no `close` method", class.name)))?;
+            if method.receiver != Some(MirReceiverKind::Value) {
+                let function = self
+                    .functions
+                    .get(&method.function_name)
+                    .cloned()
+                    .ok_or_else(|| {
+                        Diagnostic::new(format!(
+                            "unknown MIR method body `{}`",
+                            method.function_name
+                        ))
+                    })?;
+                let receiver_ty = resource_type
+                    .clone()
+                    .unwrap_or_else(|| Type::named(&instance.class_name));
+                self.call_prepared_user_function(
+                    &function,
+                    &[],
+                    env,
+                    None,
+                    None,
+                    Some((place, receiver_ty)),
+                )?;
+                return Ok(());
+            }
+        }
         let resource = env.read_place(place)?;
         match resource {
             Value::TaskGroup(group) => self.close_task_group(group, cancel_before_cleanup),
@@ -4110,7 +4744,11 @@ impl MirRuntime {
                     captured.push(ClosureCaptureValue {
                         name: capture.name.clone(),
                         ty: capture.ty.clone(),
-                        value: self.evaluate_owned_operand(&capture.value, env)?,
+                        value: if source_place.is_some() {
+                            Value::Unit
+                        } else {
+                            self.evaluate_owned_operand(&capture.value, env)?
+                        },
                         source_place,
                         mutable: capture.passing == MirReceiverKind::BorrowMut || capture.mutated,
                     });
@@ -4138,7 +4776,7 @@ impl MirRuntime {
                     match part {
                         MirFormatPart::Literal(text) => append_string_checked(&mut rendered, text)?,
                         MirFormatPart::Value(value) => {
-                            let value = self.evaluate_operand(value, env)?.render();
+                            let value = borrow_mir_operand(value, env)?.as_value().render();
                             append_string_checked(&mut rendered, &value)?;
                         }
                         MirFormatPart::Formatted {
@@ -4146,8 +4784,9 @@ impl MirRuntime {
                             spec,
                             value_type,
                         } => {
-                            let value = self.evaluate_operand(value, env)?;
-                            let formatted = format_runtime_value(&value, value_type, spec)?;
+                            let value = borrow_mir_operand(value, env)?;
+                            let formatted =
+                                format_runtime_value(value.as_value(), value_type, spec)?;
                             append_string_checked(&mut rendered, &formatted)?;
                         }
                     }
@@ -4303,6 +4942,28 @@ impl MirRuntime {
                         right.as_value(),
                         Some(*span),
                     )?));
+                }
+                // Equality reads aggregate operands, and concatenation creates
+                // a new string from borrowed input bytes. Neither operation
+                // owns or snapshots a contextual element/entry operand.
+                if matches!(op, BinaryOp::Eq | BinaryOp::NotEq | BinaryOp::Add) {
+                    let borrowed_left = borrow_mir_operand(left, env)?;
+                    let borrowed_right = borrow_mir_operand(right, env)?;
+                    match (*op, borrowed_left.as_value(), borrowed_right.as_value()) {
+                        (BinaryOp::Eq, left, right) => {
+                            return Ok(RvalueOutcome::Value(Value::Bool(left == right)));
+                        }
+                        (BinaryOp::NotEq, left, right) => {
+                            return Ok(RvalueOutcome::Value(Value::Bool(left != right)));
+                        }
+                        (BinaryOp::Add, Value::String(left), Value::String(right)) => {
+                            let mut result = String::new();
+                            append_string_checked(&mut result, left)?;
+                            append_string_checked(&mut result, right)?;
+                            return Ok(RvalueOutcome::Value(Value::String(result)));
+                        }
+                        _ => {}
+                    }
                 }
                 let mut left = self.evaluate_operand(left, env)?;
                 let mut right = self.evaluate_operand(right, env)?;
@@ -4460,21 +5121,9 @@ impl MirRuntime {
                 let Type::Union(target) = union_type else {
                     return Err(Diagnostic::new("union tag test requires a union type"));
                 };
-                // Align the value to this frame's union so the payload
-                // projections proved by this test address the active member
-                // (ADR-0052 A7); a value that cannot be retagged in place is
-                // still tested structurally.
-                let active = match env.place_mut(place) {
-                    Ok(value) => {
-                        crate::union_runtime::align_union_value(value, target, "union tag test")
-                    }
-                    Err(_) => crate::union_runtime::aligned_member_index(
-                        env.place_ref(place)?,
-                        target,
-                        "union tag test",
-                    ),
-                }
-                .map_err(Diagnostic::new)?;
+                let active = env.union_member_index(place, target)?;
+                env.union_presentations
+                    .insert(place.clone(), union_type.clone());
                 Ok(RvalueOutcome::Value(Value::Bool(active == *member_index)))
             }
             Rvalue::UnionTakePayload {
@@ -4609,9 +5258,10 @@ impl MirRuntime {
                     return Ok(Value::Unit);
                 }
                 if name == "print" {
-                    let values = evaluate_named_args(args, env)?;
-                    let bound = bind_builtin_args(&["value"], values)?;
-                    let rendered_value = match (&bound[0].value, bound[0].ty.as_ref()) {
+                    let bound = bind_mir_arg_refs(&["value"], args)?;
+                    let value = borrow_mir_operand(&bound[0].value, env)?;
+                    let ty = self.resolve_operand_type(&bound[0].value, env);
+                    let rendered_value = match (value.as_value(), ty.as_ref()) {
                         (Value::Float(value), Some(Type::Named(name, args)))
                             if name == "float32" && args.is_empty() =>
                         {
@@ -5156,28 +5806,19 @@ impl MirRuntime {
                     unreachable!("handled earlier");
                 }
 
-                let function =
-                    self.functions.get(name).cloned().ok_or_else(|| {
-                        Diagnostic::new(format!("unknown MIR function `{}`", name))
-                    })?;
-                let evaluated_args = evaluate_named_args(args, env)?;
-                let writeback_places =
-                    bind_function_writeback_places(&function.params, &evaluated_args)?;
-                let outcome = self.call_function_for_target(
+                let function = self
+                    .functions
+                    .get(name)
+                    .cloned()
+                    .ok_or_else(|| Diagnostic::new(format!("unknown MIR function `{name}`")))?;
+                self.call_prepared_user_function(
                     &function,
-                    None,
-                    evaluated_args,
-                    expected_return_type,
-                )?;
-                self.apply_borrowed_param_writebacks(
-                    &function.params,
-                    &writeback_places,
-                    outcome.updated_params,
+                    args,
                     env,
-                )?;
-                let value = outcome.value.into_result()?;
-                self.publish_returned_view_projection(outcome.returned_view_projection);
-                Ok(value)
+                    expected_return_type,
+                    None,
+                    None,
+                )
             }
             CallTarget::Extern(call) => self.evaluate_extern_call(call, args, env),
             CallTarget::Value(function) => {
@@ -5194,6 +5835,97 @@ impl MirRuntime {
                 receiver_place,
                 ..
             } => {
+                if field == "clone" {
+                    if let Operand::Place(place) = object {
+                        if let Some(union_type @ Type::Union(_)) =
+                            self.resolve_operand_type(object, env)
+                        {
+                            if !args.is_empty() {
+                                return Err(Diagnostic::new("`clone` does not take arguments"));
+                            }
+                            let Type::Union(target) = &union_type else {
+                                unreachable!()
+                            };
+                            let index = env.union_member_index(place, target)?;
+                            let value = try_clone_mir_value(env.place_ref(place)?)?;
+                            return if matches!(value, Value::Union(_)) {
+                                Ok(crate::union_runtime::coerce_union_boundary(
+                                    value,
+                                    &union_type,
+                                ))
+                            } else {
+                                crate::union_runtime::inject_union_member(target, index, value)
+                                    .map_err(Diagnostic::new)
+                            };
+                        }
+                    }
+                }
+                if let Operand::Place(object_place) = object {
+                    let mut effective_place = object_place.clone();
+                    let mut receiver_value = env.place_ref(&effective_place)?;
+                    if let Value::Union(union) = receiver_value {
+                        effective_place =
+                            format!("{effective_place}.__union_payload_{}", union.member_index);
+                        receiver_value = &union.payload;
+                    }
+                    let receiver_ty = self
+                        .resolve_operand_type(object, env)
+                        .filter(|ty| !matches!(ty, Type::Union(_) | Type::TypeParam(_)))
+                        .or_else(|| self.infer_runtime_value_type(receiver_value));
+                    if let Some(receiver_ty) = receiver_ty {
+                        let method = match callee {
+                            CallTarget::TraitMember { trait_name, .. } => self
+                                .find_trait_impl_method_for_trait(
+                                    &receiver_ty,
+                                    Some(trait_name),
+                                    field,
+                                )
+                                .cloned(),
+                            _ => match receiver_value {
+                                Value::Instance(instance) => self
+                                    .classes
+                                    .get(&instance.class_name)
+                                    .and_then(|class| {
+                                        class.methods.iter().find(|method| method.name == *field)
+                                    })
+                                    .cloned()
+                                    .or_else(|| {
+                                        self.find_trait_impl_method(&receiver_ty, field).cloned()
+                                    })
+                                    .or_else(|| {
+                                        self.find_trait_impl_method_for_class_name(
+                                            &instance.class_name,
+                                            field,
+                                        )
+                                        .cloned()
+                                    }),
+                                _ => self.find_trait_impl_method(&receiver_ty, field).cloned(),
+                            },
+                        };
+                        if let Some(method) =
+                            method.filter(|method| method.receiver != Some(MirReceiverKind::Value))
+                        {
+                            let function = self
+                                .functions
+                                .get(&method.function_name)
+                                .cloned()
+                                .ok_or_else(|| {
+                                    Diagnostic::new(format!(
+                                        "unknown MIR method body `{}`",
+                                        method.function_name
+                                    ))
+                                })?;
+                            return self.call_prepared_user_function(
+                                &function,
+                                args,
+                                env,
+                                expected_return_type,
+                                None,
+                                Some((&effective_place, receiver_ty)),
+                            );
+                        }
+                    }
+                }
                 if let CallTarget::TraitMember { trait_name, .. } = callee {
                     let receiver_static_ty = self
                         .resolve_operand_type(object, env)
@@ -5296,6 +6028,14 @@ impl MirRuntime {
                 if let Operand::Place(place) = object {
                     if matches!(env.place_ref(place)?, Value::Array(_)) {
                         return self.evaluate_array_place_method(place, field, args, env);
+                    }
+                }
+
+                if let Operand::Place(place) = object {
+                    if let Some(result) =
+                        self.evaluate_builtin_place_method(place, field, args, env)
+                    {
+                        return result;
                     }
                 }
 
@@ -5719,7 +6459,10 @@ impl MirRuntime {
                             env,
                         )?;
                         let value = outcome.value.into_result()?;
-                        self.publish_returned_view_projection(outcome.returned_view_projection);
+                        self.publish_returned_view_handoff(
+                            outcome.returned_view_projection,
+                            outcome.returned_view_physical_projection,
+                        );
                         Ok(value)
                     }
                     // Checked non-instance trait calls return through the trait-dispatch
@@ -5847,13 +6590,82 @@ impl MirRuntime {
                 function_value.render()
             )));
         };
-        let evaluated_args = evaluate_named_args(args, env)?;
-        self.evaluate_function_value_with_args(
-            *function_value,
-            evaluated_args,
+        if function_value.closure_environment.is_none() {
+            let function = self
+                .functions
+                .get(&function_value.name)
+                .cloned()
+                .ok_or_else(|| {
+                    Diagnostic::new(format!("unknown MIR function `{}`", function_value.name))
+                })?;
+            return self.call_prepared_user_function(
+                &function,
+                args,
+                env,
+                expected_return_type,
+                Some(&function_value.signature),
+                None,
+            );
+        }
+        let function = self
+            .functions
+            .get(&function_value.name)
+            .cloned()
+            .ok_or_else(|| {
+                Diagnostic::new(format!("unknown MIR function `{}`", function_value.name))
+            })?;
+        let closure = function_value
+            .closure_environment
+            .as_ref()
+            .expect("closure branch");
+        let captures = closure.arguments(&function_value.name)?;
+        let capture_count = captures.len();
+        let mut user_function = function.clone();
+        user_function.params.drain(..capture_count);
+        let (mut supplied, mut bindings) = self.prepare_user_args(&user_function, args, env)?;
+        let mut combined = Vec::with_capacity(capture_count + supplied.len());
+        for (index, capture) in captures.into_iter().enumerate() {
+            let value = if let Some(source) = capture.source_place {
+                bindings.insert(
+                    function.params[index].name.clone(),
+                    BorrowedBinding {
+                        source,
+                        mutable: capture.mutable,
+                    },
+                );
+                Value::Unit
+            } else {
+                capture.value
+            };
+            combined.push(EvaluatedMirArg {
+                name: None,
+                value,
+                ty: Some(capture.ty),
+                writeback_place: None,
+            });
+        }
+        combined.append(&mut supplied);
+        let outcome = self.call_function_with_bindings(
+            &function,
+            None,
+            combined,
             expected_return_type,
-            env,
-        )
+            None,
+            None,
+            Some(env),
+            bindings,
+        )?;
+        for (index, value) in outcome.updated_params {
+            if index < capture_count {
+                closure.write_back_mutable(index, value)?;
+            }
+        }
+        let value = outcome.value.into_result()?;
+        self.publish_returned_view_handoff(
+            outcome.returned_view_projection,
+            outcome.returned_view_physical_projection,
+        );
+        Ok(value)
     }
 
     fn evaluate_function_value_with_args(
@@ -5910,7 +6722,10 @@ impl MirRuntime {
                 env,
             )?;
             let value = outcome.value.into_result()?;
-            self.publish_returned_view_projection(outcome.returned_view_projection);
+            self.publish_returned_view_handoff(
+                outcome.returned_view_projection,
+                outcome.returned_view_physical_projection,
+            );
             return Ok(value);
         }
         let writeback_places = bind_function_writeback_places(&function.params, &evaluated_args)?;
@@ -5927,7 +6742,10 @@ impl MirRuntime {
             env,
         )?;
         let value = outcome.value.into_result()?;
-        self.publish_returned_view_projection(outcome.returned_view_projection);
+        self.publish_returned_view_handoff(
+            outcome.returned_view_projection,
+            outcome.returned_view_physical_projection,
+        );
         Ok(value)
     }
 
@@ -6377,6 +7195,785 @@ impl MirRuntime {
                 "unsupported channel method `{}`",
                 field
             ))),
+        }
+    }
+
+    // Contextual collection receivers name retained storage. Evaluate consuming
+    // arguments before borrowing that storage, then keep each Rust borrow local
+    // to the operation so nested Aura calls never retain a collection reference.
+    fn evaluate_builtin_place_method(
+        &mut self,
+        object_place: &str,
+        field: &str,
+        args: &[MirArg],
+        env: &mut Env,
+    ) -> Option<Result<Value>> {
+        match env.place_ref(object_place) {
+            Ok(Value::Vec(_)) => {
+                Some(self.evaluate_vec_place_method(object_place, field, args, env))
+            }
+            Ok(Value::Map(_)) => {
+                Some(self.evaluate_map_place_method(object_place, field, args, env))
+            }
+            Ok(Value::Set(_)) => {
+                Some(self.evaluate_set_place_method(object_place, field, args, env))
+            }
+            Ok(Value::String(_)) => {
+                Some(self.evaluate_string_place_method(object_place, field, args, env))
+            }
+            Err(error) => Some(Err(error)),
+            _ => None,
+        }
+    }
+
+    fn evaluate_vec_place_method(
+        &mut self,
+        object_place: &str,
+        field: &str,
+        args: &[MirArg],
+        env: &mut Env,
+    ) -> Result<Value> {
+        match field {
+            "len" | "is_empty" | "copy" => {
+                if !args.is_empty() {
+                    return Err(Diagnostic::new(format!(
+                        "`{field}` does not take arguments"
+                    )));
+                }
+                let Value::Vec(vector) = env.place_ref(object_place)? else {
+                    unreachable!()
+                };
+                match field {
+                    "len" => Ok(Value::Int(IntegerValue::from_literal(
+                        vector.elements.len() as u128,
+                    ))),
+                    "is_empty" => Ok(Value::Bool(vector.elements.is_empty())),
+                    _ => try_clone_mir_value(env.place_ref(object_place)?),
+                }
+            }
+            "contains" | "index" | "count" | "remove" => {
+                let bound = bind_mir_arg_refs(&["value"], args)?;
+                let (first, count) = {
+                    let needle = borrow_mir_operand(&bound[0].value, env)?;
+                    let Value::Vec(vector) = env.place_ref(object_place)? else {
+                        unreachable!()
+                    };
+                    let first = vector
+                        .elements
+                        .iter()
+                        .position(|candidate| candidate == needle.as_value());
+                    let count = if field == "count" {
+                        vector
+                            .elements
+                            .iter()
+                            .filter(|candidate| *candidate == needle.as_value())
+                            .count()
+                    } else {
+                        0
+                    };
+                    (first, count)
+                };
+                if field == "contains" {
+                    return Ok(Value::Bool(first.is_some()));
+                }
+                if field == "count" {
+                    return Ok(Value::Int(IntegerValue::from_literal(count as u128)));
+                }
+                let Some(index) = first else {
+                    return Err(
+                        Diagnostic::coded("AU4008", "collection value was not found").with_help(
+                            if field == "remove" {
+                                "check `value in values` before removing when absence is expected"
+                            } else {
+                                "check `value in values` before searching when absence is expected"
+                            },
+                        ),
+                    );
+                };
+                if field == "index" {
+                    return Ok(Value::Int(IntegerValue::from_literal(index as u128)));
+                }
+                let Value::Vec(vector) = env.place_mut(object_place)? else {
+                    unreachable!()
+                };
+                vector.elements.remove(index);
+                Ok(Value::Unit)
+            }
+            "get" | "__index_option" | "__index" | "__take_index_option" => {
+                let values = evaluate_named_args(args, env)?;
+                let (index_value, span) = if field == "__index" {
+                    if values.len() != 3 {
+                        return Err(Diagnostic::new(
+                            "internal vector indexing requires index, line, and column operands",
+                        ));
+                    }
+                    let mut values = values.into_iter();
+                    let index = values.next().unwrap().value;
+                    let line = self.mir_index_from_value(values.next().unwrap().value)?;
+                    let column = self.mir_index_from_value(values.next().unwrap().value)?;
+                    (index, Some(Span::new(line, column)))
+                } else {
+                    (
+                        bind_builtin_args(&["index"], values)?
+                            .into_iter()
+                            .next()
+                            .unwrap()
+                            .value,
+                        None,
+                    )
+                };
+                let Value::Vec(vector) = env.place_ref(object_place)? else {
+                    unreachable!()
+                };
+                let len = vector.elements.len();
+                let (supplied, index) = self.mir_vec_index_from_value(index_value, len)?;
+                let index = index.filter(|index| *index < len);
+                if field == "__take_index_option" {
+                    let Value::Vec(vector) = env.place_mut(object_place)? else {
+                        unreachable!()
+                    };
+                    return Ok(index
+                        .map(|index| lookup_found(vector.elements.remove(index)))
+                        .unwrap_or_else(lookup_missing));
+                }
+                match (index, span) {
+                    (Some(index), None) => {
+                        try_clone_mir_value(&vector.elements[index]).map(lookup_found)
+                    }
+                    (None, None) => Ok(lookup_missing()),
+                    (Some(index), Some(_)) => try_clone_mir_value(&vector.elements[index]),
+                    (None, Some(span)) => Err(Diagnostic::at(
+                        span,
+                        format!("list index `{supplied}` is out of bounds for length `{len}`"),
+                    )),
+                }
+            }
+            "append" | "insert" | "extend" => {
+                let values = evaluate_named_args(args, env)?;
+                let names: &[&str] = match field {
+                    "append" => &["value"],
+                    "insert" => &["index", "value"],
+                    _ => &["other"],
+                };
+                let mut bound = bind_builtin_args(names, values)?.into_iter();
+                let index = if field == "insert" {
+                    Some(
+                        expect_i64_value(&bound.next().unwrap().value, "list.insert index")?
+                            as i128,
+                    )
+                } else {
+                    None
+                };
+                let value = bound.next().unwrap().value;
+                let Value::Vec(vector) = env.place_mut(object_place)? else {
+                    unreachable!()
+                };
+                match field {
+                    "append" => vector.elements.push(value),
+                    "insert" => {
+                        let supplied = index.unwrap();
+                        let len = vector.elements.len() as i128;
+                        let index = if supplied < 0 {
+                            len.saturating_add(supplied)
+                        } else {
+                            supplied
+                        }
+                        .clamp(0, len) as usize;
+                        vector.elements.insert(index, value);
+                    }
+                    _ => {
+                        let Value::Vec(other) = value else {
+                            return Err(Diagnostic::new(
+                                "`extend` requires another `list[T]` value",
+                            ));
+                        };
+                        vector.elements.extend(other.elements);
+                    }
+                }
+                Ok(Value::Unit)
+            }
+            "set" | "__set_index" => {
+                let values = evaluate_named_args(args, env)?;
+                let mut values = if field == "set" {
+                    bind_builtin_args(&["index", "value"], values)?
+                } else {
+                    if values.len() != 4 {
+                        return Err(Diagnostic::new("internal indexed assignment requires index, value, line, and column operands"));
+                    }
+                    values
+                }.into_iter();
+                let index_value = values.next().unwrap().value;
+                let value = values.next().unwrap().value;
+                let span = if field == "__set_index" {
+                    Some(Span::new(
+                        self.mir_index_from_value(values.next().unwrap().value)?,
+                        self.mir_index_from_value(values.next().unwrap().value)?,
+                    ))
+                } else {
+                    None
+                };
+                let Value::Vec(vector) = env.place_ref(object_place)? else {
+                    unreachable!()
+                };
+                let len = vector.elements.len();
+                let (supplied, index) = self.mir_vec_index_from_value(index_value, len)?;
+                let Some(index) = index.filter(|index| *index < len) else {
+                    return Err(if let Some(span) = span {
+                        Diagnostic::at(
+                            span,
+                            format!("list index `{supplied}` is out of bounds for length `{len}`"),
+                        )
+                    } else {
+                        Diagnostic::new(format!(
+                            "list set index `{supplied}` is out of bounds for length `{len}`"
+                        ))
+                    });
+                };
+                // List set and indexed assignment have element-level authority.
+                // In particular, a disjoint live loan must not make this a
+                // whole-list mutation or force a receiver snapshot.
+                let place = format!("{object_place}.{}", element_index_segment(index));
+                let previous = std::mem::replace(env.place_mut(&place)?, value);
+                if field == "set" {
+                    Ok(previous)
+                } else {
+                    Ok(Value::Unit)
+                }
+            }
+            "pop" => {
+                let values = evaluate_named_args(args, env)?;
+                let index_value = if values.is_empty() {
+                    Value::Int(IntegerValue::from_signed(-1))
+                } else {
+                    bind_builtin_args(&["index"], values)?
+                        .into_iter()
+                        .next()
+                        .unwrap()
+                        .value
+                };
+                let Value::Vec(vector) = env.place_ref(object_place)? else {
+                    unreachable!()
+                };
+                let len = vector.elements.len();
+                let (supplied, index) = self.mir_vec_index_from_value(index_value, len)?;
+                let Some(index) = index.filter(|index| *index < len) else {
+                    return Err(Diagnostic::coded(
+                        "AU4003",
+                        format!("list pop index `{supplied}` is out of bounds for length `{len}`"),
+                    ));
+                };
+                let Value::Vec(vector) = env.place_mut(object_place)? else {
+                    unreachable!()
+                };
+                Ok(vector.elements.remove(index))
+            }
+            "swap" => {
+                let values = evaluate_named_args(args, env)?;
+                let mut bound = bind_builtin_args(&["first", "second"], values)?.into_iter();
+                let Value::Vec(vector) = env.place_ref(object_place)? else {
+                    unreachable!()
+                };
+                let len = vector.elements.len();
+                let (supplied_first, first) =
+                    self.mir_vec_index_from_value(bound.next().unwrap().value, len)?;
+                let (supplied_second, second) =
+                    self.mir_vec_index_from_value(bound.next().unwrap().value, len)?;
+                let (Some(first), Some(second)) = (
+                    first.filter(|index| *index < len),
+                    second.filter(|index| *index < len),
+                ) else {
+                    return Err(Diagnostic::new(format!("list swap indices `{supplied_first}` and `{supplied_second}` are out of bounds for length `{len}`")));
+                };
+                let Value::Vec(vector) = env.place_mut(object_place)? else {
+                    unreachable!()
+                };
+                vector.elements.swap(first, second);
+                Ok(Value::Unit)
+            }
+            "clear" | "reverse" => {
+                if !args.is_empty() {
+                    return Err(Diagnostic::new(format!(
+                        "`{field}` does not take arguments"
+                    )));
+                }
+                let Value::Vec(vector) = env.place_mut(object_place)? else {
+                    unreachable!()
+                };
+                if field == "clear" {
+                    vector.elements.clear();
+                } else {
+                    vector.elements.reverse();
+                }
+                Ok(Value::Unit)
+            }
+            "reserve" => {
+                let values = evaluate_named_args(args, env)?;
+                let bound = bind_builtin_args(&["additional"], values)?;
+                let additional = expect_i64_value(&bound[0].value, "list.reserve(...)")?;
+                let additional = usize::try_from(additional).map_err(|_| {
+                    Diagnostic::coded("AU4003", "collection capacity cannot be negative")
+                })?;
+                let Value::Vec(vector) = env.place_mut(object_place)? else {
+                    unreachable!()
+                };
+                vector
+                    .elements
+                    .try_reserve(additional)
+                    .map_err(|_| Diagnostic::coded("AU4005", "list capacity allocation failed"))?;
+                Ok(Value::Unit)
+            }
+            "__slice" => {
+                let values = evaluate_named_args(args, env)?;
+                let (start, end, span) = self.mir_slice_args(values)?;
+                let Value::Vec(vector) = env.place_ref(object_place)? else {
+                    unreachable!()
+                };
+                slice_vec_owned(vector, start, end)
+                    .map(Value::Vec)
+                    .map_err(|mut error| {
+                        error.span = Some(span);
+                        error
+                    })
+            }
+            _ => Err(Diagnostic::new(format!(
+                "unsupported vector method `{field}`"
+            ))),
+        }
+    }
+
+    fn evaluate_map_place_method(
+        &mut self,
+        object_place: &str,
+        field: &str,
+        args: &[MirArg],
+        env: &mut Env,
+    ) -> Result<Value> {
+        match field {
+            "len" | "is_empty" | "copy" | "keys" | "values" | "items" => {
+                if !args.is_empty() {
+                    return Err(Diagnostic::new(format!(
+                        "`{field}` does not take arguments"
+                    )));
+                }
+                let Value::Map(map) = env.place_ref(object_place)? else {
+                    unreachable!()
+                };
+                match field {
+                    "len" => Ok(Value::Int(IntegerValue::from_literal(
+                        map.entries.len() as u128
+                    ))),
+                    "is_empty" => Ok(Value::Bool(map.entries.is_empty())),
+                    "copy" => try_clone_mir_value(env.place_ref(object_place)?),
+                    _ => {
+                        let mut elements =
+                            try_array_buffer(map.entries.len(), "Array-containing Map entry copy")?;
+                        for (key, value) in &map.entries {
+                            elements.push(match field {
+                                "keys" => try_clone_mir_value(key)?,
+                                "values" => try_clone_mir_value(value)?,
+                                _ => Value::Tuple(TupleValue {
+                                    element_types: vec![
+                                        map.key_type.clone(),
+                                        map.value_type.clone(),
+                                    ],
+                                    elements: vec![
+                                        try_clone_mir_value(key)?,
+                                        try_clone_mir_value(value)?,
+                                    ],
+                                }),
+                            });
+                        }
+                        let element_type = match field {
+                            "keys" => map.key_type.clone(),
+                            "values" => map.value_type.clone(),
+                            _ => Type::Tuple(vec![map.key_type.clone(), map.value_type.clone()]),
+                        };
+                        Ok(Value::Vec(VecValue {
+                            element_type,
+                            elements,
+                        }))
+                    }
+                }
+            }
+            "get" | "contains_key" | "remove" | "__index" => {
+                let (index, missing_message, span) = {
+                    let bound = if field == "__index" {
+                        if args.len() != 3 {
+                            return Err(Diagnostic::new(
+                                "internal map indexing requires key, line, and column operands",
+                            ));
+                        }
+                        args.iter().collect::<Vec<_>>()
+                    } else {
+                        bind_mir_arg_refs(&["key"], args)?
+                    };
+                    let key = borrow_mir_operand(&bound[0].value, env)?;
+                    let Value::Map(map) = env.place_ref(object_place)? else {
+                        unreachable!()
+                    };
+                    let index = map
+                        .entries
+                        .iter()
+                        .position(|(candidate, _)| candidate == key.as_value());
+                    let span = if field == "__index" {
+                        let line = borrow_mir_operand(&bound[1].value, env)?;
+                        let column = borrow_mir_operand(&bound[2].value, env)?;
+                        Some(Span::new(
+                            self.mir_index_from_value(line.as_value().clone())?,
+                            self.mir_index_from_value(column.as_value().clone())?,
+                        ))
+                    } else {
+                        None
+                    };
+                    let missing = if index.is_none() && span.is_some() {
+                        Some(format!(
+                            "dict key `{}` was not present",
+                            key.as_value().render()
+                        ))
+                    } else {
+                        None
+                    };
+                    (index, missing, span)
+                };
+                if field == "contains_key" {
+                    return Ok(Value::Bool(index.is_some()));
+                }
+                if field == "remove" {
+                    let Value::Map(map) = env.place_mut(object_place)? else {
+                        unreachable!()
+                    };
+                    return Ok(index
+                        .map(|index| lookup_found(map.entries.remove(index).1))
+                        .unwrap_or_else(lookup_missing));
+                }
+                let Some(index) = index else {
+                    return if let Some(span) = span {
+                        Err(Diagnostic::coded_at(
+                            "AU4003",
+                            span,
+                            missing_message.unwrap(),
+                        ))
+                    } else {
+                        Ok(lookup_missing())
+                    };
+                };
+                let Value::Map(map) = env.place_ref(object_place)? else {
+                    unreachable!()
+                };
+                let value = try_clone_mir_value(&map.entries[index].1)?;
+                if field == "__index" {
+                    Ok(value)
+                } else {
+                    Ok(lookup_found(value))
+                }
+            }
+            "set" | "__set_index" => {
+                let values = evaluate_named_args(args, env)?;
+                let mut values = if field == "set" {
+                    bind_builtin_args(&["key", "value"], values)?
+                } else {
+                    if values.len() != 4 { return Err(Diagnostic::new("internal map indexed assignment requires key, value, line, and column operands")); }
+                    values
+                }.into_iter();
+                let key = values.next().unwrap().value;
+                let value = values.next().unwrap().value;
+                let Value::Map(map) = env.place_mut(object_place)? else {
+                    unreachable!()
+                };
+                let previous = if let Some(index) = map
+                    .entries
+                    .iter()
+                    .position(|(candidate, _)| *candidate == key)
+                {
+                    Some(std::mem::replace(&mut map.entries[index].1, value))
+                } else {
+                    map.entries.push((key, value));
+                    None
+                };
+                if field == "set" {
+                    Ok(previous.map(lookup_found).unwrap_or_else(lookup_missing))
+                } else {
+                    Ok(Value::Unit)
+                }
+            }
+            "clear" => {
+                if !args.is_empty() {
+                    return Err(Diagnostic::new("`clear` does not take arguments"));
+                }
+                let Value::Map(map) = env.place_mut(object_place)? else {
+                    unreachable!()
+                };
+                map.entries.clear();
+                Ok(Value::Unit)
+            }
+            "update" => {
+                let values = evaluate_named_args(args, env)?;
+                let Value::Map(other) = bind_builtin_args(&["other"], values)?
+                    .into_iter()
+                    .next()
+                    .unwrap()
+                    .value
+                else {
+                    return Err(Diagnostic::new(
+                        "`update` requires another `dict[K, V]` value",
+                    ));
+                };
+                let Value::Map(map) = env.place_mut(object_place)? else {
+                    unreachable!()
+                };
+                for (key, value) in other.entries {
+                    if let Some(index) = map
+                        .entries
+                        .iter()
+                        .position(|(candidate, _)| *candidate == key)
+                    {
+                        map.entries[index].1 = value;
+                    } else {
+                        map.entries.push((key, value));
+                    }
+                }
+                Ok(Value::Unit)
+            }
+            "reserve" => {
+                let values = evaluate_named_args(args, env)?;
+                let bound = bind_builtin_args(&["additional"], values)?;
+                let additional = expect_i64_value(&bound[0].value, "dict.reserve(...)")?;
+                let additional = usize::try_from(additional).map_err(|_| {
+                    Diagnostic::coded("AU4003", "collection capacity cannot be negative")
+                })?;
+                let Value::Map(map) = env.place_mut(object_place)? else {
+                    unreachable!()
+                };
+                map.entries.try_reserve(additional).map_err(|_| {
+                    Diagnostic::coded("AU4005", "dictionary capacity allocation failed")
+                })?;
+                Ok(Value::Unit)
+            }
+            _ => Err(Diagnostic::new(format!(
+                "unsupported dict method `{field}`"
+            ))),
+        }
+    }
+
+    fn evaluate_string_place_method(
+        &mut self,
+        object_place: &str,
+        field: &str,
+        args: &[MirArg],
+        env: &mut Env,
+    ) -> Result<Value> {
+        let Value::String(text) = env.place_ref(object_place)? else {
+            unreachable!()
+        };
+        match field {
+            "len" | "byte_len" | "clone" | "to_lower" | "to_upper" | "trim" | "to_bytes" => {
+                if !args.is_empty() {
+                    return Err(Diagnostic::new(format!(
+                        "`{field}` does not take arguments"
+                    )));
+                }
+                match field {
+                    "len" => Ok(Value::Int(IntegerValue::from_literal(
+                        text.chars().count() as u128
+                    ))),
+                    "byte_len" => Ok(Value::Int(IntegerValue::from_literal(text.len() as u128))),
+                    "clone" => try_clone_mir_value(env.place_ref(object_place)?),
+                    "to_lower" => Ok(Value::String(text.to_lowercase())),
+                    "to_upper" => Ok(Value::String(text.to_uppercase())),
+                    "trim" => Ok(Value::String(text.trim().to_string())),
+                    _ => evaluate_string_to_bytes_host_ref(text),
+                }
+            }
+            "contains" | "starts_with" | "ends_with" | "split" | "strip_prefix"
+            | "strip_suffix" | "add" => {
+                let bound =
+                    bind_mir_arg_refs(&[if field == "add" { "other" } else { "text" }], args)?;
+                let other = borrow_mir_string(&bound[0].value, env, field)?;
+                match field {
+                    "contains" => Ok(Value::Bool(text.contains(other))),
+                    "starts_with" => Ok(Value::Bool(text.starts_with(other))),
+                    "ends_with" => Ok(Value::Bool(text.ends_with(other))),
+                    "strip_prefix" => Ok(optional_str_value(
+                        text.strip_prefix(other).map(str::to_string),
+                    )),
+                    "strip_suffix" => Ok(optional_str_value(
+                        text.strip_suffix(other).map(str::to_string),
+                    )),
+                    "add" => {
+                        let mut result =
+                            String::with_capacity(text.len().saturating_add(other.len()));
+                        result.push_str(text);
+                        result.push_str(other);
+                        Ok(Value::String(result))
+                    }
+                    _ => Ok(Value::Vec(VecValue {
+                        element_type: Type::named("str"),
+                        elements: text
+                            .split(other)
+                            .map(|part| Value::String(part.to_string()))
+                            .collect(),
+                    })),
+                }
+            }
+            "replace" => {
+                let bound = bind_mir_arg_refs(&["from", "to"], args)?;
+                let from = borrow_mir_string(&bound[0].value, env, field)?;
+                let to = borrow_mir_string(&bound[1].value, env, field)?;
+                Ok(Value::String(text.replace(from, to)))
+            }
+            "join" => {
+                let bound = bind_mir_arg_refs(&["parts"], args)?;
+                let parts = borrow_mir_operand(&bound[0].value, env)?;
+                let Value::Vec(parts) = parts.as_value() else {
+                    return Err(Diagnostic::new("`join` requires `list[str]`"));
+                };
+                let parts = parts
+                    .elements
+                    .iter()
+                    .map(|part| match part {
+                        Value::String(part) => Ok(part.as_str()),
+                        _ => Err(Diagnostic::new("`join` requires `list[str]`")),
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                Ok(Value::String(parts.join(text)))
+            }
+            "__slice" => {
+                let values = evaluate_named_args(args, env)?;
+                let (start, end, span) = self.mir_slice_args(values)?;
+                let Value::String(text) = env.place_ref(object_place)? else {
+                    unreachable!()
+                };
+                slice_string_owned(text, start, end)
+                    .map(Value::String)
+                    .map_err(|mut error| {
+                        error.span = Some(span);
+                        error
+                    })
+            }
+            _ => Err(Diagnostic::new(format!(
+                "unsupported string method `{field}`"
+            ))),
+        }
+    }
+
+    fn evaluate_set_place_method(
+        &mut self,
+        object_place: &str,
+        field: &str,
+        args: &[MirArg],
+        env: &mut Env,
+    ) -> Result<Value> {
+        match field {
+            "len" | "is_empty" | "copy" => {
+                if !args.is_empty() {
+                    return Err(Diagnostic::new(format!(
+                        "`{field}` does not take arguments"
+                    )));
+                }
+                let Value::Set(set) = env.place_ref(object_place)? else {
+                    unreachable!()
+                };
+                match field {
+                    "len" => Ok(Value::Int(IntegerValue::from_literal(
+                        set.elements.len() as u128
+                    ))),
+                    "is_empty" => Ok(Value::Bool(set.elements.is_empty())),
+                    _ => try_clone_mir_value(env.place_ref(object_place)?),
+                }
+            }
+            "contains" | "remove" | "discard" => {
+                let bound = bind_mir_arg_refs(&["value"], args)?;
+                let index = {
+                    let needle = borrow_mir_operand(&bound[0].value, env)?;
+                    let Value::Set(set) = env.place_ref(object_place)? else {
+                        unreachable!()
+                    };
+                    set.elements
+                        .iter()
+                        .position(|candidate| candidate == needle.as_value())
+                };
+                if field == "contains" {
+                    return Ok(Value::Bool(index.is_some()));
+                }
+                if index.is_none() && field == "remove" {
+                    return Err(
+                        Diagnostic::coded("AU4008", "collection value was not found").with_help(
+                            "check `value in values` before removing when absence is expected",
+                        ),
+                    );
+                }
+                let Value::Set(set) = env.place_mut(object_place)? else {
+                    unreachable!()
+                };
+                if let Some(index) = index {
+                    set.elements.remove(index);
+                }
+                Ok(Value::Unit)
+            }
+            "add" => {
+                let values = evaluate_named_args(args, env)?;
+                let value = bind_builtin_args(&["value"], values)?
+                    .into_iter()
+                    .next()
+                    .unwrap()
+                    .value;
+                let Value::Set(set) = env.place_mut(object_place)? else {
+                    unreachable!()
+                };
+                if !set.elements.contains(&value) {
+                    set.elements.push(value);
+                }
+                Ok(Value::Unit)
+            }
+            "clear" => {
+                if !args.is_empty() {
+                    return Err(Diagnostic::new("`clear` does not take arguments"));
+                }
+                let Value::Set(set) = env.place_mut(object_place)? else {
+                    unreachable!()
+                };
+                set.elements.clear();
+                Ok(Value::Unit)
+            }
+            "reserve" => {
+                let values = evaluate_named_args(args, env)?;
+                let bound = bind_builtin_args(&["additional"], values)?;
+                let additional = expect_i64_value(&bound[0].value, "set.reserve(...)")?;
+                let additional = usize::try_from(additional).map_err(|_| {
+                    Diagnostic::coded("AU4003", "collection capacity cannot be negative")
+                })?;
+                let Value::Set(set) = env.place_mut(object_place)? else {
+                    unreachable!()
+                };
+                set.elements
+                    .try_reserve(additional)
+                    .map_err(|_| Diagnostic::coded("AU4005", "set capacity allocation failed"))?;
+                Ok(Value::Unit)
+            }
+            "__index_option" | "__take_index_option" => {
+                let values = evaluate_named_args(args, env)?;
+                let value = bind_builtin_args(&["index"], values)?
+                    .into_iter()
+                    .next()
+                    .unwrap()
+                    .value;
+                let index = self.mir_index_from_value(value)?;
+                if field == "__take_index_option" {
+                    let Value::Set(set) = env.place_mut(object_place)? else {
+                        unreachable!()
+                    };
+                    let value = (index < set.elements.len()).then(|| set.elements.remove(index));
+                    return Ok(value.map(lookup_found).unwrap_or_else(lookup_missing));
+                }
+                let Value::Set(set) = env.place_ref(object_place)? else {
+                    unreachable!()
+                };
+                match set.elements.get(index) {
+                    Some(value) => try_clone_mir_value(value).map(lookup_found),
+                    None => Ok(lookup_missing()),
+                }
+            }
+            _ => Err(Diagnostic::new(format!("unsupported set method `{field}`"))),
         }
     }
 
@@ -8230,6 +9827,48 @@ impl MirRuntime {
         }
     }
 
+    // Resource members with shared parameters borrow their inputs for the
+    // synchronous host operation. The owned resource APIs (for example
+    // Supervisor.start) continue to use the consuming argument evaluator.
+    fn borrow_resource_method_args<'a>(
+        expected_names: &[&str],
+        args: &'a [MirArg],
+        env: &'a Env,
+    ) -> Result<Vec<MirBorrowedOperand<'a>>> {
+        let mut bound = vec![None; expected_names.len()];
+        let mut next_positional = 0;
+        for arg in args {
+            let index = if let Some(name) = arg.name.as_deref() {
+                expected_names
+                    .iter()
+                    .position(|candidate| *candidate == name)
+                    .ok_or_else(|| Diagnostic::new(format!("unknown MIR argument `{name}`")))?
+            } else {
+                while next_positional < bound.len() && bound[next_positional].is_some() {
+                    next_positional += 1;
+                }
+                if next_positional >= bound.len() {
+                    return Err(Diagnostic::new("too many MIR arguments"));
+                }
+                let index = next_positional;
+                next_positional += 1;
+                index
+            };
+            bound[index] = Some(arg);
+        }
+        bound
+            .into_iter()
+            .enumerate()
+            .map(|(index, arg)| match arg {
+                Some(arg) => borrow_mir_operand(&arg.value, env),
+                None if expected_names[index] == "timeout" => {
+                    Ok(MirBorrowedOperand::Immediate(Value::Unit))
+                }
+                None => Err(Diagnostic::new("missing MIR argument")),
+            })
+            .collect()
+    }
+
     fn evaluate_file_method(
         &mut self,
         file: FileValue,
@@ -8239,22 +9878,22 @@ impl MirRuntime {
     ) -> Result<Value> {
         match field {
             "read_all" => {
-                bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
+                Self::borrow_resource_method_args(&[], args, env)?;
                 match file.read_all() {
                     Ok(text) => Ok(result_ok(Value::String(text))),
                     Err(error) => Ok(result_err(io_error(error))),
                 }
             }
             "read_bytes" => {
-                bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
+                Self::borrow_resource_method_args(&[], args, env)?;
                 match file.read_bytes() {
                     Ok(bytes) => Ok(result_ok(bytes_vec_value(bytes))),
                     Err(error) => Ok(result_err(io_error(error))),
                 }
             }
             "write_all" => {
-                let bound = bind_builtin_args(&["text"], evaluate_named_args(args, env)?)?;
-                match &bound[0].value {
+                let bound = Self::borrow_resource_method_args(&["text"], args, env)?;
+                match bound[0].as_value() {
                     Value::String(text) => match file.write_all(text) {
                         Ok(()) => Ok(result_ok(Value::Unit)),
                         Err(error) => Ok(result_err(io_error(error))),
@@ -8266,22 +9905,22 @@ impl MirRuntime {
                 }
             }
             "write_bytes" => {
-                let bound = bind_builtin_args(&["bytes"], evaluate_named_args(args, env)?)?;
-                let bytes = expect_bytes_value(&bound[0].value, "write_bytes(...)")?;
+                let bound = Self::borrow_resource_method_args(&["bytes"], args, env)?;
+                let bytes = expect_bytes_value(bound[0].as_value(), "write_bytes(...)")?;
                 match file.write_bytes(&bytes) {
                     Ok(()) => Ok(result_ok(Value::Unit)),
                     Err(error) => Ok(result_err(io_error(error))),
                 }
             }
             "flush" => {
-                bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
+                Self::borrow_resource_method_args(&[], args, env)?;
                 match file.flush() {
                     Ok(()) => Ok(result_ok(Value::Unit)),
                     Err(error) => Ok(result_err(io_error(error))),
                 }
             }
             "close" => {
-                bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
+                Self::borrow_resource_method_args(&[], args, env)?;
                 file.close();
                 Ok(Value::Unit)
             }
@@ -8301,7 +9940,7 @@ impl MirRuntime {
     ) -> Result<Value> {
         match field {
             "stdin" => {
-                bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
+                Self::borrow_resource_method_args(&[], args, env)?;
                 Ok(child
                     .stdin()
                     .map(Value::ProcessPipe)
@@ -8309,7 +9948,7 @@ impl MirRuntime {
                     .unwrap_or_else(|| optional_absent(Type::named("process.Pipe"))))
             }
             "stdout" => {
-                bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
+                Self::borrow_resource_method_args(&[], args, env)?;
                 Ok(child
                     .stdout()
                     .map(Value::ProcessPipe)
@@ -8317,7 +9956,7 @@ impl MirRuntime {
                     .unwrap_or_else(|| optional_absent(Type::named("process.Pipe"))))
             }
             "stderr" => {
-                bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
+                Self::borrow_resource_method_args(&[], args, env)?;
                 Ok(child
                     .stderr()
                     .map(Value::ProcessPipe)
@@ -8325,9 +9964,10 @@ impl MirRuntime {
                     .unwrap_or_else(|| optional_absent(Type::named("process.Pipe"))))
             }
             "wait" => {
-                let bound = bind_builtin_args(&["timeout"], evaluate_named_args(args, env)?)?;
+                let bound = Self::borrow_resource_method_args(&["timeout"], args, env)?;
                 let timeout =
-                    match expect_process_optional_timeout(&bound[0].value, "wait(timeout=...)") {
+                    match expect_process_optional_timeout(bound[0].as_value(), "wait(timeout=...)")
+                    {
                         Ok(timeout) => timeout,
                         Err(error) => return Ok(process_wait_failed(error)),
                     };
@@ -8341,9 +9981,9 @@ impl MirRuntime {
                 })
             }
             "wait_or_none" => {
-                let bound = bind_builtin_args(&["timeout"], evaluate_named_args(args, env)?)?;
+                let bound = Self::borrow_resource_method_args(&["timeout"], args, env)?;
                 let timeout = match expect_process_optional_timeout(
-                    &bound[0].value,
+                    bound[0].as_value(),
                     "wait_or_none(timeout=...)",
                 ) {
                     Ok(timeout) => timeout,
@@ -8361,9 +10001,9 @@ impl MirRuntime {
                 }
             }
             "wait_ok" => {
-                let bound = bind_builtin_args(&["timeout"], evaluate_named_args(args, env)?)?;
+                let bound = Self::borrow_resource_method_args(&["timeout"], args, env)?;
                 let timeout = match expect_process_optional_timeout(
-                    &bound[0].value,
+                    bound[0].as_value(),
                     "wait_ok(timeout=...)",
                 ) {
                     Ok(timeout) => timeout,
@@ -8375,21 +10015,21 @@ impl MirRuntime {
                 }
             }
             "kill" => {
-                bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
+                Self::borrow_resource_method_args(&[], args, env)?;
                 match child.kill() {
                     Ok(()) => Ok(result_ok(Value::Unit)),
                     Err(error) => Ok(result_err(process_error_from_io(error))),
                 }
             }
             "terminate" => {
-                bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
+                Self::borrow_resource_method_args(&[], args, env)?;
                 match child.terminate() {
                     Ok(()) => Ok(result_ok(Value::Unit)),
                     Err(error) => Ok(result_err(process_error_from_io(error))),
                 }
             }
             "close" => {
-                bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
+                Self::borrow_resource_method_args(&[], args, env)?;
                 child.close();
                 Ok(Value::Unit)
             }
@@ -8409,16 +10049,16 @@ impl MirRuntime {
     ) -> Result<Value> {
         match field {
             "read_all" => {
-                bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
+                Self::borrow_resource_method_args(&[], args, env)?;
                 match pipe.read_all(Some(&self.cancellation)) {
                     Ok(text) => Ok(result_ok(Value::String(text))),
                     Err(error) => Ok(result_err(process_error_from_io(error))),
                 }
             }
             "read_line" => {
-                let bound = bind_builtin_args(&["timeout"], evaluate_named_args(args, env)?)?;
+                let bound = Self::borrow_resource_method_args(&["timeout"], args, env)?;
                 let timeout = match expect_process_optional_timeout(
-                    &bound[0].value,
+                    bound[0].as_value(),
                     "read_line(timeout=...)",
                 ) {
                     Ok(timeout) => timeout,
@@ -8432,13 +10072,13 @@ impl MirRuntime {
             }
             "read_bytes" => {
                 let bound =
-                    bind_builtin_args(&["max_bytes", "timeout"], evaluate_named_args(args, env)?)?;
-                let max_bytes = expect_i32_value(&bound[0].value, "read_bytes(...)")?;
+                    Self::borrow_resource_method_args(&["max_bytes", "timeout"], args, env)?;
+                let max_bytes = expect_i32_value(bound[0].as_value(), "read_bytes(...)")?;
                 let max_bytes = usize::try_from(max_bytes).map_err(|_| {
                     Diagnostic::new("`read_bytes(...)` expects a non-negative `max_bytes`")
                 })?;
                 let timeout = match expect_process_optional_timeout(
-                    &bound[1].value,
+                    bound[1].as_value(),
                     "read_bytes(timeout=...)",
                 ) {
                     Ok(timeout) => timeout,
@@ -8453,27 +10093,30 @@ impl MirRuntime {
                 }
             }
             "write_all" => {
-                let bound =
-                    bind_builtin_args(&["text", "timeout"], evaluate_named_args(args, env)?)?;
-                let text = expect_string_value(&bound[0].value, "write_all(...)")?;
+                let bound = Self::borrow_resource_method_args(&["text", "timeout"], args, env)?;
+                let Value::String(text) = bound[0].as_value() else {
+                    return Err(Diagnostic::new(format!(
+                        "`write_all(...)` expects `str`, found `{}`",
+                        bound[0].as_value().render()
+                    )));
+                };
                 let timeout = match expect_process_optional_timeout(
-                    &bound[1].value,
+                    bound[1].as_value(),
                     "write_all(timeout=...)",
                 ) {
                     Ok(timeout) => timeout,
                     Err(error) => return Ok(result_err(error)),
                 };
-                match pipe.write_all(&text, timeout, Some(&self.cancellation)) {
+                match pipe.write_all(text, timeout, Some(&self.cancellation)) {
                     Ok(()) => Ok(result_ok(Value::Unit)),
                     Err(error) => Ok(result_err(process_error_from_io(error))),
                 }
             }
             "write_bytes" => {
-                let bound =
-                    bind_builtin_args(&["bytes", "timeout"], evaluate_named_args(args, env)?)?;
-                let bytes = expect_bytes_value(&bound[0].value, "write_bytes(...)")?;
+                let bound = Self::borrow_resource_method_args(&["bytes", "timeout"], args, env)?;
+                let bytes = expect_bytes_value(bound[0].as_value(), "write_bytes(...)")?;
                 let timeout = match expect_process_optional_timeout(
-                    &bound[1].value,
+                    bound[1].as_value(),
                     "write_bytes(timeout=...)",
                 ) {
                     Ok(timeout) => timeout,
@@ -8485,14 +10128,14 @@ impl MirRuntime {
                 }
             }
             "flush" => {
-                bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
+                Self::borrow_resource_method_args(&[], args, env)?;
                 match pipe.flush() {
                     Ok(()) => Ok(result_ok(Value::Unit)),
                     Err(error) => Ok(result_err(process_error_from_io(error))),
                 }
             }
             "close" => {
-                bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
+                Self::borrow_resource_method_args(&[], args, env)?;
                 pipe.close();
                 Ok(Value::Unit)
             }
@@ -8512,37 +10155,37 @@ impl MirRuntime {
     ) -> Result<Value> {
         match field {
             "status" => {
-                bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
+                Self::borrow_resource_method_args(&[], args, env)?;
                 Ok(completed.status())
             }
             "success" => {
-                bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
+                Self::borrow_resource_method_args(&[], args, env)?;
                 Ok(Value::Bool(completed.success()))
             }
             "stdout" => {
-                bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
+                Self::borrow_resource_method_args(&[], args, env)?;
                 completed
                     .stdout()
                     .map(Value::String)
                     .map_err(|error| Diagnostic::coded("AU4005", error.to_string()))
             }
             "stderr" => {
-                bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
+                Self::borrow_resource_method_args(&[], args, env)?;
                 completed
                     .stderr()
                     .map(Value::String)
                     .map_err(|error| Diagnostic::coded("AU4005", error.to_string()))
             }
             "stdout_bytes" => {
-                bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
+                Self::borrow_resource_method_args(&[], args, env)?;
                 Ok(bytes_vec_value(completed.stdout_bytes()))
             }
             "stderr_bytes" => {
-                bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
+                Self::borrow_resource_method_args(&[], args, env)?;
                 Ok(bytes_vec_value(completed.stderr_bytes()))
             }
             "check" => {
-                bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
+                Self::borrow_resource_method_args(&[], args, env)?;
                 match completed.check() {
                     Ok(()) => Ok(result_ok(Value::Unit)),
                     Err(error) => Ok(result_err(error)),
@@ -8660,9 +10303,10 @@ impl MirRuntime {
                 }
             }
             "wait" => {
-                let bound = bind_builtin_args(&["timeout"], evaluate_named_args(args, env)?)?;
+                let bound = Self::borrow_resource_method_args(&["timeout"], args, env)?;
                 let timeout =
-                    match expect_process_optional_timeout(&bound[0].value, "wait(timeout=...)") {
+                    match expect_process_optional_timeout(bound[0].as_value(), "wait(timeout=...)")
+                    {
                         Ok(timeout) => timeout,
                         Err(error) => {
                             return Ok(process_supervisor_wait_event(
@@ -8683,9 +10327,9 @@ impl MirRuntime {
                 })
             }
             "wait_or_none" => {
-                let bound = bind_builtin_args(&["timeout"], evaluate_named_args(args, env)?)?;
+                let bound = Self::borrow_resource_method_args(&["timeout"], args, env)?;
                 let timeout = match expect_process_optional_timeout(
-                    &bound[0].value,
+                    bound[0].as_value(),
                     "wait_or_none(timeout=...)",
                 ) {
                     Ok(timeout) => timeout,
@@ -8703,18 +10347,18 @@ impl MirRuntime {
                 }
             }
             "stop" => {
-                bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
+                Self::borrow_resource_method_args(&[], args, env)?;
                 match supervisor.stop() {
                     Ok(()) => Ok(result_ok(Value::Unit)),
                     Err(error) => Ok(result_err(error)),
                 }
             }
             "is_empty" => {
-                bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
+                Self::borrow_resource_method_args(&[], args, env)?;
                 Ok(Value::Bool(supervisor.is_empty()))
             }
             "close" => {
-                bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
+                Self::borrow_resource_method_args(&[], args, env)?;
                 supervisor.close();
                 Ok(Value::Unit)
             }
@@ -8734,9 +10378,9 @@ impl MirRuntime {
     ) -> Result<Value> {
         match field {
             "accept" => {
-                let bound = bind_builtin_args(&["timeout"], evaluate_named_args(args, env)?)?;
+                let bound = Self::borrow_resource_method_args(&["timeout"], args, env)?;
                 let timeout = io_timeout_or_return!(
-                    bound.first().map(|argument| &argument.value),
+                    bound.first().map(MirBorrowedOperand::as_value),
                     "accept(timeout=...)"
                 );
                 match listener.accept(timeout, Some(&self.cancellation)) {
@@ -8745,14 +10389,14 @@ impl MirRuntime {
                 }
             }
             "local_addr" => {
-                bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
+                Self::borrow_resource_method_args(&[], args, env)?;
                 match listener.local_addr() {
                     Ok(address) => Ok(result_ok(Value::String(address))),
                     Err(error) => Ok(result_err(io_error(error))),
                 }
             }
             "close" => {
-                bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
+                Self::borrow_resource_method_args(&[], args, env)?;
                 listener.close();
                 Ok(Value::Unit)
             }
@@ -8772,9 +10416,9 @@ impl MirRuntime {
     ) -> Result<Value> {
         match field {
             "read_all" => {
-                let bound = bind_builtin_args(&["timeout"], evaluate_named_args(args, env)?)?;
+                let bound = Self::borrow_resource_method_args(&["timeout"], args, env)?;
                 let timeout = io_timeout_or_return!(
-                    bound.first().map(|argument| &argument.value),
+                    bound.first().map(MirBorrowedOperand::as_value),
                     "read_all(timeout=...)"
                 );
                 match stream.read_all(timeout, Some(&self.cancellation)) {
@@ -8783,9 +10427,9 @@ impl MirRuntime {
                 }
             }
             "read_line" => {
-                let bound = bind_builtin_args(&["timeout"], evaluate_named_args(args, env)?)?;
+                let bound = Self::borrow_resource_method_args(&["timeout"], args, env)?;
                 let timeout = io_timeout_or_return!(
-                    bound.first().map(|argument| &argument.value),
+                    bound.first().map(MirBorrowedOperand::as_value),
                     "read_line(timeout=...)"
                 );
                 match stream.read_line(timeout, Some(&self.cancellation)) {
@@ -8796,14 +10440,14 @@ impl MirRuntime {
             }
             "read_bytes" => {
                 let bound =
-                    bind_builtin_args(&["max_bytes", "timeout"], evaluate_named_args(args, env)?)?;
+                    Self::borrow_resource_method_args(&["max_bytes", "timeout"], args, env)?;
                 let max_bytes =
-                    usize::try_from(expect_i32_value(&bound[0].value, "read_bytes(...)")?)
+                    usize::try_from(expect_i32_value(bound[0].as_value(), "read_bytes(...)")?)
                         .map_err(|_| {
                             Diagnostic::new("`read_bytes(...)` requires a non-negative max_bytes")
                         })?;
                 let timeout =
-                    io_timeout_or_return!(Some(&bound[1].value), "read_bytes(timeout=...)");
+                    io_timeout_or_return!(Some(bound[1].as_value()), "read_bytes(timeout=...)");
                 match stream.read_bytes(max_bytes, timeout, Some(&self.cancellation)) {
                     Ok(Some(bytes)) => Ok(result_ok(optional_bytes_value(Some(bytes_vec_value(
                         bytes,
@@ -8813,26 +10457,27 @@ impl MirRuntime {
                 }
             }
             "read_exact" => {
-                let bound =
-                    bind_builtin_args(&["count", "timeout"], evaluate_named_args(args, env)?)?;
-                let count = usize::try_from(expect_i32_value(&bound[0].value, "read_exact(...)")?)
-                    .map_err(|_| {
-                        Diagnostic::new("`read_exact(...)` requires a non-negative count")
-                    })?;
+                let bound = Self::borrow_resource_method_args(&["count", "timeout"], args, env)?;
+                let count =
+                    usize::try_from(expect_i32_value(bound[0].as_value(), "read_exact(...)")?)
+                        .map_err(|_| {
+                            Diagnostic::new("`read_exact(...)` requires a non-negative count")
+                        })?;
                 let timeout =
-                    io_timeout_or_return!(Some(&bound[1].value), "read_exact(timeout=...)");
+                    io_timeout_or_return!(Some(bound[1].as_value()), "read_exact(timeout=...)");
                 match stream.read_exact(count, timeout, Some(&self.cancellation)) {
                     Ok(bytes) => Ok(result_ok(bytes_vec_value(bytes))),
                     Err(error) => Ok(result_err(io_error(error))),
                 }
             }
             "write_all" => {
-                let bound =
-                    bind_builtin_args(&["text", "timeout"], evaluate_named_args(args, env)?)?;
-                match &bound[0].value {
+                let bound = Self::borrow_resource_method_args(&["text", "timeout"], args, env)?;
+                match bound[0].as_value() {
                     Value::String(text) => {
-                        let timeout =
-                            io_timeout_or_return!(Some(&bound[1].value), "write_all(timeout=...)");
+                        let timeout = io_timeout_or_return!(
+                            Some(bound[1].as_value()),
+                            "write_all(timeout=...)"
+                        );
                         match stream.write_all(text, timeout, Some(&self.cancellation)) {
                             Ok(()) => Ok(result_ok(Value::Unit)),
                             Err(error) => Ok(result_err(io_error(error))),
@@ -8845,60 +10490,59 @@ impl MirRuntime {
                 }
             }
             "write_bytes" => {
-                let bound =
-                    bind_builtin_args(&["bytes", "timeout"], evaluate_named_args(args, env)?)?;
-                let bytes = expect_bytes_value(&bound[0].value, "write_bytes(...)")?;
+                let bound = Self::borrow_resource_method_args(&["bytes", "timeout"], args, env)?;
+                let bytes = expect_bytes_value(bound[0].as_value(), "write_bytes(...)")?;
                 let timeout =
-                    io_timeout_or_return!(Some(&bound[1].value), "write_bytes(timeout=...)");
+                    io_timeout_or_return!(Some(bound[1].as_value()), "write_bytes(timeout=...)");
                 match stream.write_bytes(&bytes, timeout, Some(&self.cancellation)) {
                     Ok(()) => Ok(result_ok(Value::Unit)),
                     Err(error) => Ok(result_err(io_error(error))),
                 }
             }
             "flush" => {
-                bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
+                Self::borrow_resource_method_args(&[], args, env)?;
                 match stream.flush() {
                     Ok(()) => Ok(result_ok(Value::Unit)),
                     Err(error) => Ok(result_err(io_error(error))),
                 }
             }
             "local_addr" => {
-                bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
+                Self::borrow_resource_method_args(&[], args, env)?;
                 match stream.local_addr() {
                     Ok(address) => Ok(result_ok(Value::String(address))),
                     Err(error) => Ok(result_err(io_error(error))),
                 }
             }
             "peer_addr" => {
-                bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
+                Self::borrow_resource_method_args(&[], args, env)?;
                 match stream.peer_addr() {
                     Ok(address) => Ok(result_ok(Value::String(address))),
                     Err(error) => Ok(result_err(io_error(error))),
                 }
             }
             "shutdown_read" => {
-                bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
+                Self::borrow_resource_method_args(&[], args, env)?;
                 match stream.shutdown_read() {
                     Ok(()) => Ok(result_ok(Value::Unit)),
                     Err(error) => Ok(result_err(io_error(error))),
                 }
             }
             "shutdown_write" => {
-                bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
+                Self::borrow_resource_method_args(&[], args, env)?;
                 match stream.shutdown_write() {
                     Ok(()) => Ok(result_ok(Value::Unit)),
                     Err(error) => Ok(result_err(io_error(error))),
                 }
             }
             "shutdown_both" => {
-                bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
+                Self::borrow_resource_method_args(&[], args, env)?;
                 match stream.shutdown_both() {
                     Ok(()) => Ok(result_ok(Value::Unit)),
                     Err(error) => Ok(result_err(io_error(error))),
                 }
             }
             "close" => {
-                bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
+                Self::borrow_resource_method_args(&[], args, env)?;
                 stream.close();
                 Ok(Value::Unit)
             }
@@ -8918,41 +10562,52 @@ impl MirRuntime {
     ) -> Result<Value> {
         match field {
             "send_text" => {
-                let bound = bind_builtin_args(
-                    &["address", "text", "timeout"],
-                    evaluate_named_args(args, env)?,
-                )?;
-                let address = expect_string_value(&bound[0].value, "send_text(...)")?;
-                let text = expect_string_value(&bound[1].value, "send_text(...)")?;
+                let bound =
+                    Self::borrow_resource_method_args(&["address", "text", "timeout"], args, env)?;
+                let Value::String(address) = bound[0].as_value() else {
+                    return Err(Diagnostic::new(format!(
+                        "`send_text(...)` expects `str`, found `{}`",
+                        bound[0].as_value().render()
+                    )));
+                };
+                let Value::String(text) = bound[1].as_value() else {
+                    return Err(Diagnostic::new(format!(
+                        "`send_text(...)` expects `str`, found `{}`",
+                        bound[1].as_value().render()
+                    )));
+                };
                 let timeout =
-                    io_timeout_or_return!(Some(&bound[2].value), "send_text(timeout=...)");
-                match socket.send_to_text(&address, &text, timeout, Some(&self.cancellation)) {
+                    io_timeout_or_return!(Some(bound[2].as_value()), "send_text(timeout=...)");
+                match socket.send_to_text(address, text, timeout, Some(&self.cancellation)) {
                     Ok(()) => Ok(result_ok(Value::Unit)),
                     Err(error) => Ok(result_err(io_error(error))),
                 }
             }
             "send_bytes" => {
-                let bound = bind_builtin_args(
-                    &["address", "bytes", "timeout"],
-                    evaluate_named_args(args, env)?,
-                )?;
-                let address = expect_string_value(&bound[0].value, "send_bytes(...)")?;
-                let bytes = expect_bytes_value(&bound[1].value, "send_bytes(...)")?;
+                let bound =
+                    Self::borrow_resource_method_args(&["address", "bytes", "timeout"], args, env)?;
+                let Value::String(address) = bound[0].as_value() else {
+                    return Err(Diagnostic::new(format!(
+                        "`send_bytes(...)` expects `str`, found `{}`",
+                        bound[0].as_value().render()
+                    )));
+                };
+                let bytes = expect_bytes_value(bound[1].as_value(), "send_bytes(...)")?;
                 let timeout =
-                    io_timeout_or_return!(Some(&bound[2].value), "send_bytes(timeout=...)");
-                match socket.send_to_bytes(&address, &bytes, timeout, Some(&self.cancellation)) {
+                    io_timeout_or_return!(Some(bound[2].as_value()), "send_bytes(timeout=...)");
+                match socket.send_to_bytes(address, &bytes, timeout, Some(&self.cancellation)) {
                     Ok(()) => Ok(result_ok(Value::Unit)),
                     Err(error) => Ok(result_err(io_error(error))),
                 }
             }
             "recv" => {
                 let bound =
-                    bind_builtin_args(&["max_bytes", "timeout"], evaluate_named_args(args, env)?)?;
-                let max_bytes = usize::try_from(expect_i32_value(&bound[0].value, "recv(...)")?)
-                    .map_err(|_| {
-                        Diagnostic::new("`recv(...)` requires a non-negative max_bytes")
-                    })?;
-                let timeout = io_timeout_or_return!(Some(&bound[1].value), "recv(timeout=...)");
+                    Self::borrow_resource_method_args(&["max_bytes", "timeout"], args, env)?;
+                let max_bytes =
+                    usize::try_from(expect_i32_value(bound[0].as_value(), "recv(...)")?).map_err(
+                        |_| Diagnostic::new("`recv(...)` requires a non-negative max_bytes"),
+                    )?;
+                let timeout = io_timeout_or_return!(Some(bound[1].as_value()), "recv(timeout=...)");
                 match socket.recv(max_bytes, timeout, Some(&self.cancellation)) {
                     Ok(Some(bytes)) => Ok(result_ok(optional_bytes_value(Some(bytes_vec_value(
                         bytes,
@@ -8963,13 +10618,14 @@ impl MirRuntime {
             }
             "recv_from" => {
                 let bound =
-                    bind_builtin_args(&["max_bytes", "timeout"], evaluate_named_args(args, env)?)?;
+                    Self::borrow_resource_method_args(&["max_bytes", "timeout"], args, env)?;
                 let max_bytes =
-                    usize::try_from(expect_i32_value(&bound[0].value, "recv_from(...)")?).map_err(
-                        |_| Diagnostic::new("`recv_from(...)` requires a non-negative max_bytes"),
-                    )?;
+                    usize::try_from(expect_i32_value(bound[0].as_value(), "recv_from(...)")?)
+                        .map_err(|_| {
+                            Diagnostic::new("`recv_from(...)` requires a non-negative max_bytes")
+                        })?;
                 let timeout =
-                    io_timeout_or_return!(Some(&bound[1].value), "recv_from(timeout=...)");
+                    io_timeout_or_return!(Some(bound[1].as_value()), "recv_from(timeout=...)");
                 match socket.recv_from(max_bytes, timeout, Some(&self.cancellation)) {
                     Ok(Some(datagram)) => Ok(result_ok(optional_present(
                         Type::named("net.UdpDatagram"),
@@ -9005,7 +10661,7 @@ impl MirRuntime {
         args: &[MirArg],
         env: &mut Env,
     ) -> Result<Value> {
-        bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
+        Self::borrow_resource_method_args(&[], args, env)?;
         match field {
             "address" => Ok(Value::String(datagram.address())),
             "bytes" => Ok(bytes_vec_value(datagram.bytes())),
@@ -9029,8 +10685,9 @@ impl MirRuntime {
     ) -> Result<Value> {
         match field {
             "accept" => {
-                let bound = bind_builtin_args(&["timeout"], evaluate_named_args(args, env)?)?;
-                let timeout = io_timeout_or_return!(Some(&bound[0].value), "accept(timeout=...)");
+                let bound = Self::borrow_resource_method_args(&["timeout"], args, env)?;
+                let timeout =
+                    io_timeout_or_return!(Some(bound[0].as_value()), "accept(timeout=...)");
                 match listener.accept(timeout, Some(&self.cancellation)) {
                     Ok(exchange) => Ok(result_ok(Value::HttpExchange(exchange))),
                     Err(error) => Ok(result_err(io_error(error))),
@@ -9060,26 +10717,26 @@ impl MirRuntime {
     ) -> Result<Value> {
         match field {
             "method" => {
-                bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
+                bind_mir_arg_refs(&[], args)?;
                 Ok(Value::String(exchange.method()))
             }
             "path" => {
-                bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
+                bind_mir_arg_refs(&[], args)?;
                 Ok(Value::String(exchange.path()))
             }
             "headers" => {
-                bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
+                bind_mir_arg_refs(&[], args)?;
                 Ok(headers_map_value(exchange.headers()))
             }
             "body_text" => {
-                bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
+                bind_mir_arg_refs(&[], args)?;
                 match exchange.body_text() {
                     Ok(text) => Ok(result_ok(Value::String(text))),
                     Err(error) => Ok(result_err(io_error(error))),
                 }
             }
             "body_bytes" => {
-                bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
+                bind_mir_arg_refs(&[], args)?;
                 Ok(bytes_vec_value(exchange.body_bytes()))
             }
             "respond_text" => {
@@ -9147,7 +10804,7 @@ impl MirRuntime {
         args: &[MirArg],
         env: &mut Env,
     ) -> Result<Value> {
-        bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
+        bind_mir_arg_refs(&[], args)?;
         match field {
             "status" => Ok(Value::Int(IntegerValue::from_signed(
                 response.status() as i128
@@ -9175,8 +10832,9 @@ impl MirRuntime {
     ) -> Result<Value> {
         match field {
             "accept" => {
-                let bound = bind_builtin_args(&["timeout"], evaluate_named_args(args, env)?)?;
-                let timeout = io_timeout_or_return!(Some(&bound[0].value), "accept(timeout=...)");
+                let bound = Self::borrow_resource_method_args(&["timeout"], args, env)?;
+                let timeout =
+                    io_timeout_or_return!(Some(bound[0].as_value()), "accept(timeout=...)");
                 match listener.accept(timeout) {
                     Ok(socket) => Ok(result_ok(Value::WebSocket(socket))),
                     Err(error) => Ok(result_err(io_error(error))),
@@ -9202,31 +10860,34 @@ impl MirRuntime {
     ) -> Result<Value> {
         match field {
             "send_text" => {
-                let bound =
-                    bind_builtin_args(&["text", "timeout"], evaluate_named_args(args, env)?)?;
-                let text = expect_string_value(&bound[0].value, "send_text(...)")?;
+                let bound = Self::borrow_resource_method_args(&["text", "timeout"], args, env)?;
+                let Value::String(text) = bound[0].as_value() else {
+                    return Err(Diagnostic::new(format!(
+                        "`send_text(...)` expects `str`, found `{}`",
+                        bound[0].as_value().render()
+                    )));
+                };
                 let timeout =
-                    io_timeout_or_return!(Some(&bound[1].value), "send_text(timeout=...)");
-                match socket.send_text(&text, timeout) {
+                    io_timeout_or_return!(Some(bound[1].as_value()), "send_text(timeout=...)");
+                match socket.send_text(text, timeout) {
                     Ok(()) => Ok(result_ok(Value::Unit)),
                     Err(error) => Ok(result_err(io_error(error))),
                 }
             }
             "send_bytes" => {
-                let bound =
-                    bind_builtin_args(&["bytes", "timeout"], evaluate_named_args(args, env)?)?;
-                let bytes = expect_bytes_value(&bound[0].value, "send_bytes(...)")?;
+                let bound = Self::borrow_resource_method_args(&["bytes", "timeout"], args, env)?;
+                let bytes = expect_bytes_value(bound[0].as_value(), "send_bytes(...)")?;
                 let timeout =
-                    io_timeout_or_return!(Some(&bound[1].value), "send_bytes(timeout=...)");
+                    io_timeout_or_return!(Some(bound[1].as_value()), "send_bytes(timeout=...)");
                 match socket.send_bytes(&bytes, timeout) {
                     Ok(()) => Ok(result_ok(Value::Unit)),
                     Err(error) => Ok(result_err(io_error(error))),
                 }
             }
             "recv_text" => {
-                let bound = bind_builtin_args(&["timeout"], evaluate_named_args(args, env)?)?;
+                let bound = Self::borrow_resource_method_args(&["timeout"], args, env)?;
                 let timeout =
-                    io_timeout_or_return!(Some(&bound[0].value), "recv_text(timeout=...)");
+                    io_timeout_or_return!(Some(bound[0].as_value()), "recv_text(timeout=...)");
                 match socket.recv_text(timeout) {
                     Ok(Some(text)) => Ok(result_ok(optional_str_value(Some(text)))),
                     Ok(None) => Ok(result_ok(optional_str_value(None))),
@@ -9234,9 +10895,9 @@ impl MirRuntime {
                 }
             }
             "recv_bytes" => {
-                let bound = bind_builtin_args(&["timeout"], evaluate_named_args(args, env)?)?;
+                let bound = Self::borrow_resource_method_args(&["timeout"], args, env)?;
                 let timeout =
-                    io_timeout_or_return!(Some(&bound[0].value), "recv_bytes(timeout=...)");
+                    io_timeout_or_return!(Some(bound[0].as_value()), "recv_bytes(timeout=...)");
                 match socket.recv_bytes(timeout) {
                     Ok(Some(bytes)) => Ok(result_ok(optional_bytes_value(Some(bytes_vec_value(
                         bytes,
@@ -9265,8 +10926,9 @@ impl MirRuntime {
     ) -> Result<Value> {
         match field {
             "accept" => {
-                let bound = bind_builtin_args(&["timeout"], evaluate_named_args(args, env)?)?;
-                let timeout = io_timeout_or_return!(Some(&bound[0].value), "accept(timeout=...)");
+                let bound = Self::borrow_resource_method_args(&["timeout"], args, env)?;
+                let timeout =
+                    io_timeout_or_return!(Some(bound[0].as_value()), "accept(timeout=...)");
                 match listener.accept(timeout, Some(&self.cancellation)) {
                     Ok(stream) => Ok(result_ok(Value::UnixStream(stream))),
                     Err(error) => Ok(result_err(io_error(error))),
@@ -9292,9 +10954,9 @@ impl MirRuntime {
     ) -> Result<Value> {
         match field {
             "read_line" => {
-                let bound = bind_builtin_args(&["timeout"], evaluate_named_args(args, env)?)?;
+                let bound = Self::borrow_resource_method_args(&["timeout"], args, env)?;
                 let timeout =
-                    io_timeout_or_return!(Some(&bound[0].value), "read_line(timeout=...)");
+                    io_timeout_or_return!(Some(bound[0].as_value()), "read_line(timeout=...)");
                 match stream.read_line(timeout, Some(&self.cancellation)) {
                     Ok(Some(text)) => Ok(result_ok(optional_str_value(Some(text)))),
                     Ok(None) => Ok(result_ok(optional_str_value(None))),
@@ -9302,26 +10964,30 @@ impl MirRuntime {
                 }
             }
             "read_exact" => {
-                let bound =
-                    bind_builtin_args(&["count", "timeout"], evaluate_named_args(args, env)?)?;
-                let count = usize::try_from(expect_i32_value(&bound[0].value, "read_exact(...)")?)
-                    .map_err(|_| {
-                        Diagnostic::new("`read_exact(...)` requires a non-negative count")
-                    })?;
+                let bound = Self::borrow_resource_method_args(&["count", "timeout"], args, env)?;
+                let count =
+                    usize::try_from(expect_i32_value(bound[0].as_value(), "read_exact(...)")?)
+                        .map_err(|_| {
+                            Diagnostic::new("`read_exact(...)` requires a non-negative count")
+                        })?;
                 let timeout =
-                    io_timeout_or_return!(Some(&bound[1].value), "read_exact(timeout=...)");
+                    io_timeout_or_return!(Some(bound[1].as_value()), "read_exact(timeout=...)");
                 match stream.read_exact(count, timeout, Some(&self.cancellation)) {
                     Ok(bytes) => Ok(result_ok(bytes_vec_value(bytes))),
                     Err(error) => Ok(result_err(io_error(error))),
                 }
             }
             "write_all" => {
-                let bound =
-                    bind_builtin_args(&["text", "timeout"], evaluate_named_args(args, env)?)?;
-                let text = expect_string_value(&bound[0].value, "write_all(...)")?;
+                let bound = Self::borrow_resource_method_args(&["text", "timeout"], args, env)?;
+                let Value::String(text) = bound[0].as_value() else {
+                    return Err(Diagnostic::new(format!(
+                        "`write_all(...)` expects `str`, found `{}`",
+                        bound[0].as_value().render()
+                    )));
+                };
                 let timeout =
-                    io_timeout_or_return!(Some(&bound[1].value), "write_all(timeout=...)");
-                match stream.write_all(&text, timeout, Some(&self.cancellation)) {
+                    io_timeout_or_return!(Some(bound[1].as_value()), "write_all(timeout=...)");
+                match stream.write_all(text, timeout, Some(&self.cancellation)) {
                     Ok(()) => Ok(result_ok(Value::Unit)),
                     Err(error) => Ok(result_err(io_error(error))),
                 }
@@ -9346,8 +11012,9 @@ impl MirRuntime {
     ) -> Result<Value> {
         match field {
             "accept" => {
-                let bound = bind_builtin_args(&["timeout"], evaluate_named_args(args, env)?)?;
-                let timeout = io_timeout_or_return!(Some(&bound[0].value), "accept(timeout=...)");
+                let bound = Self::borrow_resource_method_args(&["timeout"], args, env)?;
+                let timeout =
+                    io_timeout_or_return!(Some(bound[0].as_value()), "accept(timeout=...)");
                 match listener.accept(timeout, Some(&self.cancellation)) {
                     Ok(stream) => Ok(result_ok(Value::TlsStream(stream))),
                     Err(error) => Ok(result_err(io_error(error))),
@@ -9377,9 +11044,9 @@ impl MirRuntime {
     ) -> Result<Value> {
         match field {
             "read_line" => {
-                let bound = bind_builtin_args(&["timeout"], evaluate_named_args(args, env)?)?;
+                let bound = Self::borrow_resource_method_args(&["timeout"], args, env)?;
                 let timeout =
-                    io_timeout_or_return!(Some(&bound[0].value), "read_line(timeout=...)");
+                    io_timeout_or_return!(Some(bound[0].as_value()), "read_line(timeout=...)");
                 match stream.read_line(timeout, Some(&self.cancellation)) {
                     Ok(Some(text)) => Ok(result_ok(optional_str_value(Some(text)))),
                     Ok(None) => Ok(result_ok(optional_str_value(None))),
@@ -9387,26 +11054,30 @@ impl MirRuntime {
                 }
             }
             "read_exact" => {
-                let bound =
-                    bind_builtin_args(&["count", "timeout"], evaluate_named_args(args, env)?)?;
-                let count = usize::try_from(expect_i32_value(&bound[0].value, "read_exact(...)")?)
-                    .map_err(|_| {
-                        Diagnostic::new("`read_exact(...)` requires a non-negative count")
-                    })?;
+                let bound = Self::borrow_resource_method_args(&["count", "timeout"], args, env)?;
+                let count =
+                    usize::try_from(expect_i32_value(bound[0].as_value(), "read_exact(...)")?)
+                        .map_err(|_| {
+                            Diagnostic::new("`read_exact(...)` requires a non-negative count")
+                        })?;
                 let timeout =
-                    io_timeout_or_return!(Some(&bound[1].value), "read_exact(timeout=...)");
+                    io_timeout_or_return!(Some(bound[1].as_value()), "read_exact(timeout=...)");
                 match stream.read_exact(count, timeout, Some(&self.cancellation)) {
                     Ok(bytes) => Ok(result_ok(bytes_vec_value(bytes))),
                     Err(error) => Ok(result_err(io_error(error))),
                 }
             }
             "write_all" => {
-                let bound =
-                    bind_builtin_args(&["text", "timeout"], evaluate_named_args(args, env)?)?;
-                let text = expect_string_value(&bound[0].value, "write_all(...)")?;
+                let bound = Self::borrow_resource_method_args(&["text", "timeout"], args, env)?;
+                let Value::String(text) = bound[0].as_value() else {
+                    return Err(Diagnostic::new(format!(
+                        "`write_all(...)` expects `str`, found `{}`",
+                        bound[0].as_value().render()
+                    )));
+                };
                 let timeout =
-                    io_timeout_or_return!(Some(&bound[1].value), "write_all(timeout=...)");
-                match stream.write_all(&text, timeout, Some(&self.cancellation)) {
+                    io_timeout_or_return!(Some(bound[1].as_value()), "write_all(timeout=...)");
+                match stream.write_all(text, timeout, Some(&self.cancellation)) {
                     Ok(()) => Ok(result_ok(Value::Unit)),
                     Err(error) => Ok(result_err(io_error(error))),
                 }

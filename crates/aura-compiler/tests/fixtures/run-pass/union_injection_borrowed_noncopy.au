@@ -1,0 +1,10 @@
+def accept(value: str | None) -> int64:
+    if value is not None:
+        return value.len()
+    return 0
+
+def main():
+    name = "Ada"
+    print(accept(value=name))
+    print(accept(value=None))
+    print(name)

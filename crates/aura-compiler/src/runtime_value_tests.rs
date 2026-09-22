@@ -18330,6 +18330,258 @@ fn process_child_waits_report_unrepresentable_deadlines_as_failures() {
 }
 
 #[test]
+fn mir_copy_classifier_preserves_scalar_tuple_and_optional_capabilities() {
+    let program = crate::check_source("def main():\n    pass\n")
+        .expect("the empty runtime program should type check");
+    let module = crate::mir::lower(&program);
+    let is_copy = |ty: &Type| crate::mir::type_is_copy_in_mir(ty, &module);
+    for name in [
+        "bool", "int8", "int16", "int32", "int64", "int128", "intsize", "uint8", "uint16",
+        "uint32", "uint64", "uint128", "uintsize", "float32", "float64", "Duration",
+    ] {
+        assert!(is_copy(&Type::named(name)), "{name} remains Copy in MIR");
+    }
+    assert!(is_copy(&Type::Unit));
+    assert!(is_copy(&Type::Function {
+        params: vec![],
+        return_type: Box::new(Type::named("str")),
+    }));
+    assert!(is_copy(&Type::Tuple(vec![
+        Type::named("int64"),
+        Type::Tuple(vec![Type::named("bool"), Type::Unit]),
+    ])));
+    assert!(!is_copy(&Type::Tuple(vec![
+        Type::named("int64"),
+        Type::named("str"),
+    ])));
+    assert!(is_copy(&crate::sema::optional_type(Type::named("int64"))));
+    assert!(!is_copy(&crate::sema::optional_type(Type::named("str"))));
+    for ty in [
+        Type::named("str"),
+        Type::Named("list".to_string(), vec![Type::named("int64")]),
+        Type::Named(
+            "dict".to_string(),
+            vec![Type::named("int64"), Type::named("bool")],
+        ),
+    ] {
+        assert!(!is_copy(&ty), "{ty} remains borrowed in MIR");
+    }
+}
+
+#[test]
+fn mir_copy_classifier_uses_declared_classes_and_substituted_enum_payloads() {
+    let program = crate::check_source(
+        "\
+copy class Count:
+    value: int64
+
+copy class Marker[T]:
+    value: int64
+
+class OwnedCount:
+    value: int64
+
+enum Envelope[T]:
+    Empty
+    Item(T)
+
+enum PairEnvelope[T]:
+    Item((T, int64))
+
+def main():
+    pass
+",
+    )
+    .expect("ordinary Copy classes and generic enums should type check");
+    let module = crate::mir::lower(&program);
+    let is_copy = |ty: &Type| crate::mir::type_is_copy_in_mir(ty, &module);
+    assert!(is_copy(&Type::named("Count")));
+    assert!(!is_copy(&Type::named("OwnedCount")));
+    for name in ["Marker", "Envelope", "PairEnvelope"] {
+        assert!(is_copy(&Type::Named(
+            name.to_string(),
+            vec![Type::named("int64")]
+        )));
+        assert!(!is_copy(&Type::Named(
+            name.to_string(),
+            vec![Type::named("str")]
+        )));
+    }
+    assert!(is_copy(&Type::Named(
+        "Envelope".to_string(),
+        vec![Type::Named(
+            "PairEnvelope".to_string(),
+            vec![Type::named("Count")]
+        )],
+    )));
+    assert!(!is_copy(&Type::Named(
+        "Envelope".to_string(),
+        vec![Type::named("OwnedCount")],
+    )));
+}
+
+#[test]
+fn mir_copy_classifier_preserves_builtin_wrapper_payload_rules() {
+    let program = crate::check_source("def main():\n    pass\n")
+        .expect("the empty runtime program should type check");
+    let module = crate::mir::lower(&program);
+    let is_copy = |ty: &Type| crate::mir::type_is_copy_in_mir(ty, &module);
+    for name in ["Task", "Lookup", "Poll", "SendError", "QueueReceive"] {
+        assert!(is_copy(&Type::Named(
+            name.to_string(),
+            vec![Type::named("int64")]
+        )));
+        assert!(!is_copy(&Type::Named(
+            name.to_string(),
+            vec![Type::named("str")]
+        )));
+    }
+    for payload in [Type::named("int64"), Type::named("str")] {
+        assert!(is_copy(&Type::Named("Queue".to_string(), vec![payload])));
+    }
+    assert!(is_copy(&Type::Named(
+        "Result".to_string(),
+        vec![Type::named("int64"), Type::named("bool")],
+    )));
+    assert!(!is_copy(&Type::Named(
+        "Result".to_string(),
+        vec![Type::named("int64"), Type::named("str")],
+    )));
+}
+
+#[test]
+fn payload_clone_watch_observes_original_strings_but_not_fresh_outputs() {
+    let original = Value::String("watched original allocation".to_string());
+    let watch = super::watch_payload_clones(&original);
+    let fresh = Value::String("independent rendered output".to_string());
+    let fresh_copy = fresh.clone();
+    assert_eq!(watch.observations(), 0);
+    let copy = original.clone();
+    assert!(watch.observations() > 0);
+    let (Value::String(original), Value::String(copy)) = (&original, &copy) else {
+        panic!("string clones preserve their type");
+    };
+    assert_eq!(original, copy);
+    assert_ne!(original.as_ptr(), copy.as_ptr());
+    assert_eq!(fresh, fresh_copy);
+}
+
+#[test]
+fn payload_clone_watch_observes_fallible_and_direct_scalar_container_clones() {
+    let original = Value::Vec(VecValue {
+        element_type: Type::named("int64"),
+        elements: vec![
+            Value::Int(IntegerValue::from_i64(7)),
+            Value::Int(IntegerValue::from_i64(9)),
+        ],
+    });
+    let watch = super::watch_payload_clones(&original);
+    let copy = super::try_clone_array_containing_value(&original).unwrap();
+    assert!(watch.observations() > 0);
+    let prior = watch.observations();
+    let Value::Vec(source) = &original else {
+        unreachable!()
+    };
+    let mut direct_copy = source.clone();
+    assert!(watch.observations() > prior);
+    assert_ne!(source.elements.as_ptr(), direct_copy.elements.as_ptr());
+    direct_copy.elements[0] = Value::Int(IntegerValue::from_i64(30));
+    assert_eq!(source.elements[0], Value::Int(IntegerValue::from_i64(7)));
+    let Value::Vec(copy) = copy else {
+        unreachable!()
+    };
+    assert_ne!(source.elements.as_ptr(), copy.elements.as_ptr());
+    assert_eq!(source.elements, copy.elements);
+}
+
+#[test]
+fn payload_clone_watch_nesting_and_unwinding_restore_the_outer_scope() {
+    let original = Value::String("persistent watched source".to_string());
+    let outer = super::watch_payload_clones(&original);
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let inner = super::watch_payload_clones(&original);
+        drop(original.clone());
+        assert!(inner.observations() > 0);
+        panic!("unwind a nested observation scope");
+    }));
+    assert!(result.is_err());
+    let prior = outer.observations();
+    drop(original.clone());
+    assert!(outer.observations() > prior);
+}
+
+#[test]
+fn payload_clone_watch_covers_direct_aggregate_routes_and_recursive_sources() {
+    let integer = || Value::Int(IntegerValue::from_i64(7));
+    let values = vec![
+        Value::Tuple(TupleValue {
+            element_types: vec![Type::named("int64")],
+            elements: vec![integer()],
+        }),
+        Value::Set(SetValue {
+            element_type: Type::named("int64"),
+            elements: vec![integer()],
+        }),
+        Value::Map(MapValue {
+            key_type: Type::named("int64"),
+            value_type: Type::named("str"),
+            entries: vec![(integer(), Value::String("entry payload".to_string()))],
+        }),
+        Value::Instance(InstanceValue {
+            class_name: "Example".to_string(),
+            fields: [("field".to_string(), integer())].into_iter().collect(),
+        }),
+        Value::EnumVariant(EnumVariantValue {
+            enum_name: "Example".to_string(),
+            variant_name: "Found".to_string(),
+            payloads: vec![integer()],
+        }),
+        optional_present(Type::named("int64"), integer()),
+    ];
+    for source in &values {
+        let watch = super::watch_payload_clones(source);
+        let copy = match source {
+            Value::Tuple(value) => Value::Tuple(value.clone()),
+            Value::Set(value) => Value::Set(value.clone()),
+            Value::Map(value) => Value::Map(value.clone()),
+            Value::Instance(value) => Value::Instance(value.clone()),
+            Value::EnumVariant(value) => Value::EnumVariant(value.clone()),
+            Value::Union(value) => Value::Union(value.clone()),
+            _ => unreachable!(),
+        };
+        assert!(watch.observations() > 0);
+        assert_eq!(source, &copy);
+        let prior = watch.observations();
+        let fallible = super::try_clone_array_containing_value(source).unwrap();
+        assert!(watch.observations() > prior);
+        assert_eq!(source, &fallible);
+    }
+    let empty = Value::Vec(VecValue {
+        element_type: Type::named("int64"),
+        elements: vec![],
+    });
+    let watch = super::watch_payload_clones(&empty);
+    assert_eq!(empty, empty.clone());
+    assert_eq!(watch.observations(), 0);
+}
+
+#[test]
+fn payload_clone_watch_sees_json_fast_path_interior_string_copies() {
+    let source = Value::EnumVariant(EnumVariantValue {
+        enum_name: "json.Value".to_string(),
+        variant_name: "String".to_string(),
+        payloads: vec![Value::String("original JSON text".to_string())],
+    });
+    let Value::EnumVariant(value) = &source else {
+        unreachable!()
+    };
+    let watch = super::watch_payload_clones(&value.payloads[0]);
+    let copy = source.clone();
+    assert!(watch.observations() > 0);
+    assert_eq!(source, copy);
+}
+
+#[test]
 fn representation_stats_count_report_and_parse_round_trip() {
     use super::representation_stats::{self, RepresentationStats};
     let before = representation_stats::snapshot();
@@ -18337,22 +18589,31 @@ fn representation_stats_count_report_and_parse_round_trip() {
     representation_stats::note_closure_environment();
     representation_stats::note_opaque_box();
     representation_stats::note_callable_overflow_allocation();
+    representation_stats::note_payload_clone(super::PayloadCloneRoute::Value);
+    representation_stats::note_payload_clone(super::PayloadCloneRoute::Fallible);
+    representation_stats::note_payload_clone(super::PayloadCloneRoute::Container);
     let delta = representation_stats::snapshot().since(before);
     assert!(delta.union_payload_boxes >= 1);
     assert!(delta.closure_environments >= 1);
     assert!(delta.opaque_boxes >= 1);
     assert!(delta.callable_overflow_allocations >= 1);
+    assert!(delta.payload_value_clone_observations >= 1);
+    assert!(delta.payload_fallible_clone_observations >= 1);
+    assert!(delta.payload_container_clone_observations >= 1);
 
     let stats = RepresentationStats {
         union_payload_boxes: 2,
         closure_environments: 1,
         opaque_boxes: 10,
         callable_overflow_allocations: 0,
+        payload_value_clone_observations: 3,
+        payload_fallible_clone_observations: 4,
+        payload_container_clone_observations: 5,
     };
     let line = stats.report_line("direct");
     assert_eq!(
         line,
-        "aura runtime stats (direct): union_payload_boxes=2 closure_environments=1 opaque_boxes=10 callable_overflow_allocations=0"
+        "aura runtime stats (direct): union_payload_boxes=2 closure_environments=1 opaque_boxes=10 callable_overflow_allocations=0 payload_container_clone_observations=5 payload_fallible_clone_observations=4 payload_value_clone_observations=3"
     );
     assert_eq!(
         RepresentationStats::parse_report_line(&line),

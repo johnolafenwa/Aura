@@ -83,8 +83,10 @@ impl Program {
 }
 
 impl FunctionChecker<'_> {
-    /// A borrowed call may borrow a freshly constructed union or a Copy
-    /// snapshot. It cannot clone a non-Copy member place to build that union.
+    /// A shared union injection presents its member through `BeginUnionLoan`,
+    /// retaining the original place instead of constructing an owned copy.
+    /// Expression typing checks temporary and returned-view origins; stable
+    /// places must remain readable through the original access path.
     pub(super) fn validate_borrowed_union_injection(
         &self,
         expr: &Expr,
@@ -103,10 +105,9 @@ impl FunctionChecker<'_> {
                 self.validate_borrowed_union_injection(then_expr, expected, locals)?;
                 return self.validate_borrowed_union_injection(else_expr, expected, locals);
             }
-            ExprKind::Match { arms, .. } => {
-                for arm in arms {
-                    self.validate_borrowed_union_injection(&arm.value, expected, locals)?;
-                }
+            ExprKind::Match { .. } => {
+                // Each arm was checked with its own pattern bindings. The
+                // outer locals cannot resolve those names or their origins.
                 return Ok(());
             }
             _ => {}
@@ -119,14 +120,14 @@ impl FunctionChecker<'_> {
         };
         let injection = self.union_injections.borrow().get(&id).cloned();
         if let Some(injection) = injection {
-            if !self.is_copy_type(&injection.member_type)
-                && self.borrowed_iterable_place(expr, locals)?.is_some()
-            {
-                return Err(Diagnostic::coded_at(
-                    "AU2010",
-                    expr.span,
-                    format!("borrowed union argument cannot implicitly clone member place of type '{}' into '{expected}'", injection.member_type),
-                ).with_help("construct an owned union local first, moving or explicitly cloning the member, then borrow that union"));
+            if !self.is_copy_type(&injection.member_type) {
+                if let Some(access) = self.borrow_call_place(expr) {
+                    let through_view = locals
+                        .get(&access.root)
+                        .and_then(|binding| binding.view.as_ref())
+                        .map(|_| access.root.as_str());
+                    self.ensure_place_readable(&access, through_view, expr.span, locals)?;
+                }
             }
         }
         Ok(())

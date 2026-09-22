@@ -1,0 +1,31 @@
+enum Message:
+    Text(str)
+    Empty
+
+def main():
+    mut messages: list[Message] = [Message.Text("hello"), Message.Empty]
+    labels: dict[str, str | None] = {"name": "Aura", "empty": None}
+    match messages[0]:
+        case Message.Text(text):
+            print(text)
+        case Message.Empty:
+            print("empty")
+    size: int64 = match labels["name"]:
+        case str as text: text.len()
+        case None: 0
+    print(size)
+    match labels["empty"]:
+        case str as text:
+            print(text)
+        case None:
+            print("absent")
+    match mut messages[0]:
+        case Message.Text(text):
+            text = text + "!"
+        case Message.Empty:
+            pass
+    match messages[0]:
+        case Message.Text(text):
+            print(text)
+        case Message.Empty:
+            print("empty")

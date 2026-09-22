@@ -278,6 +278,116 @@ fn marshal_direct_values(
     Ok(converted)
 }
 
+/// A contextual borrowed argument keeps its origin even when specialization
+/// changes its ABI. The incoming words own their transferred handle references;
+/// replacing them with an origin-derived representation consumes those words.
+fn marshal_borrowed_direct_values(
+    codegen: &mut NativeCodegen<'_>,
+    builder: &mut FunctionBuilder<'_>,
+    values: &[Value],
+    from: &DirectType,
+    to: &DirectType,
+    origin: Value,
+) -> std::result::Result<Vec<Value>, String> {
+    let borrowed_block = builder.create_block();
+    let ordinary_block = builder.create_block();
+    let merge_block = builder.create_block();
+    for abi in to.abi_types() {
+        builder.append_block_param(merge_block, abi);
+    }
+    let borrowed = builder.ins().icmp_imm(IntCC::NotEqual, origin, 0);
+    builder
+        .ins()
+        .brif(borrowed, borrowed_block, &[], ordinary_block, &[]);
+    builder.switch_to_block(borrowed_block);
+    builder.seal_block(borrowed_block);
+    let handle = borrowed_box_thunk_value(codegen, builder, values, from, origin)?;
+    let converted = borrowed_unbox_thunk_value(codegen, builder, handle, to)?;
+    if !matches!(to, DirectType::Opaque(_) | DirectType::Callable(_)) {
+        let release_value = codegen
+            .object
+            .declare_func_in_func(codegen.release_value, builder.func);
+        builder.ins().call(release_value, &[handle]);
+    }
+    release_direct_values(codegen, builder, values, from)?;
+    builder.ins().jump(merge_block, &converted);
+    builder.switch_to_block(ordinary_block);
+    builder.seal_block(ordinary_block);
+    let converted = marshal_direct_values(codegen, builder, values, from, to)?;
+    builder.ins().jump(merge_block, &converted);
+    builder.switch_to_block(merge_block);
+    builder.seal_block(merge_block);
+    Ok(builder.block_params(merge_block).to_vec())
+}
+
+/// Box a transferred argument, adopting its ordinary words or replacing them
+/// with a retained descriptor. The caller still owns the `origin` reference.
+fn box_borrowed_direct_values(
+    codegen: &mut NativeCodegen<'_>,
+    builder: &mut FunctionBuilder<'_>,
+    values: &[Value],
+    ty: &DirectType,
+    origin: Value,
+) -> std::result::Result<Value, String> {
+    let boxed = borrowed_box_thunk_value(codegen, builder, values, ty, origin)?;
+    let borrowed = builder.ins().icmp_imm(IntCC::NotEqual, origin, 0);
+    let release_block = builder.create_block();
+    let next_block = builder.create_block();
+    builder
+        .ins()
+        .brif(borrowed, release_block, &[], next_block, &[]);
+    builder.switch_to_block(release_block);
+    builder.seal_block(release_block);
+    release_direct_values(codegen, builder, values, ty)?;
+    builder.ins().jump(next_block, &[]);
+    builder.switch_to_block(next_block);
+    builder.seal_block(next_block);
+    Ok(boxed)
+}
+
+/// A selected mutable argument was already updated in place. Read its current
+/// representation from the origin; ordinary writebacks retain owned conversion.
+/// Both input handle references are consumed by this helper.
+fn unbox_borrowed_writeback(
+    codegen: &mut NativeCodegen<'_>,
+    builder: &mut FunctionBuilder<'_>,
+    raw: Value,
+    ty: &DirectType,
+    origin: Value,
+) -> std::result::Result<Vec<Value>, String> {
+    let release_value = codegen
+        .object
+        .declare_func_in_func(codegen.release_value, builder.func);
+    let borrowed_block = builder.create_block();
+    let ordinary_block = builder.create_block();
+    let merge_block = builder.create_block();
+    for abi in ty.abi_types() {
+        builder.append_block_param(merge_block, abi);
+    }
+    let borrowed = builder.ins().icmp_imm(IntCC::NotEqual, origin, 0);
+    builder
+        .ins()
+        .brif(borrowed, borrowed_block, &[], ordinary_block, &[]);
+    builder.switch_to_block(borrowed_block);
+    builder.seal_block(borrowed_block);
+    let values = borrowed_unbox_thunk_value(codegen, builder, origin, ty)?;
+    builder.ins().call(release_value, &[raw]);
+    if !matches!(ty, DirectType::Opaque(_) | DirectType::Callable(_)) {
+        builder.ins().call(release_value, &[origin]);
+    }
+    builder.ins().jump(merge_block, &values);
+    builder.switch_to_block(ordinary_block);
+    builder.seal_block(ordinary_block);
+    let values = unbox_thunk_value(codegen, builder, raw, ty)?;
+    if !matches!(ty, DirectType::Opaque(_) | DirectType::Callable(_)) {
+        builder.ins().call(release_value, &[raw]);
+    }
+    builder.ins().jump(merge_block, &values);
+    builder.switch_to_block(merge_block);
+    builder.seal_block(merge_block);
+    Ok(builder.block_params(merge_block).to_vec())
+}
+
 /// An environment word as a direct value of `abi`, and back.
 fn value_from_word(builder: &mut FunctionBuilder<'_>, word: Value, abi: types::Type) -> Value {
     if abi == types::F64 {
@@ -836,6 +946,17 @@ impl NativeCodegen<'_> {
         let params = builder.block_params(entry).to_vec();
         let callable_ptr = params[0];
         let supplied_mask = params[1];
+        let take_handoff = self
+            .object
+            .declare_func_in_func(self.call_handoff_take, builder.func);
+        let handoff = builder.ins().call(take_handoff, &[]);
+        let handoff = builder.inst_results(handoff)[0];
+        let handoff_place = self
+            .object
+            .declare_func_in_func(self.call_handoff_place, builder.func);
+        let release_value = self
+            .object
+            .declare_func_in_func(self.release_value, builder.func);
         let env_base = environment_base(&mut builder, callable_ptr, shape.inline());
         let captures = load_captures(&mut builder, env_base, &shape.capture_types);
 
@@ -856,30 +977,65 @@ impl NativeCodegen<'_> {
             let count = contract_ty.value_count();
             let supplied = params[cursor..cursor + count].to_vec();
             cursor += count;
+            // Detaching the handoff at entry keeps calls made by defaults from
+            // claiming this invocation's origins. Missing arguments also carry
+            // zero ABI placeholders, which must not be marshalled as values.
+            let default_blocks = if param.default_function.is_some() {
+                let bit = builder
+                    .ins()
+                    .band_imm(supplied_mask, 1i64 << (index - key.captures));
+                let missing = builder.ins().icmp_imm(IntCC::Equal, bit, 0);
+                let default_block = builder.create_block();
+                let supplied_block = builder.create_block();
+                let merge_block = builder.create_block();
+                for abi in ty.abi_types() {
+                    builder.append_block_param(merge_block, abi);
+                }
+                builder
+                    .ins()
+                    .brif(missing, default_block, &[], supplied_block, &[]);
+                builder.switch_to_block(supplied_block);
+                builder.seal_block(supplied_block);
+                Some((default_block, merge_block))
+            } else {
+                None
+            };
             // The caller passes the contract's direct value; the lowered
             // function takes its own parameter type (a type parameter is a
             // boxed handle), so the value is marshalled when they differ.
-            let supplied = marshal_direct_values(self, &mut builder, &supplied, contract_ty, ty)?;
-            let Some(default_name) = param.default_function.as_ref() else {
+            let supplied = if param.passing == MirReceiverKind::Value {
+                marshal_direct_values(self, &mut builder, &supplied, contract_ty, ty)?
+            } else {
+                let public_index = builder
+                    .ins()
+                    .iconst(types::I64, (index - key.captures) as i64);
+                let public = builder.ins().iconst(types::I64, 0);
+                let origin = builder
+                    .ins()
+                    .call(handoff_place, &[handoff, public_index, public]);
+                let origin = builder.inst_results(origin)[0];
+                let converted = marshal_borrowed_direct_values(
+                    self,
+                    &mut builder,
+                    &supplied,
+                    contract_ty,
+                    ty,
+                    origin,
+                )?;
+                builder.ins().call(release_value, &[origin]);
+                converted
+            };
+            let Some((default_block, merge_block)) = default_blocks else {
                 lowered_args.extend(supplied);
                 continue;
             };
-            // A cleared mask bit means the caller passed nothing for this
-            // slot: evaluate the declared default instead.
-            let bit = builder
-                .ins()
-                .band_imm(supplied_mask, 1i64 << (index - key.captures));
-            let missing = builder.ins().icmp_imm(IntCC::Equal, bit, 0);
-            let default_block = builder.create_block();
-            let merge_block = builder.create_block();
-            for abi in ty.abi_types() {
-                builder.append_block_param(merge_block, abi);
-            }
-            builder
-                .ins()
-                .brif(missing, default_block, &[], merge_block, &supplied);
+            builder.ins().jump(merge_block, &supplied);
             builder.switch_to_block(default_block);
             builder.seal_block(default_block);
+            let default_name = param
+                .default_function
+                .as_ref()
+                .expect("default blocks require a default function");
             let default_id = *self.functions.get(default_name).ok_or({
                 format!(
                     "direct backend is missing default function `{default_name}` for `{}`",
@@ -895,24 +1051,38 @@ impl NativeCodegen<'_> {
             lowered_args.extend(builder.block_params(merge_block).to_vec());
         }
 
-        // A caller's indirect sink handoff (public sinks by contract index,
-        // capture sinks by capture index) becomes the callee's own sink list.
-        let claim_sinks = self
+        // Publish only after defaults have completed. The token remains
+        // readable while mutable results are marshalled back to the contract.
+        let publish_handoff = self
             .object
-            .declare_func_in_func(self.claim_indirect_mutable_sinks, builder.func);
+            .declare_func_in_func(self.call_handoff_publish, builder.func);
         let capture_count = builder.ins().iconst(types::I64, key.captures as i64);
-        builder.ins().call(claim_sinks, &[capture_count]);
+        builder
+            .ins()
+            .call(publish_handoff, &[handoff, capture_count]);
         let target_ref = self.object.declare_func_in_func(target_id, builder.func);
         let inst = builder.ins().call(target_ref, &lowered_args);
         let results = builder.inst_results(inst).to_vec();
         let return_count = return_ty.value_count();
-        let mut returned = marshal_direct_values(
-            self,
-            &mut builder,
-            &results[..return_count],
-            &return_ty,
-            &shape.contract_return_ty,
-        )?;
+        let returns_view = function.blocks.iter().any(|block| {
+            block
+                .instructions
+                .iter()
+                .any(|instruction| matches!(instruction, Instruction::ReturnLoan { .. }))
+        });
+        let mut returned = if returns_view {
+            // The returned-view descriptor travels through the runtime handoff;
+            // the ABI result words are placeholders, even across specialization.
+            shape.contract_return_ty.zero_values(&mut builder)
+        } else {
+            marshal_direct_values(
+                self,
+                &mut builder,
+                &results[..return_count],
+                &return_ty,
+                &shape.contract_return_ty,
+            )?
+        };
         let mut cursor = return_count;
         let mut env_offset = 0i32;
         for (index, param) in function.params.iter().enumerate() {
@@ -929,17 +1099,31 @@ impl NativeCodegen<'_> {
             }
             if param.passing == MirReceiverKind::BorrowMut {
                 let contract_ty = &shape.contract_param_types[index - key.captures];
-                let writeback = marshal_direct_values(
+                let public_index = builder
+                    .ins()
+                    .iconst(types::I64, (index - key.captures) as i64);
+                let public = builder.ins().iconst(types::I64, 0);
+                let origin = builder
+                    .ins()
+                    .call(handoff_place, &[handoff, public_index, public]);
+                let origin = builder.inst_results(origin)[0];
+                let writeback = marshal_borrowed_direct_values(
                     self,
                     &mut builder,
                     &results[cursor..cursor + count],
                     ty,
                     contract_ty,
+                    origin,
                 )?;
+                builder.ins().call(release_value, &[origin]);
                 returned.extend(writeback);
                 cursor += count;
             }
         }
+        let release_handoff = self
+            .object
+            .declare_func_in_func(self.call_handoff_release, builder.func);
+        builder.ins().call(release_handoff, &[handoff]);
         builder.ins().return_(&returned);
         builder.finalize();
         try_or_string_error!(
@@ -964,6 +1148,7 @@ pub(super) struct ContractDescriptor {
     pub(super) param_types: Vec<DirectType>,
     pub(super) mutable_params: Vec<bool>,
     pub(super) return_ty: DirectType,
+    pub(super) returns_view: bool,
 }
 
 /// The public parameters and return type of a callable contract.
@@ -1050,6 +1235,7 @@ pub(super) fn declare_contract_descriptor(
         return Ok(existing.clone());
     }
     let (param_types, mutable_params, return_ty) = contract_direct_parts(signature, classes)?;
+    let returns_view = matches!(contract_parts(signature)?.1, Type::ReturnedView(_));
     let stem = format!("aura_contract_{}", contract_descriptors.len());
     let descriptor = try_or_string_error!(
         object.declare_data(&format!("{stem}_descriptor"), Linkage::Local, false, false),
@@ -1096,6 +1282,7 @@ pub(super) fn declare_contract_descriptor(
         param_types,
         mutable_params,
         return_ty,
+        returns_view,
     };
     contract_descriptors.insert(key, contract.clone());
     Ok(contract)
@@ -1261,6 +1448,17 @@ impl NativeCodegen<'_> {
         let params = builder.block_params(entry).to_vec();
         let callable_ptr = params[0];
         let supplied_mask = params[1];
+        let take_handoff = self
+            .object
+            .declare_func_in_func(self.call_handoff_take, builder.func);
+        let handoff = builder.ins().call(take_handoff, &[]);
+        let handoff = builder.inst_results(handoff)[0];
+        let handoff_place = self
+            .object
+            .declare_func_in_func(self.call_handoff_place, builder.func);
+        let release_value = self
+            .object
+            .declare_func_in_func(self.release_value, builder.func);
         let handle = builder
             .ins()
             .load(types::I64, MemFlags::new(), callable_ptr, 8);
@@ -1291,7 +1489,13 @@ impl NativeCodegen<'_> {
                 .brif(supplied, box_block, &[], next_block, &[]);
             builder.switch_to_block(box_block);
             builder.seal_block(box_block);
-            let boxed = box_thunk_value(self, &mut builder, &values, ty)?;
+            let public_index = builder.ins().iconst(types::I64, index as i64);
+            let origin = builder
+                .ins()
+                .call(handoff_place, &[handoff, public_index, zero]);
+            let origin = builder.inst_results(origin)[0];
+            let boxed = box_borrowed_direct_values(self, &mut builder, &values, ty, origin)?;
+            builder.ins().call(release_value, &[origin]);
             builder
                 .ins()
                 .store(MemFlags::new(), boxed, buffer, (index as i32) * 8);
@@ -1311,17 +1515,28 @@ impl NativeCodegen<'_> {
         let function_call = self
             .object
             .declare_func_in_func(self.function_call, builder.func);
+        let publish_handoff = self
+            .object
+            .declare_func_in_func(self.call_handoff_publish, builder.func);
+        let preserve_shape = builder.ins().iconst(types::I64, -1);
+        builder
+            .ins()
+            .call(publish_handoff, &[handoff, preserve_shape]);
         let call = builder
             .ins()
             .call(function_call, &[handle, buffer, count_value]);
         let raw_result = builder.inst_results(call)[0];
-        let release_value = self
-            .object
-            .declare_func_in_func(self.release_value, builder.func);
-        let mut returned = unbox_thunk_value(self, &mut builder, raw_result, &contract.return_ty)?;
-        if !matches!(contract.return_ty, DirectType::Opaque(_)) {
-            builder.ins().call(release_value, &[raw_result]);
-        }
+        let mut returned = if contract.returns_view {
+            // A returned-view thunk returns null; only its descriptor handoff
+            // carries the result. Do not unbox null as the pointee's value.
+            contract.return_ty.zero_values(&mut builder)
+        } else {
+            let values = unbox_thunk_value(self, &mut builder, raw_result, &contract.return_ty)?;
+            if !matches!(contract.return_ty, DirectType::Opaque(_)) {
+                builder.ins().call(release_value, &[raw_result]);
+            }
+            values
+        };
         for (index, (ty, mutable)) in contract
             .param_types
             .iter()
@@ -1334,11 +1549,23 @@ impl NativeCodegen<'_> {
             let raw = builder
                 .ins()
                 .load(types::I64, MemFlags::new(), buffer, (index as i32) * 8);
-            returned.extend(unbox_thunk_value(self, &mut builder, raw, ty)?);
-            if !matches!(ty, DirectType::Opaque(_)) {
-                builder.ins().call(release_value, &[raw]);
-            }
+            let public_index = builder.ins().iconst(types::I64, index as i64);
+            let origin = builder
+                .ins()
+                .call(handoff_place, &[handoff, public_index, zero]);
+            let origin = builder.inst_results(origin)[0];
+            returned.extend(unbox_borrowed_writeback(
+                self,
+                &mut builder,
+                raw,
+                ty,
+                origin,
+            )?);
         }
+        let release_handoff = self
+            .object
+            .declare_func_in_func(self.call_handoff_release, builder.func);
+        builder.ins().call(release_handoff, &[handoff]);
         builder.ins().return_(&returned);
         builder.finalize();
         try_or_string_error!(

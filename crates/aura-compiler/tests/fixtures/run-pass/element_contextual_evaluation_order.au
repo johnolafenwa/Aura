@@ -1,0 +1,40 @@
+class Counter:
+    value: int64
+
+    def add(mut self, amount: int64):
+        self.value += amount
+
+def choose(position: mut int64) -> int64:
+    old = position
+    position += 1
+    print(f"select {old}")
+    return old
+
+def reset(position: mut int64) -> int64:
+    print("reset")
+    position = 0
+    return 7
+
+def show(value: str, marker: int64):
+    print(value)
+    print(marker)
+
+def main():
+    names = ["head", "tail"]
+    mut position: int64 = 1
+    show(value=names[choose(position)], marker=reset(position))
+    print(position)
+    show(marker=reset(position), value=names[choose(position)])
+    print(position)
+    position = -1
+    show(names[position], reset(position))
+    print(position)
+    mut counters = [Counter(value=1), Counter(value=10)]
+    position = 1
+    counters[choose(position)].add(amount=reset(position))
+    print(counters[0].value)
+    print(counters[1].value)
+    print(position)
+    print(false and names[choose(position)] == "head")
+    print(true or names[choose(position)] == "tail")
+    print(position)

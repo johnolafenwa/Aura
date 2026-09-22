@@ -3178,9 +3178,16 @@ def main():
     assert_eq!(dynamic.code, "AU2003");
     assert!(dynamic.message.contains("tuple indices must be"));
 
-    let non_copy =
-        crate::check_source("def main():\n    pair = (\"left\", 2)\n    print(pair[0])\n")
-            .expect_err("non-copy tuple elements cannot be consumed by indexing");
+    crate::check_source(
+        "def main():\n    pair = (\"left\", 2)\n    print(pair[0])\n    print(pair)\n",
+    )
+    .expect("a shared contextual read borrows a non-copy tuple element");
+
+    let non_copy = crate::check_source(
+        "def main():\n    pair = (\"left\", 2)\n    value = pair[0]\n    print(value)\n",
+    )
+    .expect_err("an owned extraction still cannot consume a non-copy tuple element by indexing");
+    assert_eq!(non_copy.code, "AU3005");
     assert!(non_copy.message.contains("unpack the tuple"));
 
     let grouped_dynamic = crate::check_source(
@@ -4238,11 +4245,11 @@ fn indexed_read_guidance_follows_the_element_clone_safety() {
     for (source, message) in [
         (
             "def main():\n    values: list[str] = [\"one\"]\n    taken = values[0]\n    print(taken)\n",
-            "cannot implicitly copy `str` out of a list index; use `get(index)` for an explicit cloned read instead",
+            "cannot implicitly copy `str` out of a list index; use `view value = items[index]` for shared access, `items[index].clone()` for an explicit cloned owner, or `pop(index)` or `set(index, value)` to transfer ownership",
         ),
         (
             "def main():\n    mut values = dict[str, str]()\n    values[\"a\"] = \"b\"\n    taken = values[\"a\"]\n    print(taken)\n",
-            "cannot implicitly copy `str` out of a dict index; use `get(key)` for an explicit cloned optional read, or `remove(key)` to transfer ownership",
+            "cannot implicitly copy `str` out of a dict index; use `view value = table[key]` for shared access, `table[key].clone()` for an explicit cloned owner, or `remove(key)` to transfer ownership",
         ),
     ] {
         let rejected = crate::check_source(source)
@@ -4257,11 +4264,11 @@ fn indexed_read_guidance_follows_the_element_clone_safety() {
     for (source, message) in [
         (
             "import random\n\ndef main():\n    mut generators = list[random.Rng]()\n    generators.append(random.Rng(seed=1))\n    chosen = generators[0]\n    print(chosen.next_float())\n",
-            "cannot implicitly copy `random.Rng` out of a list index; `get(index)` cannot clone it because `random.Rng` is directly non-cloneable, so use `pop(index)` to transfer ownership instead",
+            "cannot implicitly copy `random.Rng` out of a list index; use `view value = items[index]` for shared access; `.clone()` is unavailable because `random.Rng` is directly non-cloneable, so use `pop(index)` or `set(index, value)` to transfer ownership",
         ),
         (
             "import random\n\nclass Holder:\n    generator: random.Rng\n\ndef main():\n    mut holders = dict[str, Holder]()\n    holders[\"a\"] = Holder(generator=random.Rng(seed=1))\n    chosen = holders[\"a\"]\n    print(chosen.generator.next_float())\n",
-            "cannot implicitly copy `Holder` out of a dict index; `get(key)` cannot clone it because `Holder` contains non-cloneable `random.Rng` state, so use `remove(key)` to transfer ownership instead",
+            "cannot implicitly copy `Holder` out of a dict index; use `view value = table[key]` for shared access; `.clone()` is unavailable because `Holder` contains non-cloneable `random.Rng` state, so use `remove(key)` to transfer ownership",
         ),
     ] {
         let rejected = crate::check_source(source)
@@ -4275,15 +4282,15 @@ fn indexed_read_guidance_follows_the_element_clone_safety() {
     for (source, message) in [
         (
             "def first[T](values: list[T]) -> T:\n    return values[0]\n\ndef main():\n    print(\"ok\")\n",
-            "cannot implicitly copy `T` out of a list index; `get(index)` requires a clone-safe `T`, or use `pop(index)` to transfer ownership",
+            "cannot implicitly copy `T` out of a list index; use `view value = items[index]` for shared access; `items[index].clone()` requires a clone-safe `T`, or use `pop(index)` or `set(index, value)` to transfer ownership",
         ),
         (
             "def lookup[V](values: dict[str, V], key: str) -> V:\n    return values[key]\n\ndef main():\n    print(\"ok\")\n",
-            "cannot implicitly copy `V` out of a dict index; `get(key)` requires a clone-safe `V`, or use `remove(key)` to transfer ownership",
+            "cannot implicitly copy `V` out of a dict index; use `view value = table[key]` for shared access; `table[key].clone()` requires a clone-safe `V`, or use `remove(key)` to transfer ownership",
         ),
         (
             "def first(values: list[Task[str]]) -> Task[str]:\n    return values[0]\n",
-            "cannot implicitly copy `Task[str]` out of a list index; `get(index)` cannot clone it because that would duplicate the single observation right for task result `str`, so use `pop(index)` to transfer ownership instead",
+            "cannot implicitly copy `Task[str]` out of a list index; use `view value = items[index]` for shared access; `.clone()` is unavailable because that would duplicate the single observation right for task result `str`, so use `pop(index)` or `set(index, value)` to transfer ownership",
         ),
     ] {
         let rejected = crate::check_source(source)
@@ -28458,14 +28465,14 @@ def probe(value: bool):
 
 #[test]
 fn adr0038_additional_view_diagnostics_cover_call_and_tuple_place_edges() {
+    crate::check_source(
+        "def bump(value: mut int64):\n    value += 1\n\ndef main():\n    mut values = [1, 2]\n    bump(values[0])\n",
+    )
+    .expect("a selected mutable list element is an addressable call argument");
     let cases = [
         (
             "def main():\n    values = [1]\n    view mut item = values[0]\n",
             "is not mutable",
-        ),
-        (
-            "def bump(value: mut int64):\n    value += 1\n\ndef main():\n    mut values = [1, 2]\n    bump(values[0])\n",
-            "must be a mutable place",
         ),
         (
             "def plain() -> int64:\n    return 1\n\ndef main():\n    view invalid = plain()\n",
@@ -28473,11 +28480,11 @@ fn adr0038_additional_view_diagnostics_cover_call_and_tuple_place_edges() {
         ),
         (
             "class Box:\n    value: int64\n\n    def value_view(self) -> view int64 from self:\n        return view self.value\n\ndef main():\n    view invalid = Box(value=1).value_view()\n",
-            "requires an addressable receiver place",
+            "a view source must be an addressable",
         ),
         (
             "def identity(value: int64) -> view int64 from value:\n    return view value\n\ndef main():\n    view invalid = identity(1 + 2)\n",
-            "requires an addressable caller place",
+            "a view source must be an addressable",
         ),
     ];
     for (source, expected) in cases {
@@ -31148,34 +31155,24 @@ fn explicit_specialization_ast_keeps_the_same_callable_adapter_diagnostic() {
 }
 
 #[test]
-fn adr0061_element_places_read_fields_in_place_and_refuse_element_arguments() {
+fn adr0061_element_places_read_fields_in_place_and_accept_element_arguments() {
     let accepted = "class Profile:\n    name: str\n    visits: int64\n\ndef main():\n    mut users = [Profile(name=\"ada\", visits=1), Profile(name=\"linus\", visits=2)]\n    print(users[0].visits)\n    users[1].visits += 1\n    view mut ada = users[0]\n    view mut linus = users[1]\n    ada.visits += 1\n    linus.visits += 1\n    view shared = users[0]\n    users[1].visits = 5\n    print(shared.visits)\n    mut people: dict[str, Profile] = {\"ada\": Profile(name=\"ada\", visits=0)}\n    people[\"ada\"].visits = 3\n    print(people[\"ada\"].name)\n    mut pairs = [(1, \"one\")]\n    view label = pairs[0][1]\n    print(label)\n";
     crate::check_source(accepted)
         .expect("field reads and writes through elements are place accesses, and literal-disjoint element views coexist");
 
+    for source in [
+        "def bump(value: mut int64):\n    value += 1\n\ndef main():\n    mut values = [1, 2]\n    bump(values[0])\n",
+        "def bump(value: mut int64):\n    value += 1\n\ndef main():\n    mut values = [1, 2]\n    bump((values[1]))\n",
+        "class Profile:\n    name: str\n    visits: int64\n\ndef bump(value: mut int64):\n    value += 1\n\ndef main():\n    mut users = [Profile(name=\"ada\", visits=1)]\n    bump(users[0].visits)\n",
+        "class Profile:\n    name: str\n    visits: int64\n\ndef bump(value: mut int64):\n    value += 1\n\ndef main():\n    mut people: dict[str, Profile] = {\"ada\": Profile(name=\"ada\", visits=1)}\n    bump(people[\"ada\"].visits)\n",
+        "class Profile:\n    name: str\n    visits: int64\n\ndef bump(profile: mut Profile):\n    profile.visits += 1\n\ndef main():\n    mut users = [Profile(name=\"ada\", visits=1)]\n    bump(users[0])\n",
+    ] {
+        crate::check_source(source).expect("contextual mutable element arguments are places");
+    }
+
     let cases = [
         (
             "class Profile:\n    name: str\n    visits: int64\n\ndef main():\n    mut users = [Profile(name=\"ada\", visits=1)]\n    taken = users[0].name\n    print(taken)\n",
-            "cannot implicitly copy `Profile` out of a list index",
-        ),
-        (
-            "def bump(value: mut int64):\n    value += 1\n\ndef main():\n    mut values = [1, 2]\n    bump(values[0])\n",
-            "must be a mutable place",
-        ),
-        (
-            "def bump(value: mut int64):\n    value += 1\n\ndef main():\n    mut values = [1, 2]\n    bump((values[1]))\n",
-            "must be a mutable place",
-        ),
-        (
-            "class Profile:\n    name: str\n    visits: int64\n\ndef bump(value: mut int64):\n    value += 1\n\ndef main():\n    mut users = [Profile(name=\"ada\", visits=1)]\n    bump(users[0].visits)\n",
-            "must be a mutable place",
-        ),
-        (
-            "class Profile:\n    name: str\n    visits: int64\n\ndef bump(value: mut int64):\n    value += 1\n\ndef main():\n    mut people: dict[str, Profile] = {\"ada\": Profile(name=\"ada\", visits=1)}\n    bump(people[\"ada\"].visits)\n",
-            "must be a mutable place",
-        ),
-        (
-            "class Profile:\n    name: str\n    visits: int64\n\ndef bump(profile: mut Profile):\n    profile.visits += 1\n\ndef main():\n    mut users = [Profile(name=\"ada\", visits=1)]\n    bump(users[0])\n",
             "cannot implicitly copy `Profile` out of a list index",
         ),
         (
@@ -31396,7 +31393,8 @@ fn adr0061_contextual_member_reads_restore_owned_read_rules_and_identify_element
             .expect_err("an owned read must still require a copyable element");
         assert_eq!(error.code, "AU3005", "{source}");
     }
-    let outer_read = Some(Span::new(20, 3));
+    let outer_expression = crate::parser::parse_expression("users[0]").unwrap();
+    let outer_read = Some(&outer_expression as *const Expr as usize);
     checker.index_place_read.set(outer_read);
     for source in ["users[\"wrong\"]", "people[0]"] {
         let expression = crate::parser::parse_expression(source).unwrap();
@@ -31498,6 +31496,7 @@ fn adr0061_typed_element_and_entry_paths_resolve_values_and_reject_wrong_project
         PlacePath::root("people").with_tuple(2),
         PlacePath::root("people").with_entry(PlaceSelector::Int(2)),
         PlacePath::root("people").with_entry(PlaceSelector::Dynamic),
+        PlacePath::root("people").with_element(PlaceSelector::Dynamic),
     ] {
         assert_eq!(
             checker
@@ -31531,5 +31530,210 @@ fn adr0061_typed_element_and_entry_paths_resolve_values_and_reject_wrong_project
         assert_eq!(error.code, "AU3004");
         assert_eq!(error.message, expected);
         assert_eq!(error.span, Some(span));
+    }
+}
+
+#[test]
+fn adr0061_contextual_collection_read_fixtures_type_check() {
+    for (name, source) in [
+        (
+            "element_contextual_bare_iteration_source",
+            include_str!("../tests/fixtures/run-pass/element_contextual_bare_iteration_source.au"),
+        ),
+        (
+            "element_contextual_disjoint_reads",
+            include_str!("../tests/fixtures/run-pass/element_contextual_disjoint_reads.au"),
+        ),
+        (
+            "element_contextual_evaluation_order",
+            include_str!("../tests/fixtures/run-pass/element_contextual_evaluation_order.au"),
+        ),
+        (
+            "element_contextual_mutable_arguments",
+            include_str!("../tests/fixtures/run-pass/element_contextual_mutable_arguments.au"),
+        ),
+        (
+            "element_contextual_mutable_receivers",
+            include_str!("../tests/fixtures/run-pass/element_contextual_mutable_receivers.au"),
+        ),
+        (
+            "element_contextual_nested_selections",
+            include_str!("../tests/fixtures/run-pass/element_contextual_nested_selections.au"),
+        ),
+        (
+            "element_contextual_operands",
+            include_str!("../tests/fixtures/run-pass/element_contextual_operands.au"),
+        ),
+        (
+            "element_contextual_projected_owners",
+            include_str!("../tests/fixtures/run-pass/element_contextual_projected_owners.au"),
+        ),
+        (
+            "element_contextual_returned_field_views",
+            include_str!("../tests/fixtures/run-pass/element_contextual_returned_field_views.au"),
+        ),
+        (
+            "element_contextual_scrutinees",
+            include_str!("../tests/fixtures/run-pass/element_contextual_scrutinees.au"),
+        ),
+        (
+            "element_contextual_selected_collection",
+            include_str!("../tests/fixtures/run-pass/element_contextual_selected_collection.au"),
+        ),
+        (
+            "element_contextual_shared_arguments",
+            include_str!("../tests/fixtures/run-pass/element_contextual_shared_arguments.au"),
+        ),
+        (
+            "element_contextual_shared_receivers",
+            include_str!("../tests/fixtures/run-pass/element_contextual_shared_receivers.au"),
+        ),
+        (
+            "element_contextual_temporary_owners",
+            include_str!("../tests/fixtures/run-pass/element_contextual_temporary_owners.au"),
+        ),
+        (
+            "element_contextual_union_arguments",
+            include_str!("../tests/fixtures/run-pass/element_contextual_union_arguments.au"),
+        ),
+        (
+            "entry_contextual_selector_lifetime",
+            include_str!("../tests/fixtures/run-pass/entry_contextual_selector_lifetime.au"),
+        ),
+    ] {
+        crate::check_source(source).unwrap_or_else(|error| {
+            panic!("{name} should permit contextual place access: {error}")
+        });
+    }
+}
+
+#[test]
+fn adr0061_contextual_collection_reads_preserve_owned_positions() {
+    for source in [
+        include_str!("../tests/fixtures/check-fail/element_contextual_owned_argument.au"),
+        include_str!("../tests/fixtures/check-fail/entry_contextual_owned_aggregate.au"),
+        include_str!("../tests/fixtures/check-fail/element_contextual_owned_match.au"),
+        include_str!("../tests/fixtures/check-fail/element_contextual_read_context_restored.au"),
+    ] {
+        let error =
+            crate::check_source(source).expect_err("an indexed place does not yield ownership");
+        assert_eq!(error.code, "AU3005", "{source}: {error}");
+        assert!(error.message.contains("use `view"), "{error}");
+    }
+}
+
+#[test]
+fn adr0061_contextual_collection_reads_keep_call_exclusivity_and_mutable_places() {
+    for (source, detail) in [
+        ("def append_name(names: mut list[str]) -> int64:\n    names.append(\"new\")\n    return 1\n\ndef show(value: str, marker: int64):\n    print(value)\n    print(marker)\n\ndef main():\n    mut names = [\"old\"]\n    show(names[0], append_name(names))\n", "borrow"),
+        ("class Counter:\n    value: int64\n\n    def add(mut self, amount: int64):\n        self.value += amount\n\ndef append_counter(counters: mut list[Counter]) -> int64:\n    counters.append(Counter(value=2))\n    return 1\n\ndef main():\n    mut counters = [Counter(value=1)]\n    counters[0].add(append_counter(counters))\n", "borrow"),
+        ("def main():\n    mut names = [\"old\", \"other\"]\n    view mut selected = names[0]\n    print(names[0])\n    selected = \"new\"\n    print(selected)\n", "mutable view"),
+        ("def make_values() -> list[int64]:\n    return [1]\n\ndef bump(value: mut int64):\n    value += 1\n\ndef main():\n    bump(make_values()[0])\n", "mutable place"),
+    ] {
+        let error = crate::check_source(source).expect_err("contextual access cannot bypass exclusivity or capability");
+        assert_ne!(error.code, "AU3005", "the contextual read must succeed before the intended guard: {source}: {error}");
+        assert!(error.message.contains(detail), "{source}: {error}");
+    }
+}
+
+#[test]
+fn adr0061_contextual_projection_bases_preserve_selector_read_checks() {
+    let source = r#"
+def select_row(value: str) -> int64:
+    return 0
+
+def main():
+    mut names = ["first"]
+    view mut held = names[0]
+    rows = [["row"]]
+    print(rows[select_row(names[0])][0])
+    print(held)
+"#;
+    let error = crate::check_source(source)
+        .expect_err("resolving an outer projection does not suppress reads inside its selector");
+    assert_eq!(error.code, "AU3002", "{error}");
+    assert!(error.message.contains("mutable view `held`"), "{error}");
+}
+
+#[test]
+fn adr0061_contextual_returned_view_origins_infer_projected_argument_and_receiver_types() {
+    crate::check_source(
+        r#"
+class Row[T]:
+    name: T
+
+    def label(self) -> view T from self:
+        return view self.name
+
+def label[T](row: Row[T]) -> view T from row:
+    return view row.name
+
+def main():
+    rows = [Row(name="Ada")]
+    view text = label(rows[0])
+    print(text)
+    print(label(rows[0]))
+    view method_text = rows[0].label()
+    print(method_text)
+    print(rows[0].label())
+"#,
+    )
+    .expect(
+        "returned-view origin inference preserves declared shared argument and receiver access",
+    );
+}
+
+#[test]
+fn adr0061_contextual_branches_preserve_owned_results_and_mutable_union_types() {
+    let accepted = r#"
+def show(value: str):
+    print(value)
+
+def reset(value: mut (str | None)):
+    value = None
+
+def main():
+    names = ["left", "right"]
+    flag = true
+    show(names[0] if flag else names[1])
+    show(match flag:
+        case true: names[0]
+        case false: names[1]
+    )
+    mut optional: list[str | None] = ["present"]
+    reset(optional[0])
+"#;
+    crate::check_source(accepted)
+        .expect("borrowed branch results and exact mutable union elements are admitted");
+    let owned = "def main():\n    names = [\"left\", \"right\"]\n    flag = true\n    taken = names[0] if flag else names[1]\n    print(taken)\n";
+    let error = crate::check_source(owned)
+        .expect_err("owned branch results cannot acquire an indexed owner");
+    assert_eq!(error.code, "AU3005", "{error}");
+    let mismatch = "def reset(value: mut (str | None)):\n    value = None\n\ndef main():\n    mut names = [\"a\"]\n    reset(names[0])\n";
+    let error = crate::check_source(mismatch)
+        .expect_err("mutable union injection must still require exact storage");
+    assert_eq!(error.code, "AU2010", "{error}");
+}
+
+#[test]
+fn adr0061_borrowed_consumers_do_not_own_their_selected_receivers_or_fields() {
+    for source in [
+        "class Profile:\n    name: str\n\n    def take(own self) -> str:\n        return self.name\n\ndef main():\n    users = [Profile(name=\"ada\")]\n    print(users[0].take())\n",
+        "class Profile:\n    name: str\n\ndef take(value: own str):\n    print(value)\n\ndef main():\n    users = [Profile(name=\"ada\")]\n    take(users[0].name)\n",
+    ] {
+        let error = crate::check_source(source).expect_err("an owned receiver or selected field stays owned inside a shared consumer");
+        assert_eq!(error.code, "AU3005", "{error}");
+    }
+}
+
+#[test]
+fn adr0061_nested_selectors_are_read_in_written_argument_order() {
+    for source in [
+        "def use(position: mut int64, value: str):\n    print(value)\n\ndef main():\n    mut position: int64 = 0\n    rows = [[\"a\"]]\n    use(position, rows[position][0])\n",
+        "class Profile:\n    name: str\n\ndef use(position: mut int64, value: str):\n    print(value)\n\ndef main():\n    mut position: int64 = 0\n    users = [Profile(name=\"a\")]\n    use(position, users[position].name)\n",
+    ] {
+        let error = crate::check_source(source).expect_err("nested selector reads conflict with an earlier mutable argument");
+        assert!(error.message.contains("position"), "{error}");
+        assert_ne!(error.code, "AU3005", "the contextual value must be admitted before its evaluation-order guard: {error}");
     }
 }

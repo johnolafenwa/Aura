@@ -33,42 +33,34 @@ fn assert_rejected_on_both_boundaries(encoded: Value, expected: &str) -> String 
 }
 
 #[test]
-fn shared_member_view_cannot_be_passed_as_a_borrowed_union() {
+fn shared_member_view_uses_a_borrowed_union_presentation() {
     let source = format!(
         "{VIEW_HELPER}def accept(value: str | None) -> int64:\n    return 42\ndef main():\n    profile = Profile(name=\"Ada\")\n    view name = profile_name(profile)\n    print(accept(value=name))\n"
     );
 
-    let error = match check_source(&source) {
-        Err(error) => error,
-        Ok(_) => panic!("a member view cannot be relabeled with a union descriptor"),
-    };
-    assert!(
-        matches!(error.code.as_str(), "AU2010" | "AU3003"),
-        "{error}"
-    );
+    check_source(&source).expect("shared union presentation should check");
+    let mir = lower_source_to_mir(&source).expect("shared union presentation should lower");
+    assert_eq!(run_mir(&mir).expect("presentation should run").stdout, "42\n");
+    emit_host_native_object(&mir).expect("direct backend must accept the same presentation");
 }
 
 #[test]
-fn argument_origin_union_view_cannot_derive_from_member_layout() {
+fn argument_origin_union_view_preserves_member_storage() {
     let source = format!(
         "{VIEW_HELPER}def preserve(value: str | None) -> view (str | None) from value:\n    return view value\ndef main():\n    profile = Profile(name=\"Ada\")\n    view name = profile_name(profile)\n    view result = preserve(value=name)\n    print(result)\n"
     );
 
-    let error = match check_source(&source) {
-        Err(error) => error,
-        Ok(_) => panic!("a returned union view requires an actual union-typed origin place"),
-    };
-    assert!(
-        matches!(error.code.as_str(), "AU2010" | "AU3003"),
-        "{error}"
-    );
+    check_source(&source).expect("shared union presentation should check");
+    let mir = lower_source_to_mir(&source).expect("shared union presentation should lower");
+    assert_eq!(run_mir(&mir).expect("presentation should run").stdout, "Ada\n");
+    emit_host_native_object(&mir).expect("direct backend must accept the same presentation");
 }
 
 #[test]
 fn forged_mir_cannot_pass_a_member_view_place_as_union_storage() {
-    // The checker refuses `accept(value=name)` at the source level (above),
-    // so no checked program ever lowers it. A forged module that binds the
-    // `str` member view `name` to the exact-union parameter must be refused
+    // Checked source creates a shared union presentation descriptor. A forged
+    // module that skips that descriptor and binds the bare `str` member view
+    // `name` to the exact-union parameter must still be refused
     // by the shared validator on both boundaries before anything executes.
     let source = format!(
         "{VIEW_HELPER}def accept(value: str | None) -> int64:\n    return 42\ndef main():\n    profile = Profile(name=\"Ada\")\n    view name = profile_name(profile)\n    wrapped: str | None = \"Ada\"\n    print(accept(value=wrapped))\n    print(name)\n"
@@ -89,16 +81,12 @@ fn forged_mir_cannot_pass_a_member_view_place_as_union_storage() {
 }
 
 #[test]
-fn ordinary_noncopy_member_local_is_not_cloned_into_a_borrowed_union() {
+fn ordinary_noncopy_member_local_uses_a_borrowed_union_presentation() {
     let source = "def accept(value: str | None) -> int64:\n    return 42\ndef main():\n    name = \"Ada\"\n    print(accept(value=name))\n";
-    let error = match check_source(source) {
-        Err(error) => error,
-        Ok(_) => panic!("borrowing a union must not implicitly clone a non-Copy member local"),
-    };
-    assert!(
-        matches!(error.code.as_str(), "AU2010" | "AU3003"),
-        "{error}"
-    );
+    check_source(&source).expect("shared union presentation should check");
+    let mir = lower_source_to_mir(&source).expect("shared union presentation should lower");
+    assert_eq!(run_mir(&mir).expect("presentation should run").stdout, "42\n");
+    emit_host_native_object(&mir).expect("direct backend must accept the same presentation");
 }
 
 #[test]
@@ -122,51 +110,12 @@ fn exact_union_view_can_be_passed_to_a_borrowed_union() {
 }
 
 #[test]
-fn returned_origin_rejects_copy_member_to_union_adaptation() {
+fn returned_origin_preserves_copy_member_union_presentation() {
     let source = "def preserve(value: int64 | None) -> view (int64 | None) from value:\n    return view value\ndef main():\n    number = 1\n    view result = preserve(value=number)\n    print(result)\n";
-    let error = match check_source(source) {
-        Err(error) => error,
-        Ok(_) => panic!("a returned union view cannot originate from Copy member layout"),
-    };
-    assert!(
-        matches!(error.code.as_str(), "AU2010" | "AU3003"),
-        "{error}"
-    );
-}
-
-fn find_accept_call(value: &mut Value) -> Option<&mut serde_json::Map<String, Value>> {
-    match value {
-        Value::Object(object) => {
-            let is_accept = object.get("Call").is_some_and(|call| {
-                serde_json::to_string(&call.get("callee"))
-                    .is_ok_and(|encoded| encoded.contains("accept"))
-            });
-            if is_accept {
-                return object.get_mut("Call").and_then(Value::as_object_mut);
-            }
-            object.values_mut().find_map(find_accept_call)
-        }
-        Value::Array(items) => items.iter_mut().find_map(find_accept_call),
-        _ => None,
-    }
-}
-
-fn find_indirect_call(value: &mut Value) -> Option<&mut serde_json::Map<String, Value>> {
-    match value {
-        Value::Object(object) => {
-            let is_indirect = object.get("Call").is_some_and(|call| {
-                call.get("callee")
-                    .and_then(|callee| callee.get("Value"))
-                    .is_some()
-            });
-            if is_indirect {
-                return object.get_mut("Call").and_then(Value::as_object_mut);
-            }
-            object.values_mut().find_map(find_indirect_call)
-        }
-        Value::Array(items) => items.iter_mut().find_map(find_indirect_call),
-        _ => None,
-    }
+    check_source(&source).expect("shared union presentation should check");
+    let mir = lower_source_to_mir(&source).expect("shared union presentation should lower");
+    assert_eq!(run_mir(&mir).expect("presentation should run").stdout, "1\n");
+    emit_host_native_object(&mir).expect("direct backend must accept the same presentation");
 }
 
 #[test]

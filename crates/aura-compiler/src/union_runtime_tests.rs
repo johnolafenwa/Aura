@@ -424,3 +424,20 @@ fn forged_union_values_without_a_union_type_have_no_identity() {
     );
     assert!(!union_values_equal(&forged, &int(1)));
 }
+
+#[test]
+fn shared_union_inspection_does_not_clone_payload_storage() {
+    let target = union(vec![Type::named("str"), Type::Unit]);
+    let value = union_value(
+        &target,
+        &Type::named("str"),
+        Value::String("watched payload".into()),
+    );
+    let watch = crate::runtime_value::watch_payload_clones(&value);
+    assert_eq!(runtime_member_type(&value), Some(Type::named("str")));
+    assert!(union_values_equal(&value, &value));
+    assert_eq!(watch.observations(), 0);
+    let unwrapped = coerce_union_boundary(value, &Type::named("str"));
+    assert_eq!(watch.observations(), 0);
+    assert!(matches!(unwrapped, Value::String(ref text) if text == "watched payload"));
+}

@@ -38,7 +38,7 @@ fn is_type_param(ty: &Type) -> bool {
 /// stored behind a type-parameter member.
 pub(crate) fn runtime_member_type(value: &Value) -> Option<Type> {
     match value {
-        Value::Union(union) => member_identity(&Value::Union(union.clone())),
+        Value::Union(_) => member_identity(value),
         Value::Int(value) => Some(Type::named(value.runtime_type_name().unwrap_or("int64"))),
         Value::Float(_) => Some(Type::named("float64")),
         Value::Bool(_) => Some(Type::named("bool")),
@@ -63,8 +63,19 @@ pub(crate) fn runtime_member_type(value: &Value) -> Option<Type> {
         Value::Function(function) => Some(function.signature.clone()),
         Value::Unit => Some(Type::Unit),
         Value::FfiHandle(handle) => Some(Type::named(handle.type_name())),
-        Value::Instance(instance) => Some(Type::named(&instance.class_name)),
-        Value::EnumVariant(variant) => Some(Type::named(&variant.enum_name)),
+        Value::Instance(instance) => Some(
+            instance.fields.get(crate::runtime_value::DIRECT_RUNTIME_TYPE_FIELD)
+                .and_then(|value| match value {
+                    Value::String(name) => Some(crate::runtime_value::runtime_type_from_name(name)),
+                    _ => None,
+                })
+                .unwrap_or_else(|| Type::named(&instance.class_name)),
+        ),
+        Value::EnumVariant(variant) => Some(
+            crate::runtime_value::embedded_nominal_runtime_type_name(&variant.enum_name)
+                .map(crate::runtime_value::runtime_type_from_name)
+                .unwrap_or_else(|| Type::named(&variant.enum_name)),
+        ),
         _ => None,
     }
 }
@@ -81,12 +92,12 @@ pub(crate) fn union_values_equal(left: &Value, right: &Value) -> bool {
     if !member_matches(&left_identity, &right_identity) {
         return false;
     }
-    let payload = |value: &Value| -> Value {
+    fn payload(value: &Value) -> &Value {
         match value {
-            Value::Union(union) => union.payload.clone(),
-            other => other.clone(),
+            Value::Union(union) => &union.payload,
+            other => other,
         }
-    };
+    }
     payload(left) == payload(right)
 }
 
@@ -267,15 +278,14 @@ pub(crate) fn coerce_union_boundary(value: Value, expected: &Type) -> Value {
         }
         Type::TypeParam(_) => value,
         Type::Named(name, _) if name == "Unknown" => value,
-        other => match value {
-            Value::Union(union)
-                if member_identity(&Value::Union(union.clone()))
-                    .is_some_and(|active| member_matches(&active, other)) =>
-            {
-                union.payload
+        other => {
+            let unwrap = matches!(&value, Value::Union(_))
+                && member_identity(&value).is_some_and(|active| member_matches(&active, other));
+            match value {
+                Value::Union(union) if unwrap => union.payload,
+                value => value,
             }
-            value => value,
-        },
+        }
     }
 }
 

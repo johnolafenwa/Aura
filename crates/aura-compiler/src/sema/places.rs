@@ -248,14 +248,7 @@ impl<'a> FunctionChecker<'a> {
                 let parent = self.borrow_call_place(object)?;
                 Some(parent.with_field(field.clone()))
             }
-            ExprKind::Index { object, index } => {
-                let ExprKind::Int(value) = index.kind else {
-                    return None;
-                };
-                let index = usize::try_from(value).ok()?;
-                self.borrow_call_place(object)
-                    .map(|parent| parent.with_tuple(index))
-            }
+            ExprKind::Index { .. } => self.member_access_path(expr),
             _ => None,
         }
     }
@@ -286,6 +279,11 @@ impl<'a> FunctionChecker<'a> {
                     // a list or dictionary it is the element or entry
                     // projection of `view_place`.
                     match &ty {
+                        Type::Named(name, args) if name == "Array" && args.len() == 1 => {
+                            // Array scalar reads are Copy, not element loans.
+                            ty = args[0].clone();
+                            continue;
+                        }
                         Type::Named(name, args) if name == "list" && args.len() == 1 => {
                             ty = args[0].clone();
                             continue;
@@ -311,10 +309,23 @@ impl<'a> FunctionChecker<'a> {
                         )
                     })?;
                 }
-                PlaceProjection::Element(_) => {
+                PlaceProjection::Element(selector) => {
                     let element = match &ty {
+                        Type::Named(name, args) if name == "Array" && args.len() == 1 => {
+                            // Coordinate tuples have a computed syntactic path.
+                            Some(args[0].clone())
+                        }
                         Type::Named(name, args) if name == "list" && args.len() == 1 => {
                             Some(args[0].clone())
+                        }
+                        Type::Named(name, args)
+                            if name == "dict"
+                                && args.len() == 2
+                                && *selector == PlaceSelector::Dynamic =>
+                        {
+                            // member_access_path cannot infer whether a computed
+                            // selector is a position or a key without locals.
+                            Some(args[1].clone())
                         }
                         _ => None,
                     };

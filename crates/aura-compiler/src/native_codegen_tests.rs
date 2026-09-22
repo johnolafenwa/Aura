@@ -9906,6 +9906,7 @@ fn direct_backend_operand_and_construct_error_surface_reports_expected_diagnosti
     assert!(stray_pop_cleanup_error.contains("does not know cleanup registration for `ghost`"));
 
     let pair_class = crate::mir::MirClass {
+        copy: false,
         name: "Pair".to_string(),
         type_params: Vec::new(),
         fields: vec![
@@ -11135,6 +11136,7 @@ fn infer_operand_and_rvalue_types_track_plain_classes() {
         (
             "Point".to_string(),
             crate::mir::MirClass {
+                copy: false,
                 name: "Point".to_string(),
                 type_params: Vec::new(),
                 fields: Vec::new(),
@@ -11148,6 +11150,7 @@ fn infer_operand_and_rvalue_types_track_plain_classes() {
         (
             "Node".to_string(),
             crate::mir::MirClass {
+                copy: false,
                 name: "Node".to_string(),
                 type_params: Vec::new(),
                 fields: Vec::new(),
@@ -12032,6 +12035,7 @@ fn signature_helpers_flatten_plain_class_abi_types() {
     classes.insert(
         "Point".to_string(),
         crate::mir::MirClass {
+            copy: false,
             name: "Point".to_string(),
             type_params: Vec::new(),
             fields: vec![
@@ -12124,6 +12128,7 @@ fn signature_helpers_flatten_plain_class_abi_types() {
 #[test]
 fn cleanup_place_type_resolves_receivers_params_locals_and_inferred_values() {
     let resource_class = crate::mir::MirClass {
+        copy: false,
         name: "Resource".to_string(),
         type_params: Vec::new(),
         fields: vec![crate::mir::MirClassField {
@@ -12133,6 +12138,7 @@ fn cleanup_place_type_resolves_receivers_params_locals_and_inferred_values() {
         methods: Vec::new(),
     };
     let holder_class = crate::mir::MirClass {
+        copy: false,
         name: "Holder".to_string(),
         type_params: Vec::new(),
         fields: vec![crate::mir::MirClassField {
@@ -12476,6 +12482,7 @@ fn direct_field_and_try_helpers_cover_remaining_direct_inference_paths() {
         (
             "Entry".to_string(),
             crate::mir::MirClass {
+                copy: false,
                 name: "Entry".to_string(),
                 type_params: Vec::new(),
                 fields: vec![crate::mir::MirClassField {
@@ -12488,6 +12495,7 @@ fn direct_field_and_try_helpers_cover_remaining_direct_inference_paths() {
         (
             "Box".to_string(),
             crate::mir::MirClass {
+                copy: false,
                 name: "Box".to_string(),
                 type_params: vec!["T".to_string()],
                 fields: vec![crate::mir::MirClassField {
@@ -13107,6 +13115,7 @@ fn native_codegen_builtin_member_tables_and_trait_lookup_cover_additional_paths(
         (
             "Node".to_string(),
             crate::mir::MirClass {
+                copy: false,
                 name: "Node".to_string(),
                 type_params: Vec::new(),
                 fields: vec![crate::mir::MirClassField {
@@ -13119,6 +13128,7 @@ fn native_codegen_builtin_member_tables_and_trait_lookup_cover_additional_paths(
         (
             "Box".to_string(),
             crate::mir::MirClass {
+                copy: false,
                 name: "Box".to_string(),
                 type_params: vec!["T".to_string()],
                 fields: vec![crate::mir::MirClassField {
@@ -14111,6 +14121,7 @@ fn native_codegen_type_helpers_cover_nested_type_params_and_opaque_fallbacks() {
         (
             "Pair".to_string(),
             crate::mir::MirClass {
+                copy: false,
                 name: "Pair".to_string(),
                 type_params: Vec::new(),
                 fields: vec![
@@ -14129,6 +14140,7 @@ fn native_codegen_type_helpers_cover_nested_type_params_and_opaque_fallbacks() {
         (
             "Wrapper".to_string(),
             crate::mir::MirClass {
+                copy: false,
                 name: "Wrapper".to_string(),
                 type_params: Vec::new(),
                 fields: vec![crate::mir::MirClassField {
@@ -14530,6 +14542,7 @@ fn dead_assignments_do_not_poison_reachable_cleanup_type_inference() {
         constants: Vec::new(),
         functions: vec![main, close],
         classes: vec![crate::mir::MirClass {
+            copy: false,
             name: "Resource".to_string(),
             type_params: Vec::new(),
             fields: vec![class_field("value", Type::named("int64"))],
@@ -14595,6 +14608,7 @@ fn native_codegen_cleanup_thunks_cover_scalar_plain_opaque_and_metadata_errors()
         constants: Vec::new(),
         functions: vec![plain_function.clone()],
         classes: vec![crate::mir::MirClass {
+            copy: false,
             name: "Plain".to_string(),
             type_params: Vec::new(),
             fields: vec![class_field("value", Type::named("int32"))],
@@ -14631,6 +14645,7 @@ fn native_codegen_cleanup_thunks_cover_class_close_success_and_missing_targets()
         constants: Vec::new(),
         functions: vec![plain_close_function.clone(), resource_close],
         classes: vec![crate::mir::MirClass {
+            copy: false,
             name: "Resource".to_string(),
             type_params: Vec::new(),
             fields: vec![class_field("closed", Type::named("bool"))],
@@ -14669,6 +14684,7 @@ fn native_codegen_cleanup_thunks_cover_class_close_success_and_missing_targets()
         constants: Vec::new(),
         functions: vec![opaque_close_function.clone(), managed_close],
         classes: vec![crate::mir::MirClass {
+            copy: false,
             name: "Managed".to_string(),
             type_params: Vec::new(),
             fields: vec![class_field("handle", Type::named("str"))],
@@ -15698,6 +15714,7 @@ fn adr0061_direct_view_place_projection_reaches_inside_an_element() {
     element.alternatives[0]
         .elements
         .push(DirectElementSelector {
+            descriptor: None,
             variable: Variable::from_u32(9),
             selector_ty: DirectType::Scalar(ScalarKind::Int64),
             element_type: Type::named("Profile"),
@@ -15714,6 +15731,50 @@ fn adr0061_direct_view_place_projection_reaches_inside_an_element() {
         "visits.inner"
     );
     assert_eq!(nested.clone().project("").alternatives, nested.alternatives);
+}
+
+#[test]
+fn adr0061_contextual_arguments_use_borrowed_place_runtime_calls() {
+    let module = lower_source_to_mir(include_str!(
+        "../tests/fixtures/run-pass/element_contextual_mutable_arguments.au"
+    ))
+    .expect("contextual mutable arguments should lower");
+    let object = emit_host_object(&module).expect("contextual mutable arguments should compile");
+    let referenced = object_referenced_symbols(&object);
+    for helper in [
+        "aura_direct_place_borrow_element",
+        "aura_direct_place_sink_new",
+        "aura_direct_current_borrowed_place",
+        "aura_direct_place_store_owned",
+    ] {
+        assert!(
+            referenced.iter().any(|symbol| symbol.ends_with(helper)),
+            "contextual mutation must reference {helper}, found {referenced:?}"
+        );
+    }
+}
+
+#[test]
+fn adr0061_contextual_union_and_returned_views_compile_with_origin_handoffs() {
+    for (source, helper) in [
+        (
+            include_str!("../tests/fixtures/run-pass/element_contextual_union_arguments.au"),
+            "aura_direct_place_borrow_union",
+        ),
+        (
+            include_str!("../tests/fixtures/run-pass/element_contextual_returned_field_views.au"),
+            "aura_direct_take_returned_view_place",
+        ),
+    ] {
+        let module = lower_source_to_mir(source).expect("contextual source should lower");
+        let object = emit_host_object(&module).expect("contextual source should compile");
+        assert!(
+            object_referenced_symbols(&object)
+                .iter()
+                .any(|symbol| symbol.ends_with(helper)),
+            "borrowed coercion or returned view must preserve its origin through {helper}"
+        );
+    }
 }
 
 #[test]

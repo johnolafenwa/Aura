@@ -1,0 +1,35 @@
+class Profile:
+    name: str
+    visits: int64
+
+def visits(value: Profile | None) -> int64:
+    match value:
+        case Profile as profile:
+            return profile.visits
+        case None:
+            return -1
+
+def absent[T](value: T | None) -> bool:
+    return value == None
+
+type VisitCount = def(Profile | None) -> int64
+
+def main():
+    users = [Profile(name="ada", visits=3)]
+    people: dict[str, Profile] = {"linus": Profile(name="linus", visits=4)}
+    optional: list[Profile | None] = [Profile(name="grace", visits=5), None]
+    print(visits(users[0]))
+    print(visits(people["linus"]))
+    callback = VisitCount(visits)
+    print(callback(users[0]))
+    print(visits(optional[0]))
+    print(visits(optional[1]))
+    print(absent[Profile](value=users[0]))
+    print(absent[Profile](value=optional[1]))
+    print(users[0].name)
+    print(people["linus"].name)
+    match optional[0]:
+        case Profile as profile:
+            print(profile.name)
+        case None:
+            print("absent")

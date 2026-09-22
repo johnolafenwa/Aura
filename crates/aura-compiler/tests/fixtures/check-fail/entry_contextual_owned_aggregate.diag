@@ -1,0 +1,5 @@
+error[AU3005]: cannot implicitly copy `str` out of a dict index; use `view value = table[key]` for shared access, `table[key].clone()` for an explicit cloned owner, or `remove(key)` to transfer ownership
+ --> crates/aura-compiler/tests/fixtures/check-fail/entry_contextual_owned_aggregate.au:3:14
+  |
+3 |     saved = (labels["name"], 1)
+  |              ^

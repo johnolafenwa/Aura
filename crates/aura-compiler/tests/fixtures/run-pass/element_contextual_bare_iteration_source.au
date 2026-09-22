@@ -1,0 +1,9 @@
+def main():
+    rows: list[list[str]] = [["a", "b"]]
+    table: dict[str, list[str]] = {"row": ["c", "d"]}
+    for value in rows[0]:
+        print(value)
+    for value in table["row"]:
+        print(value)
+    print(rows[0][0])
+    print(table["row"][0])

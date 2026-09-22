@@ -623,9 +623,9 @@ impl<'a> FunctionChecker<'a> {
         .then(|| self.render_place_expr(expr))
     }
 
-    /// Returns a conservative source place for a bare shared match. Field
-    /// projections retain their precision; indexed scrutinees retain the
-    /// collection root because Aura does not yet model index identity.
+    /// Returns the selected source held by a bare shared match. Literal
+    /// element/entry selectors retain their disjointness; computed selectors
+    /// conservatively overlap every selection of the collection.
     pub(super) fn shared_match_place(
         &self,
         expr: &Expr,
@@ -638,7 +638,7 @@ impl<'a> FunctionChecker<'a> {
                 self.shared_match_place(object, locals)?
                     .with_field(field.clone()),
             ),
-            ExprKind::Index { object, .. } => self.shared_match_place(object, locals),
+            ExprKind::Index { .. } => self.member_access_path(expr),
             ExprKind::Call { .. } => {
                 let mut place_locals = locals.clone();
                 self.view_place(expr, &mut place_locals).ok().flatten()
@@ -1004,33 +1004,27 @@ impl<'a> FunctionChecker<'a> {
                 )
             })?;
             let conservative = self.view_expr_has_conservative_footprint(receiver, locals)?;
-            return self
-                .view_place(receiver, locals)?
-                .ok_or_else(|| {
-                    Diagnostic::coded_at(
-                        "AU3010",
-                        receiver.span,
-                        "returned view origin `self` requires an addressable receiver place",
-                    )
-                })
-                .map(|mut place| {
-                    if !conservative {
-                        if let Some(projection) = self.transitive_unique_returned_view_projection(
-                            &decl,
-                            &owner_module,
-                            &mut BTreeSet::new(),
-                            &substitutions,
-                        ) {
-                            for segment in projection.split('.').filter(|part| !part.is_empty()) {
-                                place = match segment.parse::<usize>() {
-                                    Ok(index) => place.with_tuple(index),
-                                    Err(_) => place.with_field(segment.to_string()),
-                                };
-                            }
+            let Some(place) = self.view_place(receiver, locals)? else {
+                return Ok(None);
+            };
+            return Ok(place).map(|mut place| {
+                if !conservative {
+                    if let Some(projection) = self.transitive_unique_returned_view_projection(
+                        &decl,
+                        &owner_module,
+                        &mut BTreeSet::new(),
+                        &substitutions,
+                    ) {
+                        for segment in projection.split('.').filter(|part| !part.is_empty()) {
+                            place = match segment.parse::<usize>() {
+                                Ok(index) => place.with_tuple(index),
+                                Err(_) => place.with_field(segment.to_string()),
+                            };
                         }
                     }
-                    Some(place)
-                });
+                }
+                Some(place)
+            });
         }
         let Some(origin_index) = decl
             .params
@@ -1057,48 +1051,53 @@ impl<'a> FunctionChecker<'a> {
             ));
         };
         let context = self.returned_view_summary_context(&owner_module, &decl);
+        let mut lifted_union_origin = false;
         if let Some(pattern) = context.locals.get(&contract.origin) {
             let expected = substitute_type(pattern, &substitutions);
             if matches!(expected, Type::Union(_)) {
-                let actual = self.type_of_expr_without_move_state(&argument.value, locals, None)?;
+                let passing = resolve_param_passing(decl.params[origin_index].mode);
+                let actual = self.type_of_expr_without_move_state_for_passing(
+                    &argument.value,
+                    locals,
+                    None,
+                    passing,
+                )?;
                 if actual != expected {
-                    return Err(Diagnostic::coded_at(
-                        "AU2010", argument.value.span,
-                        format!("returned view origin requires exact union storage '{expected}', found '{actual}'"),
-                    ).with_help("construct a union local first and pass that local as the returned view origin"));
+                    if passing == ReceiverKind::BorrowMut {
+                        return Err(Diagnostic::coded_at(
+                            "AU2010", argument.value.span,
+                            format!("returned view origin requires exact union storage '{expected}', found '{actual}'"),
+                        ).with_help("construct a union local first and pass that local as the returned view origin"));
+                    }
+                    // A shared lifted union presents a logical payload over
+                    // the same member place; retain its whole origin footprint.
+                    lifted_union_origin = true;
                 }
             }
         }
-        let conservative = self.view_expr_has_conservative_footprint(&argument.value, locals)?;
-        self.view_place(&argument.value, locals)?
-            .ok_or_else(|| {
-                Diagnostic::coded_at(
-                    "AU3010",
-                    argument.value.span,
-                    format!(
-                        "returned view origin `{}` requires an addressable caller place",
-                        contract.origin
-                    ),
-                )
-            })
-            .map(|mut place| {
-                if !conservative {
-                    if let Some(projection) = self.transitive_unique_returned_view_projection(
-                        &decl,
-                        &owner_module,
-                        &mut BTreeSet::new(),
-                        &substitutions,
-                    ) {
-                        for segment in projection.split('.').filter(|part| !part.is_empty()) {
-                            place = match segment.parse::<usize>() {
-                                Ok(index) => place.with_tuple(index),
-                                Err(_) => place.with_field(segment.to_string()),
-                            };
-                        }
+        let conservative = lifted_union_origin
+            || self.view_expr_has_conservative_footprint(&argument.value, locals)?;
+        let Some(place) = self.view_place(&argument.value, locals)? else {
+            return Ok(None);
+        };
+        Ok(place).map(|mut place| {
+            if !conservative {
+                if let Some(projection) = self.transitive_unique_returned_view_projection(
+                    &decl,
+                    &owner_module,
+                    &mut BTreeSet::new(),
+                    &substitutions,
+                ) {
+                    for segment in projection.split('.').filter(|part| !part.is_empty()) {
+                        place = match segment.parse::<usize>() {
+                            Ok(index) => place.with_tuple(index),
+                            Err(_) => place.with_field(segment.to_string()),
+                        };
                     }
                 }
-                Some(place)
-            })
+            }
+            Some(place)
+        })
     }
 
     pub(super) fn returned_view_call_type_substitutions(
@@ -1124,7 +1123,12 @@ impl<'a> FunctionChecker<'a> {
         let context = self.returned_view_summary_context(owner_module, decl);
         if let (Some(receiver), Some(pattern)) = (receiver, context.locals.get("self")) {
             let mut type_locals = locals.clone();
-            let actual = self.type_of_expr(receiver, &mut type_locals)?;
+            let actual = self.type_of_expr_for_passing_hint(
+                receiver,
+                &mut type_locals,
+                None,
+                decl.receiver.unwrap_or(ReceiverKind::Value),
+            )?;
             let _ = unify_type_pattern(pattern, &actual, &mut substitutions);
         }
         let ordered = bind_call_arguments(
@@ -1142,7 +1146,12 @@ impl<'a> FunctionChecker<'a> {
                 continue;
             };
             let mut type_locals = locals.clone();
-            let actual = self.type_of_expr(&argument.value, &mut type_locals)?;
+            let actual = self.type_of_expr_for_passing_hint(
+                &argument.value,
+                &mut type_locals,
+                None,
+                resolve_param_passing(param.mode),
+            )?;
             let _ = unify_type_pattern(pattern, &actual, &mut substitutions);
         }
         Ok(substitutions)
@@ -2868,7 +2877,12 @@ impl<'a> FunctionChecker<'a> {
         places: &mut Vec<BorrowedCallPlace>,
     ) -> Result<()> {
         match &expr.kind {
-            ExprKind::Name(_) => {
+            ExprKind::Index { object, .. }
+                if self.bound_method_closure_at(object.span).is_some() =>
+            {
+                Ok(())
+            }
+            ExprKind::Name(_) | ExprKind::Index { .. } => {
                 let Some(path) = self.borrow_call_place(expr) else {
                     return Ok(());
                 };
@@ -3165,6 +3179,25 @@ impl<'a> FunctionChecker<'a> {
         }
     }
 
+    fn collect_place_selector_reads(
+        &self,
+        expr: &Expr,
+        locals: &HashMap<String, LocalBinding>,
+        label: &str,
+        places: &mut Vec<BorrowedCallPlace>,
+    ) {
+        match &expr.kind {
+            ExprKind::Group(inner) | ExprKind::Member { object: inner, .. } => {
+                self.collect_place_selector_reads(inner, locals, label, places);
+            }
+            ExprKind::Index { object, index } => {
+                self.collect_place_selector_reads(object, locals, label, places);
+                self.collect_expr_place_reads(index, locals, label, places);
+            }
+            _ => {}
+        }
+    }
+
     pub(super) fn collect_expr_place_reads(
         &self,
         expr: &Expr,
@@ -3265,13 +3298,15 @@ impl<'a> FunctionChecker<'a> {
             ExprKind::Member { object, .. } => {
                 if let Some(path) = self.borrow_call_place(expr) {
                     push_place(path, expr.span);
+                    self.collect_place_selector_reads(object, locals, label, places);
                 } else {
                     self.collect_expr_place_reads(object, locals, label, places);
                 }
             }
             ExprKind::Index { object, index } => {
-                if let Some(path) = self.borrow_call_place(object) {
-                    push_place(path, object.span);
+                if let Some(path) = self.borrow_call_place(expr) {
+                    push_place(path, expr.span);
+                    self.collect_place_selector_reads(object, locals, label, places);
                 } else {
                     self.collect_expr_place_reads(object, locals, label, places);
                 }
@@ -3429,7 +3464,12 @@ impl<'a> FunctionChecker<'a> {
                         }
                     }
                 }
-                let receiver_ty = self.type_of_expr(object, &mut locals_for_resolution)?;
+                let receiver_ty = self.type_of_expr_for_passing_hint(
+                    object,
+                    &mut locals_for_resolution,
+                    None,
+                    ReceiverKind::Borrow,
+                )?;
                 let Type::Named(receiver_name, _) = receiver_ty else {
                     return Ok(());
                 };

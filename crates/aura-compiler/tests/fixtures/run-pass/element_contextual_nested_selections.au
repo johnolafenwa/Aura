@@ -1,0 +1,23 @@
+def bump(value: mut int64):
+    value += 10
+
+def show(value: str):
+    print(value)
+
+def main():
+    mut grid: list[list[int64]] = [[1, 2], [3, 4]]
+    mut table: dict[str, list[int64]] = {"row": [5, 6]}
+    mut records: list[dict[str, int64]] = [{"count": 7}]
+    words: list[list[str]] = [["left", "right"]]
+    row: int64 = 1
+    column: int64 = 0
+    print(grid[row][column])
+    bump(grid[0][1])
+    bump(table["row"][0])
+    bump(records[0]["count"])
+    grid[1].append(8)
+    table["row"].append(9)
+    show(words[0][1])
+    print(grid)
+    print(table["row"])
+    print(records[0]["count"])

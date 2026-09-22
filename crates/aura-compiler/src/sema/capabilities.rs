@@ -603,6 +603,14 @@ impl<'a> FunctionChecker<'a> {
         if self.is_copy_type(member_ty) {
             return Ok(());
         }
+        let mut projection_locals = locals.clone();
+        if self.is_collection_element_expr(object, &mut projection_locals)? {
+            return Err(Diagnostic::coded_at(
+                "AU3005",
+                expr.span,
+                format!("cannot move non-copy field `{field}` out of a collection element; use `view value = {}.{field}` for shared access, or explicitly clone or replace/remove the containing element to obtain ownership", self.render_place_expr(object)),
+            ));
+        }
         if let Some(place) = self.borrow_call_place(expr) {
             self.ensure_place_not_locked_by_view(&place, None, expr.span, locals)?;
         }

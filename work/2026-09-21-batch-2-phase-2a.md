@@ -309,9 +309,31 @@ was cloned before the write), which the one-call selection chain removes.
   Both hosted jobs retain 100% LSP coverage. Full job logs are saved locally
   as `/tmp/aura-b2-step1-ubuntu-ci.log` and
   `/tmp/aura-b2-step1-macos-ci.log`.
-- Step 1 has met its local and hosted verification gates and is ready to
-  merge. This evidence-only follow-up changes no compiler or test source.
-  Phase 2a remains in progress; the open items below follow the step-1 merge.
+- Step 1 is complete: PR #17 merged as `372ed8e7` after evidence-only
+  commit `8787a8ec`; the tested compiler/test source is unchanged from the
+  green hosted head. Remaining phase 2a work continues on
+  `codex/batch-2-phase-2a-2` from that merge.
+
+### Part B item 1: contextual reads (in progress, 2026-09-22)
+
+- Added 16 run-pass, four check-fail, and four run-fail fixture pairs first.
+  All 16 positive programs were refused by both forced backends on the
+  merged step-1 baseline at the missing contextual-read/mutable-place rules;
+  `/tmp/aura-item1-baseline-red.json` records that red baseline. One draft
+  string-ordering expression was corrected to an existing equality-chain
+  operation rather than extending unrelated operator semantics.
+- Parallel implementation covers the checker, MIR lowering and contracts,
+  interpreter borrowed frames, direct descriptors/call adapters, and clone
+  observations. New union presentations borrow existing storage, and Copy
+  class metadata is being retained across MIR. Temporary loans must end on
+  each executed branch and remain live through returned-field handoffs.
+- Clone-observation positive controls were added before their implementation;
+  the compile-red log identifies the missing observer and descriptor helpers.
+  The benchmark parser's new counter test was red before its update and all
+  five focused Python tests now pass. Rust/backend integration and item-1
+  coverage are still pending; these changes are not completion evidence.
+- A3 invalidation, iteration unification, definition-side returned element
+  views, lookup, and capability/narrowing work remain separate later items.
 
 ## Open items
 

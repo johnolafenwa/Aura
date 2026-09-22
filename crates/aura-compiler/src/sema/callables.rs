@@ -810,7 +810,12 @@ impl<'a> FunctionChecker<'a> {
                 },
                 locals,
             )?,
-            _ => self.type_of_expr(&callback.value, locals)?,
+            _ => self.type_of_expr_for_passing_hint(
+                &callback.value,
+                locals,
+                None,
+                ReceiverKind::Borrow,
+            )?,
         };
         let (params, return_type) = match &callback_ty {
             Type::Function {
@@ -981,8 +986,12 @@ impl<'a> FunctionChecker<'a> {
                             ),
                         ));
                     }
-                    let default_ty =
-                        self.type_of_expr_hint(default, &mut HashMap::new(), Some(&lowered))?;
+                    let default_ty = self.type_of_expr_for_passing_hint(
+                        default,
+                        &mut HashMap::new(),
+                        Some(&lowered),
+                        resolve_param_passing(param.mode),
+                    )?;
                     if default_ty != lowered {
                         return Err(Diagnostic::at(
                             default.span,
@@ -2203,6 +2212,29 @@ impl<'a> FunctionChecker<'a> {
         }
     }
 
+    fn type_of_callable_argument_without_move_state(
+        &self,
+        expr: &Expr,
+        locals: &HashMap<String, LocalBinding>,
+        expected: Option<&Type>,
+        passing: ReceiverKind,
+    ) -> Result<Type> {
+        // Union probes may revisit an argument after its nested calls have
+        // already updated the caller's move state. Preserve that state while
+        // retaining the argument's borrowed or owned typing context.
+        let mut snapshot = locals.clone();
+        for binding in snapshot.values_mut() {
+            binding.moved = false;
+            binding.moved_at = None;
+            binding.moved_fields.clear();
+            binding.stale_match_borrow_place = None;
+        }
+        let saved_entries = std::mem::take(&mut *self.expr_result_entries.borrow_mut());
+        let result = self.type_of_expr_for_passing_hint(expr, &mut snapshot, expected, passing);
+        *self.expr_result_entries.borrow_mut() = saved_entries;
+        result
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(super) fn type_check_callable_args(
         &self,
@@ -2335,10 +2367,14 @@ impl<'a> FunctionChecker<'a> {
                 if let Some(argument) = argument {
                     // A `mut` union parameter exposes the whole declared place;
                     // a refinement of the argument does not narrow the contract.
-                    self.suppress_narrowing.set(true);
-                    let actual =
-                        self.type_of_expr_without_move_state(&argument.value, locals, None);
-                    self.suppress_narrowing.set(false);
+                    let previous = self.suppress_narrowing.replace(true);
+                    let actual = self.type_of_callable_argument_without_move_state(
+                        &argument.value,
+                        locals,
+                        None,
+                        *passing,
+                    );
+                    self.suppress_narrowing.set(previous);
                     let actual = actual?;
                     if actual != hinted_expected {
                         return Err(Diagnostic::coded_at("AU2010", argument.value.span,
@@ -2347,10 +2383,20 @@ impl<'a> FunctionChecker<'a> {
                 }
             }
             let actual = if let Some(argument) = argument {
-                match self.type_of_expr_hint(&argument.value, locals, Some(&hinted_expected)) {
+                match self.type_of_expr_for_passing_hint(
+                    &argument.value,
+                    locals,
+                    Some(&hinted_expected),
+                    *passing,
+                ) {
                     Ok(actual) => actual,
                     Err(error) if has_unresolved_type_params(&hinted_expected) => {
-                        match self.type_of_expr(&argument.value, locals) {
+                        match self.type_of_expr_for_passing_hint(
+                            &argument.value,
+                            locals,
+                            None,
+                            *passing,
+                        ) {
                             Ok(actual) => actual,
                             Err(_) => return Err(error),
                         }
@@ -2367,10 +2413,17 @@ impl<'a> FunctionChecker<'a> {
                 if matches!(default.kind, ExprKind::BuiltinOmitted) {
                     hinted_expected.clone()
                 } else {
-                    match self.type_of_expr_hint(default, locals, Some(&hinted_expected)) {
+                    match self.type_of_expr_for_passing_hint(
+                        default,
+                        locals,
+                        Some(&hinted_expected),
+                        *passing,
+                    ) {
                         Ok(actual) => actual,
                         Err(error) if has_unresolved_type_params(&hinted_expected) => {
-                            match self.type_of_expr(default, locals) {
+                            match self
+                                .type_of_expr_for_passing_hint(default, locals, None, *passing)
+                            {
                                 Ok(actual) => actual,
                                 Err(_) => return Err(error),
                             }
@@ -2479,7 +2532,10 @@ impl<'a> FunctionChecker<'a> {
         // An argument typed before its union parameter resolved is typed
         // again under the resolved union so the checker records the boundary
         // injection it implies (ADR-0052 A7).
-        for ((argument, actual, _, _), expected) in resolved_args.iter_mut().zip(param_types.iter())
+        for (((argument, actual, _, _), expected), passing) in resolved_args
+            .iter_mut()
+            .zip(param_types.iter())
+            .zip(param_passings.iter().copied())
         {
             let Some(argument) = argument else {
                 continue;
@@ -2491,9 +2547,12 @@ impl<'a> FunctionChecker<'a> {
             if *actual == resolved || !matches!(resolved, Type::Union(_)) {
                 continue;
             }
-            if let Ok(retyped) =
-                self.type_of_expr_without_move_state(&argument.value, locals, Some(&resolved))
-            {
+            if let Ok(retyped) = self.type_of_callable_argument_without_move_state(
+                &argument.value,
+                locals,
+                Some(&resolved),
+                passing,
+            ) {
                 *actual = retyped;
             }
         }
@@ -2815,22 +2874,6 @@ impl<'a> FunctionChecker<'a> {
                                     "argument for parameter `{}` in {} must be a mutable place",
                                     param_decl.name, callee_name
                                 ),
-                            ));
-                        }
-                        // A list element or dictionary entry is a mutable
-                        // place for views and assignment, but a call cannot
-                        // yet lend it in place (ADR-0061, 2026-09-21 section:
-                        // contextual element arguments follow).
-                        if self.is_collection_element_expr(&argument.value, locals)? {
-                            return Err(Diagnostic::at(
-                                argument.span,
-                                format!(
-                                    "argument for parameter `{}` in {} must be a mutable place",
-                                    param_decl.name, callee_name
-                                ),
-                            )
-                            .with_help(
-                                "bind the element first with `view mut name = items[i]` and pass the view",
                             ));
                         }
                         if let Some(place) = argument_place {

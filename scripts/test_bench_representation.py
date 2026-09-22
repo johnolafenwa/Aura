@@ -16,6 +16,32 @@ class RepresentationBenchmarkTests(unittest.TestCase):
         self.assertEqual(bench.parse_stats(stderr, 'direct')['opaque_boxes'], 10)
         self.assertEqual(bench.parse_stats(stderr, 'mir')['union_payload_boxes'], 2)
 
+    def test_parse_stats_preserves_payload_clone_observations(self):
+        stderr = ('aura runtime stats (direct): union_payload_boxes=1 closure_environments=2 '
+                  'opaque_boxes=3 callable_overflow_allocations=4 '
+                  'payload_container_clone_observations=5 '
+                  'payload_fallible_clone_observations=6 '
+                  'payload_value_clone_observations=7\n')
+        self.assertEqual(bench.parse_stats(stderr, 'direct'), {
+            'union_payload_boxes': 1,
+            'closure_environments': 2,
+            'opaque_boxes': 3,
+            'callable_overflow_allocations': 4,
+            'payload_container_clone_observations': 5,
+            'payload_fallible_clone_observations': 6,
+            'payload_value_clone_observations': 7,
+        })
+
+    def test_parse_stats_keeps_legacy_reports_without_inventing_clone_counts(self):
+        stderr = ('aura runtime stats (mir): union_payload_boxes=2 closure_environments=1 '
+                  'opaque_boxes=0 callable_overflow_allocations=0\n')
+        self.assertEqual(bench.parse_stats(stderr, 'mir'), {
+            'union_payload_boxes': 2,
+            'closure_environments': 1,
+            'opaque_boxes': 0,
+            'callable_overflow_allocations': 0,
+        })
+
     def test_parse_stats_rejects_missing_or_unknown_counters(self):
         with self.assertRaisesRegex(ValueError, 'missing counters'):
             bench.parse_stats('aura runtime stats (mir): union_payload_boxes=2\n', 'mir')

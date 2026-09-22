@@ -30,8 +30,14 @@ Last updated: 2026-09-22
   attempt (Ubuntu job `106681171662`, macOS job `106681172161`); Docs
   `35707901153` and Tutorial Examples `35707901218` passed. Hosted coverage
   is 96.4791 / 97.4090 / 95.3000 on Ubuntu and 96.4767 / 97.4090 / 95.3005
-  on macOS; LSP coverage stays at 100%. Step 1 is verified and ready to
-  merge. See the work note for exact counts and the Daybreak access limitation.
+  on macOS; LSP coverage stays at 100%. Step 1 merged as `372ed8e7` after
+  evidence commit `8787a8ec` and is complete.
+- Part B item 1 is in progress on `codex/batch-2-phase-2a-2`: 16 new positive
+  contextual-read fixtures first fail on both baseline backends. Checker,
+  loan lowering/contracts, interpreter frames, direct call origins, and
+  clone-observation tests are being integrated in parallel. Rust/backend
+  validation remains pending. See the work note for exact evidence and the
+  Daybreak access limitation.
 
 ## Batch 1 representation phase (complete) and Batch 2–3 design checkpoint (ratified)
 

@@ -19,6 +19,11 @@ PROGRAMS = ('union_scalar_local', 'union_class_field', 'union_string_local', 'ca
 BACKENDS = ('mir', 'direct')
 COUNTERS = ('union_payload_boxes', 'closure_environments', 'opaque_boxes',
             'callable_overflow_allocations')
+# These observations supplement the original representation counters. Historical
+# reports omit them; absence is not evidence that the runtime observed no clones.
+PAYLOAD_CLONE_COUNTERS = ('payload_container_clone_observations',
+                          'payload_fallible_clone_observations',
+                          'payload_value_clone_observations')
 REPORT_SCHEMA_VERSION = 1
 
 
@@ -37,7 +42,7 @@ def parse_stats(stderr, backend):
             stats = {}
             for field in line[len(prefix):].split():
                 name, value = field.split('=', 1)
-                if name not in COUNTERS:
+                if name not in COUNTERS + PAYLOAD_CLONE_COUNTERS:
                     raise ValueError(f'unexpected counter {name}')
                 stats[name] = int(value)
             missing = [name for name in COUNTERS if name not in stats]

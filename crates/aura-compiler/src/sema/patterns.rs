@@ -161,7 +161,12 @@ impl FunctionChecker<'_> {
             None
         };
         let result = (|| {
-            let scrutinee_ty = self.type_of_expr(&match_stmt.scrutinee, locals)?;
+            let scrutinee_ty = self.type_of_expr_for_passing_hint(
+                &match_stmt.scrutinee,
+                locals,
+                None,
+                match_stmt.capability,
+            )?;
             let scrutinee_ty =
                 self.narrowed_scrutinee_type(&match_stmt.scrutinee, scrutinee_ty, locals);
             if match_stmt.capability == ReceiverKind::Value {
@@ -1047,13 +1052,15 @@ impl FunctionChecker<'_> {
     }
 
     /// Types one `match` arm value the way the surrounding expression uses the
-    /// match result.
+    /// match result. An inspected borrowed result forwards contextual place
+    /// access to its arm without changing owned-result consumption.
     pub(super) fn type_of_match_arm_value(
         &self,
         value: &Expr,
         arm_locals: &mut HashMap<String, LocalBinding>,
         result_ty: Option<&Type>,
         result_use: BranchResultUse<'_>,
+        borrowed_result: bool,
     ) -> Result<Type> {
         match result_use {
             BranchResultUse::ProjectedField(field) => Ok(self
@@ -1062,6 +1069,12 @@ impl FunctionChecker<'_> {
             BranchResultUse::Consumed => {
                 self.type_expr_consuming_result(value, arm_locals, result_ty)
             }
+            BranchResultUse::Inspected if borrowed_result => self.type_of_expr_for_passing_hint(
+                value,
+                arm_locals,
+                result_ty,
+                ReceiverKind::Borrow,
+            ),
             BranchResultUse::Inspected => match result_ty {
                 Some(expected_ty) => self.type_of_expr_hint(value, arm_locals, Some(expected_ty)),
                 None => self.type_of_expr(value, arm_locals),
@@ -1077,6 +1090,7 @@ impl FunctionChecker<'_> {
         result_use: BranchResultUse<'_>,
     ) -> Result<Type> {
         let MatchExprParts {
+            borrowed_result,
             scrutinee,
             borrow_mode,
             arms,
@@ -1092,7 +1106,8 @@ impl FunctionChecker<'_> {
             None
         };
         let result = (|| {
-            let scrutinee_ty = self.type_of_expr(scrutinee, locals)?;
+            let scrutinee_ty =
+                self.type_of_expr_for_passing_hint(scrutinee, locals, None, borrow_mode)?;
             let scrutinee_ty = self.narrowed_scrutinee_type(scrutinee, scrutinee_ty, locals);
             if borrow_mode == ReceiverKind::Value {
                 if self.is_copy_type(&scrutinee_ty) {
@@ -1153,6 +1168,7 @@ impl FunctionChecker<'_> {
                         &mut arm_locals,
                         result_ty.as_ref(),
                         result_use,
+                        borrowed_result,
                     )?;
                     if let Some(expected_ty) = result_ty.as_ref() {
                         if arm_ty != *expected_ty {
@@ -1387,6 +1403,7 @@ impl FunctionChecker<'_> {
                         &mut arm_locals,
                         result_ty.as_ref(),
                         result_use,
+                        borrowed_result,
                     )?;
                     if let Some(expected_ty) = result_ty.as_ref() {
                         if arm_ty != *expected_ty {
@@ -1603,6 +1620,7 @@ impl FunctionChecker<'_> {
                     &mut arm_locals,
                     result_ty.as_ref(),
                     result_use,
+                    borrowed_result,
                 )?;
                 if let Some(expected_ty) = result_ty.as_ref() {
                     if arm_ty != *expected_ty {

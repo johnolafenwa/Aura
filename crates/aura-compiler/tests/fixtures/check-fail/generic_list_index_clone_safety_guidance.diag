@@ -1,4 +1,4 @@
-error[AU3005]: cannot implicitly copy `T` out of a list index; `get(index)` requires a clone-safe `T`, or use `pop(index)` to transfer ownership
+error[AU3005]: cannot implicitly copy `T` out of a list index; use `view value = items[index]` for shared access; `items[index].clone()` requires a clone-safe `T`, or use `pop(index)` or `set(index, value)` to transfer ownership
  --> crates/aura-compiler/tests/fixtures/check-fail/generic_list_index_clone_safety_guidance.au:2:12
   |
 2 |     return values[0]

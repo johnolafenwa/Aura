@@ -1,0 +1,22 @@
+class Profile:
+    name: str
+
+def make_names() -> list[str]:
+    print("make names")
+    return ["made"]
+
+def make_people() -> list[Profile]:
+    print("make people")
+    return [Profile(name="temporary")]
+
+def label(profile: Profile) -> view str from profile:
+    return view profile.name
+
+def show(value: str):
+    print(value)
+
+def main():
+    print(["literal"][0])
+    show(make_names()[0])
+    print(label(make_people()[0]))
+    print(label(make_people()[0]).len())

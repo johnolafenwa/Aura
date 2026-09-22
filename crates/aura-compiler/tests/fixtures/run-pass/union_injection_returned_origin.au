@@ -1,6 +1,10 @@
 def preserve(value: int64 | None) -> view (int64 | None) from value:
     return view value
+
 def main():
-    number = 1
+    number: int64 = 7
     view result = preserve(value=number)
+    if result is not None:
+        print(result + 1)
     print(result)
+    print(number)

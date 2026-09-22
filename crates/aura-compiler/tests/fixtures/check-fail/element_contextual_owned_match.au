@@ -1,0 +1,5 @@
+def main():
+    names = ["ada"]
+    match own names[0]:
+        case value:
+            print(value)

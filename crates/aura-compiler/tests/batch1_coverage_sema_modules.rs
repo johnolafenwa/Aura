@@ -627,20 +627,14 @@ const SHOW_UNION: &str = "def show(value: int64 | str):\n    print(value)\n";
 
 #[test]
 fn borrowed_union_injection_looks_through_groups_conditionals_and_matches() {
-    let expected = "borrowed union argument cannot implicitly clone member place of type 'str'";
-    rejects(
-        &format!(
-            "{SHOW_UNION}def main():\n    text = \"aura\"\n    show((text))\n    print(text)\n"
-        ),
-        expected,
-    );
-    rejects(
+    accepts(&format!(
+        "{SHOW_UNION}def main():\n    text = \"aura\"\n    show((text))\n    print(text)\n"
+    ));
+    accepts(
         &format!("{SHOW_UNION}def main():\n    text = \"aura\"\n    other = \"beta\"\n    flag = true\n    show(text if flag else other)\n    print(text)\n"),
-        expected,
     );
-    rejects(
+    accepts(
         &format!("{SHOW_UNION}def main():\n    text = \"aura\"\n    flag = true\n    show(match flag:\n        case true: text\n        case false: 1)\n    print(text)\n"),
-        expected,
     );
 }
 

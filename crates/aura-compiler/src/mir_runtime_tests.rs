@@ -54,6 +54,66 @@ fn test_function_operand(name: &str, params: Vec<Type>, return_type: Type) -> Op
 }
 
 #[test]
+fn contextual_element_mutation_preserves_original_storage() {
+    let mut env = Env::default();
+    env.define_typed(
+        "items",
+        Type::Named("list".into(), vec![Type::named("str")]),
+        Value::Vec(VecValue {
+            element_type: Type::named("str"),
+            elements: vec![Value::String(String::with_capacity(64))],
+        }),
+    );
+    env.begin_element_loan(
+        "element",
+        "items",
+        Value::Int(IntegerValue::from_i64(0)),
+        "",
+        true,
+        Span::new(1, 1),
+    )
+    .unwrap();
+    let Value::String(original) = env.place_ref("element").unwrap() else {
+        panic!("string element")
+    };
+    let allocation = original.as_ptr();
+    let Value::String(value) = env.place_mut("element").unwrap() else {
+        panic!("string element")
+    };
+    value.push_str("changed");
+    let Value::String(value) = env.place_ref("element").unwrap() else {
+        panic!("string element")
+    };
+    assert_eq!(value, "changed");
+    assert_eq!(value.as_ptr(), allocation);
+}
+
+#[test]
+fn contextual_entry_loan_resolves_to_an_ordinal_once() {
+    let mut env = Env::default();
+    env.define_typed(
+        "entries",
+        Type::Named("dict".into(), vec![Type::named("str"), Type::named("str")]),
+        Value::Map(MapValue {
+            key_type: Type::named("str"),
+            value_type: Type::named("str"),
+            entries: vec![(Value::String("key".into()), Value::String("value".into()))],
+        }),
+    );
+    env.begin_element_loan(
+        "entry",
+        "entries",
+        Value::String("key".into()),
+        "",
+        false,
+        Span::new(1, 1),
+    )
+    .unwrap();
+    assert_eq!(env.loans["entry"].source, "entries.[e:0]");
+    assert_eq!(env.place_ref("entry").unwrap().render(), "value");
+}
+
+#[test]
 fn adr0061_element_place_segments_round_trip_keys_and_refuse_invalid_encodings() {
     for key in [
         Value::Int(IntegerValue::from_i64(-7)),
@@ -3192,7 +3252,7 @@ fn mir_runtime_ffi_writes_mutable_views_back_before_foreign_and_result_errors() 
         }]
     }
 
-    fn env() -> Env {
+    fn env() -> Env<'static> {
         let mut env = Env::default();
         env.define_typed(
             "bytes",
@@ -12243,6 +12303,7 @@ fn mir_runtime_member_call_dispatch_covers_builtin_runtime_and_trait_receivers()
     runtime.classes.insert(
         "Widget".to_string(),
         MirClass {
+            copy: false,
             name: "Widget".to_string(),
             type_params: Vec::new(),
             fields: Vec::new(),
@@ -12742,6 +12803,7 @@ fn mir_runtime_member_error_surface_covers_remaining_dispatch_branches() {
     runtime.classes.insert(
         "Empty".to_string(),
         MirClass {
+            copy: false,
             name: "Empty".to_string(),
             type_params: Vec::new(),
             fields: Vec::new(),
@@ -12751,6 +12813,7 @@ fn mir_runtime_member_error_surface_covers_remaining_dispatch_branches() {
     runtime.classes.insert(
         "Broken".to_string(),
         MirClass {
+            copy: false,
             name: "Broken".to_string(),
             type_params: Vec::new(),
             fields: Vec::new(),
@@ -13107,6 +13170,7 @@ fn mir_runtime_mutating_member_calls_write_back_receivers_and_params() {
     runtime.classes.insert(
         "Counter".to_string(),
         MirClass {
+            copy: false,
             name: "Counter".to_string(),
             type_params: Vec::new(),
             fields: vec![crate::mir::MirClassField {
@@ -13846,6 +13910,7 @@ fn trait_impl_lookup_and_top_level_run_helpers_cover_runtime_paths() {
             constants: Vec::new(),
             functions: Vec::new(),
             classes: vec![MirClass {
+                copy: false,
                 name: "Box".to_string(),
                 type_params: vec!["T".to_string()],
                 fields: vec![crate::mir::MirClassField {
@@ -18013,6 +18078,7 @@ fn mir_runtime_entrypoint_call_and_type_helpers_cover_remaining_edges() {
             constants: Vec::new(),
             functions: Vec::new(),
             classes: vec![MirClass {
+                copy: false,
                 name: "Pair".to_string(),
                 type_params: vec!["T".to_string(), "U".to_string()],
                 fields: vec![crate::mir::MirClassField {
@@ -18434,6 +18500,7 @@ fn mir_runtime_cleanup_and_rvalue_helpers_cover_remaining_error_paths() {
         }],
     };
     let managed_class = MirClass {
+        copy: false,
         name: "Managed".to_string(),
         type_params: Vec::new(),
         fields: vec![crate::mir::MirClassField {
@@ -18447,6 +18514,7 @@ fn mir_runtime_cleanup_and_rvalue_helpers_cover_remaining_error_paths() {
         }],
     };
     let borrow_managed_class = MirClass {
+        copy: false,
         name: "BorrowManaged".to_string(),
         type_params: Vec::new(),
         fields: Vec::new(),
@@ -18457,12 +18525,14 @@ fn mir_runtime_cleanup_and_rvalue_helpers_cover_remaining_error_paths() {
         }],
     };
     let worker_class = MirClass {
+        copy: false,
         name: "Worker".to_string(),
         type_params: Vec::new(),
         fields: Vec::new(),
         methods: Vec::new(),
     };
     let broken_class = MirClass {
+        copy: false,
         name: "Broken".to_string(),
         type_params: Vec::new(),
         fields: Vec::new(),
@@ -18937,6 +19007,7 @@ fn mir_runtime_env_and_entry_helpers_cover_additional_branch_paths() {
             constants: Vec::new(),
             functions: Vec::new(),
             classes: vec![MirClass {
+                copy: false,
                 name: "Box".to_string(),
                 type_params: Vec::new(),
                 fields: vec![crate::mir::MirClassField {
@@ -18978,6 +19049,7 @@ fn mir_runtime_env_and_entry_helpers_cover_additional_branch_paths() {
                 }],
             }],
             classes: vec![MirClass {
+                copy: false,
                 name: "Box".to_string(),
                 type_params: vec!["T".to_string()],
                 fields: vec![crate::mir::MirClassField {
@@ -22962,4 +23034,606 @@ fn optional_helpers_infer_lookup_and_poll_types_and_decode_bare_payloads() {
             .expect("a bare owned `str` decodes as a present optional string"),
         Some("dir".to_string())
     );
+}
+#[test]
+fn mir_builtin_place_receivers_preserve_storage_without_snapshot_reads() {
+    let mut runtime = test_runtime();
+    let mut env = Env::default();
+    let mut elements = Vec::with_capacity(16);
+    elements.push(Value::String("retained element".to_string()));
+    let allocation = elements.as_ptr();
+    env.define_typed(
+        "items",
+        Type::Named("list".into(), vec![Type::named("str")]),
+        Value::Vec(VecValue {
+            element_type: Type::named("str"),
+            elements,
+        }),
+    );
+    env.define_typed(
+        "text",
+        Type::named("str"),
+        Value::String("borrowed receiver".into()),
+    );
+    let member = |place: &str, field: &str| CallTarget::Member {
+        object: Operand::Place(place.to_string()),
+        field: field.to_string(),
+        receiver_place: Some(place.to_string()),
+    };
+    let clones = super::mir_value_clone_count();
+    let result = runtime
+        .evaluate_call(
+            &member("text", "contains"),
+            &[mir_arg(None, Operand::String("receiver".into()))],
+            &mut env,
+        )
+        .unwrap();
+    assert_eq!(result, Value::Bool(true));
+    assert_eq!(
+        super::mir_value_clone_count(),
+        clones,
+        "shared string methods must inspect original storage"
+    );
+    runtime
+        .evaluate_call(
+            &member("items", "append"),
+            &[mir_arg(None, Operand::String("new element".into()))],
+            &mut env,
+        )
+        .unwrap();
+    assert_eq!(
+        super::mir_value_clone_count(),
+        clones,
+        "mutable list methods must not snapshot the receiver"
+    );
+    let Value::Vec(vector) = env.place_ref("items").unwrap() else {
+        panic!("list")
+    };
+    assert_eq!(vector.elements.as_ptr(), allocation);
+    assert_eq!(vector.elements.len(), 2);
+}
+#[test]
+fn mir_list_set_returns_original_owner_while_disjoint_loan_lives() {
+    let mut runtime = test_runtime();
+    let mut env = Env::default();
+    let removed = String::from("return this original owner");
+    let removed_allocation = removed.as_ptr();
+    env.define_typed(
+        "items",
+        Type::Named("list".into(), vec![Type::named("str")]),
+        Value::Vec(VecValue {
+            element_type: Type::named("str"),
+            elements: vec![
+                Value::String("retained loan".into()),
+                Value::String(removed),
+            ],
+        }),
+    );
+    env.begin_element_loan(
+        "retained",
+        "items",
+        Value::Int(IntegerValue::from_i64(0)),
+        "",
+        false,
+        Span::new(1, 1),
+    )
+    .unwrap();
+    let result = runtime
+        .evaluate_call(
+            &CallTarget::Member {
+                object: Operand::Place("items".into()),
+                field: "set".into(),
+                receiver_place: Some("items".into()),
+            },
+            &[
+                mir_arg(None, Operand::Int(1)),
+                mir_arg(None, Operand::String("replacement".into())),
+            ],
+            &mut env,
+        )
+        .unwrap();
+    let Value::String(removed) = result else {
+        panic!("old owner")
+    };
+    assert_eq!(removed.as_ptr(), removed_allocation);
+    assert_eq!(env.place_ref("retained").unwrap().render(), "retained loan");
+    assert_eq!(
+        env.place_ref("items.[i:1]").unwrap().render(),
+        "replacement"
+    );
+}
+
+#[test]
+fn mir_nested_list_builtin_receiver_mutates_original_loan_storage() {
+    let mut runtime = test_runtime();
+    let mut env = Env::default();
+    let mut inner = Vec::with_capacity(8);
+    inner.push(Value::String("retained".into()));
+    let allocation = inner.as_ptr();
+    let inner_type = Type::Named("list".into(), vec![Type::named("str")]);
+    env.define_typed(
+        "items",
+        Type::Named("list".into(), vec![inner_type.clone()]),
+        Value::Vec(VecValue {
+            element_type: inner_type,
+            elements: vec![Value::Vec(VecValue {
+                element_type: Type::named("str"),
+                elements: inner,
+            })],
+        }),
+    );
+    env.begin_element_loan(
+        "selected",
+        "items",
+        Value::Int(IntegerValue::from_i64(0)),
+        "",
+        true,
+        Span::new(1, 1),
+    )
+    .unwrap();
+    runtime
+        .evaluate_call(
+            &CallTarget::Member {
+                object: Operand::Place("selected".into()),
+                field: "append".into(),
+                receiver_place: Some("selected".into()),
+            },
+            &[mir_arg(None, Operand::String("appended".into()))],
+            &mut env,
+        )
+        .unwrap();
+    let Value::Vec(inner) = env.place_ref("selected").unwrap() else {
+        panic!("nested list")
+    };
+    assert_eq!(inner.elements.as_ptr(), allocation);
+    assert_eq!(inner.elements.len(), 2);
+}
+
+#[test]
+fn contextual_borrowed_user_call_does_not_clone_selected_storage() {
+    let module = crate::lower_source_to_mir(
+        r#"
+def observe(value: str):
+    print(value)
+
+def replace_then_trap(value: mut str):
+    value = "changed"
+    print(1 // 0)
+
+def main():
+    pass
+"#,
+    )
+    .unwrap();
+    let stdout = Arc::new(Mutex::new(String::new()));
+    let mut runtime = MirRuntime::new(module, stdout.clone(), CancellationContext::default());
+    let observe = runtime.functions["observe"].clone();
+    let replace = runtime.functions["replace_then_trap"].clone();
+    let mut env = Env::default();
+    env.define_typed(
+        "items",
+        Type::Named("list".into(), vec![Type::named("str")]),
+        Value::Vec(VecValue {
+            element_type: Type::named("str"),
+            elements: vec![Value::String("original allocation".into())],
+        }),
+    );
+    env.begin_element_loan(
+        "element",
+        "items",
+        Value::Int(IntegerValue::from_i64(0)),
+        "",
+        false,
+        Span::new(1, 1),
+    )
+    .unwrap();
+    let Value::String(original) = env.place_ref("element").unwrap() else {
+        panic!("string")
+    };
+    let allocation = original.as_ptr();
+    let watch = crate::runtime_value::watch_payload_clones(env.place_ref("element").unwrap());
+    runtime
+        .call_prepared_user_function(
+            &observe,
+            &[mir_arg(None, Operand::Place("element".into()))],
+            &mut env,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+    assert_eq!(
+        watch.observations(),
+        0,
+        "shared argument must retain original element storage"
+    );
+    let Value::String(original) = env.place_ref("element").unwrap() else {
+        panic!("string")
+    };
+    assert_eq!(original.as_ptr(), allocation);
+    let explicit_copy = original.clone();
+    assert_ne!(explicit_copy.as_ptr(), allocation);
+    // The explicit language clone routes through Value::clone, unlike a Rust String control.
+    let copied = env.place_ref("element").unwrap().clone();
+    assert_eq!(watch.observations(), 1);
+    drop(copied);
+    drop(watch);
+    env.end_loan("element").unwrap();
+    env.begin_element_loan(
+        "element",
+        "items",
+        Value::Int(IntegerValue::from_i64(0)),
+        "",
+        true,
+        Span::new(1, 1),
+    )
+    .unwrap();
+    let error = runtime
+        .call_prepared_user_function(
+            &replace,
+            &[mir_arg(None, Operand::Place("element".into()))],
+            &mut env,
+            None,
+            None,
+            None,
+        )
+        .unwrap_err();
+    assert_eq!(error.code, "AU4004");
+    assert_eq!(env.place_ref("element").unwrap().render(), "changed");
+}
+
+#[test]
+fn contextual_element_write_is_visible_to_cleanup_after_indirect_trap() {
+    let module = crate::lower_source_to_mir(
+        r#"
+class Profile:
+    name: str
+    visits: int64
+
+class Resource:
+    users: list[Profile]
+
+    def close(mut self):
+        print(self.users[0].name)
+        print(self.users[0].visits)
+
+def change(value: mut Profile):
+    value.name = "changed"
+    value.visits = 9
+    print(1 // 0)
+
+type Action = def(mut Profile) -> None
+
+def main():
+    with resource = Resource(users=[Profile(name="original", visits=1)]):
+        callback = Action(change)
+        callback(resource.users[0])
+"#,
+    )
+    .unwrap();
+    let stdout = Arc::new(Mutex::new(String::new()));
+    let mut runtime = MirRuntime::new(module, stdout.clone(), CancellationContext::default());
+    assert_eq!(runtime.run_main().unwrap_err().code, "AU4004");
+    assert_eq!(stdout.lock().unwrap().as_str(), "changed\n9\n");
+}
+#[test]
+fn mir_binary_string_read_operands_do_not_snapshot_places() {
+    let mut runtime = test_runtime();
+    let mut env = Env::default();
+    env.define_typed("left", Type::named("str"), Value::String("Aura".into()));
+    env.define_typed("right", Type::named("str"), Value::String("Aura".into()));
+    for (op, expected) in [
+        (crate::ast::BinaryOp::Eq, Value::Bool(true)),
+        (crate::ast::BinaryOp::NotEq, Value::Bool(false)),
+        (crate::ast::BinaryOp::Add, Value::String("AuraAura".into())),
+    ] {
+        let clones = super::mir_value_clone_count();
+        let super::RvalueOutcome::Value(value) = runtime
+            .evaluate_rvalue(
+                &Rvalue::Binary {
+                    op,
+                    left: Operand::Place("left".into()),
+                    right: Operand::Place("right".into()),
+                    span: Span::new(1, 1),
+                },
+                &mut env,
+            )
+            .unwrap()
+        else {
+            panic!("ordinary binary result")
+        };
+        assert_eq!(value, expected);
+        assert_eq!(
+            super::mir_value_clone_count(),
+            clones,
+            "binary read must borrow retained string operands"
+        );
+    }
+}
+#[test]
+fn mir_selected_set_receiver_and_membership_needle_borrow_original_storage() {
+    let mut runtime = test_runtime();
+    let mut env = Env::default();
+    let mut elements = Vec::with_capacity(8);
+    elements.push(Value::String("retained".into()));
+    let allocation = elements.as_ptr();
+    let set_type = Type::Named("set".into(), vec![Type::named("str")]);
+    env.define_typed(
+        "sets",
+        Type::Named("list".into(), vec![set_type.clone()]),
+        Value::Vec(VecValue {
+            element_type: set_type,
+            elements: vec![Value::Set(SetValue {
+                element_type: Type::named("str"),
+                elements,
+            })],
+        }),
+    );
+    env.define_typed(
+        "needles",
+        Type::Named("list".into(), vec![Type::named("str")]),
+        Value::Vec(VecValue {
+            element_type: Type::named("str"),
+            elements: vec![Value::String("retained".into())],
+        }),
+    );
+    env.begin_element_loan(
+        "selected",
+        "sets",
+        Value::Int(IntegerValue::from_i64(0)),
+        "",
+        true,
+        Span::new(1, 1),
+    )
+    .unwrap();
+    env.begin_element_loan(
+        "needle",
+        "needles",
+        Value::Int(IntegerValue::from_i64(0)),
+        "",
+        false,
+        Span::new(1, 1),
+    )
+    .unwrap();
+    let member = |field: &str| CallTarget::Member {
+        object: Operand::Place("selected".into()),
+        field: field.into(),
+        receiver_place: Some("selected".into()),
+    };
+    let clones = super::mir_value_clone_count();
+    assert_eq!(
+        runtime
+            .evaluate_call(
+                &member("contains"),
+                &[mir_arg(None, Operand::Place("needle".into()))],
+                &mut env
+            )
+            .unwrap(),
+        Value::Bool(true)
+    );
+    runtime
+        .evaluate_call(
+            &member("add"),
+            &[mir_arg(None, Operand::String("inserted".into()))],
+            &mut env,
+        )
+        .unwrap();
+    runtime
+        .evaluate_call(
+            &member("discard"),
+            &[mir_arg(None, Operand::Place("needle".into()))],
+            &mut env,
+        )
+        .unwrap();
+    assert_eq!(
+        super::mir_value_clone_count(),
+        clones,
+        "set operations must borrow retained receiver and membership needle"
+    );
+    let Value::Set(set) = env.place_ref("selected").unwrap() else {
+        panic!("selected set")
+    };
+    assert_eq!(set.elements.as_ptr(), allocation);
+    assert_eq!(set.elements, vec![Value::String("inserted".into())]);
+    assert_eq!(env.place_ref("needle").unwrap().render(), "retained");
+}
+
+#[test]
+fn contextual_mutable_call_retains_watched_storage_through_trap() {
+    let module = crate::lower_source_to_mir(
+        r#"
+def append_then_trap(value: mut list[str]):
+    value.append("new")
+    print(1 // 0)
+
+def main():
+    pass
+"#,
+    )
+    .unwrap();
+    let mut runtime = MirRuntime::new(
+        module,
+        Arc::new(Mutex::new(String::new())),
+        CancellationContext::default(),
+    );
+    let function = runtime.functions["append_then_trap"].clone();
+    let mut retained = Vec::with_capacity(8);
+    retained.push(Value::String("original storage remains alive".into()));
+    let allocation = retained.as_ptr();
+    let mut env = Env::default();
+    let inner_type = Type::Named("list".into(), vec![Type::named("str")]);
+    env.define_typed(
+        "items",
+        Type::Named("list".into(), vec![inner_type.clone()]),
+        Value::Vec(VecValue {
+            element_type: inner_type,
+            elements: vec![Value::Vec(VecValue {
+                element_type: Type::named("str"),
+                elements: retained,
+            })],
+        }),
+    );
+    env.begin_element_loan(
+        "element",
+        "items",
+        Value::Int(IntegerValue::from_i64(0)),
+        "",
+        true,
+        Span::new(1, 1),
+    )
+    .unwrap();
+    let watch = crate::runtime_value::watch_payload_clones(env.place_ref("element").unwrap());
+    let error = runtime
+        .call_prepared_user_function(
+            &function,
+            &[mir_arg(None, Operand::Place("element".into()))],
+            &mut env,
+            None,
+            None,
+            None,
+        )
+        .unwrap_err();
+    assert_eq!(error.code, "AU4004");
+    let Value::Vec(value) = env.place_ref("element").unwrap() else {
+        panic!("nested list")
+    };
+    assert_eq!(value.elements.as_ptr(), allocation);
+    assert_eq!(value.elements.len(), 2);
+    assert_eq!(watch.observations(), 0);
+}
+#[test]
+fn mir_file_write_members_borrow_selected_payloads() {
+    let mut runtime = test_runtime();
+    let mut env = Env::default();
+    env.define_typed("texts", Type::Named("list".into(), vec![Type::named("str")]),
+        Value::Vec(VecValue { element_type: Type::named("str"), elements: vec![Value::String("borrowed".into())] }));
+    let bytes_type = Type::Named("list".into(), vec![Type::named("uint8")]);
+    env.define_typed("buffers", Type::Named("list".into(), vec![bytes_type.clone()]),
+        Value::Vec(VecValue { element_type: bytes_type, elements: vec![bytes_vec_value(b" bytes".to_vec())] }));
+    env.begin_element_loan("text", "texts", Value::Int(IntegerValue::from_i64(0)), "", false, Span::new(1, 1)).unwrap();
+    env.begin_element_loan("bytes", "buffers", Value::Int(IntegerValue::from_i64(0)), "", false, Span::new(1, 1)).unwrap();
+    let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let path = std::env::temp_dir().join(format!("aura-borrowed-file-member-{}-{stamp}.txt", std::process::id()));
+    let file = FileValue::create(path.to_str().unwrap()).unwrap();
+    let clones = super::mir_value_clone_count();
+    for (field, place) in [("write_all", "text"), ("write_bytes", "bytes")] {
+        let result = runtime.evaluate_file_method(file.clone(), field,
+            &[mir_arg(None, Operand::Place(place.into()))], &mut env).unwrap();
+        assert_eq!(result_ok_payload(result), Value::Unit);
+    }
+    assert_eq!(super::mir_value_clone_count(), clones,
+        "file writes must borrow selected strings and byte lists");
+    file.close();
+    assert_eq!(std::fs::read(&path).unwrap(), b"borrowed bytes");
+    std::fs::remove_file(path).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn mir_process_pipe_write_members_borrow_selected_payloads_with_default_timeout() {
+    let mut runtime = test_runtime();
+    let mut env = Env::default();
+    env.define_typed("texts", Type::Named("list".into(), vec![Type::named("str")]),
+        Value::Vec(VecValue { element_type: Type::named("str"), elements: vec![Value::String("borrowed".into())] }));
+    env.begin_element_loan("text", "texts", Value::Int(IntegerValue::from_i64(0)), "", false, Span::new(1, 1)).unwrap();
+    let child = ProcessChildValue::spawn(vec!["/bin/cat".into()], None, Vec::new(),
+        ProcessStdioConfig::Pipe, ProcessStdioConfig::Pipe, ProcessStdioConfig::Null, false).unwrap();
+    let pipe = child.stdin().unwrap();
+    let clones = super::mir_value_clone_count();
+    let result = runtime.evaluate_process_pipe_method(pipe.clone(), "write_all",
+        &[mir_arg(Some("text"), Operand::Place("text".into()))], &mut env).unwrap();
+    assert_eq!(result_ok_payload(result), Value::Unit);
+    assert_eq!(super::mir_value_clone_count(), clones,
+        "process pipe writes must borrow selected strings");
+    pipe.close();
+    let output = child.stdout().unwrap().read_all(Some(&runtime.cancellation)).unwrap();
+    assert_eq!(output, "borrowed");
+    child.close();
+}
+#[test]
+fn mir_udp_shared_selected_inputs_retain_original_payloads() {
+    let mut runtime = test_runtime();
+    let mut env = Env::default();
+    let receiver = UdpSocketValue::bind("127.0.0.1:0").unwrap();
+    let address = receiver.local_addr().unwrap();
+    let sender = UdpSocketValue::bind("127.0.0.1:0").unwrap();
+    env.define_typed(
+        "texts",
+        Type::Named("list".into(), vec![Type::named("str")]),
+        Value::Vec(VecValue {
+            element_type: Type::named("str"),
+            elements: vec![
+                Value::String(address),
+                Value::String("selected text".into()),
+            ],
+        }),
+    );
+    let bytes_type = Type::Named("list".into(), vec![Type::named("uint8")]);
+    env.define_typed(
+        "packets",
+        Type::Named("list".into(), vec![bytes_type.clone()]),
+        Value::Vec(VecValue {
+            element_type: bytes_type,
+            elements: vec![bytes_vec_value(b"selected bytes".to_vec())],
+        }),
+    );
+    for (loan, source, index) in [
+        ("address", "texts", 0),
+        ("text", "texts", 1),
+        ("bytes", "packets", 0),
+    ] {
+        env.begin_element_loan(
+            loan,
+            source,
+            Value::Int(IntegerValue::from_i64(index)),
+            "",
+            false,
+            Span::new(1, 1),
+        )
+        .unwrap();
+    }
+    let text_watch = crate::runtime_value::watch_payload_clones(env.place_ref("texts").unwrap());
+    let bytes_watch = crate::runtime_value::watch_payload_clones(env.place_ref("bytes").unwrap());
+    for (method, argument, expected) in [
+        ("send_text", "text", b"selected text".as_slice()),
+        ("send_bytes", "bytes", b"selected bytes".as_slice()),
+    ] {
+        assert_eq!(
+            result_ok_payload(
+                runtime
+                    .evaluate_udp_socket_method(
+                        sender.clone(),
+                        method,
+                        &[
+                            mir_arg(Some("address"), Operand::Place("address".into())),
+                            mir_arg(Some(argument), Operand::Place(argument.into())),
+                            mir_arg(Some("timeout"), Operand::Duration(2_000_000_000)),
+                        ],
+                        &mut env,
+                    )
+                    .unwrap()
+            ),
+            Value::Unit
+        );
+        assert_eq!(
+            receiver
+                .recv(64, Some(std::time::Duration::from_secs(2)), None)
+                .unwrap()
+                .unwrap(),
+            expected
+        );
+    }
+    assert_eq!(
+        text_watch.observations(),
+        0,
+        "shared text and address must remain borrowed"
+    );
+    assert_eq!(
+        bytes_watch.observations(),
+        0,
+        "packing network bytes must not clone the selected list"
+    );
+    assert_eq!(env.place_ref("text").unwrap().render(), "selected text");
+    sender.close();
+    receiver.close();
 }

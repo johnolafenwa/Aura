@@ -64,6 +64,64 @@ type HttpRequestParts = (String, String, HttpHeaders, Vec<u8>);
 
 pub(crate) const DIRECT_RUNTIME_TYPE_FIELD: &str = "\0aura:runtime-type";
 pub(crate) const DIRECT_RUNTIME_TYPE_SEPARATOR: char = '\0';
+pub(crate) const CANONICAL_RUNTIME_TYPE_PREFIX: &str = "__aura_type_json_v1__:";
+
+/// Decodes canonical runtime metadata and the legacy structural type spelling.
+pub(crate) fn runtime_type_from_name(name: &str) -> Type {
+    fn split_type_list(source: &str) -> Vec<Type> {
+        let mut values = Vec::new();
+        let mut bracket_depth = 0usize;
+        let mut tuple_depth = 0usize;
+        let mut start = 0usize;
+        for (index, character) in source.char_indices() {
+            match character {
+                '[' => bracket_depth += 1,
+                ']' => bracket_depth = bracket_depth.saturating_sub(1),
+                '(' => tuple_depth += 1,
+                ')' => tuple_depth = tuple_depth.saturating_sub(1),
+                ',' if bracket_depth == 0 && tuple_depth == 0 => {
+                    let value = source[start..index].trim();
+                    if !value.is_empty() {
+                        values.push(runtime_type_from_name(value));
+                    }
+                    start = index + 1;
+                }
+                _ => {}
+            }
+        }
+        let value = source[start..].trim();
+        if !value.is_empty() {
+            values.push(runtime_type_from_name(value));
+        }
+        values
+    }
+
+    if let Some(ty) = name
+        .strip_prefix(CANONICAL_RUNTIME_TYPE_PREFIX)
+        .and_then(|json| serde_json::from_str(json).ok())
+    {
+        return ty;
+    }
+    if name == "None" {
+        return Type::Unit;
+    }
+    if let Some(module) = name.strip_prefix("module ") {
+        return Type::Module(module.to_string());
+    }
+    if name.starts_with('(') && name.ends_with(')') {
+        return Type::Tuple(split_type_list(&name[1..name.len() - 1]));
+    }
+    let Some(open) = name.find('[') else {
+        return Type::named(name);
+    };
+    if !name.ends_with(']') {
+        return Type::named(name);
+    }
+    let base = &name[..open];
+    let inner = &name[open + 1..name.len() - 1];
+    Type::Named(base.to_string(), split_type_list(inner))
+}
+
 pub(crate) const NANOS_PER_MILLISECOND: i128 = 1_000_000;
 pub(crate) const NANOS_PER_SECOND: i128 = 1_000_000_000;
 pub(crate) const NANOS_PER_MINUTE: i128 = 60 * NANOS_PER_SECOND;
@@ -315,6 +373,10 @@ pub mod representation_stats {
     static OPAQUE_BOXES: AtomicU64 = AtomicU64::new(0);
     static CALLABLE_OVERFLOW_ALLOCATIONS: AtomicU64 = AtomicU64::new(0);
 
+    static PAYLOAD_VALUE_CLONE_OBSERVATIONS: AtomicU64 = AtomicU64::new(0);
+    static PAYLOAD_FALLIBLE_CLONE_OBSERVATIONS: AtomicU64 = AtomicU64::new(0);
+    static PAYLOAD_CONTAINER_CLONE_OBSERVATIONS: AtomicU64 = AtomicU64::new(0);
+
     /// The environment variable that requests the exit report.
     pub const ENV_VAR: &str = "AURA_RUNTIME_STATS";
 
@@ -325,12 +387,26 @@ pub mod representation_stats {
         pub closure_environments: u64,
         pub opaque_boxes: u64,
         pub callable_overflow_allocations: u64,
+        /// Nonempty payload storage observed by aggregate Clone implementations.
+        /// Observations may overlap other routes; these are not byte-copy totals.
+        pub payload_container_clone_observations: u64,
+        /// Payload clone attempts in iterative fallible and JSON traversal.
+        pub payload_fallible_clone_observations: u64,
+        /// Payload storage observed at Value::clone, excluding scalar values,
+        /// shared transport handles, type metadata and numeric Array storage.
+        pub payload_value_clone_observations: u64,
     }
 
     impl RepresentationStats {
         /// The counters that grew since `earlier`.
         pub fn since(self, earlier: RepresentationStats) -> RepresentationStats {
             RepresentationStats {
+                payload_value_clone_observations: self.payload_value_clone_observations
+                    - earlier.payload_value_clone_observations,
+                payload_fallible_clone_observations: self.payload_fallible_clone_observations
+                    - earlier.payload_fallible_clone_observations,
+                payload_container_clone_observations: self.payload_container_clone_observations
+                    - earlier.payload_container_clone_observations,
                 union_payload_boxes: self.union_payload_boxes - earlier.union_payload_boxes,
                 closure_environments: self.closure_environments - earlier.closure_environments,
                 opaque_boxes: self.opaque_boxes - earlier.opaque_boxes,
@@ -342,11 +418,14 @@ pub mod representation_stats {
         /// The report line a backend prints at exit.
         pub fn report_line(self, backend: &str) -> String {
             format!(
-                "aura runtime stats ({backend}): union_payload_boxes={} closure_environments={} opaque_boxes={} callable_overflow_allocations={}",
+                "aura runtime stats ({backend}): union_payload_boxes={} closure_environments={} opaque_boxes={} callable_overflow_allocations={} payload_container_clone_observations={} payload_fallible_clone_observations={} payload_value_clone_observations={}",
                 self.union_payload_boxes,
                 self.closure_environments,
                 self.opaque_boxes,
-                self.callable_overflow_allocations
+                self.callable_overflow_allocations,
+                self.payload_container_clone_observations,
+                self.payload_fallible_clone_observations,
+                self.payload_value_clone_observations
             )
         }
 
@@ -363,6 +442,15 @@ pub mod representation_stats {
                     "closure_environments" => stats.closure_environments = value,
                     "opaque_boxes" => stats.opaque_boxes = value,
                     "callable_overflow_allocations" => stats.callable_overflow_allocations = value,
+                    "payload_value_clone_observations" => {
+                        stats.payload_value_clone_observations = value
+                    }
+                    "payload_fallible_clone_observations" => {
+                        stats.payload_fallible_clone_observations = value
+                    }
+                    "payload_container_clone_observations" => {
+                        stats.payload_container_clone_observations = value
+                    }
                     _ => return None,
                 }
             }
@@ -386,9 +474,24 @@ pub mod representation_stats {
         CALLABLE_OVERFLOW_ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
     }
 
+    pub(super) fn note_payload_clone(route: super::PayloadCloneRoute) {
+        let counter = match route {
+            super::PayloadCloneRoute::Value => &PAYLOAD_VALUE_CLONE_OBSERVATIONS,
+            super::PayloadCloneRoute::Fallible => &PAYLOAD_FALLIBLE_CLONE_OBSERVATIONS,
+            super::PayloadCloneRoute::Container => &PAYLOAD_CONTAINER_CLONE_OBSERVATIONS,
+        };
+        counter.fetch_add(1, Ordering::Relaxed);
+    }
+
     /// The current totals.
     pub fn snapshot() -> RepresentationStats {
         RepresentationStats {
+            payload_value_clone_observations: PAYLOAD_VALUE_CLONE_OBSERVATIONS
+                .load(Ordering::Relaxed),
+            payload_fallible_clone_observations: PAYLOAD_FALLIBLE_CLONE_OBSERVATIONS
+                .load(Ordering::Relaxed),
+            payload_container_clone_observations: PAYLOAD_CONTAINER_CLONE_OBSERVATIONS
+                .load(Ordering::Relaxed),
             union_payload_boxes: UNION_PAYLOAD_BOXES.load(Ordering::Relaxed),
             closure_environments: CLOSURE_ENVIRONMENTS.load(Ordering::Relaxed),
             opaque_boxes: OPAQUE_BOXES.load(Ordering::Relaxed),
@@ -409,6 +512,137 @@ pub mod representation_stats {
     }
 }
 
+/// Observations identify clone attempts, not byte copies: nested hooks can count
+/// the same source more than once. Zero is the useful borrowed-operation oracle.
+#[derive(Clone, Copy)]
+enum PayloadCloneRoute {
+    Value,
+    Fallible,
+    Container,
+}
+
+#[derive(Clone, Copy, Eq, PartialEq, Hash)]
+struct PayloadStorageId(u8, usize);
+
+fn slice_payload_storage<T>(kind: u8, values: &[T]) -> Option<PayloadStorageId> {
+    (!values.is_empty()).then(|| PayloadStorageId(kind, values.as_ptr() as usize))
+}
+
+fn instance_payload_storage(instance: &InstanceValue) -> Option<PayloadStorageId> {
+    instance
+        .fields
+        .values()
+        .next()
+        .map(|value| PayloadStorageId(6, value as *const Value as usize))
+}
+
+fn payload_storage(value: &Value) -> Option<PayloadStorageId> {
+    match value {
+        Value::String(value) => slice_payload_storage(1, value.as_bytes()),
+        Value::Tuple(value) => slice_payload_storage(2, &value.elements),
+        Value::Vec(value) => slice_payload_storage(3, &value.elements),
+        Value::Set(value) => slice_payload_storage(4, &value.elements),
+        Value::Map(value) => slice_payload_storage(5, &value.entries),
+        Value::Instance(value) => instance_payload_storage(value),
+        Value::EnumVariant(value) => slice_payload_storage(7, &value.payloads),
+        Value::Union(value) => Some(PayloadStorageId(
+            8,
+            value.as_ref() as *const UnionValue as usize,
+        )),
+        // Handles retain shared transport state; metadata and scalar values are
+        // not payload copies. Numeric Array storage has its own copy contract.
+        _ => None,
+    }
+}
+
+fn note_payload_storage_clone(source: Option<PayloadStorageId>, route: PayloadCloneRoute) {
+    let Some(source) = source else { return };
+    representation_stats::note_payload_clone(route);
+    #[cfg(test)]
+    PAYLOAD_CLONE_WATCHES.with(|watches| {
+        for watch in watches.borrow().iter() {
+            if watch.storage.contains(&source) {
+                watch.observations.set(watch.observations.get() + 1);
+            }
+        }
+    });
+    #[cfg(not(test))]
+    let _ = source;
+}
+
+fn note_payload_clone_source(source: &Value, route: PayloadCloneRoute) {
+    note_payload_storage_clone(payload_storage(source), route);
+}
+
+#[cfg(test)]
+struct PayloadCloneWatchState {
+    storage: HashSet<PayloadStorageId>,
+    observations: Rc<Cell<usize>>,
+}
+
+#[cfg(test)]
+thread_local! {
+    static PAYLOAD_CLONE_WATCHES: RefCell<Vec<PayloadCloneWatchState>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Scoped source-specific observations on the current thread. The original
+/// owner must remain alive while watched so allocation IDs cannot be recycled.
+/// This does not follow work into spawned runtime threads or other processes.
+#[cfg(test)]
+pub(crate) struct PayloadCloneWatch {
+    observations: Rc<Cell<usize>>,
+}
+
+#[cfg(test)]
+impl PayloadCloneWatch {
+    pub(crate) fn observations(&self) -> usize {
+        self.observations.get()
+    }
+}
+
+#[cfg(test)]
+impl Drop for PayloadCloneWatch {
+    fn drop(&mut self) {
+        PAYLOAD_CLONE_WATCHES.with(|watches| {
+            watches
+                .borrow_mut()
+                .retain(|watch| !Rc::ptr_eq(&watch.observations, &self.observations));
+        });
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn watch_payload_clones(source: &Value) -> PayloadCloneWatch {
+    let mut storage = HashSet::new();
+    let mut pending = vec![source];
+    while let Some(value) = pending.pop() {
+        storage.extend(payload_storage(value));
+        match value {
+            Value::Tuple(value) => pending.extend(&value.elements),
+            Value::Vec(value) => pending.extend(&value.elements),
+            Value::Set(value) => pending.extend(&value.elements),
+            Value::Map(value) => {
+                for (key, value) in &value.entries {
+                    pending.push(key);
+                    pending.push(value);
+                }
+            }
+            Value::Instance(value) => pending.extend(value.fields.values()),
+            Value::EnumVariant(value) => pending.extend(&value.payloads),
+            Value::Union(value) => pending.push(&value.payload),
+            _ => {}
+        }
+    }
+    let observations = Rc::new(Cell::new(0));
+    PAYLOAD_CLONE_WATCHES.with(|watches| {
+        watches.borrow_mut().push(PayloadCloneWatchState {
+            storage,
+            observations: Rc::clone(&observations),
+        });
+    });
+    PayloadCloneWatch { observations }
+}
+
 /// Boxes a union value and counts the allocation for the representation
 /// measurements; every runtime union construction goes through here.
 pub(crate) fn union_value(union_type: Type, member_index: usize, payload: Value) -> Value {
@@ -420,11 +654,25 @@ pub(crate) fn union_value(union_type: Type, member_index: usize, payload: Value)
     }))
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub struct UnionValue {
     pub union_type: Type,
     pub member_index: usize,
     pub payload: Value,
+}
+
+impl Clone for UnionValue {
+    fn clone(&self) -> Self {
+        note_payload_storage_clone(
+            Some(PayloadStorageId(8, self as *const Self as usize)),
+            PayloadCloneRoute::Container,
+        );
+        Self {
+            union_type: self.union_type.clone(),
+            member_index: self.member_index,
+            payload: self.payload.clone(),
+        }
+    }
 }
 
 /// A non-null foreign-owned opaque address tagged with its Aura nominal
@@ -620,17 +868,41 @@ impl PartialEq for FunctionValue {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct InstanceValue {
     pub class_name: String,
     pub fields: BTreeMap<String, Value>,
 }
 
-#[derive(Clone, Debug)]
+impl Clone for InstanceValue {
+    fn clone(&self) -> Self {
+        note_payload_storage_clone(instance_payload_storage(self), PayloadCloneRoute::Container);
+        Self {
+            class_name: self.class_name.clone(),
+            fields: self.fields.clone(),
+        }
+    }
+}
+
+#[derive(Debug)]
 pub struct EnumVariantValue {
     pub enum_name: String,
     pub variant_name: String,
     pub payloads: Vec<Value>,
+}
+
+impl Clone for EnumVariantValue {
+    fn clone(&self) -> Self {
+        note_payload_storage_clone(
+            slice_payload_storage(7, &self.payloads),
+            PayloadCloneRoute::Container,
+        );
+        Self {
+            enum_name: self.enum_name.clone(),
+            variant_name: self.variant_name.clone(),
+            payloads: self.payloads.clone(),
+        }
+    }
 }
 
 impl EnumVariantValue {
@@ -667,10 +939,23 @@ impl PartialEq for EnumVariantValue {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct VecValue {
     pub element_type: Type,
     pub elements: Vec<Value>,
+}
+
+impl Clone for VecValue {
+    fn clone(&self) -> Self {
+        note_payload_storage_clone(
+            slice_payload_storage(3, &self.elements),
+            PayloadCloneRoute::Container,
+        );
+        Self {
+            element_type: self.element_type.clone(),
+            elements: self.elements.clone(),
+        }
+    }
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -1892,10 +2177,23 @@ pub(crate) fn slice_string_owned(
     Ok(text.chars().skip(start).take(end - start).collect())
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct TupleValue {
     pub element_types: Vec<Type>,
     pub elements: Vec<Value>,
+}
+
+impl Clone for TupleValue {
+    fn clone(&self) -> Self {
+        note_payload_storage_clone(
+            slice_payload_storage(2, &self.elements),
+            PayloadCloneRoute::Container,
+        );
+        Self {
+            element_types: self.element_types.clone(),
+            elements: self.elements.clone(),
+        }
+    }
 }
 
 impl PartialEq for TupleValue {
@@ -2132,6 +2430,18 @@ pub(crate) fn try_clone_array_containing_value(value: &Value) -> Result<Value> {
 
     loop {
         if let Some(value) = next.take() {
+            if matches!(
+                value,
+                Value::Tuple(_)
+                    | Value::Vec(_)
+                    | Value::Set(_)
+                    | Value::Map(_)
+                    | Value::Instance(_)
+                    | Value::EnumVariant(_)
+                    | Value::Union(_)
+            ) {
+                note_payload_clone_source(value, PayloadCloneRoute::Fallible);
+            }
             state.completed = match value {
                 Value::Array(array) => Some(Value::Array(array.try_clone()?)),
                 Value::Tuple(tuple) => {
@@ -2435,17 +2745,44 @@ pub(crate) fn try_clone_array_containing_value(value: &Value) -> Result<Value> {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct SetValue {
     pub element_type: Type,
     pub elements: Vec<Value>,
 }
 
-#[derive(Clone, Debug)]
+impl Clone for SetValue {
+    fn clone(&self) -> Self {
+        note_payload_storage_clone(
+            slice_payload_storage(4, &self.elements),
+            PayloadCloneRoute::Container,
+        );
+        Self {
+            element_type: self.element_type.clone(),
+            elements: self.elements.clone(),
+        }
+    }
+}
+
+#[derive(Debug)]
 pub struct MapValue {
     pub key_type: Type,
     pub value_type: Type,
     pub entries: Vec<(Value, Value)>,
+}
+
+impl Clone for MapValue {
+    fn clone(&self) -> Self {
+        note_payload_storage_clone(
+            slice_payload_storage(5, &self.entries),
+            PayloadCloneRoute::Container,
+        );
+        Self {
+            key_type: self.key_type.clone(),
+            value_type: self.value_type.clone(),
+            entries: self.entries.clone(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -6836,6 +7173,10 @@ fn clone_json_runtime_tree(root: &Value) -> Option<Value> {
             if nominal_runtime_base_name(&variant.enum_name) != "json.Value" {
                 return None;
             }
+            note_payload_clone_source(value, PayloadCloneRoute::Fallible);
+            for payload in &variant.payloads {
+                note_payload_clone_source(payload, PayloadCloneRoute::Fallible);
+            }
             completed = match (variant.variant_name.as_str(), variant.payloads.as_slice()) {
                 ("Null", []) => Some(enum_value(variant, Vec::new())),
                 ("Bool", [Value::Bool(value)]) => {
@@ -6889,7 +7230,13 @@ fn clone_json_runtime_tree(root: &Value) -> Option<Value> {
                             map,
                             next_index: 1,
                             entries,
-                            pending_key: Value::String(key.clone()),
+                            pending_key: {
+                                note_payload_storage_clone(
+                                    slice_payload_storage(1, key.as_bytes()),
+                                    PayloadCloneRoute::Fallible,
+                                );
+                                Value::String(key.clone())
+                            },
                         });
                         next = Some(value);
                         None
@@ -6944,7 +7291,13 @@ fn clone_json_runtime_tree(root: &Value) -> Option<Value> {
                             map,
                             next_index,
                             entries,
-                            pending_key: Value::String(key.clone()),
+                            pending_key: {
+                                note_payload_storage_clone(
+                                    slice_payload_storage(1, key.as_bytes()),
+                                    PayloadCloneRoute::Fallible,
+                                );
+                                Value::String(key.clone())
+                            },
                         });
                         next = Some(value);
                     } else {
@@ -6969,6 +7322,7 @@ fn clone_json_runtime_tree(root: &Value) -> Option<Value> {
 
 impl Clone for Value {
     fn clone(&self) -> Self {
+        note_payload_clone_source(self, PayloadCloneRoute::Value);
         if matches!(
             self,
             Value::EnumVariant(variant)

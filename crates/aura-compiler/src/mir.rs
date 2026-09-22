@@ -657,9 +657,95 @@ pub struct MirLocalType {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MirClass {
     pub name: String,
+    #[serde(default)]
+    pub copy: bool,
     pub type_params: Vec<String>,
     pub fields: Vec<MirClassField>,
     pub methods: Vec<MirMethod>,
+}
+
+/// Copy classification retained at the executable MIR boundary. Unknown and
+/// unresolved types remain borrowed; concrete generic calls substitute first.
+pub(crate) fn type_is_copy_in_mir(ty: &Type, module: &MirModule) -> bool {
+    fn visit(ty: &Type, module: &MirModule, visiting: &mut BTreeSet<String>) -> bool {
+        match ty {
+            Type::Unit | Type::Function { .. } => true,
+            Type::Tuple(elements) => elements.iter().all(|ty| visit(ty, module, visiting)),
+            Type::Union(union) => union.members.iter().all(|ty| visit(ty, module, visiting)),
+            Type::Named(name, args) => {
+                if name == "Queue" && args.len() == 1 {
+                    return true;
+                }
+                if args.is_empty()
+                    && matches!(
+                        name.as_str(),
+                        "bool"
+                            | "int8"
+                            | "int16"
+                            | "int32"
+                            | "int64"
+                            | "int128"
+                            | "intsize"
+                            | "uint8"
+                            | "uint16"
+                            | "uint32"
+                            | "uint64"
+                            | "uint128"
+                            | "uintsize"
+                            | "float32"
+                            | "float64"
+                            | "Duration"
+                    )
+                {
+                    return true;
+                }
+                if (matches!(
+                    name.as_str(),
+                    "Task" | "Lookup" | "Poll" | "SendError" | "QueueReceive"
+                ) && args.len() == 1)
+                    || (name == "Result" && args.len() == 2)
+                {
+                    return args.iter().all(|ty| visit(ty, module, visiting));
+                }
+                let key = ty.to_string();
+                if !visiting.insert(key.clone()) {
+                    return false;
+                }
+                let result =
+                    if let Some(class) = module.classes.iter().find(|class| class.name == *name) {
+                        class.copy
+                            && args.len() == class.type_params.len()
+                            && args.iter().all(|ty| visit(ty, module, visiting))
+                    } else if let Some(decl) = module.enums.iter().find(|decl| decl.name == *name) {
+                        if args.len() != decl.type_params.len() {
+                            false
+                        } else {
+                            let substitutions = decl
+                                .type_params
+                                .iter()
+                                .cloned()
+                                .zip(args.iter().cloned())
+                                .collect();
+                            decl.variants.iter().all(|variant| {
+                                variant.payloads.iter().all(|ty| {
+                                    visit(&substitute_type(ty, &substitutions), module, visiting)
+                                })
+                            })
+                        }
+                    } else {
+                        false
+                    };
+                visiting.remove(&key);
+                result
+            }
+            Type::Module(_)
+            | Type::TypeParam(_)
+            | Type::Closure { .. }
+            | Type::Callable(_)
+            | Type::ReturnedView(_) => false,
+        }
+    }
+    visit(ty, module, &mut BTreeSet::new())
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -742,6 +828,16 @@ pub enum Instruction {
         loan: String,
         source: String,
         mutable: bool,
+    },
+    /// A shared logical union presentation over existing storage. Unlike
+    /// UnionInject, this creates neither an owner nor a copied payload.
+    BeginUnionLoan {
+        loan: String,
+        source: String,
+        union_type: Type,
+        member_type: Type,
+        member_index: usize,
+        span: Span,
     },
     /// A loan of one list element or dictionary entry of the collection
     /// place `source`, selected by `selector`, which was evaluated exactly
@@ -1124,6 +1220,7 @@ struct ValidatedLoan {
 impl PartialEq for ValidatedLoan {
     fn eq(&self, other: &Self) -> bool {
         self.mutable == other.mutable
+            && self.footprints == other.footprints
             && self.parent == other.parent
             && self.returned_descriptor == other.returned_descriptor
             && self.active_children == other.active_children
@@ -1304,6 +1401,18 @@ fn symbolic_loan_contract<'a>(
                 )?,
                 mutable: *mutable,
             },
+            Instruction::BeginUnionLoan { source, .. } => SymbolicLoanContract {
+                sources: symbolic_loan_place_sources(
+                    source,
+                    definitions,
+                    memo,
+                    visiting,
+                    depth,
+                    function,
+                    budget,
+                )?,
+                mutable: false,
+            },
             Instruction::BeginReturnedLoan {
                 origin,
                 projections,
@@ -1441,6 +1550,7 @@ fn function_returned_view_contract(
     for instruction in &instructions {
         let name = match instruction {
             Instruction::BeginLoan { loan, .. }
+            | Instruction::BeginUnionLoan { loan, .. }
             | Instruction::BeginElementLoan { loan, .. }
             | Instruction::BeginReturnedLoan { loan, .. }
             | Instruction::Reborrow { loan, .. }
@@ -1615,6 +1725,7 @@ enum CallableContractSite {
 }
 
 struct MirLoanValidationContext<'a> {
+    module: &'a MirModule,
     classes: BTreeMap<&'a str, &'a MirClass>,
     enums: BTreeMap<&'a str, &'a MirEnum>,
     functions: BTreeMap<&'a str, &'a MirFunction>,
@@ -1988,6 +2099,24 @@ impl<'a> MirLoanValidationContext<'a> {
                 ));
             }
         }
+        for class in &module.classes {
+            if class.copy {
+                let substitutions = class
+                    .type_params
+                    .iter()
+                    .cloned()
+                    .map(|name| (name, Type::named("int64")))
+                    .collect();
+                for field in &class.fields {
+                    if !type_is_copy_in_mir(&substitute_type(&field.ty, &substitutions), module) {
+                        return Err(format!(
+                            "invalid MIR Copy class `{}` has non-Copy field `{}`",
+                            class.name, field.name
+                        ));
+                    }
+                }
+            }
+        }
         let mut unions = BTreeMap::new();
         for plan in &module.unions {
             crate::union_layout::validate_union_layout(plan)
@@ -2051,6 +2180,7 @@ impl<'a> MirLoanValidationContext<'a> {
             }
         }
         Ok(Self {
+            module,
             classes,
             enums,
             functions,
@@ -2135,23 +2265,7 @@ impl<'a> MirLoanValidationContext<'a> {
                             })
                         }
                     } else if let Some(class) = context.classes.get(name.as_str()) {
-                        if args.len() != class.type_params.len() {
-                            false
-                        } else {
-                            let substitutions = class
-                                .type_params
-                                .iter()
-                                .cloned()
-                                .zip(args.iter().cloned())
-                                .collect::<HashMap<_, _>>();
-                            class.fields.iter().any(|field| {
-                                visit(
-                                    context,
-                                    &substitute_type(&field.ty, &substitutions),
-                                    visiting,
-                                )
-                            })
-                        }
+                        !class.copy || args.iter().any(|arg| visit(context, arg, visiting))
                     } else if matches!(name.as_str(), "Lookup" | "Poll" | "Task") && args.len() == 1
                     {
                         visit(context, &args[0], visiting)
@@ -3457,6 +3571,8 @@ struct ValidatedLoanState {
     taken_enum_payloads: Vec<ValidatedTakenEnumPayload>,
     derived_value_origins: BTreeMap<String, std::sync::Arc<[String]>>,
     borrowed_value_origins: BTreeMap<String, std::sync::Arc<[String]>>,
+    borrowed_loan_dependencies: BTreeMap<String, BTreeSet<String>>,
+    expired_borrowed_values: BTreeSet<String>,
     task_borrowed_closures: BTreeSet<String>,
     authoritative_callables: BTreeMap<String, ValidatedCallable>,
     active_path_bytes: usize,
@@ -5296,6 +5412,27 @@ fn validated_mapped_sources(
     origins_by_place: &BTreeMap<String, std::sync::Arc<[String]>>,
 ) -> std::result::Result<Vec<String>, String> {
     let mut expanded = Vec::new();
+    if let Some((target, origins)) = origins_by_place
+        .iter()
+        .filter(|(target, _)| {
+            place == target.as_str()
+                || place
+                    .strip_prefix(target.as_str())
+                    .is_some_and(|suffix| suffix.starts_with('.'))
+        })
+        .max_by_key(|(target, _)| target.len())
+    {
+        let suffix = place.strip_prefix(target.as_str()).unwrap_or_default();
+        for origin in origins.iter() {
+            expanded.extend(validated_loan_sources(
+                &format!("{origin}{suffix}"),
+                &state.loans,
+            )?);
+        }
+        expanded.sort();
+        expanded.dedup();
+        return Ok(expanded);
+    }
     for source in validated_loan_sources(place, &state.loans)? {
         let mapped = origins_by_place
             .iter()
@@ -5738,8 +5875,20 @@ fn validate_projected_place_access(
             None => Ok(()),
         };
     }
+    let root = place.split('.').next().unwrap_or_default();
+    let selected_layout = if let Some(loan) = state.loans.get(root) {
+        loan.footprints.is_some()
+            && context.place_type(function, place)?.is_some()
+            && loan.sources.iter().all(|source| {
+                context
+                    .place_type(function, source)
+                    .is_ok_and(|ty| ty.is_some())
+            })
+    } else {
+        false
+    };
     for source in validated_physical_sources(place, state)? {
-        if context.place_type(function, &source)?.is_none() {
+        if !selected_layout && context.place_type(function, &source)?.is_none() {
             return Err(format!(
                 "invalid MIR payload projection `{place}` in `{}` has no concrete payload layout",
                 function.name
@@ -5840,6 +5989,13 @@ fn invalidate_union_facts_for_place(place: &str, state: &mut ValidatedLoanState)
     state
         .borrowed_value_origins
         .retain(|target, _| !resolved.iter().any(|changed| overwritten(target, changed)));
+    state
+        .borrowed_loan_dependencies
+        .retain(|target, _| !resolved.iter().any(|changed| overwritten(target, changed)));
+    state
+        .expired_borrowed_values
+        .retain(|target| !resolved.iter().any(|changed| overwritten(target, changed)));
+
     state
         .task_borrowed_closures
         .retain(|target| !resolved.iter().any(|changed| overwritten(target, changed)));
@@ -6074,6 +6230,106 @@ enum LoanPlaceAccess {
     Mutate,
 }
 
+fn loan_dependencies_for_place(place: &str, state: &ValidatedLoanState) -> BTreeSet<String> {
+    let root = place.split('.').next().unwrap_or_default();
+    let mut dependencies = BTreeSet::new();
+    if state.loans.contains_key(root) {
+        dependencies.insert(root.to_owned());
+    }
+    for (target, loans) in &state.borrowed_loan_dependencies {
+        if mir_place_paths_overlap(place, target) {
+            dependencies.extend(loans.iter().cloned());
+        }
+    }
+    dependencies
+}
+
+fn loan_dependencies_for_rvalue(value: &Rvalue, state: &ValidatedLoanState) -> BTreeSet<String> {
+    let mut operands = Vec::new();
+    match value {
+        Rvalue::Use(value)
+        | Rvalue::Try { value }
+        | Rvalue::Cast { value, .. }
+        | Rvalue::CallableAdapt { value, .. }
+        | Rvalue::UnionInject { value, .. }
+        | Rvalue::TupleElement { tuple: value, .. }
+        | Rvalue::Member { object: value, .. }
+        | Rvalue::VariantPayload {
+            scrutinee: value, ..
+        } => operands.push(value),
+        Rvalue::TupleLiteral { elements, .. }
+        | Rvalue::VecLiteral { elements, .. }
+        | Rvalue::SetLiteral { elements, .. }
+        | Rvalue::EnumVariant {
+            payloads: elements, ..
+        } => operands.extend(elements),
+        Rvalue::MapLiteral { entries, .. } => {
+            for entry in entries {
+                operands.extend([&entry.key, &entry.value]);
+            }
+        }
+        Rvalue::Construct { fields, .. } => {
+            operands.extend(fields.iter().map(|field| &field.value))
+        }
+        Rvalue::Closure { captures, .. } => {
+            operands.extend(captures.iter().map(|capture| &capture.value))
+        }
+        _ => {}
+    }
+    operands
+        .into_iter()
+        .filter_map(|operand| match operand {
+            Operand::Place(place) => Some(loan_dependencies_for_place(place, state)),
+            _ => None,
+        })
+        .flatten()
+        .collect()
+}
+
+fn validate_borrowed_alias_access(
+    function: &MirFunction,
+    place: &str,
+    access: LoanPlaceAccess,
+    state: &ValidatedLoanState,
+) -> std::result::Result<(), String> {
+    if state
+        .expired_borrowed_values
+        .iter()
+        .any(|expired| mir_place_paths_overlap(place, expired))
+    {
+        // Replacing the whole alias local is permitted; reading a descendant is not.
+        if !matches!(access, LoanPlaceAccess::Mutate)
+            || !state.expired_borrowed_values.contains(place)
+        {
+            return Err(format!(
+                "invalid MIR in `{}` uses a borrowed value after its loan ended: `{place}`",
+                function.name
+            ));
+        }
+    }
+    for loan in loan_dependencies_for_place(place, state) {
+        if loan == place.split('.').next().unwrap_or_default() {
+            // Direct descriptors retain the established loan diagnostics below.
+            continue;
+        }
+        if !state.loans.contains_key(&loan) {
+            if matches!(access, LoanPlaceAccess::Mutate)
+                && state.borrowed_loan_dependencies.contains_key(place)
+            {
+                continue;
+            }
+            return Err(format!("invalid MIR in `{}` uses a borrowed value after its loan `{loan}` ended: `{place}`", function.name));
+        }
+        if validated_loan_is_suspended(&loan, &state.loans) {
+            return Err(format!(
+                "invalid MIR in `{}` uses suspended parent loan `{loan}` through `{place}`",
+                function.name
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn validate_loan_place_access(
     function: &MirFunction,
     place: &str,
@@ -6081,6 +6337,7 @@ fn validate_loan_place_access(
     state: &ValidatedLoanState,
 ) -> std::result::Result<(), String> {
     validate_canonical_mir_place(function, place)?;
+    validate_borrowed_alias_access(function, place, access, state)?;
     let root = place.split('.').next().unwrap_or_default();
     if let Some(loan) = state.loans.get(root) {
         if validated_loan_is_suspended(root, &state.loans) {
@@ -7575,6 +7832,102 @@ fn validate_loan_instruction(
         state.pending_handoff = None;
     }
     match instruction {
+        Instruction::BeginUnionLoan {
+            loan,
+            source,
+            union_type,
+            member_type,
+            member_index,
+            ..
+        } => {
+            validate_mir_loan_name(function, loan)?;
+            validate_canonical_mir_place(function, source)?;
+            let source_root = source.split('.').next().unwrap_or_default();
+            if loan == source_root {
+                return Err(format!(
+                    "invalid MIR union loan `{loan}` in `{}` shadows its source root",
+                    function.name
+                ));
+            }
+            if state.loans.contains_key(loan) {
+                return Err(format!(
+                    "invalid MIR in `{}` begins already-active union loan `{loan}`",
+                    function.name
+                ));
+            }
+            if !known_roots.contains(source_root) && !state.loans.contains_key(source_root) {
+                return Err(format!(
+                    "invalid MIR union loan `{loan}` in `{}` has unknown source `{source}`",
+                    function.name
+                ));
+            }
+            let Type::Union(union) = union_type else {
+                return Err("invalid MIR union loan requires a union type".into());
+            };
+            if union.members.get(*member_index) != Some(member_type) {
+                return Err("invalid MIR union loan member index and type disagree".into());
+            }
+            context.union_plan(function, union_type)?;
+            if context.place_type(function, source)?.as_ref() != Some(member_type) {
+                return Err(
+                    "invalid MIR union loan source does not have its selected member type".into(),
+                );
+            }
+            if context.root_type(function, loan).as_ref() != Some(union_type) {
+                return Err(
+                    "invalid MIR union loan destination does not have its union type".into(),
+                );
+            }
+            validate_checked_loan_place_access(
+                function,
+                source,
+                LoanPlaceAccess::Read,
+                context,
+                state,
+                None,
+            )?;
+            let parent = state
+                .loans
+                .contains_key(source_root)
+                .then(|| source_root.to_owned());
+            let sources = validated_loan_sources(source, &state.loans)?;
+            let footprints = state
+                .loans
+                .get(source_root)
+                .and_then(|parent| parent.footprints.clone());
+            let bytes = sources.iter().map(String::len).sum();
+            budget.reserve(function, loan, bytes)?;
+            validate_active_loan_path_budget(function, loan, state, bytes)?;
+            validate_new_loan_overlap(
+                function,
+                loan,
+                footprints.as_deref().unwrap_or(&sources),
+                false,
+                parent.as_deref(),
+                &state.loans,
+            )?;
+            state.ended.remove(loan);
+            insert_validated_loan(
+                state,
+                loan.clone(),
+                ValidatedLoan {
+                    sources: sources.into(),
+                    footprints,
+                    mutable: false,
+                    parent,
+                    returned_descriptor: false,
+                    active_children: 0,
+                },
+            );
+            let payload = format!("{loan}.{UNION_PAYLOAD_PROJECTION_PREFIX}{member_index}");
+            state.derived_value_origins.insert(
+                payload.clone(),
+                validated_physical_sources(source, state)?.into(),
+            );
+            for (place, callable) in rebase_authoritative_callables(source, &payload, state) {
+                state.authoritative_callables.insert(place, callable);
+            }
+        }
         Instruction::BeginElementLoan {
             loan,
             source,
@@ -7975,6 +8328,14 @@ fn validate_loan_instruction(
                     function.name
                 ));
             }
+            let logical_source = if projection.is_empty() {
+                parent.clone()
+            } else {
+                format!("{parent}.{projection}")
+            };
+            context.validate_projected_loan_type(function, loan, &logical_source)?;
+            validate_projected_place_access(function, &logical_source, context, state, None)?;
+            let footprints = parent_loan.footprints.clone();
             let expanded_path_bytes = parent_loan.sources.iter().fold(0usize, |total, source| {
                 total.saturating_add(
                     source
@@ -7989,7 +8350,7 @@ fn validate_loan_instruction(
                 .sources
                 .iter()
                 .map(|source| {
-                    if projection.is_empty() {
+                    if projection.is_empty() || footprints.is_some() {
                         source.clone()
                     } else {
                         format!("{source}.{projection}")
@@ -7998,14 +8359,17 @@ fn validate_loan_instruction(
                 .collect::<Vec<_>>();
             sources.sort();
             sources.dedup();
-            for source in &sources {
-                context.validate_projected_loan_type(function, loan, source)?;
-                validate_projected_place_access(function, source, context, state, None)?;
+            if footprints.is_none() {
+                sources = validated_physical_sources(&logical_source, state)?;
+                for source in &sources {
+                    context.validate_projected_loan_type(function, loan, source)?;
+                    validate_projected_place_access(function, source, context, state, None)?;
+                }
             }
             validate_new_loan_overlap(
                 function,
                 loan,
-                &sources,
+                footprints.as_deref().unwrap_or(&sources),
                 *mutable,
                 Some(parent),
                 &state.loans,
@@ -8016,7 +8380,7 @@ fn validate_loan_instruction(
                 loan.clone(),
                 ValidatedLoan {
                     sources: sources.into(),
-                    footprints: None,
+                    footprints,
                     mutable: *mutable,
                     parent: Some(parent.clone()),
                     returned_descriptor: false,
@@ -8055,6 +8419,7 @@ fn validate_loan_instruction(
                 state,
                 None,
             )?;
+            context.validate_projected_loan_type(function, target, loan)?;
             let task_borrowed_closure = place_has_task_borrowed_closure(loan, state);
             let loan_sources = validated_loan_sources(loan, &state.loans)?;
             let mut grouped: BTreeMap<String, Vec<ValidatedCallable>> = BTreeMap::new();
@@ -8081,13 +8446,16 @@ fn validate_loan_instruction(
                 .collect::<Vec<_>>();
             let borrowed_origins = context
                 .place_type(function, target)?
-                .is_some_and(|ty| context.type_is_definitely_noncopy(&ty))
+                .is_some_and(|ty| !type_is_copy_in_mir(&ty, context.module))
                 .then(|| validated_authority_sources(loan, state))
                 .transpose()?
                 .map(std::sync::Arc::from);
             invalidate_union_facts_for_place(target, state);
             if let Some(origins) = borrowed_origins {
                 state.borrowed_value_origins.insert(target.clone(), origins);
+                state
+                    .borrowed_loan_dependencies
+                    .insert(target.clone(), BTreeSet::from([root.to_owned()]));
             }
             if task_borrowed_closure {
                 state.task_borrowed_closures.insert(target.clone());
@@ -8187,6 +8555,11 @@ fn validate_loan_instruction(
             }
         }
         Instruction::EndLoan { loan } => {
+            for (target, dependencies) in &state.borrowed_loan_dependencies {
+                if dependencies.contains(loan) {
+                    state.expired_borrowed_values.insert(target.clone());
+                }
+            }
             if validated_loan_has_child(loan, &state.loans) {
                 return Err(format!(
                     "invalid MIR in `{}` ends parent loan `{loan}` before its child",
@@ -8342,6 +8715,8 @@ fn validate_loan_instruction(
             let borrowed_value_origins = borrowed_noncopy_origin_targets_for_rvalue(
                 function, target, value, context, state,
             )?;
+            let loan_dependencies = loan_dependencies_for_rvalue(value, state);
+
             let derived_value_origin = if let Rvalue::VariantPayload {
                 scrutinee,
                 variant_name,
@@ -8429,6 +8804,11 @@ fn validate_loan_instruction(
                 state.derived_value_origins.insert(target.clone(), origins);
             }
             for (origin_target, origins) in borrowed_value_origins {
+                if !loan_dependencies.is_empty() {
+                    state
+                        .borrowed_loan_dependencies
+                        .insert(origin_target.clone(), loan_dependencies.clone());
+                }
                 state.borrowed_value_origins.insert(origin_target, origins);
             }
             for task_target in task_borrowed_closure_targets {
@@ -8770,6 +9150,15 @@ fn validate_function_loan_flow(
                         merged.dedup();
                         merged_borrowed_origins.insert(name.clone(), std::sync::Arc::from(merged));
                     }
+                    let mut merged_loan_dependencies = existing.borrowed_loan_dependencies.clone();
+                    for (target, dependencies) in &successor_state.borrowed_loan_dependencies {
+                        merged_loan_dependencies
+                            .entry(target.clone())
+                            .or_default()
+                            .extend(dependencies.iter().cloned());
+                    }
+                    let mut merged_expired = existing.expired_borrowed_values.clone();
+                    merged_expired.extend(successor_state.expired_borrowed_values.iter().cloned());
                     let mut merged_task_borrowed_closures = existing.task_borrowed_closures.clone();
                     merged_task_borrowed_closures
                         .extend(successor_state.task_borrowed_closures.iter().cloned());
@@ -8777,7 +9166,10 @@ fn validate_function_loan_flow(
                         &existing.authoritative_callables,
                         &successor_state.authoritative_callables,
                     );
-                    let facts_changed = merged_tags != existing.active_union_tags
+                    let facts_changed = merged_loan_dependencies
+                        != existing.borrowed_loan_dependencies
+                        || merged_expired != existing.expired_borrowed_values
+                        || merged_tags != existing.active_union_tags
                         || merged_tests != existing.tag_tests
                         || merged_variants != existing.active_enum_variants
                         || merged_origins != existing.derived_value_origins
@@ -8790,6 +9182,8 @@ fn validate_function_loan_flow(
                     existing.tag_tests = merged_tests;
                     existing.derived_value_origins = merged_origins;
                     existing.borrowed_value_origins = merged_borrowed_origins;
+                    existing.borrowed_loan_dependencies = merged_loan_dependencies;
+                    existing.expired_borrowed_values = merged_expired;
                     existing.task_borrowed_closures = merged_task_borrowed_closures;
                     existing.authoritative_callables = merged_callables;
                     if existing.ended.len() != previous_len
@@ -8913,6 +9307,7 @@ pub fn lower(program: &Program) -> MirModule {
         }
         classes.push(MirClass {
             name: class_name,
+            copy: class.decl.copy,
             type_params: class.decl.type_params.clone(),
             fields,
             methods,
@@ -9224,6 +9619,7 @@ fn push_imported_module_classes_from_namespace(
         }
         classes.push(MirClass {
             name: class_name,
+            copy: class.decl.copy,
             type_params: class.decl.type_params.clone(),
             fields,
             methods,
@@ -9645,8 +10041,72 @@ struct Lowerer<'a> {
     lowered_returned_view_origins: BTreeMap<(usize, usize), String>,
     loan_source_names: BTreeMap<String, String>,
     loan_scopes: Vec<Vec<String>>,
+    /// Generated expression loans are also lexical entries so a named child
+    /// can extend their lifetime; expression consumers end them earlier.
+    contextual_loans: BTreeSet<String>,
+    contextual_read_origins: BTreeMap<String, String>,
+    lowered_borrowed_places: BTreeMap<(usize, usize), String>,
+    call_consumer_frames: Vec<CallConsumerFrame>,
     needed_after_current_stmt: BTreeSet<String>,
     view_return_origin: Option<String>,
+}
+
+/// A call's operands keep their existing passing-aware lowering. When one
+/// operand branches, replay only the consumer and its remaining operands on
+/// the other edge, reusing the already evaluated prefix by source identity.
+/// A borrowed branch value never crosses a CFG join as an owned temporary.
+type CallConsumerOperandKey = (usize, usize, String);
+
+struct CallConsumerFrame {
+    operands: BTreeSet<CallConsumerOperandKey>,
+    split: bool,
+    evaluating: BTreeSet<CallConsumerOperandKey>,
+    cache: BTreeMap<CallConsumerOperandKey, Operand>,
+    replacements: BTreeMap<CallConsumerOperandKey, Expr>,
+    operand_scopes:
+        BTreeMap<CallConsumerOperandKey, Vec<std::collections::HashMap<String, String>>>,
+    pending: Vec<CallConsumerEdge>,
+    match_cleanups: Vec<CallConsumerMatchCleanup>,
+    compare_progress: BTreeMap<CallConsumerOperandKey, CallConsumerCompareProgress>,
+}
+
+struct CallConsumerEdge {
+    block: usize,
+    cache: BTreeMap<CallConsumerOperandKey, Operand>,
+    replacements: BTreeMap<CallConsumerOperandKey, Expr>,
+    operand_scopes:
+        BTreeMap<CallConsumerOperandKey, Vec<std::collections::HashMap<String, String>>>,
+    loans: CallConsumerLoanState,
+    match_cleanups: Vec<CallConsumerMatchCleanup>,
+    compare_progress: BTreeMap<CallConsumerOperandKey, CallConsumerCompareProgress>,
+}
+
+#[derive(Clone)]
+struct CallConsumerCompareProgress {
+    next_link: usize,
+    left: Operand,
+    left_ty: Option<Type>,
+    before: BTreeSet<String>,
+}
+
+#[derive(Clone)]
+struct CallConsumerMatchCleanup {
+    scope_depth: usize,
+    writeback: Option<MatchWritebackState>,
+}
+
+#[derive(Clone)]
+struct CallConsumerLoanState {
+    view_sources: BTreeMap<String, String>,
+    returned_view_descriptors: BTreeSet<String>,
+    lowered_returned_view_origins: BTreeMap<(usize, usize), String>,
+    loan_source_names: BTreeMap<String, String>,
+    loan_scopes: Vec<Vec<String>>,
+    contextual_loans: BTreeSet<String>,
+    contextual_read_origins: BTreeMap<String, String>,
+    lowered_borrowed_places: BTreeMap<(usize, usize), String>,
+    scoped_names: Vec<std::collections::HashMap<String, String>>,
+    match_writeback_stack: Vec<MatchWritebackState>,
 }
 
 #[derive(Clone, Debug)]
@@ -9828,6 +10288,10 @@ impl<'a> Lowerer<'a> {
             lowered_returned_view_origins: BTreeMap::new(),
             loan_source_names: BTreeMap::new(),
             loan_scopes: Vec::new(),
+            contextual_loans: BTreeSet::new(),
+            contextual_read_origins: BTreeMap::new(),
+            lowered_borrowed_places: BTreeMap::new(),
+            call_consumer_frames: Vec::new(),
             needed_after_current_stmt: BTreeSet::new(),
             view_return_origin: None,
         }
@@ -11145,8 +11609,235 @@ impl<'a> Lowerer<'a> {
         self.loan_scopes.pop();
     }
 
+    fn register_contextual_loan(&mut self, loan: String, source: String, returned: bool) {
+        self.view_sources.insert(loan.clone(), source);
+        self.loan_source_names.insert(loan.clone(), loan.clone());
+        self.contextual_loans.insert(loan.clone());
+        if returned {
+            self.returned_view_descriptors.insert(loan.clone());
+        }
+        if let Some(scope) = self.loan_scopes.last_mut() {
+            scope.push(loan);
+        }
+    }
+
+    fn contextual_dependencies(&self, value: Option<&Operand>) -> BTreeSet<String> {
+        let mut keep = BTreeSet::new();
+        let Some(Operand::Place(place) | Operand::MovePlace(place)) = value else {
+            return keep;
+        };
+        let mut root = place.split('.').next().unwrap_or_default().to_string();
+        while keep.insert(root.clone()) {
+            let source = self
+                .contextual_read_origins
+                .get(&root)
+                .or_else(|| self.view_sources.get(&root));
+            let Some(source) = source else {
+                break;
+            };
+            root = source.split('.').next().unwrap_or_default().to_string();
+        }
+        keep
+    }
+
+    /// End only loans created by this consumer. A named child promotes its
+    /// parents to lexical lifetime via the existing descendant check.
+    fn finish_contextual_loans(&mut self, before: &BTreeSet<String>, value: Option<&Operand>) {
+        if self.current_terminated() {
+            return;
+        }
+        let keep = self.contextual_dependencies(value);
+        loop {
+            let ending = self
+                .contextual_loans
+                .iter()
+                .filter(|loan| {
+                    !before.contains(*loan)
+                        && !keep.contains(*loan)
+                        && self.view_sources.contains_key(*loan)
+                        && !self.loan_has_active_descendant(loan)
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            if ending.is_empty() {
+                break;
+            }
+            for loan in ending {
+                self.emit(Instruction::EndLoan { loan: loan.clone() });
+                self.remove_loans_from_lowering_state(&BTreeSet::from([loan]));
+            }
+        }
+        self.contextual_loans
+            .retain(|loan| self.view_sources.contains_key(loan));
+    }
+
+    fn emit_contextual_edge_cleanup(&mut self, loans: &BTreeSet<String>) {
+        let mut remaining = loans.clone();
+        while !remaining.is_empty() {
+            let ending = remaining
+                .iter()
+                .filter(|parent| {
+                    !remaining.iter().any(|child| {
+                        child != *parent && {
+                            let mut root = child.as_str();
+                            let mut seen = BTreeSet::new();
+                            while seen.insert(root.to_string()) {
+                                let Some(source) = self.view_sources.get(root) else {
+                                    break;
+                                };
+                                root = source.split('.').next().unwrap_or_default();
+                                if root == parent.as_str() {
+                                    return true;
+                                }
+                            }
+                            false
+                        }
+                    })
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            assert!(!ending.is_empty(), "contextual loan ancestry is acyclic");
+            for loan in ending {
+                if self.view_sources.contains_key(&loan) {
+                    self.emit(Instruction::EndLoan { loan: loan.clone() });
+                }
+                remaining.remove(&loan);
+            }
+        }
+    }
+
+    fn remember_borrowed_place(&mut self, expr: &Expr, value: &Operand) {
+        if let Operand::Place(place) = value {
+            self.lowered_borrowed_places
+                .insert((expr.span.line, expr.span.column), place.clone());
+        }
+    }
+
+    /// A syntactic collection selection may include field and tuple suffixes.
+    /// Detect it without evaluation before recursively lowering its source.
+    fn is_element_place(&self, expr: &Expr) -> bool {
+        match &grouped_mir_expr(expr).kind {
+            ExprKind::Member { object, .. } if self.bound_method_info_at(expr).is_none() => {
+                self.is_element_place(object)
+            }
+            ExprKind::Index { object, .. } => match self.infer_expr_type(object) {
+                Some(Type::Named(name, args))
+                    if (name == "list" && args.len() == 1)
+                        || (name == "dict" && args.len() == 2) =>
+                {
+                    true
+                }
+                Some(Type::Tuple(_)) => self.is_element_place(object),
+                _ => false,
+            },
+            _ => false,
+        }
+    }
+
+    fn lower_contextual_element(&mut self, expr: &Expr, mutable: bool) -> Option<Operand> {
+        if !self.is_element_place(expr) {
+            return None;
+        }
+        let before = self.contextual_loans.clone();
+        let (source, selector, projection, span) = self.element_loan_source(expr, mutable)?;
+        let ty = self
+            .infer_expr_type(expr)
+            .unwrap_or_else(|| Type::named("Unknown"));
+        let loan = self.new_typed_temp(ty);
+        let root = source.split('.').next().unwrap_or_default();
+        if self.view_sources.contains_key(root) {
+            self.emit(Instruction::ReborrowElement {
+                loan: loan.clone(),
+                parent: source.clone(),
+                selector,
+                projection,
+                mutable,
+                span,
+            });
+        } else {
+            self.emit(Instruction::BeginElementLoan {
+                loan: loan.clone(),
+                source: source.clone(),
+                selector,
+                projection,
+                mutable,
+                span,
+            });
+        }
+        self.register_contextual_loan(loan.clone(), source, false);
+        let value = Operand::Place(loan);
+        self.remember_borrowed_place(expr, &value);
+        // The descriptor has resolved its selector. Keep its collection
+        // ancestors, but release a selector-only loan such as keys[0] now.
+        self.finish_contextual_loans(&before, Some(&value));
+        Some(value)
+    }
+
+    /// Copy reads snapshot the slot now; non-Copy reads retain the descriptor.
+    fn lower_contextual_element_read(&mut self, expr: &Expr) -> Option<Operand> {
+        let value = self.lower_contextual_element(expr, false)?;
+        let Some(ty) = self.infer_expr_type(expr) else {
+            return Some(value);
+        };
+        if !type_is_copy_in_program(&ty, self.program) {
+            return Some(value);
+        }
+        let Operand::Place(loan) = value else {
+            unreachable!()
+        };
+        let target = self.new_typed_temp(ty);
+        self.emit(Instruction::ReadLoan {
+            target: target.clone(),
+            loan,
+        });
+        Some(Operand::Place(target))
+    }
+
+    fn returned_origin_expr(&self, expr: &Expr) -> Option<Expr> {
+        let (call, _) = self.returned_view_call_root(expr)?;
+        let ExprKind::Call { callee, args } = &call.kind else {
+            return None;
+        };
+        let info = self.returned_view_callee_decl(callee)?;
+        let contract = info.decl.view_return.as_ref()?;
+        if contract.origin == "self" {
+            return info.receiver;
+        }
+        let index = info
+            .decl
+            .params
+            .iter()
+            .position(|param| param.name == contract.origin)?;
+        let ordered = bind_call_arguments(
+            &format!("callable `{}`", info.decl.name),
+            &callable_params_from_decl(&info.decl.params),
+            args,
+            callee.span,
+            CallConvention::PositionalOrNamed,
+        )
+        .ok()?;
+        Some(ordered.get(index).copied().flatten()?.value.clone())
+    }
+
+    fn source_place_root(&self, expr: &Expr) -> Option<String> {
+        match &grouped_mir_expr(expr).kind {
+            ExprKind::Name(name) => Some(self.render_local_name(name)),
+            ExprKind::Member { object, .. } | ExprKind::Index { object, .. } => {
+                self.source_place_root(object)
+            }
+            ExprKind::Call { .. } => self.returned_view_source(expr).map(|(root, _)| root),
+            _ => None,
+        }
+    }
+
     fn remove_loans_from_lowering_state(&mut self, loans: &BTreeSet<String>) {
         for loan in loans {
+            self.contextual_loans.remove(loan);
+            self.loan_source_names.remove(loan);
+            self.contextual_read_origins
+                .retain(|_, origin| origin.split('.').next() != Some(loan.as_str()));
+            self.lowered_borrowed_places
+                .retain(|_, place| place.split('.').next() != Some(loan.as_str()));
             self.view_sources.remove(loan);
             self.returned_view_descriptors.remove(loan);
             for scope in &mut self.loan_scopes {
@@ -11239,6 +11930,7 @@ impl<'a> Lowerer<'a> {
                 true
             }
             Stmt::View(view) => {
+                let before = self.contextual_loans.clone();
                 let ty = self.infer_expr_type(&view.source).or_else(|| {
                     let ExprKind::Call { callee, .. } = &grouped_mir_expr(&view.source).kind else {
                         return None;
@@ -11372,8 +12064,9 @@ impl<'a> Lowerer<'a> {
                 self.loan_source_names
                     .insert(loan_name.clone(), view.name.clone());
                 if let Some(scope) = self.loan_scopes.last_mut() {
-                    scope.push(loan_name);
+                    scope.push(loan_name.clone());
                 }
+                self.finish_contextual_loans(&before, Some(&Operand::Place(loan_name)));
                 true
             }
             Stmt::Destructure(destructure) => {
@@ -11417,13 +12110,13 @@ impl<'a> Lowerer<'a> {
                         {
                             self.returned_view_descriptors.insert(loan.clone());
                         }
-                        let target = self.new_typed_temp(return_type);
-                        self.emit(Instruction::ReadLoan {
-                            target: target.clone(),
-                            loan: loan.clone(),
-                        });
                         returned_call_loan = Some(loan);
-                        Operand::Place(target)
+                        Operand::Unit
+                    } else if return_stmt.view.is_some() {
+                        // ReturnLoan transfers the selection. Reading the pointee
+                        // here would manufacture an owned result or an alias that
+                        // expires at handoff; the value ABI is unused for views.
+                        Operand::Unit
                     } else {
                         self.lower_expr_for_owned_value(value, Some(&return_type))
                     }
@@ -11487,15 +12180,17 @@ impl<'a> Lowerer<'a> {
                     let return_place = redirect.return_place.clone();
                     let cleanup_depth = redirect.cleanup_depth;
                     let label = redirect.label.clone();
-                    self.emit(Instruction::Assign {
-                        target: return_place,
-                        value: Rvalue::Use(value),
-                    });
+                    if return_stmt.view.is_none() {
+                        self.emit(Instruction::Assign {
+                            target: return_place,
+                            value: Rvalue::Use(value),
+                        });
+                    }
                     self.emit_cleanup_range(cleanup_depth, true);
                     self.terminate(Terminator::Goto(label));
                 } else {
                     let mut value = value;
-                    if !self.with_stack.is_empty() {
+                    if return_stmt.view.is_none() && !self.with_stack.is_empty() {
                         let temp = self.new_temp();
                         self.emit(Instruction::Assign {
                             target: temp.clone(),
@@ -13054,7 +13749,9 @@ impl<'a> Lowerer<'a> {
                     },
                 ))
             }
-            ExprKind::Index { object, index } => {
+            ExprKind::Index { object, index }
+                if matches!(self.infer_expr_type(object), Some(Type::Tuple(_))) =>
+            {
                 let ExprKind::Int(index) = index.kind else {
                     return None;
                 };
@@ -13086,10 +13783,13 @@ impl<'a> Lowerer<'a> {
         let contract = decl.view_return.as_ref()?;
         let origin = if contract.origin == "self" {
             let receiver = callee_info.receiver.as_ref()?;
-            self.render_place_expr_option(receiver).or_else(|| {
-                self.returned_view_source(receiver)
-                    .map(|(origin, _)| origin)
-            })?
+            self.render_stable_place_expr_option(receiver)
+                .or_else(|| {
+                    self.returned_view_source(receiver)
+                        .map(|(origin, _)| origin)
+                })
+                .or_else(|| self.source_place_root(receiver))
+                .or_else(|| self.is_element_place(receiver).then(String::new))?
         } else {
             let origin_index = decl
                 .params
@@ -13104,10 +13804,13 @@ impl<'a> Lowerer<'a> {
             )
             .ok()?;
             let origin = ordered.get(origin_index).copied().flatten()?;
-            self.render_place_expr_option(&origin.value).or_else(|| {
-                self.returned_view_source(&origin.value)
-                    .map(|(origin, _)| origin)
-            })?
+            self.render_stable_place_expr_option(&origin.value)
+                .or_else(|| {
+                    self.returned_view_source(&origin.value)
+                        .map(|(origin, _)| origin)
+                })
+                .or_else(|| self.source_place_root(&origin.value))
+                .or_else(|| self.is_element_place(&origin.value).then(String::new))?
         };
         let projections = if decl.name == crate::sema::SYNTHETIC_CALLABLE_DECL {
             // The callee behind a callable value is opaque here: it may return
@@ -13193,6 +13896,15 @@ impl<'a> Lowerer<'a> {
             return Some(origin);
         }
 
+        if let Some(origin_expr) = self.returned_origin_expr(call) {
+            if let Some(origin) = self
+                .lowered_borrowed_places
+                .get(&(origin_expr.span.line, origin_expr.span.column))
+            {
+                return Some(origin.clone());
+            }
+        }
+
         // The current call itself may have been lowered as a plain value, but
         // one of its borrowed origin arguments can already be represented by
         // a caller-side returned descriptor. Follow the declaration contract
@@ -13238,7 +13950,12 @@ impl<'a> Lowerer<'a> {
             .infer_expr_type(call)
             .or_else(|| expected.cloned())
             .unwrap_or_else(|| Type::named("Unknown"));
-        let _ = self.lower_expr_with_expected(call, Some(&call_type));
+        let ExprKind::Call { callee, args } = &call.kind else {
+            unreachable!()
+        };
+        // Lower the invocation itself, bypassing the contextual result wrapper
+        // which is responsible for this very handoff.
+        let _ = self.lower_call(call, callee, args, Some(&call_type));
         let origin = self
             .take_lowered_returned_view_origin(call)
             .unwrap_or(fallback_origin);
@@ -13260,13 +13977,7 @@ impl<'a> Lowerer<'a> {
             projections,
             mutable,
         });
-        self.view_sources.insert(parent.clone(), origin);
-        self.returned_view_descriptors.insert(parent.clone());
-        self.loan_source_names
-            .insert(parent.clone(), parent.clone());
-        if let Some(scope) = self.loan_scopes.last_mut() {
-            scope.push(parent.clone());
-        }
+        self.register_contextual_loan(parent.clone(), origin, true);
         self.emit(Instruction::Reborrow {
             loan: loan.to_string(),
             parent: parent.clone(),
@@ -13278,7 +13989,15 @@ impl<'a> Lowerer<'a> {
     }
 
     fn lowered_writeback_place(&self, expr: &Expr, value: &Operand) -> Option<String> {
-        self.render_place_expr_option(expr).or_else(|| {
+        if let Operand::Place(place) = value {
+            if self
+                .view_sources
+                .contains_key(place.split('.').next().unwrap_or_default())
+            {
+                return Some(place.clone());
+            }
+        }
+        self.render_stable_place_expr_option(expr).or_else(|| {
             self.returned_view_source(expr).and_then(|_| match value {
                 Operand::Place(place) | Operand::MovePlace(place) => Some(place.clone()),
                 _ => None,
@@ -13445,19 +14164,15 @@ impl<'a> Lowerer<'a> {
                 value: Rvalue::Use(source),
             });
             Operand::Place(captured)
-        } else if match_stmt
-            .arms
-            .iter()
-            .any(|arm| pattern_contains_type_arm(&arm.pattern))
-        {
-            self.render_place_expr_option(&match_stmt.scrutinee)
-                .map(Operand::Place)
-                .unwrap_or_else(|| self.lower_expr(&match_stmt.scrutinee))
         } else {
-            self.lower_expr(&match_stmt.scrutinee)
+            self.lower_expr_for_passing(
+                &match_stmt.scrutinee,
+                scrutinee_ty.as_ref(),
+                match_stmt.capability,
+            )
         };
         let writeback_root = if match_stmt.capability == ReceiverKind::BorrowMut {
-            self.render_place_expr_option(&match_stmt.scrutinee)
+            self.lowered_writeback_place(&match_stmt.scrutinee, &scrutinee)
         } else {
             None
         };
@@ -13514,7 +14229,14 @@ impl<'a> Lowerer<'a> {
             } else {
                 self.new_block("match_next")
             };
-            let alternatives = type_pattern_alternatives(&arm.pattern);
+            let contextual_scrutinee = !consumes_scrutinee
+                && matches!(&scrutinee,
+                Operand::Place(place) if self.view_sources.contains_key(place.split('.').next().unwrap_or_default()));
+            let alternatives = if contextual_scrutinee {
+                Self::contextual_pattern_alternatives(&arm.pattern)
+            } else {
+                type_pattern_alternatives(&arm.pattern)
+            };
             for (alternative_index, pattern) in alternatives.iter().enumerate() {
                 self.switch_to(next_case_block);
                 let arm_block = self.new_block("match_arm");
@@ -13536,7 +14258,9 @@ impl<'a> Lowerer<'a> {
                     PatternLoweringOptions {
                         collect_writeback: writeback_root.is_some(),
                         consume_payloads: consumes_scrutinee && !probes_candidates,
-                        typed_payload_views: pattern_contains_type_arm(pattern),
+                        typed_payload_views: pattern_contains_type_arm(pattern)
+                            || (!consumes_scrutinee && matches!(&scrutinee, Operand::Place(place)
+                                if self.view_sources.contains_key(place.split('.').next().unwrap_or_default()))),
                     },
                 );
                 self.switch_to(arm_block);
@@ -13560,7 +14284,9 @@ impl<'a> Lowerer<'a> {
                 if let Some(guard) = &arm.guard {
                     let selected = self.new_block("match_guard_true");
                     let rejected = self.new_block("match_guard_false");
+                    let guard_before = self.contextual_loans.clone();
                     let condition = self.lower_expr(guard);
+                    self.finish_contextual_loans(&guard_before, None);
                     self.terminate(Terminator::Branch {
                         condition,
                         then_label: self.label(selected),
@@ -13653,6 +14379,19 @@ impl<'a> Lowerer<'a> {
         }
         self.switch_to(after_block);
         self.remove_loans_from_lowering_state(&ending_loans);
+    }
+
+    /// A borrowed OR alternative has its own payload loans. Run its arm
+    /// consumer on that path rather than joining different loan sources.
+    fn contextual_pattern_alternatives(pattern: &Pattern) -> Vec<&Pattern> {
+        match pattern {
+            Pattern::Or(pattern) => pattern
+                .alternatives
+                .iter()
+                .flat_map(Self::contextual_pattern_alternatives)
+                .collect(),
+            pattern => vec![pattern],
+        }
     }
 
     fn pattern_failure_cleanup(&mut self, failure: usize, first_loan: usize) -> usize {
@@ -13974,15 +14713,23 @@ impl<'a> Lowerer<'a> {
                         self.register_consuming_pattern_bindings(element_pattern, element_ty);
                         self.terminate(Terminator::Goto(self.label(element_success)));
                     } else {
-                        let element = self.new_typed_temp(element_ty.clone());
-                        self.emit(Instruction::Assign {
-                            target: element.clone(),
-                            value: Rvalue::TupleElement {
-                                tuple: scrutinee.clone(),
-                                index,
-                                element_type: element_ty.clone(),
-                            },
-                        });
+                        let element = if options.typed_payload_views {
+                            let Operand::Place(source) = &scrutinee else {
+                                unreachable!("borrowed tuple patterns use captured places");
+                            };
+                            format!("{source}.{index}")
+                        } else {
+                            let element = self.new_typed_temp(element_ty.clone());
+                            self.emit(Instruction::Assign {
+                                target: element.clone(),
+                                value: Rvalue::TupleElement {
+                                    tuple: scrutinee.clone(),
+                                    index,
+                                    element_type: element_ty.clone(),
+                                },
+                            });
+                            element
+                        };
                         let child_failure = self.pattern_failure_cleanup(failure_block, first_loan);
                         self.lower_pattern(
                             element_pattern,
@@ -13991,7 +14738,8 @@ impl<'a> Lowerer<'a> {
                             element_success,
                             child_failure,
                             PatternLoweringOptions {
-                                collect_writeback: false,
+                                collect_writeback: options.collect_writeback
+                                    && options.typed_payload_views,
                                 consume_payloads: options.consume_payloads,
                                 typed_payload_views: options.typed_payload_views,
                             },
@@ -13999,7 +14747,8 @@ impl<'a> Lowerer<'a> {
                     }
                     next_element_block = element_success;
                 }
-                None
+                (options.collect_writeback && options.typed_payload_views)
+                    .then_some(PatternWriteback::InPlace(scrutinee))
             }
             Pattern::Variant(pattern) => {
                 let resolved_enum_name = self.resolve_pattern_enum_name(pattern, scrutinee_ty);
@@ -14643,7 +15392,11 @@ impl<'a> Lowerer<'a> {
             owned_iterable_place = Some(captured.clone());
             Operand::Place(captured)
         } else {
-            self.lower_expr_at_sequence_point(&for_stmt.iterable, None)
+            self.lower_expr_for_passing(
+                &for_stmt.iterable,
+                iterable_ty.as_ref(),
+                for_stmt.borrow_mode.unwrap_or(ReceiverKind::Borrow),
+            )
         };
         let target_ty = checked_binding
             .map(|binding| binding.binding_type.clone())
@@ -14943,8 +15696,11 @@ impl<'a> Lowerer<'a> {
                         self.terminate(Terminator::Goto(parent_label));
                     } else {
                         self.emit_cleanup_range(0, true);
-                        let return_value =
-                            self.move_place_for_type(return_place, &self.return_type);
+                        let return_value = if self.view_return_origin.is_some() {
+                            Operand::Unit
+                        } else {
+                            self.move_place_for_type(return_place, &self.return_type)
+                        };
                         self.terminate(Terminator::Return(return_value));
                     }
                     self.switch_to(after_block);
@@ -15287,7 +16043,9 @@ impl<'a> Lowerer<'a> {
                 .expect("comprehension filter should be inside its clause loop")
                 .continue_label
                 .clone();
+            let filter_before = self.contextual_loans.clone();
             let condition = self.lower_expr_with_expected(filter, Some(&Type::named("bool")));
+            self.finish_contextual_loans(&filter_before, None);
             self.terminate(Terminator::Branch {
                 condition,
                 then_label: self.label(pass_block),
@@ -15446,12 +16204,12 @@ impl<'a> Lowerer<'a> {
             projection: projected[root.len()..].trim_start_matches('.').to_string(),
             mutable: false,
         });
-        self.view_sources.insert(loan.clone(), projected);
-        self.loan_source_names.insert(loan.clone(), loan.clone());
-        if let Some(scope) = self.loan_scopes.last_mut() {
-            scope.push(loan.clone());
-        }
+        self.register_contextual_loan(loan.clone(), projected, false);
         let value = self.new_typed_temp(read.member_type.clone());
+        if !type_is_copy_in_program(&read.member_type, self.program) {
+            self.contextual_read_origins
+                .insert(value.clone(), loan.clone());
+        }
         self.emit(Instruction::ReadLoan {
             target: value.clone(),
             loan,
@@ -15548,12 +16306,18 @@ impl<'a> Lowerer<'a> {
             Some(place) => place,
             None => {
                 let tested = self.new_typed_temp(union_type.clone());
-                let operand = self.lower_expr_for_owned_value(value, Some(&union_type));
-                self.emit(Instruction::Assign {
-                    target: tested.clone(),
-                    value: Rvalue::Use(operand),
-                });
-                tested
+                let operand =
+                    self.lower_expr_for_passing(value, Some(&union_type), ReceiverKind::Borrow);
+                match operand {
+                    Operand::Place(place) => place,
+                    operand => {
+                        self.emit(Instruction::Assign {
+                            target: tested.clone(),
+                            value: Rvalue::Use(operand),
+                        });
+                        tested
+                    }
+                }
             }
         };
         let test = self.new_typed_temp(Type::named("bool"));
@@ -15584,6 +16348,21 @@ impl<'a> Lowerer<'a> {
     /// Lowers a condition as a branch chain so every `is None` leaf is its own
     /// tag test whose proof flows into the selected successor (ADR-0052 A4).
     fn lower_condition_branch(&mut self, condition: &Expr, then_label: String, else_label: String) {
+        let before = self.contextual_loans.clone();
+        if matches!(&condition.kind, ExprKind::IsNone { value, .. }
+            if self.call_consumer_contains_branch(value))
+        {
+            // A selected borrowed operand must be consumed by its test on
+            // each edge. It has no stable source place to refine at the join.
+            let tested = self.lower_expr(condition);
+            self.finish_contextual_loans(&before, None);
+            self.terminate(Terminator::Branch {
+                condition: tested,
+                then_label,
+                else_label,
+            });
+            return;
+        }
         match &condition.kind {
             ExprKind::Group(inner) => self.lower_condition_branch(inner, then_label, else_label),
             ExprKind::Unary {
@@ -15640,6 +16419,7 @@ impl<'a> Lowerer<'a> {
                                 member_index,
                             },
                         });
+                        self.finish_contextual_loans(&before, None);
                         self.terminate(Terminator::Branch {
                             condition: Operand::Place(test),
                             then_label: true_label,
@@ -15653,6 +16433,7 @@ impl<'a> Lowerer<'a> {
                             target: test.clone(),
                             value: Rvalue::NoneTest { value: operand },
                         });
+                        self.finish_contextual_loans(&before, None);
                         self.terminate(Terminator::Branch {
                             condition: Operand::Place(test),
                             then_label: true_label,
@@ -15663,6 +16444,7 @@ impl<'a> Lowerer<'a> {
                         // A constant test still evaluates its operand once.
                         let is_none = declared == Some(Type::Unit);
                         self.lower_expr(value);
+                        self.finish_contextual_loans(&before, None);
                         self.terminate(Terminator::Branch {
                             condition: Operand::Bool(is_none),
                             then_label: true_label,
@@ -15673,6 +16455,7 @@ impl<'a> Lowerer<'a> {
             }
             _ => {
                 let condition = self.lower_expr(condition);
+                self.finish_contextual_loans(&before, None);
                 self.terminate(Terminator::Branch {
                     condition,
                     then_label,
@@ -15683,6 +16466,30 @@ impl<'a> Lowerer<'a> {
     }
 
     fn lower_expr(&mut self, expr: &Expr) -> Operand {
+        self.lower_call_consumer_operand(expr, |lowerer, selected| {
+            lowerer.lower_owned_expr_consumer(selected, None, |lowerer| {
+                lowerer.lower_expr_uncached(selected)
+            })
+        })
+    }
+
+    fn lower_expr_uncached(&mut self, expr: &Expr) -> Operand {
+        let before = self.contextual_loans.clone();
+        let value = self.lower_expr_inner(expr);
+        // A returned call must hand off immediately, before any EndLoan.
+        if self.returned_view_source(expr).is_none() {
+            self.finish_contextual_loans(&before, Some(&value));
+        }
+        value
+    }
+
+    fn lower_expr_inner(&mut self, expr: &Expr) -> Operand {
+        if self.returned_view_source(expr).is_some() {
+            return self.lower_expr_for_passing(expr, None, ReceiverKind::Borrow);
+        }
+        if let Some(value) = self.lower_contextual_element_read(expr) {
+            return value;
+        }
         if let Some(function) = self.lower_function_value(expr) {
             return function;
         }
@@ -15712,6 +16519,10 @@ impl<'a> Lowerer<'a> {
                         .cloned()
                         .unwrap_or_else(|| Type::named("Unknown"));
                     let target = self.new_typed_temp(ty);
+                    if !type_is_copy_in_program(&self.local_types[&target], self.program) {
+                        self.contextual_read_origins
+                            .insert(target.clone(), loan.clone());
+                    }
                     self.emit(Instruction::ReadLoan {
                         target: target.clone(),
                         loan,
@@ -15805,26 +16616,12 @@ impl<'a> Lowerer<'a> {
                             MirFormatPart::Literal(text.clone())
                         }
                         crate::ast::FormatPart::Expr(expr) => {
-                            let value = self.lower_expr_at_sequence_point(expr, None);
-                            let rendered = self.new_typed_temp(Type::named("str"));
-                            self.emit(Instruction::Assign {
-                                target: rendered.clone(),
-                                value: Rvalue::FormatString {
-                                    parts: vec![MirFormatPart::Value(value)],
-                                },
-                            });
-                            MirFormatPart::Value(Operand::Place(rendered))
+                            MirFormatPart::Value(self.lower_rendered_part_consumer(expr, None))
                         }
                         crate::ast::FormatPart::Formatted { expr, spec, .. } => {
-                            let value_type = self
-                                .infer_expr_type(expr)
-                                .unwrap_or_else(|| Type::named("Unknown"));
-                            let value = self.lower_expr_at_sequence_point(expr, None);
-                            MirFormatPart::Formatted {
-                                value,
-                                spec: spec.clone(),
-                                value_type,
-                            }
+                            MirFormatPart::Value(
+                                self.lower_rendered_part_consumer(expr, Some(spec)),
+                            )
                         }
                     };
                     lowered_parts.push(lowered);
@@ -16271,8 +17068,9 @@ impl<'a> Lowerer<'a> {
 
         match member {
             BuiltinMember::VecSort => {
+                let receiver = self.lower_expr_for_passing(object, None, ReceiverKind::BorrowMut);
                 let receiver_place = self
-                    .render_place_expr_option(object)
+                    .lowered_writeback_place(object, &receiver)
                     .expect("checked list.sort receiver should be a mutable place");
                 let ordered = member
                     .bind_args(args, expr.span)
@@ -16692,6 +17490,92 @@ impl<'a> Lowerer<'a> {
         self.lower_expr_at_sequence_point(object, expected.as_ref())
     }
 
+    fn emit_vec_borrowed_dispatch(
+        &mut self,
+        source: Operand,
+        index: &str,
+        body: usize,
+        done: usize,
+        span: Span,
+    ) {
+        let length = self.new_typed_temp(Type::named("int64"));
+        self.emit(Instruction::Assign {
+            target: length.clone(),
+            value: Rvalue::Call {
+                callee: CallTarget::Member {
+                    object: source,
+                    field: "len".to_string(),
+                    receiver_place: None,
+                },
+                args: Vec::new(),
+            },
+        });
+        let present = self.new_typed_temp(Type::named("bool"));
+        self.emit(Instruction::Assign {
+            target: present.clone(),
+            value: Rvalue::Binary {
+                op: BinaryOp::Less,
+                left: Operand::Place(index.to_string()),
+                right: Operand::Place(length),
+                span,
+            },
+        });
+        self.terminate(Terminator::Branch {
+            condition: Operand::Place(present),
+            then_label: self.label(body),
+            else_label: self.label(done),
+        });
+    }
+
+    fn emit_vec_element_borrow(
+        &mut self,
+        source: Operand,
+        index: &str,
+        element_ty: &Type,
+        span: Span,
+    ) -> String {
+        let Operand::Place(mut source) = source else {
+            unreachable!("shared list algorithm sources lower to stable temporaries or places");
+        };
+        if let Some((root, projection)) = source.split_once('.') {
+            if self.view_sources.contains_key(root) {
+                let parent =
+                    self.new_typed_temp(Type::Named("list".to_string(), vec![element_ty.clone()]));
+                self.emit(Instruction::Reborrow {
+                    loan: parent.clone(),
+                    parent: root.to_string(),
+                    projection: projection.to_string(),
+                    mutable: false,
+                });
+                self.register_contextual_loan(parent.clone(), source, false);
+                source = parent;
+            }
+        }
+        let root = source.split('.').next().unwrap_or_default();
+        let loan = self.new_typed_temp(element_ty.clone());
+        if self.view_sources.contains_key(root) {
+            self.emit(Instruction::ReborrowElement {
+                loan: loan.clone(),
+                parent: source.clone(),
+                selector: Operand::Place(index.to_string()),
+                projection: String::new(),
+                mutable: false,
+                span,
+            });
+        } else {
+            self.emit(Instruction::BeginElementLoan {
+                loan: loan.clone(),
+                source: source.clone(),
+                selector: Operand::Place(index.to_string()),
+                projection: String::new(),
+                mutable: false,
+                span,
+            });
+        }
+        self.register_contextual_loan(loan.clone(), source, false);
+        loan
+    }
+
     fn lower_vec_key_collection_loop(
         &mut self,
         source: Operand,
@@ -16702,8 +17586,6 @@ impl<'a> Lowerer<'a> {
         span: Span,
     ) {
         let index = self.new_typed_temp(Type::named("int64"));
-        let next = self.new_typed_temp(lookup_type(element_ty.clone()));
-        let element = self.new_typed_temp(element_ty.clone());
         self.emit(Instruction::Assign {
             target: index.clone(),
             value: Rvalue::Use(Operand::Int(0)),
@@ -16715,35 +17597,11 @@ impl<'a> Lowerer<'a> {
         self.terminate(Terminator::Goto(self.label(dispatch)));
 
         self.switch_to(dispatch);
-        self.emit_vec_optional_read(&next, source.clone(), &index);
-        self.terminate(Terminator::Match {
-            scrutinee: Operand::Place(next.clone()),
-            arms: vec![
-                MirMatchArm {
-                    enum_name: Some("Lookup".to_string()),
-                    variant_name: Some("Found".to_string()),
-                    wildcard: false,
-                    label: self.label(body),
-                },
-                MirMatchArm {
-                    enum_name: Some("Lookup".to_string()),
-                    variant_name: Some("Missing".to_string()),
-                    wildcard: false,
-                    label: self.label(done),
-                },
-            ],
-            otherwise: self.label(done),
-        });
+        self.emit_vec_borrowed_dispatch(source.clone(), &index, body, done, span);
 
         self.switch_to(body);
-        self.emit(Instruction::Assign {
-            target: element.clone(),
-            value: Rvalue::VariantPayload {
-                scrutinee: Operand::MovePlace(next),
-                variant_name: "Found".to_string(),
-                index: 0,
-            },
-        });
+        let before = self.contextual_loans.clone();
+        let element = self.emit_vec_element_borrow(source.clone(), &index, element_ty, span);
         let key = self.new_typed_temp(key_ty.clone());
         self.emit(Instruction::Assign {
             target: key.clone(),
@@ -16756,6 +17614,7 @@ impl<'a> Lowerer<'a> {
                 }],
             },
         });
+        self.finish_contextual_loans(&before, None);
         self.emit_vec_push(
             Operand::Place(keys.to_string()),
             keys,
@@ -16776,8 +17635,6 @@ impl<'a> Lowerer<'a> {
         span: Span,
     ) {
         let index = self.new_typed_temp(Type::named("int64"));
-        let next = self.new_typed_temp(lookup_type(element_ty.clone()));
-        let element = self.new_typed_temp(element_ty.clone());
         self.emit(Instruction::Assign {
             target: index.clone(),
             value: Rvalue::Use(Operand::Int(0)),
@@ -16806,35 +17663,11 @@ impl<'a> Lowerer<'a> {
         self.terminate(Terminator::Goto(self.label(dispatch)));
 
         self.switch_to(dispatch);
-        self.emit_vec_optional_read(&next, source.clone(), &index);
-        self.terminate(Terminator::Match {
-            scrutinee: Operand::Place(next.clone()),
-            arms: vec![
-                MirMatchArm {
-                    enum_name: Some("Lookup".to_string()),
-                    variant_name: Some("Found".to_string()),
-                    wildcard: false,
-                    label: self.label(body),
-                },
-                MirMatchArm {
-                    enum_name: Some("Lookup".to_string()),
-                    variant_name: Some("Missing".to_string()),
-                    wildcard: false,
-                    label: self.label(done),
-                },
-            ],
-            otherwise: self.label(done),
-        });
+        self.emit_vec_borrowed_dispatch(source.clone(), &index, body, done, span);
 
         self.switch_to(body);
-        self.emit(Instruction::Assign {
-            target: element.clone(),
-            value: Rvalue::VariantPayload {
-                scrutinee: Operand::MovePlace(next),
-                variant_name: "Found".to_string(),
-                index: 0,
-            },
-        });
+        let before = self.contextual_loans.clone();
+        let element = self.emit_vec_element_borrow(source.clone(), &index, element_ty, span);
         let callback_result = self.new_typed_temp(if filter {
             Type::named("bool")
         } else {
@@ -16851,6 +17684,7 @@ impl<'a> Lowerer<'a> {
                 }],
             },
         });
+        self.finish_contextual_loans(&before, None);
         if filter {
             let keep = self.new_block("vec_filter_keep");
             self.terminate(Terminator::Branch {
@@ -16859,6 +17693,9 @@ impl<'a> Lowerer<'a> {
                 else_label: self.label(advance),
             });
             self.switch_to(keep);
+            // filter's result is an owned collection. Clone only a retained
+            // result element, after its predicate's borrowed argument ended.
+            let element = self.emit_vec_read(source, &index, element_ty, span);
             self.emit_vec_push(
                 Operand::Place(output.place.to_string()),
                 output.place,
@@ -16974,11 +17811,18 @@ impl<'a> Lowerer<'a> {
                 span,
             },
         });
-        let current = self.emit_vec_read(ordering_source.clone(), &inner_index, ordering_ty, span);
-        let previous =
-            self.emit_vec_read(ordering_source.clone(), &previous_index, ordering_ty, span);
+        let before = self.contextual_loans.clone();
+        let current =
+            self.emit_vec_element_borrow(ordering_source.clone(), &inner_index, ordering_ty, span);
+        let previous = self.emit_vec_element_borrow(
+            ordering_source.clone(),
+            &previous_index,
+            ordering_ty,
+            span,
+        );
         let ascending = self.emit_vec_ordering_less(&current, &previous, ordering_ty, span);
         let descending = self.emit_vec_ordering_less(&previous, &current, ordering_ty, span);
+        self.finish_contextual_loans(&before, None);
         let not_reverse = self.new_typed_temp(Type::named("bool"));
         self.emit(Instruction::Assign {
             target: not_reverse.clone(),
@@ -17049,24 +17893,6 @@ impl<'a> Lowerer<'a> {
         self.emit(Instruction::Assign {
             target: result.to_string(),
             value: Rvalue::Use(Operand::Unit),
-        });
-    }
-
-    fn emit_vec_optional_read(&mut self, target: &str, source: Operand, index: &str) {
-        self.emit(Instruction::Assign {
-            target: target.to_string(),
-            value: Rvalue::Call {
-                callee: CallTarget::Member {
-                    object: source,
-                    field: INTERNAL_VEC_INDEX_OPTION_FIELD.to_string(),
-                    receiver_place: None,
-                },
-                args: vec![MirArg {
-                    name: None,
-                    value: Operand::Place(index.to_string()),
-                    writeback_place: None,
-                }],
-            },
         });
     }
 
@@ -17271,19 +18097,42 @@ impl<'a> Lowerer<'a> {
     fn lower_compare_chain(&mut self, first: &Expr, links: &[CompareLink]) -> Operand {
         let result = self.new_typed_temp(Type::named("bool"));
         let join_block = self.new_block("compare_chain_join");
-        let short_circuit_block = self.new_block("compare_chain_false");
-
-        let first_expected = links.first().and_then(|link| {
-            matches!(link.op.as_binary_op(), Some(BinaryOp::Eq | BinaryOp::NotEq))
-                .then(|| self.infer_equality_hint(first, &link.operand))
-                .flatten()
-        });
-        let mut left_ty = first_expected
-            .clone()
-            .or_else(|| self.infer_expr_type(first));
-        let mut left_expr = first;
-        let mut left = self.lower_expr_at_sequence_point(first, first_expected.as_ref());
-        for (index, link) in links.iter().enumerate() {
+        let checkpoint_key = (
+            first.span.line,
+            first.span.column,
+            format!("compare-chain:{first:?}:{links:?}"),
+        );
+        let checkpoint = self
+            .call_consumer_frames
+            .last()
+            .and_then(|frame| frame.compare_progress.get(&checkpoint_key))
+            .cloned();
+        let (before, mut left_ty, mut left, start) = if let Some(checkpoint) = checkpoint {
+            (
+                checkpoint.before,
+                checkpoint.left_ty,
+                checkpoint.left,
+                checkpoint.next_link,
+            )
+        } else {
+            let before = self.contextual_loans.clone();
+            let first_expected = links.first().and_then(|link| {
+                matches!(link.op.as_binary_op(), Some(BinaryOp::Eq | BinaryOp::NotEq))
+                    .then(|| self.infer_equality_hint(first, &link.operand))
+                    .flatten()
+            });
+            let left_ty = first_expected
+                .clone()
+                .or_else(|| self.infer_expr_type(first));
+            let left = self.lower_expr_at_sequence_point(first, first_expected.as_ref());
+            (before, left_ty, left, 0)
+        };
+        let mut left_expr = if start == 0 {
+            first
+        } else {
+            &links[start - 1].operand
+        };
+        for (index, link) in links.iter().enumerate().skip(start) {
             let link_value = match link.op.as_binary_op() {
                 Some(op) => {
                     let shared_equality_expected = if matches!(op, BinaryOp::Eq | BinaryOp::NotEq) {
@@ -17339,26 +18188,50 @@ impl<'a> Lowerer<'a> {
                     target: result.clone(),
                     value: Rvalue::Use(link_value),
                 });
+                self.finish_contextual_loans(&before, None);
                 self.terminate(Terminator::Goto(self.label(join_block)));
             } else {
                 let next_block = self.new_block("compare_chain_next");
+                let short_circuit_block = self.new_block("compare_chain_false");
+                // Both edges share this prefix. Emit the failure cleanup
+                // without deleting the success edge's descriptor state.
                 self.terminate(Terminator::Branch {
                     condition: link_value,
                     then_label: self.label(next_block),
                     else_label: self.label(short_circuit_block),
                 });
+                self.switch_to(short_circuit_block);
+                self.emit(Instruction::Assign {
+                    target: result.clone(),
+                    value: Rvalue::Use(Operand::Bool(false)),
+                });
+                let failed = self
+                    .contextual_loans
+                    .difference(&before)
+                    .cloned()
+                    .collect::<BTreeSet<_>>();
+                self.emit_contextual_edge_cleanup(&failed);
+                self.terminate(Terminator::Goto(self.label(join_block)));
                 self.switch_to(next_block);
+                self.finish_contextual_loans(&before, Some(&left));
+                if let Some(frame) = self.call_consumer_frames.last_mut() {
+                    frame.compare_progress.insert(
+                        checkpoint_key.clone(),
+                        CallConsumerCompareProgress {
+                            next_link: index + 1,
+                            left: left.clone(),
+                            left_ty: left_ty.clone(),
+                            before: before.clone(),
+                        },
+                    );
+                }
             }
         }
 
-        self.switch_to(short_circuit_block);
-        self.emit(Instruction::Assign {
-            target: result.clone(),
-            value: Rvalue::Use(Operand::Bool(false)),
-        });
-        self.terminate(Terminator::Goto(self.label(join_block)));
-
         self.switch_to(join_block);
+        if let Some(frame) = self.call_consumer_frames.last_mut() {
+            frame.compare_progress.remove(&checkpoint_key);
+        }
         Operand::Place(result)
     }
 
@@ -17399,6 +18272,21 @@ impl<'a> Lowerer<'a> {
     }
 
     fn lower_expr_with_expected(&mut self, expr: &Expr, expected: Option<&Type>) -> Operand {
+        self.lower_call_consumer_operand(expr, |lowerer, selected| {
+            lowerer.lower_owned_expr_consumer(selected, expected, |lowerer| {
+                lowerer.lower_expr_with_expected_uncached(selected, expected)
+            })
+        })
+    }
+
+    fn lower_expr_with_expected_uncached(
+        &mut self,
+        expr: &Expr,
+        expected: Option<&Type>,
+    ) -> Operand {
+        if self.returned_view_source(expr).is_some() {
+            return self.lower_expr_for_passing(expr, expected, ReceiverKind::Borrow);
+        }
         if let Some(value) = self.lower_union_injection(expr, expected, false) {
             return value;
         }
@@ -17494,8 +18382,20 @@ impl<'a> Lowerer<'a> {
     }
 
     fn lower_expr_at_sequence_point(&mut self, expr: &Expr, expected: Option<&Type>) -> Operand {
+        self.lower_call_consumer_operand(expr, |lowerer, selected| {
+            lowerer.lower_expr_at_sequence_point_uncached(selected, expected)
+        })
+    }
+
+    fn lower_expr_at_sequence_point_uncached(
+        &mut self,
+        expr: &Expr,
+        expected: Option<&Type>,
+    ) -> Operand {
         let value = self.lower_expr_with_expected(expr, expected);
-        if self.render_place_expr_option(expr).is_none() {
+        let descriptor = matches!(&value, Operand::Place(place)
+            if self.view_sources.contains_key(place.split('.').next().unwrap_or_default()));
+        if self.render_place_expr_option(expr).is_none() && !descriptor {
             return value;
         }
         let Operand::Place(_) = value else {
@@ -17574,11 +18474,33 @@ impl<'a> Lowerer<'a> {
         expected: Option<&Type>,
         passing: ReceiverKind,
     ) -> Operand {
+        let value = self.lower_call_consumer_operand(expr, |lowerer, selected| {
+            lowerer.lower_expr_for_passing_inner(selected, expected, passing)
+        });
         if matches!(passing, ReceiverKind::Borrow | ReceiverKind::BorrowMut) {
-            if let Some(value) = self.lower_union_injection(expr, expected, false) {
+            self.remember_borrowed_place(expr, &value);
+        }
+        value
+    }
+
+    fn lower_expr_for_passing_inner(
+        &mut self,
+        expr: &Expr,
+        expected: Option<&Type>,
+        passing: ReceiverKind,
+    ) -> Operand {
+        if matches!(passing, ReceiverKind::Borrow | ReceiverKind::BorrowMut) {
+            if passing == ReceiverKind::Borrow {
+                if let Some(value) = self.lower_union_injection(expr, expected, false) {
+                    return value;
+                }
+            }
+            if let Some(value) =
+                self.lower_contextual_element(expr, passing == ReceiverKind::BorrowMut)
+            {
                 return value;
             }
-            if let Some(place) = self.render_place_expr_option(expr) {
+            if let Some(place) = self.render_stable_place_expr_option(expr) {
                 let root = place.split('.').next().unwrap_or_default();
                 if self.view_sources.contains_key(root) {
                     // Borrowing an existing view passes its descriptor (or a
@@ -17609,12 +18531,7 @@ impl<'a> Lowerer<'a> {
                         expected,
                     )
                     .expect("checked returned-view argument should lower into a loan");
-                self.view_sources.insert(loan.clone(), origin);
-                self.returned_view_descriptors.insert(loan.clone());
-                self.loan_source_names.insert(loan.clone(), loan.clone());
-                if let Some(scope) = self.loan_scopes.last_mut() {
-                    scope.push(loan.clone());
-                }
+                self.register_contextual_loan(loan.clone(), origin, true);
                 return Operand::Place(loan);
             }
             return self.lower_expr_with_expected(expr, expected);
@@ -17623,6 +18540,16 @@ impl<'a> Lowerer<'a> {
     }
 
     fn lower_expr_for_owned_value(&mut self, expr: &Expr, expected: Option<&Type>) -> Operand {
+        self.lower_call_consumer_operand(expr, |lowerer, selected| {
+            lowerer.lower_expr_for_owned_value_uncached(selected, expected)
+        })
+    }
+
+    fn lower_expr_for_owned_value_uncached(
+        &mut self,
+        expr: &Expr,
+        expected: Option<&Type>,
+    ) -> Operand {
         if let Some(value) = self.lower_union_injection(expr, expected, true) {
             return value;
         }
@@ -17724,6 +18651,35 @@ impl<'a> Lowerer<'a> {
         let injection = self
             .program
             .union_injection(self.module_name, expr.span, expected)?;
+        if !owned && !type_is_copy_in_program(&injection.member_type, self.program) {
+            let value = self.lower_expr_for_passing(
+                expr,
+                Some(&injection.member_type),
+                ReceiverKind::Borrow,
+            );
+            let source = match value {
+                Operand::Place(place) | Operand::MovePlace(place) => place,
+                value => {
+                    let place = self.new_typed_temp(injection.member_type.clone());
+                    self.emit(Instruction::Assign {
+                        target: place.clone(),
+                        value: Rvalue::Use(value),
+                    });
+                    place
+                }
+            };
+            let loan = self.new_typed_temp(injection.union_type.clone());
+            self.emit(Instruction::BeginUnionLoan {
+                loan: loan.clone(),
+                source: source.clone(),
+                union_type: injection.union_type,
+                member_type: injection.member_type,
+                member_index: injection.member_index,
+                span: expr.span,
+            });
+            self.register_contextual_loan(loan.clone(), source, false);
+            return Some(Operand::Place(loan));
+        }
         let value = if owned {
             self.lower_expr_for_owned_value(expr, Some(&injection.member_type))
         } else {
@@ -17778,18 +18734,11 @@ impl<'a> Lowerer<'a> {
                 value: Rvalue::Use(source),
             });
             Operand::Place(captured)
-        } else if arms
-            .iter()
-            .any(|arm| pattern_contains_type_arm(&arm.pattern))
-        {
-            self.render_place_expr_option(scrutinee_expr)
-                .map(Operand::Place)
-                .unwrap_or_else(|| self.lower_expr(scrutinee_expr))
         } else {
-            self.lower_expr(scrutinee_expr)
+            self.lower_expr_for_passing(scrutinee_expr, scrutinee_ty.as_ref(), borrow_mode)
         };
         let writeback_root = if borrow_mode == ReceiverKind::BorrowMut {
-            self.render_place_expr_option(scrutinee_expr)
+            self.lowered_writeback_place(scrutinee_expr, &scrutinee)
         } else {
             None
         };
@@ -17806,7 +18755,14 @@ impl<'a> Lowerer<'a> {
             } else {
                 self.new_block("match_expr_next")
             };
-            let alternatives = type_pattern_alternatives(&arm.pattern);
+            let contextual_scrutinee = !consumes_scrutinee
+                && matches!(&scrutinee,
+                Operand::Place(place) if self.view_sources.contains_key(place.split('.').next().unwrap_or_default()));
+            let alternatives = if contextual_scrutinee {
+                Self::contextual_pattern_alternatives(&arm.pattern)
+            } else {
+                type_pattern_alternatives(&arm.pattern)
+            };
             for (alternative_index, pattern) in alternatives.iter().enumerate() {
                 self.switch_to(next_case_block);
                 let arm_block = self.new_block("match_expr_arm");
@@ -17828,7 +18784,9 @@ impl<'a> Lowerer<'a> {
                     PatternLoweringOptions {
                         collect_writeback: writeback_root.is_some(),
                         consume_payloads: consumes_scrutinee && !probes_candidates,
-                        typed_payload_views: pattern_contains_type_arm(pattern),
+                        typed_payload_views: pattern_contains_type_arm(pattern)
+                            || (!consumes_scrutinee && matches!(&scrutinee, Operand::Place(place)
+                                if self.view_sources.contains_key(place.split('.').next().unwrap_or_default()))),
                     },
                 );
                 self.switch_to(arm_block);
@@ -17852,7 +18810,9 @@ impl<'a> Lowerer<'a> {
                 if let Some(guard) = &arm.guard {
                     let selected = self.new_block("match_expr_guard_true");
                     let rejected = self.new_block("match_expr_guard_false");
+                    let guard_before = self.contextual_loans.clone();
                     let condition = self.lower_expr(guard);
+                    self.finish_contextual_loans(&guard_before, None);
                     self.terminate(Terminator::Branch {
                         condition,
                         then_label: self.label(selected),
@@ -17885,6 +18845,7 @@ impl<'a> Lowerer<'a> {
                         scrutinee_ty.as_ref(),
                     );
                 }
+                let arm_before = self.contextual_loans.clone();
                 let arm_type = expected
                     .cloned()
                     .or_else(|| self.infer_expr_type(&arm.value));
@@ -17893,6 +18854,7 @@ impl<'a> Lowerer<'a> {
                     target: result.clone(),
                     value: Rvalue::Use(value),
                 });
+                self.finish_contextual_loans(&arm_before, None);
                 if !self.current_terminated() {
                     self.emit_loan_cleanup_from(self.loan_scopes.len() - 1, None);
                 }
@@ -17996,6 +18958,7 @@ impl<'a> Lowerer<'a> {
         let rhs_block = self.new_block("logic_rhs");
         let short_block = self.new_block("logic_short");
         let join_block = self.new_block("logic_join");
+        let before = self.contextual_loans.clone();
         let left_value = self.lower_expr(left);
         // A mutable match guard may perform a successful mutation in the
         // left operand before the right operand traps. Publish that mutation
@@ -18011,6 +18974,7 @@ impl<'a> Lowerer<'a> {
             _ => unreachable!("logical lowering only handles `and` / `or`"),
         };
 
+        self.finish_contextual_loans(&before, None);
         self.terminate(Terminator::Branch {
             condition: left_value,
             then_label,
@@ -18025,11 +18989,13 @@ impl<'a> Lowerer<'a> {
         self.terminate(Terminator::Goto(self.label(join_block)));
 
         self.switch_to(rhs_block);
+        let rhs_before = self.contextual_loans.clone();
         let right_value = self.lower_expr(right);
         self.emit(Instruction::Assign {
             target: result.clone(),
             value: Rvalue::Use(right_value),
         });
+        self.finish_contextual_loans(&rhs_before, None);
         self.terminate(Terminator::Goto(self.label(join_block)));
 
         self.switch_to(join_block);
@@ -18053,6 +19019,7 @@ impl<'a> Lowerer<'a> {
         let else_block = self.new_block("conditional_else");
         let join_block = self.new_block("conditional_join");
 
+        let before = self.contextual_loans.clone();
         if Self::condition_has_none_test(condition_expr) {
             // `is None` leaves branch on their tag tests so each arm carries
             // the narrowing proof the checker relied on (ADR-0052 A4).
@@ -18062,6 +19029,7 @@ impl<'a> Lowerer<'a> {
         } else {
             let condition =
                 self.lower_expr_at_sequence_point(condition_expr, Some(&Type::named("bool")));
+            self.finish_contextual_loans(&before, None);
             self.terminate(Terminator::Branch {
                 condition,
                 then_label: self.label(then_block),
@@ -18079,6 +19047,7 @@ impl<'a> Lowerer<'a> {
             target: result.clone(),
             value: Rvalue::Use(then_value),
         });
+        self.finish_contextual_loans(&before, None);
         self.terminate(Terminator::Goto(self.label(join_block)));
 
         self.switch_to(else_block);
@@ -18091,6 +19060,7 @@ impl<'a> Lowerer<'a> {
             target: result.clone(),
             value: Rvalue::Use(else_value),
         });
+        self.finish_contextual_loans(&before, None);
         self.terminate(Terminator::Goto(self.label(join_block)));
 
         self.switch_to(join_block);
@@ -18606,7 +19576,609 @@ impl<'a> Lowerer<'a> {
         }
     }
 
+    fn snapshot_call_consumer_loans(&self) -> CallConsumerLoanState {
+        CallConsumerLoanState {
+            view_sources: self.view_sources.clone(),
+            returned_view_descriptors: self.returned_view_descriptors.clone(),
+            lowered_returned_view_origins: self.lowered_returned_view_origins.clone(),
+            loan_source_names: self.loan_source_names.clone(),
+            loan_scopes: self.loan_scopes.clone(),
+            contextual_loans: self.contextual_loans.clone(),
+            contextual_read_origins: self.contextual_read_origins.clone(),
+            lowered_borrowed_places: self.lowered_borrowed_places.clone(),
+            scoped_names: self.scoped_names.clone(),
+            match_writeback_stack: self.match_writeback_stack.clone(),
+        }
+    }
+
+    fn restore_call_consumer_loans(&mut self, state: CallConsumerLoanState) {
+        self.view_sources = state.view_sources;
+        self.returned_view_descriptors = state.returned_view_descriptors;
+        self.lowered_returned_view_origins = state.lowered_returned_view_origins;
+        self.loan_source_names = state.loan_source_names;
+        self.loan_scopes = state.loan_scopes;
+        self.contextual_loans = state.contextual_loans;
+        self.contextual_read_origins = state.contextual_read_origins;
+        self.lowered_borrowed_places = state.lowered_borrowed_places;
+        self.scoped_names = state.scoped_names;
+        self.match_writeback_stack = state.match_writeback_stack;
+    }
+
+    fn lower_call_consumer_operand(
+        &mut self,
+        expr: &Expr,
+        lower: impl FnOnce(&mut Self, &Expr) -> Operand,
+    ) -> Operand {
+        if self.call_consumer_frames.is_empty() {
+            return lower(self, expr);
+        }
+        let key = Self::call_consumer_operand_key(expr);
+        let frame = self.call_consumer_frames.last_mut().unwrap();
+        if !frame.operands.contains(&key) || frame.evaluating.contains(&key) {
+            return lower(self, expr);
+        }
+        if let Some(cached) = frame.cache.get(&key) {
+            return cached.clone();
+        }
+        frame.evaluating.insert(key.clone());
+        let previous_scopes = self.scoped_names.clone();
+        if let Some(scopes) = frame.operand_scopes.get(&key) {
+            self.scoped_names = scopes.clone();
+        }
+        let mut selected = frame.replacements.get(&key).unwrap_or(expr).clone();
+        loop {
+            if let ExprKind::Match {
+                scrutinee,
+                capability,
+                arms,
+            } = &grouped_mir_expr(&selected).kind
+            {
+                selected =
+                    self.select_call_consumer_match_arm(key.clone(), scrutinee, *capability, arms);
+                continue;
+            }
+            let ExprKind::Conditional {
+                then_expr,
+                condition,
+                else_expr,
+            } = &grouped_mir_expr(&selected).kind
+            else {
+                break;
+            };
+            let then_expr = (**then_expr).clone();
+            let else_expr = (**else_expr).clone();
+            let before = self.contextual_loans.clone();
+            let condition = self.lower_expr(condition);
+            self.finish_contextual_loans(&before, None);
+            let then_block = self.new_block("call_consumer_then");
+            let else_block = self.new_block("call_consumer_else");
+            self.terminate(Terminator::Branch {
+                condition,
+                then_label: self.label(then_block),
+                else_label: self.label(else_block),
+            });
+            let loans = self.snapshot_call_consumer_loans();
+            let frame = self.call_consumer_frames.last_mut().unwrap();
+            let mut replacements = frame.replacements.clone();
+            replacements.insert(key.clone(), else_expr);
+            let mut operand_scopes = frame.operand_scopes.clone();
+            operand_scopes.insert(key.clone(), self.scoped_names.clone());
+            frame.split = true;
+            frame.pending.push(CallConsumerEdge {
+                block: else_block,
+                cache: frame.cache.clone(),
+                replacements,
+                operand_scopes,
+                loans,
+                match_cleanups: frame.match_cleanups.clone(),
+                compare_progress: frame.compare_progress.clone(),
+            });
+            self.switch_to(then_block);
+            selected = then_expr;
+        }
+        let value = lower(self, &selected);
+        self.scoped_names = previous_scopes;
+        let frame = self.call_consumer_frames.last_mut().unwrap();
+        frame.evaluating.remove(&key);
+        frame.cache.insert(key, value.clone());
+        value
+    }
+
+    fn call_consumer_operand_key(expr: &Expr) -> CallConsumerOperandKey {
+        // AST spans mark starts, so a binary expression and its left operand
+        // can have identical spans. Include structure to distinguish these
+        // nodes and retain identity across checked AST clones/alias expansion.
+        (expr.span.line, expr.span.column, format!("{:?}", expr.kind))
+    }
+
+    fn call_consumer_contains_branch(&self, expr: &Expr) -> bool {
+        match &expr.kind {
+            ExprKind::Conditional { .. } | ExprKind::Match { .. } => true,
+            ExprKind::Group(inner)
+            | ExprKind::Member { object: inner, .. }
+            | ExprKind::Unary { expr: inner, .. }
+            | ExprKind::Cast { expr: inner, .. }
+            | ExprKind::Specialize { expr: inner, .. }
+            | ExprKind::Try(inner)
+            | ExprKind::IsNone { value: inner, .. } => self.call_consumer_contains_branch(inner),
+            ExprKind::Call { callee, args } if self.returned_view_source(expr).is_some() => {
+                self.call_consumer_contains_branch(callee)
+                    || args
+                        .iter()
+                        .any(|arg| self.call_consumer_contains_branch(&arg.value))
+            }
+            ExprKind::Binary { left, right, .. }
+            | ExprKind::Membership {
+                value: left,
+                container: right,
+                ..
+            }
+            | ExprKind::Index {
+                object: left,
+                index: right,
+            } => {
+                self.call_consumer_contains_branch(left)
+                    || self.call_consumer_contains_branch(right)
+            }
+            ExprKind::CompareChain { first, links } => {
+                self.call_consumer_contains_branch(first)
+                    || links
+                        .iter()
+                        .any(|link| self.call_consumer_contains_branch(&link.operand))
+            }
+            ExprKind::Tuple(elements) | ExprKind::List(elements) | ExprKind::Set(elements) => {
+                elements
+                    .iter()
+                    .any(|expr| self.call_consumer_contains_branch(expr))
+            }
+            _ => false,
+        }
+    }
+
+    fn collect_call_consumer_operands(
+        &self,
+        expr: &Expr,
+        operands: &mut BTreeSet<CallConsumerOperandKey>,
+    ) -> bool {
+        operands.insert(Self::call_consumer_operand_key(expr));
+        let mut branch = false;
+        match &expr.kind {
+            ExprKind::Group(inner)
+            | ExprKind::Member { object: inner, .. }
+            | ExprKind::Unary { expr: inner, .. }
+            | ExprKind::Cast { expr: inner, .. }
+            | ExprKind::Specialize { expr: inner, .. }
+            | ExprKind::Try(inner)
+            | ExprKind::IsNone { value: inner, .. } => {
+                branch |= self.collect_call_consumer_operands(inner, operands);
+            }
+            ExprKind::Call { callee, args } if self.returned_view_source(expr).is_some() => {
+                branch |= self.collect_call_consumer_operands(callee, operands);
+                for argument in args {
+                    branch |= self.collect_call_consumer_operands(&argument.value, operands);
+                }
+            }
+            ExprKind::Binary { left, right, .. }
+            | ExprKind::Membership {
+                value: left,
+                container: right,
+                ..
+            }
+            | ExprKind::Index {
+                object: left,
+                index: right,
+            } => {
+                branch |= self.collect_call_consumer_operands(left, operands);
+                branch |= self.collect_call_consumer_operands(right, operands);
+            }
+            ExprKind::Conditional {
+                then_expr,
+                condition,
+                else_expr,
+            } => {
+                branch = true;
+                self.collect_call_consumer_operands(then_expr, operands);
+                self.collect_call_consumer_operands(condition, operands);
+                self.collect_call_consumer_operands(else_expr, operands);
+            }
+            ExprKind::Match {
+                scrutinee, arms, ..
+            } => {
+                branch = true;
+                self.collect_call_consumer_operands(scrutinee, operands);
+                for arm in arms {
+                    if let Some(guard) = &arm.guard {
+                        self.collect_call_consumer_operands(guard, operands);
+                    }
+                    self.collect_call_consumer_operands(&arm.value, operands);
+                }
+            }
+            ExprKind::CompareChain { first, links } => {
+                branch |= self.collect_call_consumer_operands(first, operands);
+                for link in links {
+                    branch |= self.collect_call_consumer_operands(&link.operand, operands);
+                }
+            }
+            ExprKind::Tuple(elements) | ExprKind::List(elements) | ExprKind::Set(elements) => {
+                for element in elements {
+                    branch |= self.collect_call_consumer_operands(element, operands);
+                }
+            }
+            // Ordinary nested calls own their consumer frames. Lambda bodies
+            // and comprehensions are separate evaluation regions as well.
+            _ => {}
+        }
+        branch
+    }
+
+    fn finish_call_consumer_edge(&mut self, before: &BTreeSet<String>) {
+        let cleanups =
+            std::mem::take(&mut self.call_consumer_frames.last_mut().unwrap().match_cleanups);
+        for cleanup in cleanups.into_iter().rev() {
+            self.finish_contextual_loans(before, None);
+            let ending = self.loan_scopes[cleanup.scope_depth..]
+                .iter()
+                .flatten()
+                .cloned()
+                .collect::<BTreeSet<_>>();
+            self.emit_loan_cleanup_from(cleanup.scope_depth, None);
+            self.remove_loans_from_lowering_state(&ending);
+            self.loan_scopes.truncate(cleanup.scope_depth);
+            if let Some(state) = cleanup.writeback {
+                self.match_writeback_stack.pop();
+                if let Some(writeback) = state.writeback.as_ref() {
+                    let resume = self.new_block("call_match_writeback_end");
+                    self.finish_match_arm_with_writeback(
+                        resume,
+                        &state.root,
+                        writeback,
+                        &state.skip_place,
+                    );
+                    self.switch_to(resume);
+                }
+            }
+        }
+        self.finish_contextual_loans(before, None);
+    }
+
+    fn select_call_consumer_match_arm(
+        &mut self,
+        key: CallConsumerOperandKey,
+        scrutinee_expr: &Expr,
+        borrow_mode: ReceiverKind,
+        arms: &[crate::ast::MatchExprArm],
+    ) -> Expr {
+        let before = self.contextual_loans.clone();
+        let scrutinee_ty = self.infer_expr_type(scrutinee_expr);
+        let consumes_scrutinee = borrow_mode == ReceiverKind::Value
+            && scrutinee_ty
+                .as_ref()
+                .is_some_and(|ty| !type_is_copy_in_program(ty, self.program));
+        let scrutinee = if consumes_scrutinee {
+            let source = self.lower_expr_for_owned_value(scrutinee_expr, scrutinee_ty.as_ref());
+            let captured = scrutinee_ty
+                .clone()
+                .map(|ty| self.new_typed_temp(ty))
+                .unwrap_or_else(|| self.new_temp());
+            self.emit(Instruction::Assign {
+                target: captured.clone(),
+                value: Rvalue::Use(source),
+            });
+            Operand::Place(captured)
+        } else {
+            self.lower_expr_for_passing(scrutinee_expr, scrutinee_ty.as_ref(), borrow_mode)
+        };
+        let writeback_root = (borrow_mode == ReceiverKind::BorrowMut)
+            .then(|| self.lowered_writeback_place(scrutinee_expr, &scrutinee))
+            .flatten();
+        let baseline = self.snapshot_call_consumer_loans();
+        let frame = self.call_consumer_frames.last().unwrap();
+        let prefix = frame.cache.clone();
+        let replacements = frame.replacements.clone();
+        let operand_scopes = frame.operand_scopes.clone();
+        let enclosing_cleanups = frame.match_cleanups.clone();
+        let compare_progress = frame.compare_progress.clone();
+        let unmatched = self.new_block("call_match_unmatched");
+        let mut next_case = self.current_block;
+        let mut selected_edges = Vec::new();
+        for (index, arm) in arms.iter().enumerate() {
+            let next_arm = if index + 1 == arms.len() {
+                unmatched
+            } else {
+                self.new_block("call_match_next")
+            };
+            let contextual_scrutinee = !consumes_scrutinee
+                && matches!(&scrutinee, Operand::Place(place)
+                    if self.view_sources.contains_key(place.split('.').next().unwrap_or_default()));
+            let alternatives = if contextual_scrutinee {
+                Self::contextual_pattern_alternatives(&arm.pattern)
+            } else {
+                type_pattern_alternatives(&arm.pattern)
+            };
+            for (alternative_index, pattern) in alternatives.iter().enumerate() {
+                self.restore_call_consumer_loans(baseline.clone());
+                self.switch_to(next_case);
+                let arm_block = self.new_block("call_match_arm");
+                let next_block = if alternative_index + 1 == alternatives.len() {
+                    next_arm
+                } else {
+                    self.new_block("call_match_alternative")
+                };
+                let scope_depth = self.loan_scopes.len();
+                self.scoped_names.push(std::collections::HashMap::new());
+                self.loan_scopes.push(Vec::new());
+                let probes_candidates =
+                    arm.guard.is_some() || matches!(arm.pattern, Pattern::Or(_));
+                let pattern_writeback = self.lower_pattern(
+                    pattern,
+                    scrutinee.clone(),
+                    scrutinee_ty.as_ref(),
+                    arm_block,
+                    next_block,
+                    PatternLoweringOptions {
+                        collect_writeback: writeback_root.is_some(),
+                        consume_payloads: consumes_scrutinee && !probes_candidates,
+                        typed_payload_views: pattern_contains_type_arm(pattern)
+                            || contextual_scrutinee,
+                    },
+                );
+                self.switch_to(arm_block);
+                let pattern_loans = self.loan_scopes.last().cloned().unwrap_or_default();
+                let writeback_root = writeback_root
+                    .as_ref()
+                    .filter(|_| !matches!(pattern_writeback, Some(PatternWriteback::InPlace(_))))
+                    .cloned();
+                let writeback_state = writeback_root.as_ref().map(|root| {
+                    let skip_place = self.new_typed_temp(Type::named("bool"));
+                    let state = MatchWritebackState {
+                        root: root.clone(),
+                        skip_place: skip_place.clone(),
+                        writeback: pattern_writeback.clone(),
+                    };
+                    self.match_writeback_stack.push(state.clone());
+                    self.emit(Instruction::Assign {
+                        target: skip_place,
+                        value: Rvalue::Use(Operand::Bool(false)),
+                    });
+                    state
+                });
+                if let Some(guard) = &arm.guard {
+                    let accepted = self.new_block("call_match_guard_true");
+                    let rejected = self.new_block("call_match_guard_false");
+                    let guard_before = self.contextual_loans.clone();
+                    let condition = self.lower_expr(guard);
+                    self.finish_contextual_loans(&guard_before, None);
+                    self.terminate(Terminator::Branch {
+                        condition,
+                        then_label: self.label(accepted),
+                        else_label: self.label(rejected),
+                    });
+                    self.switch_to(rejected);
+                    for loan in pattern_loans.iter().rev() {
+                        self.emit(Instruction::EndLoan { loan: loan.clone() });
+                    }
+                    if let (Some(place), Some(writeback)) =
+                        (writeback_root.as_ref(), pattern_writeback.as_ref())
+                    {
+                        let updated = self.materialize_pattern_writeback(writeback);
+                        self.emit(Instruction::Assign {
+                            target: place.clone(),
+                            value: Rvalue::Use(updated),
+                        });
+                    }
+                    self.terminate(Terminator::Goto(self.label(next_arm)));
+                    self.switch_to(accepted);
+                }
+                if consumes_scrutinee {
+                    for loan in pattern_loans.iter().rev() {
+                        self.emit(Instruction::EndLoan { loan: loan.clone() });
+                    }
+                    self.remove_loans_from_lowering_state(&pattern_loans.iter().cloned().collect());
+                    self.lower_consuming_pattern_bindings(
+                        pattern,
+                        scrutinee.clone(),
+                        scrutinee_ty.as_ref(),
+                    );
+                }
+                let mut replacements = replacements.clone();
+                replacements.insert(key.clone(), arm.value.clone());
+                let mut operand_scopes = operand_scopes.clone();
+                operand_scopes.insert(key.clone(), self.scoped_names.clone());
+                let mut match_cleanups = enclosing_cleanups.clone();
+                match_cleanups.push(CallConsumerMatchCleanup {
+                    scope_depth,
+                    writeback: writeback_state,
+                });
+                selected_edges.push(CallConsumerEdge {
+                    block: self.current_block,
+                    cache: prefix.clone(),
+                    replacements,
+                    operand_scopes,
+                    loans: self.snapshot_call_consumer_loans(),
+                    match_cleanups,
+                    compare_progress: compare_progress.clone(),
+                });
+                next_case = next_block;
+            }
+        }
+        self.restore_call_consumer_loans(baseline);
+        self.switch_to(unmatched);
+        self.finish_contextual_loans(&before, None);
+        self.terminate(Terminator::Unreachable);
+        let first = selected_edges.remove(0);
+        let selected = first.replacements.get(&key).unwrap().clone();
+        self.restore_call_consumer_loans(first.loans);
+        self.switch_to(first.block);
+        let frame = self.call_consumer_frames.last_mut().unwrap();
+        frame.cache = first.cache;
+        frame.replacements = first.replacements;
+        frame.operand_scopes = first.operand_scopes;
+        frame.split = true;
+        frame.match_cleanups = first.match_cleanups;
+        frame.compare_progress = first.compare_progress;
+        frame.pending.extend(selected_edges.into_iter().rev());
+        selected
+    }
+
+    fn lower_rendered_part_consumer(&mut self, expr: &Expr, spec: Option<&str>) -> Operand {
+        let value_type = self
+            .infer_expr_type(expr)
+            .unwrap_or_else(|| Type::named("Unknown"));
+        self.lower_owned_result_consumer(expr, Some(&Type::named("str")), &[expr], |lowerer| {
+            let before = lowerer.contextual_loans.clone();
+            let value = lowerer.lower_expr_at_sequence_point(expr, None);
+            let rendered = lowerer.new_typed_temp(Type::named("str"));
+            let part = match spec {
+                Some(spec) => MirFormatPart::Formatted {
+                    value,
+                    spec: spec.to_string(),
+                    value_type: value_type.clone(),
+                },
+                None => MirFormatPart::Value(value),
+            };
+            lowerer.emit(Instruction::Assign {
+                target: rendered.clone(),
+                value: Rvalue::FormatString { parts: vec![part] },
+            });
+            lowerer.finish_contextual_loans(&before, None);
+            Operand::Place(rendered)
+        })
+    }
+
+    fn lower_owned_expr_consumer(
+        &mut self,
+        expr: &Expr,
+        expected: Option<&Type>,
+        lower: impl FnMut(&mut Self) -> Operand,
+    ) -> Operand {
+        // Branch expressions themselves may produce borrowed results, so
+        // only their actual ordinary-value consumer may own a result join.
+        let operands = match &expr.kind {
+            ExprKind::Binary { left, right, .. }
+            | ExprKind::Membership {
+                value: left,
+                container: right,
+                ..
+            } => {
+                vec![&**left, &**right]
+            }
+            ExprKind::Unary { expr, .. }
+            | ExprKind::Cast { expr, .. }
+            | ExprKind::IsNone { value: expr, .. } => vec![&**expr],
+            ExprKind::CompareChain { first, links } => std::iter::once(&**first)
+                .chain(links.iter().map(|link| &link.operand))
+                .collect(),
+            _ => {
+                return {
+                    let mut lower = lower;
+                    lower(self)
+                };
+            }
+        };
+        self.lower_owned_result_consumer(expr, expected, &operands, lower)
+    }
+
     fn lower_call(
+        &mut self,
+        expr: &Expr,
+        callee: &Expr,
+        args: &[Argument],
+        expected: Option<&Type>,
+    ) -> Operand {
+        // A view-returning consumer needs its immediate handoff distributed
+        // with the call. The ordinary-result replay below deliberately does
+        // not manufacture a joined descriptor for different branch origins.
+        if self.returned_view_source(expr).is_some() {
+            return self.lower_call_inner(expr, callee, args, expected);
+        }
+        let operands = std::iter::once(callee)
+            .chain(args.iter().map(|argument| &argument.value))
+            .collect::<Vec<_>>();
+        self.lower_owned_result_consumer(expr, expected, &operands, |lowerer| {
+            lowerer.lower_call_inner(expr, callee, args, expected)
+        })
+    }
+
+    fn lower_owned_result_consumer(
+        &mut self,
+        expr: &Expr,
+        expected: Option<&Type>,
+        operands: &[&Expr],
+        mut lower: impl FnMut(&mut Self) -> Operand,
+    ) -> Operand {
+        let needs_distribution = operands
+            .iter()
+            .any(|operand| self.call_consumer_contains_branch(operand));
+        if !needs_distribution {
+            let before = self.contextual_loans.clone();
+            let value = lower(self);
+            self.finish_contextual_loans(&before, Some(&value));
+            return value;
+        }
+        let baseline = self.snapshot_call_consumer_loans();
+        let mut operand_keys = BTreeSet::new();
+        for operand in operands {
+            self.collect_call_consumer_operands(operand, &mut operand_keys);
+        }
+        self.call_consumer_frames.push(CallConsumerFrame {
+            operands: operand_keys,
+            split: false,
+            evaluating: BTreeSet::new(),
+            cache: BTreeMap::new(),
+            replacements: BTreeMap::new(),
+            operand_scopes: BTreeMap::new(),
+            pending: Vec::new(),
+            match_cleanups: Vec::new(),
+            compare_progress: BTreeMap::new(),
+        });
+        let mut value = lower(self);
+        if !self.call_consumer_frames.last().unwrap().split {
+            self.call_consumer_frames.pop();
+            self.finish_contextual_loans(&baseline.contextual_loans, Some(&value));
+            return value;
+        }
+
+        let result_type = expected.cloned().or_else(|| self.infer_expr_type(expr));
+        let result = result_type
+            .clone()
+            .map(|ty| self.new_typed_temp(ty))
+            .unwrap_or_else(|| self.new_temp_for_expr(expr));
+        let done = self.new_block("owned_consumer_end");
+        loop {
+            // Only the consumer's owned/Copy result is joined. Moving an
+            // owned non-Copy result avoids introducing a clone at this join.
+            if let (Operand::Place(place), Some(ty)) = (&value, result_type.as_ref()) {
+                value = self.move_place_for_type(place.clone(), ty);
+            }
+            self.emit(Instruction::Assign {
+                target: result.clone(),
+                value: Rvalue::Use(value),
+            });
+            self.finish_call_consumer_edge(&baseline.contextual_loans);
+            self.terminate(Terminator::Goto(self.label(done)));
+            let next = self.call_consumer_frames.last_mut().unwrap().pending.pop();
+            let Some(next) = next else { break };
+            self.restore_call_consumer_loans(next.loans);
+            // Arm names are visible only while evaluating their selected
+            // expression, not in the caller's callee or later arguments.
+            self.scoped_names = baseline.scoped_names.clone();
+            self.switch_to(next.block);
+            let frame = self.call_consumer_frames.last_mut().unwrap();
+            frame.cache = next.cache;
+            frame.replacements = next.replacements;
+            frame.operand_scopes = next.operand_scopes;
+            frame.match_cleanups = next.match_cleanups;
+            frame.compare_progress = next.compare_progress;
+            frame.evaluating.clear();
+            value = lower(self);
+        }
+        self.call_consumer_frames.pop();
+        self.restore_call_consumer_loans(baseline);
+        self.switch_to(done);
+        Operand::Place(result)
+    }
+
+    fn lower_call_inner(
         &mut self,
         expr: &Expr,
         callee: &Expr,
@@ -20658,7 +22230,40 @@ impl<'a> Lowerer<'a> {
             Type::Named(name, args) if name == "dict" && args.len() == 2 => args[0].clone(),
             _ => return None,
         };
-        let mut collection = self.render_place_expr_option(object)?;
+        let mut collection = if self.is_element_place(object) {
+            match self.lower_contextual_element(object, mutable)? {
+                Operand::Place(place) => place,
+                _ => unreachable!(),
+            }
+        } else if self.returned_view_source(object).is_some() {
+            match self.lower_expr_for_passing(
+                object,
+                Some(&collection_ty),
+                if mutable {
+                    ReceiverKind::BorrowMut
+                } else {
+                    ReceiverKind::Borrow
+                },
+            ) {
+                Operand::Place(place) => place,
+                _ => return None,
+            }
+        } else if let Some(place) = self.render_stable_place_expr_option(object) {
+            place
+        } else {
+            // Temporary owned collections live in a local through this expression.
+            match self.lower_expr_with_expected(object, Some(&collection_ty)) {
+                Operand::Place(place) | Operand::MovePlace(place) => place,
+                value => {
+                    let place = self.new_typed_temp(collection_ty.clone());
+                    self.emit(Instruction::Assign {
+                        target: place.clone(),
+                        value: Rvalue::Use(value),
+                    });
+                    place
+                }
+            }
+        };
         // A literal selector stays a literal operand so the validator can
         // prove two element loans of one collection disjoint, as the
         // checker does.
@@ -20666,21 +22271,39 @@ impl<'a> Lowerer<'a> {
             ExprKind::Int(value) => Operand::Int(*value),
             ExprKind::String(value) => Operand::String(value.clone()),
             ExprKind::Bool(value) => Operand::Bool(*value),
+            _ if matches!(&collection_ty, Type::Named(name, _) if name == "list") => {
+                self.lower_index_domain_expr(index)
+            }
             _ => self.lower_expr_with_expected(index, Some(&selector_ty)),
         };
+        // Creation resolves the selected slot immediately. Borrow the key or
+        // index for that probe instead of cloning a non-Copy key into a temp;
+        // later rebinding cannot retarget the descriptor's resolved ordinal.
         let selector = match lowered {
-            Operand::Place(place) => {
-                // A place read must not be retargeted by a later rebinding:
-                // copy the selector into a fresh temporary now.
-                let temp = self.new_typed_temp(selector_ty);
-                self.emit(Instruction::Assign {
-                    target: temp.clone(),
-                    value: Rvalue::Use(Operand::Place(place)),
-                });
-                Operand::Place(temp)
+            Operand::Place(place) | Operand::MovePlace(place) if place.contains('.') => {
+                // MIR selector operands name locals. Give a projected key a
+                // shared descriptor rather than copying its non-Copy value.
+                let loan = self.new_typed_temp(selector_ty);
+                let (root, projection) = place.split_once('.').expect("projected selector");
+                if self.view_sources.contains_key(root) {
+                    self.emit(Instruction::Reborrow {
+                        loan: loan.clone(),
+                        parent: root.to_string(),
+                        projection: projection.to_string(),
+                        mutable: false,
+                    });
+                } else {
+                    self.emit(Instruction::BeginLoan {
+                        loan: loan.clone(),
+                        source: place.clone(),
+                        mutable: false,
+                    });
+                }
+                self.register_contextual_loan(loan.clone(), place, false);
+                Operand::Place(loan)
             }
             Operand::MovePlace(place) => Operand::Place(place),
-            literal => literal,
+            operand => operand,
         };
         // ReborrowElement selects inside its parent's value. Preserve a
         // collection field/tuple projection through a view as a separate
@@ -20694,12 +22317,7 @@ impl<'a> Lowerer<'a> {
                     projection: projection.to_string(),
                     mutable,
                 });
-                self.view_sources.insert(parent.clone(), collection);
-                self.loan_source_names
-                    .insert(parent.clone(), parent.clone());
-                if let Some(scope) = self.loan_scopes.last_mut() {
-                    scope.push(parent.clone());
-                }
+                self.register_contextual_loan(parent.clone(), collection, false);
                 collection = parent;
             }
         }

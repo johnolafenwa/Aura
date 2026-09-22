@@ -538,14 +538,25 @@ struct NativeCodegen<'a> {
     trait_impls: Vec<MirTraitImpl>,
     function_return_types: HashMap<String, DirectType>,
     function_param_types: HashMap<String, Vec<DirectType>>,
+    function_param_passings: HashMap<String, Vec<MirReceiverKind>>,
     function_writeback_types: HashMap<String, Vec<DirectType>>,
     call_conv: CallConv,
     runtime_init: FuncId,
     run_root: FuncId,
     enter_call: FuncId,
     exit_call: FuncId,
-    set_returned_view_projection: FuncId,
-    take_returned_view_projection: FuncId,
+    place_borrow: FuncId,
+    place_borrow_element: FuncId,
+    place_borrow_union: FuncId,
+    place_store_owned: FuncId,
+    place_sink_new: FuncId,
+    current_borrowed_place: FuncId,
+    call_handoff_take: FuncId,
+    call_handoff_place: FuncId,
+    call_handoff_publish: FuncId,
+    call_handoff_release: FuncId,
+    set_returned_view_place: FuncId,
+    take_returned_view_place: FuncId,
     print_i64: FuncId,
     print_u64: FuncId,
     print_f32: FuncId,
@@ -564,7 +575,6 @@ struct NativeCodegen<'a> {
     refresh_cleanup: FuncId,
     set_next_mutable_sinks: FuncId,
     set_next_indirect_mutable_sinks: FuncId,
-    claim_indirect_mutable_sinks: FuncId,
     current_mutable_sink: FuncId,
     mutable_sink_new: FuncId,
     mutable_sink_project: FuncId,
@@ -1076,8 +1086,18 @@ impl<'a> NativeCodegen<'a> {
             run_root => ("aura_direct_run_root", [types::I64], Some(types::I32)),
             enter_call => ("aura_direct_enter_call_with_frame", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], None),
             exit_call => ("aura_direct_exit_call", [], None),
-            set_returned_view_projection => ("aura_direct_set_returned_view_projection", [types::I64, types::I64], None),
-            take_returned_view_projection => ("aura_direct_take_returned_view_projection", [types::I64, types::I64], Some(types::I64)),
+            place_borrow => ("aura_direct_place_borrow", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
+            place_borrow_element => ("aura_direct_place_borrow_element", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
+            place_borrow_union => ("aura_direct_place_borrow_union", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
+            place_store_owned => ("aura_direct_place_store_owned", [types::I64, types::I64], None),
+            place_sink_new => ("aura_direct_place_sink_new", [types::I64], Some(types::I64)),
+            current_borrowed_place => ("aura_direct_current_borrowed_place", [types::I64], Some(types::I64)),
+            call_handoff_take => ("aura_direct_call_handoff_take", [], Some(types::I64)),
+            call_handoff_place => ("aura_direct_call_handoff_place", [types::I64, types::I64, types::I64], Some(types::I64)),
+            call_handoff_publish => ("aura_direct_call_handoff_publish", [types::I64, types::I64], None),
+            call_handoff_release => ("aura_direct_call_handoff_release", [types::I64], None),
+            set_returned_view_place => ("aura_direct_set_returned_view_place", [types::I64, types::I64, types::I64], None),
+            take_returned_view_place => ("aura_direct_take_returned_view_place", [types::I64, types::I64, types::I64], Some(types::I64)),
             print_i64 => ("aura_direct_print_i64", [types::I64], None),
             print_u64 => ("aura_direct_print_u64", [types::I64], None),
             print_f32 => ("aura_direct_print_f32", [types::F64], None),
@@ -1096,7 +1116,6 @@ impl<'a> NativeCodegen<'a> {
             refresh_cleanup => ("aura_direct_refresh_cleanup", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             set_next_mutable_sinks => ("aura_direct_set_next_mutable_sinks", [types::I64, types::I64], None),
             set_next_indirect_mutable_sinks => ("aura_direct_set_next_indirect_mutable_sinks", [types::I64, types::I64, types::I64, types::I64, types::I64], None),
-            claim_indirect_mutable_sinks => ("aura_direct_claim_indirect_mutable_sinks", [types::I64], None),
             current_mutable_sink => ("aura_direct_current_mutable_sink", [types::I64], Some(types::I64)),
             mutable_sink_new => ("aura_direct_mutable_sink_new", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             mutable_sink_project => ("aura_direct_mutable_sink_project", [types::I64, types::I64, types::I64], Some(types::I64)),
@@ -1439,6 +1458,7 @@ impl<'a> NativeCodegen<'a> {
         let mut cleanup_thunks = HashMap::new();
         let mut function_return_types = HashMap::new();
         let mut function_param_types = HashMap::new();
+        let mut function_param_passings = HashMap::new();
         let mut function_writeback_types = HashMap::new();
         for function in module.functions.iter().chain(module.top_level.iter()) {
             let function_reachable = reachable_blocks.get(&function.name).ok_or_else(|| {
@@ -1523,6 +1543,14 @@ impl<'a> NativeCodegen<'a> {
                 )?);
             }
             function_param_types.insert(function.name.clone(), params);
+            function_param_passings.insert(
+                function.name.clone(),
+                function
+                    .receiver
+                    .into_iter()
+                    .chain(function.params.iter().map(|param| param.passing))
+                    .collect(),
+            );
             function_writeback_types.insert(function.name.clone(), writebacks);
         }
 
@@ -1565,14 +1593,25 @@ impl<'a> NativeCodegen<'a> {
             trait_impls,
             function_return_types,
             function_param_types,
+            function_param_passings,
             function_writeback_types,
             call_conv,
             runtime_init,
             run_root,
             enter_call,
             exit_call,
-            set_returned_view_projection,
-            take_returned_view_projection,
+            place_borrow,
+            place_borrow_element,
+            place_borrow_union,
+            place_store_owned,
+            place_sink_new,
+            current_borrowed_place,
+            call_handoff_take,
+            call_handoff_place,
+            call_handoff_publish,
+            call_handoff_release,
+            set_returned_view_place,
+            take_returned_view_place,
             print_i64,
             print_u64,
             print_f32,
@@ -1591,7 +1630,6 @@ impl<'a> NativeCodegen<'a> {
             refresh_cleanup,
             set_next_mutable_sinks,
             set_next_indirect_mutable_sinks,
-            claim_indirect_mutable_sinks,
             current_mutable_sink,
             mutable_sink_new,
             mutable_sink_project,
@@ -2005,12 +2043,30 @@ impl<'a> NativeCodegen<'a> {
         let exit_call = self
             .object
             .declare_func_in_func(self.exit_call, builder.func);
-        let set_returned_view_projection = self
+        let place_borrow = self
             .object
-            .declare_func_in_func(self.set_returned_view_projection, builder.func);
-        let take_returned_view_projection = self
+            .declare_func_in_func(self.place_borrow, builder.func);
+        let place_borrow_element = self
             .object
-            .declare_func_in_func(self.take_returned_view_projection, builder.func);
+            .declare_func_in_func(self.place_borrow_element, builder.func);
+        let place_borrow_union = self
+            .object
+            .declare_func_in_func(self.place_borrow_union, builder.func);
+        let place_store_owned = self
+            .object
+            .declare_func_in_func(self.place_store_owned, builder.func);
+        let place_sink_new = self
+            .object
+            .declare_func_in_func(self.place_sink_new, builder.func);
+        let current_borrowed_place = self
+            .object
+            .declare_func_in_func(self.current_borrowed_place, builder.func);
+        let set_returned_view_place = self
+            .object
+            .declare_func_in_func(self.set_returned_view_place, builder.func);
+        let take_returned_view_place = self
+            .object
+            .declare_func_in_func(self.take_returned_view_place, builder.func);
         let line = builder.ins().iconst(types::I64, function.span.line as i64);
         let column = builder
             .ins()
@@ -2283,6 +2339,94 @@ impl<'a> NativeCodegen<'a> {
                 mutable_param_indices.insert(param.name.clone(), call_slot);
             }
             call_slot += 1;
+        }
+        let mut borrowed_names = HashSet::new();
+        let mut definite_borrowed_roots = HashSet::new();
+        for block in &function.blocks {
+            for instruction in &block.instructions {
+                match instruction {
+                    Instruction::BeginLoan { loan, .. }
+                    | Instruction::BeginReturnedLoan { loan, .. }
+                    | Instruction::Reborrow { loan, .. } => {
+                        borrowed_names.insert(loan.clone());
+                    }
+                    Instruction::BeginElementLoan { loan, .. }
+                    | Instruction::ReborrowElement { loan, .. }
+                    | Instruction::BeginUnionLoan { loan, .. } => {
+                        borrowed_names.insert(loan.clone());
+                        definite_borrowed_roots.insert(loan.clone());
+                    }
+                    Instruction::ReadLoan { target, .. } => {
+                        borrowed_names.insert(target.clone());
+                    }
+                    _ => {}
+                }
+            }
+        }
+        let mut mutable_borrowed_roots = HashSet::new();
+        for instruction in function.blocks.iter().flat_map(|block| &block.instructions) {
+            match instruction {
+                Instruction::BeginLoan {
+                    loan,
+                    mutable: true,
+                    ..
+                }
+                | Instruction::BeginReturnedLoan {
+                    loan,
+                    mutable: true,
+                    ..
+                }
+                | Instruction::Reborrow {
+                    loan,
+                    mutable: true,
+                    ..
+                }
+                | Instruction::BeginElementLoan {
+                    loan,
+                    mutable: true,
+                    ..
+                }
+                | Instruction::ReborrowElement {
+                    loan,
+                    mutable: true,
+                    ..
+                } => {
+                    mutable_borrowed_roots.insert(loan.clone());
+                }
+                _ => {}
+            }
+        }
+        mutable_borrowed_roots.extend(mutable_param_indices.keys().cloned());
+        let mut borrowed_params = Vec::new();
+        let mut parameter_index = 0usize;
+        if let Some(passing) = function.receiver {
+            if passing != MirReceiverKind::Value {
+                borrowed_params.push(("self".to_string(), parameter_index));
+            }
+            parameter_index += 1;
+        }
+        for param in &function.params {
+            if param.passing != MirReceiverKind::Value {
+                borrowed_params.push((param.name.clone(), parameter_index));
+            }
+            parameter_index += 1;
+        }
+        borrowed_names.extend(borrowed_params.iter().map(|(name, _)| name.clone()));
+        let mut borrowed_names = borrowed_names.into_iter().collect::<Vec<_>>();
+        borrowed_names.sort();
+        let mut borrowed_place_vars = HashMap::new();
+        for name in borrowed_names {
+            let variable = Variable::from_u32(variable_index as u32);
+            variable_index += 1;
+            builder.declare_var(variable, types::I64);
+            let zero = builder.ins().iconst(types::I64, 0);
+            builder.def_var(variable, zero);
+            borrowed_place_vars.insert(name, variable);
+        }
+        for (name, index) in borrowed_params {
+            let index = builder.ins().iconst(types::I64, index as i64);
+            let call = builder.ins().call(current_borrowed_place, &[index]);
+            builder.def_var(borrowed_place_vars[&name], builder.inst_results(call)[0]);
         }
         if function.receiver == Some(MirReceiverKind::BorrowMut) {
             let receiver_ty = receiver_type(function, &self.classes)?;
@@ -3348,16 +3492,33 @@ impl<'a> NativeCodegen<'a> {
             cleanup_thunk_refs,
             function_return_types: self.function_return_types.clone(),
             function_param_types: self.function_param_types.clone(),
+            function_param_passings: self.function_param_passings.clone(),
             function_writeback_types: self.function_writeback_types.clone(),
             current_function_name,
             current_function_path,
             writeback_locals,
             mutable_param_indices,
+            borrowed_place_vars,
+            borrowed_value_origins: HashMap::new(),
+            absent_argument_origins: HashSet::new(),
+            definite_borrowed_roots,
+            mutable_borrowed_roots,
+            noncopy_roots: function
+                .local_types
+                .iter()
+                .filter(|local| !crate::mir::type_is_copy_in_mir(&local.ty, self.module))
+                .map(|local| local.name.clone())
+                .collect(),
             classes: self.classes.clone(),
             enums: self.enums.clone(),
             union_layouts: self.union_layouts.clone(),
             trait_impls: self.trait_impls.clone(),
             return_type: function.return_type.clone(),
+            returns_view: function
+                .blocks
+                .iter()
+                .flat_map(|block| &block.instructions)
+                .any(|instruction| matches!(instruction, Instruction::ReturnLoan { .. })),
             owned_opaque_temporaries: OwnedTemporaries::default(),
             view_places: HashMap::new(),
             view_element_keys: HashMap::new(),
@@ -3376,8 +3537,13 @@ impl<'a> NativeCodegen<'a> {
             cleanup_registration_vars,
             safepoint_fuel,
             exit_call,
-            set_returned_view_projection,
-            take_returned_view_projection,
+            place_borrow,
+            place_borrow_element,
+            place_borrow_union,
+            place_store_owned,
+            place_sink_new,
+            set_returned_view_place,
+            take_returned_view_place,
             print_i64,
             print_u64,
             print_f32,
@@ -3771,21 +3937,23 @@ impl<'a> NativeCodegen<'a> {
 
         let args_ptr = builder.block_params(entry)[0];
         let target_ref = self.object.declare_func_in_func(target_id, builder.func);
-        let unbox_i64 = self
+        let take_handoff = self
             .object
-            .declare_func_in_func(self.unbox_i64, builder.func);
-        let unbox_int64 = self
+            .declare_func_in_func(self.call_handoff_take, builder.func);
+        let handoff = builder.ins().call(take_handoff, &[]);
+        let handoff = builder.inst_results(handoff)[0];
+        let handoff_place = self
             .object
-            .declare_func_in_func(self.unbox_int64, builder.func);
-        let unbox_u64 = self
+            .declare_func_in_func(self.call_handoff_place, builder.func);
+        let publish_handoff = self
             .object
-            .declare_func_in_func(self.unbox_u64, builder.func);
-        let unbox_f64 = self
+            .declare_func_in_func(self.call_handoff_publish, builder.func);
+        let release_handoff = self
             .object
-            .declare_func_in_func(self.unbox_f64, builder.func);
-        let unbox_bool = self
+            .declare_func_in_func(self.call_handoff_release, builder.func);
+        let retain_value = self
             .object
-            .declare_func_in_func(self.unbox_bool, builder.func);
+            .declare_func_in_func(self.retain_value, builder.func);
         let release_value = self
             .object
             .declare_func_in_func(self.release_value, builder.func);
@@ -3821,6 +3989,7 @@ impl<'a> NativeCodegen<'a> {
         }
 
         let mut lowered_args = Vec::new();
+        let mut parameter_origins = Vec::new();
         let param_types = self.function_param_types[&function.name].clone();
         for (index, param_ty) in param_types.iter().enumerate() {
             let raw = builder
@@ -3835,49 +4004,57 @@ impl<'a> NativeCodegen<'a> {
             builder
                 .ins()
                 .store(MemFlags::new(), zero, args_ptr, (index as i32) * 8);
-            match param_ty {
-                DirectType::Callable(_) => {
-                    // The boxed handle is adopted into the callable's words.
-                    lowered_args.extend(unbox_thunk_value(self, &mut builder, raw, param_ty)?);
+            if function.params[index].passing == MirReceiverKind::Value {
+                parameter_origins.push(zero);
+                lowered_args.extend(unbox_thunk_value(self, &mut builder, raw, param_ty)?);
+                if !matches!(param_ty, DirectType::Opaque(_) | DirectType::Callable(_)) {
+                    builder.ins().call(release_value, &[raw]);
                 }
-                DirectType::Opaque(_) => lowered_args.push(raw),
-                DirectType::Scalar(ScalarKind::Int32) => {
-                    let inst = builder.ins().call(unbox_i64, &[raw]);
-                    lowered_args.push(builder.inst_results(inst)[0]);
-                    let _ = builder.ins().call(release_value, &[raw]);
-                }
-                DirectType::Scalar(ScalarKind::Int64) => {
-                    let inst = builder.ins().call(unbox_int64, &[raw]);
-                    lowered_args.push(builder.inst_results(inst)[0]);
-                    let _ = builder.ins().call(release_value, &[raw]);
-                }
-                DirectType::Scalar(ScalarKind::Uint64) => {
-                    let inst = builder.ins().call(unbox_u64, &[raw]);
-                    lowered_args.push(builder.inst_results(inst)[0]);
-                    let _ = builder.ins().call(release_value, &[raw]);
-                }
-                DirectType::Scalar(ScalarKind::Float32)
-                | DirectType::Scalar(ScalarKind::Float64) => {
-                    let inst = builder.ins().call(unbox_f64, &[raw]);
-                    lowered_args.push(builder.inst_results(inst)[0]);
-                    let _ = builder.ins().call(release_value, &[raw]);
-                }
-                DirectType::Scalar(ScalarKind::Bool) => {
-                    let inst = builder.ins().call(unbox_bool, &[raw]);
-                    lowered_args.push(builder.inst_results(inst)[0]);
-                    let _ = builder.ins().call(release_value, &[raw]);
-                }
-                DirectType::Scalar(ScalarKind::Unit) => {
-                    lowered_args.push(builder.ins().iconst(types::I64, 0));
-                    let _ = builder.ins().call(release_value, &[raw]);
-                }
-                DirectType::PlainClass(_) | DirectType::Union(_) => {
-                    lowered_args.extend(unbox_thunk_value(self, &mut builder, raw, param_ty)?);
-                    let _ = builder.ins().call(release_value, &[raw]);
-                }
+                continue;
             }
+
+            let parameter_index = builder.ins().iconst(types::I64, index as i64);
+            let origin = builder
+                .ins()
+                .call(handoff_place, &[handoff, parameter_index, zero]);
+            let origin = builder.inst_results(origin)[0];
+            parameter_origins.push(origin);
+            let borrowed_block = builder.create_block();
+            let ordinary_block = builder.create_block();
+            let merge_block = builder.create_block();
+            for abi in param_ty.abi_types() {
+                builder.append_block_param(merge_block, abi);
+            }
+            let borrowed = builder.ins().icmp_imm(IntCC::NotEqual, origin, 0);
+            builder
+                .ins()
+                .brif(borrowed, borrowed_block, &[], ordinary_block, &[]);
+            builder.switch_to_block(borrowed_block);
+            builder.seal_block(borrowed_block);
+            // Keep the original origin reference until mutable results have
+            // been boxed; the target ABI receives a separate retained handle.
+            let retained = builder.ins().call(retain_value, &[origin]);
+            let retained = builder.inst_results(retained)[0];
+            let values = borrowed_unbox_thunk_value(self, &mut builder, retained, param_ty)?;
+            builder.ins().call(release_value, &[raw]);
+            if !matches!(param_ty, DirectType::Opaque(_) | DirectType::Callable(_)) {
+                builder.ins().call(release_value, &[retained]);
+            }
+            builder.ins().jump(merge_block, &values);
+            builder.switch_to_block(ordinary_block);
+            builder.seal_block(ordinary_block);
+            let values = unbox_thunk_value(self, &mut builder, raw, param_ty)?;
+            if !matches!(param_ty, DirectType::Opaque(_) | DirectType::Callable(_)) {
+                builder.ins().call(release_value, &[raw]);
+            }
+            builder.ins().jump(merge_block, &values);
+            builder.switch_to_block(merge_block);
+            builder.seal_block(merge_block);
+            lowered_args.extend(builder.block_params(merge_block).to_vec());
         }
 
+        let direct = builder.ins().iconst(types::I64, 0);
+        builder.ins().call(publish_handoff, &[handoff, direct]);
         let inst = builder.ins().call(target_ref, &lowered_args);
         let results = builder.inst_results(inst).to_vec();
         let return_ty = match self.function_return_types.get(&function.name).cloned() {
@@ -3900,12 +4077,22 @@ impl<'a> NativeCodegen<'a> {
             }
             let writeback_ty = &param_types[index];
             let writeback_count = writeback_ty.value_count();
-            let boxed_writeback = box_thunk_value(
-                self,
-                &mut builder,
-                &results[cursor..cursor + writeback_count],
-                writeback_ty,
-            )?;
+            let origin = parameter_origins[index];
+            let writeback = &results[cursor..cursor + writeback_count];
+            let boxed_writeback =
+                borrowed_box_thunk_value(self, &mut builder, writeback, writeback_ty, origin)?;
+            let borrowed = builder.ins().icmp_imm(IntCC::NotEqual, origin, 0);
+            let release_block = builder.create_block();
+            let next_block = builder.create_block();
+            builder
+                .ins()
+                .brif(borrowed, release_block, &[], next_block, &[]);
+            builder.switch_to_block(release_block);
+            builder.seal_block(release_block);
+            release_direct_values(self, &mut builder, writeback, writeback_ty)?;
+            builder.ins().jump(next_block, &[]);
+            builder.switch_to_block(next_block);
+            builder.seal_block(next_block);
             builder.ins().store(
                 MemFlags::new(),
                 boxed_writeback,
@@ -3914,7 +4101,23 @@ impl<'a> NativeCodegen<'a> {
             );
             cursor += writeback_count;
         }
-        let boxed = box_thunk_value(self, &mut builder, &results[..return_count], &return_ty)?;
+        let returns_view = function.blocks.iter().any(|block| {
+            block
+                .instructions
+                .iter()
+                .any(|instruction| matches!(instruction, Instruction::ReturnLoan { .. }))
+        });
+        let boxed = if returns_view {
+            // ReturnLoan transferred the descriptor through the runtime handoff.
+            // Its zero ABI words must not be boxed as an owned pointee value.
+            builder.ins().iconst(types::I64, 0)
+        } else {
+            box_thunk_value(self, &mut builder, &results[..return_count], &return_ty)?
+        };
+        for origin in parameter_origins {
+            builder.ins().call(release_value, &[origin]);
+        }
+        builder.ins().call(release_handoff, &[handoff]);
         builder.ins().return_(&[boxed]);
         builder.finalize();
 
@@ -4292,6 +4495,9 @@ enum DirectElementKind {
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct DirectElementSelector {
     variable: Variable,
+    /// The resolved element descriptor, when created by the contextual
+    /// loan path. `projection` then contains only subsequent projections.
+    descriptor: Option<Variable>,
     selector_ty: DirectType,
     /// The type the selection reaches: the element, or its `projection`.
     element_type: Type,
@@ -4688,16 +4894,24 @@ struct FunctionCompiler<'a> {
     cleanup_thunk_refs: HashMap<String, cranelift_codegen::ir::FuncRef>,
     function_return_types: HashMap<String, DirectType>,
     function_param_types: HashMap<String, Vec<DirectType>>,
+    function_param_passings: HashMap<String, Vec<MirReceiverKind>>,
     function_writeback_types: HashMap<String, Vec<DirectType>>,
     current_function_name: String,
     current_function_path: String,
     writeback_locals: Vec<(String, DirectType)>,
     mutable_param_indices: HashMap<String, usize>,
+    borrowed_place_vars: HashMap<String, Variable>,
+    borrowed_value_origins: HashMap<Vec<Value>, Value>,
+    absent_argument_origins: HashSet<Value>,
+    definite_borrowed_roots: HashSet<String>,
+    mutable_borrowed_roots: HashSet<String>,
+    noncopy_roots: HashSet<String>,
     classes: HashMap<String, MirClass>,
     enums: HashMap<String, MirEnum>,
     union_layouts: HashMap<String, crate::union_layout::MirUnionLayout>,
     trait_impls: Vec<MirTraitImpl>,
     return_type: Type,
+    returns_view: bool,
     owned_opaque_temporaries: OwnedTemporaries,
     view_places: HashMap<String, DirectViewPlace>,
     view_selector_vars: HashMap<String, Variable>,
@@ -4717,8 +4931,13 @@ struct FunctionCompiler<'a> {
     cleanup_registration_vars: HashMap<String, Variable>,
     safepoint_fuel: Option<Variable>,
     exit_call: cranelift_codegen::ir::FuncRef,
-    set_returned_view_projection: cranelift_codegen::ir::FuncRef,
-    take_returned_view_projection: cranelift_codegen::ir::FuncRef,
+    place_borrow: cranelift_codegen::ir::FuncRef,
+    place_borrow_element: cranelift_codegen::ir::FuncRef,
+    place_borrow_union: cranelift_codegen::ir::FuncRef,
+    place_store_owned: cranelift_codegen::ir::FuncRef,
+    place_sink_new: cranelift_codegen::ir::FuncRef,
+    set_returned_view_place: cranelift_codegen::ir::FuncRef,
+    take_returned_view_place: cranelift_codegen::ir::FuncRef,
     print_i64: cranelift_codegen::ir::FuncRef,
     print_u64: cranelift_codegen::ir::FuncRef,
     print_f32: cranelift_codegen::ir::FuncRef,
@@ -5173,6 +5392,7 @@ impl<'a> FunctionCompiler<'a> {
             self.release_callable_words(&words);
         }
         self.owned_opaque_temporaries.clear();
+        self.borrowed_value_origins.clear();
     }
 
     fn release_temporary_owned_since(&mut self, baseline: &OwnedTemporaries) {
@@ -5706,7 +5926,13 @@ impl<'a> FunctionCompiler<'a> {
 
                 self.builder.switch_to_block(continue_block);
             }
-            Instruction::BeginLoan { loan, source, .. } => {
+            Instruction::BeginLoan {
+                loan,
+                source,
+                mutable,
+            } => {
+                let handle = self.borrow_place_origin(source, *mutable)?;
+                self.bind_borrowed_place(loan, handle)?;
                 let source = self.resolve_view_place(source)?;
                 self.view_places.insert(loan.clone(), source);
             }
@@ -5716,7 +5942,7 @@ impl<'a> FunctionCompiler<'a> {
                 selector,
                 projection,
                 span,
-                ..
+                mutable,
             }
             | Instruction::ReborrowElement {
                 loan,
@@ -5724,9 +5950,42 @@ impl<'a> FunctionCompiler<'a> {
                 selector,
                 projection,
                 span,
-                ..
+                mutable,
             } => {
-                self.begin_element_loan(loan, source, selector, projection, *span)?;
+                self.begin_element_loan(loan, source, selector, projection, *mutable, *span)?;
+            }
+            Instruction::BeginUnionLoan {
+                loan,
+                source,
+                union_type,
+                member_type,
+                member_index,
+                span,
+            } => {
+                let source_handle = self.borrow_place_or_box(source)?;
+                let union_encoded = crate::native_runtime::canonical_runtime_type_name(union_type);
+                let member_encoded =
+                    crate::native_runtime::canonical_runtime_type_name(member_type);
+                let (union_ptr, union_len) = self.string_constant(union_encoded.as_bytes())?;
+                let (member_ptr, member_len) = self.string_constant(member_encoded.as_bytes())?;
+                let index = self.builder.ins().iconst(types::I64, *member_index as i64);
+                let (line, column) = self.span_operands(*span);
+                let call = self.builder.ins().call(
+                    self.place_borrow_union,
+                    &[
+                        source_handle,
+                        union_ptr,
+                        union_len,
+                        member_ptr,
+                        member_len,
+                        index,
+                        line,
+                        column,
+                    ],
+                );
+                self.bind_borrowed_place(loan, self.builder.inst_results(call)[0])?;
+                self.view_places
+                    .insert(loan.clone(), self.resolve_view_place(source)?);
             }
             Instruction::BeginReturnedLoan {
                 loan,
@@ -5742,11 +6001,21 @@ impl<'a> FunctionCompiler<'a> {
                     encoded.extend_from_slice(projection.as_bytes());
                 }
                 let (projections_ptr, projections_len) = self.string_constant(&encoded)?;
-                let selected = self.builder.ins().call(
-                    self.take_returned_view_projection,
-                    &[projections_ptr, projections_len],
+                let selected_slot = self.builder.create_sized_stack_slot(StackSlotData::new(
+                    StackSlotKind::ExplicitSlot,
+                    8,
+                    3,
+                ));
+                let selected_ptr = self.builder.ins().stack_addr(types::I64, selected_slot, 0);
+                let returned = self.builder.ins().call(
+                    self.take_returned_view_place,
+                    &[projections_ptr, projections_len, selected_ptr],
                 );
-                let selected = self.builder.inst_results(selected)[0];
+                self.bind_borrowed_place(loan, self.builder.inst_results(returned)[0])?;
+                let selected =
+                    self.builder
+                        .ins()
+                        .load(types::I64, MemFlags::new(), selected_ptr, 0);
                 let selector_var = *self.view_selector_vars.get(loan).ok_or_else(|| {
                     format!(
                         "direct backend has no returned-view selector storage for loan `{loan}`"
@@ -5812,16 +6081,65 @@ impl<'a> FunctionCompiler<'a> {
                 loan,
                 parent,
                 projection,
-                ..
+                mutable,
             } => {
+                let source_place = if projection.is_empty() {
+                    parent.clone()
+                } else {
+                    format!("{parent}.{projection}")
+                };
+                let handle = self.borrow_place_origin(&source_place, *mutable)?;
+                self.bind_borrowed_place(loan, handle)?;
+                if self
+                    .definite_borrowed_roots
+                    .contains(parent.split('.').next().unwrap_or(parent))
+                {
+                    self.definite_borrowed_roots.insert(loan.clone());
+                }
                 let source = self.resolve_view_place(parent)?.project(projection);
                 self.view_places.insert(loan.clone(), source);
             }
             Instruction::ReadLoan { target, loan } => {
+                if self.noncopy_roots.contains(target) {
+                    let mutable = self
+                        .mutable_borrowed_roots
+                        .contains(loan.split('.').next().unwrap_or(loan));
+                    let handle = self.borrow_place_origin(loan, mutable)?;
+                    if mutable {
+                        self.mutable_borrowed_roots.insert(target.clone());
+                    }
+                    self.bind_borrowed_place(target, handle)?;
+                    if self
+                        .definite_borrowed_roots
+                        .contains(loan.split('.').next().unwrap_or(loan))
+                    {
+                        self.definite_borrowed_roots.insert(target.clone());
+                    }
+                }
                 let loaded = self.load_place(loan)?;
                 let target_ty = self.type_of_place(target)?;
-                let loaded = self.coerce_value(loaded, &target_ty)?;
-                self.store_place(target, loaded)?;
+                let loaded = if !self.noncopy_roots.contains(target)
+                    && matches!(&target_ty, DirectType::Opaque(_) | DirectType::Union(_))
+                {
+                    // Copy aggregates leave the selection as independent values;
+                    // a non-Copy ReadLoan keeps the storage alias instead.
+                    let boxed = self.ensure_opaque(loaded)?;
+                    let cloned = self
+                        .builder
+                        .ins()
+                        .call(self.clone_value, &[boxed.values[0]]);
+                    let copied = self.owned_opaque_result(
+                        self.builder.inst_results(cloned).to_vec(),
+                        direct_type_to_type(&target_ty),
+                    );
+                    self.coerce_value(copied, &target_ty)?
+                } else {
+                    self.coerce_value(loaded, &target_ty)?
+                };
+                if !self.noncopy_roots.contains(target) {
+                    self.borrowed_value_origins.remove(&loaded.values);
+                }
+                self.store_root(target, loaded)?;
             }
             Instruction::WriteLoan { loan, value } => {
                 let target_ty = self.type_of_place(loan)?;
@@ -5831,6 +6149,12 @@ impl<'a> FunctionCompiler<'a> {
             }
             Instruction::EndLoan { loan } => {
                 self.view_places.remove(loan);
+                if let Some(variable) = self.borrowed_place_vars.get(loan).copied() {
+                    let handle = self.builder.use_var(variable);
+                    self.release_opaque_handle(handle);
+                    let zero = self.builder.ins().iconst(types::I64, 0);
+                    self.builder.def_var(variable, zero);
+                }
                 if let Some(variable) = self.view_element_keys.remove(loan) {
                     let key = self.builder.use_var(variable);
                     self.release_opaque_handle(key);
@@ -5979,9 +6303,17 @@ impl<'a> FunctionCompiler<'a> {
     ) -> std::result::Result<(), String> {
         match terminator {
             Terminator::Return(operand) => {
-                let value = self.load_operand_for_target(operand, return_ty)?;
-                let coerced = self.coerce_value(value, return_ty)?;
-                self.emit_return_value(coerced)?;
+                if self.returns_view {
+                    let placeholder = ValueRef {
+                        values: return_ty.zero_values(&mut self.builder),
+                        ty: return_ty.clone(),
+                    };
+                    self.emit_return_value(placeholder)?;
+                } else {
+                    let value = self.load_operand_for_target(operand, return_ty)?;
+                    let coerced = self.coerce_value(value, return_ty)?;
+                    self.emit_return_value(coerced)?;
+                }
             }
             Terminator::Goto(label) => {
                 self.release_all_temporary_owned();
@@ -6153,6 +6485,15 @@ impl<'a> FunctionCompiler<'a> {
         self.append_writeback_return_values(&mut return_values)?;
         self.release_all_temporary_owned();
         self.release_all_opaque_roots()?;
+        let origins = self
+            .borrowed_place_vars
+            .values()
+            .copied()
+            .collect::<Vec<_>>();
+        for variable in origins {
+            let origin = self.builder.use_var(variable);
+            self.release_opaque_handle(origin);
+        }
         self.builder.ins().call(self.exit_call, &[]);
         self.builder.ins().return_(&return_values);
         Ok(())
@@ -7640,6 +7981,107 @@ impl<'a> FunctionCompiler<'a> {
     /// contract's direct parameters and passed with a supplied mask to the
     /// `invoke` adapter named by the descriptor, which fills defaults and
     /// writes mutated captures back into the environment words.
+    fn argument_borrow_origin(
+        &mut self,
+        operand: &Operand,
+        writeback: Option<&str>,
+        passing: MirReceiverKind,
+    ) -> std::result::Result<Value, String> {
+        if passing == MirReceiverKind::Value {
+            let absent = self.builder.ins().iconst(types::I64, 0);
+            self.absent_argument_origins.insert(absent);
+            return Ok(absent);
+        }
+        let place = writeback.or_else(|| match operand {
+            Operand::Place(place) => Some(place.as_str()),
+            _ => None,
+        });
+        match place {
+            Some(place) => self.borrow_place_origin(place, passing == MirReceiverKind::BorrowMut),
+            None => Ok(self.builder.ins().iconst(types::I64, 0)),
+        }
+    }
+
+    fn load_call_argument(
+        &mut self,
+        operand: &Operand,
+        target: &DirectType,
+        origin: Value,
+    ) -> std::result::Result<ValueRef, String> {
+        if self.absent_argument_origins.contains(&origin) {
+            let loaded = self.load_operand_for_target(operand, target)?;
+            return self.coerce_value(loaded, target);
+        }
+        let borrowed = self.builder.create_block();
+        let ordinary = self.builder.create_block();
+        let merge = self.builder.create_block();
+        for abi in target.abi_types() {
+            self.builder.append_block_param(merge, abi);
+        }
+        let active = self.builder.ins().icmp_imm(IntCC::NotEqual, origin, 0);
+        self.builder
+            .ins()
+            .brif(active, borrowed, &[], ordinary, &[]);
+        let baseline = self.owned_opaque_temporaries.clone();
+        self.builder.switch_to_block(borrowed);
+        self.builder.seal_block(borrowed);
+        let value = self.read_borrowed_handle(origin, target)?;
+        let values = self.transfer_values(&value);
+        self.release_temporary_owned_since(&baseline);
+        self.builder.ins().jump(merge, &values);
+        self.builder.switch_to_block(ordinary);
+        self.builder.seal_block(ordinary);
+        self.owned_opaque_temporaries = baseline.clone();
+        let loaded = self.load_operand_for_target(operand, target)?;
+        let value = self.coerce_value(loaded, target)?;
+        let values = self.transfer_values(&value);
+        self.release_temporary_owned_since(&baseline);
+        self.builder.ins().jump(merge, &values);
+        self.builder.switch_to_block(merge);
+        self.builder.seal_block(merge);
+        self.owned_opaque_temporaries = baseline;
+        let value = ValueRef {
+            values: self.builder.block_params(merge).to_vec(),
+            ty: target.clone(),
+        };
+        self.mark_call_result_owned(&value);
+        if matches!(target, DirectType::Union(_) | DirectType::PlainClass(_)) {
+            self.borrowed_value_origins
+                .insert(value.values.clone(), origin);
+        }
+        Ok(value)
+    }
+
+    fn sink_for_argument(
+        &mut self,
+        origin: Value,
+        legacy_mutable: Option<&str>,
+    ) -> std::result::Result<Value, String> {
+        let borrowed = self.builder.create_block();
+        let ordinary = self.builder.create_block();
+        let merge = self.builder.create_block();
+        self.builder.append_block_param(merge, types::I64);
+        let active = self.builder.ins().icmp_imm(IntCC::NotEqual, origin, 0);
+        self.builder
+            .ins()
+            .brif(active, borrowed, &[], ordinary, &[]);
+        self.builder.switch_to_block(borrowed);
+        self.builder.seal_block(borrowed);
+        let call = self.builder.ins().call(self.place_sink_new, &[origin]);
+        let sink = self.builder.inst_results(call)[0];
+        self.builder.ins().jump(merge, &[sink]);
+        self.builder.switch_to_block(ordinary);
+        self.builder.seal_block(ordinary);
+        let sink = match legacy_mutable {
+            Some(place) => self.mutable_sink_for_place(place)?,
+            None => self.builder.ins().iconst(types::I64, 0),
+        };
+        self.builder.ins().jump(merge, &[sink]);
+        self.builder.switch_to_block(merge);
+        self.builder.seal_block(merge);
+        Ok(self.builder.block_params(merge)[0])
+    }
+
     fn compile_inline_callable_call(
         &mut self,
         function: &Operand,
@@ -7703,17 +8145,31 @@ impl<'a> FunctionCompiler<'a> {
         let mut supplied: Vec<Option<Vec<Value>>> = vec![None; params.len()];
         let mut mask_bits = 0i64;
         let mut writebacks = Vec::new();
+        let mut public_sinks = (0..params.len())
+            .map(|_| self.builder.ins().iconst(types::I64, 0))
+            .collect::<Vec<_>>();
         for (argument, index) in args.iter().zip(&binding.source_slots) {
             let index = *index;
             let expected = &param_types[index];
-            let loaded_value = self.load_operand_for_target(&argument.value, expected)?;
-            let value = self.coerce_value(loaded_value, expected)?;
+            let passing = match params[index].passing {
+                ReceiverKind::Borrow => MirReceiverKind::Borrow,
+                ReceiverKind::BorrowMut => MirReceiverKind::BorrowMut,
+                ReceiverKind::Value => MirReceiverKind::Value,
+            };
+            let origin = self.argument_borrow_origin(
+                &argument.value,
+                argument.writeback_place.as_deref(),
+                passing,
+            )?;
+            let value = self.load_call_argument(&argument.value, expected, origin)?;
+            public_sinks[index] =
+                self.sink_for_argument(origin, argument.writeback_place.as_deref())?;
             let transferred = self.transfer_values(&value);
             supplied[index] = Some(transferred);
             mask_bits |= 1i64 << index;
             match (params[index].passing, argument.writeback_place.as_ref()) {
                 (ReceiverKind::BorrowMut, Some(place)) => {
-                    writebacks.push((index, place.clone(), expected.clone()));
+                    writebacks.push((index, place.clone(), expected.clone(), origin));
                 }
                 (ReceiverKind::BorrowMut, None) => {
                     return Err(format!(
@@ -7730,23 +8186,14 @@ impl<'a> FunctionCompiler<'a> {
                 (_, None) => {}
             }
         }
-        let mut public_sinks = Vec::new();
         let mut capture_sinks = Vec::new();
-        if !writebacks.is_empty() || !closure_writebacks.is_empty() {
-            public_sinks = (0..params.len())
-                .map(|_| self.builder.ins().iconst(types::I64, 0))
-                .collect();
-            for (index, place, _) in &writebacks {
-                public_sinks[*index] = self.mutable_sink_for_place(place)?;
-            }
-            for writeback in &closure_writebacks {
-                capture_sinks.push((
-                    writeback.index,
-                    self.mutable_sink_for_resolved_place(writeback.place.clone())?,
-                ));
-            }
-            self.install_indirect_mutable_sinks(&public_sinks, &capture_sinks)?;
+        for writeback in &closure_writebacks {
+            capture_sinks.push((
+                writeback.index,
+                self.mutable_sink_for_resolved_place(writeback.place.clone())?,
+            ));
         }
+        self.install_indirect_mutable_sinks(&public_sinks, &capture_sinks)?;
         let mask = self.builder.ins().iconst(types::I64, mask_bits);
         let mut lowered = vec![callable_ptr, mask];
         for (index, expected) in param_types.iter().enumerate() {
@@ -7813,7 +8260,7 @@ impl<'a> FunctionCompiler<'a> {
         };
         self.mark_call_result_owned(&result);
         let mut cursor = result_count;
-        for (_, place, writeback_ty) in writebacks {
+        for (_, place, writeback_ty, origin) in writebacks {
             let count = writeback_ty.value_count();
             let writeback = ValueRef {
                 values: results[cursor..cursor + count].to_vec(),
@@ -7821,7 +8268,7 @@ impl<'a> FunctionCompiler<'a> {
             };
             cursor += count;
             self.mark_call_result_owned(&writeback);
-            self.store_place(&place, writeback)?;
+            self.store_with_optional_origin(&place, writeback, origin, true)?;
         }
         for writeback in closure_writebacks {
             let env_base = if writeback.inline {
@@ -8613,8 +9060,14 @@ impl<'a> FunctionCompiler<'a> {
                 );
             }
         }
+        let passings = self
+            .function_param_passings
+            .get(name)
+            .cloned()
+            .unwrap_or_default();
         let mut writeback_places = Vec::new();
-        let mut mutable_sink_places = vec![None; expected.len()];
+        let mut writeback_origins = Vec::new();
+        let mut mutable_sinks = Vec::new();
         for (index, argument) in args.iter().enumerate() {
             let semantic_expected = expected
                 .get(index)
@@ -8628,48 +9081,48 @@ impl<'a> FunctionCompiler<'a> {
                     )
                 })
                 .transpose()?;
-            let loaded = if let Some(expected_ty) = semantic_expected.as_ref() {
-                self.load_operand_for_target(&argument.value, expected_ty)?
+            let passing = passings
+                .get(index)
+                .copied()
+                .unwrap_or(MirReceiverKind::Value);
+            let origin = self.argument_borrow_origin(
+                &argument.value,
+                argument.writeback_place.as_deref(),
+                passing,
+            )?;
+            let coerced = if let Some(abi_expected) = expected.get(index) {
+                self.load_call_argument(&argument.value, abi_expected, origin)?
+            } else if let Some(expected_ty) = semantic_expected.as_ref() {
+                self.load_call_argument(&argument.value, expected_ty, origin)?
             } else {
                 self.load_operand(&argument.value)?
             };
-            let semantic_coerced = if let Some(expected_ty) = semantic_expected.as_ref() {
-                self.coerce_value(loaded, expected_ty)?
-            } else {
-                loaded
-            };
-            let coerced = if let Some(abi_expected) = expected.get(index) {
-                self.coerce_value(semantic_coerced, abi_expected)?
-            } else {
-                semantic_coerced
-            };
             if let Some(place) = &argument.writeback_place {
                 writeback_places.push(place.clone());
-                if let Some(slot) = mutable_sink_places.get_mut(index) {
-                    *slot = Some(place.clone());
-                }
+                writeback_origins.push(origin);
             }
+            mutable_sinks
+                .push(self.sink_for_argument(origin, argument.writeback_place.as_deref())?);
             let transferred = self.transfer_values(&coerced);
             lowered_args.extend(transferred);
         }
-        let mutable_sinks = if mutable_sink_places.iter().any(Option::is_some) {
-            let mut sinks = Vec::with_capacity(mutable_sink_places.len());
-            for place in &mutable_sink_places {
-                sinks.push(match place {
-                    Some(place) => self.mutable_sink_for_place(place)?,
-                    None => self.builder.ins().iconst(types::I64, 0),
-                });
-            }
-            self.install_direct_mutable_sinks(&sinks)?;
-            sinks
-        } else {
-            Vec::new()
-        };
+        self.install_direct_mutable_sinks(&mutable_sinks)?;
         let inst = self.builder.ins().call(func_ref, &lowered_args);
         let results = self.builder.inst_results(inst).to_vec();
         self.release_mutable_sinks(mutable_sinks);
         let (result, writebacks) = self.split_call_results(name, results)?;
-        self.apply_writeback_places(&writeback_places, writebacks)?;
+        if writeback_places.len() != writebacks.len() {
+            return Err(format!(
+                "direct call `{name}` returned an unexpected number of mutable arguments"
+            ));
+        }
+        for ((place, origin), value) in writeback_places
+            .iter()
+            .zip(writeback_origins)
+            .zip(writebacks)
+        {
+            self.store_with_optional_origin(place, value, origin, true)?;
+        }
         Ok(result)
     }
 
@@ -9278,6 +9731,18 @@ impl<'a> FunctionCompiler<'a> {
         }
     }
 
+    /// Runtime member mutations already changed selected storage. Their
+    /// returned receiver words are needed only by the legacy inline path.
+    fn store_builtin_receiver(
+        &mut self,
+        place: &str,
+        value: ValueRef,
+    ) -> std::result::Result<(), String> {
+        let origin = self.borrow_place_origin(place, true)?;
+        self.store_with_optional_origin(place, value, origin, true)?;
+        self.refresh_cleanup_registrations_for_mutation(place)
+    }
+
     fn compile_member_call(
         &mut self,
         object: &Operand,
@@ -9285,7 +9750,38 @@ impl<'a> FunctionCompiler<'a> {
         receiver_place: Option<&str>,
         args: &[MirArg],
     ) -> std::result::Result<ValueRef, String> {
-        let object = self.load_operand(object)?;
+        let receiver_target = match receiver_place {
+            Some(place) => Some(self.type_of_place(place)?),
+            None => match object {
+                Operand::Place(place) | Operand::MovePlace(place) => {
+                    Some(self.type_of_place(place)?)
+                }
+                _ => infer_operand_type(object, &self.variable_types, &self.classes),
+            },
+        };
+        let builtin_mutable = receiver_target.as_ref().is_some_and(|target| {
+            let Type::Named(name, _) = direct_type_to_type(target) else {
+                return false;
+            };
+            find_method(self.classes.get(&name), field).is_none()
+                && (BuiltinMember::resolve_runtime(&name, field)
+                    .is_some_and(|member| member.receiver_passing() == ReceiverKind::BorrowMut)
+                    || (field == "__set_index"
+                        && matches!(name.as_str(), "list" | "dict" | "Array")))
+        });
+        let object = if builtin_mutable {
+            let origin =
+                self.argument_borrow_origin(object, receiver_place, MirReceiverKind::BorrowMut)?;
+            self.load_call_argument(
+                object,
+                receiver_target
+                    .as_ref()
+                    .expect("builtin receiver has a type"),
+                origin,
+            )?
+        } else {
+            self.load_operand(object)?
+        };
 
         if let DirectType::Opaque(Type::Named(name, _)) = &object.ty {
             if let Some(
@@ -9793,7 +10289,334 @@ impl<'a> FunctionCompiler<'a> {
         self.ensure_opaque(coerced)
     }
 
+    fn bind_borrowed_place(
+        &mut self,
+        name: &str,
+        handle: Value,
+    ) -> std::result::Result<(), String> {
+        let variable = *self.borrowed_place_vars.get(name).ok_or(format!(
+            "direct backend has no borrowed origin storage for `{name}`"
+        ))?;
+        let previous = self.builder.use_var(variable);
+        self.release_opaque_handle(previous);
+        self.builder.def_var(variable, handle);
+        self.owned_opaque_temporaries.opaque.remove(&handle);
+        Ok(())
+    }
+
+    fn project_borrowed_handle(
+        &mut self,
+        source: Value,
+        projection: &str,
+        mutable: bool,
+        ty: &Type,
+    ) -> std::result::Result<Value, String> {
+        let (path_ptr, path_len) = self.string_constant(projection.as_bytes())?;
+        let encoded = crate::native_runtime::canonical_runtime_type_name(ty);
+        let (type_ptr, type_len) = self.string_constant(encoded.as_bytes())?;
+        let mutable = self.builder.ins().iconst(types::I64, i64::from(mutable));
+        let call = self.builder.ins().call(
+            self.place_borrow,
+            &[source, path_ptr, path_len, mutable, type_ptr, type_len],
+        );
+        let handle = self.builder.inst_results(call)[0];
+        self.mark_temporary_opaque_owned(&ValueRef {
+            values: vec![handle],
+            ty: DirectType::Opaque(ty.clone()),
+        });
+        Ok(handle)
+    }
+
+    /// A place argument retains its runtime origin independently of the
+    /// scalar/aggregate words used by the existing function ABI.
+    fn borrow_place_origin(
+        &mut self,
+        place: &str,
+        mutable: bool,
+    ) -> std::result::Result<Value, String> {
+        let (root, projection) = place.split_once('.').unwrap_or((place, ""));
+        let ty = direct_type_to_type(&self.type_of_place(place)?);
+        if let Some(variable) = self.borrowed_place_vars.get(root).copied() {
+            let origin = self.builder.use_var(variable);
+            if self.definite_borrowed_roots.contains(root) {
+                return self.project_borrowed_handle(origin, projection, mutable, &ty);
+            }
+            let borrowed = self.builder.create_block();
+            let ordinary = self.builder.create_block();
+            let merge = self.builder.create_block();
+            self.builder.append_block_param(merge, types::I64);
+            let present = self.builder.ins().icmp_imm(IntCC::NotEqual, origin, 0);
+            self.builder
+                .ins()
+                .brif(present, borrowed, &[], ordinary, &[]);
+            let baseline = self.owned_opaque_temporaries.clone();
+            self.builder.switch_to_block(borrowed);
+            self.builder.seal_block(borrowed);
+            let selected = self.project_borrowed_handle(origin, projection, mutable, &ty)?;
+            self.owned_opaque_temporaries.opaque.remove(&selected);
+            self.release_temporary_owned_since(&baseline);
+            self.builder.ins().jump(merge, &[selected]);
+            self.builder.switch_to_block(ordinary);
+            self.builder.seal_block(ordinary);
+            self.owned_opaque_temporaries = baseline.clone();
+            let resolved = self.resolve_view_place(place)?;
+            let selected = self.borrow_resolved_origin(resolved, mutable, &ty)?;
+            self.owned_opaque_temporaries.opaque.remove(&selected);
+            self.release_temporary_owned_since(&baseline);
+            self.builder.ins().jump(merge, &[selected]);
+            self.builder.switch_to_block(merge);
+            self.builder.seal_block(merge);
+            self.owned_opaque_temporaries = baseline;
+            let selected = self.builder.block_params(merge)[0];
+            self.mark_temporary_opaque_owned(&ValueRef {
+                values: vec![selected],
+                ty: DirectType::Opaque(ty),
+            });
+            return Ok(selected);
+        }
+        {
+            let resolved = self.resolve_view_place(place)?;
+            self.borrow_resolved_origin(resolved, mutable, &ty)
+        }
+    }
+
+    fn borrow_resolved_origin(
+        &mut self,
+        resolved: DirectViewPlace,
+        mutable: bool,
+        ty: &Type,
+    ) -> std::result::Result<Value, String> {
+        let merge = self.builder.create_block();
+        self.builder.append_block_param(merge, types::I64);
+        let baseline = self.owned_opaque_temporaries.clone();
+        let count = resolved.alternatives.len();
+        for (index, alternative) in resolved.alternatives.into_iter().enumerate() {
+            let next = if index + 1 < count {
+                let selected = self.view_alternative_condition(&alternative);
+                let body = self.builder.create_block();
+                let next = self.builder.create_block();
+                self.builder.ins().brif(selected, body, &[], next, &[]);
+                self.builder.switch_to_block(body);
+                self.builder.seal_block(body);
+                Some(next)
+            } else {
+                None
+            };
+            self.owned_opaque_temporaries = baseline.clone();
+            let handle = if let Some((selector, variable)) = alternative
+                .elements
+                .last()
+                .and_then(|selector| selector.descriptor.map(|variable| (selector, variable)))
+            {
+                let parent = self.builder.use_var(variable);
+                self.project_borrowed_handle(parent, &selector.projection, mutable, ty)?
+            } else {
+                let (root, mut projection) = alternative
+                    .place
+                    .split_once('.')
+                    .unwrap_or((&alternative.place, ""));
+                let mut value = self.load_root(root)?;
+                while !projection.is_empty() && !matches!(value.ty, DirectType::Opaque(_)) {
+                    let (field, rest) = projection.split_once('.').unwrap_or((projection, ""));
+                    value = self.extract_field(value, field)?;
+                    projection = rest;
+                }
+                if matches!(value.ty, DirectType::Opaque(_)) {
+                    self.project_borrowed_handle(value.values[0], projection, mutable, ty)?
+                } else if let DirectType::Union(union) = &value.ty {
+                    if !mutable && projection.is_empty() {
+                        self.borrow_inline_union(union, &value.values)?.values[0]
+                    } else {
+                        self.builder.ins().iconst(types::I64, 0)
+                    }
+                } else {
+                    // An ordinary inline local keeps the legacy value ABI.
+                    self.builder.ins().iconst(types::I64, 0)
+                }
+            };
+            self.owned_opaque_temporaries.opaque.remove(&handle);
+            self.release_temporary_owned_since(&baseline);
+            self.builder.ins().jump(merge, &[handle]);
+            if let Some(next) = next {
+                self.builder.switch_to_block(next);
+                self.builder.seal_block(next);
+            }
+        }
+        self.builder.switch_to_block(merge);
+        self.builder.seal_block(merge);
+        self.owned_opaque_temporaries = baseline;
+        let result = self.builder.block_params(merge)[0];
+        self.mark_temporary_opaque_owned(&ValueRef {
+            values: vec![result],
+            ty: DirectType::Opaque(ty.clone()),
+        });
+        Ok(result)
+    }
+
+    fn borrow_place_or_box(&mut self, place: &str) -> std::result::Result<Value, String> {
+        let origin = self.borrow_place_origin(place, false)?;
+        let root = place.split('.').next().unwrap_or(place);
+        if self.definite_borrowed_roots.contains(root)
+            || matches!(self.type_of_place(place)?, DirectType::Opaque(_))
+        {
+            return Ok(origin);
+        }
+        let borrowed = self.builder.create_block();
+        let ordinary = self.builder.create_block();
+        let merge = self.builder.create_block();
+        self.builder.append_block_param(merge, types::I64);
+        let present = self.builder.ins().icmp_imm(IntCC::NotEqual, origin, 0);
+        self.builder
+            .ins()
+            .brif(present, borrowed, &[], ordinary, &[]);
+        self.builder.switch_to_block(borrowed);
+        self.builder.seal_block(borrowed);
+        let retained = self.retain_opaque_handle(origin);
+        self.builder.ins().jump(merge, &[retained]);
+        self.builder.switch_to_block(ordinary);
+        self.builder.seal_block(ordinary);
+        let value = self.load_place_without_origin(place)?;
+        let boxed = self.ensure_opaque(value)?;
+        let transferred = self.transfer_opaque_arg(&boxed);
+        self.builder.ins().jump(merge, &[transferred]);
+        self.builder.switch_to_block(merge);
+        self.builder.seal_block(merge);
+        let result = self.builder.block_params(merge)[0];
+        let ty = direct_type_to_type(&self.type_of_place(place)?);
+        self.mark_temporary_opaque_owned(&ValueRef {
+            values: vec![result],
+            ty: DirectType::Opaque(ty),
+        });
+        Ok(result)
+    }
+
+    fn read_borrowed_handle(
+        &mut self,
+        handle: Value,
+        target: &DirectType,
+    ) -> std::result::Result<ValueRef, String> {
+        let value = match target {
+            DirectType::Opaque(ty) => {
+                let retained = self.retain_opaque_handle(handle);
+                Ok(self.owned_opaque_result(vec![retained], ty.clone()))
+            }
+            DirectType::Union(union) => {
+                let union = union.clone();
+                let call = self.builder.ins().call(self.union_tag, &[handle]);
+                let mut words = vec![self.builder.inst_results(call)[0]];
+                words.extend(
+                    (0..union.payload_words).map(|_| self.builder.ins().iconst(types::I64, 0)),
+                );
+                let result =
+                    self.switch_on_union_tag(&union, &words, target, |this, index, _| {
+                        let member_ty = union.member(index)?.clone();
+                        let payload = this.project_borrowed_handle(
+                            handle,
+                            &format!("__union_payload_{index}"),
+                            false,
+                            &direct_type_to_type(&member_ty),
+                        )?;
+                        let member = this.read_borrowed_handle(payload, &member_ty)?;
+                        let member_words = this.transfer_values(&member);
+                        let member = ValueRef {
+                            values: member_words,
+                            ty: member_ty,
+                        };
+                        let words = this.union_words_from_member(&union, index, member)?;
+                        let value = ValueRef {
+                            values: words,
+                            ty: target.clone(),
+                        };
+                        this.mark_temporary_union_owned(&value);
+                        Ok(value)
+                    })?;
+                Ok(result)
+            }
+            DirectType::PlainClass(class) => {
+                let mut words = Vec::new();
+                for field in &class.fields {
+                    let projected = self.project_borrowed_handle(
+                        handle,
+                        &field.name,
+                        false,
+                        &direct_type_to_type(&field.ty),
+                    )?;
+                    words.extend(self.read_borrowed_handle(projected, &field.ty)?.values);
+                }
+                Ok(ValueRef {
+                    values: words,
+                    ty: target.clone(),
+                })
+            }
+            _ => self.coerce_value(
+                ValueRef {
+                    values: vec![handle],
+                    ty: DirectType::Opaque(direct_type_to_type(target)),
+                },
+                target,
+            ),
+        }?;
+        if matches!(
+            target,
+            DirectType::Opaque(_) | DirectType::Union(_) | DirectType::PlainClass(_)
+        ) {
+            self.borrowed_value_origins
+                .insert(value.values.clone(), handle);
+        }
+        Ok(value)
+    }
+
     fn load_place(&mut self, place: &str) -> std::result::Result<ValueRef, String> {
+        let root = place.split('.').next().unwrap_or(place);
+        if self.borrowed_place_vars.contains_key(root) {
+            let ty = self.type_of_place(place)?;
+            let handle = self.borrow_place_origin(place, false)?;
+            if self.definite_borrowed_roots.contains(root) {
+                return self.read_borrowed_handle(handle, &ty);
+            }
+            let borrowed = self.builder.create_block();
+            let ordinary = self.builder.create_block();
+            let merge = self.builder.create_block();
+            for abi in ty.abi_types() {
+                self.builder.append_block_param(merge, abi);
+            }
+            let active = self.builder.ins().icmp_imm(IntCC::NotEqual, handle, 0);
+            self.builder
+                .ins()
+                .brif(active, borrowed, &[], ordinary, &[]);
+            let baseline = self.owned_opaque_temporaries.clone();
+            self.builder.switch_to_block(borrowed);
+            self.builder.seal_block(borrowed);
+            let value = self.read_borrowed_handle(handle, &ty)?;
+            let values = self.transfer_values(&value);
+            self.release_temporary_owned_since(&baseline);
+            self.builder.ins().jump(merge, &values);
+            self.builder.switch_to_block(ordinary);
+            self.builder.seal_block(ordinary);
+            self.owned_opaque_temporaries = baseline.clone();
+            let loaded = self.load_place_without_origin(place)?;
+            let value = self.coerce_value(loaded, &ty)?;
+            let values = self.transfer_values(&value);
+            self.release_temporary_owned_since(&baseline);
+            self.builder.ins().jump(merge, &values);
+            self.builder.switch_to_block(merge);
+            self.builder.seal_block(merge);
+            self.owned_opaque_temporaries = baseline;
+            let value = ValueRef {
+                values: self.builder.block_params(merge).to_vec(),
+                ty,
+            };
+            self.mark_call_result_owned(&value);
+            if matches!(&value.ty, DirectType::Union(_) | DirectType::PlainClass(_)) {
+                self.borrowed_value_origins
+                    .insert(value.values.clone(), handle);
+            }
+            return Ok(value);
+        }
+        self.load_place_without_origin(place)
+    }
+
+    fn load_place_without_origin(&mut self, place: &str) -> std::result::Result<ValueRef, String> {
         let resolved = self.resolve_view_place(place)?;
         if resolved.alternatives.len() == 1 && resolved.alternatives[0].conditions.is_empty() {
             return self.load_alternative(&resolved.alternatives[0]);
@@ -9801,17 +10624,16 @@ impl<'a> FunctionCompiler<'a> {
         self.load_selected_view_place(place, resolved)
     }
 
-    /// Begins an element or entry loan on the direct backend: the selector
-    /// is evaluated once into its own variable (a non-Copy key is owned by
-    /// the loan and released with it), the collection is probed so a
-    /// missing position or key traps now, and every alternative of the
-    /// collection's view place gains the selection.
+    /// Resolves an element or entry once and retains its physical owner.
+    /// Missing positions trap now; dictionary descriptors retain the selected
+    /// entry ordinal, so the selector key need not live with the loan.
     fn begin_element_loan(
         &mut self,
         loan: &str,
         source: &str,
         selector: &Operand,
         projection: &str,
+        mutable: bool,
         span: Span,
     ) -> std::result::Result<(), String> {
         let collection_ty = direct_type_to_type(&self.type_of_place(source)?);
@@ -9827,41 +10649,57 @@ impl<'a> FunctionCompiler<'a> {
             other => {
                 return Err(format!(
                     "direct backend cannot begin element loan `{loan}` on `{other}`"
-                ));
+                ))
             }
         };
-        // The loan's local carries the type the selection reaches.
-        let element_type = direct_type_to_type(&self.local_type(loan)?);
+        let collection = self.borrow_place_origin(source, mutable)?;
         let loaded = self.load_operand_for_target(selector, &selector_ty)?;
         let selected = self.coerce_value(loaded, &selector_ty)?;
-        let words = self.transfer_values(&selected);
-        let abi = selector_ty.abi_types()[0];
-        let variable = Variable::from_u32(self.next_variable_index as u32);
-        self.next_variable_index += 1;
-        self.builder.declare_var(variable, abi);
-        self.builder.def_var(variable, words[0]);
-        if matches!(selector_ty, DirectType::Opaque(_)) {
-            self.view_element_keys.insert(loan.to_string(), variable);
-        }
-        let selector = DirectElementSelector {
-            variable,
-            selector_ty,
-            element_type,
-            kind,
-            projection: projection.to_string(),
-            span,
+        let selected_word = match kind {
+            DirectElementKind::List => selected.values[0],
+            DirectElementKind::Dict => self.ensure_opaque(selected)?.values[0],
         };
+        let element_type = direct_type_to_type(&self.local_type(loan)?);
+        let encoded = crate::native_runtime::canonical_runtime_type_name(&element_type);
+        let (type_ptr, type_len) = self.string_constant(encoded.as_bytes())?;
+        let (projection_ptr, projection_len) = self.string_constant(projection.as_bytes())?;
+        let kind_word = self
+            .builder
+            .ins()
+            .iconst(types::I64, i64::from(kind == DirectElementKind::Dict));
+        let mutable_word = self.builder.ins().iconst(types::I64, i64::from(mutable));
+        let (line, column) = self.span_operands(span);
+        let call = self.builder.ins().call(
+            self.place_borrow_element,
+            &[
+                collection,
+                kind_word,
+                selected_word,
+                projection_ptr,
+                projection_len,
+                mutable_word,
+                type_ptr,
+                type_len,
+                line,
+                column,
+            ],
+        );
+        let handle = self.builder.inst_results(call)[0];
+        self.bind_borrowed_place(loan, handle)?;
+        let variable = self.borrowed_place_vars[loan];
         let mut resolved = self.resolve_view_place(source)?;
         for alternative in &mut resolved.alternatives {
-            alternative.elements.push(selector.clone());
+            alternative.elements.push(DirectElementSelector {
+                variable,
+                descriptor: Some(variable),
+                selector_ty: selector_ty.clone(),
+                element_type: element_type.clone(),
+                kind,
+                projection: String::new(),
+                span,
+            });
         }
         self.view_places.insert(loan.to_string(), resolved);
-        // Bounds or presence are checked once at creation: probe the
-        // selected slot through the loan and drop the copy.
-        let baseline = self.owned_opaque_temporaries.clone();
-        let probe = self.load_place(loan)?;
-        drop(probe);
-        self.release_temporary_owned_since(&baseline);
         Ok(())
     }
 
@@ -9884,6 +10722,17 @@ impl<'a> FunctionCompiler<'a> {
             return self.load_static_place(&alternative.place);
         };
         let element_type = last.element_type.clone();
+        if let Some(descriptor) = last.descriptor {
+            let descriptor = self.builder.use_var(descriptor);
+            let target = ensure_direct_type(&element_type, &self.classes, "borrowed element")?;
+            let descriptor = self.project_borrowed_handle(
+                descriptor,
+                &last.projection,
+                false,
+                &direct_type_to_type(&target),
+            )?;
+            return self.read_borrowed_handle(descriptor, &target);
+        }
         let (collection, projection) = self.load_element_path_root(&alternative.place)?;
         let path = self.element_path_operands(&projection, &alternative.elements)?;
         let inst = self.builder.ins().call(
@@ -9911,6 +10760,25 @@ impl<'a> FunctionCompiler<'a> {
     ) -> std::result::Result<(), String> {
         if alternative.elements.is_empty() {
             return self.store_static_place(&alternative.place, value);
+        }
+        if let Some(last) = alternative.elements.last() {
+            if let Some(descriptor) = last.descriptor {
+                let descriptor = self.builder.use_var(descriptor);
+                let target =
+                    ensure_direct_type(&last.element_type, &self.classes, "borrowed element")?;
+                let descriptor = self.project_borrowed_handle(
+                    descriptor,
+                    &last.projection,
+                    true,
+                    &direct_type_to_type(&target),
+                )?;
+                let stored = self.ensure_opaque(value)?;
+                let stored = self.transfer_owned_opaque_value(&stored);
+                self.builder
+                    .ins()
+                    .call(self.place_store_owned, &[descriptor, stored]);
+                return Ok(());
+            }
         }
         let (collection, projection) = self.load_element_path_root(&alternative.place)?;
         let path = self.element_path_operands(&projection, &alternative.elements)?;
@@ -10053,6 +10921,10 @@ impl<'a> FunctionCompiler<'a> {
         loan: &str,
         origin: &str,
     ) -> std::result::Result<(), String> {
+        let mutable = self
+            .mutable_borrowed_roots
+            .contains(loan.split('.').next().unwrap_or(loan));
+        let selected_origin = self.borrow_place_origin(loan, mutable)?;
         let sources = self.resolve_view_place(loan)?;
         let origins = self.resolve_view_place(origin)?;
         let mut alternatives = Vec::<(String, Vec<(Variable, i64)>)>::new();
@@ -10115,13 +10987,13 @@ impl<'a> FunctionCompiler<'a> {
                     .ins()
                     .brif(selected, set_block, &[], next_block, &[]);
                 self.builder.switch_to_block(set_block);
-                self.set_returned_view_projection_value(&projection)?;
+                self.set_returned_view_projection_value(&projection, selected_origin)?;
                 self.builder.ins().jump(merge, &[]);
                 self.builder.seal_block(set_block);
                 self.builder.switch_to_block(next_block);
                 self.builder.seal_block(next_block);
             } else {
-                self.set_returned_view_projection_value(&projection)?;
+                self.set_returned_view_projection_value(&projection, selected_origin)?;
                 self.builder.ins().jump(merge, &[]);
             }
         }
@@ -10133,11 +11005,12 @@ impl<'a> FunctionCompiler<'a> {
     fn set_returned_view_projection_value(
         &mut self,
         projection: &str,
+        origin: Value,
     ) -> std::result::Result<(), String> {
         let (projection_ptr, projection_len) = self.string_constant(projection.as_bytes())?;
         self.builder.ins().call(
-            self.set_returned_view_projection,
-            &[projection_ptr, projection_len],
+            self.set_returned_view_place,
+            &[projection_ptr, projection_len, origin],
         );
         Ok(())
     }
@@ -10476,6 +11349,9 @@ impl<'a> FunctionCompiler<'a> {
                     || matches!(source_ty, Type::Named(name, _) if name == "Unknown")
                     || matches!(source_ty, Type::TypeParam(_))
                 {
+                    if self.borrowed_value_origins.contains_key(&value.values) {
+                        return self.read_borrowed_handle(value.values[0], target);
+                    }
                     return self.unbox_inline_union(&union, value.values[0]);
                 }
             }
@@ -10798,8 +11674,59 @@ impl<'a> FunctionCompiler<'a> {
     }
 
     fn store_place(&mut self, place: &str, value: ValueRef) -> std::result::Result<(), String> {
+        let root = place.split('.').next().unwrap_or(place);
+        if self.borrowed_place_vars.contains_key(root) {
+            let origin = self.borrow_place_origin(place, true)?;
+            return self.store_with_optional_origin(place, value, origin, false);
+        }
         let resolved = self.resolve_view_place(place)?;
         self.store_resolved_view_place(resolved, value)
+    }
+
+    /// An alias assignment replaces its selected storage immediately. Legacy
+    /// inline arguments still use their ABI words and final writeback.
+    fn store_with_optional_origin(
+        &mut self,
+        place: &str,
+        value: ValueRef,
+        origin: Value,
+        final_writeback: bool,
+    ) -> std::result::Result<(), String> {
+        let words = self.transfer_values(&value);
+        let value = ValueRef {
+            values: words,
+            ty: value.ty,
+        };
+        let baseline = self.owned_opaque_temporaries.clone();
+        let selected = self.builder.create_block();
+        let legacy = self.builder.create_block();
+        let done = self.builder.create_block();
+        let active = self.builder.ins().icmp_imm(IntCC::NotEqual, origin, 0);
+        self.builder.ins().brif(active, selected, &[], legacy, &[]);
+        self.builder.switch_to_block(selected);
+        self.mark_call_result_owned(&value);
+        if !final_writeback {
+            let stored = self.ensure_opaque(value.clone())?;
+            let stored = self.transfer_owned_opaque_value(&stored);
+            self.builder
+                .ins()
+                .call(self.place_store_owned, &[origin, stored]);
+        }
+        self.release_temporary_owned_since(&baseline);
+        self.builder.ins().jump(done, &[]);
+        self.builder.seal_block(selected);
+        self.builder.switch_to_block(legacy);
+        self.owned_opaque_temporaries = baseline.clone();
+        self.mark_call_result_owned(&value);
+        let resolved = self.resolve_view_place(place)?;
+        self.store_resolved_view_place(resolved, value)?;
+        self.release_temporary_owned_since(&baseline);
+        self.builder.ins().jump(done, &[]);
+        self.builder.seal_block(legacy);
+        self.builder.switch_to_block(done);
+        self.builder.seal_block(done);
+        self.owned_opaque_temporaries = baseline;
+        Ok(())
     }
 
     fn store_resolved_view_place(
@@ -11270,6 +12197,45 @@ impl<'a> FunctionCompiler<'a> {
         Ok(merged)
     }
 
+    /// A shared inline union uses its active payload as the physical owner.
+    /// Primitive payloads are copied into a small owner; runtime payloads keep
+    /// their existing storage and are never consumed by the presentation.
+    fn borrow_inline_union(
+        &mut self,
+        union: &DirectUnionType,
+        words: &[Value],
+    ) -> std::result::Result<ValueRef, String> {
+        let union_type = union.union_type.clone();
+        let encoded = crate::native_runtime::canonical_runtime_type_name(&union_type);
+        let (type_ptr, type_len) = self.string_constant(encoded.as_bytes())?;
+        let target = DirectType::Opaque(union_type.clone());
+        let value = self.switch_on_union_tag(union, words, &target, |this, index, member| {
+            let member_type = direct_type_to_type(&member.ty);
+            let encoded_member = crate::native_runtime::canonical_runtime_type_name(&member_type);
+            let (member_ptr, member_len) = this.string_constant(encoded_member.as_bytes())?;
+            let payload = this.ensure_opaque(member)?;
+            let index = this.builder.ins().iconst(types::I64, index as i64);
+            let zero = this.builder.ins().iconst(types::I64, 0);
+            let call = this.builder.ins().call(
+                this.place_borrow_union,
+                &[
+                    payload.values[0],
+                    type_ptr,
+                    type_len,
+                    member_ptr,
+                    member_len,
+                    index,
+                    zero,
+                    zero,
+                ],
+            );
+            Ok(this
+                .owned_opaque_result(this.builder.inst_results(call).to_vec(), union_type.clone()))
+        })?;
+        self.mark_temporary_opaque_owned(&value);
+        Ok(value)
+    }
+
     /// Boxes an inline union into the runtime's `Value::Union` for a
     /// container, task, queue, or helper boundary.
     fn box_inline_union(
@@ -11362,6 +12328,52 @@ impl<'a> FunctionCompiler<'a> {
     }
 
     fn ensure_opaque(&mut self, value: ValueRef) -> std::result::Result<ValueRef, String> {
+        if matches!(value.ty, DirectType::Union(_) | DirectType::PlainClass(_)) {
+            if let Some(origin) = self.borrowed_value_origins.get(&value.values).copied() {
+                let borrowed = self.builder.create_block();
+                let ordinary = self.builder.create_block();
+                let merge = self.builder.create_block();
+                self.builder.append_block_param(merge, types::I64);
+                let active = self.builder.ins().icmp_imm(IntCC::NotEqual, origin, 0);
+                self.builder
+                    .ins()
+                    .brif(active, borrowed, &[], ordinary, &[]);
+                let baseline = self.owned_opaque_temporaries.clone();
+                let semantic_type = direct_type_to_type(&value.ty);
+                self.builder.switch_to_block(borrowed);
+                self.builder.seal_block(borrowed);
+                // A distinct descriptor keeps this presentation independent of
+                // other generic or concrete views of the same physical owner.
+                let handle = self.project_borrowed_handle(origin, "", false, &semantic_type)?;
+                self.owned_opaque_temporaries.opaque.remove(&handle);
+                self.release_temporary_owned_since(&baseline);
+                self.builder.ins().jump(merge, &[handle]);
+                self.builder.switch_to_block(ordinary);
+                self.builder.seal_block(ordinary);
+                self.owned_opaque_temporaries = baseline.clone();
+                let boxed = match &value.ty {
+                    DirectType::Union(union) => self.borrow_inline_union(union, &value.values)?,
+                    _ => self.ensure_opaque_without_origin(value.clone())?,
+                };
+                let handle = self.transfer_opaque_arg(&boxed);
+                self.release_temporary_owned_since(&baseline);
+                self.builder.ins().jump(merge, &[handle]);
+                self.builder.switch_to_block(merge);
+                self.builder.seal_block(merge);
+                self.owned_opaque_temporaries = baseline;
+                return Ok(self.owned_opaque_result(
+                    self.builder.block_params(merge).to_vec(),
+                    semantic_type,
+                ));
+            }
+        }
+        self.ensure_opaque_without_origin(value)
+    }
+
+    fn ensure_opaque_without_origin(
+        &mut self,
+        value: ValueRef,
+    ) -> std::result::Result<ValueRef, String> {
         match value.ty {
             DirectType::Callable(ref callable) => {
                 let signature = callable.signature.clone();
@@ -12321,7 +13333,7 @@ impl<'a> FunctionCompiler<'a> {
         values: &mut Vec<Value>,
     ) -> std::result::Result<(), String> {
         for (name, ty) in self.writeback_locals.clone() {
-            let current = self.load_root(&name)?;
+            let current = self.load_place(&name)?;
             let coerced = self.coerce_value(current, &ty)?;
             values.extend(self.export_return_value(coerced));
         }
@@ -12385,24 +13397,6 @@ impl<'a> FunctionCompiler<'a> {
             _ => {}
         }
         Ok((result, writebacks))
-    }
-
-    fn apply_writeback_places(
-        &mut self,
-        places: &[String],
-        values: Vec<ValueRef>,
-    ) -> std::result::Result<(), String> {
-        if places.len() != values.len() {
-            return Err(format!(
-                "direct backend expected {} writeback values but received {}",
-                places.len(),
-                values.len()
-            ));
-        }
-        for (place, value) in places.iter().zip(values) {
-            self.store_place(place, value)?;
-        }
-        Ok(())
     }
 
     fn emit_cleanup_for_place(
@@ -12508,28 +13502,63 @@ impl<'a> FunctionCompiler<'a> {
             .get(&method_function_name)
             .cloned()
             .unwrap_or_default();
+        let passings = self
+            .function_param_passings
+            .get(&method_function_name)
+            .cloned()
+            .unwrap_or_default();
         let mut lowered_args = Vec::new();
         let mut writeback_places = Vec::new();
-        let mut mutable_sink_places = vec![None; expected.len()];
+        let mut argument_sinks = Vec::with_capacity(expected.len());
         let receiver_expected = expected.first().cloned().unwrap_or(object.ty.clone());
-        let receiver = self.coerce_value(object.clone(), &receiver_expected)?;
+        let receiver_passing = method.receiver.unwrap_or(MirReceiverKind::Value);
+        let receiver_origin = if let Some(place) = receiver_place {
+            self.argument_borrow_origin(
+                &Operand::Place(place.to_string()),
+                (receiver_passing == MirReceiverKind::BorrowMut).then_some(place),
+                receiver_passing,
+            )?
+        } else {
+            self.builder.ins().iconst(types::I64, 0)
+        };
+        let receiver = if let Some(place) =
+            receiver_place.filter(|_| receiver_passing != MirReceiverKind::Value)
+        {
+            self.load_call_argument(
+                &Operand::Place(place.to_string()),
+                &receiver_expected,
+                receiver_origin,
+            )?
+        } else {
+            self.coerce_value(object, &receiver_expected)?
+        };
         let transferred = self.transfer_values(&receiver);
         lowered_args.extend(transferred);
-        if method.receiver == Some(MirReceiverKind::BorrowMut) {
+        let receiver_writeback = if receiver_passing == MirReceiverKind::BorrowMut {
             let Some(place) = receiver_place else {
                 return Err(format!(
                     "direct backend does not yet support temporary mutable receiver method `{}.{}`",
                     class_name, field
                 ));
             };
-            writeback_places.push(place.to_string());
-            if let Some(slot) = mutable_sink_places.first_mut() {
-                *slot = Some(place.to_string());
-            }
-        }
+            writeback_places.push((place.to_string(), receiver_origin));
+            Some(place)
+        } else {
+            None
+        };
+        argument_sinks.push(self.sink_for_argument(receiver_origin, receiver_writeback)?);
         for (index, argument) in args.iter().enumerate() {
+            let passing = passings
+                .get(index + 1)
+                .copied()
+                .unwrap_or(MirReceiverKind::Value);
+            let origin = self.argument_borrow_origin(
+                &argument.value,
+                argument.writeback_place.as_deref(),
+                passing,
+            )?;
             let loaded = if let Some(expected_ty) = expected.get(index + 1) {
-                self.load_operand_for_target(&argument.value, expected_ty)?
+                self.load_call_argument(&argument.value, expected_ty, origin)?
             } else {
                 self.load_operand(&argument.value)?
             };
@@ -12539,32 +13568,28 @@ impl<'a> FunctionCompiler<'a> {
                 loaded
             };
             if let Some(place) = &argument.writeback_place {
-                writeback_places.push(place.clone());
-                if let Some(slot) = mutable_sink_places.get_mut(index + 1) {
-                    *slot = Some(place.clone());
-                }
+                writeback_places.push((place.clone(), origin));
             }
+            argument_sinks
+                .push(self.sink_for_argument(origin, argument.writeback_place.as_deref())?);
             let transferred = self.transfer_values(&coerced);
             lowered_args.extend(transferred);
         }
-        let mutable_sinks = if mutable_sink_places.iter().any(Option::is_some) {
-            let mut sinks = Vec::with_capacity(mutable_sink_places.len());
-            for place in &mutable_sink_places {
-                sinks.push(match place {
-                    Some(place) => self.mutable_sink_for_place(place)?,
-                    None => self.builder.ins().iconst(types::I64, 0),
-                });
-            }
-            self.install_direct_mutable_sinks(&sinks)?;
-            sinks
-        } else {
-            Vec::new()
-        };
+        self.install_direct_mutable_sinks(&argument_sinks)?;
         let inst = self.builder.ins().call(func_ref, &lowered_args);
         let results = self.builder.inst_results(inst).to_vec();
-        self.release_mutable_sinks(mutable_sinks);
+        self.release_mutable_sinks(argument_sinks);
         let (result, writebacks) = self.split_call_results(&method_function_name, results)?;
-        self.apply_writeback_places(&writeback_places, writebacks)?;
+        if writeback_places.len() != writebacks.len() {
+            return Err(format!(
+                "direct backend expected {} writeback values but received {}",
+                writeback_places.len(),
+                writebacks.len()
+            ));
+        }
+        for ((place, origin), value) in writeback_places.into_iter().zip(writebacks) {
+            self.store_with_optional_origin(&place, value, origin, true)?;
+        }
         Ok(result)
     }
 
@@ -12997,19 +14022,25 @@ impl<'a> FunctionCompiler<'a> {
                     "shuffle" => {
                         let ordered = ordered_named_args(&["values"], args)?;
                         let argument = ordered[0];
-                        let vector = self.load_operand(&argument.value)?;
-                        let vector = self.ensure_opaque(vector)?;
-                        let _ = self
-                            .builder
-                            .ins()
-                            .call(self.rng_shuffle, &[object.values[0], vector.values[0]]);
                         let Some(place) = &argument.writeback_place else {
                             return Err(
                                 "direct backend expected `shuffle()` to carry a mutable argument writeback place"
                                     .to_string(),
                             );
                         };
-                        self.store_place(place, vector)?;
+                        let target = self.type_of_place(place)?;
+                        let origin = self.argument_borrow_origin(
+                            &argument.value,
+                            Some(place),
+                            MirReceiverKind::BorrowMut,
+                        )?;
+                        let vector = self.load_call_argument(&argument.value, &target, origin)?;
+                        let vector = self.ensure_opaque(vector)?;
+                        let _ = self
+                            .builder
+                            .ins()
+                            .call(self.rng_shuffle, &[object.values[0], vector.values[0]]);
+                        self.store_builtin_receiver(place, vector)?;
                         Ok(unit_value(&mut self.builder))
                     }
                     _ => Err(format!(
@@ -13124,7 +14155,7 @@ impl<'a> FunctionCompiler<'a> {
                             ],
                         );
                         if let Some(place) = receiver_place {
-                            self.store_place(place, object.clone())?;
+                            self.store_builtin_receiver(place, object.clone())?;
                         }
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
@@ -13141,7 +14172,7 @@ impl<'a> FunctionCompiler<'a> {
                         );
                         self.release_opaque_handle(self.builder.inst_results(inst)[0]);
                         if let Some(place) = receiver_place {
-                            self.store_place(place, object.clone())?;
+                            self.store_builtin_receiver(place, object.clone())?;
                         }
                         Ok(unit_value(&mut self.builder))
                     }
@@ -13204,7 +14235,7 @@ impl<'a> FunctionCompiler<'a> {
                         );
                         self.release_opaque_handle(self.builder.inst_results(inst)[0]);
                         if let Some(place) = receiver_place {
-                            self.store_place(place, object.clone())?;
+                            self.store_builtin_receiver(place, object.clone())?;
                         }
                         Ok(unit_value(&mut self.builder))
                     }
@@ -13415,7 +14446,7 @@ impl<'a> FunctionCompiler<'a> {
                             .call(self.vec_push_in_place, &[object.values[0], value]);
                         self.release_opaque_handle(self.builder.inst_results(result)[0]);
                         if let Some(place) = receiver_place {
-                            self.store_place(place, object.clone())?;
+                            self.store_builtin_receiver(place, object.clone())?;
                         }
                         Ok(unit_value(&mut self.builder))
                     }
@@ -13444,7 +14475,7 @@ impl<'a> FunctionCompiler<'a> {
                             &[object.values[0], zero, index, opcode],
                         );
                         if let Some(place) = receiver_place {
-                            self.store_place(place, object.clone())?;
+                            self.store_builtin_receiver(place, object.clone())?;
                         }
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
@@ -13512,7 +14543,7 @@ impl<'a> FunctionCompiler<'a> {
                             self.vec_take_index_in_place,
                             &[object.values[0], index.values[0]],
                         );
-                        self.store_place(receiver_place, object.clone())?;
+                        self.store_builtin_receiver(receiver_place, object.clone())?;
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
                             optional_type(element_ty),
@@ -13573,7 +14604,7 @@ impl<'a> FunctionCompiler<'a> {
                             &[object.values[0], index.values[0], value],
                         );
                         if let Some(place) = receiver_place {
-                            self.store_place(place, object.clone())?;
+                            self.store_builtin_receiver(place, object.clone())?;
                         }
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
@@ -13622,7 +14653,7 @@ impl<'a> FunctionCompiler<'a> {
                         );
                         self.release_opaque_handle(self.builder.inst_results(result)[0]);
                         if let Some(place) = receiver_place {
-                            self.store_place(place, object.clone())?;
+                            self.store_builtin_receiver(place, object.clone())?;
                         }
                         Ok(unit_value(&mut self.builder))
                     }
@@ -13642,7 +14673,7 @@ impl<'a> FunctionCompiler<'a> {
                             &[object.values[0], value.values[0], zero, opcode],
                         );
                         if let Some(place) = receiver_place {
-                            self.store_place(place, object.clone())?;
+                            self.store_builtin_receiver(place, object.clone())?;
                         }
                         self.release_opaque_handle(self.builder.inst_results(inst)[0]);
                         Ok(unit_value(&mut self.builder))
@@ -13688,7 +14719,7 @@ impl<'a> FunctionCompiler<'a> {
                             &[object.values[0], first.values[0], second.values[0]],
                         );
                         if let Some(place) = receiver_place {
-                            self.store_place(place, object.clone())?;
+                            self.store_builtin_receiver(place, object.clone())?;
                         }
                         let _ = inst;
                         Ok(unit_value(&mut self.builder))
@@ -13729,7 +14760,7 @@ impl<'a> FunctionCompiler<'a> {
                             &[object.values[0], index.values[0], value],
                         );
                         if let Some(place) = receiver_place {
-                            self.store_place(place, object.clone())?;
+                            self.store_builtin_receiver(place, object.clone())?;
                         }
                         let _ = inst;
                         Ok(unit_value(&mut self.builder))
@@ -13745,7 +14776,7 @@ impl<'a> FunctionCompiler<'a> {
                             .call(self.vec_clear_in_place, &[object.values[0]]);
                         self.release_opaque_handle(self.builder.inst_results(result)[0]);
                         if let Some(place) = receiver_place {
-                            self.store_place(place, object.clone())?;
+                            self.store_builtin_receiver(place, object.clone())?;
                         }
                         Ok(unit_value(&mut self.builder))
                     }
@@ -13760,7 +14791,7 @@ impl<'a> FunctionCompiler<'a> {
                             .call(self.vec_reverse_in_place, &[object.values[0]]);
                         self.release_opaque_handle(self.builder.inst_results(result)[0]);
                         if let Some(place) = receiver_place {
-                            self.store_place(place, object.clone())?;
+                            self.store_builtin_receiver(place, object.clone())?;
                         }
                         Ok(unit_value(&mut self.builder))
                     }
@@ -13780,7 +14811,7 @@ impl<'a> FunctionCompiler<'a> {
                             .call(self.vec_extend_in_place, &[object.values[0], value]);
                         self.release_opaque_handle(self.builder.inst_results(result)[0]);
                         if let Some(place) = receiver_place {
-                            self.store_place(place, object.clone())?;
+                            self.store_builtin_receiver(place, object.clone())?;
                         }
                         Ok(unit_value(&mut self.builder))
                     }
@@ -13805,7 +14836,7 @@ impl<'a> FunctionCompiler<'a> {
                         );
                         self.release_opaque_handle(self.builder.inst_results(inst)[0]);
                         if let Some(place) = receiver_place {
-                            self.store_place(place, object.clone())?;
+                            self.store_builtin_receiver(place, object.clone())?;
                         }
                         Ok(unit_value(&mut self.builder))
                     }
@@ -13918,7 +14949,7 @@ impl<'a> FunctionCompiler<'a> {
                             .ins()
                             .call(self.map_set_in_place, &[object.values[0], key, value]);
                         if let Some(place) = receiver_place {
-                            self.store_place(place, object.clone())?;
+                            self.store_builtin_receiver(place, object.clone())?;
                         }
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
@@ -13956,7 +14987,7 @@ impl<'a> FunctionCompiler<'a> {
                         );
                         self.release_opaque_handle(self.builder.inst_results(result)[0]);
                         if let Some(place) = receiver_place {
-                            self.store_place(place, object.clone())?;
+                            self.store_builtin_receiver(place, object.clone())?;
                         }
                         Ok(unit_value(&mut self.builder))
                     }
@@ -13974,7 +15005,7 @@ impl<'a> FunctionCompiler<'a> {
                             .ins()
                             .call(self.map_remove_in_place, &[object.values[0], key.values[0]]);
                         if let Some(place) = receiver_place {
-                            self.store_place(place, object.clone())?;
+                            self.store_builtin_receiver(place, object.clone())?;
                         }
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
@@ -14050,7 +15081,7 @@ impl<'a> FunctionCompiler<'a> {
                             .call(self.map_clear_in_place, &[object.values[0]]);
                         self.release_opaque_handle(self.builder.inst_results(result)[0]);
                         if let Some(place) = receiver_place {
-                            self.store_place(place, object.clone())?;
+                            self.store_builtin_receiver(place, object.clone())?;
                         }
                         Ok(unit_value(&mut self.builder))
                     }
@@ -14070,7 +15101,7 @@ impl<'a> FunctionCompiler<'a> {
                             .call(self.map_extend_in_place, &[object.values[0], value]);
                         self.release_opaque_handle(self.builder.inst_results(result)[0]);
                         if let Some(place) = receiver_place {
-                            self.store_place(place, object.clone())?;
+                            self.store_builtin_receiver(place, object.clone())?;
                         }
                         Ok(unit_value(&mut self.builder))
                     }
@@ -14095,7 +15126,7 @@ impl<'a> FunctionCompiler<'a> {
                         );
                         self.release_opaque_handle(self.builder.inst_results(inst)[0]);
                         if let Some(place) = receiver_place {
-                            self.store_place(place, object.clone())?;
+                            self.store_builtin_receiver(place, object.clone())?;
                         }
                         Ok(unit_value(&mut self.builder))
                     }
@@ -14175,7 +15206,7 @@ impl<'a> FunctionCompiler<'a> {
                             .ins()
                             .call(self.set_insert_in_place, &[object.values[0], value]);
                         if let Some(place) = receiver_place {
-                            self.store_place(place, object.clone())?;
+                            self.store_builtin_receiver(place, object.clone())?;
                         }
                         Ok(unit_value(&mut self.builder))
                     }
@@ -14197,7 +15228,7 @@ impl<'a> FunctionCompiler<'a> {
                             &[object.values[0], value.values[0], zero, opcode],
                         );
                         if let Some(place) = receiver_place {
-                            self.store_place(place, object.clone())?;
+                            self.store_builtin_receiver(place, object.clone())?;
                         }
                         self.release_opaque_handle(self.builder.inst_results(inst)[0]);
                         Ok(unit_value(&mut self.builder))
@@ -14215,7 +15246,7 @@ impl<'a> FunctionCompiler<'a> {
                         );
                         self.release_opaque_handle(self.builder.inst_results(inst)[0]);
                         if let Some(place) = receiver_place {
-                            self.store_place(place, object.clone())?;
+                            self.store_builtin_receiver(place, object.clone())?;
                         }
                         Ok(unit_value(&mut self.builder))
                     }
@@ -14240,7 +15271,7 @@ impl<'a> FunctionCompiler<'a> {
                         );
                         self.release_opaque_handle(self.builder.inst_results(inst)[0]);
                         if let Some(place) = receiver_place {
-                            self.store_place(place, object.clone())?;
+                            self.store_builtin_receiver(place, object.clone())?;
                         }
                         Ok(unit_value(&mut self.builder))
                     }
@@ -14283,7 +15314,7 @@ impl<'a> FunctionCompiler<'a> {
                             self.set_take_index_in_place,
                             &[object.values[0], index.values[0]],
                         );
-                        self.store_place(receiver_place, object.clone())?;
+                        self.store_builtin_receiver(receiver_place, object.clone())?;
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
                             optional_type(element_ty),
@@ -17851,7 +18882,8 @@ fn validate_function_in_reachable(
                 Instruction::Safepoint => {}
                 Instruction::BeginElementLoan { selector, .. }
                 | Instruction::ReborrowElement { selector, .. } => validate_operand(selector)?,
-                Instruction::BeginLoan { .. }
+                Instruction::BeginUnionLoan { .. }
+                | Instruction::BeginLoan { .. }
                 | Instruction::BeginReturnedLoan { .. }
                 | Instruction::Reborrow { .. }
                 | Instruction::ReadLoan { .. }
@@ -20018,6 +21050,137 @@ fn thunk_switch_on_tag(
     builder.switch_to_block(merge);
     builder.seal_block(merge);
     Ok(builder.block_params(merge).to_vec())
+}
+
+/// Boxes a borrowed call argument without materializing its referent. The
+/// descriptor and input ABI words are borrowed by this helper; the caller
+/// remains responsible for releasing transferred words it no longer uses.
+fn borrowed_box_thunk_value(
+    codegen: &mut NativeCodegen<'_>,
+    builder: &mut FunctionBuilder<'_>,
+    values: &[Value],
+    ty: &DirectType,
+    origin: Value,
+) -> std::result::Result<Value, String> {
+    let borrowed = builder.create_block();
+    let ordinary = builder.create_block();
+    let merge = builder.create_block();
+    builder.append_block_param(merge, types::I64);
+    let has_origin = builder.ins().icmp_imm(IntCC::NotEqual, origin, 0);
+    builder.ins().brif(has_origin, borrowed, &[], ordinary, &[]);
+    builder.switch_to_block(borrowed);
+    builder.seal_block(borrowed);
+    let retain = codegen
+        .object
+        .declare_func_in_func(codegen.retain_value, builder.func);
+    let retained = builder.ins().call(retain, &[origin]);
+    let retained = builder.inst_results(retained)[0];
+    builder.ins().jump(merge, &[retained]);
+    builder.switch_to_block(ordinary);
+    builder.seal_block(ordinary);
+    let boxed = box_thunk_value(codegen, builder, values, ty)?;
+    builder.ins().jump(merge, &[boxed]);
+    builder.switch_to_block(merge);
+    builder.seal_block(merge);
+    Ok(builder.block_params(merge)[0])
+}
+
+/// The borrowed counterpart of thunk unboxing. Runtime-object words adopt
+/// `raw`; inline aggregate words own any projected descriptor handles, and
+/// the caller releases the original aggregate handle after extracting them.
+fn borrowed_unbox_thunk_value(
+    codegen: &mut NativeCodegen<'_>,
+    builder: &mut FunctionBuilder<'_>,
+    raw: Value,
+    ty: &DirectType,
+) -> std::result::Result<Vec<Value>, String> {
+    match ty {
+        DirectType::Union(union) => {
+            let tag_fn = codegen
+                .object
+                .declare_func_in_func(codegen.union_tag, builder.func);
+            let tag_call = builder.ins().call(tag_fn, &[raw]);
+            let tag = builder.inst_results(tag_call)[0];
+            thunk_switch_on_tag(
+                builder,
+                tag,
+                union.members.len(),
+                &ty.abi_types(),
+                |builder, index| {
+                    let member = &union.members[index].ty;
+                    let payload = borrowed_thunk_projection(
+                        codegen,
+                        builder,
+                        raw,
+                        &format!("__union_payload_{index}"),
+                        &direct_type_to_type(member),
+                    )?;
+                    let values = borrowed_unbox_thunk_value(codegen, builder, payload, member)?;
+                    if !matches!(member, DirectType::Opaque(_) | DirectType::Callable(_)) {
+                        let release = codegen
+                            .object
+                            .declare_func_in_func(codegen.release_value, builder.func);
+                        builder.ins().call(release, &[payload]);
+                    }
+                    let mut words = vec![builder.ins().iconst(types::I64, index as i64)];
+                    for (value, abi) in values.into_iter().zip(member.abi_types()) {
+                        words.push(if abi == types::F64 {
+                            builder.ins().bitcast(types::I64, MemFlags::new(), value)
+                        } else {
+                            value
+                        });
+                    }
+                    while words.len() < union.payload_words + 1 {
+                        words.push(builder.ins().iconst(types::I64, 0));
+                    }
+                    Ok(words)
+                },
+            )
+        }
+        DirectType::PlainClass(class) => {
+            let mut values = Vec::new();
+            for field in &class.fields {
+                let raw_field = borrowed_thunk_projection(
+                    codegen,
+                    builder,
+                    raw,
+                    &field.name,
+                    &direct_type_to_type(&field.ty),
+                )?;
+                values.extend(borrowed_unbox_thunk_value(
+                    codegen, builder, raw_field, &field.ty,
+                )?);
+                if !matches!(field.ty, DirectType::Opaque(_) | DirectType::Callable(_)) {
+                    let release = codegen
+                        .object
+                        .declare_func_in_func(codegen.release_value, builder.func);
+                    builder.ins().call(release, &[raw_field]);
+                }
+            }
+            Ok(values)
+        }
+        _ => unbox_thunk_value(codegen, builder, raw, ty),
+    }
+}
+
+fn borrowed_thunk_projection(
+    codegen: &mut NativeCodegen<'_>,
+    builder: &mut FunctionBuilder<'_>,
+    raw: Value,
+    projection: &str,
+    ty: &Type,
+) -> std::result::Result<Value, String> {
+    let (path, path_len) = thunk_string_constant(codegen, builder, projection.as_bytes())?;
+    let encoded = crate::native_runtime::canonical_runtime_type_name(ty);
+    let (ty_ptr, ty_len) = thunk_string_constant(codegen, builder, encoded.as_bytes())?;
+    let shared = builder.ins().iconst(types::I64, 0);
+    let borrow = codegen
+        .object
+        .declare_func_in_func(codegen.place_borrow, builder.func);
+    let call = builder
+        .ins()
+        .call(borrow, &[raw, path, path_len, shared, ty_ptr, ty_len]);
+    Ok(builder.inst_results(call)[0])
 }
 
 fn box_thunk_value(

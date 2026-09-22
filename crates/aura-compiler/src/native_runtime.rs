@@ -47,10 +47,10 @@ use crate::runtime_value::{
     queue_receive_item, queue_receive_timed_out, read_file_limited,
     recv_for_registered_producers_iteration, recv_for_task_group_iteration, render_float,
     render_float32, result_err, result_ok, round_numeric_value, run_blocking_io,
-    run_lightweight_root_task_with_forced_exit_cleanup, runtime_value_to_json,
-    select_runtime_values, send_error_cancelled, send_error_closed, send_error_full,
-    send_error_timed_out, sleep_with_runtime_scheduler, slice_string_owned, slice_vec_owned,
-    spawn_lightweight_task_with_cancellation,
+    run_lightweight_root_task_with_forced_exit_cleanup, runtime_type_from_name,
+    runtime_value_to_json, select_runtime_values, send_error_cancelled, send_error_closed,
+    send_error_full, send_error_timed_out, sleep_with_runtime_scheduler, slice_string_owned,
+    slice_vec_owned, spawn_lightweight_task_with_cancellation,
     spawn_lightweight_task_with_cancellation_and_forced_exit_cleanup_and_stack_and_result_repeatability_registered,
     task_group_cleanup_should_cancel, task_result_cancelled, task_result_error, task_result_ready,
     task_result_timed_out, try_array_buffer, try_clone_array_containing_value, wait_all_cancelled,
@@ -65,8 +65,8 @@ use crate::runtime_value::{
     RuntimeSchedulerWakeReason, SendValueError, SetValue, TaskCancelledSignal, TaskGroupValue,
     TaskValue, TaskWaitStatus, TcpListenerValue, TcpStreamValue, TlsListenerValue, TlsStreamValue,
     TupleValue, UdpSocketValue, UnixListenerValue, UnixStreamValue, Value, VecValue,
-    WebSocketListenerValue, WebSocketValue, DIRECT_RUNTIME_TYPE_FIELD,
-    DIRECT_RUNTIME_TYPE_SEPARATOR,
+    WebSocketListenerValue, WebSocketValue, CANONICAL_RUNTIME_TYPE_PREFIX,
+    DIRECT_RUNTIME_TYPE_FIELD, DIRECT_RUNTIME_TYPE_SEPARATOR,
 };
 use crate::sema::Type;
 
@@ -460,15 +460,23 @@ struct DirectTaskRuntimeState {
     pending_mutable_sinks: Option<DirectPendingMutableSinks>,
     mutable_sinks: HashMap<i64, DirectMutableWritebackSink>,
     next_mutable_sink_id: i64,
+    call_handoffs: HashMap<i64, DirectPendingMutableSinks>,
+    next_call_handoff_id: i64,
 }
 
 #[derive(Default)]
 struct DirectReturnedViewFrame {
-    returned: Option<String>,
-    pending_child: Option<String>,
+    returned: Option<DirectReturnedPlace>,
+    pending_child: Option<DirectReturnedPlace>,
     mutable_sinks: Vec<i64>,
 }
 
+struct DirectReturnedPlace {
+    projection: String,
+    place: Option<DirectRetainedPlace>,
+}
+
+#[derive(Clone)]
 enum DirectPendingMutableSinks {
     Direct(Vec<i64>),
     Indirect {
@@ -478,9 +486,12 @@ enum DirectPendingMutableSinks {
 }
 
 #[derive(Clone)]
-struct DirectMutableWritebackSink {
-    slot: Arc<Mutex<DirectMutableWritebackSlot>>,
-    projection: String,
+enum DirectMutableWritebackSink {
+    Snapshot {
+        slot: Arc<Mutex<DirectMutableWritebackSlot>>,
+        projection: String,
+    },
+    SelectedPlace(DirectRetainedPlace),
 }
 
 struct DirectMutableWritebackSlot {
@@ -506,6 +517,8 @@ impl Default for DirectTaskRuntimeState {
             pending_mutable_sinks: None,
             mutable_sinks: HashMap::new(),
             next_mutable_sink_id: 1,
+            call_handoffs: HashMap::new(),
+            next_call_handoff_id: 1,
         }
     }
 }
@@ -1010,8 +1023,57 @@ fn int32_overflow_message(value: i64) -> String {
 
 pub struct OpaqueValue {
     ref_count: AtomicUsize,
-    value: RwLock<Value>,
+    storage: DirectValueStorage,
     runtime_type_name: RwLock<Option<String>>,
+}
+
+// A borrowed handle retains only its canonical owner, never the selected value.
+// All paths contain already resolved collection slots; no selector or key survives.
+enum DirectValueStorage {
+    Owned(RwLock<Value>),
+    Borrowed(DirectBorrowedPlace),
+}
+
+#[derive(Clone)]
+enum DirectResolvedStep {
+    Projection(String),
+    Index(usize),
+    Entry(usize),
+    UnionPayload,
+}
+
+struct DirectBorrowedPlace {
+    root: *mut OpaqueValue,
+    path: Vec<DirectResolvedStep>,
+    mutable: bool,
+    logical_union: Option<Type>,
+    logical_member_type: Option<Type>,
+}
+
+impl Drop for DirectBorrowedPlace {
+    fn drop(&mut self) {
+        unsafe {
+            release_untracked_value(self.root);
+        }
+    }
+}
+
+// Retains used by task-local origins are deliberately absent from the value ledger.
+struct DirectRetainedPlace(*mut OpaqueValue);
+impl Clone for DirectRetainedPlace {
+    fn clone(&self) -> Self {
+        unsafe {
+            retain_untracked_value(self.0);
+        }
+        Self(self.0)
+    }
+}
+impl Drop for DirectRetainedPlace {
+    fn drop(&mut self) {
+        unsafe {
+            release_untracked_value(self.0);
+        }
+    }
 }
 
 #[cfg(coverage)]
@@ -1189,7 +1251,7 @@ fn boxed_typed_value(value: Value, runtime_type_name: &str) -> *mut OpaqueValue 
 fn boxed_value_with_type(value: Value, runtime_type_name: Option<String>) -> *mut OpaqueValue {
     let value = Box::into_raw(Box::new(OpaqueValue {
         ref_count: AtomicUsize::new(1),
-        value: RwLock::new(value),
+        storage: DirectValueStorage::Owned(RwLock::new(value)),
         runtime_type_name: RwLock::new(runtime_type_name),
     }));
     #[cfg(coverage)]
@@ -1271,16 +1333,518 @@ unsafe fn release_untracked_value(value: *mut OpaqueValue) {
     }
 }
 
+unsafe fn direct_opaque<'a>(ptr: *mut OpaqueValue) -> &'a OpaqueValue {
+    unsafe { ptr.as_ref() }
+        .unwrap_or_else(|| runtime_error("direct runtime received a null opaque value pointer"))
+}
+
+unsafe fn direct_canonical_place<'a>(
+    ptr: *mut OpaqueValue,
+) -> (*mut OpaqueValue, &'a [DirectResolvedStep]) {
+    match &unsafe { direct_opaque(ptr) }.storage {
+        DirectValueStorage::Owned(_) => (ptr, &[]),
+        DirectValueStorage::Borrowed(place) => (place.root, &place.path),
+    }
+}
+
+fn direct_resolved_value<'a>(
+    mut value: &'a Value,
+    path: &[DirectResolvedStep],
+) -> Result<&'a Value, String> {
+    for step in path {
+        value = match (step, value) {
+            (DirectResolvedStep::Projection(field), _) => {
+                direct_value_at_path(value, &[field.as_str()], field)?
+            }
+            (DirectResolvedStep::Index(index), Value::Vec(vector)) => {
+                vector
+                    .elements
+                    .get(*index)
+                    .ok_or("resolved list slot no longer exists".to_string())?
+            }
+            (DirectResolvedStep::Entry(index), Value::Map(map)) => {
+                &map.entries
+                    .get(*index)
+                    .ok_or("resolved dict entry no longer exists".to_string())?
+                    .1
+            }
+            (DirectResolvedStep::UnionPayload, Value::Union(union)) => &union.payload,
+            _ => return Err("resolved borrowed place no longer matches its storage".to_string()),
+        };
+    }
+    Ok(value)
+}
+
+fn direct_resolved_value_mut<'a>(
+    value: &'a mut Value,
+    path: &[DirectResolvedStep],
+) -> Result<&'a mut Value, String> {
+    let Some((step, rest)) = path.split_first() else {
+        return Ok(value);
+    };
+    let next =
+        match (step, value) {
+            (DirectResolvedStep::Projection(field), value) => {
+                direct_value_at_path_mut(value, &[field.as_str()], field)?
+            }
+            (DirectResolvedStep::Index(index), Value::Vec(vector)) => vector
+                .elements
+                .get_mut(*index)
+                .ok_or("resolved list slot no longer exists".to_string())?,
+            (DirectResolvedStep::Entry(index), Value::Map(map)) => {
+                &mut map
+                    .entries
+                    .get_mut(*index)
+                    .ok_or("resolved dict entry no longer exists".to_string())?
+                    .1
+            }
+            (DirectResolvedStep::UnionPayload, Value::Union(union)) => &mut union.payload,
+            _ => return Err("resolved borrowed place no longer matches its storage".to_string()),
+        };
+    direct_resolved_value_mut(next, rest)
+}
+
+// Lock each canonical owner exactly once and in stable address order, including
+// distinct descriptors selecting siblings of the same owner. Callbacks cannot
+// invoke Aura code or recursively lock handles; all guards end before returning.
+unsafe fn with_values<T>(handles: &[*mut OpaqueValue], read: impl FnOnce(&[&Value]) -> T) -> T {
+    let places = handles
+        .iter()
+        .map(|handle| unsafe { direct_canonical_place(*handle) })
+        .collect::<Vec<_>>();
+    let mut roots = places
+        .iter()
+        .map(|(root, _)| *root as usize)
+        .collect::<Vec<_>>();
+    roots.sort_unstable();
+    roots.dedup();
+    let guards = roots
+        .iter()
+        .map(|root| {
+            let DirectValueStorage::Owned(storage) =
+                &unsafe { direct_opaque(*root as *mut OpaqueValue) }.storage
+            else {
+                unreachable!("borrowed owners are flattened");
+            };
+            storage
+                .read()
+                .unwrap_or_else(|_| runtime_error("direct runtime value lock was poisoned"))
+        })
+        .collect::<Vec<_>>();
+    let resolved = places
+        .iter()
+        .map(|(root, path)| {
+            let index = roots
+                .binary_search(&(*root as usize))
+                .expect("canonical owner is locked");
+            direct_resolved_value(&guards[index], path)
+        })
+        .collect::<Result<Vec<_>, _>>();
+    let result = match resolved {
+        Ok(values) => read(&values),
+        Err(message) => {
+            drop(guards);
+            runtime_error(message);
+        }
+    };
+    result
+}
+
 unsafe fn with_value<T>(ptr: *mut OpaqueValue, read: impl FnOnce(&Value) -> T) -> T {
-    let value = match ptr.as_ref() {
-        Some(value) => value,
-        None => runtime_error("direct runtime received a null opaque value pointer"),
+    unsafe { with_values(&[ptr], |values| read(values[0])) }
+}
+
+unsafe fn direct_logical_union(source: *mut OpaqueValue) -> Option<Type> {
+    let DirectValueStorage::Borrowed(place) = &unsafe { direct_opaque(source) }.storage else {
+        return None;
     };
-    let guard = match value.value.read() {
-        Ok(guard) => guard,
-        Err(_) => runtime_error("direct runtime value lock was poisoned"),
-    };
-    read(&guard)
+    unsafe { explicit_runtime_type_name(source) }
+        .and_then(|name| canonical_runtime_type_from_name(&name))
+        .filter(|ty| matches!(ty, Type::Union(_)))
+        .or_else(|| place.logical_union.clone())
+}
+
+unsafe fn direct_logical_member_type(source: *mut OpaqueValue) -> Option<Type> {
+    match &unsafe { direct_opaque(source) }.storage {
+        DirectValueStorage::Borrowed(place) => place.logical_member_type.clone(),
+        DirectValueStorage::Owned(_) => None,
+    }
+}
+
+fn direct_borrowed_union_index(
+    value: &Value,
+    target: &crate::sema::UnionType,
+    member_type: Option<&Type>,
+    operation: &str,
+) -> Result<usize, String> {
+    // Bare values can erase information such as float width or generic nominal
+    // arguments. Preserve the checked member identity of a logical lift. An
+    // actual union still uses its active member, including generic flattening.
+    if !matches!(value, Value::Union(_)) {
+        if let Some(member) = member_type.filter(|member| !matches!(member, Type::TypeParam(_))) {
+            if let Some(index) = target
+                .members
+                .iter()
+                .position(|candidate| crate::union_runtime::member_matches(member, candidate))
+                .or_else(|| {
+                    target
+                        .members
+                        .iter()
+                        .position(|candidate| matches!(candidate, Type::TypeParam(_)))
+                })
+            {
+                return Ok(index);
+            }
+        }
+    }
+    crate::union_runtime::aligned_member_index(value, target, operation)
+}
+
+fn direct_type_name_is_erased(name: &str) -> bool {
+    match runtime_type_from_name(name) {
+        Type::TypeParam(_) => true,
+        Type::Named(name, args) => name == "Unknown" && args.is_empty(),
+        _ => false,
+    }
+}
+
+unsafe fn direct_place_parts(
+    source: *mut OpaqueValue,
+    mutable: bool,
+) -> (*mut OpaqueValue, Vec<DirectResolvedStep>, Option<Type>) {
+    match &unsafe { direct_opaque(source) }.storage {
+        DirectValueStorage::Owned(_) => (source, Vec::new(), None),
+        DirectValueStorage::Borrowed(place) => {
+            if mutable && !place.mutable {
+                runtime_error("cannot upgrade a shared direct borrowed place");
+            }
+            (place.root, place.path.clone(), unsafe {
+                direct_logical_union(source)
+            })
+        }
+    }
+}
+
+fn direct_borrowed_handle(
+    root: *mut OpaqueValue,
+    path: Vec<DirectResolvedStep>,
+    mutable: bool,
+    logical_union: Option<Type>,
+    logical_member_type: Option<Type>,
+    runtime_type_name: Option<String>,
+) -> *mut OpaqueValue {
+    unsafe {
+        retain_untracked_value(root);
+    }
+    let value = Box::into_raw(Box::new(OpaqueValue {
+        ref_count: AtomicUsize::new(1),
+        storage: DirectValueStorage::Borrowed(DirectBorrowedPlace {
+            root,
+            path,
+            mutable,
+            logical_union,
+            logical_member_type,
+        }),
+        runtime_type_name: RwLock::new(runtime_type_name),
+    }));
+    #[cfg(coverage)]
+    DIRECT_VALUE_LIVE_COUNT.fetch_add(1, Ordering::Relaxed);
+    crate::runtime_value::representation_stats::note_opaque_box();
+    register_direct_owned_value(value);
+    value
+}
+
+fn direct_resolve_projection(
+    value: &Value,
+    projection: &str,
+    logical_union: Option<&Type>,
+    logical_member_type: Option<&Type>,
+) -> Result<Vec<DirectResolvedStep>, String> {
+    let mut value = value;
+    let mut logical_union = logical_union;
+    let mut steps = Vec::new();
+    if projection.is_empty() {
+        return Ok(steps);
+    }
+    for segment in projection.split('.') {
+        if segment.is_empty() {
+            return Err("invalid empty borrowed place projection".to_string());
+        }
+        if let Some(Type::Union(target)) = logical_union.take() {
+            let active = direct_borrowed_union_index(
+                value,
+                target,
+                logical_member_type,
+                "borrowed union projection",
+            )?;
+            if segment != DIRECT_UNION_ACTIVE_PAYLOAD_PROJECTION
+                && segment != format!("__union_payload_{active}")
+            {
+                return Err(
+                    "union payload projection does not select the active member".to_string()
+                );
+            }
+            if let Value::Union(union) = value {
+                value = &union.payload;
+                steps.push(DirectResolvedStep::UnionPayload);
+            }
+        } else if let Value::Union(union) = value {
+            if !direct_union_projection(union, segment) {
+                return Err(
+                    "union payload projection does not select the active member".to_string()
+                );
+            }
+            value = &union.payload;
+            steps.push(DirectResolvedStep::UnionPayload);
+        } else {
+            value = direct_value_at_path(value, &[segment], projection)?;
+            steps.push(DirectResolvedStep::Projection(segment.to_string()));
+        }
+    }
+    Ok(steps)
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_place_borrow(
+    source: *mut OpaqueValue,
+    path_ptr: *const u8,
+    path_len: usize,
+    mutable: i64,
+    type_ptr: *const u8,
+    type_len: usize,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let projection = decode_bytes(path_ptr, path_len);
+        let mut name = decode_bytes(type_ptr, type_len);
+        if projection.is_empty() && direct_type_name_is_erased(&name) {
+            if let Some(actual) = unsafe { effective_runtime_type_name(source) } {
+                name = actual;
+            }
+        }
+        let (root, mut path, logical_union) = unsafe { direct_place_parts(source, mutable != 0) };
+        let logical_member_type = unsafe { direct_logical_member_type(source) };
+        let projected = unsafe {
+            with_value(source, |value| {
+                direct_resolve_projection(
+                    value,
+                    &projection,
+                    logical_union.as_ref(),
+                    logical_member_type.as_ref(),
+                )
+            })
+        }
+        .unwrap_or_else(|message| runtime_error(message));
+        path.extend(projected);
+        let logical_union = if projection.is_empty() {
+            logical_union
+        } else {
+            None
+        };
+        direct_borrowed_handle(
+            root,
+            path,
+            mutable != 0,
+            logical_union,
+            if projection.is_empty() {
+                logical_member_type
+            } else {
+                None
+            },
+            (!name.is_empty()).then_some(name),
+        )
+    })
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_place_borrow_element(
+    source: *mut OpaqueValue,
+    kind: i64,
+    selector: i64,
+    projection_ptr: *const u8,
+    projection_len: usize,
+    mutable: i64,
+    type_ptr: *const u8,
+    type_len: usize,
+    line: i64,
+    column: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let projection = decode_bytes(projection_ptr, projection_len);
+        let mut name = decode_bytes(type_ptr, type_len);
+        let (root, mut path, _) = unsafe { direct_place_parts(source, mutable != 0) };
+        let handles = if kind == 1 {
+            vec![source, selector as *mut OpaqueValue]
+        } else {
+            vec![source]
+        };
+        // Resolve the selector and diagnostic text under one deduplicated read.
+        // The resulting descriptor owns neither the key nor a collection pointer.
+        let resolved = unsafe {
+            with_values(&handles, |values| {
+                let (step, value, selected_type) = match (kind, values[0]) {
+                    (0, Value::Vec(vector)) => {
+                        let len = vector.elements.len();
+                        let Some(index) = normalize_vec_index(selector, len) else {
+                            return Err((
+                                false,
+                                format!(
+                                    "list index `{selector}` is out of bounds for length `{len}"
+                                ),
+                            ));
+                        };
+                        (
+                            DirectResolvedStep::Index(index),
+                            &vector.elements[index],
+                            &vector.element_type,
+                        )
+                    }
+                    (1, Value::Map(map)) => {
+                        let Some(index) = map
+                            .entries
+                            .iter()
+                            .position(|(candidate, _)| candidate == values[1])
+                        else {
+                            return Err((
+                                true,
+                                format!("dict key `{}` was not present", values[1].render()),
+                            ));
+                        };
+                        (
+                            DirectResolvedStep::Entry(index),
+                            &map.entries[index].1,
+                            &map.value_type,
+                        )
+                    }
+                    (0, other) => {
+                        return Err((
+                            false,
+                            format!(
+                                "cannot borrow an element of non-list `{}`",
+                                value_type_name(other)
+                            ),
+                        ))
+                    }
+                    (1, other) => {
+                        return Err((
+                            false,
+                            format!(
+                                "cannot borrow an entry of non-dict `{}`",
+                                value_type_name(other)
+                            ),
+                        ))
+                    }
+                    _ => return Err((false, "invalid direct element selection kind".to_string())),
+                };
+                let mut steps = vec![step];
+                steps.extend(
+                    direct_resolve_projection(value, &projection, None, None)
+                        .map_err(|message| (false, message))?,
+                );
+                Ok((steps, selected_type.clone()))
+            })
+        };
+        match resolved {
+            Ok((steps, selected_type)) => {
+                path.extend(steps);
+                if projection.is_empty() && direct_type_name_is_erased(&name) {
+                    name = canonical_runtime_type_name(&selected_type);
+                }
+            }
+            Err((missing, message)) => {
+                if missing {
+                    let diagnostic = match runtime_span(line, column) {
+                        Some(span) => Diagnostic::coded_at("AU4003", span, message),
+                        None => Diagnostic::coded("AU4003", message),
+                    };
+                    runtime_diagnostic_error(diagnostic);
+                }
+                match runtime_span(line, column) {
+                    Some(span) => runtime_error_at(span, message),
+                    None => runtime_error(message),
+                }
+            }
+        }
+        direct_borrowed_handle(
+            root,
+            path,
+            mutable != 0,
+            None,
+            None,
+            (!name.is_empty()).then_some(name),
+        )
+    })
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_place_borrow_union(
+    source: *mut OpaqueValue,
+    union_type_ptr: *const u8,
+    union_type_len: usize,
+    member_type_ptr: *const u8,
+    member_type_len: usize,
+    member_index: i64,
+    _line: i64,
+    _column: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let name = decode_bytes(union_type_ptr, union_type_len);
+        let union_type = canonical_runtime_type_from_name(&name)
+            .unwrap_or_else(|| runtime_error("invalid borrowed union type"));
+        let member_name = decode_bytes(member_type_ptr, member_type_len);
+        let member_type = canonical_runtime_type_from_name(&member_name)
+            .unwrap_or_else(|| runtime_error("invalid borrowed union member type"));
+        let Type::Union(target) = &union_type else {
+            runtime_error("borrowed union presentation requires a union type");
+        };
+        let index = usize::try_from(member_index)
+            .unwrap_or_else(|_| runtime_error("invalid borrowed union member index"));
+        if index >= target.members.len() {
+            runtime_error("borrowed union member index is out of range");
+        }
+        let member_type = unsafe { direct_logical_member_type(source) }.unwrap_or_else(|| {
+            if matches!(member_type, Type::TypeParam(_)) {
+                unsafe { effective_runtime_type_name(source) }
+                    .map(|name| runtime_type_from_name(&name))
+                    .filter(|ty| !matches!(ty, Type::TypeParam(_) | Type::Union(_)))
+                    .unwrap_or(member_type)
+            } else {
+                member_type
+            }
+        });
+        unsafe {
+            with_value(source, |value| {
+                direct_borrowed_union_index(
+                    value,
+                    target,
+                    Some(&member_type),
+                    "borrowed union presentation",
+                )
+            })
+        }
+        .unwrap_or_else(|message| runtime_error(message));
+        let (root, path, _) = unsafe { direct_place_parts(source, false) };
+        direct_borrowed_handle(
+            root,
+            path,
+            false,
+            Some(union_type),
+            Some(member_type),
+            Some(name),
+        )
+    })
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_place_store_owned(
+    place: *mut OpaqueValue,
+    owned: *mut OpaqueValue,
+) {
+    task_runtime_boundary(|| {
+        let replacement = unsafe { consume_owned_value(owned) };
+        unsafe {
+            value_mut(place, |value| *value = replacement);
+        }
+    })
 }
 
 unsafe fn value_ref(ptr: *mut OpaqueValue) -> Value {
@@ -1303,8 +1867,6 @@ unsafe fn explicit_runtime_type_name(ptr: *mut OpaqueValue) -> Option<String> {
         None => runtime_error("direct runtime received a null opaque value pointer"),
     }
 }
-
-const CANONICAL_RUNTIME_TYPE_PREFIX: &str = "__aura_type_json_v1__:";
 
 pub(crate) fn canonical_runtime_type_name(ty: &Type) -> String {
     format!(
@@ -1361,58 +1923,6 @@ fn embedded_runtime_type_name(value: &Value) -> Option<String> {
 
 unsafe fn effective_runtime_type_name(ptr: *mut OpaqueValue) -> Option<String> {
     explicit_runtime_type_name(ptr).or_else(|| with_value(ptr, embedded_runtime_type_name))
-}
-
-fn runtime_type_from_name(name: &str) -> Type {
-    fn split_type_list(source: &str) -> Vec<Type> {
-        let mut values = Vec::new();
-        let mut bracket_depth = 0usize;
-        let mut tuple_depth = 0usize;
-        let mut start = 0usize;
-        for (index, character) in source.char_indices() {
-            match character {
-                '[' => bracket_depth += 1,
-                ']' => bracket_depth = bracket_depth.saturating_sub(1),
-                '(' => tuple_depth += 1,
-                ')' => tuple_depth = tuple_depth.saturating_sub(1),
-                ',' if bracket_depth == 0 && tuple_depth == 0 => {
-                    let value = source[start..index].trim();
-                    if !value.is_empty() {
-                        values.push(runtime_type_from_name(value));
-                    }
-                    start = index + 1;
-                }
-                _ => {}
-            }
-        }
-        let value = source[start..].trim();
-        if !value.is_empty() {
-            values.push(runtime_type_from_name(value));
-        }
-        values
-    }
-
-    if let Some(ty) = canonical_runtime_type_from_name(name) {
-        return ty;
-    }
-    if name == "None" {
-        return Type::Unit;
-    }
-    if let Some(module) = name.strip_prefix("module ") {
-        return Type::Module(module.to_string());
-    }
-    if name.starts_with('(') && name.ends_with(')') {
-        return Type::Tuple(split_type_list(&name[1..name.len() - 1]));
-    }
-    let Some(open) = name.find('[') else {
-        return Type::named(name);
-    };
-    if !name.ends_with(']') {
-        return Type::named(name);
-    }
-    let base = &name[..open];
-    let inner = &name[open + 1..name.len() - 1];
-    Type::Named(base.to_string(), split_type_list(inner))
 }
 
 fn runtime_type_pattern_from_name(name: &str) -> Type {
@@ -1667,6 +2177,14 @@ unsafe fn set_explicit_runtime_type_name(ptr: *mut OpaqueValue, runtime_type_nam
         },
         None => runtime_error("direct runtime received a null opaque value pointer"),
     }
+    // A descriptor's type is its logical presentation, never permission to
+    // retag or clone the physical owner (including a shared union lift).
+    if matches!(
+        &unsafe { direct_opaque(ptr) }.storage,
+        DirectValueStorage::Borrowed(_)
+    ) {
+        return;
+    }
     let parsed = runtime_type_from_name(&runtime_type_name);
     unsafe {
         value_mut(ptr, |value| match value {
@@ -1732,15 +2250,33 @@ unsafe fn set_explicit_runtime_type_name(ptr: *mut OpaqueValue, runtime_type_nam
 }
 
 unsafe fn value_mut<T>(ptr: *mut OpaqueValue, write: impl FnOnce(&mut Value) -> T) -> T {
-    let value = match ptr.as_ref() {
-        Some(value) => value,
-        None => runtime_error("direct runtime received a null opaque value pointer"),
+    let opaque = unsafe { direct_opaque(ptr) };
+    if matches!(&opaque.storage, DirectValueStorage::Borrowed(place) if !place.mutable) {
+        runtime_error("cannot write through a shared direct borrowed place");
+    }
+    let (root, path) = unsafe { direct_canonical_place(ptr) };
+    let DirectValueStorage::Owned(storage) = &unsafe { direct_opaque(root) }.storage else {
+        unreachable!("borrowed owners are flattened");
     };
-    let mut guard = match value.value.write() {
-        Ok(guard) => guard,
-        Err(_) => runtime_error("direct runtime value lock was poisoned"),
-    };
-    write(&mut guard)
+    let mut guard = storage
+        .write()
+        .unwrap_or_else(|_| runtime_error("direct runtime value lock was poisoned"));
+    match direct_resolved_value_mut(&mut guard, path) {
+        Ok(value) => write(value),
+        Err(message) => {
+            drop(guard);
+            runtime_error(message);
+        }
+    }
+}
+
+unsafe fn require_direct_owned_storage(ptr: *mut OpaqueValue) {
+    if matches!(
+        &unsafe { direct_opaque(ptr) }.storage,
+        DirectValueStorage::Borrowed(_)
+    ) {
+        runtime_error("cannot consume a direct borrowed place as an owned value");
+    }
 }
 
 unsafe fn take_value(ptr: *mut OpaqueValue) -> Value {
@@ -1756,6 +2292,9 @@ unsafe fn consume_value(ptr: *mut OpaqueValue) -> Value {
 }
 
 unsafe fn consume_owned_value(ptr: *mut OpaqueValue) -> Value {
+    unsafe {
+        require_direct_owned_storage(ptr);
+    }
     let value = unsafe { value_mut(ptr, |value| std::mem::replace(value, Value::Unit)) };
     unsafe {
         aura_direct_release_value(ptr);
@@ -1772,6 +2311,9 @@ unsafe fn consume_untracked_value(ptr: *mut OpaqueValue) -> Value {
 }
 
 unsafe fn consume_owned_untracked_value(ptr: *mut OpaqueValue) -> Value {
+    unsafe {
+        require_direct_owned_storage(ptr);
+    }
     let value = unsafe { value_mut(ptr, |value| std::mem::replace(value, Value::Unit)) };
     unsafe {
         release_untracked_value(ptr);
@@ -2211,6 +2753,9 @@ fn evaluate_direct_json_host_builtin(
 }
 
 fn decode_bytes(ptr: *const u8, len: usize) -> String {
+    if len == 0 {
+        return String::new();
+    }
     let bytes = unsafe { slice::from_raw_parts(ptr, len) };
     str::from_utf8(bytes)
         .unwrap_or_else(|_| runtime_error("aura direct runtime received invalid UTF-8 bytes"))
@@ -3379,9 +3924,18 @@ fn inferred_collection_type(value: &Value) -> Type {
     }
 }
 
+#[cfg(test)]
 fn compare_values(
     left: Value,
     right: Value,
+    op: BinaryOp,
+) -> std::result::Result<Value, Diagnostic> {
+    compare_borrowed_values(&left, &right, op)
+}
+
+fn compare_borrowed_values(
+    left: &Value,
+    right: &Value,
     op: BinaryOp,
 ) -> std::result::Result<Value, Diagnostic> {
     if matches!(op, BinaryOp::Eq | BinaryOp::NotEq) {
@@ -3442,8 +3996,8 @@ fn compare_values(
         })),
         (left, right) => Err(Diagnostic::new(format!(
             "unsupported comparison between `{}` and `{}`",
-            value_type_name(&left),
-            value_type_name(&right)
+            value_type_name(left),
+            value_type_name(right)
         ))),
     }
 }
@@ -3456,6 +4010,7 @@ fn unsupported_binary_operands(operator: &str, left: &Value, right: &Value) -> D
     ))
 }
 
+#[cfg(test)]
 fn eval_binary_value(
     left: Value,
     right: Value,
@@ -3464,27 +4019,37 @@ fn eval_binary_value(
     eval_binary_value_with_float_width(left, right, op, FloatPowerWidth::Float64)
 }
 
+#[cfg(test)]
 fn eval_binary_value_with_float_width(
     left: Value,
     right: Value,
     op: BinaryOp,
     float_width: FloatPowerWidth,
 ) -> std::result::Result<Value, Diagnostic> {
+    eval_borrowed_binary_value(&left, &right, op, float_width)
+}
+
+fn eval_borrowed_binary_value(
+    left: &Value,
+    right: &Value,
+    op: BinaryOp,
+    float_width: FloatPowerWidth,
+) -> std::result::Result<Value, Diagnostic> {
     match op {
         BinaryOp::And => match (left, right) {
-            (Value::Bool(left), Value::Bool(right)) => Ok(Value::Bool(left && right)),
+            (Value::Bool(left), Value::Bool(right)) => Ok(Value::Bool(*left && *right)),
             (left, right) => Err(Diagnostic::new(format!(
                 "logical `and` expects bool operands, found `{}` and `{}`",
-                value_type_name(&left),
-                value_type_name(&right)
+                value_type_name(left),
+                value_type_name(right)
             ))),
         },
         BinaryOp::Or => match (left, right) {
-            (Value::Bool(left), Value::Bool(right)) => Ok(Value::Bool(left || right)),
+            (Value::Bool(left), Value::Bool(right)) => Ok(Value::Bool(*left || *right)),
             (left, right) => Err(Diagnostic::new(format!(
                 "logical `or` expects bool operands, found `{}` and `{}`",
-                value_type_name(&left),
-                value_type_name(&right)
+                value_type_name(left),
+                value_type_name(right)
             ))),
         },
         BinaryOp::Eq
@@ -3492,40 +4057,40 @@ fn eval_binary_value_with_float_width(
         | BinaryOp::Less
         | BinaryOp::LessEq
         | BinaryOp::Greater
-        | BinaryOp::GreaterEq => compare_values(left, right, op),
+        | BinaryOp::GreaterEq => compare_borrowed_values(left, right, op),
         BinaryOp::Add => match (left, right) {
             (Value::Duration(left), Value::Duration(right)) => left
-                .checked_add(right)
+                .checked_add(*right)
                 .map(Value::Duration)
                 .ok_or_else(|| Diagnostic::new("duration overflow")),
-            (Value::Int(left), Value::Int(right)) => match left.checked_add(right) {
+            (Value::Int(left), Value::Int(right)) => match left.checked_add(*right) {
                 Some(value) => Ok(Value::Int(value)),
                 None => Err(Diagnostic::new("integer overflow")),
             },
             (Value::Float(left), Value::Float(right)) => Ok(Value::Float(left + right)),
             (Value::String(left), Value::String(right)) => {
-                Ok(Value::String(concat_strings_checked(left, &right)?))
+                Ok(Value::String(concat_strings_checked(left.clone(), right)?))
             }
             (left, right) => Err(Diagnostic::new(format!(
                 "unsupported `+` operands `{}` and `{}`",
-                value_type_name(&left),
-                value_type_name(&right)
+                value_type_name(left),
+                value_type_name(right)
             ))),
         },
         BinaryOp::Sub => match (left, right) {
             (Value::Duration(left), Value::Duration(right)) => left
-                .checked_sub(right)
+                .checked_sub(*right)
                 .map(Value::Duration)
                 .ok_or_else(|| Diagnostic::new("duration overflow")),
-            (Value::Int(left), Value::Int(right)) => match left.checked_sub(right) {
+            (Value::Int(left), Value::Int(right)) => match left.checked_sub(*right) {
                 Some(value) => Ok(Value::Int(value)),
                 None => Err(Diagnostic::new("integer overflow")),
             },
             (Value::Float(left), Value::Float(right)) => Ok(Value::Float(left - right)),
             (left, right) => Err(Diagnostic::new(format!(
                 "unsupported `-` operands `{}` and `{}`",
-                value_type_name(&left),
-                value_type_name(&right)
+                value_type_name(left),
+                value_type_name(right)
             ))),
         },
         BinaryOp::Mul => match (left, right) {
@@ -3535,15 +4100,15 @@ fn eval_binary_value_with_float_width(
                 .and_then(|factor| duration.checked_mul(factor))
                 .map(Value::Duration)
                 .ok_or_else(|| Diagnostic::new("duration overflow")),
-            (Value::Int(left), Value::Int(right)) => match left.checked_mul(right) {
+            (Value::Int(left), Value::Int(right)) => match left.checked_mul(*right) {
                 Some(value) => Ok(Value::Int(value)),
                 None => Err(Diagnostic::new("integer overflow")),
             },
             (Value::Float(left), Value::Float(right)) => Ok(Value::Float(left * right)),
             (left, right) => Err(Diagnostic::new(format!(
                 "unsupported `*` operands `{}` and `{}`",
-                value_type_name(&left),
-                value_type_name(&right)
+                value_type_name(left),
+                value_type_name(right)
             ))),
         },
         BinaryOp::Div => match (left, right) {
@@ -3551,12 +4116,12 @@ fn eval_binary_value_with_float_width(
                 Err(Diagnostic::new("division by zero"))
             }
             (Value::Int(left), Value::Int(right)) => Ok(Value::Int(
-                left.checked_div(right)
+                left.checked_div(*right)
                     .expect("non-zero integer division is total"),
             )),
             (Value::Float(_), Value::Float(0.0)) => Err(Diagnostic::new("division by zero")),
             (Value::Float(left), Value::Float(right)) => Ok(Value::Float(left / right)),
-            (left, right) => Err(unsupported_binary_operands("/", &left, &right)),
+            (left, right) => Err(unsupported_binary_operands("/", left, right)),
         },
         BinaryOp::FloorDiv => match (left, right) {
             (Value::Duration(_), Value::Int(right)) if right.is_zero() => {
@@ -3564,76 +4129,76 @@ fn eval_binary_value_with_float_width(
             }
             (Value::Duration(left), Value::Int(right)) => right
                 .as_i128()
-                .and_then(|right| checked_i128_floor_div(left, right))
+                .and_then(|right| checked_i128_floor_div(*left, right))
                 .map(Value::Duration)
                 .ok_or_else(|| Diagnostic::new("duration overflow")),
             (Value::Int(_), Value::Int(right)) if right.is_zero() => {
                 Err(Diagnostic::new("division by zero"))
             }
             (Value::Int(left), Value::Int(right)) => Ok(Value::Int(
-                left.checked_floor_div(right)
+                left.checked_floor_div(*right)
                     .expect("non-zero matching integer floor division is total"),
             )),
             (Value::Float(_), Value::Float(0.0)) => Err(Diagnostic::new("division by zero")),
             (Value::Float(left), Value::Float(right)) => {
-                Ok(Value::Float(float_floor_divmod(left, right).0))
+                Ok(Value::Float(float_floor_divmod(*left, *right).0))
             }
-            (left, right) => Err(unsupported_binary_operands("//", &left, &right)),
+            (left, right) => Err(unsupported_binary_operands("//", left, right)),
         },
         BinaryOp::Mod => match (left, right) {
             (Value::Int(_), Value::Int(right)) if right.is_zero() => {
                 Err(Diagnostic::new("division by zero"))
             }
             (Value::Int(left), Value::Int(right)) => Ok(Value::Int(
-                left.checked_floor_rem(right)
+                left.checked_floor_rem(*right)
                     .expect("non-zero integer remainder is total"),
             )),
             (Value::Float(_), Value::Float(0.0)) => Err(Diagnostic::new("division by zero")),
             (Value::Float(left), Value::Float(right)) => {
-                Ok(Value::Float(float_floor_divmod(left, right).1))
+                Ok(Value::Float(float_floor_divmod(*left, *right).1))
             }
             (left, right) => Err(Diagnostic::new(format!(
                 "unsupported `%` operands `{}` and `{}`",
-                value_type_name(&left),
-                value_type_name(&right)
+                value_type_name(left),
+                value_type_name(right)
             ))),
         },
         BinaryOp::Pow => match (left, right) {
             (Value::Int(left), Value::Int(right)) => left
-                .checked_pow(right)
+                .checked_pow(*right)
                 .map(Value::Int)
                 .map_err(native_integer_power_diagnostic),
             (Value::Float(left), Value::Float(right)) => {
-                float_power(left, right, float_width).map(Value::Float)
+                float_power(*left, *right, float_width).map(Value::Float)
             }
-            (left, right) => Err(unsupported_binary_operands("**", &left, &right)),
+            (left, right) => Err(unsupported_binary_operands("**", left, right)),
         },
         BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor => match (left, right) {
             (Value::Int(left), Value::Int(right)) => {
                 let result = match op {
-                    BinaryOp::BitAnd => left.checked_bitand(right),
-                    BinaryOp::BitOr => left.checked_bitor(right),
-                    BinaryOp::BitXor => left.checked_bitxor(right),
+                    BinaryOp::BitAnd => left.checked_bitand(*right),
+                    BinaryOp::BitOr => left.checked_bitor(*right),
+                    BinaryOp::BitXor => left.checked_bitxor(*right),
                     _ => unreachable!(),
                 };
                 result.map(Value::Int).ok_or_else(|| {
                     Diagnostic::coded("AU2002", "bitwise integer operand types must match")
                 })
             }
-            (left, right) => Err(unsupported_binary_operands("bitwise", &left, &right)),
+            (left, right) => Err(unsupported_binary_operands("bitwise", left, right)),
         },
         BinaryOp::Shl | BinaryOp::Shr => match (left, right) {
             (Value::Int(left), Value::Int(right)) => {
                 let result = if op == BinaryOp::Shl {
-                    left.checked_shl(right)
+                    left.checked_shl(*right)
                 } else {
-                    left.checked_shr(right)
+                    left.checked_shr(*right)
                 };
                 result
                     .map(Value::Int)
                     .map_err(native_integer_shift_diagnostic)
             }
-            (left, right) => Err(unsupported_binary_operands("shift", &left, &right)),
+            (left, right) => Err(unsupported_binary_operands("shift", left, right)),
         },
     }
 }
@@ -4117,21 +4682,25 @@ pub extern "C-unwind" fn aura_direct_function_bind_defaults(
     transfer_defaults: i64,
 ) {
     task_runtime_boundary(|| {
-        let function = match unsafe { value_ref(function) } {
-            Value::Function(function) => function,
-            other => runtime_error(format!(
-                "indirect call expected a function value, found `{}`",
-                value_type_name(&other)
-            )),
+        let (binder_ptr, environment) = unsafe {
+            with_value(function, |value| match value {
+                Value::Function(function) => (
+                    function.direct_default_binder,
+                    function.closure_environment.clone(),
+                ),
+                other => runtime_error(format!(
+                    "indirect call expected a function value, found `{}`",
+                    value_type_name(other)
+                )),
+            })
         };
-        let binder_ptr = function
-            .direct_default_binder
+        let binder_ptr = binder_ptr
             .unwrap_or_else(|| runtime_error("direct function value has no native default binder"));
         let binder: unsafe extern "C-unwind" fn(*mut i64, usize, i64) =
             unsafe { std::mem::transmute(binder_ptr as usize) };
         let arg_count = usize::try_from(arg_count)
             .unwrap_or_else(|_| runtime_error("invalid indirect-call arg count"));
-        let Some(environment) = &function.closure_environment else {
+        let Some(environment) = &environment else {
             unsafe { binder(args, arg_count, transfer_defaults) };
             return;
         };
@@ -4193,25 +4762,30 @@ pub extern "C-unwind" fn aura_direct_function_call(
     arg_count: i64,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
-        let function = match unsafe { value_ref(function) } {
-            Value::Function(function) => function,
-            other => runtime_error(format!(
-                "indirect call expected a function value, found `{}`",
-                value_type_name(&other)
-            )),
+        let (thunk_ptr, environment, function_name) = unsafe {
+            with_value(function, |value| match value {
+                Value::Function(function) => (
+                    function.direct_thunk,
+                    function.closure_environment.clone(),
+                    function.name.clone(),
+                ),
+                other => runtime_error(format!(
+                    "indirect call expected a function value, found `{}`",
+                    value_type_name(other)
+                )),
+            })
         };
-        let thunk_ptr = function
-            .direct_thunk
-            .unwrap_or_else(|| runtime_error("direct function value has no native thunk"));
+        let thunk_ptr =
+            thunk_ptr.unwrap_or_else(|| runtime_error("direct function value has no native thunk"));
         let thunk: NativeThunk = unsafe { std::mem::transmute(thunk_ptr as usize) };
         let arg_count = usize::try_from(arg_count)
             .unwrap_or_else(|_| runtime_error("invalid indirect-call arg count"));
-        let Some(environment) = &function.closure_environment else {
+        let Some(environment) = &environment else {
             prepare_indirect_direct_mutable_sinks(0);
             return unsafe { thunk(args, arg_count) };
         };
         let captures = environment
-            .arguments(&function.name)
+            .arguments(&function_name)
             .unwrap_or_else(|error| runtime_diagnostic_error(error));
         let capture_count = captures.len();
         let mutable_capture_indices = captures
@@ -4254,27 +4828,31 @@ pub extern "C-unwind" fn aura_direct_function_call(
 
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_function_default_binder(function: *mut OpaqueValue) -> i64 {
-    task_runtime_boundary(|| match unsafe { value_ref(function) } {
-        Value::Function(function) => function
-            .direct_default_binder
-            .unwrap_or_else(|| runtime_error("direct function value has no native default binder")),
-        other => runtime_error(format!(
-            "indirect call expected a function value, found `{}`",
-            value_type_name(other)
-        )),
+    task_runtime_boundary(|| unsafe {
+        with_value(function, |function| match function {
+            Value::Function(function) => function.direct_default_binder.unwrap_or_else(|| {
+                runtime_error("direct function value has no native default binder")
+            }),
+            other => runtime_error(format!(
+                "indirect call expected a function value, found `{}`",
+                value_type_name(other)
+            )),
+        })
     })
 }
 
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_function_thunk(function: *mut OpaqueValue) -> i64 {
-    task_runtime_boundary(|| match unsafe { value_ref(function) } {
-        Value::Function(function) => function
-            .direct_thunk
-            .unwrap_or_else(|| runtime_error("direct function value has no native thunk")),
-        other => runtime_error(format!(
-            "indirect call expected a function value, found `{}`",
-            value_type_name(other)
-        )),
+    task_runtime_boundary(|| unsafe {
+        with_value(function, |function| match function {
+            Value::Function(function) => function
+                .direct_thunk
+                .unwrap_or_else(|| runtime_error("direct function value has no native thunk")),
+            other => runtime_error(format!(
+                "indirect call expected a function value, found `{}`",
+                value_type_name(other)
+            )),
+        })
     })
 }
 
@@ -4437,7 +5015,7 @@ pub extern "C-unwind" fn aura_direct_string_literal(
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_stringify_value(value: *mut OpaqueValue) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
-        let rendered = unsafe { value_ref(value) }.render();
+        let rendered = unsafe { with_value(value, Value::render) };
         boxed_value(Value::String(rendered))
     })
 }
@@ -4453,8 +5031,12 @@ pub extern "C-unwind" fn aura_direct_format_value(
     task_runtime_boundary(|| {
         let spec = decode_bytes(spec_ptr, spec_len);
         let value_type = Type::named(decode_bytes(type_ptr, type_len));
-        let value = unsafe { value_ref(value) };
-        match format_runtime_value(&value, &value_type, &spec) {
+        let rendered = unsafe {
+            with_value(value, |value| {
+                format_runtime_value(value, &value_type, &spec)
+            })
+        };
+        match rendered {
             Ok(rendered) => boxed_value(Value::String(rendered)),
             Err(error) => runtime_diagnostic_error(error),
         }
@@ -4514,29 +5096,35 @@ pub extern "C-unwind" fn aura_direct_duration_to_float(
 
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_string_len(value: *mut OpaqueValue) -> i64 {
-    task_runtime_boundary(|| match unsafe { value_ref(value) } {
-        Value::String(text) => match i64::try_from(text.chars().count()) {
-            Ok(length) => length,
-            Err(_) => runtime_error("string length does not fit in the direct runtime range"),
-        },
-        other => runtime_error(format!(
-            "expected `str`, found `{}`",
-            value_type_name(other)
-        )),
+    task_runtime_boundary(|| unsafe {
+        with_value(value, |value| match value {
+            Value::String(text) => match i64::try_from(text.chars().count()) {
+                Ok(length) => length,
+                Err(_) => runtime_error("string length does not fit in the direct runtime range"),
+            },
+            other => runtime_error(format!(
+                "expected `str`, found `{}`",
+                value_type_name(other)
+            )),
+        })
     })
 }
 
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_string_byte_len(value: *mut OpaqueValue) -> i64 {
-    task_runtime_boundary(|| match unsafe { value_ref(value) } {
-        Value::String(text) => match i64::try_from(text.len()) {
-            Ok(length) => length,
-            Err(_) => runtime_error("string byte length does not fit in the direct runtime range"),
-        },
-        other => runtime_error(format!(
-            "expected `str`, found `{}`",
-            value_type_name(other)
-        )),
+    task_runtime_boundary(|| unsafe {
+        with_value(value, |value| match value {
+            Value::String(text) => match i64::try_from(text.len()) {
+                Ok(length) => length,
+                Err(_) => {
+                    runtime_error("string byte length does not fit in the direct runtime range")
+                }
+            },
+            other => runtime_error(format!(
+                "expected `str`, found `{}`",
+                value_type_name(other)
+            )),
+        })
     })
 }
 
@@ -4579,17 +5167,19 @@ pub extern "C-unwind" fn aura_direct_string_contains(
     value: *mut OpaqueValue,
     needle: *mut OpaqueValue,
 ) -> i64 {
-    task_runtime_boundary(|| {
-        let Value::String(needle) = (unsafe { take_value(needle) }) else {
-            runtime_error("`contains` requires a `str` argument");
-        };
-        match unsafe { value_ref(value) } {
-            Value::String(text) => i64::from(text.contains(&needle)),
-            other => runtime_error(format!(
-                "expected `str`, found `{}`",
-                value_type_name(other)
-            )),
-        }
+    task_runtime_boundary(|| unsafe {
+        with_values(&[value, needle], |values| {
+            let Value::String(needle) = values[1] else {
+                runtime_error("`contains` requires a `str` argument");
+            };
+            match values[0] {
+                Value::String(text) => i64::from(text.contains(needle.as_str())),
+                other => runtime_error(format!(
+                    "expected `str`, found `{}`",
+                    value_type_name(other)
+                )),
+            }
+        })
     })
 }
 
@@ -4598,17 +5188,19 @@ pub extern "C-unwind" fn aura_direct_string_starts_with(
     value: *mut OpaqueValue,
     prefix: *mut OpaqueValue,
 ) -> i64 {
-    task_runtime_boundary(|| {
-        let Value::String(prefix) = (unsafe { take_value(prefix) }) else {
-            runtime_error("`starts_with` requires a `str` argument");
-        };
-        match unsafe { value_ref(value) } {
-            Value::String(text) => i64::from(text.starts_with(&prefix)),
-            other => runtime_error(format!(
-                "expected `str`, found `{}`",
-                value_type_name(other)
-            )),
-        }
+    task_runtime_boundary(|| unsafe {
+        with_values(&[value, prefix], |values| {
+            let Value::String(prefix) = values[1] else {
+                runtime_error("`starts_with` requires a `str` argument");
+            };
+            match values[0] {
+                Value::String(text) => i64::from(text.starts_with(prefix.as_str())),
+                other => runtime_error(format!(
+                    "expected `str`, found `{}`",
+                    value_type_name(other)
+                )),
+            }
+        })
     })
 }
 
@@ -4617,17 +5209,19 @@ pub extern "C-unwind" fn aura_direct_string_ends_with(
     value: *mut OpaqueValue,
     suffix: *mut OpaqueValue,
 ) -> i64 {
-    task_runtime_boundary(|| {
-        let Value::String(suffix) = (unsafe { take_value(suffix) }) else {
-            runtime_error("`ends_with` requires a `str` argument");
-        };
-        match unsafe { value_ref(value) } {
-            Value::String(text) => i64::from(text.ends_with(&suffix)),
-            other => runtime_error(format!(
-                "expected `str`, found `{}`",
-                value_type_name(other)
-            )),
-        }
+    task_runtime_boundary(|| unsafe {
+        with_values(&[value, suffix], |values| {
+            let Value::String(suffix) = values[1] else {
+                runtime_error("`ends_with` requires a `str` argument");
+            };
+            match values[0] {
+                Value::String(text) => i64::from(text.ends_with(suffix.as_str())),
+                other => runtime_error(format!(
+                    "expected `str`, found `{}`",
+                    value_type_name(other)
+                )),
+            }
+        })
     })
 }
 
@@ -4636,23 +5230,25 @@ pub extern "C-unwind" fn aura_direct_string_split(
     value: *mut OpaqueValue,
     separator: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    task_runtime_boundary(|| {
-        let Value::String(separator) = (unsafe { take_value(separator) }) else {
-            runtime_error("`split` requires a `str` argument");
-        };
-        match unsafe { value_ref(value) } {
-            Value::String(text) => boxed_value(Value::Vec(VecValue {
-                element_type: Type::named("str"),
-                elements: text
-                    .split(&separator)
-                    .map(|part| Value::String(part.to_string()))
-                    .collect(),
-            })),
-            other => runtime_error(format!(
-                "expected `str`, found `{}`",
-                value_type_name(other)
-            )),
-        }
+    task_runtime_boundary(|| unsafe {
+        with_values(&[value, separator], |values| {
+            let Value::String(separator) = values[1] else {
+                runtime_error("`split` requires a `str` argument");
+            };
+            match values[0] {
+                Value::String(text) => boxed_value(Value::Vec(VecValue {
+                    element_type: Type::named("str"),
+                    elements: text
+                        .split(separator.as_str())
+                        .map(|part| Value::String(part.to_string()))
+                        .collect(),
+                })),
+                other => runtime_error(format!(
+                    "expected `str`, found `{}`",
+                    value_type_name(other)
+                )),
+            }
+        })
     })
 }
 
@@ -4662,42 +5258,50 @@ pub extern "C-unwind" fn aura_direct_string_replace(
     from: *mut OpaqueValue,
     to: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    task_runtime_boundary(|| {
-        let Value::String(from) = (unsafe { take_value(from) }) else {
-            runtime_error("`replace` requires `str` for `from`");
-        };
-        let Value::String(to) = (unsafe { take_value(to) }) else {
-            runtime_error("`replace` requires `str` for `to`");
-        };
-        match unsafe { value_ref(value) } {
-            Value::String(text) => boxed_value(Value::String(text.replace(&from, &to))),
-            other => runtime_error(format!(
-                "expected `str`, found `{}`",
-                value_type_name(other)
-            )),
-        }
+    task_runtime_boundary(|| unsafe {
+        with_values(&[value, from, to], |values| {
+            let Value::String(from) = values[1] else {
+                runtime_error("`replace` requires `str` for `from`");
+            };
+            let Value::String(to) = values[2] else {
+                runtime_error("`replace` requires `str` for `to`");
+            };
+            match values[0] {
+                Value::String(text) => {
+                    boxed_value(Value::String(text.replace(from.as_str(), to.as_str())))
+                }
+                other => runtime_error(format!(
+                    "expected `str`, found `{}`",
+                    value_type_name(other)
+                )),
+            }
+        })
     })
 }
 
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_string_to_lower(value: *mut OpaqueValue) -> *mut OpaqueValue {
-    task_runtime_boundary(|| match unsafe { value_ref(value) } {
-        Value::String(text) => boxed_value(Value::String(text.to_lowercase())),
-        other => runtime_error(format!(
-            "expected `str`, found `{}`",
-            value_type_name(other)
-        )),
+    task_runtime_boundary(|| unsafe {
+        with_value(value, |value| match value {
+            Value::String(text) => boxed_value(Value::String(text.to_lowercase())),
+            other => runtime_error(format!(
+                "expected `str`, found `{}`",
+                value_type_name(other)
+            )),
+        })
     })
 }
 
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_string_to_upper(value: *mut OpaqueValue) -> *mut OpaqueValue {
-    task_runtime_boundary(|| match unsafe { value_ref(value) } {
-        Value::String(text) => boxed_value(Value::String(text.to_uppercase())),
-        other => runtime_error(format!(
-            "expected `str`, found `{}`",
-            value_type_name(other)
-        )),
+    task_runtime_boundary(|| unsafe {
+        with_value(value, |value| match value {
+            Value::String(text) => boxed_value(Value::String(text.to_uppercase())),
+            other => runtime_error(format!(
+                "expected `str`, found `{}`",
+                value_type_name(other)
+            )),
+        })
     })
 }
 
@@ -4706,19 +5310,21 @@ pub extern "C-unwind" fn aura_direct_string_strip_prefix(
     value: *mut OpaqueValue,
     prefix: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    task_runtime_boundary(|| {
-        let Value::String(prefix) = (unsafe { take_value(prefix) }) else {
-            runtime_error("`strip_prefix` requires a `str` argument");
-        };
-        match unsafe { value_ref(value) } {
-            Value::String(text) => boxed_value(optional_str_value(
-                text.strip_prefix(&prefix).map(str::to_string),
-            )),
-            other => runtime_error(format!(
-                "expected `str`, found `{}`",
-                value_type_name(other)
-            )),
-        }
+    task_runtime_boundary(|| unsafe {
+        with_values(&[value, prefix], |values| {
+            let Value::String(prefix) = values[1] else {
+                runtime_error("`strip_prefix` requires a `str` argument");
+            };
+            match values[0] {
+                Value::String(text) => boxed_value(optional_str_value(
+                    text.strip_prefix(prefix.as_str()).map(str::to_string),
+                )),
+                other => runtime_error(format!(
+                    "expected `str`, found `{}`",
+                    value_type_name(other)
+                )),
+            }
+        })
     })
 }
 
@@ -4727,30 +5333,34 @@ pub extern "C-unwind" fn aura_direct_string_strip_suffix(
     value: *mut OpaqueValue,
     suffix: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    task_runtime_boundary(|| {
-        let Value::String(suffix) = (unsafe { take_value(suffix) }) else {
-            runtime_error("`strip_suffix` requires a `str` argument");
-        };
-        match unsafe { value_ref(value) } {
-            Value::String(text) => boxed_value(optional_str_value(
-                text.strip_suffix(&suffix).map(str::to_string),
-            )),
-            other => runtime_error(format!(
-                "expected `str`, found `{}`",
-                value_type_name(other)
-            )),
-        }
+    task_runtime_boundary(|| unsafe {
+        with_values(&[value, suffix], |values| {
+            let Value::String(suffix) = values[1] else {
+                runtime_error("`strip_suffix` requires a `str` argument");
+            };
+            match values[0] {
+                Value::String(text) => boxed_value(optional_str_value(
+                    text.strip_suffix(suffix.as_str()).map(str::to_string),
+                )),
+                other => runtime_error(format!(
+                    "expected `str`, found `{}`",
+                    value_type_name(other)
+                )),
+            }
+        })
     })
 }
 
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_string_trim(value: *mut OpaqueValue) -> *mut OpaqueValue {
-    task_runtime_boundary(|| match unsafe { value_ref(value) } {
-        Value::String(text) => boxed_value(Value::String(text.trim().to_string())),
-        other => runtime_error(format!(
-            "expected `str`, found `{}`",
-            value_type_name(other)
-        )),
+    task_runtime_boundary(|| unsafe {
+        with_value(value, |value| match value {
+            Value::String(text) => boxed_value(Value::String(text.trim().to_string())),
+            other => runtime_error(format!(
+                "expected `str`, found `{}`",
+                value_type_name(other)
+            )),
+        })
     })
 }
 
@@ -4759,26 +5369,28 @@ pub extern "C-unwind" fn aura_direct_string_join(
     separator: *mut OpaqueValue,
     parts: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    task_runtime_boundary(|| {
-        let Value::Vec(parts) = (unsafe { take_value(parts) }) else {
-            runtime_error("`join` requires `list[str]`");
-        };
-        match unsafe { value_ref(separator) } {
-            Value::String(separator) => {
-                let mut rendered_parts = Vec::new();
-                for value in parts.elements {
-                    let Value::String(part) = value else {
-                        runtime_error("`join` requires `list[str]`");
-                    };
-                    rendered_parts.push(part);
+    task_runtime_boundary(|| unsafe {
+        with_values(&[separator, parts], |values| {
+            let Value::Vec(parts) = values[1] else {
+                runtime_error("`join` requires `list[str]`");
+            };
+            match values[0] {
+                Value::String(separator) => {
+                    let mut rendered_parts = Vec::new();
+                    for value in &parts.elements {
+                        let Value::String(part) = value else {
+                            runtime_error("`join` requires `list[str]`");
+                        };
+                        rendered_parts.push(part.as_str());
+                    }
+                    boxed_value(Value::String(rendered_parts.join(separator.as_str())))
                 }
-                boxed_value(Value::String(rendered_parts.join(&separator)))
+                other => runtime_error(format!(
+                    "expected `str`, found `{}`",
+                    value_type_name(other)
+                )),
             }
-            other => runtime_error(format!(
-                "expected `str`, found `{}`",
-                value_type_name(other)
-            )),
-        }
+        })
     })
 }
 
@@ -4912,9 +5524,8 @@ pub extern "C-unwind" fn aura_direct_divmod(
 
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_parse_int32(value: *mut OpaqueValue) -> *mut OpaqueValue {
-    task_runtime_boundary(|| {
-        let value = unsafe { take_value(value) };
-        match value {
+    task_runtime_boundary(|| unsafe {
+        with_value(value, |value| match value {
             Value::String(text) => match text.parse::<i32>() {
                 Ok(value) => boxed_value(result_ok(Value::Int(IntegerValue::from_signed(
                     value as i128,
@@ -4923,17 +5534,16 @@ pub extern "C-unwind" fn aura_direct_parse_int32(value: *mut OpaqueValue) -> *mu
             },
             other => runtime_error(format!(
                 "`parse_int32(...)` expects `str`, found `{}`",
-                value_type_name(&other)
+                value_type_name(other)
             )),
-        }
+        })
     })
 }
 
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_parse_int64(value: *mut OpaqueValue) -> *mut OpaqueValue {
-    task_runtime_boundary(|| {
-        let value = unsafe { take_value(value) };
-        match value {
+    task_runtime_boundary(|| unsafe {
+        with_value(value, |value| match value {
             Value::String(text) => match text.parse::<i64>() {
                 Ok(value) => boxed_value(result_ok(Value::Int(IntegerValue::from_signed(
                     value as i128,
@@ -4942,17 +5552,16 @@ pub extern "C-unwind" fn aura_direct_parse_int64(value: *mut OpaqueValue) -> *mu
             },
             other => runtime_error(format!(
                 "`parse_int64(...)` expects `str`, found `{}`",
-                value_type_name(&other)
+                value_type_name(other)
             )),
-        }
+        })
     })
 }
 
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_parse_float64(value: *mut OpaqueValue) -> *mut OpaqueValue {
-    task_runtime_boundary(|| {
-        let value = unsafe { take_value(value) };
-        match value {
+    task_runtime_boundary(|| unsafe {
+        with_value(value, |value| match value {
             Value::String(text) => match text.parse::<f64>() {
                 Ok(value) if value.is_finite() => boxed_value(result_ok(Value::Float(value))),
                 Ok(_) => boxed_value(result_err(Value::String(
@@ -4962,9 +5571,9 @@ pub extern "C-unwind" fn aura_direct_parse_float64(value: *mut OpaqueValue) -> *
             },
             other => runtime_error(format!(
                 "`parse_float64(...)` expects `str`, found `{}`",
-                value_type_name(&other)
+                value_type_name(other)
             )),
-        }
+        })
     })
 }
 
@@ -5398,9 +6007,16 @@ pub extern "C-unwind" fn aura_direct_vec_contains(
     vec: *mut OpaqueValue,
     value: *mut OpaqueValue,
 ) -> i64 {
-    task_runtime_boundary(|| {
-        let needle = unsafe { take_value(value) };
-        i64::from(with_vector(vec, |vector| vector.elements.contains(&needle)))
+    task_runtime_boundary(|| unsafe {
+        with_values(&[vec, value], |values| {
+            let Value::Vec(collection) = values[0] else {
+                runtime_error(format!(
+                    "expected `list`, found `{}`",
+                    value_type_name(values[0])
+                ));
+            };
+            i64::from(collection.elements.contains(values[1]))
+        })
     })
 }
 
@@ -5473,23 +6089,38 @@ pub extern "C-unwind" fn aura_direct_collection_operation(
             boxed_value(value)
         }
         1..=3 => {
-            let needle = unsafe { value_ref(arg) };
+            let (index, count) = unsafe {
+                with_values(&[collection, arg], |values| {
+                    let Value::Vec(vector) = values[0] else {
+                        runtime_error(format!(
+                            "expected `list`, found `{}`",
+                            value_type_name(values[0])
+                        ));
+                    };
+                    let needle = values[1];
+                    if opcode == 3 {
+                        (
+                            None,
+                            vector
+                                .elements
+                                .iter()
+                                .filter(|candidate| *candidate == needle)
+                                .count(),
+                        )
+                    } else {
+                        (
+                            vector
+                                .elements
+                                .iter()
+                                .position(|candidate| candidate == needle),
+                            0,
+                        )
+                    }
+                })
+            };
             if opcode == 3 {
-                let count = with_vector(collection, |vector| {
-                    vector
-                        .elements
-                        .iter()
-                        .filter(|candidate| **candidate == needle)
-                        .count()
-                });
                 return boxed_value(Value::Int(IntegerValue::from_literal(count as u128)));
             }
-            let index = with_vector(collection, |vector| {
-                vector
-                    .elements
-                    .iter()
-                    .position(|candidate| *candidate == needle)
-            });
             let Some(index) = index else {
                 runtime_diagnostic_error(
                     Diagnostic::coded("AU4008", "collection value was not found").with_help(
@@ -5552,14 +6183,22 @@ pub extern "C-unwind" fn aura_direct_collection_operation(
             boxed_value(Value::Unit)
         }
         5 | 6 => {
-            let needle = unsafe { value_ref(arg) };
-            let removed = with_set_mut(collection, |set| {
-                set.elements
-                    .iter()
-                    .position(|candidate| *candidate == needle)
-                    .map(|index| set.elements.remove(index))
-                    .is_some()
-            });
+            let index = unsafe {
+                with_values(&[collection, arg], |values| {
+                    let Value::Set(set) = values[0] else {
+                        runtime_error(format!(
+                            "expected `set`, found `{}`",
+                            value_type_name(values[0])
+                        ));
+                    };
+                    set.elements
+                        .iter()
+                        .position(|candidate| candidate == values[1])
+                })
+            };
+            let removed = index
+                .map(|index| with_set_mut(collection, |set| set.elements.remove(index)))
+                .is_some();
             if opcode == 5 && !removed {
                 runtime_diagnostic_error(
                     Diagnostic::coded("AU4008", "collection value was not found").with_help(
@@ -6117,15 +6756,8 @@ pub extern "C-unwind" fn aura_direct_array_binary(
                 )),
             }
         };
-        let result = unsafe {
-            if left == right {
-                with_value(left, |value| evaluate(value, value))
-            } else {
-                with_value(left, |left_value| {
-                    with_value(right, |right_value| evaluate(left_value, right_value))
-                })
-            }
-        };
+        let result =
+            unsafe { with_values(&[left, right], |values| evaluate(values[0], values[1])) };
         boxed_value(Value::Array(direct_array_result(result, line, column)))
     })
 }
@@ -6215,14 +6847,22 @@ pub extern "C-unwind" fn aura_direct_map_get(
     key: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
-        let key = unsafe { take_value(key) };
-        let value = with_map(map, |map| {
-            map.entries
-                .iter()
-                .find(|(candidate_key, _)| *candidate_key == key)
-                .map(|(_, value)| try_clone_array_containing_value(value))
-                .transpose()
-        });
+        let value = unsafe {
+            with_values(&[map, key], |values| {
+                let Value::Map(map) = values[0] else {
+                    runtime_error(format!(
+                        "expected `dict`, found `{}`",
+                        value_type_name(values[0])
+                    ));
+                };
+                let key = values[1];
+                map.entries
+                    .iter()
+                    .find(|(candidate_key, _)| candidate_key == key)
+                    .map(|(_, value)| try_clone_array_containing_value(value))
+                    .transpose()
+            })
+        };
         let value = direct_array_result(value, 0, 0);
         boxed_value(value.map(lookup_found).unwrap_or_else(lookup_missing))
     })
@@ -6270,18 +6910,20 @@ pub extern "C-unwind" fn aura_direct_map_remove_in_place(
     key: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
-        let key = unsafe { take_value(key) };
-        let previous = with_map_mut(map, |map| {
-            if let Some(index) = map
-                .entries
-                .iter()
-                .position(|(candidate_key, _)| *candidate_key == key)
-            {
-                Some(map.entries.remove(index).1)
-            } else {
-                None
-            }
-        });
+        let index = unsafe {
+            with_values(&[map, key], |values| {
+                let Value::Map(map) = values[0] else {
+                    runtime_error(format!(
+                        "expected `dict`, found `{}`",
+                        value_type_name(values[0])
+                    ));
+                };
+                map.entries
+                    .iter()
+                    .position(|(candidate, _)| candidate == values[1])
+            })
+        };
+        let previous = index.map(|index| with_map_mut(map, |map| map.entries.remove(index).1));
         boxed_value(previous.map(lookup_found).unwrap_or_else(lookup_missing))
     })
 }
@@ -6292,12 +6934,20 @@ pub extern "C-unwind" fn aura_direct_map_contains_key(
     key: *mut OpaqueValue,
 ) -> i64 {
     task_runtime_boundary(|| {
-        let key = unsafe { take_value(key) };
-        i64::from(with_map(map, |map| {
-            map.entries
-                .iter()
-                .any(|(candidate_key, _)| *candidate_key == key)
-        }))
+        i64::from(unsafe {
+            with_values(&[map, key], |values| {
+                let Value::Map(map) = values[0] else {
+                    runtime_error(format!(
+                        "expected `dict`, found `{}`",
+                        value_type_name(values[0])
+                    ));
+                };
+                let key = values[1];
+                map.entries
+                    .iter()
+                    .any(|(candidate_key, _)| candidate_key == key)
+            })
+        })
     })
 }
 
@@ -6373,15 +7023,27 @@ pub extern "C-unwind" fn aura_direct_map_index(
     column: i64,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
-        let key = unsafe { take_value(key) };
-        let value = with_map(map, |map| {
-            map.entries
-                .iter()
-                .find(|(candidate_key, _)| *candidate_key == key)
-                .map(|(_, value)| try_clone_array_containing_value(value))
-        });
+        let value = unsafe {
+            with_values(&[map, key], |values| {
+                let Value::Map(map) = values[0] else {
+                    runtime_error(format!(
+                        "expected `dict`, found `{}`",
+                        value_type_name(values[0])
+                    ));
+                };
+                let key = values[1];
+                map.entries
+                    .iter()
+                    .find(|(candidate_key, _)| candidate_key == key)
+                    .map(|(_, value)| try_clone_array_containing_value(value))
+            })
+        };
         let Some(value) = value else {
-            let message = format!("dict key `{}` was not present", key.render());
+            let message = unsafe {
+                with_value(key, |key| {
+                    format!("dict key `{}` was not present", key.render())
+                })
+            };
             match runtime_span(line, column) {
                 Some(span) => {
                     runtime_diagnostic_error(Diagnostic::coded_at("AU4003", span, message))
@@ -6855,9 +7517,16 @@ pub extern "C-unwind" fn aura_direct_set_contains(
     set: *mut OpaqueValue,
     value: *mut OpaqueValue,
 ) -> i64 {
-    task_runtime_boundary(|| {
-        let needle = unsafe { take_value(value) };
-        i64::from(with_set(set, |set| set.elements.contains(&needle)))
+    task_runtime_boundary(|| unsafe {
+        with_values(&[set, value], |values| {
+            let Value::Set(collection) = values[0] else {
+                runtime_error(format!(
+                    "expected `set`, found `{}`",
+                    value_type_name(values[0])
+                ));
+            };
+            i64::from(collection.elements.contains(values[1]))
+        })
     })
 }
 
@@ -6890,19 +7559,22 @@ pub extern "C-unwind" fn aura_direct_set_remove_in_place(
     value: *mut OpaqueValue,
 ) -> i64 {
     task_runtime_boundary(|| {
-        let value = unsafe { take_value(value) };
-        let removed = with_set_mut(set, |set| {
-            if let Some(index) = set
-                .elements
-                .iter()
-                .position(|candidate| *candidate == value)
-            {
-                set.elements.remove(index);
-                true
-            } else {
-                false
-            }
-        });
+        let index = unsafe {
+            with_values(&[set, value], |values| {
+                let Value::Set(set) = values[0] else {
+                    runtime_error(format!(
+                        "expected `set`, found `{}`",
+                        value_type_name(values[0])
+                    ));
+                };
+                set.elements
+                    .iter()
+                    .position(|candidate| candidate == values[1])
+            })
+        };
+        let removed = index
+            .map(|index| with_set_mut(set, |set| set.elements.remove(index)))
+            .is_some();
         i64::from(removed)
     })
 }
@@ -6954,7 +7626,24 @@ pub extern "C-unwind" fn aura_direct_clone_value(value: *mut OpaqueValue) -> *mu
     task_runtime_boundary(|| {
         let runtime_type_name = unsafe { explicit_runtime_type_name(value) };
         let cloned = unsafe { with_value(value, try_clone_array_containing_value) };
-        boxed_value_with_type(direct_array_result(cloned, 0, 0), runtime_type_name)
+        let mut cloned = direct_array_result(cloned, 0, 0);
+        if let Some(Type::Union(target)) = unsafe { direct_logical_union(value) } {
+            let member_type = unsafe { direct_logical_member_type(value) };
+            let index = direct_borrowed_union_index(
+                &cloned,
+                &target,
+                member_type.as_ref(),
+                "borrowed union clone",
+            )
+            .unwrap_or_else(|message| runtime_error(message));
+            if let Value::Union(union) = &mut cloned {
+                union.union_type = Type::Union(target);
+                union.member_index = index;
+            } else {
+                cloned = crate::runtime_value::union_value(Type::Union(target), index, cloned);
+            }
+        }
+        boxed_value_with_type(cloned, runtime_type_name)
     })
 }
 
@@ -7229,11 +7918,12 @@ pub extern "C-unwind" fn aura_direct_binary_value(
             19 => BinaryOp::Shr,
             other => runtime_error(format!("unknown binary opcode `{}`", other)),
         };
-        match eval_binary_value(
-            unsafe { take_value(left) },
-            unsafe { take_value(right) },
-            op,
-        ) {
+        let result = unsafe {
+            with_values(&[left, right], |values| {
+                eval_borrowed_binary_value(values[0], values[1], op, FloatPowerWidth::Float64)
+            })
+        };
+        match result {
             Ok(value) => boxed_value(value),
             Err(error) => runtime_diagnostic_error(error),
         }
@@ -7278,12 +7968,12 @@ pub extern "C-unwind" fn aura_direct_binary_value_at(
             0 | 64 => FloatPowerWidth::Float64,
             other => runtime_error(format!("unknown direct floating width `{other}`")),
         };
-        match eval_binary_value_with_float_width(
-            unsafe { take_value(left) },
-            unsafe { take_value(right) },
-            op,
-            float_width,
-        ) {
+        let result = unsafe {
+            with_values(&[left, right], |values| {
+                eval_borrowed_binary_value(values[0], values[1], op, float_width)
+            })
+        };
+        match result {
             Ok(value) => boxed_value(value),
             Err(error) => runtime_diagnostic_error_at(error, runtime_span(line, column)),
         }
@@ -7442,108 +8132,111 @@ pub extern "C-unwind" fn aura_direct_value_type_matches(
     task_runtime_boundary(|| {
         let expected = decode_bytes(type_ptr, type_len);
         let explicit_type = unsafe { effective_runtime_type_name(value) };
-        let actual = unsafe { value_ref(value) };
-        if let Some(pattern) = canonical_runtime_type_from_name(&expected) {
-            let actual_type = explicit_type
-                .as_deref()
-                .map(runtime_type_from_name)
-                .unwrap_or_else(|| inferred_collection_type(&actual));
-            return i64::from(runtime_type_pattern_matches(
-                &pattern,
-                &actual_type,
-                &mut BTreeMap::new(),
-            ));
-        }
-        if expected.contains('?') {
-            let pattern = runtime_type_pattern_from_name(&expected);
-            if let Some(actual_type) = explicit_type.as_deref() {
-                return i64::from(runtime_type_pattern_matches(
-                    &pattern,
-                    &runtime_type_from_name(actual_type),
-                    &mut BTreeMap::new(),
-                ));
-            }
-            let untagged_outer_wildcard = match &pattern {
-                Type::Union(_) => false,
-                Type::Named(name, args) => {
-                    value_type_name(&actual) == *name
-                        && args.iter().all(|arg| matches!(arg, Type::TypeParam(_)))
-                }
-                Type::Tuple(_) => match &actual {
-                    Value::Tuple(tuple) => runtime_type_pattern_matches(
+        unsafe {
+            with_value(value, |actual| {
+                if let Some(pattern) = canonical_runtime_type_from_name(&expected) {
+                    let actual_type = explicit_type
+                        .as_deref()
+                        .map(runtime_type_from_name)
+                        .unwrap_or_else(|| inferred_collection_type(actual));
+                    return i64::from(runtime_type_pattern_matches(
                         &pattern,
-                        &Type::Tuple(tuple.element_types.clone()),
+                        &actual_type,
                         &mut BTreeMap::new(),
+                    ));
+                }
+                if expected.contains('?') {
+                    let pattern = runtime_type_pattern_from_name(&expected);
+                    if let Some(actual_type) = explicit_type.as_deref() {
+                        return i64::from(runtime_type_pattern_matches(
+                            &pattern,
+                            &runtime_type_from_name(actual_type),
+                            &mut BTreeMap::new(),
+                        ));
+                    }
+                    let untagged_outer_wildcard = match &pattern {
+                        Type::Union(_) => false,
+                        Type::Named(name, args) => {
+                            value_type_name(actual) == *name
+                                && args.iter().all(|arg| matches!(arg, Type::TypeParam(_)))
+                        }
+                        Type::Tuple(_) => match actual {
+                            Value::Tuple(tuple) => runtime_type_pattern_matches(
+                                &pattern,
+                                &Type::Tuple(tuple.element_types.clone()),
+                                &mut BTreeMap::new(),
+                            ),
+                            _ => false,
+                        },
+                        Type::Function { .. }
+                        | Type::Closure { .. }
+                        | Type::Callable(_)
+                        | Type::ReturnedView(_)
+                        | Type::Unit
+                        | Type::Module(_)
+                        | Type::TypeParam(_) => false,
+                    };
+                    return i64::from(untagged_outer_wildcard);
+                }
+                let explicit_matches = explicit_type.as_deref() == Some(expected.as_str());
+                let structural_matches = match actual {
+                    Value::Instance(instance) => {
+                        nominal_runtime_base_name(&instance.class_name) == expected
+                    }
+                    Value::EnumVariant(variant) => {
+                        nominal_runtime_base_name(&variant.enum_name) == expected
+                    }
+                    Value::Union(union) => union.union_type.to_string() == expected,
+                    Value::String(_) => expected == "str",
+                    Value::Tuple(tuple) => {
+                        expected == "tuple"
+                            || Type::Tuple(tuple.element_types.clone()).to_string() == expected
+                    }
+                    Value::Vec(_) => expected == "list",
+                    Value::Array(array) => {
+                        expected == "Array"
+                            || expected == format!("Array[{}]", array.dtype().runtime_type_name())
+                    }
+                    Value::Set(_) => expected == "set",
+                    Value::Map(_) => expected == "dict",
+                    Value::Channel(_) => expected == "Queue",
+                    Value::Task(_) => expected == "Task",
+                    Value::TaskGroup(_) => expected == "TaskGroup",
+                    Value::Function(function) => function.signature.to_string() == expected,
+                    Value::FfiHandle(handle) => handle.type_name() == expected,
+                    Value::File(_) => expected == "fs.File",
+                    Value::TcpListener(_) => expected == "net.TcpListener",
+                    Value::TcpStream(_) => expected == "net.TcpStream",
+                    Value::UdpSocket(_) => expected == "net.UdpSocket",
+                    Value::UdpDatagram(_) => expected == "net.UdpDatagram",
+                    Value::HttpListener(_) => expected == "net.HttpListener",
+                    Value::HttpExchange(_) => expected == "net.HttpExchange",
+                    Value::HttpResponse(_) => expected == "net.HttpResponse",
+                    Value::WebSocketListener(_) => expected == "net.WebSocketListener",
+                    Value::WebSocket(_) => expected == "net.WebSocket",
+                    Value::UnixListener(_) => expected == "net.UnixListener",
+                    Value::UnixStream(_) => expected == "net.UnixStream",
+                    Value::TlsListener(_) => expected == "net.TlsListener",
+                    Value::TlsStream(_) => expected == "net.TlsStream",
+                    Value::ProcessChild(_) => expected == "process.Child",
+                    Value::ProcessPipe(_) => expected == "process.Pipe",
+                    Value::ProcessCompleted(_) => expected == "process.Completed",
+                    Value::ProcessSupervisor(_) => expected == "process.Supervisor",
+                    Value::Duration(_) => expected == "Duration",
+                    Value::Rng(_) => expected == "random.Rng",
+                    Value::Range(_) => expected == "Range",
+                    Value::Bool(_) => expected == "bool",
+                    Value::Float(_) => expected == "float64" || expected == "float32",
+                    Value::Int(value) => value.runtime_type_name().map_or_else(
+                        || expected.starts_with("int") || expected.starts_with("uint"),
+                        |actual| actual == expected,
                     ),
-                    _ => false,
-                },
-                Type::Function { .. }
-                | Type::Closure { .. }
-                | Type::Callable(_)
-                | Type::ReturnedView(_)
-                | Type::Unit
-                | Type::Module(_)
-                | Type::TypeParam(_) => false,
-            };
-            return i64::from(untagged_outer_wildcard);
+                    Value::Unit => expected == "None",
+                    Value::ModuleNamespace(_) => expected.starts_with("module "),
+                };
+                i64::from(explicit_matches || structural_matches)
+            })
         }
-        let explicit_matches = explicit_type.as_deref() == Some(expected.as_str());
-        let structural_matches = match &actual {
-            Value::Instance(instance) => {
-                nominal_runtime_base_name(&instance.class_name) == expected
-            }
-            Value::EnumVariant(variant) => {
-                nominal_runtime_base_name(&variant.enum_name) == expected
-            }
-            Value::Union(union) => union.union_type.to_string() == expected,
-            Value::String(_) => expected == "str",
-            Value::Tuple(tuple) => {
-                expected == "tuple"
-                    || Type::Tuple(tuple.element_types.clone()).to_string() == expected
-            }
-            Value::Vec(_) => expected == "list",
-            Value::Array(array) => {
-                expected == "Array"
-                    || expected == format!("Array[{}]", array.dtype().runtime_type_name())
-            }
-            Value::Set(_) => expected == "set",
-            Value::Map(_) => expected == "dict",
-            Value::Channel(_) => expected == "Queue",
-            Value::Task(_) => expected == "Task",
-            Value::TaskGroup(_) => expected == "TaskGroup",
-            Value::Function(function) => function.signature.to_string() == expected,
-            Value::FfiHandle(handle) => handle.type_name() == expected,
-            Value::File(_) => expected == "fs.File",
-            Value::TcpListener(_) => expected == "net.TcpListener",
-            Value::TcpStream(_) => expected == "net.TcpStream",
-            Value::UdpSocket(_) => expected == "net.UdpSocket",
-            Value::UdpDatagram(_) => expected == "net.UdpDatagram",
-            Value::HttpListener(_) => expected == "net.HttpListener",
-            Value::HttpExchange(_) => expected == "net.HttpExchange",
-            Value::HttpResponse(_) => expected == "net.HttpResponse",
-            Value::WebSocketListener(_) => expected == "net.WebSocketListener",
-            Value::WebSocket(_) => expected == "net.WebSocket",
-            Value::UnixListener(_) => expected == "net.UnixListener",
-            Value::UnixStream(_) => expected == "net.UnixStream",
-            Value::TlsListener(_) => expected == "net.TlsListener",
-            Value::TlsStream(_) => expected == "net.TlsStream",
-            Value::ProcessChild(_) => expected == "process.Child",
-            Value::ProcessPipe(_) => expected == "process.Pipe",
-            Value::ProcessCompleted(_) => expected == "process.Completed",
-            Value::ProcessSupervisor(_) => expected == "process.Supervisor",
-            Value::Duration(_) => expected == "Duration",
-            Value::Rng(_) => expected == "random.Rng",
-            Value::Range(_) => expected == "Range",
-            Value::Bool(_) => expected == "bool",
-            Value::Float(_) => expected == "float64" || expected == "float32",
-            Value::Int(value) => value.runtime_type_name().map_or_else(
-                || expected.starts_with("int") || expected.starts_with("uint"),
-                |actual| actual == expected,
-            ),
-            Value::Unit => expected == "None",
-            Value::ModuleNamespace(_) => expected.starts_with("module "),
-        };
-        i64::from(explicit_matches || structural_matches)
     })
 }
 
@@ -7566,12 +8259,29 @@ pub extern "C-unwind" fn aura_direct_union_tag_test(
             runtime_error("union tag test requires a union type");
         };
         unsafe {
-            value_mut(value, |value| {
-                let active =
-                    crate::union_runtime::align_union_value(value, target, "union tag test")
-                        .unwrap_or_else(|message| runtime_error(message));
+            if matches!(
+                &direct_opaque(value).storage,
+                DirectValueStorage::Borrowed(_)
+            ) {
+                let direct_logical_member_type_ptr = direct_logical_member_type(value);
+                let active = with_value(value, |value| {
+                    direct_borrowed_union_index(
+                        value,
+                        target,
+                        direct_logical_member_type_ptr.as_ref(),
+                        "union tag test",
+                    )
+                })
+                .unwrap_or_else(|message| runtime_error(message));
                 i64::from(active == member_index)
-            })
+            } else {
+                value_mut(value, |value| {
+                    let active =
+                        crate::union_runtime::align_union_value(value, target, "union tag test")
+                            .unwrap_or_else(|message| runtime_error(message));
+                    i64::from(active == member_index)
+                })
+            }
         }
     })
 }
@@ -7589,6 +8299,24 @@ pub extern "C-unwind" fn aura_direct_union_active_payload(
     consume: i64,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
+        if matches!(
+            &unsafe { direct_opaque(value) }.storage,
+            DirectValueStorage::Borrowed(_)
+        ) {
+            if consume != 0 {
+                runtime_error("cannot consume a borrowed union payload");
+            }
+            let projection = DIRECT_UNION_ACTIVE_PAYLOAD_PROJECTION;
+            return aura_direct_place_borrow(
+                value,
+                projection.as_ptr(),
+                projection.len(),
+                i64::from(unsafe { direct_place_is_mutable(value) }),
+                b"".as_ptr(),
+                0,
+            );
+        }
+
         let payload = unsafe {
             value_mut(value, |value| {
                 let Value::Union(union) = value else {
@@ -7623,7 +8351,11 @@ pub extern "C-unwind" fn aura_direct_none_test(value: *mut OpaqueValue) -> i64 {
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_value_is_union(value: *mut OpaqueValue) -> i64 {
     task_runtime_boundary(|| unsafe {
-        with_value(value, |value| i64::from(matches!(value, Value::Union(_))))
+        if direct_logical_union(value).is_some() {
+            1
+        } else {
+            with_value(value, |value| i64::from(matches!(value, Value::Union(_))))
+        }
     })
 }
 
@@ -7662,6 +8394,20 @@ pub extern "C-unwind" fn aura_direct_union_take_payload(
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_union_tag(value: *mut OpaqueValue) -> i64 {
     task_runtime_boundary(|| {
+        if let Some(Type::Union(target)) = unsafe { direct_logical_union(value) } {
+            let member_type = unsafe { direct_logical_member_type(value) };
+            return unsafe {
+                with_value(value, |value| {
+                    direct_borrowed_union_index(
+                        value,
+                        &target,
+                        member_type.as_ref(),
+                        "borrowed union tag",
+                    )
+                })
+            }
+            .unwrap_or_else(|message| runtime_error(message)) as i64;
+        }
         // The lock is released before any failure is raised.
         let tag = unsafe {
             with_value(value, |value| match value {
@@ -7922,20 +8668,50 @@ pub extern "C-unwind" fn aura_direct_variant_payload(
     value: *mut OpaqueValue,
     index: i64,
 ) -> *mut OpaqueValue {
-    task_runtime_boundary(|| match unsafe { value_ref(value) } {
-        Value::EnumVariant(variant) => match variant.payloads.get(index.max(0) as usize) {
-            Some(payload) => boxed_value(payload.clone()),
-            None => runtime_error(format!(
-                "enum variant `{}.{}` does not carry a payload at index {}",
-                nominal_runtime_base_name(&variant.enum_name),
-                variant.variant_name,
-                index
-            )),
-        },
-        other => runtime_error(format!(
-            "expected enum value, found `{}`",
-            value_type_name(other)
-        )),
+    task_runtime_boundary(|| {
+        let index = index.max(0) as usize;
+        if matches!(
+            &unsafe { direct_opaque(value) }.storage,
+            DirectValueStorage::Borrowed(_)
+        ) {
+            let path = unsafe {
+                with_value(value, |value| match value {
+                    Value::EnumVariant(variant) => {
+                        format!("__variant_payload_{}_{index}", variant.variant_name)
+                    }
+                    other => runtime_error(format!(
+                        "expected enum value, found `{}`",
+                        value_type_name(other)
+                    )),
+                })
+            };
+            return aura_direct_place_borrow(
+                value,
+                path.as_ptr(),
+                path.len(),
+                i64::from(unsafe { direct_place_is_mutable(value) }),
+                b"".as_ptr(),
+                0,
+            );
+        }
+        let payload = unsafe {
+            with_value(value, |value| match value {
+                Value::EnumVariant(variant) => match variant.payloads.get(index) {
+                    Some(payload) => try_clone_array_containing_value(payload),
+                    None => runtime_error(format!(
+                        "enum variant `{}.{}` does not carry a payload at index {}",
+                        nominal_runtime_base_name(&variant.enum_name),
+                        variant.variant_name,
+                        index
+                    )),
+                },
+                other => runtime_error(format!(
+                    "expected enum value, found `{}`",
+                    value_type_name(other)
+                )),
+            })
+        };
+        boxed_value(direct_array_result(payload, 0, 0))
     })
 }
 
@@ -8013,6 +8789,19 @@ pub extern "C-unwind" fn aura_direct_instance_get_field(
     field_len: usize,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
+        if matches!(
+            &unsafe { direct_opaque(value) }.storage,
+            DirectValueStorage::Borrowed(_)
+        ) {
+            return aura_direct_place_borrow(
+                value,
+                field_ptr,
+                field_len,
+                i64::from(unsafe { direct_place_is_mutable(value) }),
+                b"".as_ptr(),
+                0,
+            );
+        }
         let field = decode_bytes(field_ptr, field_len);
         let cloned = unsafe {
             with_value(value, |value| {
@@ -8452,6 +9241,224 @@ pub extern "C-unwind" fn aura_direct_arg_buffer_store_owned(
     })
 }
 
+unsafe fn direct_place_is_mutable(place: *mut OpaqueValue) -> bool {
+    matches!(&unsafe { direct_opaque(place) }.storage, DirectValueStorage::Borrowed(place) if place.mutable)
+}
+
+fn direct_registered_place(place: *mut OpaqueValue) -> *mut OpaqueValue {
+    unsafe {
+        retain_untracked_value(place);
+    }
+    register_direct_owned_value(place);
+    place
+}
+
+fn direct_sink_place(id: i64) -> *mut OpaqueValue {
+    // Register outside the task-state borrow, since the ledger shares it.
+    let place = with_direct_task_runtime_state(|state| match state.mutable_sinks.get(&id) {
+        Some(DirectMutableWritebackSink::SelectedPlace(place)) => place.0,
+        _ => std::ptr::null_mut(),
+    });
+    if !place.is_null() {
+        direct_registered_place(place)
+    } else {
+        place
+    }
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_place_sink_new(place: *mut OpaqueValue) -> i64 {
+    task_runtime_boundary(|| {
+        if !matches!(
+            &unsafe { direct_opaque(place) }.storage,
+            DirectValueStorage::Borrowed(_)
+        ) {
+            runtime_error("selected place sink requires a borrowed descriptor");
+        }
+        unsafe {
+            retain_untracked_value(place);
+        }
+        let retained = DirectRetainedPlace(place);
+        with_direct_task_runtime_state(|state| {
+            let id = next_direct_mutable_sink_id(state);
+            state
+                .mutable_sinks
+                .insert(id, DirectMutableWritebackSink::SelectedPlace(retained));
+            id
+        })
+    })
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_current_borrowed_place(
+    parameter_index: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let index = usize::try_from(parameter_index)
+            .unwrap_or_else(|_| runtime_error("invalid borrowed parameter index"));
+        let id = with_direct_task_runtime_state(|state| {
+            state
+                .returned_view_frames
+                .last()
+                .and_then(|frame| frame.mutable_sinks.get(index))
+                .copied()
+                .unwrap_or(0)
+        });
+        direct_sink_place(id)
+    })
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_call_handoff_take() -> i64 {
+    task_runtime_boundary(|| {
+        with_direct_task_runtime_state(|state| {
+            let Some(pending) = state.pending_mutable_sinks.take() else {
+                return 0;
+            };
+            loop {
+                let id = state.next_call_handoff_id;
+                state.next_call_handoff_id = id.checked_add(1).unwrap_or(1);
+                if id != 0 && !state.call_handoffs.contains_key(&id) {
+                    state.call_handoffs.insert(id, pending);
+                    return id;
+                }
+            }
+        })
+    })
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_call_handoff_place(
+    token: i64,
+    index: i64,
+    capture: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        if token == 0 {
+            return std::ptr::null_mut();
+        }
+        let index = usize::try_from(index)
+            .unwrap_or_else(|_| runtime_error("invalid borrowed handoff index"));
+        let sink = with_direct_task_runtime_state(|state| match state.call_handoffs.get(&token) {
+            Some(DirectPendingMutableSinks::Direct(sinks)) if capture == 0 => {
+                Ok(sinks.get(index).copied().unwrap_or(0))
+            }
+            Some(DirectPendingMutableSinks::Indirect { public, captures }) => {
+                if capture == 0 {
+                    Ok(public.get(index).copied().unwrap_or(0))
+                } else {
+                    Ok(captures
+                        .iter()
+                        .find(|(slot, _)| *slot == index)
+                        .map(|(_, sink)| *sink)
+                        .unwrap_or(0))
+                }
+            }
+            Some(_) => Err("direct handoff cannot select a capture"),
+            None => Err("unknown direct call handoff token"),
+        })
+        .unwrap_or_else(|message| runtime_error(message));
+        direct_sink_place(sink)
+    })
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_call_handoff_publish(token: i64, capture_count: i64) {
+    task_runtime_boundary(|| {
+        if token == 0 {
+            return;
+        }
+        let pending =
+            with_direct_task_runtime_state(|state| state.call_handoffs.get(&token).cloned())
+                .unwrap_or_else(|| runtime_error("unknown direct call handoff token"));
+        let indirect = matches!(pending, DirectPendingMutableSinks::Indirect { .. });
+        install_pending_direct_mutable_sinks(pending);
+        if indirect && capture_count >= 0 {
+            prepare_indirect_direct_mutable_sinks(capture_count as usize);
+        }
+    })
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_call_handoff_release(token: i64) {
+    task_runtime_boundary(|| {
+        with_direct_task_runtime_state(|state| {
+            state.call_handoffs.remove(&token);
+        });
+    })
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_set_returned_view_place(
+    projection_ptr: *const u8,
+    projection_len: usize,
+    place: *mut OpaqueValue,
+) {
+    task_runtime_boundary(|| {
+        let projection = decode_bytes(projection_ptr, projection_len);
+        let retained = if place.is_null() {
+            None
+        } else {
+            unsafe {
+                retain_untracked_value(place);
+            }
+            Some(DirectRetainedPlace(place))
+        };
+        let result = with_direct_task_runtime_state(|state| {
+            let Some(frame) = state.returned_view_frames.last_mut() else {
+                return false;
+            };
+            frame.returned = Some(DirectReturnedPlace {
+                projection,
+                place: retained,
+            });
+            true
+        });
+        if !result {
+            runtime_error("direct returned-view handoff has no active call frame");
+        }
+    })
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_take_returned_view_place(
+    allowed_ptr: *const u8,
+    allowed_len: usize,
+    selected_index_out: *mut i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let allowed = if allowed_len == 0 {
+            &[][..]
+        } else {
+            unsafe { slice::from_raw_parts(allowed_ptr, allowed_len) }
+        };
+        let selected = with_direct_task_runtime_state(|state| {
+            state
+                .returned_view_frames
+                .last_mut()
+                .and_then(|frame| frame.pending_child.take())
+        })
+        .unwrap_or_else(|| runtime_error("direct returned view has no transferred projection"));
+        let index = allowed
+            .split(|byte| *byte == 0)
+            .position(|projection| projection == selected.projection.as_bytes())
+            .and_then(|index| i64::try_from(index).ok())
+            .unwrap_or_else(|| {
+                runtime_error("direct returned view selected an undeclared projection")
+            });
+        if selected_index_out.is_null() {
+            runtime_error("direct returned view selection output is null");
+        }
+        unsafe {
+            *selected_index_out = index;
+        }
+        match selected.place {
+            Some(place) => direct_registered_place(place.0),
+            None => std::ptr::null_mut(),
+        }
+    })
+}
+
 fn direct_mutable_sink_projection(path: String) -> String {
     if !path.is_empty() && path.split('.').any(str::is_empty) {
         runtime_error(format!(
@@ -8629,12 +9636,20 @@ pub extern "C-unwind" fn aura_direct_current_mutable_sink(index: i64) -> i64 {
         let index = usize::try_from(index)
             .unwrap_or_else(|_| runtime_error("invalid direct mutable sink index"));
         with_direct_task_runtime_state(|state| {
-            state
+            let id = state
                 .returned_view_frames
                 .last()
                 .and_then(|frame| frame.mutable_sinks.get(index))
                 .copied()
-                .unwrap_or(0)
+                .unwrap_or(0);
+            match state.mutable_sinks.get(&id) {
+                Some(DirectMutableWritebackSink::SelectedPlace(place))
+                    if !unsafe { direct_place_is_mutable(place.0) } =>
+                {
+                    0
+                }
+                _ => id,
+            }
         })
     })
 }
@@ -8657,7 +9672,7 @@ pub extern "C-unwind" fn aura_direct_mutable_sink_new(
             let id = next_direct_mutable_sink_id(state);
             state.mutable_sinks.insert(
                 id,
-                DirectMutableWritebackSink {
+                DirectMutableWritebackSink::Snapshot {
                     slot: Arc::new(Mutex::new(DirectMutableWritebackSlot {
                         root,
                         cleanup_registration_id,
@@ -8685,17 +9700,38 @@ pub extern "C-unwind" fn aura_direct_mutable_sink_project(
         let parent =
             with_direct_task_runtime_state(|state| state.mutable_sinks.get(&parent_id).cloned())
                 .unwrap_or_else(|| runtime_error("unknown direct mutable write-through sink"));
-        let projection = match (parent.projection.is_empty(), projection.is_empty()) {
+        let parent = match parent {
+            DirectMutableWritebackSink::SelectedPlace(place) => {
+                let projected = aura_direct_place_borrow(
+                    place.0,
+                    projection.as_ptr(),
+                    projection.len(),
+                    1,
+                    b"".as_ptr(),
+                    0,
+                );
+                let id = aura_direct_place_sink_new(projected);
+                unsafe {
+                    aura_direct_release_value(projected);
+                }
+                return id;
+            }
+            DirectMutableWritebackSink::Snapshot {
+                slot,
+                projection: parent_projection,
+            } => (slot, parent_projection),
+        };
+        let projection = match (parent.1.is_empty(), projection.is_empty()) {
             (true, _) => projection,
-            (_, true) => parent.projection,
-            (false, false) => format!("{}.{}", parent.projection, projection),
+            (_, true) => parent.1,
+            (false, false) => format!("{}.{}", parent.1, projection),
         };
         with_direct_task_runtime_state(|state| {
             let id = next_direct_mutable_sink_id(state);
             state.mutable_sinks.insert(
                 id,
-                DirectMutableWritebackSink {
-                    slot: parent.slot,
+                DirectMutableWritebackSink::Snapshot {
+                    slot: parent.0,
                     projection,
                 },
             );
@@ -8717,16 +9753,24 @@ pub extern "C-unwind" fn aura_direct_mutable_sink_store_owned(
         let sink =
             with_direct_task_runtime_state(|state| state.mutable_sinks.get(&sink_id).cloned())
                 .unwrap_or_else(|| runtime_error("unknown direct mutable write-through sink"));
+        let (slot, projection) = match sink {
+            DirectMutableWritebackSink::SelectedPlace(place) => {
+                unsafe {
+                    value_mut(place.0, |selected| *selected = value);
+                }
+                return;
+            }
+            DirectMutableWritebackSink::Snapshot { slot, projection } => (slot, projection),
+        };
         let (root, cleanup_registration_id) = {
-            let mut slot = sink
-                .slot
+            let mut slot = slot
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if sink.projection.is_empty() {
+            if projection.is_empty() {
                 slot.root = value;
             } else {
-                let segments = sink.projection.split('.').collect::<Vec<_>>();
-                set_direct_instance_field_owned(&mut slot.root, &segments, &sink.projection, value)
+                let segments = projection.split('.').collect::<Vec<_>>();
+                set_direct_instance_field_owned(&mut slot.root, &segments, &projection, value)
                     .unwrap_or_else(|message| runtime_error(message));
             }
             let root = try_clone_array_containing_value(&slot.root)
@@ -8863,7 +9907,10 @@ pub extern "C-unwind" fn aura_direct_set_returned_view_projection(
             let Some(frame) = state.returned_view_frames.last_mut() else {
                 return false;
             };
-            frame.returned = Some(projection);
+            frame.returned = Some(DirectReturnedPlace {
+                projection,
+                place: None,
+            });
             true
         });
         if !installed {
@@ -8880,7 +9927,11 @@ pub extern "C-unwind" fn aura_direct_take_returned_view_projection(
     projections_len: usize,
 ) -> i64 {
     task_runtime_boundary(|| {
-        let projections = unsafe { slice::from_raw_parts(projections_ptr, projections_len) };
+        let projections = if projections_len == 0 {
+            &[][..]
+        } else {
+            unsafe { slice::from_raw_parts(projections_ptr, projections_len) }
+        };
         let selected = with_direct_task_runtime_state(|state| {
             state
                 .returned_view_frames
@@ -8890,7 +9941,7 @@ pub extern "C-unwind" fn aura_direct_take_returned_view_projection(
         .unwrap_or_else(|| runtime_error("direct returned view has no transferred projection"));
         projections
             .split(|byte| *byte == 0)
-            .position(|projection| projection == selected.as_bytes())
+            .position(|projection| projection == selected.projection.as_bytes())
             .and_then(|index| i64::try_from(index).ok())
             .unwrap_or_else(|| {
                 runtime_error("direct returned view selected an undeclared projection")

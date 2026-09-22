@@ -1,5 +1,0 @@
-def accept(value: str | None) -> int64:
-    return 42
-def main():
-    name = "Ada"
-    print(accept(value=name))

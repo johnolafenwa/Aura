@@ -3070,6 +3070,7 @@ fn adr0038_mir_reborrow_and_returned_projections_are_canonical_and_type_valid() 
     );
 
     let generic_box = MirClass {
+        copy: false,
         name: "Box".to_string(),
         type_params: vec!["T".to_string()],
         fields: vec![MirClassField {
@@ -3102,6 +3103,7 @@ fn adr0038_mir_reborrow_and_returned_projections_are_canonical_and_type_valid() 
     );
 
     let pair_for_mismatch = MirClass {
+        copy: false,
         name: "TypedPair".to_string(),
         type_params: Vec::new(),
         fields: vec![MirClassField {
@@ -3134,6 +3136,7 @@ fn adr0038_mir_reborrow_and_returned_projections_are_canonical_and_type_valid() 
     );
 
     let pair = MirClass {
+        copy: false,
         name: "Pair".to_string(),
         type_params: Vec::new(),
         fields: vec![MirClassField {
@@ -13465,4 +13468,617 @@ def main():
         &inactive_parent,
         "invalid MIR element reborrow `first` in `main` has inactive parent `second`",
     );
+}
+
+#[test]
+fn adr0061_shared_union_loan_contracts_are_common_to_public_boundaries() {
+    let mut module = crate::lower_source_to_mir(
+        "def main():\n    text = \"hello\"\n    optional: str | None = None\n    print(text)\n",
+    )
+    .unwrap();
+    let function = module
+        .functions
+        .iter_mut()
+        .find(|function| function.name == "main")
+        .unwrap();
+    let union_type = function
+        .local_types
+        .iter()
+        .find(|local| local.name == "optional")
+        .unwrap()
+        .ty
+        .clone();
+    let Type::Union(union) = &union_type else {
+        panic!("expected union")
+    };
+    let member_index = union
+        .members
+        .iter()
+        .position(|member| *member == Type::named("str"))
+        .unwrap();
+    function.local_types.push(MirLocalType {
+        name: "presentation".into(),
+        ty: union_type.clone(),
+    });
+    let block = function
+        .blocks
+        .iter_mut()
+        .find(|block| block.label == function.entry)
+        .unwrap();
+    block.instructions.push(Instruction::BeginUnionLoan {
+        loan: "presentation".into(),
+        source: "text".into(),
+        union_type,
+        member_type: Type::named("str"),
+        member_index,
+        span: Span::new(1, 1),
+    });
+    block.instructions.push(Instruction::EndLoan {
+        loan: "presentation".into(),
+    });
+    for (kind, expected) in [
+        (0, "union loan requires a union type"),
+        (1, "union loan member index and type disagree"),
+        (
+            2,
+            "union loan source does not have its selected member type",
+        ),
+        (3, "union loan destination does not have its union type"),
+        (4, "has unknown source `absent`"),
+        (5, "shadows its source root"),
+    ] {
+        let mut invalid = module.clone();
+        let function = invalid
+            .functions
+            .iter_mut()
+            .find(|function| function.name == "main")
+            .unwrap();
+        if kind == 3 {
+            function
+                .local_types
+                .iter_mut()
+                .find(|local| local.name == "presentation")
+                .unwrap()
+                .ty = Type::named("str");
+        }
+        let instruction = function
+            .blocks
+            .iter_mut()
+            .flat_map(|block| &mut block.instructions)
+            .find(|instruction| matches!(instruction, Instruction::BeginUnionLoan { .. }))
+            .unwrap();
+        if let Instruction::BeginUnionLoan {
+            loan,
+            source,
+            union_type,
+            member_index,
+            ..
+        } = instruction
+        {
+            match kind {
+                0 => *union_type = Type::named("str"),
+                1 => *member_index = usize::MAX,
+                2 => *source = "optional".into(),
+                4 => *source = "absent".into(),
+                5 => *loan = "text".into(),
+                _ => {}
+            }
+        }
+        assert_public_boundaries_reject(&invalid, expected);
+    }
+}
+
+#[test]
+fn adr0061_noncopy_read_alias_cannot_outlive_its_loan() {
+    let mut module = crate::lower_source_to_mir(
+        "def main():\n    text = \"hello\"\n    view selected = text\n    print(selected)\n",
+    )
+    .unwrap();
+    let function = module
+        .functions
+        .iter_mut()
+        .find(|function| function.name == "main")
+        .unwrap();
+    function.local_types.push(MirLocalType {
+        name: "alias".into(),
+        ty: Type::named("str"),
+    });
+    let block = function
+        .blocks
+        .iter_mut()
+        .find(|block| {
+            block
+                .instructions
+                .iter()
+                .any(|instruction| matches!(instruction, Instruction::BeginLoan { .. }))
+        })
+        .unwrap();
+    let start = block
+        .instructions
+        .iter()
+        .position(|instruction| matches!(instruction, Instruction::BeginLoan { .. }))
+        .unwrap();
+    let Instruction::BeginLoan { loan, .. } = &block.instructions[start] else {
+        unreachable!()
+    };
+    let loan = loan.clone();
+    block.instructions.truncate(start + 1);
+    block.instructions.extend([
+        Instruction::ReadLoan {
+            target: "alias".into(),
+            loan: loan.clone(),
+        },
+        Instruction::EndLoan { loan },
+        Instruction::Eval {
+            value: Operand::Place("alias".into()),
+        },
+    ]);
+    block.terminator = Terminator::Return(Operand::Unit);
+    assert_public_boundaries_reject(&module, "uses a borrowed value after its loan");
+    let function = module.functions.iter_mut().find(|function| function.name == "main").unwrap();
+    function.local_types.iter_mut().find(|local| local.name == "alias").unwrap().ty = Type::named("int64");
+    assert_public_boundaries_reject(&module, "projects");
+}
+#[test]
+fn adr0061_contextual_lowering_preserves_selected_mutable_argument_places() {
+    let module = crate::lower_source_to_mir(
+        r#"
+def bump(value: mut int64):
+    value += 1
+
+def main():
+    mut rows = [[1, 2], [3, 4]]
+    mut entries: dict[str, list[int64]] = {"row": [5, 6]}
+    bump(rows[0][1])
+    bump(entries["row"][0])
+    print(rows)
+    print(entries)
+"#,
+    )
+    .expect("nested contextual mutable places should lower");
+    let main = module
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .unwrap();
+    let instructions = main
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .collect::<Vec<_>>();
+    let child_loans = instructions
+        .iter()
+        .filter_map(|instruction| match instruction {
+            Instruction::ReborrowElement {
+                loan,
+                mutable: true,
+                ..
+            } => Some(loan),
+            _ => None,
+        })
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        child_loans.len(),
+        2,
+        "each nested selection must retain its element parent"
+    );
+    let calls = instructions
+        .iter()
+        .filter_map(|instruction| match instruction {
+            Instruction::Assign {
+                value:
+                    Rvalue::Call {
+                        callee: CallTarget::Name(name),
+                        args,
+                    },
+                ..
+            } if name == "bump" => Some(args),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(calls.len(), 2);
+    for args in calls {
+        let Operand::Place(place) = &args[0].value else {
+            panic!("borrow must be a place")
+        };
+        assert!(child_loans.contains(place));
+        assert_eq!(args[0].writeback_place.as_ref(), Some(place));
+    }
+    validate_loan_flow(&module).expect("generated nested descriptor lifetimes should validate");
+}
+
+#[test]
+fn adr0061_contextual_fixed_field_return_keeps_the_selected_origin_through_handoff() {
+    let module = crate::lower_source_to_mir(
+        r#"
+class Row:
+    name: str
+
+def label(row: Row) -> view str from row:
+    return view row.name
+
+def main():
+    rows = [Row(name="Ada")]
+    view text = label(rows[0])
+    print(text)
+    print(label(rows[0]))
+"#,
+    )
+    .expect("an ordinary fixed-field return can originate in a contextual element argument");
+    let main = module
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .unwrap();
+    let mut handoffs = 0;
+    for block in &main.blocks {
+        for (index, instruction) in block.instructions.iter().enumerate() {
+            let Instruction::BeginReturnedLoan {
+                loan,
+                origin,
+                projections,
+                ..
+            } = instruction
+            else {
+                continue;
+            };
+            handoffs += 1;
+            let Some(Instruction::Assign {
+                value: Rvalue::Call { args, .. },
+                ..
+            }) = index.checked_sub(1).map(|index| &block.instructions[index])
+            else {
+                panic!("handoff must immediately follow its call");
+            };
+            assert_eq!(args[0].value, Operand::Place(origin.clone()));
+            assert_eq!(projections, &vec!["name".to_string()]);
+            assert!(block.instructions[..index]
+                .iter()
+                .any(|instruction| matches!(instruction,
+                Instruction::BeginElementLoan { loan, .. } if loan == origin)));
+            let child_end = block.instructions[index + 1..]
+                .iter()
+                .position(|instruction| {
+                    matches!(instruction,
+                Instruction::EndLoan { loan: ended } if ended == loan)
+                })
+                .expect("returned child ends");
+            let parent_end = block.instructions[index + 1..]
+                .iter()
+                .position(|instruction| {
+                    matches!(instruction,
+                Instruction::EndLoan { loan: ended } if ended == origin)
+                })
+                .expect("contextual origin ends");
+            assert!(
+                child_end < parent_end,
+                "returned child must end before selected origin"
+            );
+        }
+    }
+    assert_eq!(handoffs, 2);
+    validate_loan_flow(&module).expect("fixed-field handoffs over element origins should validate");
+}
+
+#[test]
+fn adr0061_contextual_loans_end_on_short_circuit_guard_and_comparison_edges() {
+    let module = crate::lower_source_to_mir(
+        r#"
+def present(value: str) -> bool:
+    return value.len() > 0
+
+def main():
+    mut names = ["a", "b", "c"]
+    print(false and present(names[0]))
+    print(true or present(names[1]))
+    print(names[0] == names[1] != names[2])
+    print(names[2] != names[1] == names[0])
+    count = 0 if present(names[0]) else 1
+    print(count)
+    match 1:
+        case 1 if present(names[0]) and false:
+            print("unselected")
+        case _:
+            print("selected")
+    names.append("d")
+    print(names.len())
+"#,
+    )
+    .expect("ordinary contextual expressions on conditional edges should lower");
+    validate_loan_flow(&module).expect("every generated loan must exist on the edge where it ends");
+    let main = module
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .unwrap();
+    assert!(
+        main.blocks
+            .iter()
+            .filter(|block| block.label.contains("compare_chain_false"))
+            .count()
+            >= 2,
+        "comparison failure predecessors must own their prefix-specific cleanup"
+    );
+    for block in &main.blocks {
+        if block.label.contains("compare_chain_false") {
+            assert!(
+                block
+                    .instructions
+                    .iter()
+                    .any(|instruction| matches!(instruction, Instruction::EndLoan { .. })),
+                "failed comparison drops its selected operands before joining"
+            );
+        }
+    }
+}
+
+#[test]
+fn adr0061_contextual_union_arguments_lower_as_shared_presentations() {
+    let module = crate::lower_source_to_mir(
+        r#"
+class Row:
+    name: str
+
+def present(row: Row | None) -> bool:
+    return row is not None
+
+def main():
+    rows = [Row(name="Ada")]
+    print(present(rows[0]))
+"#,
+    )
+    .expect("contextual non-Copy union member lifts should lower");
+    let main = module
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .unwrap();
+    let instructions = main
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .collect::<Vec<_>>();
+    let element = instructions
+        .iter()
+        .find_map(|instruction| match instruction {
+            Instruction::BeginElementLoan { loan, .. } => Some(loan),
+            _ => None,
+        })
+        .expect("selected record descriptor");
+    assert!(
+        instructions.iter().any(|instruction| matches!(instruction,
+        Instruction::BeginUnionLoan { source, .. } if source == element)),
+        "union adaptation must refer to the selected record without constructing an owned union"
+    );
+    validate_loan_flow(&module)
+        .expect("borrowed union presentation should preserve source lifetime");
+}
+
+#[test]
+fn adr0061_contextual_enum_patterns_borrow_payloads_without_snapshotting() {
+    let module = crate::lower_source_to_mir(
+        r#"
+enum Message:
+    Left(str)
+    Right(str)
+
+def main():
+    mut messages = [Message.Left("hello"), Message.Right("world")]
+    match mut messages[0]:
+        case Message.Left(text):
+            text = text + "!"
+        case Message.Right(text):
+            text = text + "?"
+    match messages[1]:
+        case Message.Left(text) | Message.Right(text):
+            print(text)
+    pairs = [("left", "right")]
+    match pairs[0]:
+        case (left, right):
+            print(left)
+            print(right)
+"#,
+    )
+    .expect("contextual enum and tuple patterns should retain their source places");
+    let main = module
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .unwrap();
+    let instructions = main
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .collect::<Vec<_>>();
+    assert!(instructions.iter().any(|instruction| matches!(instruction,
+        Instruction::Reborrow { projection, mutable: true, .. }
+            if projection == "__variant_payload_Left_0")));
+    assert!(
+        !instructions.iter().any(|instruction| matches!(
+            instruction,
+            Instruction::Assign {
+                value: Rvalue::VariantPayload { .. } | Rvalue::TupleElement { .. },
+                ..
+            }
+        )),
+        "borrowed payload inspection must project storage instead of snapshotting aggregate values"
+    );
+    validate_loan_flow(&module).expect("alternative payload consumers should end their own loans");
+}
+
+#[test]
+fn adr0061_returned_view_terminators_carry_only_the_handoff() {
+    let module = crate::lower_source_to_mir(
+        r#"
+class Row:
+    name: str
+
+def label(row: Row) -> view str from row:
+    return view row.name
+
+def forward(row: Row) -> view str from row:
+    return view label(row)
+
+def main():
+    rows = [Row(name="Ada")]
+    print(forward(rows[0]))
+"#,
+    )
+    .expect("view results should use descriptor handoff rather than an expired value alias");
+    for function in module
+        .functions
+        .iter()
+        .filter(|function| matches!(function.name.as_str(), "label" | "forward"))
+    {
+        assert!(function
+            .blocks
+            .iter()
+            .flat_map(|block| &block.instructions)
+            .any(|instruction| matches!(instruction, Instruction::ReturnLoan { .. })));
+        for block in &function.blocks {
+            if let Terminator::Return(value) = &block.terminator {
+                assert_eq!(value, &Operand::Unit);
+            }
+        }
+    }
+    validate_loan_flow(&module).expect("descriptor-only returned-view functions should validate");
+}
+
+#[test]
+fn adr0061_mir_copy_class_flag_cannot_hide_noncopy_fields() {
+    let mut module = crate::lower_source_to_mir(
+        "class Row:\n    name: str\n\ndef main():\n    row = Row(name=\"Ada\")\n    print(row.name)\n",
+    ).expect("ordinary class should lower");
+    module.classes.iter_mut().find(|class| class.name == "Row").unwrap().copy = true;
+    assert_public_boundaries_reject(&module, "Copy class");
+}
+
+#[test]
+fn adr0061_list_callbacks_borrow_inputs_and_drop_them_before_advancing() {
+    let module = crate::lower_source_to_mir(
+        r#"
+def size(text: str) -> int64:
+    return text.len()
+
+def keep(text: str) -> bool:
+    return text.len() > 1
+
+def main():
+    mut words = ["bbb", "a", "cc"]
+    print(words.map(size))
+    print(words.filter(keep))
+    words.sort(key=size)
+    print(words)
+    words.sort()
+    print(words)
+"#,
+    )
+    .expect("list callback inputs should lower as element loans");
+    let main = module
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .unwrap();
+    let instructions = main
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .collect::<Vec<_>>();
+    let loans = instructions
+        .iter()
+        .filter_map(|instruction| match instruction {
+            Instruction::BeginElementLoan { loan, .. }
+            | Instruction::ReborrowElement { loan, .. } => Some(loan.clone()),
+            _ => None,
+        })
+        .collect::<BTreeSet<_>>();
+    let callbacks = instructions
+        .iter()
+        .filter_map(|instruction| match instruction {
+            Instruction::Assign {
+                value:
+                    Rvalue::Call {
+                        callee: CallTarget::Value(_),
+                        args,
+                    },
+                ..
+            } => Some(args),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        callbacks.len(),
+        3,
+        "map, filter, and sort-key each have one callback site"
+    );
+    for args in callbacks {
+        let Operand::Place(place) = &args[0].value else {
+            panic!("borrowed callback input must be a descriptor")
+        };
+        assert!(loans.contains(place));
+    }
+    assert!(!instructions.iter().any(|instruction| matches!(instruction,
+        Instruction::Assign { value: Rvalue::Call { callee: CallTarget::Member { field, .. }, .. }, .. }
+            if field == INTERNAL_VEC_INDEX_OPTION_FIELD)),
+        "callback iteration must not snapshot optional payloads before invoking its borrower");
+    validate_loan_flow(&module)
+        .expect("callback element loans must end before loop edges and sort swaps");
+}
+
+#[test]
+fn adr0061_entry_selector_loan_ends_at_descriptor_creation() {
+    let module = crate::lower_source_to_mir(
+        r#"
+def main():
+    mut keys = ["a"]
+    table: dict[str, str] = {"a": "selected"}
+    view entry = table[keys[0]]
+    keys[0] = "b"
+    print(entry)
+"#,
+    )
+    .expect("a live entry view must not retain a loan of its lookup key");
+    let main = module
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .unwrap();
+    let instructions = main
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .collect::<Vec<_>>();
+    let key = instructions
+        .iter()
+        .find_map(|instruction| match instruction {
+            Instruction::BeginElementLoan { loan, source, .. } if source == "keys" => {
+                Some(loan.clone())
+            }
+            _ => None,
+        })
+        .expect("nested selected key should have a temporary read loan");
+    let entry_start = instructions
+        .iter()
+        .position(|instruction| {
+            matches!(instruction,
+        Instruction::BeginElementLoan { source, selector: Operand::Place(selector), .. }
+            if source == "table" && selector == &key)
+        })
+        .expect("entry creation directly borrows the selected key");
+    let key_end = instructions
+        .iter()
+        .position(|instruction| {
+            matches!(instruction,
+        Instruction::EndLoan { loan } if loan == &key)
+        })
+        .expect("selector loan must end");
+    let entry_end = instructions
+        .iter()
+        .position(|instruction| {
+            matches!(instruction,
+        Instruction::EndLoan { loan } if loan == "entry")
+        })
+        .expect("entry loan must end after its use");
+    assert!(entry_start < key_end && key_end < entry_end);
+    validate_loan_flow(&module).expect("lookup key lifetime is independent of the selected entry");
 }

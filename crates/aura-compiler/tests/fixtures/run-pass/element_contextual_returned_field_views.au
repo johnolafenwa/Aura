@@ -1,0 +1,26 @@
+class Profile:
+    name: str
+    visits: int64
+
+def label(profile: Profile) -> view str from profile:
+    return view profile.name
+
+def count(profile: mut Profile) -> view mut int64 from profile:
+    return view mut profile.visits
+
+def bump(value: mut int64):
+    value += 1
+
+def main():
+    mut users = [Profile(name="ada", visits=1), Profile(name="linus", visits=2)]
+    mut people: dict[str, Profile] = {"grace": Profile(name="grace", visits=3)}
+    view name = label(users[0])
+    print(name)
+    view mut selected = count(users[0])
+    selected += 10
+    print(selected)
+    bump(count(people["grace"]))
+    print(users[0].visits)
+    print(users[1].visits)
+    print(people["grace"].visits)
+    print(label(people["grace"]))

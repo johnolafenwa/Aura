@@ -912,6 +912,7 @@ struct ProjectedField<'a> {
 /// The parts of an expression-form `match` that its typing needs.
 #[derive(Clone, Copy)]
 struct MatchExprParts<'a> {
+    borrowed_result: bool,
     scrutinee: &'a Expr,
     borrow_mode: ReceiverKind,
     arms: &'a [MatchExprArm],
@@ -969,10 +970,16 @@ struct FunctionChecker<'a> {
     suppress_narrowing: Rc<std::cell::Cell<bool>>,
     /// Owned lambda captures the current lambda body mutates in place (C2).
     mutated_captures: Rc<RefCell<BTreeSet<String>>>,
-    /// The index expression currently typed as a place read: the object of
-    /// a member access, whose element or entry is projected rather than
-    /// copied (ADR-0061, 2026-09-21 section, contextual reads).
-    index_place_read: Rc<std::cell::Cell<Option<crate::diag::Span>>>,
+    /// Identity of the expression currently typed as a contextual place read.
+    /// Calls and their receivers can share a span; only the selected AST
+    /// expression receives borrowed access, never a same-span owned child.
+    index_place_read: Rc<std::cell::Cell<Option<usize>>>,
+    /// Intermediate projections resolve storage and selectors without reading
+    /// the whole parent; the final projection checks its precise footprint.
+    place_read_base: Rc<std::cell::Cell<bool>>,
+    /// Builtin argument expressions obtain the same passing context as user
+    /// arguments, even when their individual type rules live in separate arms.
+    builtin_argument_passings: Rc<RefCell<Vec<(usize, ReceiverKind)>>>,
     rng_clone_obligations: Rc<RefCell<BTreeSet<String>>>,
     array_equality_obligations: Rc<RefCell<BTreeSet<String>>>,
     expr_result_entries: Rc<RefCell<HashMap<usize, ExprResultEntry>>>,
@@ -1094,32 +1101,35 @@ impl<'a> FunctionChecker<'a> {
     /// cloned at all. Recommending `get(...)` unconditionally sends a caller
     /// holding non-cloneable `random.Rng` state to an `AU3007` dead end, so the
     /// guidance follows the same tri-state classification that rejection uses.
-    fn indexed_read_guidance(&self, container: &str, selector: &str, ty: &Type) -> String {
-        let transfer = if container == "dict" {
-            format!("remove({selector})")
+    fn indexed_read_guidance(&self, container: &str, _selector: &str, ty: &Type) -> String {
+        let target = if container == "dict" {
+            "table[key]"
         } else {
-            format!("pop({selector})")
+            "items[index]"
         };
+        let transfer = if container == "dict" {
+            "`remove(key)`"
+        } else {
+            "`pop(index)` or `set(index, value)`"
+        };
+        let prefix = format!(
+            "cannot implicitly copy `{ty}` out of a {container} index; use `view value = {target}` for shared access"
+        );
         if let Some(result_ty) = self.nonrepeatable_task_result_in(ty) {
             return format!(
-                "cannot implicitly copy `{ty}` out of a {container} index; `get({selector})` cannot clone it because that would duplicate the single observation right for task result `{result_ty}`, so use `{transfer}` to transfer ownership instead"
+                "{prefix}; `.clone()` is unavailable because that would duplicate the single observation right for task result `{result_ty}`, so use {transfer} to transfer ownership"
             );
         }
         match self.rng_clone_safety(ty) {
-            RngCloneSafety::Safe if container == "dict" => format!(
-                "cannot implicitly copy `{ty}` out of a dict index; use `get(key)` for an explicit cloned optional read, or `remove(key)` to transfer ownership"
-            ),
             RngCloneSafety::Safe => format!(
-                "cannot implicitly copy `{ty}` out of a list index; use `get(index)` for an explicit cloned read instead"
+                "{prefix}, `{target}.clone()` for an explicit cloned owner, or {transfer} to transfer ownership"
             ),
             RngCloneSafety::ContainsRng => {
                 let reason = Self::non_cloneable_rng_reason(ty);
-                format!(
-                    "cannot implicitly copy `{ty}` out of a {container} index; `get({selector})` cannot clone it because {reason}, so use `{transfer}` to transfer ownership instead"
-                )
+                format!("{prefix}; `.clone()` is unavailable because {reason}, so use {transfer} to transfer ownership")
             }
             RngCloneSafety::Unknown => format!(
-                "cannot implicitly copy `{ty}` out of a {container} index; `get({selector})` requires a clone-safe `{ty}`, or use `{transfer}` to transfer ownership"
+                "{prefix}; `{target}.clone()` requires a clone-safe `{ty}`, or use {transfer} to transfer ownership"
             ),
         }
     }
@@ -1811,6 +1821,8 @@ impl<'a> FunctionChecker<'a> {
             suppress_narrowing: Rc::new(std::cell::Cell::new(false)),
             mutated_captures: Rc::new(RefCell::new(BTreeSet::new())),
             index_place_read: Rc::new(std::cell::Cell::new(None)),
+            place_read_base: Rc::new(std::cell::Cell::new(false)),
+            builtin_argument_passings: Rc::new(RefCell::new(Vec::new())),
             rng_clone_obligations: Rc::new(RefCell::new(BTreeSet::new())),
             array_equality_obligations: Rc::new(RefCell::new(BTreeSet::new())),
             expr_result_entries: Rc::new(RefCell::new(HashMap::new())),
@@ -1865,6 +1877,8 @@ impl<'a> FunctionChecker<'a> {
             suppress_narrowing: self.suppress_narrowing.clone(),
             mutated_captures: self.mutated_captures.clone(),
             index_place_read: self.index_place_read.clone(),
+            place_read_base: self.place_read_base.clone(),
+            builtin_argument_passings: self.builtin_argument_passings.clone(),
         }
     }
 
@@ -1905,6 +1919,8 @@ impl<'a> FunctionChecker<'a> {
             suppress_narrowing: self.suppress_narrowing.clone(),
             mutated_captures: self.mutated_captures.clone(),
             index_place_read: self.index_place_read.clone(),
+            place_read_base: self.place_read_base.clone(),
+            builtin_argument_passings: self.builtin_argument_passings.clone(),
         }
     }
 
@@ -1941,6 +1957,8 @@ impl<'a> FunctionChecker<'a> {
             suppress_narrowing: self.suppress_narrowing.clone(),
             mutated_captures: self.mutated_captures.clone(),
             index_place_read: self.index_place_read.clone(),
+            place_read_base: self.place_read_base.clone(),
+            builtin_argument_passings: self.builtin_argument_passings.clone(),
         }
     }
 
@@ -1977,6 +1995,8 @@ impl<'a> FunctionChecker<'a> {
             suppress_narrowing: self.suppress_narrowing.clone(),
             mutated_captures: self.mutated_captures.clone(),
             index_place_read: self.index_place_read.clone(),
+            place_read_base: self.place_read_base.clone(),
+            builtin_argument_passings: self.builtin_argument_passings.clone(),
         }
     }
 
@@ -2281,9 +2301,10 @@ impl<'a> FunctionChecker<'a> {
             return Ok(Some(fact.members.clone()));
         }
         let mut scratch = locals.clone();
-        self.suppress_narrowing.set(true);
-        let declared = self.type_of_expr(place, &mut scratch);
-        self.suppress_narrowing.set(false);
+        let previous_narrowing = self.suppress_narrowing.replace(true);
+        let declared =
+            self.type_of_expr_for_passing_hint(place, &mut scratch, None, ReceiverKind::Borrow);
+        self.suppress_narrowing.set(previous_narrowing);
         Ok(match declared? {
             Type::Union(union) => Some(union.members.clone()),
             Type::Unit => Some(vec![Type::Unit]),
@@ -2968,7 +2989,8 @@ impl<'a> FunctionChecker<'a> {
         }
         let mut any_non_copy = false;
         for iterable in &form.iterables {
-            let iterable_ty = self.type_of_expr(iterable, locals)?;
+            let iterable_ty =
+                self.type_of_expr_for_passing_hint(iterable, locals, None, ReceiverKind::Borrow)?;
             let Some(element_ty) = lockstep_element_type(&iterable_ty) else {
                 return Err(Diagnostic::coded_at(
                     "AU2002",
@@ -3051,7 +3073,12 @@ impl<'a> FunctionChecker<'a> {
             }
             let mut any_non_copy = false;
             for iterable in &form.iterables {
-                let iterable_ty = self.type_of_expr(iterable, locals)?;
+                let iterable_ty = self.type_of_expr_for_passing_hint(
+                    iterable,
+                    locals,
+                    None,
+                    ReceiverKind::Borrow,
+                )?;
                 let Some(element_ty) = lockstep_element_type(&iterable_ty) else {
                     return Err(Diagnostic::coded_at(
                             "AU2002",
@@ -3079,7 +3106,12 @@ impl<'a> FunctionChecker<'a> {
                 form.iterables,
             )
         } else {
-            let iterable_ty = self.type_of_expr(&clause.iterable, locals)?;
+            let iterable_ty = self.type_of_expr_for_passing_hint(
+                &clause.iterable,
+                locals,
+                None,
+                ReceiverKind::Borrow,
+            )?;
             let (binding_type, binding_passing, receive_owned) = match &iterable_ty {
                     Type::Named(name, _) if name == "Range" => {
                         (Type::named("int64"), ReceiverKind::Value, false)
@@ -4054,7 +4086,12 @@ impl<'a> FunctionChecker<'a> {
                         )?;
                         continue;
                     }
-                    let iterable_ty = self.type_of_expr(&for_stmt.iterable, locals)?;
+                    let iterable_ty = self.type_of_expr_for_passing_hint(
+                        &for_stmt.iterable,
+                        locals,
+                        None,
+                        for_stmt.borrow_mode.unwrap_or(ReceiverKind::Borrow),
+                    )?;
                     if matches!(&iterable_ty, Type::Named(name, _) if name == "Range")
                         && for_stmt.borrow_mode.is_some()
                     {
@@ -5385,6 +5422,7 @@ impl<'a> FunctionChecker<'a> {
             } => {
                 let result = self.type_of_match_expr(
                     MatchExprParts {
+                        borrowed_result: false,
                         scrutinee,
                         borrow_mode: *capability,
                         arms,
@@ -5471,6 +5509,7 @@ impl<'a> FunctionChecker<'a> {
             } => {
                 let object_ty = self.type_of_match_expr(
                     MatchExprParts {
+                        borrowed_result: false,
                         scrutinee,
                         borrow_mode: *capability,
                         arms,
@@ -5517,6 +5556,21 @@ impl<'a> FunctionChecker<'a> {
                 Ok((object_ty, member_ty))
             }
         }
+    }
+
+    fn type_of_expr_without_move_state_for_passing(
+        &self,
+        expr: &Expr,
+        locals: &HashMap<String, LocalBinding>,
+        expected: Option<&Type>,
+        passing: ReceiverKind,
+    ) -> Result<Type> {
+        let previous = self
+            .index_place_read
+            .replace((passing != ReceiverKind::Value).then_some(expr as *const Expr as usize));
+        let result = self.type_of_expr_without_move_state(expr, locals, expected);
+        self.index_place_read.set(previous);
+        result
     }
 
     fn type_of_expr_without_move_state(
@@ -5721,8 +5775,18 @@ impl<'a> FunctionChecker<'a> {
             }
         }
 
-        let then_guess = self.type_of_expr_without_move_state(then_expr, then_locals, None);
-        let else_guess = self.type_of_expr_without_move_state(else_expr, else_locals, None);
+        let then_guess = self.type_of_expr_without_move_state_for_passing(
+            then_expr,
+            then_locals,
+            None,
+            ReceiverKind::Borrow,
+        );
+        let else_guess = self.type_of_expr_without_move_state_for_passing(
+            else_expr,
+            else_locals,
+            None,
+            ReceiverKind::Borrow,
+        );
         let (then_ty, else_ty) = match (then_guess, else_guess) {
             (Ok(then_ty), Ok(else_ty)) => (then_ty, else_ty),
             (Err(_), Ok(else_ty)) => return Ok(else_ty),
@@ -5736,10 +5800,20 @@ impl<'a> FunctionChecker<'a> {
             return Ok(then_ty);
         }
         let then_adopts_else = self
-            .type_of_expr_without_move_state(then_expr, then_locals, Some(&else_ty))
+            .type_of_expr_without_move_state_for_passing(
+                then_expr,
+                then_locals,
+                Some(&else_ty),
+                ReceiverKind::Borrow,
+            )
             .is_ok_and(|actual| actual == else_ty);
         let else_adopts_then = self
-            .type_of_expr_without_move_state(else_expr, else_locals, Some(&then_ty))
+            .type_of_expr_without_move_state_for_passing(
+                else_expr,
+                else_locals,
+                Some(&then_ty),
+                ReceiverKind::Borrow,
+            )
             .is_ok_and(|actual| actual == then_ty);
         match (then_adopts_else, else_adopts_then) {
             (true, false) => return Ok(else_ty),
@@ -5878,7 +5952,7 @@ impl<'a> FunctionChecker<'a> {
         locals: &mut HashMap<String, LocalBinding>,
         hint: Option<&Type>,
     ) -> Result<Type> {
-        match self.type_of_expr_hint(operand, locals, hint) {
+        match self.type_of_expr_for_passing_hint(operand, locals, hint, ReceiverKind::Borrow) {
             Err(error)
                 if matches!(op, BinaryOp::Eq | BinaryOp::NotEq)
                     && error.code == "AU2010"
@@ -6194,17 +6268,53 @@ impl<'a> FunctionChecker<'a> {
     /// value is ABI-equal to that destination, every callable position must
     /// have the identical complete contract (Q17 A). Restrictions require
     /// an explicit thin alias adapter or owned callable constructor.
+    pub(super) fn type_of_expr_for_passing_hint(
+        &self,
+        expr: &Expr,
+        locals: &mut HashMap<String, LocalBinding>,
+        expected: Option<&Type>,
+        passing: ReceiverKind,
+    ) -> Result<Type> {
+        let contextual = (passing != ReceiverKind::Value).then_some(expr as *const Expr as usize);
+        let previous = self.index_place_read.replace(contextual);
+        let result = match &expr.kind {
+            ExprKind::Group(inner) => {
+                self.type_of_expr_for_passing_hint(inner, locals, expected, passing)
+            }
+            _ => self.type_of_expr_hint(expr, locals, expected),
+        };
+        self.index_place_read.set(previous);
+        result
+    }
+
     fn type_of_expr_hint(
         &self,
         expr: &Expr,
         locals: &mut HashMap<String, LocalBinding>,
         expected: Option<&Type>,
     ) -> Result<Type> {
-        let actual = self.type_of_expr_hint_uncontracted(expr, locals, expected)?;
-        if let Some(expected) = expected {
-            self.enforce_callable_destination(expr, expected, &actual)?;
+        let builtin_passing = self
+            .builtin_argument_passings
+            .borrow()
+            .iter()
+            .rev()
+            .find(|(key, _)| *key == expr as *const Expr as usize)
+            .map(|(_, passing)| *passing);
+        let previous = builtin_passing.map(|passing| {
+            self.index_place_read
+                .replace((passing != ReceiverKind::Value).then_some(expr as *const Expr as usize))
+        });
+        let result = (|| {
+            let actual = self.type_of_expr_hint_uncontracted(expr, locals, expected)?;
+            if let Some(expected) = expected {
+                self.enforce_callable_destination(expr, expected, &actual)?;
+            }
+            Ok(actual)
+        })();
+        if let Some(previous) = previous {
+            self.index_place_read.set(previous);
         }
-        Ok(actual)
+        result
     }
 
     /// Bare destinations preserve a callable value's complete contract
@@ -6387,7 +6497,8 @@ impl<'a> FunctionChecker<'a> {
                 // `None` is a constant test with once-only evaluation. The
                 // tested operand is read as its declared union.
                 self.suppress_narrowing.set(true);
-                let tested = self.type_of_expr(value, locals);
+                let tested =
+                    self.type_of_expr_for_passing_hint(value, locals, None, ReceiverKind::Borrow);
                 self.suppress_narrowing.set(false);
                 tested?;
                 self.reject_mutable_returned_view_value(value, locals, false)?;
@@ -6544,14 +6655,24 @@ impl<'a> FunctionChecker<'a> {
                 for part in parts {
                     match part {
                         crate::ast::FormatPart::Expr(expr) => {
-                            self.type_of_expr(expr, locals)?;
+                            self.type_of_expr_for_passing_hint(
+                                expr,
+                                locals,
+                                None,
+                                ReceiverKind::Borrow,
+                            )?;
                         }
                         crate::ast::FormatPart::Formatted {
                             expr,
                             spec,
                             spec_span,
                         } => {
-                            let value_type = self.type_of_expr(expr, locals)?;
+                            let value_type = self.type_of_expr_for_passing_hint(
+                                expr,
+                                locals,
+                                None,
+                                ReceiverKind::Borrow,
+                            )?;
                             let parsed = parse_format_spec(spec).map_err(|error| {
                                 Diagnostic::coded_at("AU1101", *spec_span, error.message)
                             })?;
@@ -6810,6 +6931,12 @@ impl<'a> FunctionChecker<'a> {
                 condition,
                 else_expr,
             } => {
+                let result_passing =
+                    if self.index_place_read.get() == Some(expr as *const Expr as usize) {
+                        ReceiverKind::Borrow
+                    } else {
+                        ReceiverKind::Value
+                    };
                 let condition_ty = self.type_of_expr(condition, locals)?;
                 if condition_ty != Type::named("bool") {
                     return Err(Diagnostic::coded_at(
@@ -6835,8 +6962,12 @@ impl<'a> FunctionChecker<'a> {
                     &else_locals,
                     expected,
                 )?;
-                let then_ty =
-                    self.type_of_expr_hint(then_expr, &mut then_locals, Some(&result_ty))?;
+                let then_ty = self.type_of_expr_for_passing_hint(
+                    then_expr,
+                    &mut then_locals,
+                    Some(&result_ty),
+                    result_passing,
+                )?;
                 if then_ty != result_ty {
                     if capturing_closure_branch_mismatch(&result_ty, &then_ty) {
                         return Err(capturing_closure_branch_diagnostic(
@@ -6855,8 +6986,12 @@ impl<'a> FunctionChecker<'a> {
                     ));
                 }
 
-                let else_ty =
-                    self.type_of_expr_hint(else_expr, &mut else_locals, Some(&result_ty))?;
+                let else_ty = self.type_of_expr_for_passing_hint(
+                    else_expr,
+                    &mut else_locals,
+                    Some(&result_ty),
+                    result_passing,
+                )?;
                 if else_ty != result_ty {
                     if capturing_closure_branch_mismatch(&result_ty, &else_ty) {
                         return Err(capturing_closure_branch_diagnostic(
@@ -6883,6 +7018,8 @@ impl<'a> FunctionChecker<'a> {
                 arms,
             } => self.type_of_match_expr(
                 MatchExprParts {
+                    borrowed_result: self.index_place_read.get()
+                        == Some(expr as *const Expr as usize),
                     scrutinee,
                     borrow_mode: *capability,
                     arms,
@@ -6892,7 +7029,16 @@ impl<'a> FunctionChecker<'a> {
                 expected,
                 BranchResultUse::Inspected,
             ),
-            ExprKind::Group(inner) => self.type_of_expr_hint(inner, locals, expected),
+            ExprKind::Group(inner) => self.type_of_expr_for_passing_hint(
+                inner,
+                locals,
+                expected,
+                if self.index_place_read.get() == Some(expr as *const Expr as usize) {
+                    ReceiverKind::Borrow
+                } else {
+                    ReceiverKind::Value
+                },
+            ),
             ExprKind::Specialize {
                 expr: base,
                 type_args,
@@ -7214,8 +7360,18 @@ impl<'a> FunctionChecker<'a> {
                     .type_of_expr_without_move_state(container, locals, None)
                     .ok()
                     .and_then(|ty| membership_needle_type(&ty));
-                let value_ty = self.type_of_expr_hint(value, locals, needle_hint.as_ref())?;
-                let container_ty = self.type_of_expr(container, locals)?;
+                let value_ty = self.type_of_expr_for_passing_hint(
+                    value,
+                    locals,
+                    needle_hint.as_ref(),
+                    ReceiverKind::Borrow,
+                )?;
+                let container_ty = self.type_of_expr_for_passing_hint(
+                    container,
+                    locals,
+                    None,
+                    ReceiverKind::Borrow,
+                )?;
                 self.check_membership_operands(
                     &value_ty,
                     &container_ty,
@@ -7232,7 +7388,12 @@ impl<'a> FunctionChecker<'a> {
                     .first()
                     .and_then(|link| self.chain_operand_hint(first, link, locals));
                 let mut left_expr: &Expr = first;
-                let mut left_ty = self.type_of_expr_hint(first, locals, first_hint.as_ref())?;
+                let mut left_ty = self.type_of_expr_for_passing_hint(
+                    first,
+                    locals,
+                    first_hint.as_ref(),
+                    ReceiverKind::Borrow,
+                )?;
                 for link in links {
                     match link.op.as_binary_op() {
                         Some(op) => {
@@ -7244,8 +7405,12 @@ impl<'a> FunctionChecker<'a> {
                             // already fixes that return type, so the link needs
                             // no further result check.
                             let locals_before_right = locals.clone();
-                            let right_ty =
-                                self.type_of_expr_hint(&link.operand, locals, Some(&left_ty))?;
+                            let right_ty = self.type_of_expr_for_passing_hint(
+                                &link.operand,
+                                locals,
+                                Some(&left_ty),
+                                ReceiverKind::Borrow,
+                            )?;
                             if left_ty != right_ty && Self::is_numeric_literal_expr(left_expr) {
                                 left_ty =
                                     self.type_of_expr_hint(left_expr, locals, Some(&right_ty))?;
@@ -7279,7 +7444,12 @@ impl<'a> FunctionChecker<'a> {
                             left_ty = right_ty;
                         }
                         None => {
-                            let container_ty = self.type_of_expr(&link.operand, locals)?;
+                            let container_ty = self.type_of_expr_for_passing_hint(
+                                &link.operand,
+                                locals,
+                                None,
+                                ReceiverKind::Borrow,
+                            )?;
                             if let Some(needle_ty) = membership_needle_type(&container_ty) {
                                 if left_ty != needle_ty && Self::is_numeric_literal_expr(left_expr)
                                 {
@@ -7752,134 +7922,159 @@ impl<'a> FunctionChecker<'a> {
                 Ok(member_ty)
             }
             ExprKind::Index { object, index } => {
-                let function_target = match &object.kind {
-                    ExprKind::Name(name) if !locals.contains_key(name) => self
-                        .resolve_function_info(name)
-                        .map(|function| (function, format!("function `{name}`"))),
-                    ExprKind::Member { .. } => self.qualified_module_item(object).and_then(
-                        |(module_path, function_name)| {
-                            self.module_namespace(&module_path)
-                                .and_then(|namespace| {
-                                    namespace
-                                        .functions
-                                        .get(&function_name)
-                                        .or(namespace.all_functions.get(&function_name))
-                                })
-                                .map(|function| {
-                                    (
-                                        function,
-                                        format!("function `{module_path}.{function_name}`"),
-                                    )
-                                })
-                        },
-                    ),
-                    _ => None,
-                };
-                if let Some((function, display_name)) = function_target {
-                    let type_arg_exprs = match &index.kind {
-                        ExprKind::Tuple(elements) => elements.as_slice(),
-                        _ => std::slice::from_ref(&**index),
+                let projection_base = self.place_read_base.replace(false);
+                let result = (|| {
+                    let function_target = match &object.kind {
+                        ExprKind::Name(name) if !locals.contains_key(name) => self
+                            .resolve_function_info(name)
+                            .map(|function| (function, format!("function `{name}`"))),
+                        ExprKind::Member { .. } => self.qualified_module_item(object).and_then(
+                            |(module_path, function_name)| {
+                                self.module_namespace(&module_path)
+                                    .and_then(|namespace| {
+                                        namespace
+                                            .functions
+                                            .get(&function_name)
+                                            .or(namespace.all_functions.get(&function_name))
+                                    })
+                                    .map(|function| {
+                                        (
+                                            function,
+                                            format!("function `{module_path}.{function_name}`"),
+                                        )
+                                    })
+                            },
+                        ),
+                        _ => None,
                     };
-                    let type_refs = type_arg_exprs
-                        .iter()
-                        .map(Self::spawn_type_ref_from_expr)
-                        .collect::<Option<Vec<_>>>()
-                        .ok_or_else(|| {
-                            Diagnostic::at(
-                                index.span,
-                                "function specialization expects type arguments",
-                            )
-                        })?;
-                    let lowered = self.lower_explicit_type_args(&type_refs)?;
-                    return self.function_value_type(
-                        function,
-                        expected,
-                        Some(&lowered),
-                        expr.span,
-                        &display_name,
-                    );
-                }
-                // `Class.method[T]` and `receiver.method[T]` outside call
-                // position fix a generic method's type arguments (C6).
-                if let ExprKind::Member {
-                    object: receiver,
-                    field,
-                } = &object.kind
-                {
-                    if let Some((class, method, owner)) =
-                        self.associated_method_target(receiver, field, locals)
-                    {
-                        let lowered = self.explicit_type_args_from_index(index)?;
-                        return self.associated_method_value_type(
-                            class,
-                            method,
-                            &owner,
-                            field,
-                            receiver,
+                    if let Some((function, display_name)) = function_target {
+                        let type_arg_exprs = match &index.kind {
+                            ExprKind::Tuple(elements) => elements.as_slice(),
+                            _ => std::slice::from_ref(&**index),
+                        };
+                        let type_refs = type_arg_exprs
+                            .iter()
+                            .map(Self::spawn_type_ref_from_expr)
+                            .collect::<Option<Vec<_>>>()
+                            .ok_or_else(|| {
+                                Diagnostic::at(
+                                    index.span,
+                                    "function specialization expects type arguments",
+                                )
+                            })?;
+                        let lowered = self.lower_explicit_type_args(&type_refs)?;
+                        return self.function_value_type(
+                            function,
                             expected,
                             Some(&lowered),
                             expr.span,
+                            &display_name,
                         );
                     }
-                    if !self.qualified_module_item(receiver).is_some_and(|_| true)
-                        && !matches!(&receiver.kind, ExprKind::Name(name) if !locals.contains_key(name))
+                    // `Class.method[T]` and `receiver.method[T]` outside call
+                    // position fix a generic method's type arguments (C6).
+                    if let ExprKind::Member {
+                        object: receiver,
+                        field,
+                    } = &object.kind
                     {
-                        let receiver_ty = self.type_of_member_object_expr(receiver, locals)?;
-                        if self.member_names_receiver_method(&receiver_ty, field) {
+                        if let Some((class, method, owner)) =
+                            self.associated_method_target(receiver, field, locals)
+                        {
                             let lowered = self.explicit_type_args_from_index(index)?;
-                            if let Some(bound) = self.type_of_bound_method(
-                                object,
-                                receiver,
+                            return self.associated_method_value_type(
+                                class,
+                                method,
+                                &owner,
                                 field,
-                                &receiver_ty,
-                                locals,
+                                receiver,
                                 expected,
                                 Some(&lowered),
-                            )? {
-                                return Ok(bound);
+                                expr.span,
+                            );
+                        }
+                        if !self.qualified_module_item(receiver).is_some_and(|_| true)
+                            && !matches!(&receiver.kind, ExprKind::Name(name) if !locals.contains_key(name))
+                        {
+                            let receiver_ty = self.type_of_member_object_expr(receiver, locals)?;
+                            if self.member_names_receiver_method(&receiver_ty, field) {
+                                let lowered = self.explicit_type_args_from_index(index)?;
+                                if let Some(bound) = self.type_of_bound_method(
+                                    object,
+                                    receiver,
+                                    field,
+                                    &receiver_ty,
+                                    locals,
+                                    expected,
+                                    Some(&lowered),
+                                )? {
+                                    return Ok(bound);
+                                }
                             }
                         }
                     }
-                }
-                let object_ty = self.type_of_expr(object, locals)?;
-                let locals_before_index = locals.clone();
-                if let Type::Tuple(element_types) = &object_ty {
-                    let tuple_index = match &index.kind {
-                        ExprKind::Int(value) => usize::try_from(*value).ok(),
-                        ExprKind::Group(inner) => match &inner.kind {
-                            ExprKind::Int(value) => usize::try_from(*value).ok(),
-                            _ => None,
-                        },
-                        _ => None,
-                    }
-                    .ok_or_else(|| {
-                        Diagnostic::coded_at(
-                            "AU2003",
-                            index.span,
-                            "tuple indices must be non-negative integer literals",
-                        )
-                    })?;
-                    let element_ty = element_types.get(tuple_index).cloned().ok_or_else(|| {
-                        Diagnostic::at(
-                            index.span,
-                            format!(
-                                "tuple index {} is out of bounds for a {}-element tuple",
-                                tuple_index,
-                                element_types.len()
-                            ),
-                        )
-                    })?;
-                    let element_ty = match self.member_access_path(object).and_then(|path| {
-                        self.narrowed_type_at(&path.with_tuple(tuple_index), locals)
-                    }) {
-                        Some(narrowed) => {
-                            self.record_narrowed_read(expr.span, &element_ty, &narrowed);
-                            narrowed
+                    let object_ty = self.type_of_member_object_expr(object, locals)?;
+                    let locals_before_index = locals.clone();
+                    if !projection_base {
+                        if let Some(path) = self.member_access_path(expr) {
+                            if let Some(binding) = locals.get(&path.root) {
+                                if Self::field_path_is_moved(binding, &path.projections) {
+                                    return Err(Diagnostic::at(
+                                        expr.span,
+                                        format!(
+                                            "use of moved field `{}` from `{}`",
+                                            path.projections, path.root
+                                        ),
+                                    ));
+                                }
+                            }
+                            let through_view = locals
+                                .get(&path.root)
+                                .and_then(|binding| binding.view.as_ref())
+                                .map(|_| path.root.as_str());
+                            self.ensure_place_readable(&path, through_view, expr.span, locals)?;
                         }
-                        None => element_ty,
-                    };
-                    if !self.is_copy_type(&element_ty) {
-                        return Err(Diagnostic::coded_at(
+                    }
+                    if let Type::Tuple(element_types) = &object_ty {
+                        let tuple_index = match &index.kind {
+                            ExprKind::Int(value) => usize::try_from(*value).ok(),
+                            ExprKind::Group(inner) => match &inner.kind {
+                                ExprKind::Int(value) => usize::try_from(*value).ok(),
+                                _ => None,
+                            },
+                            _ => None,
+                        }
+                        .ok_or_else(|| {
+                            Diagnostic::coded_at(
+                                "AU2003",
+                                index.span,
+                                "tuple indices must be non-negative integer literals",
+                            )
+                        })?;
+                        let element_ty =
+                            element_types.get(tuple_index).cloned().ok_or_else(|| {
+                                Diagnostic::at(
+                                    index.span,
+                                    format!(
+                                        "tuple index {} is out of bounds for a {}-element tuple",
+                                        tuple_index,
+                                        element_types.len()
+                                    ),
+                                )
+                            })?;
+                        let element_ty = match self.member_access_path(object).and_then(|path| {
+                            self.narrowed_type_at(&path.with_tuple(tuple_index), locals)
+                        }) {
+                            Some(narrowed) => {
+                                self.record_narrowed_read(expr.span, &element_ty, &narrowed);
+                                narrowed
+                            }
+                            None => element_ty,
+                        };
+                        if !self.is_copy_type(&element_ty)
+                            && self.index_place_read.get() != Some(expr as *const Expr as usize)
+                        {
+                            return Err(Diagnostic::coded_at(
                             "AU3005",
                             expr.span,
                             format!(
@@ -7887,117 +8082,139 @@ impl<'a> FunctionChecker<'a> {
                                 element_ty
                             ),
                         ));
+                        }
+                        return Ok(element_ty);
                     }
-                    return Ok(element_ty);
-                }
-                if let Some(element_ty) = array_element_type(&object_ty).cloned() {
-                    self.check_array_index_type(index, locals)?;
-                    let retained_base = self
-                        .retained_place_access(
-                            object,
-                            &object_ty,
-                            ReceiverKind::Borrow,
-                            "index base",
-                        )
-                        .into_iter()
-                        .collect::<Vec<_>>();
-                    let mut index_borrowed_places = Vec::new();
-                    self.collect_expr_borrowed_places(
-                        index,
-                        &locals_before_index,
-                        &mut index_borrowed_places,
-                    )?;
-                    self.reject_retained_access_overlap(&retained_base, &index_borrowed_places)?;
-                    return Ok(element_ty);
-                }
-                if let Some(element_ty) = vec_element_type(&object_ty).cloned() {
-                    self.check_vec_index_type(index, index.span, locals)?;
-                    let retained_base = self
-                        .retained_place_access(
-                            object,
-                            &object_ty,
-                            ReceiverKind::Borrow,
-                            "index base",
-                        )
-                        .into_iter()
-                        .collect::<Vec<_>>();
-                    let mut index_borrowed_places = Vec::new();
-                    self.collect_expr_borrowed_places(
-                        index,
-                        &locals_before_index,
-                        &mut index_borrowed_places,
-                    )?;
-                    self.reject_retained_access_overlap(&retained_base, &index_borrowed_places)?;
-                    let index_moved_places = self.newly_moved_places(&locals_before_index, locals);
-                    self.reject_expr_borrow_move_overlap(
-                        &retained_base,
-                        &index_moved_places,
-                        expr.span,
-                    )?;
-                    if !self.is_copy_type(&element_ty)
-                        && self.index_place_read.get() != Some(expr.span)
-                    {
-                        return Err(Diagnostic::coded_at(
-                            "AU3005",
+                    if let Some(element_ty) = array_element_type(&object_ty).cloned() {
+                        self.check_array_index_type(index, locals)?;
+                        let retained_base = self
+                            .retained_place_access(
+                                object,
+                                &object_ty,
+                                ReceiverKind::Borrow,
+                                "index base",
+                            )
+                            .into_iter()
+                            .collect::<Vec<_>>();
+                        let mut index_borrowed_places = Vec::new();
+                        self.collect_expr_borrowed_places(
+                            index,
+                            &locals_before_index,
+                            &mut index_borrowed_places,
+                        )?;
+                        self.reject_retained_access_overlap(
+                            &retained_base,
+                            &index_borrowed_places,
+                        )?;
+                        return Ok(element_ty);
+                    }
+                    if let Some(element_ty) = vec_element_type(&object_ty).cloned() {
+                        self.check_vec_index_type(index, index.span, locals)?;
+                        let retained_base = self
+                            .retained_place_access(
+                                object,
+                                &object_ty,
+                                ReceiverKind::Borrow,
+                                "index base",
+                            )
+                            .into_iter()
+                            .collect::<Vec<_>>();
+                        let mut index_borrowed_places = Vec::new();
+                        self.collect_expr_borrowed_places(
+                            index,
+                            &locals_before_index,
+                            &mut index_borrowed_places,
+                        )?;
+                        self.reject_retained_access_overlap(
+                            &retained_base,
+                            &index_borrowed_places,
+                        )?;
+                        let index_moved_places =
+                            self.newly_moved_places(&locals_before_index, locals);
+                        self.reject_expr_borrow_move_overlap(
+                            &retained_base,
+                            &index_moved_places,
                             expr.span,
-                            self.indexed_read_guidance("list", "index", &element_ty),
-                        ));
+                        )?;
+                        if !self.is_copy_type(&element_ty)
+                            && self.index_place_read.get() != Some(expr as *const Expr as usize)
+                        {
+                            return Err(Diagnostic::coded_at(
+                                "AU3005",
+                                expr.span,
+                                self.indexed_read_guidance("list", "index", &element_ty),
+                            ));
+                        }
+                        return Ok(element_ty);
                     }
-                    return Ok(element_ty);
-                }
-                if let Some((key_ty, value_ty)) = map_key_value_types(&object_ty) {
-                    self.require_array_equality_eligible(
-                        key_ty,
-                        format!("cannot use dict indexing with `{key_ty}`"),
-                        index.span,
-                    )?;
-                    let index_ty = self.type_of_expr_hint(index, locals, Some(key_ty))?;
-                    if index_ty != *key_ty {
-                        return Err(Diagnostic::at(
+                    if let Some((key_ty, value_ty)) = map_key_value_types(&object_ty) {
+                        self.require_array_equality_eligible(
+                            key_ty,
+                            format!("cannot use dict indexing with `{key_ty}`"),
                             index.span,
-                            format!("map keys must have type `{}`, found `{}`", key_ty, index_ty),
-                        ));
-                    }
-                    let retained_base = self
-                        .retained_place_access(
-                            object,
-                            &object_ty,
+                        )?;
+                        let index_ty = self.type_of_expr_for_passing_hint(
+                            index,
+                            locals,
+                            Some(key_ty),
                             ReceiverKind::Borrow,
-                            "index base",
-                        )
-                        .into_iter()
-                        .collect::<Vec<_>>();
-                    let mut index_borrowed_places = Vec::new();
-                    self.collect_expr_borrowed_places(
-                        index,
-                        &locals_before_index,
-                        &mut index_borrowed_places,
-                    )?;
-                    self.reject_retained_access_overlap(&retained_base, &index_borrowed_places)?;
-                    let index_moved_places = self.newly_moved_places(&locals_before_index, locals);
-                    self.reject_expr_borrow_move_overlap(
-                        &retained_base,
-                        &index_moved_places,
-                        expr.span,
-                    )?;
-                    if !self.is_copy_type(value_ty)
-                        && self.index_place_read.get() != Some(expr.span)
-                    {
-                        return Err(Diagnostic::coded_at(
-                            "AU3005",
+                        )?;
+                        if index_ty != *key_ty {
+                            return Err(Diagnostic::at(
+                                index.span,
+                                format!(
+                                    "map keys must have type `{}`, found `{}`",
+                                    key_ty, index_ty
+                                ),
+                            ));
+                        }
+                        let retained_base = self
+                            .retained_place_access(
+                                object,
+                                &object_ty,
+                                ReceiverKind::Borrow,
+                                "index base",
+                            )
+                            .into_iter()
+                            .collect::<Vec<_>>();
+                        let mut index_borrowed_places = Vec::new();
+                        self.collect_expr_borrowed_places(
+                            index,
+                            &locals_before_index,
+                            &mut index_borrowed_places,
+                        )?;
+                        self.reject_retained_access_overlap(
+                            &retained_base,
+                            &index_borrowed_places,
+                        )?;
+                        let index_moved_places =
+                            self.newly_moved_places(&locals_before_index, locals);
+                        self.reject_expr_borrow_move_overlap(
+                            &retained_base,
+                            &index_moved_places,
                             expr.span,
-                            self.indexed_read_guidance("dict", "key", value_ty),
-                        ));
+                        )?;
+                        if !self.is_copy_type(value_ty)
+                            && self.index_place_read.get() != Some(expr as *const Expr as usize)
+                        {
+                            return Err(Diagnostic::coded_at(
+                                "AU3005",
+                                expr.span,
+                                self.indexed_read_guidance("dict", "key", value_ty),
+                            ));
+                        }
+                        return Ok(value_ty.clone());
                     }
-                    return Ok(value_ty.clone());
-                }
-                Err(Diagnostic::at(
-                    expr.span,
-                    format!(
-                        "cannot index non-Array, list, or dict value `{}`",
-                        object_ty
-                    ),
-                ))
+                    Err(Diagnostic::at(
+                        expr.span,
+                        format!(
+                            "cannot index non-Array, list, or dict value `{}`",
+                            object_ty
+                        ),
+                    ))
+                })();
+                self.place_read_base.set(projection_base);
+                result
             }
             ExprKind::Slice {
                 object,
@@ -8749,6 +8966,14 @@ impl<'a> FunctionChecker<'a> {
             ));
         }
         let ordered_args = constructor.bind_args(args, span)?;
+        for (index, argument) in ordered_args.iter().enumerate() {
+            if let (Some(argument), Some(passing)) = (argument, constructor.argument_passing(index))
+            {
+                self.builtin_argument_passings
+                    .borrow_mut()
+                    .push((&argument.value as *const Expr as usize, passing));
+            }
+        }
         let seed_arg = required_ordered_arg(
             &ordered_args,
             0,
@@ -9072,6 +9297,22 @@ impl<'a> FunctionChecker<'a> {
     }
 
     fn type_of_call(
+        &self,
+        callee: &Expr,
+        args: &[Argument],
+        span: crate::diag::Span,
+        locals: &mut HashMap<String, LocalBinding>,
+        expected: Option<&Type>,
+    ) -> Result<Type> {
+        let previous = self.builtin_argument_passings.borrow().len();
+        let result = self.type_of_call_inner(callee, args, span, locals, expected);
+        self.builtin_argument_passings
+            .borrow_mut()
+            .truncate(previous);
+        result
+    }
+
+    fn type_of_call_inner(
         &self,
         callee: &Expr,
         args: &[Argument],
@@ -9407,6 +9648,15 @@ impl<'a> FunctionChecker<'a> {
                             ));
                         }
                         let ordered_args = constructor.bind_args(args, span)?;
+                        for (index, argument) in ordered_args.iter().enumerate() {
+                            if let (Some(argument), Some(passing)) =
+                                (argument, constructor.argument_passing(index))
+                            {
+                                self.builtin_argument_passings
+                                    .borrow_mut()
+                                    .push((&argument.value as *const Expr as usize, passing));
+                            }
+                        }
                         self.reject_builtin_associated_argument_sibling_overlap(
                             constructor,
                             args,
@@ -9499,6 +9749,15 @@ impl<'a> FunctionChecker<'a> {
                     unreachable!("builtin lookup is stable during call checking");
                 };
                 let ordered_args = builtin.bind_args(args, span)?;
+                for (index, argument) in ordered_args.iter().enumerate() {
+                    if let (Some(argument), Some(passing)) =
+                        (argument, builtin.argument_passing(index))
+                    {
+                        self.builtin_argument_passings
+                            .borrow_mut()
+                            .push((&argument.value as *const Expr as usize, passing));
+                    }
+                }
                 self.reject_builtin_function_argument_sibling_overlap(
                     builtin,
                     args,
@@ -10171,6 +10430,15 @@ impl<'a> FunctionChecker<'a> {
                                     },
                                 )?;
                             let ordered_args = constructor.bind_args(args, span)?;
+                            for (index, argument) in ordered_args.iter().enumerate() {
+                                if let (Some(argument), Some(passing)) =
+                                    (argument, constructor.argument_passing(index))
+                                {
+                                    self.builtin_argument_passings
+                                        .borrow_mut()
+                                        .push((&argument.value as *const Expr as usize, passing));
+                                }
+                            }
                             let minimum = ordered_args[0]
                                 .expect("with_capacity binding should retain its required minimum");
                             let actual = self.type_of_expr_hint(
@@ -10233,6 +10501,15 @@ impl<'a> FunctionChecker<'a> {
                                 ));
                             }
                             let ordered_args = constructor.bind_args(args, span)?;
+                            for (index, argument) in ordered_args.iter().enumerate() {
+                                if let (Some(argument), Some(passing)) =
+                                    (argument, constructor.argument_passing(index))
+                                {
+                                    self.builtin_argument_passings
+                                        .borrow_mut()
+                                        .push((&argument.value as *const Expr as usize, passing));
+                                }
+                            }
                             self.reject_builtin_associated_argument_sibling_overlap(
                                 constructor,
                                 args,
@@ -10508,7 +10785,8 @@ impl<'a> FunctionChecker<'a> {
                     }
                 }
 
-                let receiver_ty = self.type_of_expr(object, locals)?;
+                let receiver_ty =
+                    self.type_of_expr_for_passing_hint(object, locals, None, ReceiverKind::Borrow)?;
                 if matches!(receiver_ty, Type::Union(_)) {
                     if let Some(path) = self.member_access_path(object) {
                         self.reject_stale_narrowing(&path, span, locals)?;
@@ -10516,6 +10794,19 @@ impl<'a> FunctionChecker<'a> {
                 }
                 if let Type::Named(receiver_name, _) = &receiver_ty {
                     if let Some(builtin_member) = BuiltinMember::resolve(receiver_name, field) {
+                        for (index, argument) in builtin_member
+                            .bind_args(args, span)?
+                            .into_iter()
+                            .enumerate()
+                        {
+                            if let (Some(argument), Some(passing)) =
+                                (argument, builtin_member.argument_passing(index))
+                            {
+                                self.builtin_argument_passings
+                                    .borrow_mut()
+                                    .push((&argument.value as *const Expr as usize, passing));
+                            }
+                        }
                         if explicit_type_args.is_some() && builtin_member != BuiltinMember::ArrayMap
                         {
                             return Err(Diagnostic::coded_at(
@@ -14832,14 +15123,20 @@ impl<'a> FunctionChecker<'a> {
     ) -> Result<Type> {
         match &expr.kind {
             ExprKind::Name(name) => {
-                let binding = locals
-                    .get(name)
-                    .ok_or_else(|| Diagnostic::at(expr.span, format!("unknown name `{}`", name)))?;
+                let Some(binding) = locals.get(name) else {
+                    return self.type_of_expr(expr, locals);
+                };
                 self.ensure_pattern_binding_not_stale(name, expr.span, binding)?;
                 if binding.moved {
                     return Err(self.moved_value_diagnostic(name, expr.span, binding));
                 }
-                Ok(binding.ty.clone())
+                let declared = binding.ty.clone();
+                if let Some(member) = self.narrowed_type_at(&PlacePath::root(name.clone()), locals)
+                {
+                    self.record_narrowed_read(expr.span, &declared, &member);
+                    return Ok(member);
+                }
+                Ok(declared)
             }
             ExprKind::Group(inner)
             | ExprKind::Cast { expr: inner, .. }
@@ -14850,39 +15147,12 @@ impl<'a> FunctionChecker<'a> {
                 let object_ty = self.type_of_member_object_expr(object, locals)?;
                 self.resolve_member_type(&object_ty, field, expr.span)
             }
-            ExprKind::Index { object, index } => {
-                let object_ty = self.type_of_member_object_expr(object, locals)?;
-                if let Type::Tuple(elements) = object_ty {
-                    let ExprKind::Int(value) = index.kind else {
-                        return self.type_of_expr(expr, locals);
-                    };
-                    let index = usize::try_from(value).map_err(|_| {
-                        Diagnostic::coded_at(
-                            "AU3004",
-                            index.span,
-                            "invalid tuple projection position",
-                        )
-                    })?;
-                    elements.get(index).cloned().ok_or_else(|| {
-                        Diagnostic::coded_at(
-                            "AU3004",
-                            expr.span,
-                            format!("tuple has no position {index}"),
-                        )
-                    })
-                } else if vec_element_type(&object_ty).is_some()
-                    || map_key_value_types(&object_ty).is_some()
-                {
-                    // `items[i].field`: the element or entry is a place read
-                    // here, never a copy of the selected value (ADR-0061,
-                    // 2026-09-21 section, contextual reads).
-                    let previous = self.index_place_read.replace(Some(expr.span));
-                    let result = self.type_of_expr(expr, locals);
-                    self.index_place_read.set(previous);
-                    result
-                } else {
-                    self.type_of_expr(expr, locals)
-                }
+            ExprKind::Index { .. } => {
+                let previous_base = self.place_read_base.replace(true);
+                let result =
+                    self.type_of_expr_for_passing_hint(expr, locals, None, ReceiverKind::Borrow);
+                self.place_read_base.set(previous_base);
+                result
             }
             _ => self.type_of_expr(expr, locals),
         }

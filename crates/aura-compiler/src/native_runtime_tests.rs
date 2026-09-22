@@ -462,21 +462,23 @@ fn adr0038_mutable_sink_zero_and_expired_cleanup_are_safe_noops() {
         let child = super::aura_direct_mutable_sink_project(sink, b"".as_ptr(), 0);
         super::aura_direct_mutable_sink_store_owned(child, int_value(4));
         super::with_direct_task_runtime_state(|state| {
-            assert_eq!(
-                state.mutable_sinks[&sink]
-                    .slot
-                    .lock()
-                    .unwrap()
-                    .root
-                    .render(),
-                "4"
-            );
+            let super::DirectMutableWritebackSink::Snapshot { slot, .. } =
+                &state.mutable_sinks[&sink]
+            else {
+                panic!("expected legacy snapshot sink");
+            };
+            assert_eq!(slot.lock().unwrap().root.render(), "4");
         });
         super::aura_direct_mutable_sink_release(child);
         let projected = super::aura_direct_mutable_sink_project(sink, b"field".as_ptr(), 5);
         let same_projection = super::aura_direct_mutable_sink_project(projected, b"".as_ptr(), 0);
         super::with_direct_task_runtime_state(|state| {
-            assert_eq!(state.mutable_sinks[&same_projection].projection, "field");
+            let super::DirectMutableWritebackSink::Snapshot { projection, .. } =
+                &state.mutable_sinks[&same_projection]
+            else {
+                panic!("expected legacy snapshot sink");
+            };
+            assert_eq!(projection, "field");
         });
         super::aura_direct_mutable_sink_release(same_projection);
         super::aura_direct_mutable_sink_release(projected);
@@ -2604,7 +2606,11 @@ fn direct_runtime_tuple_type_names_parse_and_match_structurally() {
 fn string_vec(values: &[&str]) -> *mut OpaqueValue {
     let vec = super::aura_direct_vec_empty();
     for value in values {
-        super::aura_direct_vec_push_in_place(vec, string_value(value));
+        let result = super::aura_direct_vec_push_in_place(vec, string_value(value));
+        expect_unit(result);
+        unsafe {
+            release_value(result);
+        }
     }
     vec
 }
@@ -3503,8 +3509,10 @@ fn direct_json_parse_reserves_capacity_before_borrowing_and_copying_the_source()
         crate::runtime_value::yield_now_with_runtime_scheduler();
 
         let source = unsafe { &*(source_address as *mut OpaqueValue) };
-        let mut source_guard = source
-            .value
+        let super::DirectValueStorage::Owned(storage) = &source.storage else {
+            panic!("the JSON source is an owned runtime value");
+        };
+        let mut source_guard = storage
             .try_write()
             .expect("codec saturation must park before the direct adapter borrows its source");
         match &mut *source_guard {
@@ -23261,10 +23269,6 @@ fn element_trap(invoke: impl FnOnce() + Send + 'static) -> Diagnostic {
     .expect_err("the element path helper should trap")
 }
 
-fn element_trap_message(invoke: impl FnOnce() + Send + 'static) -> String {
-    element_trap(invoke).message
-}
-
 fn element_path_load(collection: usize, path: &'static str, selectors: &[i64]) -> Value {
     let loaded = super::aura_direct_element_path_load(
         collection as *mut OpaqueValue,
@@ -23677,5 +23681,741 @@ fn adr0061_direct_element_paths_keep_collection_field_and_tuple_storage() {
             assert_eq!(instance.fields["pairs"].render(), "([5], [17])");
         });
         release_value(root as *mut OpaqueValue);
+    }
+}
+
+fn borrowed_element(
+    root: *mut OpaqueValue,
+    kind: i64,
+    selector: i64,
+    mutable: bool,
+    ty: &Type,
+) -> *mut OpaqueValue {
+    let name = super::canonical_runtime_type_name(ty);
+    super::aura_direct_place_borrow_element(
+        root,
+        kind,
+        selector,
+        b"".as_ptr(),
+        0,
+        i64::from(mutable),
+        name.as_ptr(),
+        name.len(),
+        1,
+        1,
+    )
+}
+
+#[test]
+fn adr0061_direct_resolved_borrows_retain_storage_and_publish_rebinding_immediately() {
+    let list_type = Type::Named("list".into(), vec![Type::named("str")]);
+    let root = boxed_value(Value::Vec(VecValue {
+        element_type: list_type.clone(),
+        elements: vec![Value::Vec(VecValue {
+            element_type: Type::named("str"),
+            elements: vec![Value::String("before".into())],
+        })],
+    }));
+    let selected = borrowed_element(root, 0, -1, true, &list_type);
+    let nested = borrowed_element(selected, 0, 0, false, &Type::named("str"));
+    unsafe {
+        super::with_values(&[nested, nested], |values| {
+            assert!(std::ptr::eq(values[0], values[1]))
+        });
+        release_value(nested);
+    }
+    super::aura_direct_place_store_owned(selected, string_vec(&["after"]));
+    let appended = super::aura_direct_vec_push_in_place(selected, string_value("next"));
+    expect_unit(appended);
+    unsafe {
+        release_value(appended);
+    }
+    unsafe {
+        super::with_value(root, |value| assert_eq!(value.render(), "[[after, next]]"));
+        release_value(root);
+        super::with_value(selected, |value| {
+            assert_eq!(value.render(), "[after, next]")
+        });
+        release_value(selected);
+    }
+}
+
+#[test]
+fn adr0061_direct_entry_descriptor_does_not_retain_or_reprobe_key() {
+    let table = string_map(&[("key", "before")]);
+    let key = string_value("key");
+    let entry = borrowed_element(table, 1, key as i64, true, &Type::named("str"));
+    unsafe {
+        release_value(key);
+    }
+    super::aura_direct_place_store_owned(entry, string_value("after"));
+    unsafe {
+        super::with_value(table, |value| assert_eq!(value.render(), "{key: after}"));
+        release_value(table);
+        super::with_value(entry, |value| assert_eq!(value.render(), "after"));
+        release_value(entry);
+    }
+}
+
+#[test]
+fn adr0061_direct_borrowed_call_handoff_detaches_defaults_and_preserves_shared_origin() {
+    let root = string_vec(&["kept"]);
+    let selected = borrowed_element(root, 0, 0, false, &Type::named("str"));
+    let sink = super::aura_direct_place_sink_new(selected);
+    super::aura_direct_set_next_mutable_sinks(&sink, 1);
+    let token = super::aura_direct_call_handoff_take();
+    assert!(super::with_direct_task_runtime_state(|state| state
+        .pending_mutable_sinks
+        .is_none()));
+    let origin = super::aura_direct_call_handoff_place(token, 0, 0);
+    unsafe {
+        super::with_value(origin, |value| assert_eq!(value.render(), "kept"));
+        release_value(origin);
+    }
+    super::aura_direct_call_handoff_publish(token, 0);
+    super::aura_direct_call_handoff_release(token);
+    super::with_direct_task_runtime_state(|state| {
+        state.pending_mutable_sinks = None;
+    });
+    super::aura_direct_mutable_sink_release(sink);
+    unsafe {
+        release_value(selected);
+        release_value(root);
+    }
+}
+
+#[test]
+fn adr0061_direct_logical_union_borrows_do_not_retag_or_clone_the_selected_owner() {
+    let root = string_vec(&["borrowed"]);
+    let source = borrowed_element(root, 0, 0, false, &Type::named("str"));
+    let watch = unsafe { super::with_value(source, crate::runtime_value::watch_payload_clones) };
+    let target = coverage_union(vec![Type::named("str"), Type::Unit]);
+    let index = coverage_union_member_index(&target, &Type::named("str"));
+    let name = super::canonical_runtime_type_name(&Type::Union(Box::new(target)));
+    let member = super::canonical_runtime_type_name(&Type::named("str"));
+    let presented = super::aura_direct_place_borrow_union(
+        source,
+        name.as_ptr(),
+        name.len(),
+        member.as_ptr(),
+        member.len(),
+        index as i64,
+        1,
+        1,
+    );
+    assert_eq!(super::aura_direct_union_tag(presented), index as i64);
+    assert_eq!(
+        super::aura_direct_union_tag_test(presented, name.as_ptr(), name.len(), index),
+        1
+    );
+    assert_eq!(super::aura_direct_value_is_union(presented), 1);
+    let path = format!("__union_payload_{index}");
+    let payload = super::aura_direct_place_borrow(
+        presented,
+        path.as_ptr(),
+        path.len(),
+        0,
+        member.as_ptr(),
+        member.len(),
+    );
+    unsafe {
+        super::with_values(&[source, payload], |values| {
+            assert!(std::ptr::eq(values[0], values[1]))
+        });
+        super::with_value(root, |value| {
+            let Value::Vec(vector) = value else {
+                panic!("expected list owner");
+            };
+            assert!(matches!(&vector.elements[0], Value::String(_)));
+        });
+    }
+    assert_eq!(watch.observations(), 0);
+    let owned = super::aura_direct_clone_value(presented);
+    assert!(
+        watch.observations() > 0,
+        "explicit clone is an observed positive control"
+    );
+    assert_eq!(super::aura_direct_union_tag(owned), index as i64);
+    drop(watch);
+    unsafe {
+        release_value(owned);
+        release_value(payload);
+        release_value(presented);
+        release_value(source);
+        release_value(root);
+    }
+}
+
+#[test]
+fn adr0061_direct_returned_place_keeps_physical_origin_separate_from_declared_projection() {
+    super::with_direct_task_runtime_scope(|| {
+        let owner = string_vec(&["kept"]);
+        let selected = borrowed_element(owner, 0, 0, false, &Type::named("str"));
+        unsafe {
+            super::aura_direct_enter_call(1, 1, b"caller".as_ptr(), 6);
+            super::aura_direct_enter_call(1, 1, b"callee".as_ptr(), 6);
+        }
+        let projection = b"__union_payload_0.name";
+        super::aura_direct_set_returned_view_place(projection.as_ptr(), projection.len(), selected);
+        unsafe {
+            super::aura_direct_exit_call();
+            release_value(selected);
+            release_value(owner);
+        }
+        let mut index = -1;
+        let returned = super::aura_direct_take_returned_view_place(
+            projection.as_ptr(),
+            projection.len(),
+            &mut index,
+        );
+        assert_eq!(index, 0);
+        unsafe {
+            super::with_value(returned, |value| assert_eq!(value.render(), "kept"));
+            release_value(returned);
+            super::aura_direct_exit_call();
+        }
+        super::with_direct_task_runtime_state(|state| assert!(state.owned_value_refs.is_empty()));
+    });
+}
+
+#[test]
+fn adr0061_direct_shared_sibling_key_and_map_probe_use_one_owner_lock() {
+    let root = boxed_value(Value::Instance(InstanceValue {
+        class_name: "Registry".into(),
+        fields: BTreeMap::from([
+            ("key".into(), Value::String("entry".into())),
+            (
+                "table".into(),
+                Value::Map(MapValue {
+                    key_type: Type::named("str"),
+                    value_type: Type::named("str"),
+                    entries: vec![(Value::String("entry".into()), Value::String("value".into()))],
+                }),
+            ),
+        ]),
+    }));
+    let borrow_field = |field: &str| {
+        super::aura_direct_place_borrow(root, field.as_ptr(), field.len(), 0, b"".as_ptr(), 0)
+    };
+    let key = borrow_field("key");
+    let table = borrow_field("table");
+    let watch = unsafe { super::with_value(root, crate::runtime_value::watch_payload_clones) };
+    let entry = borrowed_element(table, 1, key as i64, false, &Type::named("str"));
+    assert_eq!(watch.observations(), 0);
+    drop(watch);
+    unsafe {
+        super::with_value(entry, |value| assert_eq!(value.render(), "value"));
+        release_value(entry);
+        release_value(table);
+        release_value(key);
+        release_value(root);
+    }
+}
+
+#[test]
+fn adr0061_direct_selected_sinks_publish_fields_without_cleanup_snapshots() {
+    super::with_direct_task_runtime_scope(|| {
+        let owner = boxed_value(Value::Vec(VecValue {
+            element_type: Type::named("Pair"),
+            elements: vec![Value::Instance(InstanceValue {
+                class_name: "Pair".into(),
+                fields: BTreeMap::from([
+                    ("name".into(), Value::String("old".into())),
+                    ("other".into(), Value::String("same".into())),
+                ]),
+            })],
+        }));
+        let place = borrowed_element(owner, 0, 0, true, &Type::named("Pair"));
+        let sink = super::aura_direct_place_sink_new(place);
+        let child = super::aura_direct_mutable_sink_project(sink, b"name".as_ptr(), 4);
+        super::aura_direct_mutable_sink_store_owned(child, string_value("new"));
+        super::aura_direct_set_next_mutable_sinks(&sink, 1);
+        unsafe {
+            super::aura_direct_enter_call(1, 1, b"edit".as_ptr(), 4);
+        }
+        assert_eq!(super::aura_direct_current_mutable_sink(0), sink);
+        let parameter = super::aura_direct_current_borrowed_place(0);
+        let field = super::aura_direct_instance_get_field(parameter, b"name".as_ptr(), 4);
+        unsafe {
+            super::with_value(field, |value| assert_eq!(value.render(), "new"));
+            super::with_value(owner, |value| {
+                let Value::Vec(vector) = value else {
+                    panic!("expected original owner");
+                };
+                let Value::Instance(pair) = &vector.elements[0] else {
+                    panic!("expected original pair");
+                };
+                assert_eq!(pair.fields["name"].render(), "new");
+                assert_eq!(pair.fields["other"].render(), "same");
+            });
+            release_value(field);
+            release_value(parameter);
+            super::aura_direct_exit_call();
+        }
+        super::aura_direct_mutable_sink_release(child);
+        super::aura_direct_mutable_sink_release(sink);
+        unsafe {
+            release_value(place);
+            release_value(owner);
+        }
+        super::with_direct_task_runtime_state(|state| {
+            assert!(state.owned_value_refs.is_empty());
+            assert!(state.mutable_sinks.is_empty());
+        });
+    });
+}
+
+#[test]
+fn adr0061_direct_indirect_handoff_maps_captures_and_shared_public_slots() {
+    super::with_direct_task_runtime_scope(|| {
+        let owner = string_vec(&["shared", "mutable"]);
+        let shared = borrowed_element(owner, 0, 0, false, &Type::named("str"));
+        let mutable = borrowed_element(owner, 0, 1, true, &Type::named("str"));
+        let shared_sink = super::aura_direct_place_sink_new(shared);
+        let mutable_sink = super::aura_direct_place_sink_new(mutable);
+        super::aura_direct_set_next_indirect_mutable_sinks(&shared_sink, 1, &0, &mutable_sink, 1);
+        let token = super::aura_direct_call_handoff_take();
+        let captured = super::aura_direct_call_handoff_place(token, 0, 1);
+        super::aura_direct_place_store_owned(captured, string_value("updated"));
+        unsafe {
+            release_value(captured);
+        }
+        super::aura_direct_call_handoff_publish(token, 1);
+        unsafe {
+            super::aura_direct_enter_call(1, 1, b"closure".as_ptr(), 7);
+        }
+        assert_eq!(super::aura_direct_current_mutable_sink(0), mutable_sink);
+        assert_eq!(super::aura_direct_current_mutable_sink(1), 0);
+        let public = super::aura_direct_current_borrowed_place(1);
+        unsafe {
+            super::with_value(public, |value| assert_eq!(value.render(), "shared"));
+            release_value(public);
+            super::aura_direct_exit_call();
+            super::with_value(owner, |value| {
+                assert_eq!(value.render(), "[shared, updated]")
+            });
+        }
+        super::aura_direct_call_handoff_release(token);
+        super::aura_direct_mutable_sink_release(shared_sink);
+        super::aura_direct_mutable_sink_release(mutable_sink);
+        unsafe {
+            release_value(shared);
+            release_value(mutable);
+            release_value(owner);
+        }
+        super::with_direct_task_runtime_state(|state| {
+            assert!(state.owned_value_refs.is_empty());
+            assert!(state.call_handoffs.is_empty());
+        });
+    });
+}
+
+#[test]
+fn adr0061_direct_shared_union_retag_is_only_a_logical_presentation() {
+    let concrete = coverage_union(vec![Type::named("str"), Type::Unit]);
+    let concrete_index = coverage_union_member_index(&concrete, &Type::named("str"));
+    let owner = boxed_value(coverage_union_value(
+        &concrete,
+        concrete_index,
+        Value::String("same storage".into()),
+    ));
+    let generic = coverage_union(vec![Type::TypeParam("T".into()), Type::Unit]);
+    let generic_index = coverage_union_member_index(&generic, &Type::TypeParam("T".into()));
+    let generic_name = super::canonical_runtime_type_name(&Type::Union(Box::new(generic)));
+    let member_name = super::canonical_runtime_type_name(&Type::TypeParam("T".into()));
+    let watch = unsafe { super::with_value(owner, crate::runtime_value::watch_payload_clones) };
+    let loan = super::aura_direct_place_borrow_union(
+        owner,
+        generic_name.as_ptr(),
+        generic_name.len(),
+        member_name.as_ptr(),
+        member_name.len(),
+        generic_index as i64,
+        1,
+        1,
+    );
+    assert_eq!(super::aura_direct_union_tag(loan), generic_index as i64);
+    assert_eq!(
+        super::aura_direct_union_tag_test(
+            loan,
+            generic_name.as_ptr(),
+            generic_name.len(),
+            generic_index
+        ),
+        1
+    );
+    let payload = super::aura_direct_union_active_payload(loan, 0);
+    unsafe {
+        super::with_value(payload, |value| assert_eq!(value.render(), "same storage"));
+        super::with_value(owner, |value| {
+            let Value::Union(union) = value else {
+                panic!("expected physical union");
+            };
+            assert_eq!(union.union_type, Type::Union(Box::new(concrete)));
+            assert_eq!(union.member_index, concrete_index);
+        });
+    }
+    assert_eq!(watch.observations(), 0);
+    drop(watch);
+    unsafe {
+        release_value(payload);
+        release_value(loan);
+        release_value(owner);
+    }
+}
+
+#[test]
+fn adr0061_direct_mutable_union_rebinding_refreshes_the_active_member() {
+    let target = coverage_union(vec![Type::named("str"), Type::Unit]);
+    let text_index = coverage_union_member_index(&target, &Type::named("str"));
+    let none_index = coverage_union_member_index(&target, &Type::Unit);
+    let ty = Type::Union(Box::new(target.clone()));
+    let root = boxed_value(Value::Vec(VecValue {
+        element_type: ty.clone(),
+        elements: vec![coverage_union_value(
+            &target,
+            text_index,
+            Value::String("before".into()),
+        )],
+    }));
+    let selected = borrowed_element(root, 0, 0, true, &ty);
+    assert_eq!(super::aura_direct_union_tag(selected), text_index as i64);
+    super::aura_direct_place_store_owned(
+        selected,
+        boxed_value(coverage_union_value(&target, none_index, Value::Unit)),
+    );
+    assert_eq!(super::aura_direct_union_tag(selected), none_index as i64);
+    assert_eq!(super::aura_direct_none_test(selected), 1);
+    super::aura_direct_place_store_owned(
+        selected,
+        boxed_value(coverage_union_value(
+            &target,
+            text_index,
+            Value::String("after".into()),
+        )),
+    );
+    let payload = super::aura_direct_union_active_payload(selected, 0);
+    super::aura_direct_place_store_owned(payload, string_value("written through"));
+    unsafe {
+        super::with_value(root, |value| {
+            assert_eq!(value.render(), "[written through]")
+        });
+        release_value(payload);
+        release_value(selected);
+        release_value(root);
+    }
+}
+
+#[test]
+fn adr0061_direct_logical_union_preserves_declared_member_identity_for_erased_storage() {
+    for (member, value) in [
+        (Type::named("float32"), Value::Float(1.25)),
+        (
+            Type::Named("Box".into(), vec![Type::named("str")]),
+            Value::Instance(InstanceValue {
+                class_name: "Box".into(),
+                fields: BTreeMap::from([("value".into(), Value::String("payload".into()))]),
+            }),
+        ),
+    ] {
+        let owner = boxed_value(value);
+        let union = coverage_union(vec![member.clone(), Type::Unit]);
+        let index = coverage_union_member_index(&union, &member);
+        let union_name = super::canonical_runtime_type_name(&Type::Union(Box::new(union)));
+        let member_name = super::canonical_runtime_type_name(&member);
+        let loan = super::aura_direct_place_borrow_union(
+            owner,
+            union_name.as_ptr(),
+            union_name.len(),
+            member_name.as_ptr(),
+            member_name.len(),
+            index as i64,
+            1,
+            1,
+        );
+        assert_eq!(super::aura_direct_union_tag(loan), index as i64);
+        assert_eq!(
+            super::aura_direct_union_tag_test(loan, union_name.as_ptr(), union_name.len(), index),
+            1
+        );
+        let payload = super::aura_direct_union_active_payload(loan, 0);
+        unsafe {
+            super::with_values(&[owner, payload], |values| {
+                assert!(std::ptr::eq(values[0], values[1]))
+            });
+        }
+        let copy = super::aura_direct_clone_value(loan);
+        assert_eq!(super::aura_direct_union_tag(copy), index as i64);
+        unsafe {
+            release_value(copy);
+            release_value(payload);
+            release_value(loan);
+            release_value(owner);
+        }
+    }
+}
+
+#[test]
+fn adr0061_direct_generic_class_union_borrow_preserves_runtime_member_arguments() {
+    let result = run_lightweight_root_task(|| {
+        super::with_direct_task_runtime_scope(|| {
+            super::with_task_runtime_error_capture(|| {
+                let member = Type::Named("Box".into(), vec![Type::named("str")]);
+                let runtime_name = super::canonical_runtime_type_name(&member);
+                let generic = coverage_union(vec![Type::TypeParam("T".into()), Type::Unit]);
+                let generic_index =
+                    coverage_union_member_index(&generic, &Type::TypeParam("T".into()));
+                let owner = boxed_value(coverage_union_value(
+                    &generic,
+                    generic_index,
+                    Value::Instance(InstanceValue {
+                        class_name: "Box".into(),
+                        fields: BTreeMap::from([
+                            (
+                                crate::runtime_value::DIRECT_RUNTIME_TYPE_FIELD.into(),
+                                Value::String(runtime_name),
+                            ),
+                            ("value".into(), Value::String("kept".into())),
+                        ]),
+                    }),
+                ));
+                let concrete = coverage_union(vec![member.clone(), Type::Unit]);
+                let concrete_index = coverage_union_member_index(&concrete, &member);
+                let name = super::canonical_runtime_type_name(&Type::Union(Box::new(concrete)));
+                let member_name = super::canonical_runtime_type_name(&Type::TypeParam("T".into()));
+                let loan = super::aura_direct_place_borrow_union(
+                    owner,
+                    name.as_ptr(),
+                    name.len(),
+                    member_name.as_ptr(),
+                    member_name.len(),
+                    concrete_index as i64,
+                    1,
+                    1,
+                );
+                assert_eq!(super::aura_direct_union_tag(loan), concrete_index as i64);
+                let projection = format!("__union_payload_{concrete_index}.value");
+                let value = super::aura_direct_place_borrow(
+                    loan,
+                    projection.as_ptr(),
+                    projection.len(),
+                    0,
+                    b"".as_ptr(),
+                    0,
+                );
+                unsafe {
+                    super::with_value(value, |value| assert_eq!(value.render(), "kept"));
+                    release_value(value);
+                    release_value(loan);
+                    release_value(owner);
+                }
+                Ok(Value::Unit)
+            })
+        })
+    });
+    assert_eq!(
+        result.expect("generic class union member identity keeps its arguments"),
+        Value::Unit
+    );
+}
+
+#[test]
+fn adr0061_direct_sibling_string_read_helpers_keep_payloads_borrowed() {
+    let root = boxed_value(Value::Instance(InstanceValue {
+        class_name: "TextInputs".into(),
+        fields: BTreeMap::from([
+            ("text".into(), Value::String("alpha beta".into())),
+            ("same".into(), Value::String("alpha beta".into())),
+            ("prefix".into(), Value::String("alpha".into())),
+            ("suffix".into(), Value::String("beta".into())),
+            ("replacement".into(), Value::String("gamma".into())),
+        ]),
+    }));
+    let borrow = |field: &str| {
+        super::aura_direct_place_borrow(root, field.as_ptr(), field.len(), 0, b"str".as_ptr(), 3)
+    };
+    let text = borrow("text");
+    let same = borrow("same");
+    let prefix = borrow("prefix");
+    let suffix = borrow("suffix");
+    let replacement = borrow("replacement");
+    let watch = unsafe { super::with_value(root, crate::runtime_value::watch_payload_clones) };
+    let equal = super::aura_direct_binary_value(5, text, same);
+    let identical = super::aura_direct_binary_value(5, text, text);
+    unsafe {
+        super::with_value(equal, |value| assert_eq!(value, &Value::Bool(true)));
+        super::with_value(identical, |value| assert_eq!(value, &Value::Bool(true)));
+    }
+    assert_eq!(super::aura_direct_string_contains(text, suffix), 1);
+    assert_eq!(super::aura_direct_string_starts_with(text, prefix), 1);
+    assert_eq!(super::aura_direct_string_ends_with(text, suffix), 1);
+    let replaced = super::aura_direct_string_replace(text, suffix, replacement);
+    unsafe {
+        super::with_value(replaced, |value| assert_eq!(value.render(), "alpha gamma"));
+        super::with_value(text, |value| assert_eq!(value.render(), "alpha beta"));
+    }
+    assert_eq!(
+        watch.observations(),
+        0,
+        "shared readers must not clone source payloads"
+    );
+    drop(watch);
+    unsafe {
+        for value in [
+            equal,
+            identical,
+            replaced,
+            replacement,
+            suffix,
+            prefix,
+            same,
+            text,
+            root,
+        ] {
+            release_value(value);
+        }
+    }
+}
+
+#[test]
+fn adr0061_direct_sibling_collection_probes_read_keys_without_cloning() {
+    let root = boxed_value(Value::Instance(InstanceValue {
+        class_name: "SearchInputs".into(),
+        fields: BTreeMap::from([
+            ("key".into(), Value::String("hit".into())),
+            (
+                "items".into(),
+                Value::Vec(VecValue {
+                    element_type: Type::named("str"),
+                    elements: vec![
+                        Value::String("miss".into()),
+                        Value::String("hit".into()),
+                        Value::String("hit".into()),
+                    ],
+                }),
+            ),
+            (
+                "table".into(),
+                Value::Map(MapValue {
+                    key_type: Type::named("str"),
+                    value_type: Type::named("int64"),
+                    entries: vec![(
+                        Value::String("hit".into()),
+                        Value::Int(IntegerValue::from_literal(7)),
+                    )],
+                }),
+            ),
+            (
+                "set".into(),
+                Value::Set(SetValue {
+                    element_type: Type::named("str"),
+                    elements: vec![Value::String("miss".into()), Value::String("hit".into())],
+                }),
+            ),
+        ]),
+    }));
+    let borrow = |field: &str, mutable| {
+        super::aura_direct_place_borrow(root, field.as_ptr(), field.len(), mutable, b"".as_ptr(), 0)
+    };
+    let key = borrow("key", 0);
+    let items = borrow("items", 1);
+    let table = borrow("table", 1);
+    let set = borrow("set", 1);
+    let watch = unsafe { super::with_value(root, crate::runtime_value::watch_payload_clones) };
+    assert_eq!(super::aura_direct_vec_contains(items, key), 1);
+    let index = super::aura_direct_collection_operation(items, key, 0, 2);
+    let count = super::aura_direct_collection_operation(items, key, 0, 3);
+    unsafe {
+        super::with_value(index, |value| assert_eq!(value.render(), "1"));
+        super::with_value(count, |value| assert_eq!(value.render(), "2"));
+    }
+    let removed_item = super::aura_direct_collection_operation(items, key, 0, 1);
+    unsafe {
+        super::with_value(items, |value| assert_eq!(value.render(), "[miss, hit]"));
+    }
+    assert_eq!(super::aura_direct_map_contains_key(table, key), 1);
+    let map_value = super::aura_direct_map_index(table, key, 1, 1);
+    unsafe {
+        super::with_value(map_value, |value| assert_eq!(value.render(), "7"));
+    }
+    let removed_entry = super::aura_direct_map_remove_in_place(table, key);
+    assert_eq!(super::aura_direct_map_contains_key(table, key), 0);
+    assert_eq!(super::aura_direct_set_contains(set, key), 1);
+    assert_eq!(super::aura_direct_set_remove_in_place(set, key), 1);
+    assert_eq!(super::aura_direct_set_contains(set, key), 0);
+    assert_eq!(
+        watch.observations(),
+        0,
+        "probes must not clone collection or key payloads"
+    );
+    drop(watch);
+    unsafe {
+        for value in [
+            index,
+            count,
+            removed_item,
+            map_value,
+            removed_entry,
+            set,
+            table,
+            items,
+            key,
+            root,
+        ] {
+            release_value(value);
+        }
+    }
+}
+
+#[test]
+fn adr0061_direct_erased_reborrow_keeps_concrete_union_member_identity() {
+    let owner = super::boxed_typed_value(Value::Float(1.25), "float32");
+    let parameter_name = super::canonical_runtime_type_name(&Type::TypeParam("T".into()));
+    let parameter = super::aura_direct_place_borrow(
+        owner,
+        b"".as_ptr(),
+        0,
+        0,
+        parameter_name.as_ptr(),
+        parameter_name.len(),
+    );
+    let generic = coverage_union(vec![Type::TypeParam("T".into()), Type::Unit]);
+    let generic_index = coverage_union_member_index(&generic, &Type::TypeParam("T".into()));
+    let generic_name = super::canonical_runtime_type_name(&Type::Union(Box::new(generic)));
+    let generic_loan = super::aura_direct_place_borrow_union(
+        parameter,
+        generic_name.as_ptr(),
+        generic_name.len(),
+        parameter_name.as_ptr(),
+        parameter_name.len(),
+        generic_index as i64,
+        1,
+        1,
+    );
+    let concrete = coverage_union(vec![Type::named("float32"), Type::Unit]);
+    let concrete_index = coverage_union_member_index(&concrete, &Type::named("float32"));
+    let concrete_name = super::canonical_runtime_type_name(&Type::Union(Box::new(concrete)));
+    let concrete_loan = super::aura_direct_place_borrow(
+        generic_loan,
+        b"".as_ptr(),
+        0,
+        0,
+        concrete_name.as_ptr(),
+        concrete_name.len(),
+    );
+    assert_eq!(
+        super::aura_direct_union_tag(concrete_loan),
+        concrete_index as i64
+    );
+    let payload = super::aura_direct_union_active_payload(concrete_loan, 0);
+    unsafe {
+        super::with_values(&[owner, payload], |values| {
+            assert!(std::ptr::eq(values[0], values[1]))
+        });
+        release_value(payload);
+        release_value(concrete_loan);
+        release_value(generic_loan);
+        release_value(parameter);
+        release_value(owner);
     }
 }
