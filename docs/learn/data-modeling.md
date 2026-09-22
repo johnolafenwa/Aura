@@ -32,7 +32,7 @@ class Job:
 
 Construct an instance with named fields:
 
-```aura
+```aura fragment
 job = Job(id=42, queue="image")
 ```
 
@@ -42,7 +42,7 @@ it starts at `0`.
 Classes are move types by default. A bare class parameter borrows the value.
 Write `own` to transfer ownership:
 
-```aura
+```aura fragment
 def consume(job: own Job):
     print(job.id)
 
@@ -53,7 +53,7 @@ consume(job)
 
 When a helper only needs to read a job, borrow it:
 
-```aura
+```aura fragment
 def describe(job: Job) -> str:
     return job.queue + "#" + job.id.to_string()
 ```
@@ -81,7 +81,7 @@ class Job:
 
 Use it:
 
-```aura
+```aura fragment
 mut job = Job(id=42, queue="image")
 job.bump()
 print(job.label())
@@ -119,7 +119,7 @@ class Counter:
         return Counter()
 ```
 
-```aura
+```aura fragment
 counter = Counter.zero()
 ```
 
@@ -136,7 +136,7 @@ copy class Offset:
 
 A copy class duplicates on assignment:
 
-```aura
+```aura fragment
 a = Offset(x=1, y=2)
 b = a
 print(a.x)
@@ -162,13 +162,13 @@ enum JobState:
 
 Construct a variant by naming it:
 
-```aura
+```aura fragment
 state = JobState.Running(worker="worker-a")
 ```
 
 `match` inspects the variant and must cover every case:
 
-```aura
+```aura fragment
 def render_state(state: JobState) -> str:
     return match state:
         case JobState.Queued:
@@ -195,7 +195,7 @@ than a class with many optional fields.
 A class can own an enum, and often should. A stable record with a changing
 state is one of the cleanest patterns in Aura:
 
-```aura
+```aura fragment
 class TrackedJob:
     job: Job
     state: JobState = JobState.Queued

@@ -65,7 +65,7 @@ Constants become available in declaration order. An initializer may read an earl
 
 An unaliased module import binds the first path component as a namespace:
 
-```aura
+```aura fragment
 import tools.text
 
 value = tools.text.parse("input")
@@ -73,7 +73,7 @@ value = tools.text.parse("input")
 
 An aliased module import binds the complete module under the alias. It does not bind the path's first component:
 
-```aura
+```aura fragment
 import tools.text as text_tools
 
 value = text_tools.parse("input")
@@ -81,13 +81,13 @@ value = text_tools.parse("input")
 
 A from-import binds the requested public items directly:
 
-```aura
+```aura fragment
 from tools.text import parse, ResultRow
 ```
 
 Each from-import entry may take a local alias. Direct and aliased entries can appear together:
 
-```aura
+```aura fragment
 from tools.text import parse as parse_text, ResultRow
 ```
 
@@ -209,7 +209,7 @@ For limited reachability and loop-flow reasoning, the compiler recognizes consta
 
 Each match arm has its own scope for payload bindings. A binding is available only in that arm's body or value expression.
 
-```aura
+```aura fragment
 match result:
     case Result.Ok(value):
         print(value)

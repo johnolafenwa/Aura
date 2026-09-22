@@ -23,7 +23,7 @@ def internal(value: int32) -> int32:
 
 From another file, import the module and call its public names:
 
-```aura
+```aura fragment
 import helpers.math
 
 print(helpers.math.double(21))
@@ -39,7 +39,7 @@ The compiler enforces this. It is not a convention.
 `helpers.math.double(21)`. Use `from ... import ...` to bring in a single
 name directly:
 
-```aura
+```aura fragment
 from helpers.math import double
 
 print(double(21))
@@ -55,7 +55,7 @@ A quick rule for choosing:
 Use `as` when the full module path is too long to repeat, or when two modules
 export the same short name:
 
-```aura
+```aura fragment
 import helpers.math as integer_math
 from helpers.counter import Counter as ReadableCounter
 
@@ -69,7 +69,7 @@ module identity, type, visibility, and behavior.
 
 A from-import may mix direct and aliased entries:
 
-```aura
+```aura fragment
 from helpers.math import double as twice, empty
 ```
 
@@ -133,7 +133,7 @@ aura deps update util
 
 You import a dependency by its package name:
 
-```aura
+```aura fragment
 import util.math
 
 print(util.math.double(10))

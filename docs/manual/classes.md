@@ -26,7 +26,7 @@ Aura evaluates a default afresh for each construction that omits the field, so d
 
 A generic class declares type parameters after its name. Each parameter may have a bound:
 
-```aura
+```aura fragment
 class Box[T]:
     value: T
 
@@ -40,7 +40,7 @@ Type parameter names must be unique. Every field and method type must be known a
 
 Call the class name to construct a value. Arguments may be positional in field declaration order, named by field, or positional followed by named:
 
-```aura
+```aura fragment
 point = Point(3.0, 4.0)
 server = Server()
 custom = Server("0.0.0.0", port=9090)
@@ -69,7 +69,7 @@ Binding positional or named arguments to field slots never reorders evaluation. 
 
 Generic arguments may be explicit:
 
-```aura
+```aura fragment
 box = Box[int32](value=42)
 ```
 
@@ -119,11 +119,12 @@ The receiver, when present, is the first method parameter:
 | `mut self` | Exclusive mutable receiver. The call requires a mutable place and may mutate it. |
 | none | Associated method. It is called through the type, not an instance. |
 
-```aura
-mut counter = Counter.zero()
-counter.increment()
-print(counter.get())
-value = counter.into_value()
+```aura fragment
+def main():
+    mut counter = Counter.zero()
+    counter.increment()
+    print(counter.get())
+    value = counter.into_value()
 ```
 
 In every other respect, methods follow the function rules for generic parameters, ordinary parameters, defaults, and owned returns. Ordinary parameter names must be unique and cannot collide with a declared `self` receiver. A typed first parameter such as `self: Counter` is not a receiver. The checker rejects it with a diagnostic that names the valid forms. `Self` may appear in a method's parameter and return types, and it denotes the enclosing class specialization.
@@ -142,7 +143,7 @@ See [Closures](/manual/closures#bound-methods).
 
 A field assignment requires a mutable base place:
 
-```aura
+```aura fragment
 mut counter = Counter.zero()
 counter.value = 10
 counter.increment()
@@ -228,7 +229,7 @@ class Resource:
 
 The method must be named `close`, use `mut self`, take no ordinary parameters, and return `None`. In Aura 0.3, `with` does not support generic user resource classes.
 
-```aura
+```aura fragment
 with resource = Resource(name="db"):
     print("using resource")
 ```

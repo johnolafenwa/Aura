@@ -34,7 +34,7 @@ either one.
 
 This is the first error most Python developers hit:
 
-```aura
+```aura check-fail:AU3003
 def main():
     total = 0
     total = total + 1   # error: cannot assign to immutable binding `total`
@@ -98,7 +98,7 @@ Three capabilities make up the whole model:
 
 Calls look like Python, with no sigils and no `&`:
 
-```aura
+```aura fragment
 label = "aura"
 print(shout(label))
 print(shout(label))   # fine, shout only reads
@@ -106,7 +106,7 @@ print(shout(label))   # fine, shout only reads
 
 Once you give a value away, the compiler holds you to it:
 
-```aura
+```aura fragment
 n = consume(label)
 print(label)
 ```
@@ -138,7 +138,7 @@ class Account:
     currency: str = "USD"
 ```
 
-```aura
+```aura fragment
 account = Account(owner="ada", balance=0.0)
 ```
 
@@ -158,7 +158,7 @@ class Account:
         return Account(owner=owner, balance=deposit)
 ```
 
-```aura
+```aura fragment
 fresh = Account.new("ada")
 mut acct = Account.opening("grace", 100.0)
 ```
@@ -171,7 +171,7 @@ many as it needs, without `@classmethod` decorators.
 
 The receiver uses the same three capabilities as parameters:
 
-```aura
+```aura fragment
     def label(self) -> str:              # reads
         return f"{self.owner}: {self.balance} {self.currency}"
 
@@ -182,7 +182,7 @@ The receiver uses the same three capabilities as parameters:
         return self.balance
 ```
 
-```aura
+```aura fragment
 acct.deposit(25.0)
 print(acct.label())
 final = acct.into_balance()   # acct is gone after this
@@ -217,7 +217,7 @@ def parse_port(text: str) -> Result[int64, str]:
 
 The caller must handle both outcomes. Errors never propagate invisibly:
 
-```aura
+```aura fragment
 match parse_port("8080"):
     case Result.Ok(port):
         print(f"listening on {port}")
@@ -272,7 +272,7 @@ def early(flag: bool):
 When the body returns a value, the signature must say so. Aura does not infer
 the return type from the body:
 
-```aura
+```aura check-fail:AU2002
 def double(n: int64):
     return n * 2
 ```

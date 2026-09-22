@@ -100,10 +100,11 @@ Named arguments are always available. Use them whenever a call would otherwise b
 When a callback is one expression, write a lambda and give it a type from context:
 
 ```aura
-offset: int32 = 40
-add: def(int32) -> int32 = lambda value: value + offset
+def main():
+    offset: int32 = 40
+    add: def(int32) -> int32 = lambda value: value + offset
 
-print(add(2))
+    print(add(2))
 ```
 
 The `def(int32) -> int32` annotation gives the parameter and result types. A lambda does not repeat those types inline.
@@ -119,7 +120,7 @@ Use a named function when the callback needs more than one statement.
 
 `if`, `elif`, and `else` chain in the usual way:
 
-```aura
+```aura fragment
 if value < 0:
     print("negative")
 elif value == 0:

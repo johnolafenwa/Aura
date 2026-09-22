@@ -36,7 +36,7 @@ class LogLine:
 
 A line that cannot be parsed is not a crash. It is an expected, countable absence of data, so the return type is `LogLine | None`:
 
-```aura
+```aura fragment
 def parse_line(line: str) -> LogLine | None:
     clean = line.trim()
     parts = clean.split(" ")
@@ -84,7 +84,7 @@ The signature shows the ownership detail. `dict.get` borrows `key`. The indexed 
 
 Now put the pieces together:
 
-```aura
+```aura fragment
 lines = ["INFO api started", "WARN api slow", "ERROR worker failed", "INFO worker recovered", "badline"]
 
 mut levels = dict[str, int32]()
@@ -121,7 +121,7 @@ When a run prints the wrong output, the cause is almost always visible in those 
 
 Nothing in the program assumes an input size. Reading from a file instead of an inline list changes only the start:
 
-```aura
+```aura fragment
 import fs
 
 text = try fs.read_to_string("app.log")

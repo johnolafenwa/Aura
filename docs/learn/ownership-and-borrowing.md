@@ -27,11 +27,12 @@ print(other)
 Every other type is a **move type**. That includes `str`, `list[T]`, `dict[K, V]`, `set[T]`, `random.Rng`, ordinary class instances, `TaskGroup`, file handles, process resources, and network resources. Assigning a move value transfers ownership:
 
 ```aura
-name = "aura"
-other = name
+def main():
+    name = "aura"
+    other = name
 
-# name has moved into other. Using name is a compile error.
-print(other)
+    # name has moved into other. Using name is a compile error.
+    print(other)
 ```
 
 The rule stops two bindings from both claiming the same owned value. Because each value has one owner, Aura can close a string, a file handle, or a task group automatically when its owner goes out of scope.
@@ -69,11 +70,12 @@ Clone close to the reason for cloning. An explicit `clone()` or `copy()` at the 
 A closure takes its captured values when the lambda expression runs:
 
 ```aura
-label = "compile"
-length: def() -> int64 = lambda: label.len()
+def main():
+    label = "compile"
+    length: def() -> int64 = lambda: label.len()
 
-print(length())
-print(length())
+    print(length())
+    print(length())
 ```
 
 `label` is not a copy type, so it moves into `length`. You can still call the closure many times because its body only reads the captured string. If the body returned `label` itself, the first call would consume the capture and with it the whole closure. A second call would then be a moved-value error.
@@ -81,12 +83,13 @@ print(length())
 To keep both owners, clone before you create the closure:
 
 ```aura
-label = "compile"
-captured = label.clone()
-length: def() -> int64 = lambda: captured.len()
+def main():
+    label = "compile"
+    captured = label.clone()
+    length: def() -> int64 = lambda: captured.len()
 
-print(label)
-print(length())
+    print(label)
+    print(length())
 ```
 
 - A copy capture is a snapshot and leaves the source usable.
@@ -220,12 +223,13 @@ class Packet:
     id: int32
     body: str
 
-mut packet = Packet(id=1, body="hello")
-body = packet.body
+def main():
+    mut packet = Packet(id=1, body="hello")
+    body = packet.body
 
-print(packet.id)
-packet.body = "replacement"
-print(packet.body)
+    print(packet.id)
+    packet.body = "replacement"
+    print(packet.body)
 ```
 
 `packet.id` stays available because it never moved. `packet.body` is uninitialized after the move and becomes usable again once it is reassigned. This is the rule for top-level bindings, applied field by field.
@@ -270,7 +274,7 @@ with group = TaskGroup():
 
 The task owns the capture, so starting it still moves the caller's non-copy value. If the parent also needs the label, clone it before starting the child:
 
-```aura
+```aura fragment
 with group = TaskGroup():
     label = "compile"
     group.start_soon(worker, label.clone())
@@ -304,7 +308,7 @@ A task result may be transferable but not repeatable. For such a result, the fir
 
 Owned resources belong inside `with` blocks. These include files, listeners, streams, processes, supervisors, and task groups.
 
-```aura
+```aura fragment
 import fs
 
 with file = try fs.open("data.txt"):

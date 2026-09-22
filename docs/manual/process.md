@@ -40,7 +40,7 @@ Signature: `process.run(command: list[str], cwd: str | None = None, env: dict[st
 
 Omitting `timeout` means no caller deadline. The runtime marks the absence internally, and no `Duration` value stands for it. An explicit negative timeout is invalid. It does not mean unlimited.
 
-```aura
+```aura fragment
 def run_echo() -> Result[None, process.Error]:
     command = ["/bin/echo", "aura"]
     completed = try process.run(command, stdout=process.pipe(), stderr=process.pipe(), timeout=1s)
@@ -67,7 +67,7 @@ Signature: `process.start(command: list[str], cwd: str | None = None, env: dict[
 
 `process.start(...)` returns a live `process.Child`. The defaults suit interactive use: stdout and stderr inherit the parent's streams unless you ask for pipes.
 
-```aura
+```aura fragment
 def start_cat() -> Result[process.Child, process.Error]:
     command = ["/bin/cat"]
     child = try process.start(command, stdin=process.pipe(), stdout=process.pipe(), stderr=process.pipe(), group=true)
@@ -126,7 +126,7 @@ Timeouts and cancellation are errors, never `Ok(None)`:
 
 Close a child's stdin pipe when the child expects EOF:
 
-```aura
+```aura fragment
 def close_stdin(child: process.Child) -> Result[None, process.Error]:
     match own child.stdin():
         case process.Pipe as pipe:
@@ -155,7 +155,7 @@ The accessor returns an owned `process.Pipe | None`. `match own` moves the pipe 
 
 Use `check` when a failed command should stop the current `Result`-returning function:
 
-```aura
+```aura fragment
 def must_succeed() -> Result[None, process.Error]:
     completed = try process.run(["/bin/false"], timeout=1s)
     try completed.check()
@@ -166,13 +166,13 @@ Use the byte methods for tools that may emit binary or non-UTF-8 output.
 
 ## process.supervisor
 
-```aura
+```aura fragment
 process.supervisor() -> process.Supervisor
 ```
 
 A supervisor is a resource that owns named child process specs and emits lifecycle events. Bind it with `with` where you can:
 
-```aura
+```aura fragment
 def wait_for_worker() -> Result[process.SupervisorWait, process.Error]:
     with supervisor = process.supervisor():
         try supervisor.start(name="worker", command=["/bin/sleep", "1"])

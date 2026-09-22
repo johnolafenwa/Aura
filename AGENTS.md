@@ -194,6 +194,12 @@ an example, and move on.
 - For an error, give the code, what causes it, and how to fix it.
 - Bold only the first words of a list item or paragraph, never a whole
   sentence.
+- Every ```` ```aura ```` block must compile: `npm run check:doc-examples`
+  runs `aura check` on each one. Mark a partial snippet ```` ```aura fragment ````
+  and an error example ```` ```aura check-fail:AU3004 ````, with the exact
+  code it must fail with. For a long example, keep the program under
+  `examples/` and embed it with `<<< @/examples/path.au`, so the page shows
+  the file the CLI tests run.
 - Every claim must be true of the current compiler. When a fact is precise,
   such as a diagnostic code, a signature, a default, or a limit, keep it
   exactly.
