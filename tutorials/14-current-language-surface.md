@@ -336,10 +336,13 @@ with guidance to use an eager owned list comprehension or an explicit loop.
 Comprehension clauses do not accept `mut` or `own`; use a statement loop for
 mutable or consuming source traversal.
 
-Indexed expressions remain ordinary values after parsing. Copy-typed element
-reads like `values[idx]` work directly. Clone-safe non-copy list elements use
-`get(index)` for an explicit cloned read. Elements carrying `random.Rng` state
-use `pop(index)` to transfer ownership. Negative list indexes normalize as
+Copy-typed element reads like `values[idx]` work directly. Explicit
+`view item = values[idx]` and `view entry = table[key]` bind elements and
+entries in place, including non-copy values; `view mut` provides write-through
+access from a mutable source. An owned read of a non-copy indexed value is
+still rejected. Clone-safe non-copy list elements use `get(index)` for an
+explicit cloned read; `pop(index)` transfers ownership, including elements
+carrying `random.Rng` state. Negative list indexes normalize as
 `len + index` for direct access and every maintained list index method.
 Dictionary indexing and
 interpolations such as `f"{counts['key']}"` remain supported when the dict
@@ -352,8 +355,8 @@ in `0..=len`, and start must not exceed end. Invalid bounds trap with `AU4003`;
 Aura never clamps them. String positions count Unicode scalar values and require
 an O(n) scan. Integer str indexing, step syntax, slice assignment, and
 indexed slice views remain unavailable. Use the separate `view` forms for an
-addressable root, field, or fixed tuple position; slice syntax always owns its
-result.
+addressable root, field, fixed tuple position, list element, or dictionary
+entry; slice syntax always owns its result.
 
 Numeric `Array[T]` values have rank at least one, may contain zero-sized
 dimensions, and use contiguous row-major storage. The constructors are
@@ -901,10 +904,12 @@ Current collection notes:
   source and return fresh owned lists; `filter` requires clone-safe `T`
 - list algorithm callbacks have exact bare/shared element parameters; `mut` and
   `own` callback capabilities are rejected without adaptation
-- indexed reads from `list[T]` work directly only when `T` is copy; clone-safe non-copy element reads use `get(index)` for an explicit cloned read, while `pop(index)` transfers any stored element
+- direct indexed reads from `list[T]` require copy `T`; explicit `view` and
+  `view mut` bindings access an element in place, `get(index)` gives an owned
+  cloned result for clone-safe `T`, and `pop(index)` transfers any stored element
 - module-level functions cannot redefine a builtin function name such as `len`, `str`, `abs`, or `print`; that rejection is `AU2007`
 - negative list indexes normalize once as `len + index` for direct reads/writes, `get`, `set`, `pop`, and `swap`
-- `get` returns `None` when the normalized index is invalid; direct access and mutating methods trap
+- `get` returns `Lookup.Missing` when the normalized index is invalid; direct access and mutating methods trap
 - list and str slices accept all four omitted-endpoint forms, return fresh
   owned copies, and never clamp invalid or reversed bounds; str slicing
   counts Unicode scalars in O(n), while list slicing requires clone-safe,

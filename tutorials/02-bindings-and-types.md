@@ -267,13 +267,16 @@ For `str`, `len()` counts Unicode scalar values and `byte_len()` counts the
 UTF-8 encoding bytes. Both counts are `int64`, so `"A🎉".len()` is `2` while
 `"A🎉".byte_len()` is `5`.
 
-Indexed reads work directly for copy element types. For clone-safe non-copy
-element types like `str` or ordinary user-defined classes, use `get(index)`
-for an explicit cloned read. Appending `.clone()` after `items[index]` cannot
-repair the read because the illegal move would happen before the method call.
-A value containing `random.Rng` must be transferred with
-`pop(index)` because it cannot be cloned, and the rejection names that
-reason directly:
+Indexed reads work directly for copy element types. To access a non-copy
+element in place, bind `view item = items[index]`; use
+`view mut item = items[index]` through a mutable source to update it. To obtain
+an owned value, use `get(index)` for an explicit cloned read when the element
+is clone-safe, or `pop(index)` to transfer the stored element. Appending
+`.clone()` directly after `items[index]` cannot yet repair the read because
+the illegal move would happen before the method call. A value containing
+`random.Rng` cannot be cloned, so obtaining ownership requires a transfer
+such as `pop(index)`.
+For a clone-safe value such as `str`, handle the owned `get` result explicitly:
 
 ```aura check-pass
 names = ["Ada", "Grace"]
@@ -329,11 +332,14 @@ Dictionary lookups work inside larger expressions including f-strings:
 print(f"value: {counts['aura']}")
 ```
 
-For a non-copy value type, direct `dictionary[key]` is rejected; Aura never performs a
-hidden clone. When the value type is clone-safe, `get(key)` gives an explicit
-cloned optional read and `remove(key)` transfers the stored value out. When the
-value type carries `random.Rng` state, only `remove(key)` works, and the
-rejection explains that `get(key)` would also be rejected.
+For a non-copy value type, reading `dictionary[key]` into an owned value is
+rejected; Aura never performs a hidden clone. Bind
+`view entry = dictionary[key]` for access in place, or
+`view mut entry = dictionary[key]` through a mutable dictionary to update it.
+To obtain ownership, `get(key)` gives an explicit cloned result when the value
+type is clone-safe, while `remove(key)` transfers the stored value out. A
+value carrying `random.Rng` state cannot be cloned, so use `remove(key)` to
+transfer ownership; an entry view can still access that value in place.
 
 `items()` returns `list[(K, V)]` in insertion order:
 

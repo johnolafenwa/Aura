@@ -310,10 +310,13 @@ character indexing.
 an optional `T | None` and narrow it; there is no identity comparison between
 arbitrary values.
 
-**Reading a non-copy element out of a list by index is rejected**, because it
-would move a value out of a collection you still own. Use `values.get(index)`,
-which hands you a `Lookup[T]`: `Lookup.Found(value)` containing a clone, or
-`Lookup.Missing`.
+**Reading a non-copy list element into an owned value by index is rejected**,
+because it would move a value out of a collection you still own. Use
+`view value = values[index]` for access in place, or `view mut` through a
+mutable list to update the selected element. For an independent cloned value,
+use `values.get(index)`, which requires clone-safe elements and returns
+`Lookup.Found(value)` containing a clone, or `Lookup.Missing` for an invalid
+position.
 
 **Top-level bindings live in module storage** and cannot be moved out of it.
 If you want to consume a value with an `own` method, do it inside a function.

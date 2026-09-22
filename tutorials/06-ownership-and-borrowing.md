@@ -208,8 +208,14 @@ def main():
 so the later source read is legal even though the view bindings remain in
 lexical scope. Shared views may overlap shared views; a mutable view excludes
 all overlapping source access. Proven-disjoint fields and fixed tuple
-positions can be loaned independently. Collection indexes are not view places
-in Aura 0.3.
+positions can be loaned independently. List elements and dictionary entries
+are also view places: `view item = items[index]` and `view entry = table[key]`
+bind the selected slot in place. Use `view mut` through a mutable source to
+update that slot. Selection is evaluated once when the view is created;
+an invalid position or absent key traps with `AU4003`. Views of proven
+distinct literal positions or keys are disjoint, while a computed selector
+overlaps every selector of the same collection. A structural mutation of the
+collection conflicts with every live element or entry view.
 
 ## Returned Views
 

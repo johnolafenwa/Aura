@@ -223,7 +223,79 @@ was cloned before the write), which the one-call selection chain removes.
   `adr0061_direct_codegen_compiles_element_and_entry_loans`); the runtime
   path helpers' reads, in-place writes, and traps
   (`adr0061_direct_element_path_helpers_read_and_write_inside_elements`).
-- Chain: recorded below when the local `npm run ci` completes.
+- Complete local chain: passed for the source and tests committed as
+  `6df54d4b`; full evidence follows.
+
+### Step 1 closeout in progress (2026-09-22)
+
+- Owner's delegated ruling, 2026-09-22: list `set(i, value)` is an
+  element-level write with the same literal-disjointness requirement as
+  indexed assignment, returning the old element owned; dictionary `set`
+  remains whole-collection. The checkpoint A3 table and Q3 amendment and
+  ADR-0061 A3 now agree with A4. The remaining structural operations keep
+  their classifications.
+- Resumed at `4abb93a0`. The existing instrumented report confirms the
+  previous chain's compiler coverage failure: 96.3941% lines, 97.2761%
+  functions, and 95.2449% regions. All three floors remain unchanged.
+- Added checker projection/context tests, interpreter selector and place-walk
+  tests, direct path tests, and lowering tests for projected writes through
+  a collection view. The focused instrumented `adr0061_` run passed 15
+  tests; incremental coverage reached 96.4668% lines / 97.4087% functions /
+  95.2981% regions. This is development evidence, not a complete local chain.
+- Public-boundary assertions now compare the complete shared validator
+  reason across in-memory MIR, serialized MIR, and direct object emission
+  (accounting for the interpreter's diagnostic wrapper).
+  The first resumed full chain passed 2,130 compiler unit tests and exposed
+  one older resource-budget test whose serialized-input guard intentionally
+  precedes the flow validator. That test retains its original budget-category
+  assertion at all three boundaries; new element-loan contracts keep exact
+  shared-reason assertions. The corrected budget test passes in isolation.
+- Direct execution of the new returned-collection selection test exposed a
+  write-through defect: MIR updated the selected collection, but direct
+  execution left its elements unchanged. The direct backend now passes the
+  first opaque owner and its remaining static projection to the existing
+  element-path walker instead of extracting a cloned collection first.
+  Extending the test to union payloads exposed a second defect: element
+  reborrows dropped a collection field projection. Lowering now preserves
+  that projection in an ordinary parent reborrow before selecting an element.
+  Neither fix changes the MIR contract or runtime ABI.
+- The new `element_view_selected_collection` fixture pins both returned
+  branch alternatives, nested list/entry selections, fields, tuple-held
+  collections, and a union payload. Its complete pinned stdout matches MIR
+  and forced direct execution. The focused instrumented suite passes 17
+  tests after both fixes; clippy passes. The complete local chain below
+  supersedes the incremental coverage numbers, which predate the fixes.
+- The requested Daybreak Blue delegation could not start: the service
+  returned `The Daybreak Blue model requires access_programs.cyber=daybreak_blue`.
+  The primary agent continued the authorized defensive tests; no Daybreak
+  review is claimed.
+
+### Complete local closeout evidence (2026-09-22)
+
+- `RUST_MIN_STACK=33554432 npm run ci` completed with exit 0 for the
+  source and tests committed as `6df54d4b`. Tracked files remained unchanged
+  throughout the chain (content digest
+  `e6a57361f2a81d364196ab8c3cc5b482fc82f43b46965cd318d32729972cf5d3`).
+- Compiler coverage: **96.4791% lines** (119391/123748), **97.4090%
+  functions** (8083/8298), **95.3016% regions** (177564/186318).
+  Floors remain 96.46 / 97.33 / 95.23.
+- 2131 compiler unit tests and 378 CLI tests passed in the normal and
+  instrumented runs. Backend parity passed all 518 run-pass and 97 run-fail
+  fixtures. LSP tests passed 116/116; extension tests passed 28/28. LSP
+  coverage remains 100% for statements, branches, functions, and lines.
+- The complete chain also passed formatting, benchmark and baseline gates,
+  packaging, identity, reference and tutorial checks, documentation build,
+  dependency audits, clippy, and hygiene. The full local log is
+  `/tmp/aura-b2-step1-ci.log`; the coverage export is
+  `/tmp/aura-b2-step1-final-coverage.json` (local, disposable evidence copies).
+- After that source gate, prose-only tutorial and Learn corrections describe
+  explicit element/entry views and the remaining contextual-read limits.
+  Fenced programs are unchanged. Generated LLM documents were refreshed;
+  reference checks, tutorial checks, documentation build, and hygiene passed
+  again (`/tmp/aura-b2-step1-doc-checks.log`).
+- Hosted CI on both platforms and the step-1 pull-request merge remain
+  pending. Phase 2a remains in progress; the open items below are not closed
+  by the local gate.
 
 ## Open items
 
@@ -244,3 +316,7 @@ was cloned before the write), which the one-call selection chain removes.
   refused by the copy rule at the inner index until contextual reads land;
   the same selection through two views (`view mut row = rows[i]; view mut
   cell = row[j]`) works on both backends.
+- Reborrowing a negative-indexed element or string-keyed entry through a
+  returned collection view currently reaches the conservative root-loan
+  refusal. Contextual place resolution must preserve the parent loan for
+  these selector forms when the next step generalizes indexed places.

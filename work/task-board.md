@@ -1,6 +1,6 @@
 # Task Board
 
-Last updated: 2026-09-21
+Last updated: 2026-09-22
 
 ## Batch 2 phase 2a (element and entry loans; in progress)
 
@@ -17,6 +17,16 @@ Last updated: 2026-09-21
   `lookup`; the receiver-table audit; owned bindings as mutable places;
   script-scope narrowing. Verification: recorded in the work note as the
   local chain and hosted runs complete.
+- Step-1 local closeout: the complete `RUST_MIN_STACK=33554432 npm run ci`
+  chain passed for source/tests at `6df54d4b`. Compiler coverage is
+  **96.4791% lines / 97.4090% functions / 95.3016% regions**, with unchanged
+  floors. All 2131 compiler unit tests, 378 CLI tests, 615 parity fixtures,
+  116 LSP tests, and 28 extension tests pass; LSP coverage stays at 100%.
+  Returned-collection write-through and projected element reborrows are
+  fixed and pinned. Subsequent prose/generated-document changes pass
+  reference, tutorial, documentation-build, and hygiene checks. Hosted CI
+  and the step-1 merge remain pending. See the work note for full evidence
+  and the Daybreak access limitation.
 
 ## Batch 1 representation phase (in progress) and Batch 2–3 design checkpoint (ratified)
 
