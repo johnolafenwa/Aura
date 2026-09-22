@@ -1,9 +1,9 @@
 # Math Module
 
-The `math` module provides exact binary64 constants plus scalar `float64`
-rounding, exponentiation, exponential, logarithmic, and trigonometric
-functions. Every function input is explicitly `float64`; the module performs
-no implicit numeric conversion.
+The `math` module provides exact binary64 constants and scalar `float64`
+functions for rounding, powers, exponentials, logarithms, and trigonometry.
+Every function input is `float64`. The module performs no implicit numeric
+conversion.
 
 ## Public API
 
@@ -15,50 +15,15 @@ no implicit numeric conversion.
 | `math.nan` | `float64` constant | Canonical quiet NaN, bits `0x7ff8000000000000`. |
 | `math.floor` | `floor(value: float64) -> int64` | Greatest integer less than or equal to `value`. |
 | `math.ceil` | `ceil(value: float64) -> int64` | Least integer greater than or equal to `value`. |
-| `math.trunc` | `trunc(value: float64) -> int64` | Integer obtained by discarding the fractional part toward zero. |
-| `math.pow` | `pow(base: float64, exponent: float64) -> float64` | Binary64 exponentiation under the exceptional-value policy below. |
+| `math.trunc` | `trunc(value: float64) -> int64` | The integer left after dropping the fractional part, rounding toward zero. |
+| `math.pow` | `pow(base: float64, exponent: float64) -> float64` | Binary64 exponentiation, following the exceptional-value policy below. |
 | `math.exp` | `exp(value: float64) -> float64` | Binary64 base-e exponential. |
 | `math.log` | `log(value: float64) -> float64` | Binary64 natural logarithm. |
 | `math.log2` | `log2(value: float64) -> float64` | Binary64 base-2 logarithm. |
 | `math.log10` | `log10(value: float64) -> float64` | Binary64 base-10 logarithm. |
-| `math.sin` | `sin(value: float64) -> float64` | Binary64 sine with the input measured in radians. |
-| `math.cos` | `cos(value: float64) -> float64` | Binary64 cosine with the input measured in radians. |
-| `math.tan` | `tan(value: float64) -> float64` | Binary64 tangent with the input measured in radians. |
-
-## IEEE-754, Domain, And Overflow Policy
-
-This table is normative for every maintained backend.
-
-| Operation or input | Result |
-| --- | --- |
-| `floor`, `ceil`, or `trunc` of finite in-range `x` | Corresponding mathematical integer as `int64`. |
-| `floor`, `ceil`, or `trunc` of NaN, infinity, or an out-of-range finite value | `AU4002`. |
-| `exp(nan)` | NaN. |
-| `exp(+inf)` / `exp(-inf)` | `+inf` / `+0.0`. |
-| `exp` of a finite input with finite representable result | Nearest binary64 result. |
-| `exp` of a finite input whose result overflows | `AU4002`. Underflow produces the correctly signed zero or subnormal value. |
-| `log* (nan)` | NaN. |
-| `log* (+inf)` | `+inf`. |
-| `log* (x)` for finite `x <= 0.0`, including either zero | `AU4001` domain error. |
-| `sin`, `cos`, or `tan` of NaN | NaN. |
-| `sin`, `cos`, or `tan` of either infinity | `AU4001` domain error. |
-| `pow(x, 0.0)` for any `x`, including NaN | `1.0`. |
-| `pow(1.0, y)` for any `y`, including NaN | `1.0`. |
-| `pow(nan, y)` or `pow(x, nan)` outside the two identities above | NaN. |
-| `pow(0.0, y)` for finite `y < 0.0` | `AU4001` domain error. |
-| `pow(x, y)` for finite `x < 0.0` and finite non-integral `y` | `AU4001` domain error. |
-| Finite `pow` inputs with an infinite-magnitude mathematical result | `AU4002`. |
-| Other libm results, including documented infinities from infinite inputs | The corresponding IEEE-754 binary64 value. |
-
-An exponent is integral for the negative-base rule when its binary64 value is
-finite and exactly equal to its truncation. Signed zero follows IEEE-754 sign
-rules. Subnormal inputs and results are preserved. Aura does not enable
-flush-to-zero as a language behavior.
-
-Finite transcendental results use the maintained target's binary64 math
-implementation. Portable programs may depend on the classifications and
-identities in the table. Last-bit finite approximation can vary between
-maintained target and libm pairs.
+| `math.sin` | `sin(value: float64) -> float64` | Binary64 sine of an angle in radians. |
+| `math.cos` | `cos(value: float64) -> float64` | Binary64 cosine of an angle in radians. |
+| `math.tan` | `tan(value: float64) -> float64` | Binary64 tangent of an angle in radians. |
 
 ## Example
 
@@ -104,82 +69,126 @@ NaN
 0.0
 ```
 
-The maintained program is `examples/numbers/scalar_math.au`.
+The same program is maintained as `examples/numbers/scalar_math.au`.
+
+## IEEE-754, Domain, And Overflow Policy
+
+This table is normative for every maintained backend. `log*` means `log`,
+`log2`, and `log10`.
+
+| Operation or input | Result |
+| --- | --- |
+| `floor`, `ceil`, or `trunc` of finite in-range `x` | Corresponding mathematical integer as `int64`. |
+| `floor`, `ceil`, or `trunc` of NaN, infinity, or an out-of-range finite value | `AU4002`. |
+| `exp(nan)` | NaN. |
+| `exp(+inf)` / `exp(-inf)` | `+inf` / `+0.0`. |
+| `exp` of a finite input with finite representable result | Nearest binary64 result. |
+| `exp` of a finite input whose result overflows | `AU4002`. Underflow produces the correctly signed zero or subnormal value. |
+| `log* (nan)` | NaN. |
+| `log* (+inf)` | `+inf`. |
+| `log* (x)` for finite `x <= 0.0`, including either zero | `AU4001` domain error. |
+| `sin`, `cos`, or `tan` of NaN | NaN. |
+| `sin`, `cos`, or `tan` of either infinity | `AU4001` domain error. |
+| `pow(x, 0.0)` for any `x`, including NaN | `1.0`. |
+| `pow(1.0, y)` for any `y`, including NaN | `1.0`. |
+| `pow(nan, y)` or `pow(x, nan)` outside the two identities above | NaN. |
+| `pow(0.0, y)` for finite `y < 0.0` | `AU4001` domain error. |
+| `pow(x, y)` for finite `x < 0.0` and finite non-integral `y` | `AU4001` domain error. |
+| Finite `pow` inputs with an infinite-magnitude mathematical result | `AU4002`. |
+| Other libm results, including documented infinities from infinite inputs | The corresponding IEEE-754 binary64 value. |
+
+For the negative-base `pow` rule, an exponent is integral when its binary64
+value is finite and exactly equal to its truncation.
+
+Signed zero follows the IEEE-754 sign rules. Subnormal inputs and results are
+kept. Aura does not enable flush-to-zero.
+
+Finite transcendental results come from the target's binary64 math library.
+Portable programs can rely on the classifications and identities in the table.
+The last bit of a finite approximation can differ between target and libm
+pairs.
 
 ## Grammar
 
-The module adds no source-language grammar. `import math`, qualified member
-access, calls, named arguments, and negative numeric expressions use the
-ordinary forms defined by this Manual.
+The module adds no grammar. `import math`, qualified member access, calls,
+named arguments, and negative numeric expressions use the ordinary forms
+defined in this Manual.
 
 ## Typing Rules
 
-The four constants have exact type `float64` and the bit patterns shown in the
-Public API table. They support qualified reads and direct imports with ordinary
-import aliases. Every function parameter has type `float64`. `floor`, `ceil`,
-and `trunc` return `int64`; every other function returns `float64`. A value of
-any other numeric type requires an explicit conversion before the call. Normal
-argument-count, argument-name, and exact-type checks apply.
+The four constants have type `float64` and the exact bit patterns in
+[Public API](#public-api). You can read them qualified, or import them directly
+with ordinary import aliases.
+
+Every function parameter is `float64`. `floor`, `ceil`, and `trunc` return
+`int64`. Every other function returns `float64`. A value of any other numeric
+type needs an explicit conversion before the call. The normal checks on
+argument count, argument names, and exact types apply.
 
 The module namespace contains every constant and function in the Public API
 table.
 
 ## Runtime Semantics
 
-Each function applies the IEEE-754, domain, and overflow policy above.
-`floor`, `ceil`, and `trunc` first compute the specified mathematical integer
-and then require it to fit `int64`. `pow` classifies its identities, NaN,
-domain, and finite-overflow cases before returning the maintained binary64
-result. The exponential, logarithmic, and trigonometric functions preserve
-the table's NaN, infinity, signed-zero, and subnormal outcomes.
+Each function follows the IEEE-754, domain, and overflow policy above.
 
-Each constant has one immutable module storage location initialized once before
-application execution. Every read uses that shared location. Copy-scalar use
-preserves the stored binary64 bits, including the canonical NaN payload.
+- `floor`, `ceil`, and `trunc` compute the mathematical integer first, then
+  require it to fit in `int64`.
+- `pow` handles its identities, NaN, domain errors, and finite overflow before
+  it returns the binary64 result.
+- The exponential, logarithmic, and trigonometric functions keep the NaN,
+  infinity, signed-zero, and subnormal outcomes from the table.
 
-For one maintained target and math implementation, repeated calls with the
-same binary64 inputs produce the same binary64 result. The functions perform
-no I/O and observe no process-global mutable state.
+Each constant has one immutable module storage location, initialized once
+before the program starts. Every read uses that location. Because the
+constants are Copy scalars, each use keeps the stored binary64 bits, including
+the canonical NaN payload.
+
+On one target with one math library, repeated calls with the same binary64
+inputs give the same binary64 result. The functions do no I/O and read no
+global mutable state.
 
 ## Ownership And Evaluation Order
 
-Constant reads are shared and cannot be assigned or used through mutable
-access. Call arguments evaluate left to right and exactly once before the
-function executes. `math.pow` evaluates `base` before `exponent`. Every
-parameter and result is a Copy scalar, so calls do not move or mutate caller
-bindings. A failed call leaves all already completed argument effects
-observable and produces no result value.
+Constant reads are shared. You cannot assign to a constant or use it through
+mutable access.
+
+Call arguments evaluate from left to right, exactly once, before the function
+runs. `math.pow` evaluates `base` before `exponent`. Every parameter and
+result is a Copy scalar, so a call never moves or changes a caller's binding.
+When a call fails, the effects of arguments already evaluated remain, and the
+call produces no value.
 
 ## Diagnostics
 
-- `AU2001` reports an unknown module member.
-- `AU2002` reports an argument whose type is not exactly `float64`.
-- `AU2004` reports invalid argument binding, including a wrong argument count
-  or name.
-- `AU4001` reports the domain errors named in the normative table.
-- `AU4002` reports a finite overflow or a rounding result that cannot be
-  represented as `int64`.
+| Code | Cause |
+| --- | --- |
+| `AU2001` | Unknown module member. |
+| `AU2002` | An argument whose type is not exactly `float64`. |
+| `AU2004` | Invalid argument binding, such as a wrong argument count or name. |
+| `AU4001` | A domain error listed in the policy table. |
+| `AU4002` | Finite overflow, or a rounding result that does not fit in `int64`. |
 
 ## Backend Support
 
-All listed functions are supported by the MIR runtime and direct native
-backend. Both backends use shared exceptional-value classification and must
-agree on result classification, signed zero, and diagnostic code. They use
-the same maintained host math implementation for finite results on one target.
+The MIR runtime and the direct native backend support every listed function.
+Both use the same exceptional-value classification. They must agree on the
+result classification, signed zero, and diagnostic code. On one target, both
+use the same host math library for finite results.
 
 ## Limits And Implementation-Defined Behavior
 
-The module is scalar and `float64` only. It provides no complex, decimal,
+The module covers scalar `float64` only. It has no complex, decimal,
 arbitrary-precision, vectorized, combinatorial, or random operations. The
-logarithm functions accept one value and do not accept an alternate base.
+logarithm functions take one value and have no alternate-base form.
 
-The final bits of finite transcendental approximations can vary across target
-and libm pairs. The exact host diagnostic rendering around an `AU4001` or
-`AU4002` failure follows the general runtime diagnostic contract.
+The final bits of finite transcendental results can differ across target and
+libm pairs. The host's rendering around an `AU4001` or `AU4002` failure
+follows the general runtime diagnostic rules.
 
 ## Status
 
-The constants, functions, exact bits and signatures, exceptional-value
-classifications, initialization and evaluation order, diagnostics, and
-MIR/direct backend behavior on this page are implemented and maintained in
-Aura 0.3.
+Everything on this page is implemented in Aura 0.3 on both the MIR and direct
+backends: the constants and functions, their exact bits and signatures, the
+exceptional-value classifications, initialization and evaluation order, and
+diagnostics.

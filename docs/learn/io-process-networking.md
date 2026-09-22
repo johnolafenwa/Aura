@@ -1,12 +1,23 @@
 # Talking To The World
 
-Programs eventually need to speak to something outside themselves — a file, a subprocess, a socket, a supervised service. Aura exposes that surface through four built-in modules: `io` for standard streams, `fs` for files and directories, `process` for subprocesses and supervisors, and `net` for sockets, HTTP, and WebSockets.
+This chapter covers the four built-in modules that reach outside the program:
 
-The APIs in these modules share a shape. Operations that can fail return `Result`. Resources cleaned up by the runtime are meant to live inside a `with` block. Waits that might block indefinitely accept a `timeout` argument and tell the caller explicitly when that timeout fires. Everything works together with `match`, `try`, `with`, and `TaskGroup`.
+- `io` for standard streams
+- `fs` for files and directories
+- `process` for subprocesses and supervisors
+- `net` for sockets, HTTP, and WebSockets
+
+The APIs in all four share a shape:
+
+- An operation that can fail returns `Result`.
+- A resource that the runtime cleans up belongs inside a `with` block.
+- A wait that might block forever accepts a `timeout` argument and tells the caller when that timeout fires.
+
+They all work with `match`, `try`, `with`, and `TaskGroup`.
 
 ## Files: Read, Parse, Report
 
-The simplest filesystem API is one-shot:
+The simplest filesystem calls do the whole job in one step:
 
 ```aura
 import fs
@@ -21,11 +32,9 @@ match fs.read_to_string(path):
         print(error)
 ```
 
-One-shot `fs.read_to_string` and `fs.read_bytes` are capped at 256 MiB. The same
-cap applies to the remaining contents read by `fs.File.read_all()` and
-`fs.File.read_bytes()`. An accidental whole-file read against a very large log
-fails at the cap. Larger files need a host helper or pre-splitting because Aura
-0.2 has no incremental file-read member.
+`fs.read_to_string` and `fs.read_bytes` are capped at 256 MiB. The same cap applies to the remaining contents that `fs.File.read_all()` and `fs.File.read_bytes()` read. An accidental whole-file read of a very large log fails at the cap. Aura has no incremental file-read member, so a larger file needs a host helper or pre-splitting.
+
+For more control, open the file:
 
 ```aura
 import fs
@@ -42,11 +51,11 @@ def copy_text(source: str, dest: str) -> Result[None, io.Error]:
     return Result.Ok(None)
 ```
 
-`fs.File` is a resource. Put it in a `with` block and cleanup is the compiler's problem, not yours. The `with` ends automatically on both normal and error paths.
+`fs.File` is a resource. Put it in a `with` block and the compiler handles cleanup. The `with` block closes the file on both normal and error paths.
 
 ## Standard Streams
 
-`print(value)` renders a value and adds a newline. When a program needs more control — writing without a newline, flushing for a prompt, reading a line from standard input — the `io` module has it:
+`print(value)` renders a value and adds a newline. The `io` module covers the rest: writing without a newline, flushing before a prompt, and reading a line from standard input.
 
 ```aura
 import io
@@ -63,11 +72,14 @@ match io.read_line():
         print(error)
 ```
 
-`io.read_line()` returns `Result[str | None, io.Error]`. The payload is `None` at end of input; the `Result` captures I/O failures. Both are in the type, and a caller that wants to treat them differently can: the nested type pattern `Result.Ok(str as line)` selects a present line, and `Result.Ok(None)` selects a clean end of input.
+`io.read_line()` returns `Result[str | None, io.Error]`. The `Result` carries I/O failures. The payload is `None` at end of input. Because both cases are in the type, a caller can treat them differently:
+
+- `Result.Ok(str as line)` selects a present line. It is a nested type pattern.
+- `Result.Ok(None)` selects a clean end of input.
 
 ## Processes: No Shell By Default
 
-`process.run` executes a subprocess from an argument list. There is no shell interpretation, so the arguments are not re-split and there are no quoting hazards. The return value is a `process.Completed` record.
+`process.run` runs a subprocess from a list of arguments and returns a `process.Completed` record. No shell interprets the arguments, so they are not re-split and there are no quoting hazards.
 
 ```aura
 import process
@@ -78,15 +90,13 @@ try completed.check()
 print(completed.stdout().trim())
 ```
 
-Two things in that call site are worth explaining. `stdout=process.pipe()`
-captures the subprocess's output so the parent can read it;
-`stderr=process.pipe()` does the same for standard error. `group=true` places
-the child in its own process group on Unix hosts, so termination reaches the
-leader and all descendants.
+The arguments in that call do the following:
 
-Omitting `timeout` supplies no caller deadline through an internal absence
-marker. An explicit negative Duration is not that marker: invalid timeout or
-deadline values return `process.Error.Io(io.Error.InvalidInput)`.
+- `stdout=process.pipe()` captures the child's output so the parent can read it.
+- `stderr=process.pipe()` does the same for standard error.
+- `group=true` puts the child in its own process group on Unix hosts. Termination then reaches the leader and all its descendants.
+
+If you omit `timeout`, the call has no deadline. A negative Duration does not mean "no deadline". Invalid timeout or deadline values return `process.Error.Io(io.Error.InvalidInput)`.
 
 When a child writes bytes that are not valid UTF-8, use `stdout_bytes()` and `stderr_bytes()`:
 
@@ -97,7 +107,7 @@ print(bytes.len())
 
 ## Interacting With A Child
 
-`process.start` returns a `process.Child` you can talk to while the child is running:
+`process.start` returns a `process.Child` that you can talk to while it runs:
 
 ```aura
 import process
@@ -131,11 +141,13 @@ match child.wait(timeout=1s):
 child.close()
 ```
 
-`child.stdin()`, `child.stdout()`, and `child.stderr()` return `process.Pipe | None` so the program can tell the difference between "the stream was not piped" and "the stream is available." `match own` moves the pipe out of that result, so the arm holds an owned resource it may write, read, and close; a bare `match` would bind only a shared view of the pipe.
+`child.stdin()`, `child.stdout()`, and `child.stderr()` return `process.Pipe | None`. That lets the program tell "the stream was not piped" apart from "the stream is available".
+
+`match own` moves the pipe out of the result. The arm then holds an owned resource that it can write, read, and close. A bare `match` would bind only a shared view of the pipe.
 
 ## Supervisors
 
-When a program needs to manage several named subprocesses — start them, observe their lifetimes, restart them according to a policy — use a `process.supervisor`:
+Use `process.supervisor` to manage several named subprocesses: start them, watch their lifetimes, and restart them under a policy.
 
 ```aura
 import process
@@ -152,9 +164,10 @@ with supervisor = process.supervisor():
             print("cancelled")
 ```
 
-Supervisor names are unique within a supervisor. Starting a second child with
-the same name returns an error and preserves the existing child. Leaving the
-`with` block stops every child the supervisor still manages.
+- Names are unique within a supervisor. Starting a second child with the same name returns an error and keeps the existing child.
+- Leaving the `with` block stops every child the supervisor still manages.
+
+[A Supervised Process Runner](/learn/case-studies/process-supervisor) builds a complete example.
 
 ## Networking: TCP
 
@@ -171,25 +184,27 @@ with listener = try net.listen("127.0.0.1:0"):
         try stream.shutdown_write()
 ```
 
-Hostname lookup and blocking connect syscalls are sent to the generic
-blocking-I/O pool, so they do not freeze sibling Aura tasks. The `1s`
-timeout above is one shared budget for queue admission, DNS, and every
-candidate address. Task-group
-cancellation stops waiting promptly. Before pool acceptance it prevents
-submission; after acceptance, the host resolver cannot generally be
-interrupted and its eventual result is discarded.
+### Blocking Lookups And The Worker Pool
 
-Operators may set `AURA_BLOCKING_WORKERS` to an exact positive worker count
-and `AURA_BLOCKING_QUEUE_CAPACITY` to a positive bound on accepted pending
-jobs. The absent worker setting derives `2..=8` workers from host parallelism,
-with fallback `4`; the absent queue setting is unbounded. Full-queue admission
-is FIFO and scheduler-aware. A queue bound limits accepted pending backlog, not
-admission waiters, and cannot guarantee unrelated blocking-I/O progress while
-every worker remains stuck.
+Hostname lookup and blocking connect syscalls run on the generic blocking-I/O pool, so they do not freeze sibling Aura tasks. The `1s` timeout above is one shared budget for queue admission, DNS, and every candidate address.
 
-A live listener or stream is not `Transfer`, so it cannot be captured by a
-new task. The task that creates a listener keeps it and its accepted streams;
-it may use an ordinary helper on that same task to process a connection:
+Task-group cancellation stops the wait promptly:
+
+- Before the pool accepts the job, cancellation prevents submission.
+- After the pool accepts it, the host resolver usually cannot be interrupted. Aura discards its eventual result.
+
+Two environment variables tune the pool:
+
+| Variable | Value | When absent |
+| --- | --- | --- |
+| `AURA_BLOCKING_WORKERS` | An exact positive worker count. | `2..=8` workers derived from host parallelism, with fallback `4`. |
+| `AURA_BLOCKING_QUEUE_CAPACITY` | A positive bound on accepted pending jobs. | Unbounded. |
+
+Admission to a full queue is FIFO and scheduler-aware. A queue bound limits the accepted pending backlog, not the tasks waiting for admission. It cannot guarantee progress for unrelated blocking I/O while every worker stays stuck.
+
+### Keep Sockets On Their Task
+
+A live listener or stream is not `Transfer`, so a new task cannot capture it. The task that creates a listener keeps it and every stream it accepts. That task can call an ordinary helper to handle a connection:
 
 ```aura
 import io
@@ -205,12 +220,9 @@ def handle(stream: own net.TcpStream) -> Result[None, io.Error]:
     return Result.Ok(None)
 ```
 
-When a server itself should run as a child task, let that child create the
-listener. A copy `Queue[str]` handle can cross the boundary so the child can
-publish its bound address to the parent; the live listener never leaves its
-owning task.
+`read_line` returns `Result[str | None, io.Error]` for the same reason `io.read_line` does: the client might close cleanly, and the program must decide what that means. `try` unwraps the `Result`. The `match` then selects either the present line or the `None` that marks end of input.
 
-The `read_line` returns `Result[str | None, io.Error]` for the same reason `io.read_line` does: the client might close cleanly, and the program might have to decide what that means. `try` unwraps the `Result`, and the `match` then selects either the present line or the `None` that marks end of input.
+To run a server as a child task, let the child create the listener. A `Queue[str]` handle is a copy value, so it can cross the task boundary. The child uses it to publish its bound address to the parent. The live listener never leaves its owning task.
 
 ## HTTP And WebSockets
 
@@ -225,13 +237,13 @@ response = try net.http_request_text_timeout(method="GET", url="http://127.0.0.1
 print(response.status())
 ```
 
-HTTP servers use `net.http_listen` to create an `HttpListener`; accepting a connection returns an `HttpExchange` carrying request data and the methods to send a response.
+HTTP servers call `net.http_listen` to create an `HttpListener`. Accepting a connection returns an `HttpExchange`, which carries the request data and the methods that send a response.
 
-WebSocket APIs follow the same resource style: create or accept a socket, send and receive text or bytes, then close. See [Network Module](/manual/network) for the full surface.
+WebSocket APIs follow the same resource style: create or accept a socket, send and receive text or bytes, then close it. See [Network Module](/manual/network) for the full surface.
 
 ## The Common Shape
 
-Most system-facing Aura code has the same outline:
+Most system-facing Aura code follows one outline:
 
 ```aura
 import fs

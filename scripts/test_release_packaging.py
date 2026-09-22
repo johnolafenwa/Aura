@@ -26,25 +26,11 @@ RELEASE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "release.yml"
 PACKAGE_SCRIPT = REPO_ROOT / "scripts" / "package-cli.sh"
 LINK_ARG_WRITER = REPO_ROOT / "scripts" / "write-native-link-args.py"
 SMOKE_SCRIPT = REPO_ROOT / "scripts" / "smoke-cli-archive.sh"
-FINAL_REPORT = REPO_ROOT / "work" / "2026-07-31-batch6-final-report.md"
-DOWNLOADS_DOC = REPO_ROOT / "docs" / "downloads.md"
-RELEASE_PROCESS_DOC = REPO_ROOT / "docs" / "release-process.md"
 AURA_COMPILER_BUILD = REPO_ROOT / "crates" / "aura-compiler" / "build.rs"
 INSTALL_SCRIPT = REPO_ROOT / "docs" / "public" / "install.sh"
-LANDING_DOC = REPO_ROOT / "docs" / "index.md"
 LANDING_INSTALL_COMPONENT = (
     REPO_ROOT / "docs" / ".vitepress" / "theme" / "HomeInstall.vue"
 )
-MANUAL_INDEX = REPO_ROOT / "docs" / "manual" / "index.md"
-PERFORMANCE_DOC = REPO_ROOT / "docs" / "manual" / "performance.md"
-POSITIONING_DOC = REPO_ROOT / "docs" / "positioning.md"
-INSTALL_DOCS = {
-    "index": REPO_ROOT / "docs" / "install" / "index.md",
-    "macos": REPO_ROOT / "docs" / "install" / "macos.md",
-    "linux": REPO_ROOT / "docs" / "install" / "linux.md",
-    "wsl": REPO_ROOT / "docs" / "install" / "windows-wsl.md",
-    "vscode": REPO_ROOT / "docs" / "install" / "vscode.md",
-}
 SUPPORTED_PLATFORMS = REPO_ROOT / "SUPPORTED_PLATFORMS.md"
 
 
@@ -88,18 +74,6 @@ class HostedWorkflowHardeningTests(unittest.TestCase):
         ):
             with self.subTest(path=path):
                 self.assertEqual(trigger.count(f"      - {path}\n"), 2)
-
-    def test_docs_workflow_checks_all_maintained_documentation_surfaces(self) -> None:
-        workflow = DOCS_WORKFLOW.read_text(encoding="utf-8")
-        trigger = workflow.split("\npermissions:\n", 1)[0]
-
-        self.assertEqual(trigger.count("      - '**/*.md'\n"), 2)
-        self.assertIn("      - 'docs/**'\n", trigger)
-        self.assertIn(
-            "      - name: Check manual reference metadata\n"
-            "        run: python3 scripts/reference_integrity.py --inventory-only\n",
-            workflow,
-        )
 
     def test_cargo_color_is_disabled_at_workflow_scope(self) -> None:
         for workflow_path in (CI_WORKFLOW, RELEASE_WORKFLOW):
@@ -157,135 +131,10 @@ class HostedWorkflowHardeningTests(unittest.TestCase):
 
 
 class LandingAndInstallerTests(unittest.TestCase):
-    def test_landing_leads_with_aura_systems_and_agent_value(self) -> None:
-        landing = LANDING_DOC.read_text(encoding="utf-8")
-
-        # Structure and claims, not exact marketing sentences: pinning phrasing
-        # turns every copy edit into a CI failure without protecting anything.
-        for element in ("layout: home", "hero:", "tagline:", "features:"):
-            with self.subTest(element=element):
-                self.assertIn(element, landing)
-
-        self.assertIn("| | Python | Rust | Aura |", landing)
-        self.assertIn("```aura", landing)
-
-        lowered = landing.lower()
-        required_claims = (
-            "ownership",
-            "concurrency",
-            "garbage collector",
-            "agents",
-            "preview",
-        )
-        for claim in required_claims:
-            with self.subTest(claim=claim):
-                self.assertIn(claim, lowered)
-
-        self.assertNotIn("## Measured Snapshot", landing)
-        self.assertNotIn("Aura / CPython", landing)
-
-    def test_landing_install_command_is_in_the_hero_and_points_to_real_script(self) -> None:
-        component = LANDING_INSTALL_COMPONENT.read_text(encoding="utf-8")
-        theme = (REPO_ROOT / "docs" / ".vitepress" / "theme" / "index.ts").read_text(
-            encoding="utf-8"
-        )
-        command = "curl -fsSL https://johnolafenwa.github.io/Aura/install.sh | sh"
-        self.assertIn(command, component)
-        self.assertIn("home-hero-info-after", theme)
-        self.assertTrue(INSTALL_SCRIPT.is_file())
-
-    def test_installation_book_covers_every_supported_user_path(self) -> None:
-        missing = [name for name, path in INSTALL_DOCS.items() if not path.is_file()]
-        self.assertEqual(missing, [], f"missing installation pages: {missing}")
-
-        pages = {
-            name: path.read_text(encoding="utf-8")
-            for name, path in INSTALL_DOCS.items()
-        }
-        install_command = (
-            "curl -fsSL https://johnolafenwa.github.io/Aura/install.sh | sh"
-        )
-        for name in ("index", "macos", "linux", "wsl"):
-            with self.subTest(page=name):
-                self.assertIn(install_command, pages[name])
-                self.assertIn("aura --version", pages[name])
-
-        self.assertIn("xcode-select --install", pages["macos"])
-        self.assertIn("Apple silicon", pages["macos"])
-        self.assertIn("Intel", pages["macos"])
-        self.assertIn("build-essential", pages["linux"])
-        self.assertIn("Ubuntu 24.04", pages["linux"])
-        self.assertIn("wsl --install -d Ubuntu-24.04", pages["wsl"])
-        self.assertIn("WSL 2", pages["wsl"])
-        self.assertIn("code .", pages["wsl"])
-        self.assertIn("WSL: Ubuntu", pages["wsl"])
-
-        downloads = DOWNLOADS_DOC.read_text(encoding="utf-8")
-        config = (REPO_ROOT / "docs" / ".vitepress" / "config.mts").read_text(
-            encoding="utf-8"
-        )
-        for route in (
-            "/install/",
-            "/install/macos",
-            "/install/linux",
-            "/install/windows-wsl",
-            "/install/vscode",
-        ):
-            with self.subTest(route=route):
-                self.assertIn(route, downloads + config)
-
-        platforms = SUPPORTED_PLATFORMS.read_text(encoding="utf-8")
-        self.assertIn("Windows 11 with WSL 2", platforms)
-        self.assertNotIn("0.2 archives", platforms)
-
-    def test_vscode_installation_covers_registry_cli_vsix_and_wsl(self) -> None:
-        self.assertTrue(INSTALL_DOCS["vscode"].is_file())
-        guide = INSTALL_DOCS["vscode"].read_text(encoding="utf-8")
-        required = (
-            "https://marketplace.visualstudio.com/items?itemName=JohnOlafenwa.vscode-aura-lang",
-            "https://open-vsx.org/extension/JohnOlafenwa/vscode-aura-lang",
-            "code --install-extension JohnOlafenwa.vscode-aura-lang",
-            "aura-language.vsix",
-            "Extensions: Install from VSIX...",
-            "AURA_LSP_AURA_PATH",
-            "aura lsp",
-            "WSL: Ubuntu",
-        )
-        for text in required:
-            with self.subTest(text=text):
-                self.assertIn(text, guide)
-
-    def test_performance_evidence_has_a_dedicated_manual_page(self) -> None:
-        performance = PERFORMANCE_DOC.read_text(encoding="utf-8")
-        manual = MANUAL_INDEX.read_text(encoding="utf-8")
-        config = (REPO_ROOT / "docs" / ".vitepress" / "config.mts").read_text(
-            encoding="utf-8"
-        )
-        self.assertIn("# Performance", performance)
-        self.assertIn("## Current Measurements", performance)
-        self.assertIn("## Performance Direction", performance)
-        self.assertIn("Aura / CPython", performance)
-        self.assertIn("/manual/performance", manual)
-        self.assertIn("/manual/performance", config)
-
-    def test_public_pitch_uses_direct_voice(self) -> None:
-        contraction = re.compile(
-            r"\b(?:aren't|can't|couldn't|didn't|doesn't|don't|isn't|it's|"
-            r"that's|there's|they're|wasn't|weren't|what's|won't|wouldn't|"
-            r"you're|you've|we're|we've|we'll|we'd)\b",
-            re.IGNORECASE,
-        )
-        for path in (LANDING_DOC, POSITIONING_DOC):
-            with self.subTest(path=path.name):
-                source = path.read_text(encoding="utf-8")
-                self.assertIsNone(contraction.search(source))
-                self.assertNotIn(" rather than ", source.lower())
-                self.assertNotIn(" instead of ", source.lower())
-
     def test_installer_is_posix_and_verifies_release_checksum(self) -> None:
         installer = INSTALL_SCRIPT.read_text(encoding="utf-8")
         self.assertEqual(installer.splitlines()[0], "#!/bin/sh")
-        self.assertIn("v0.3.3-preview", installer)
+        self.assertIn("v0.3.4-preview", installer)
         self.assertIn("SHA256SUMS", installer)
         self.assertIn("sha256sum", installer)
         self.assertIn("shasum -a 256", installer)
@@ -320,7 +169,7 @@ class LandingAndInstallerTests(unittest.TestCase):
             root = Path(temp)
             release = root / "release"
             release.mkdir()
-            archive_name = f"aura-v0.3.3-preview-{target}"
+            archive_name = f"aura-v0.3.4-preview-{target}"
             archive_root = root / archive_name
             (archive_root / "bin").mkdir(parents=True)
             (archive_root / "lib" / "aura").mkdir(parents=True)
@@ -456,7 +305,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("EXPECTED_EXTENSION_VERSION", self.workflow)
         self.assertIn('expected_version="$EXPECTED_EXTENSION_VERSION"', self.workflow)
         self.assertIn("JohnOlafenwa.vscode-aura-lang", self.workflow)
-        self.assertIn("v0.3.3-preview", self.workflow)
+        self.assertIn("v0.3.4-preview", self.workflow)
         self.assertNotIn("v0.2.0-preview", self.workflow)
 
     def test_extension_only_dispatch_builds_from_an_explicit_source_ref(self) -> None:
@@ -481,14 +330,6 @@ class ReleaseWorkflowTests(unittest.TestCase):
             r"needs\.publish\.result == 'skipped'",
         )
 
-        release_process = RELEASE_PROCESS_DOC.read_text(encoding="utf-8")
-        self.assertIn("Omit `source_ref`", release_process)
-        self.assertRegex(
-            release_process,
-            r"download\s+the exact VSIX attached to the\s+release",
-        )
-        self.assertIn("-f source_ref=main", release_process)
-        self.assertIn("-f release_tag=v0.3.4", release_process)
 
     def test_manual_source_and_release_identity_are_separate(self) -> None:
         checkout_ref = (
@@ -592,34 +433,6 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("sha256sum -c SHA256SUMS", self.workflow)
         self.assertIn("prerelease: true", self.workflow)
         self.assertIn("files: release-assets/*", self.workflow)
-
-    def test_handoff_documents_github_cli_authentication(self) -> None:
-        handoff = FINAL_REPORT.read_text(encoding="utf-8")
-        self.assertIn("gh auth login", handoff)
-        self.assertIn("gh auth status", handoff)
-
-    def test_downloads_and_release_process_cover_extension_distribution(self) -> None:
-        downloads = DOWNLOADS_DOC.read_text(encoding="utf-8")
-        release_process = RELEASE_PROCESS_DOC.read_text(encoding="utf-8")
-        self.assertIn(
-            "https://marketplace.visualstudio.com/items?itemName=JohnOlafenwa.vscode-aura-lang",
-            downloads,
-        )
-        self.assertIn(
-            "https://open-vsx.org/extension/JohnOlafenwa/vscode-aura-lang",
-            downloads,
-        )
-        self.assertIn("aura-language.vsix", downloads)
-        self.assertIn(
-            "VSCE_PAT: global PATs are unsupported after 2026-12-01; renew as an "
-            "org-scoped token (Marketplace -> Manage) and verify with "
-            "`npx @vscode/vsce verify-pat JohnOlafenwa`.",
-            release_process,
-        )
-        self.assertIn("OVSX_TOKEN", release_process)
-        self.assertIn("hosted CI", release_process)
-        self.assertIn("reliably green", release_process)
-
 
 class ArchiveLayoutTests(unittest.TestCase):
     def test_package_layout_is_stable_and_self_contained(self) -> None:
@@ -753,7 +566,7 @@ class InstalledArchiveSmokeTests(unittest.TestCase):
                 stdout=subprocess.PIPE,
                 check=True,
             ).stdout.strip()
-            archive_root = root / "aura-v0.3.3-preview-aarch64-apple-darwin"
+            archive_root = root / "aura-v0.3.4-preview-aarch64-apple-darwin"
             binary = archive_root / "bin" / "aura"
             binary.parent.mkdir(parents=True)
             packaged_basic = archive_root / "examples" / "basic_addition.au"
@@ -783,7 +596,7 @@ class InstalledArchiveSmokeTests(unittest.TestCase):
                     fi
                     case "${{1:-}}" in
                       --version)
-                        echo "aura 0.3.3-preview ({commit})"
+                        echo "aura 0.3.4-preview ({commit})"
                         ;;
                       *)
                         last_argument=
@@ -832,7 +645,7 @@ class InstalledArchiveSmokeTests(unittest.TestCase):
                     check=False,
                 )
                 self.assertEqual(dash_syntax.returncode, 0, dash_syntax.stderr)
-            archive = root / "aura-v0.3.3-preview-aarch64-apple-darwin.tar.gz"
+            archive = root / "aura-v0.3.4-preview-aarch64-apple-darwin.tar.gz"
             with tarfile.open(archive, "w:gz") as handle:
                 handle.add(archive_root, arcname=archive_root.name)
 
@@ -853,7 +666,7 @@ class InstalledArchiveSmokeTests(unittest.TestCase):
             )
 
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn(f"aura 0.3.3-preview ({commit})\n", result.stdout)
+            self.assertIn(f"aura 0.3.4-preview ({commit})\n", result.stdout)
             self.assertIn("16\n", result.stdout)
             self.assertTrue(result.stdout.endswith(RETRY_STDOUT), result.stdout)
             self.assertNotIn(

@@ -1,13 +1,13 @@
 # Testing
 
-A language that checks ownership and failure at compile time still cannot
-tell you whether your logic is right. That is what tests are for, and Aura
-ships a runner so you do not have to pick one.
+The compiler checks ownership and failure, but it cannot tell you whether
+your logic is right. Tests do that. Aura ships its own test runner, so you do
+not need to pick one.
 
 ## Your First Test
 
-Tests live in `tests/` next to your package manifest. A test is a
-parameterless function whose name starts with `test_`:
+Tests live in `tests/`, next to your package manifest. A test is a function
+with no parameters whose name starts with `test_`:
 
 ```aura
 def subtotal(prices: list[float64]) -> float64:
@@ -35,13 +35,13 @@ ok tests/subtotal_test.au::test_empty_list_is_zero
 2 passed; 0 failed
 ```
 
-Each case is named `path::function`, so a failure tells you exactly which
-file and which function to open. The command exits non-zero when anything
-fails, which is all a CI job needs.
+Each case is named `path::function`, so a failure tells you which file and
+which function to open. The command exits non-zero when any case fails,
+which is all a CI job needs.
 
 ## Reading A Failure
 
-Change the expected total to something wrong and run it again:
+Change the expected total to a wrong value and run the tests again:
 
 ```text
 FAILED tests/subtotal_test.au::test_wrong_expectation
@@ -55,12 +55,11 @@ error[AU4001]: assertion failed
   = note: Aura call chain (innermost first): test_wrong_expectation at 7:1
 ```
 
-`assert` is not a plain boolean check. When a comparison fails, the compiler
-has already arranged for both sides to be reported: `left = 4.0`,
-`right = 5.0`. You do not have to rerun anything with print statements to
-find out what the values were.
+When a comparison in `assert` fails, Aura reports both sides: `left = 4.0`
+and `right = 5.0`. The compiler arranges this ahead of time. You do not need
+to add print statements and rerun to see the values.
 
-Assertions take an optional message, evaluated only when the assertion
+An assertion can take a message. Aura evaluates it only when the assertion
 fails:
 
 ```aura
@@ -71,7 +70,7 @@ def test_port_is_in_range():
 
 ## One Test, Many Cases
 
-When the same logic needs several inputs, return a list of labeled case
+To run the same logic against several inputs, return a list of labeled case
 functions from a `test_*` function:
 
 ```aura
@@ -100,13 +99,13 @@ ok tests/parse_test.au::test_ports[empty]
 2 passed; 0 failed
 ```
 
-The case functions are ordinary function values — the same first-class
-functions you can pass anywhere else in the language. They must be
-capture-free and take no arguments.
+The case functions are ordinary function values, the same first-class
+functions you can pass anywhere else. They must take no arguments and
+capture nothing.
 
 ## Setup And Teardown
 
-A file may define `setup()` and `teardown()`, which run around every case in
+A file may define `setup()` and `teardown()`. They run around every case in
 that file:
 
 ```aura
@@ -122,15 +121,17 @@ def test_total():
 ```
 
 The order is `setup`, then the case, then `teardown`. Teardown runs even when
-the case fails, so a temporary file or spawned process gets cleaned up either
-way. Each phase runs in isolation, so state does not leak between them
-through module values — use the filesystem or another external effect when a
-test genuinely needs to observe lifecycle state.
+the case fails, so a temporary file or spawned process is cleaned up either
+way.
+
+Each phase runs in isolation, so module values do not carry state from one
+phase to the next. When a test needs to observe lifecycle state, use the
+filesystem or another external effect.
 
 ## Running A Subset
 
-While you are working on one thing, run only that thing. `-k` matches a
-substring of the full case name:
+While you work on one thing, run only that thing. `-k` matches a substring of
+the full case name:
 
 ```bash
 aura test -k valid
@@ -141,8 +142,7 @@ ok tests/parse_test.au::test_ports[valid]
 1 passed; 0 failed
 ```
 
-You can also pass explicit files or directories instead of the default
-`tests/` tree:
+You can also pass files or directories instead of the default `tests/` tree:
 
 ```bash
 aura test tests/parse_test.au
@@ -151,23 +151,23 @@ aura test tests/parse_test.au
 ## Tests In CI
 
 `--format json` prints one machine-readable document instead of progress
-lines, with a `schema_version`, a summary, and one record per case including
-its duration and failure diagnostic:
+lines. It contains a `schema_version`, a summary, and one record per case
+with its duration and any failure diagnostic:
 
 ```bash
 aura test --format json
 ```
 
-Cases run under a 30-second timeout by default; `--timeout-ms` changes it for
-slow integration tests.
+Each case has a 30-second timeout by default. Use `--timeout-ms` to change it
+for slow integration tests.
 
 ## Where To Go Next
 
-Any file in `tests/` without a `test_*` function still runs as a single case
-through `main()` or its top-level statements, which is handy for end-to-end
-scripts you want executed rather than asserted.
+A file in `tests/` with no `test_*` function still runs as a single case,
+through `main()` or its top-level statements. Use this for end-to-end scripts
+that you want executed rather than asserted.
 
 The [Assertions](/manual/assertions) chapter is the normative reference for
-`assert`, operand reporting, and evaluation order, and
-[CLI And Tooling](/manual/cli-and-tooling) specifies discovery, selection,
-the JSON schema, and exit codes.
+`assert`, operand reporting, and evaluation order.
+[CLI And Tooling](/manual/cli-and-tooling) specifies test discovery,
+selection, the JSON schema, and exit codes.

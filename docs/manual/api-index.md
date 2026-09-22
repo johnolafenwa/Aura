@@ -1,134 +1,141 @@
 # API Index
 
-This page indexes every maintained public builtin constant, function, method,
-module type, and builtin enum documented by the manual. It is intentionally
-dense. Use the linked manual pages for examples and longer discussion.
+This page lists every public builtin constant, function, method, module type,
+and builtin enum that the manual documents. Each entry gives the exact
+signature and a one-line summary. The linked manual pages have the examples
+and full rules.
 
-`assert condition` and `assert condition, message` are statements rather than
-callable APIs. Their exact typing, lazy-message, `AU4001`, cleanup, and
-backend-parity contract is indexed separately in [Assertions](/manual/assertions).
+`assert condition` and `assert condition, message` are statements, not
+callable APIs. [Assertions](/manual/assertions) covers their typing, lazy
+message evaluation, `AU4001`, cleanup, and matching behavior across backends.
 
 ## Top-Level Builtins
 
-| API | Signature | Contract |
+| API | Signature | Behavior |
 | --- | --- | --- |
-| `print` | `print(value) -> None` | Renders `value` and writes a newline. |
-| `range` | `range(stop: int64) -> Range`; `range(start: int64, stop: int64) -> Range` | End-exclusive integer range. |
-| `cancelled` | `cancelled() -> bool` | Returns the current task cancellation state. |
-| `yield_now` | `yield_now() -> None` | Voluntarily yields the current lightweight task to the scheduler. |
-| `sleep` | `sleep(duration: Duration) -> None` | Suspends the current task using the scheduler. |
-| `select` | `select(source, ...) -> SelectOutcome[Q, T]` | Waits on one or more positional Queue, Task, or relative-Duration sources; cancellation wins, otherwise the lowest ready source index wins. |
-| `wait_any` | `wait_any(tasks: list[Task[T]], timeout: Duration = ...) -> WaitAny[T]` | Waits for the first task outcome; consumes the list and abandons unchosen rights when `T` is non-repeatable. `wait_any([])` returns `TimedOut` immediately. |
-| `wait_all` | `wait_all(tasks: list[Task[T]], timeout: Duration = ...) -> WaitAll[T]` | Waits for all tasks, the first task error, timeout, or cancellation; consumes the list when `T` is non-repeatable. |
-| `abs` | `abs(value: number) -> number` | Absolute value for integers and floats. |
-| `min` | `min(left: number, right: number) -> number` | Smaller value of the same numeric type. |
-| `max` | `max(left: number, right: number) -> number` | Larger value of the same numeric type. |
+| `print` | `print(value) -> None` | Renders `value` and writes it with a newline. |
+| `range` | `range(stop: int64) -> Range`; `range(start: int64, stop: int64) -> Range` | Integer range that excludes the end value. |
+| `cancelled` | `cancelled() -> bool` | Returns whether the current task is cancelled. |
+| `yield_now` | `yield_now() -> None` | Yields the current lightweight task to the scheduler. |
+| `sleep` | `sleep(duration: Duration) -> None` | Suspends the current task through the scheduler. |
+| `select` | `select(source, ...) -> SelectOutcome[Q, T]` | Waits on one or more positional sources. Each source is a Queue, a Task, or a relative Duration. Cancellation wins. Otherwise the ready source with the lowest index wins. |
+| `wait_any` | `wait_any(tasks: list[Task[T]], timeout: Duration = ...) -> WaitAny[T]` | Waits for the first task outcome. When `T` is non-repeatable, it consumes the list and abandons the rights of the tasks it does not choose. `wait_any([])` returns `TimedOut` immediately. |
+| `wait_all` | `wait_all(tasks: list[Task[T]], timeout: Duration = ...) -> WaitAll[T]` | Waits for all tasks, the first task error, the timeout, or cancellation. When `T` is non-repeatable, it consumes the list. |
+| `abs` | `abs(value: number) -> number` | Absolute value of an integer or a float. |
+| `min` | `min(left: number, right: number) -> number` | The smaller of two values of the same numeric type. |
+| `max` | `max(left: number, right: number) -> number` | The larger of two values of the same numeric type. |
 | `sqrt` | `sqrt(value: float32|float64) -> float32|float64` | Square root. |
-| `round` | `round(value: T) -> T` for integers; `round(value: float32\|float64) -> int64` | Integer identity or nearest-integer ties-to-even rounding. |
-| `divmod` | `divmod(left: T, right: T) -> (T, T)` for one exact integer or float type | Paired floor quotient and divisor-signed remainder. |
+| `round` | `round(value: T) -> T` for integers; `round(value: float32\|float64) -> int64` | Returns an integer unchanged. Rounds a float to the nearest integer, with ties to even. |
+| `divmod` | `divmod(left: T, right: T) -> (T, T)` for one exact integer or float type | Returns the floor quotient and the remainder. The remainder takes the sign of the divisor. |
 | `parse_int32` | `parse_int32(text: str) -> Result[int32, str]` | Parses a signed 32-bit integer. |
 | `parse_int64` | `parse_int64(text: str) -> Result[int64, str]` | Parses a signed 64-bit integer. |
 | `parse_float64` | `parse_float64(text: str) -> Result[float64, str]` | Parses a 64-bit float. |
-| `len` | `len(value: str\|list[T]\|dict[K, V]\|set[T]\|Array[T]) -> int64` | Delegates to the value's own `len()` member with the same `int64` type and value. |
-| `str` | `str(value) -> str` | Renders `value` exactly as `print` and f-string interpolation render it. |
+| `len` | `len(value: str\|list[T]\|dict[K, V]\|set[T]\|Array[T]) -> int64` | Returns the same `int64` as the value's own `len()` method. |
+| `str` | `str(value) -> str` | Renders `value` exactly as `print` and f-string interpolation do. |
 
 ## Foreign Declarations
 
-FFI declarations are package-authorized direct calls, not builtins or
-first-class function values. Their names and exact signatures come from the
-binding package.
+Foreign function interface declarations, or FFI declarations, are direct calls
+that a package authorizes. They are not builtins and not first-class function
+values. The binding package supplies their names and exact signatures.
 
-| Surface | Signature | Contract |
+| Surface | Signature | Behavior |
 | --- | --- | --- |
-| C function | `extern "C" def name(...) -> R` | Bodyless synchronous call to the same process-global symbol name. |
-| Opaque handle | `extern "C" opaque class Handle` | Non-null, non-Copy, non-cloneable, non-Transfer foreign pointer wrapper. |
-| str view | `text: str` | Temporary const UTF-8 pointer plus byte length; empty is `(NULL, 0)` and no NUL terminator is promised. |
-| Byte view | `bytes: list[uint8]` | Temporary const pointer plus byte length; empty is `(NULL, 0)`. |
-| Mutable byte view | `bytes: mut list[uint8]` | Same-length scratch copy-in/out; writeback occurs after native return before result validation. |
-| Consuming handle | `handle: own Handle` | Moves the opaque handle into a foreign close/free-style call. |
+| C function | `extern "C" def name(...) -> R` | Synchronous call with no body to the process-global symbol of the same name. |
+| Opaque handle | `extern "C" opaque class Handle` | Wraps a non-null foreign pointer. The handle is not Copy, not cloneable, and not Transfer. |
+| str view | `text: str` | Passes a temporary const UTF-8 pointer and a byte length. An empty string is `(NULL, 0)`. No NUL terminator is promised. |
+| Byte view | `bytes: list[uint8]` | Passes a temporary const pointer and a byte length. An empty list is `(NULL, 0)`. |
+| Mutable byte view | `bytes: mut list[uint8]` | Copies into a same-length scratch buffer and back out. The writeback happens after the native call returns and before the result is validated. |
+| Consuming handle | `handle: own Handle` | Moves the opaque handle into a foreign call that closes or frees it. |
 
-The complete scalar table, manifest report, safety boundary, diagnostics, and
-backend rules are in [FFI v0](/manual/ffi).
+[FFI v0](/manual/ffi) has the full scalar table, the manifest report, the
+safety boundary, diagnostics, and backend rules.
 
 ## Scalars And str
 
-| API | Signature | Contract |
+| API | Signature | Behavior |
 | --- | --- | --- |
 | `float64.sqrt` | `sqrt() -> float64` | Square root of the receiver. |
-| integer `.to_float` | `to_float() -> float64` | Converts any integer type with IEEE-754 round-to-nearest, ties-to-even; may round. |
-| integer wrapping methods | `wrapping_add(rhs)`, `wrapping_sub(rhs)`, `wrapping_mul(rhs)` | Same-type fixed-width two's-complement modular arithmetic. |
-| integer saturating methods | `saturating_add(rhs)`, `saturating_sub(rhs)`, `saturating_mul(rhs)` | Same-type arithmetic clamped to the declared width. |
-| integer wrapping shifts | `wrapping_shl(count)`, `wrapping_shr(count)` | Same-type count; left shift discards high bits and right shift matches `>>` after count validation. |
-| integer saturating shifts | `saturating_shl(count)`, `saturating_shr(count)` | Same-type count; left shift clamps and right shift matches `>>` after count validation. |
-| scalar `.to_string` | `to_string() -> str` | Supported on `bool`, integer types, `float32`, and `float64`. |
-| `Duration.ms` | `Duration.ms(value: int64) -> Duration` | Exact signed millisecond constructor. |
-| `Duration.seconds` | `Duration.seconds(value: int64) -> Duration` | Exact signed second constructor. |
-| `Duration.minutes` | `Duration.minutes(value: int64) -> Duration` | Exact signed minute constructor. |
-| `Duration.to_ms` | `to_ms() -> float64` | Converts exact nanoseconds to nearest-representable binary64 milliseconds, ties-to-even; may round; accepted under ADR-0019. |
-| `Duration.to_seconds` | `to_seconds() -> float64` | Converts exact nanoseconds to nearest-representable binary64 seconds, ties-to-even; may round; accepted under ADR-0019. |
-| `str.len` | `len() -> int64` | Counts Unicode scalar values in O(n). |
-| `str.byte_len` | `byte_len() -> int64` | Returns the UTF-8 byte count in O(1). |
-| `str.to_bytes` | `to_bytes() -> list[uint8]` | Returns a fresh list containing the receiver's exact UTF-8 bytes. |
-| `str.from_bytes` | `from_bytes(bytes: list[uint8]) -> Result[str, bytes.Error]` | Strictly validates UTF-8 and returns a fresh str or the first invalid byte offset. |
+| integer `.to_float` | `to_float() -> float64` | Converts any integer type with IEEE-754 round-to-nearest, ties-to-even. The result may round. |
+| integer wrapping methods | `wrapping_add(rhs)`, `wrapping_sub(rhs)`, `wrapping_mul(rhs)` | Two's-complement arithmetic that wraps at the type's fixed width. Operands and result share one type. |
+| integer saturating methods | `saturating_add(rhs)`, `saturating_sub(rhs)`, `saturating_mul(rhs)` | Arithmetic that clamps to the declared width. Operands and result share one type. |
+| integer wrapping shifts | `wrapping_shl(count)`, `wrapping_shr(count)` | `count` has the receiver's type. Left shift discards high bits. Right shift matches `>>` once the count is validated. |
+| integer saturating shifts | `saturating_shl(count)`, `saturating_shr(count)` | `count` has the receiver's type. Left shift clamps. Right shift matches `>>` once the count is validated. |
+| scalar `.to_string` | `to_string() -> str` | Available on `bool`, the integer types, `float32`, and `float64`. |
+| `Duration.ms` | `Duration.ms(value: int64) -> Duration` | Builds an exact signed Duration from milliseconds. |
+| `Duration.seconds` | `Duration.seconds(value: int64) -> Duration` | Builds an exact signed Duration from seconds. |
+| `Duration.minutes` | `Duration.minutes(value: int64) -> Duration` | Builds an exact signed Duration from minutes. |
+| `Duration.to_ms` | `to_ms() -> float64` | Converts the exact nanosecond count to the nearest binary64 milliseconds, ties-to-even. The result may round. |
+| `Duration.to_seconds` | `to_seconds() -> float64` | Converts the exact nanosecond count to the nearest binary64 seconds, ties-to-even. The result may round. |
+| `str.len` | `len() -> int64` | Counts Unicode scalar values in O(n) time. |
+| `str.byte_len` | `byte_len() -> int64` | Returns the UTF-8 byte count in O(1) time. |
+| `str.to_bytes` | `to_bytes() -> list[uint8]` | Returns a fresh list of the receiver's exact UTF-8 bytes. |
+| `str.from_bytes` | `from_bytes(bytes: list[uint8]) -> Result[str, bytes.Error]` | Validates UTF-8 strictly. Returns a fresh str, or an error with the offset of the first invalid byte. |
 | `str.contains` | `contains(text: str) -> bool` | `true` when the receiver contains `text`. |
-| `str.starts_with` | `starts_with(text: str) -> bool` | Prefix test. |
-| `str.ends_with` | `ends_with(text: str) -> bool` | Suffix test. |
-| `str.split` | `split(text: str) -> list[str]` | Splits on each occurrence of `text`. |
-| `str.replace` | `replace(from: str, to: str) -> str` | Returns a new string with replacements applied. |
-| `str.to_lower` | `to_lower() -> str` | Unicode lowercase conversion. |
-| `str.to_upper` | `to_upper() -> str` | Unicode uppercase conversion. |
-| `str.strip_prefix` | `strip_prefix(text: str) -> str \| None` | Returns the remainder when the prefix matches, or `None`; a matched empty remainder is a present `""`. |
-| `str.strip_suffix` | `strip_suffix(text: str) -> str \| None` | Returns the remainder when the suffix matches, or `None`; a matched empty remainder is a present `""`. |
-| `str.trim` | `trim() -> str` | Removes surrounding Unicode whitespace. |
-| `str.join` | `join(parts: list[str]) -> str` | Joins `parts` using the receiver as separator. |
+| `str.starts_with` | `starts_with(text: str) -> bool` | Tests for a prefix. |
+| `str.ends_with` | `ends_with(text: str) -> bool` | Tests for a suffix. |
+| `str.split` | `split(text: str) -> list[str]` | Splits at each occurrence of `text`. |
+| `str.replace` | `replace(from: str, to: str) -> str` | Returns a new string with the replacements applied. |
+| `str.to_lower` | `to_lower() -> str` | Converts to Unicode lowercase. |
+| `str.to_upper` | `to_upper() -> str` | Converts to Unicode uppercase. |
+| `str.strip_prefix` | `strip_prefix(text: str) -> str \| None` | Returns the rest of the string when the prefix matches, or `None` when it does not. An empty rest is a present `""`. |
+| `str.strip_suffix` | `strip_suffix(text: str) -> str \| None` | Returns the rest of the string when the suffix matches, or `None` when it does not. An empty rest is a present `""`. |
+| `str.trim` | `trim() -> str` | Removes leading and trailing Unicode whitespace. |
+| `str.join` | `join(parts: list[str]) -> str` | Joins `parts` with the receiver as the separator. |
 | `str.clone` | `clone() -> str` | Returns a new owned string. |
 
-Duration operators are `Duration + Duration`, `Duration - Duration`,
-`Duration * int64`, `int64 * Duration`, and `Duration // int64`, all returning
-`Duration`, plus equality and all four ordering comparisons between Duration
-values. Arithmetic is checked on signed i128 nanoseconds.
+These Duration operators each return a `Duration`:
+
+- `Duration + Duration`
+- `Duration - Duration`
+- `Duration * int64`
+- `int64 * Duration`
+- `Duration // int64`
+
+Duration values also support equality and all four ordering comparisons.
+Arithmetic is checked on signed i128 nanoseconds.
 
 ## Numeric Arrays
 
-`T` and `U` below are each exactly one of `int32`, `int64`, `float32`, or
-`float64`. See [Numeric Arrays](/manual/numeric-arrays) for shape, ownership,
-diagnostic, and backend contracts.
+In this section, `T` and `U` are each exactly one of `int32`, `int64`,
+`float32`, or `float64`. [Numeric Arrays](/manual/numeric-arrays) covers shape,
+ownership, diagnostics, and backend behavior.
 
-| API | Signature | Contract |
+| API | Signature | Behavior |
 | --- | --- | --- |
-| `Array[T].zeros` | `zeros(shape: list[int64]) -> Array[T]` | Fresh rank-at-least-one row-major zero buffer. |
+| `Array[T].zeros` | `zeros(shape: list[int64]) -> Array[T]` | Fresh zero-filled buffer in row-major order, with rank at least one. |
 | `Array[T].full` | `full(shape: list[int64], value: T) -> Array[T]` | Fresh buffer filled with `value`. |
-| `Array[T].from_list` | `from_list(values: list[T], shape: list[int64]) -> Array[T]` | Copies the shared list into exact row-major shape. |
-| `Array.shape` | `shape() -> list[int64]` | Owned shape snapshot. |
-| `Array.len` | `len() -> int64` | Total element count. |
-| `Array.clone` | `clone() -> Array[T]` | Explicit fresh full-buffer copy. |
-| `Array.get` | `get(index: list[int64]) -> T \| None` | Coordinate read; `None` for an out-of-bounds coordinate or rank mismatch. |
-| `Array.set` | `set(index: list[int64], value: T) -> T \| None` | Mutable replacement; returns the old scalar and traps on an invalid coordinate/rank rather than returning `None`. |
-| `Array.fill` | `fill(value: T) -> None` | Mutable row-major fill. |
-| `Array.map` | `map[U](f: def(T) -> U) -> Array[U]` | Eager row-major repeatable callback. |
-| `Array.sum` | `sum() -> T` | Deterministic dtype reduction; empty returns zero. |
-| `Array.min` | `min() -> T` | Minimum; empty is `AU4007`. |
-| `Array.max` | `max() -> T` | Maximum; empty is `AU4007`. |
-| `Array.mean` | `mean() -> float64` | `float64` accumulation/result; empty is `AU4007`. |
-| integer Array wrapping methods | `wrapping_add(rhs)`, `wrapping_sub(rhs)`, `wrapping_mul(rhs)` | `rhs` is same-shape Array or same-dtype scalar; fresh Array result. |
-| integer Array saturating methods | `saturating_add(rhs)`, `saturating_sub(rhs)`, `saturating_mul(rhs)` | `rhs` is same-shape Array or same-dtype scalar; fresh Array result. |
+| `Array[T].from_list` | `from_list(values: list[T], shape: list[int64]) -> Array[T]` | Copies the shared list into the exact row-major shape. |
+| `Array.shape` | `shape() -> list[int64]` | Returns an owned snapshot of the shape. |
+| `Array.len` | `len() -> int64` | Total number of elements. |
+| `Array.clone` | `clone() -> Array[T]` | Makes an explicit fresh copy of the whole buffer. |
+| `Array.get` | `get(index: list[int64]) -> T \| None` | Reads one coordinate. Returns `None` when the coordinate is out of bounds or the rank does not match. |
+| `Array.set` | `set(index: list[int64], value: T) -> T \| None` | Replaces one element in place and returns the old scalar. An invalid coordinate or rank traps instead of returning `None`. |
+| `Array.fill` | `fill(value: T) -> None` | Fills every element in place, in row-major order. |
+| `Array.map` | `map[U](f: def(T) -> U) -> Array[U]` | Applies a repeatable callback eagerly, in row-major order. |
+| `Array.sum` | `sum() -> T` | Deterministic reduction in the element type. An empty Array returns zero. |
+| `Array.min` | `min() -> T` | Smallest element. An empty Array is `AU4007`. |
+| `Array.max` | `max() -> T` | Largest element. An empty Array is `AU4007`. |
+| `Array.mean` | `mean() -> float64` | Accumulates in and returns `float64`. An empty Array is `AU4007`. |
+| integer Array wrapping methods | `wrapping_add(rhs)`, `wrapping_sub(rhs)`, `wrapping_mul(rhs)` | `rhs` is an Array of the same shape or a scalar of the same element type. Returns a fresh Array. |
+| integer Array saturating methods | `saturating_add(rhs)`, `saturating_sub(rhs)`, `saturating_mul(rhs)` | `rhs` is an Array of the same shape or a scalar of the same element type. Returns a fresh Array. |
 
 ## Math
 
-See [Math Module](/manual/math) for the normative IEEE-754, domain,
-evaluation-order, diagnostic, and backend contracts. Every argument is
-exactly `float64`; the module performs no implicit numeric conversion.
+Every argument is exactly `float64`. The module performs no implicit numeric
+conversion. [Math Module](/manual/math) has the full IEEE-754, domain,
+evaluation-order, diagnostic, and backend rules.
 
-| API | Signature | Contract |
+| API | Signature | Behavior |
 | --- | --- | --- |
-| `math.pi` | `float64` constant | Nearest binary64 pi, bits `0x400921fb54442d18`. |
-| `math.e` | `float64` constant | Nearest binary64 Euler's number, bits `0x4005bf0a8b145769`. |
+| `math.pi` | `float64` constant | Nearest binary64 value to pi, bits `0x400921fb54442d18`. |
+| `math.e` | `float64` constant | Nearest binary64 value to Euler's number, bits `0x4005bf0a8b145769`. |
 | `math.inf` | `float64` constant | Positive infinity, bits `0x7ff0000000000000`. |
 | `math.nan` | `float64` constant | Canonical quiet NaN, bits `0x7ff8000000000000`. |
-| `math.floor` | `floor(value: float64) -> int64` | Greatest integer less than or equal to `value`, checked for `int64` range. |
-| `math.ceil` | `ceil(value: float64) -> int64` | Least integer greater than or equal to `value`, checked for `int64` range. |
-| `math.trunc` | `trunc(value: float64) -> int64` | Truncates toward zero, checked for `int64` range. |
-| `math.pow` | `pow(base: float64, exponent: float64) -> float64` | Binary64 exponentiation with specified identity, domain, and overflow behavior. |
+| `math.floor` | `floor(value: float64) -> int64` | Greatest integer less than or equal to `value`. Checked against the `int64` range. |
+| `math.ceil` | `ceil(value: float64) -> int64` | Least integer greater than or equal to `value`. Checked against the `int64` range. |
+| `math.trunc` | `trunc(value: float64) -> int64` | Truncates toward zero. Checked against the `int64` range. |
+| `math.pow` | `pow(base: float64, exponent: float64) -> float64` | Binary64 exponentiation. The Math Module page specifies its identity, domain, and overflow cases. |
 | `math.exp` | `exp(value: float64) -> float64` | Base-e exponential. |
 | `math.log` | `log(value: float64) -> float64` | Natural logarithm. |
 | `math.log2` | `log2(value: float64) -> float64` | Base-2 logarithm. |
@@ -139,149 +146,156 @@ exactly `float64`; the module performs no implicit numeric conversion.
 
 ## Randomness
 
-See [Randomness Module](/manual/randomness) for the normative xoshiro256**
-algorithm, seed-42 vectors, ownership, secure-source boundary, and diagnostics.
+[Randomness Module](/manual/randomness) specifies the xoshiro256** algorithm,
+the seed-42 vectors, ownership, the secure-source boundary, and diagnostics.
 
-| API | Signature | Contract |
+| API | Signature | Behavior |
 | --- | --- | --- |
-| `random.Rng` | `Rng(seed: int64) -> random.Rng` | Creates a move-only deterministic stream from the seed's exact two's-complement bit pattern. |
-| `random.Rng.next_int` | `next_int(lo: int64, hi: int64) -> int64` | Uniform half-open `[lo, hi)` integer; mutable receiver. |
-| `random.Rng.next_float` | `next_float() -> float64` | Uniform 53-bit binary64 value in `[0.0, 1.0)`; mutable receiver. |
-| `random.Rng.shuffle` | `shuffle[T](values: mut list[T]) -> None` | Descending Fisher-Yates shuffle in place; mutable receiver and list. |
-| `random.secure_int` | `secure_int(lo: int64, hi: int64) -> int64` | OS-secure uniform half-open integer with no deterministic fallback. |
-| `random.secure_bytes` | `secure_bytes(n: int64) -> list[uint8]` | Exactly `n` OS-secure bytes for `0 <= n <= 2147483647`; zero skips entropy and larger counts trap with `AU4005` before allocation. |
+| `random.Rng` | `Rng(seed: int64) -> random.Rng` | Creates a move-only deterministic stream. The seed's exact two's-complement bit pattern selects the stream. |
+| `random.Rng.next_int` | `next_int(lo: int64, hi: int64) -> int64` | Uniform integer in the half-open range `[lo, hi)`. Needs a mutable receiver. |
+| `random.Rng.next_float` | `next_float() -> float64` | Uniform 53-bit binary64 value in `[0.0, 1.0)`. Needs a mutable receiver. |
+| `random.Rng.shuffle` | `shuffle[T](values: mut list[T]) -> None` | Shuffles in place with descending Fisher-Yates. Needs a mutable receiver and a mutable list. |
+| `random.secure_int` | `secure_int(lo: int64, hi: int64) -> int64` | Uniform half-open integer from the operating system's secure source. Has no deterministic fallback. |
+| `random.secure_bytes` | `secure_bytes(n: int64) -> list[uint8]` | Returns exactly `n` secure bytes from the operating system for `0 <= n <= 2147483647`. Zero skips the entropy read. A larger count traps with `AU4005` before allocating. |
 
 `random.Rng` has no public clone route. `AU3007` rejects the clone-producing
-collection and task APIs indexed below when their produced value contains, or
-may contain, an `Rng`, including through a user-defined wrapper. Cloning
-an allowed Task or Queue handle copies only the handle. Accepted ADR-0033
-nevertheless rejects `random.Rng` as a task result or Queue payload with
-`AU3008`, and makes a Task with a non-repeatable result non-copyable. Moves,
-collection removals, and in-place shuffle within one owning task transfer or
-rearrange values without duplicating generator state.
-Generic clone-producing calls infer clone-safety obligations and discharge them
-after specialization; the obligation is retained through generic callers and
+collection and task APIs on this page when the value they produce contains, or
+may contain, an `Rng`. That includes an `Rng` inside a user-defined wrapper.
+
+Cloning an allowed Task or Queue handle copies only the handle. `AU3008`
+rejects `random.Rng` as a task result or a Queue payload. A Task with a
+non-repeatable result is not copyable.
+
+Moves, collection removals, and in-place shuffles within one owning task move
+or reorder values. None of them duplicates generator state.
+
+Generic clone-producing calls infer clone-safety obligations and check them
+after specialization. The obligation carries through generic callers and
 module imports.
 
 ## Bytes, Text Codecs, And SHA-256
 
-See [Bytes, Text Codecs, And SHA-256](/manual/bytes) for exact UTF-8
-preservation, strict malformed-input policy, error offsets, ownership, output
-size preflights, and the cryptographic scope of SHA-256.
+[Bytes, Text Codecs, And SHA-256](/manual/bytes) covers exact UTF-8
+preservation, the strict policy for malformed input, error offsets, ownership,
+up-front output size checks, and the cryptographic scope of SHA-256.
 
-| API | Signature | Contract |
+| API | Signature | Behavior |
 | --- | --- | --- |
-| `str.to_bytes` | `to_bytes() -> list[uint8]` | Exact UTF-8 bytes; shared receiver and fresh result. |
-| `str.from_bytes` | `from_bytes(bytes: list[uint8]) -> Result[str, bytes.Error]` | Strict UTF-8; no replacement decoding. |
+| `str.to_bytes` | `to_bytes() -> list[uint8]` | Exact UTF-8 bytes. Reads a shared receiver and returns a fresh list. |
+| `str.from_bytes` | `from_bytes(bytes: list[uint8]) -> Result[str, bytes.Error]` | Strict UTF-8 with no replacement decoding. |
 | `bytes.hex_encode` | `hex_encode(value: list[uint8]) -> str` | Two lowercase ASCII digits per byte. |
-| `bytes.hex_decode` | `hex_decode(text: str) -> Result[list[uint8], bytes.Error]` | Accepts mixed-case ASCII hex; rejects prefixes, separators, and whitespace. |
+| `bytes.hex_decode` | `hex_decode(text: str) -> Result[list[uint8], bytes.Error]` | Accepts ASCII hex in mixed case. Rejects prefixes, separators, and whitespace. |
 | `bytes.base64_encode` | `base64_encode(value: list[uint8]) -> str` | RFC 4648 standard alphabet with canonical padding. |
-| `bytes.base64_decode` | `base64_decode(text: str) -> Result[list[uint8], bytes.Error]` | Strict canonical standard-alphabet decode. |
+| `bytes.base64_decode` | `base64_decode(text: str) -> Result[list[uint8], bytes.Error]` | Strict decode of canonical standard-alphabet input. |
 | `bytes.sha256` | `sha256(value: list[uint8]) -> list[uint8]` | Fresh raw 32-byte FIPS 180-4 digest. |
-| `bytes.sha256_string` | `sha256_string(text: str) -> list[uint8]` | SHA-256 over the text's exact UTF-8 bytes. |
+| `bytes.sha256_string` | `sha256_string(text: str) -> list[uint8]` | SHA-256 of the text's exact UTF-8 bytes. |
 
-All displayed inputs use shared access and remain reusable. An `encoding`
-argument is reserved but not implemented. Expanded output that cannot be
-represented or allocated traps with `AU4005`; malformed data returns
+Every input above uses shared access and stays usable after the call. An
+`encoding` argument is reserved but not implemented. Expanded output that
+cannot be represented or allocated traps with `AU4005`. Malformed data returns
 `bytes.Error`.
 
 ## Collections
 
-See [Collections](/manual/collections) for ownership and iteration details.
+[Collections](/manual/collections) covers ownership and iteration.
 
 ### list[T]
 
-| API | Signature | Contract |
+| API | Signature | Behavior |
 | --- | --- | --- |
-| `list[T]()` | `list[T]()` | Empty list constructor. |
-| `list.len` | `len() -> int64` | Element count. |
-| `list.is_empty` | `is_empty() -> bool` | `true` when empty. |
-| `list.copy` | `copy() -> list[T]` | Returns independent owned storage; requires clone-safe `T`. |
-| `list.append` | `append(value: own T) -> None` | Transfers `value` to the end. |
-| `list.pop` | `pop(index: int64 = -1) -> T` | Removes and transfers the normalized position; invalid positions trap. |
-| `list.get` | `get(index: int64) -> Lookup[T]` | `Lookup.Found(value)` with a cloned element after negative-index normalization, or `Lookup.Missing` when out of bounds; requires clone-safe `T`. |
-| `list.set` | `set(index: int64, value: own T) -> T` | Replaces and transfers out the old element; invalid positions trap. |
-| `list.remove` | `remove(value: T) -> None` | Removes the first equal value; absence traps with `AU4008`. |
-| `list.index` | `index(value: T) -> int64` | Returns the first equal position; absence traps with `AU4008`. |
-| `list.count` | `count(value: T) -> int64` | Counts equal elements. |
-| `list.swap` | `swap(first: int64, second: int64) -> None` | Normalizes and swaps two positions; invalid positions trap. |
-| `list.extend` | `extend(other: own list[T]) -> None` | Moves elements from `other` into the receiver. |
-| `list.insert` | `insert(index: int64, value: own T) -> None` | Inserts before the Python-clamped position. |
+| `list[T]()` | `list[T]()` | Creates an empty list. |
+| `list.len` | `len() -> int64` | Number of elements. |
+| `list.is_empty` | `is_empty() -> bool` | `true` when the list is empty. |
+| `list.copy` | `copy() -> list[T]` | Returns independent owned storage. Requires clone-safe `T`. |
+| `list.append` | `append(value: own T) -> None` | Moves `value` onto the end. |
+| `list.pop` | `pop(index: int64 = -1) -> T` | Removes the element at the normalized position and moves it out. An invalid position traps. |
+| `list.get` | `get(index: int64) -> Lookup[T]` | Normalizes a negative index, then returns `Lookup.Found(value)` with a clone of the element. Returns `Lookup.Missing` when the index is out of bounds. Requires clone-safe `T`. |
+| `list.set` | `set(index: int64, value: own T) -> T` | Replaces the element and moves the old one out. An invalid position traps. |
+| `list.remove` | `remove(value: T) -> None` | Removes the first equal value. A missing value traps with `AU4008`. |
+| `list.index` | `index(value: T) -> int64` | Returns the position of the first equal value. A missing value traps with `AU4008`. |
+| `list.count` | `count(value: T) -> int64` | Number of equal elements. |
+| `list.swap` | `swap(first: int64, second: int64) -> None` | Normalizes two positions and swaps them. An invalid position traps. |
+| `list.extend` | `extend(other: own list[T]) -> None` | Moves the elements of `other` into the receiver. |
+| `list.insert` | `insert(index: int64, value: own T) -> None` | Inserts before the position, clamped the way Python clamps it. |
 | `list.clear` | `clear() -> None` | Removes all elements. |
-| `list.reverse` | `reverse() -> None` | Reverses in place. |
-| `list.sort` | `sort(reverse: bool = false) -> None` | Stable in-place natural ordering for `T: Ord`. |
-| `list.sort` | `sort[K](key: def(T) -> K, reverse: bool = false) -> None` | Stable key ordering; evaluates each key once before mutation and requires `K: Ord`. |
-| `list.map` | `map[U](f: def(T) -> U) -> list[U]` | Eager shared traversal into a fresh owned result; retains the source. |
-| `list.filter` | `filter(f: def(T) -> bool) -> list[T]` | Eager shared traversal into a fresh owned result; retains the source and requires clone-safe `T`. |
-| `list.reserve` | `reserve(additional: int64) -> None` | Ensures capacity for at least `len() + additional`. |
+| `list.reverse` | `reverse() -> None` | Reverses the list in place. |
+| `list.sort` | `sort(reverse: bool = false) -> None` | Stable in-place sort by natural order. Requires `T: Ord`. |
+| `list.sort` | `sort[K](key: def(T) -> K, reverse: bool = false) -> None` | Stable sort by key. Computes each key once before changing the list. Requires `K: Ord`. |
+| `list.map` | `map[U](f: def(T) -> U) -> list[U]` | Traverses the list eagerly through shared access into a fresh owned result. The source stays usable. |
+| `list.filter` | `filter(f: def(T) -> bool) -> list[T]` | Traverses the list eagerly through shared access into a fresh owned result. The source stays usable. Requires clone-safe `T`. |
+| `list.reserve` | `reserve(additional: int64) -> None` | Makes room for at least `len() + additional` elements. |
 | `list[T].with_capacity` | `with_capacity(minimum: int64) -> list[T]` | Creates an empty list with at least the requested capacity. |
 
 ### dict[K, V]
 
-| API | Signature | Contract |
+| API | Signature | Behavior |
 | --- | --- | --- |
-| `dict[K, V]()` | `dict[K, V]()` | Empty dictionary constructor. |
-| `dict.len` | `len() -> int64` | Entry count. |
-| `dict.is_empty` | `is_empty() -> bool` | `true` when empty. |
-| `dict.copy` | `copy() -> dict[K, V]` | Returns independent owned storage; requires clone-safe `K` and `V`. |
-| `dict.get` | `get(key: K) -> Lookup[V]` | `Lookup.Found(value)` with a cloned value, or `Lookup.Missing` when the key is absent; a present `None` value is `Found(None)`; requires clone-safe `V`. |
-| `dict.remove` | `remove(key: K) -> Lookup[V]` | Removes an entry and transfers its value into `Lookup.Found(value)`, or returns `Lookup.Missing`; no clone requirement. |
-| `dict.keys` | `keys() -> list[K]` | Cloned keys in insertion order; requires clone-safe `K`. |
-| `dict.values` | `values() -> list[V]` | Cloned values in insertion order; requires clone-safe `V`. |
-| `dict.items` | `items() -> list[(K, V)]` | Cloned key/value tuples in insertion order; requires clone-safe `K` and `V`. |
+| `dict[K, V]()` | `dict[K, V]()` | Creates an empty dictionary. |
+| `dict.len` | `len() -> int64` | Number of entries. |
+| `dict.is_empty` | `is_empty() -> bool` | `true` when the dictionary is empty. |
+| `dict.copy` | `copy() -> dict[K, V]` | Returns independent owned storage. Requires clone-safe `K` and `V`. |
+| `dict.get` | `get(key: K) -> Lookup[V]` | Returns `Lookup.Found(value)` with a clone of the value, or `Lookup.Missing` when the key is absent. A stored `None` value is `Found(None)`. Requires clone-safe `V`. |
+| `dict.remove` | `remove(key: K) -> Lookup[V]` | Removes the entry and moves its value into `Lookup.Found(value)`, or returns `Lookup.Missing`. Has no clone requirement. |
+| `dict.keys` | `keys() -> list[K]` | Clones of the keys, in insertion order. Requires clone-safe `K`. |
+| `dict.values` | `values() -> list[V]` | Clones of the values, in insertion order. Requires clone-safe `V`. |
+| `dict.items` | `items() -> list[(K, V)]` | Cloned key/value tuples, in insertion order. Requires clone-safe `K` and `V`. |
 | `dict.clear` | `clear() -> None` | Removes all entries. |
-| `dict.update` | `update(other: own dict[K, V]) -> None` | Transfers entries from `other`; matching keys retain their positions. |
-| `dict.reserve` | `reserve(additional: int64) -> None` | Ensures capacity for at least `len() + additional`. |
+| `dict.update` | `update(other: own dict[K, V]) -> None` | Moves the entries of `other` into the receiver. A key that already exists keeps its position. |
+| `dict.reserve` | `reserve(additional: int64) -> None` | Makes room for at least `len() + additional` entries. |
 | `dict[K, V].with_capacity` | `with_capacity(minimum: int64) -> dict[K, V]` | Creates an empty dictionary with at least the requested capacity. |
 
 ### set[T]
 
-| API | Signature | Contract |
+| API | Signature | Behavior |
 | --- | --- | --- |
-| `set[T]()` | `set[T]()` | Empty set constructor. |
-| `set.len` | `len() -> int64` | Unique value count. |
-| `set.is_empty` | `is_empty() -> bool` | `true` when empty. |
-| `set.copy` | `copy() -> set[T]` | Returns independent owned storage; requires clone-safe `T`. |
-| `set.add` | `add(value: own T) -> None` | Transfers a value into the set. |
-| `set.remove` | `remove(value: T) -> None` | Removes an equal value; absence traps with `AU4008`. |
-| `set.discard` | `discard(value: T) -> None` | Removes an equal value when present. |
+| `set[T]()` | `set[T]()` | Creates an empty set. |
+| `set.len` | `len() -> int64` | Number of unique values. |
+| `set.is_empty` | `is_empty() -> bool` | `true` when the set is empty. |
+| `set.copy` | `copy() -> set[T]` | Returns independent owned storage. Requires clone-safe `T`. |
+| `set.add` | `add(value: own T) -> None` | Moves `value` into the set. |
+| `set.remove` | `remove(value: T) -> None` | Removes an equal value. A missing value traps with `AU4008`. |
+| `set.discard` | `discard(value: T) -> None` | Removes an equal value if one is present. |
 | `set.clear` | `clear() -> None` | Removes all values. |
-| `set.reserve` | `reserve(additional: int64) -> None` | Ensures capacity for at least `len() + additional`. |
+| `set.reserve` | `reserve(additional: int64) -> None` | Makes room for at least `len() + additional` values. |
 | `set[T].with_capacity` | `with_capacity(minimum: int64) -> set[T]` | Creates an empty set with at least the requested capacity. |
 
 ## Concurrency
 
-See [Concurrency](/manual/concurrency) for structured-concurrency semantics.
+[Concurrency](/manual/concurrency) covers structured concurrency.
 
-| API | Signature | Contract |
+| API | Signature | Behavior |
 | --- | --- | --- |
-| `Queue[T]()` | `Queue[T](capacity: int32 = ...)` | Queue constructor; bounded when capacity is supplied; Accepted ADR-0033 requires `T: Transfer`. |
-| `Queue.put` | `put(value: own T, timeout: Duration = ...) -> Result[None, SendError[T]]` | Sends a value or returns the unsent value in the error; Accepted ADR-0033 requires `T: Transfer`. |
-| `Queue.try_put` | `try_put(value: own T) -> Result[None, SendError[T]]` | Sends without waiting; Accepted ADR-0033 requires `T: Transfer`. |
-| `Queue.get` | `get(timeout: Duration = ...) -> QueueReceive[T]` | Receives an item, close, timeout, or cancellation outcome; does not itself recheck payload Transfer. |
-| `Queue.poll` | `poll(timeout: Duration = ...) -> Poll[T]` | `Poll.Ready(value)` or `Poll.Unavailable` for closed, timeout, cancellation, or immediate absence. |
-| `Queue.get_or` | `get_or(default: own T, timeout: Duration = ...) -> T` | Value or fallback. |
-| `Queue.close` | `close() -> None` | Closes the queue and wakes waiters. |
-| `Task.result` | `result(timeout: Duration = ...) -> TaskResult[T]` | Waits for task outcome; consumes the observation right when `T` is non-repeatable. |
-| `Task.poll` | `poll(timeout: Duration = ...) -> Poll[T]` | `Poll.Ready(value)` or `Poll.Unavailable` for failure, timeout, cancellation, or immediate absence; consumes the observation right when `T` is non-repeatable, including on `Unavailable`. |
-| `Task.result_or` | `result_or(default: own T, timeout: Duration = ...) -> T` | Value or fallback; consumes the observation right when `T` is non-repeatable. |
-| `TaskGroup()` | `TaskGroup()` | Task group resource constructor. |
-| `TaskGroup.start` | `start(function, own ...) -> Task[T]` | Requires every capture and result to be `Transfer`; accepts inferred or explicit `function[Types]` / `Type.associated_method[Types]` targets; starts the child on the guarded 768 KiB default stack. |
-| `TaskGroup.start_soon` | `start_soon(function, own ...) -> None` | Applies the same Transfer and target-specialization rules without returning a handle. |
-| `TaskGroup.start_with_stack` | `start_with_stack(bytes: int64, function, own ...) -> Task[T]` | Applies the same Transfer and target-specialization rules with an explicit guarded 256 KiB..64 MiB request; 256 KiB is for measured shallow tasks, not the default; Provisional under ADR-0032. |
-| `TaskGroup.start_soon_with_stack` | `start_soon_with_stack(bytes: int64, function, own ...) -> None` | Applies the same rules and explicit guarded range without retaining a handle; 256 KiB is for measured shallow tasks, not the default; Provisional under ADR-0032. |
-| `TaskGroup.cancel` | `cancel() -> None` | Signals cancellation to children. |
+| `Queue[T]()` | `Queue[T](capacity: int32 = ...)` | Creates a queue. Supplying `capacity` makes it bounded. Requires `T: Transfer`. |
+| `Queue.put` | `put(value: own T, timeout: Duration = ...) -> Result[None, SendError[T]]` | Sends a value. On failure, the error holds the unsent value. Requires `T: Transfer`. |
+| `Queue.try_put` | `try_put(value: own T) -> Result[None, SendError[T]]` | Sends without waiting. Requires `T: Transfer`. |
+| `Queue.get` | `get(timeout: Duration = ...) -> QueueReceive[T]` | Receives an item, or reports close, timeout, or cancellation. Does not check the payload for Transfer again. |
+| `Queue.poll` | `poll(timeout: Duration = ...) -> Poll[T]` | Returns `Poll.Ready(value)`, or `Poll.Unavailable` on close, timeout, cancellation, or no item right away. |
+| `Queue.get_or` | `get_or(default: own T, timeout: Duration = ...) -> T` | Returns a received value or the fallback. |
+| `Queue.close` | `close() -> None` | Closes the queue and wakes any waiters. |
+| `Task.result` | `result(timeout: Duration = ...) -> TaskResult[T]` | Waits for the task outcome. When `T` is non-repeatable, it consumes the observation right. |
+| `Task.poll` | `poll(timeout: Duration = ...) -> Poll[T]` | Returns `Poll.Ready(value)`, or `Poll.Unavailable` on failure, timeout, cancellation, or no result right away. When `T` is non-repeatable, it consumes the observation right, even on `Unavailable`. |
+| `Task.result_or` | `result_or(default: own T, timeout: Duration = ...) -> T` | Returns the value or the fallback. When `T` is non-repeatable, it consumes the observation right. |
+| `TaskGroup()` | `TaskGroup()` | Creates a task group resource. |
+| `TaskGroup.start` | `start(function, own ...) -> Task[T]` | Every capture and the result must be `Transfer`. The target may be inferred or explicit, as `function[Types]` or `Type.associated_method[Types]`. The child runs on the guarded 768 KiB default stack. |
+| `TaskGroup.start_soon` | `start_soon(function, own ...) -> None` | Same Transfer and target rules as `start`, without returning a handle. |
+| `TaskGroup.start_with_stack` | `start_with_stack(bytes: int64, function, own ...) -> Task[T]` | Same Transfer and target rules as `start`, with an explicit guarded stack request of 256 KiB..64 MiB. |
+| `TaskGroup.start_soon_with_stack` | `start_soon_with_stack(bytes: int64, function, own ...) -> None` | Same rules and stack range as `start_with_stack`, without keeping a handle. |
+| `TaskGroup.cancel` | `cancel() -> None` | Signals cancellation to the group's children. |
+
+The two stack-size methods are provisional. Their 256 KiB minimum is for tasks
+whose shallow stack use you have measured. It is not the default.
 
 ## I/O And Filesystem
 
-See [I/O Module](/manual/io) and [Filesystem Module](/manual/filesystem).
+[I/O Module](/manual/io) covers input and output on the standard streams.
+[Filesystem Module](/manual/filesystem) covers files and directories.
 
-| API | Signature | Contract |
+| API | Signature | Behavior |
 | --- | --- | --- |
 | `io.write` | `write(text: str) -> Result[None, io.Error]` | Writes text without a newline. |
 | `io.flush` | `flush() -> Result[None, io.Error]` | Flushes standard output. |
-| `io.read_line` | `read_line() -> Result[str \| None, io.Error]` | Reads strict UTF-8 without trailing LF/CRLF; `Ok(None)` only on clean EOF. |
-| `fs.exists` | `exists(path: str) -> bool` | Path existence check. |
+| `io.read_line` | `read_line() -> Result[str \| None, io.Error]` | Reads one line as strict UTF-8, without the trailing LF or CRLF. Returns `Ok(None)` only at a clean end of file. |
+| `fs.exists` | `exists(path: str) -> bool` | Checks whether the path exists. |
 | `fs.read_to_string` | `read_to_string(path: str) -> Result[str, io.Error]` | Reads UTF-8 text, capped at 256 MiB. |
 | `fs.read_bytes` | `read_bytes(path: str) -> Result[list[uint8], io.Error]` | Reads bytes, capped at 256 MiB. |
 | `fs.write_string` | `write_string(path: str, text: str) -> Result[None, io.Error]` | Creates or replaces a text file. |
@@ -289,21 +303,21 @@ See [I/O Module](/manual/io) and [Filesystem Module](/manual/filesystem).
 | `fs.append_string` | `append_string(path: str, text: str) -> Result[None, io.Error]` | Appends text. |
 | `fs.append_bytes` | `append_bytes(path: str, bytes: list[uint8]) -> Result[None, io.Error]` | Appends bytes. |
 | `fs.create_dir` | `create_dir(path: str) -> Result[None, io.Error]` | Creates one directory. |
-| `fs.read_dir` | `read_dir(path: str) -> Result[list[str], io.Error]` | Returns sorted immediate entry names, with lossy host-path decoding. |
+| `fs.read_dir` | `read_dir(path: str) -> Result[list[str], io.Error]` | Returns the sorted names of the immediate entries. Host paths are decoded lossily. |
 | `fs.remove_file` | `remove_file(path: str) -> Result[None, io.Error]` | Removes a file. |
-| `fs.open` | `open(path: str) -> Result[fs.File, io.Error]` | Opens for reading. |
-| `fs.create` | `create(path: str) -> Result[fs.File, io.Error]` | Creates or truncates for writing. |
-| `fs.append` | `append(path: str) -> Result[fs.File, io.Error]` | Opens for append, creating if needed. |
-| `fs.File.read_all` | `read_all() -> Result[str, io.Error]` | Reads remaining strict UTF-8 text, capped at 256 MiB. |
-| `fs.File.read_bytes` | `read_bytes() -> Result[list[uint8], io.Error]` | Reads remaining bytes, capped at 256 MiB. |
-| `fs.File.write_all` | `write_all(text: str) -> Result[None, io.Error]` | Writes all text. |
-| `fs.File.write_bytes` | `write_bytes(bytes: list[uint8]) -> Result[None, io.Error]` | Writes all bytes. |
+| `fs.open` | `open(path: str) -> Result[fs.File, io.Error]` | Opens a file for reading. |
+| `fs.create` | `create(path: str) -> Result[fs.File, io.Error]` | Creates or truncates a file for writing. |
+| `fs.append` | `append(path: str) -> Result[fs.File, io.Error]` | Opens a file for appending and creates it if needed. |
+| `fs.File.read_all` | `read_all() -> Result[str, io.Error]` | Reads the rest of the file as strict UTF-8 text, capped at 256 MiB. |
+| `fs.File.read_bytes` | `read_bytes() -> Result[list[uint8], io.Error]` | Reads the remaining bytes, capped at 256 MiB. |
+| `fs.File.write_all` | `write_all(text: str) -> Result[None, io.Error]` | Writes all of the text. |
+| `fs.File.write_bytes` | `write_bytes(bytes: list[uint8]) -> Result[None, io.Error]` | Writes all of the bytes. |
 | `fs.File.flush` | `flush() -> Result[None, io.Error]` | Flushes pending writes. |
 | `fs.File.close` | `close() -> None` | Closes the handle. |
 
 ## Control-Plane Modules
 
-See [Control-Plane Modules](/manual/control-plane).
+[Control-Plane Modules](/manual/control-plane) documents these modules.
 
 | API | Signature |
 | --- | --- |
@@ -336,22 +350,30 @@ See [Control-Plane Modules](/manual/control-plane).
 | `metrics.reset` | `() -> None` |
 | `control.retry` | `retry[T, E](worker: def() -> Result[T, E], max_attempts: int32 = 3, initial_backoff: Duration = 0ms) -> Result[T, E]` |
 
-Metrics are process-global `int64` counters; missing names read as zero and
-overflow is a runtime diagnostic. Dynamic JSON object dumps and bounded
-JSON/TOML string maps serialize in sorted key order. See [JSON
-Module](/manual/json) and the control-plane chapter for exact value, limit,
-host-string/path, and telemetry-record rules.
+Metrics are process-global `int64` counters. A missing name reads as zero.
+Overflow is a runtime diagnostic.
 
-`control.retry` validates at least one attempt and a non-negative,
-host-representable backoff before invoking the worker. It runs its first
-attempt immediately, retries every `Err` with doubling delays, skips zero
-sleeps, returns the exact last `Err`, and performs no sleep or multiplication
-after the final attempt. Worker traps, backoff overflow, and current-task
-cancellation propagate.
+Dynamic JSON object dumps and bounded JSON and TOML string maps serialize keys
+in sorted order. The [JSON Module](/manual/json) page and the control-plane
+chapter give the exact rules for values, limits, host strings and paths, and
+telemetry records.
+
+`control.retry` validates its arguments before it calls the worker. It needs
+at least one attempt and a backoff that is non-negative and representable on
+the host. It then:
+
+- runs the first attempt immediately
+- retries every `Err`, doubling the delay each time
+- skips sleeps of zero
+- returns the exact last `Err`
+- does no sleep or multiplication after the final attempt
+
+Worker traps, backoff overflow, and cancellation of the current task
+propagate.
 
 ## Network Constructors And HTTP Client Helpers
 
-See [Network Module](/manual/network) for behavior and examples.
+[Network Module](/manual/network) covers behavior and examples.
 
 | API | Signature |
 | --- | --- |
@@ -376,7 +398,16 @@ See [Network Module](/manual/network) for behavior and examples.
 
 ## Network Resource Methods
 
-Bounded stream read counts are `1..=67108864`; UDP receive counts are `1..=65535`. Incoming HTTP parsing accepts at most 64 headers and 16 MiB of wire data per message; WebSocket limits are 64 MiB per message and 16 MiB per frame/write buffer. See [Network Module](/manual/network) for timeout, EOF, UTF-8, cancellation, and repeated-header contracts.
+These limits apply to the methods below:
+
+- Bounded stream read counts are `1..=67108864`.
+- UDP receive counts are `1..=65535`.
+- Incoming HTTP parsing accepts at most 64 headers and 16 MiB of wire data per
+  message.
+- WebSocket limits are 64 MiB per message and 16 MiB per frame/write buffer.
+
+[Network Module](/manual/network) covers timeouts, EOF, UTF-8, cancellation,
+and repeated headers.
 
 | Type | API | Signature |
 | --- | --- | --- |
@@ -444,7 +475,8 @@ Bounded stream read counts are `1..=67108864`; UDP receive counts are `1..=65535
 
 ## Process
 
-See [Process Module](/manual/process) for defaults, groups, and supervisor behavior.
+[Process Module](/manual/process) covers defaults, process groups, and
+supervisor behavior.
 
 | API | Signature |
 | --- | --- |
@@ -484,9 +516,16 @@ See [Process Module](/manual/process) for defaults, groups, and supervisor behav
 | `process.Supervisor.is_empty` | `is_empty() -> bool` |
 | `process.Supervisor.close` | `close() -> None` |
 
-Pipe `read_bytes` returns `Ok(None)` only at EOF; timeout and cancellation are `process.Error` variants. Whole/captured reads are capped at 64 MiB. `process.Completed.stdout()` and `.stderr()` raise a runtime diagnostic on invalid UTF-8, so byte accessors are the safe boundary for untrusted output.
+Pipe `read_bytes` returns `Ok(None)` only at end of file. Timeout and
+cancellation are `process.Error` variants. Whole and captured reads are capped
+at 64 MiB.
+
+`process.Completed.stdout()` and `.stderr()` raise a runtime diagnostic on
+invalid UTF-8. Use the byte accessors to read untrusted output safely.
 
 ## Builtin Enum Variants
+
+Each builtin enum and its variants, with payload fields.
 
 | Type | Variants |
 | --- | --- |
@@ -508,3 +547,10 @@ Pipe `read_bytes` returns `Ok(None)` only at EOF; timeout and cancellation are `
 | `process.Error` | `NoCommand`, `TimedOut`, `Cancelled`, `Io(error: own io.Error)`, `Spawn(message: own str)`, `Other(message: own str)` |
 | `process.SupervisorEvent` | `Exited(name: own str, status: own process.ExitStatus, restart_count: own int32)`, `Restarted(name: own str, status: own process.ExitStatus, restart_count: own int32)`, `Failed(name: own str, error: own process.Error, restart_count: own int32)` |
 | `process.SupervisorWait` | `Event(event: own process.SupervisorEvent)`, `TimedOut`, `Cancelled` |
+
+Design records: [ADR-0019](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/decisions/0019-duration-conversion-and-timer-policy.md)
+for Duration conversion,
+[ADR-0032](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/decisions/0032-guarded-lightweight-task-stacks.md)
+for task stack sizes, and
+[ADR-0033](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/decisions/0033-structural-transfer-and-task-results.md)
+for Transfer, task results, and Queue payloads.

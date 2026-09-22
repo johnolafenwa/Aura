@@ -3597,6 +3597,23 @@ impl<'a> FunctionChecker<'a> {
                             "a view source must be an addressable local, parameter, receiver, fixed field, tuple position, or existing view",
                         )
                     })?;
+                    // A module constant is a shared value, not a local place,
+                    // so it has no loan identity.
+                    if locals.get(&source_place.root).is_some_and(|binding| {
+                        binding
+                            .borrow_origin
+                            .as_deref()
+                            .is_some_and(|origin| origin.starts_with("module constant "))
+                    }) {
+                        return Err(Diagnostic::coded_at(
+                            "AU3004",
+                            view.source.span,
+                            format!(
+                                "module constant `{}` cannot be the source of a view; bind it with `mut` or inside a function",
+                                source_place.root
+                            ),
+                        ));
+                    }
                     let parent = direct_parent
                         .or_else(|| self.returned_view_call_parent(&view.source, locals));
                     let parent_kind = parent.as_deref().and_then(|name| {

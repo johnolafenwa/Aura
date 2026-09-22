@@ -1,13 +1,13 @@
 # Install Aura On Windows With WSL
 
-Aura does not publish a native Windows executable. On an x86-64 Windows 11
-machine, install and run the Linux release inside Windows Subsystem for Linux
-2 using Ubuntu 24.04. The CLI, compiler runtime, projects, and VS Code language
-server all run inside WSL 2.
+Aura has no native Windows executable. On an x86-64 Windows 11 machine, you
+install and run the Linux release inside Windows Subsystem for Linux 2
+(WSL 2) with Ubuntu 24.04. The CLI, compiler runtime, your projects, and the
+VS Code language server all run inside WSL 2.
 
 ## 1. Install WSL 2 And Ubuntu
 
-Open PowerShell as Administrator. Check the available distribution names:
+Open PowerShell as Administrator. List the available distribution names:
 
 ```powershell
 wsl --list --online
@@ -19,11 +19,12 @@ Install Ubuntu 24.04:
 wsl --install -d Ubuntu-24.04
 ```
 
-Restart Windows if requested. Launch **Ubuntu 24.04 LTS** from the Start menu
-and create the Linux username and password requested on first launch.
+Restart Windows if asked. Launch **Ubuntu 24.04 LTS** from the Start menu.
+On first launch, create the Linux username and password it asks for.
 
-Microsoft's [WSL installation guide](https://learn.microsoft.com/windows/wsl/install)
-documents recovery steps for older Windows builds and existing WSL setups.
+For older Windows builds and existing WSL setups, Microsoft's
+[WSL installation guide](https://learn.microsoft.com/windows/wsl/install)
+documents recovery steps.
 
 ## 2. Confirm WSL 2
 
@@ -33,15 +34,15 @@ In PowerShell:
 wsl --list --verbose
 ```
 
-The Ubuntu row must show version `2`. If it shows version `1`, use the exact
-distribution name displayed by the preceding command:
+The Ubuntu row must show version `2`. If it shows version `1`, convert it.
+Use the exact distribution name that the previous command printed:
 
 ```powershell
 wsl --set-version Ubuntu-24.04 2
 ```
 
-All remaining shell commands in this guide run inside the Ubuntu terminal,
-not PowerShell.
+Run every remaining command in this guide in the Ubuntu terminal, not
+PowerShell.
 
 ## 3. Prepare Ubuntu
 
@@ -50,10 +51,12 @@ sudo apt update
 sudo apt install -y curl ca-certificates tar coreutils build-essential
 ```
 
-The first four packages install and verify Aura. `build-essential` enables
-direct native execution and `aura build`.
+The first four packages let you install and verify Aura. `build-essential`
+enables direct native execution and `aura build`.
 
 ## 4. Install Aura Inside WSL
+
+Run the installer:
 
 ```bash
 curl -fsSL https://johnolafenwa.github.io/Aura/install.sh | sh
@@ -67,7 +70,7 @@ grep -qxF 'export PATH="$HOME/.local/bin:$PATH"' "$HOME/.profile" || \
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
-Verify both the CLI and native toolchain:
+Verify both the CLI and the native toolchain:
 
 ```bash
 aura --version
@@ -76,8 +79,8 @@ cc --version
 
 ## 5. Create A Project In The WSL Filesystem
 
-Keep active Aura projects under the Linux home directory. This gives Linux
-tools normal permissions and filesystem behavior:
+Keep active Aura projects under your Linux home directory. There, Linux tools
+get normal permissions and filesystem behavior:
 
 ```bash
 mkdir -p "$HOME/projects/aura-hello"
@@ -86,50 +89,51 @@ printf '%s\n' 'print("hello from Aura in WSL")' > hello.au
 aura run hello.au
 ```
 
-Windows drives are available under paths such as `/mnt/c`, but the Linux home
-directory is the recommended location for WSL development projects.
+Windows drives are available under paths such as `/mnt/c`. The Linux home
+directory is still the recommended place for projects you develop in WSL.
 
 ## 6. Connect VS Code To WSL
 
-Install Visual Studio Code on Windows and select **Add to PATH** in its Windows
-installer. Install Microsoft's **WSL** extension in the local VS Code window.
-
-From the Ubuntu terminal, open the project:
+1. Install Visual Studio Code on Windows. In its installer, select
+   **Add to PATH**.
+2. In the local VS Code window, install Microsoft's **WSL** extension.
+3. From the Ubuntu terminal, open the project:
 
 ```bash
 cd "$HOME/projects/aura-hello"
 code .
 ```
 
-VS Code installs its server inside WSL and opens a remote window. The status
-bar must show **WSL: Ubuntu**. In that remote window, install
-**Aura Programming Language** into WSL. A locally installed copy is not enough
-because the extension must launch the `aura lsp` executable inside Ubuntu.
+4. VS Code installs its server inside WSL and opens a remote window. Check
+   that the status bar shows **WSL: Ubuntu**.
+5. In that remote window, install **Aura Programming Language** into WSL.
+
+A copy of the extension installed only locally is not enough. The extension
+must launch the `aura lsp` executable inside Ubuntu.
 
 Continue with the complete [VS Code extension guide](/install/vscode).
 
 ## Upgrade Aura
 
-Run the updater from the Ubuntu terminal:
+Run the updater from the Ubuntu terminal, not PowerShell:
 
 ```bash
 aura upgrade
 aura --version
 ```
 
-The command upgrades the Linux compiler and runtime inside WSL. Run it in the
-Ubuntu terminal, not PowerShell.
+This upgrades the Linux compiler and runtime inside WSL.
 
 ## Troubleshooting
 
 ### `wsl --install` displays help
 
-WSL may already be present. Run `wsl --list --online`, then install the exact
-Ubuntu distribution name shown by that command.
+WSL may already be installed. Run `wsl --list --online`, then install the
+exact Ubuntu distribution name that command shows.
 
 ### `code` is not found inside Ubuntu
 
-Install VS Code on Windows with its **Add to PATH** option, close the Ubuntu
+Install VS Code on Windows with its **Add to PATH** option. Close the Ubuntu
 terminal, reopen it, and run `code .` again.
 
 ### VS Code cannot find `aura`
@@ -141,11 +145,11 @@ command -v aura
 aura --version
 ```
 
-If the commands fail, restore the PATH export from step 4 and restart the WSL
-VS Code window. Do not install a Windows copy of Aura; the current compiler
-distribution is the Linux binary running inside WSL.
+If these commands fail, restore the `PATH` export from step 4 and restart the
+WSL VS Code window. Do not install a Windows copy of Aura. The current
+compiler ships only as the Linux binary running inside WSL.
 
 ### Windows on ARM
 
 The current Aura release has no Linux ARM64 archive. Windows-on-ARM WSL hosts
-are outside the supported distribution matrix for this preview.
+are not supported in this preview.

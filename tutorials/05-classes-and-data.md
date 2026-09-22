@@ -1,11 +1,12 @@
 # Classes And Data
 
-The implemented class model currently covers fields, default values,
-positional and named construction, member access, `public` fields and methods,
-instance methods, associated methods, mutating methods, explicit `copy class`
-declarations, and indirect recursive fields.
+This chapter shows how to declare a class, construct and read its values, and
+give it methods. It also covers default values, visibility, copy classes, and
+recursive fields.
 
 ## Declaring A Class
+
+A class lists its fields and their types:
 
 ```aura check-pass
 class Point:
@@ -15,14 +16,15 @@ class Point:
 
 See [examples/classes/point_distance.au](../examples/classes/point_distance.au).
 
-Generic classes are also supported:
+A class can take type parameters:
 
 ```aura check-pass
 class Box[T]:
     value: T
 ```
 
-Aura also supports explicit copy classes when every field is itself copyable:
+Declare a `copy class` to make the class a copy type. Every field must itself
+be copyable:
 
 ```aura check-pass
 copy class Point:
@@ -34,26 +36,41 @@ See [examples/classes/copy_class.au](../examples/classes/copy_class.au).
 
 ## Constructing A Value
 
-Class construction accepts named fields:
+Call the class name with a named argument for each field:
 
 ```aura fragment
 p1 = Point(x=0.0, y=0.0)
 ```
 
+Positional field arguments also work, as long as they come before any named
+fields. Here `Point(7)` leaves `y` at its default value of 9:
+
+```aura check-pass
+class Point:
+    x: int32
+    y: int32 = 9
+
+first = Point(1, 2)
+second = Point(7)
+```
+
 ## Accessing Fields
+
+Read a field with a dot:
 
 ```aura fragment
 dx = a.x - b.x
 ```
 
-Reading a non-copy field from an owned value moves that field out of the instance. You can still
-read other untouched fields, but you cannot read the moved field again until you assign a new value
-back into it. See [06-ownership-and-borrowing.md](06-ownership-and-borrowing.md) for a full
-explanation of move semantics, copy types, and common patterns for working with fields.
+Reading a non-copy field from a value you own moves that field out of the
+instance. The other fields stay readable. You cannot read the moved field again
+until you assign a new value to it. [Ownership And Borrowing](06-ownership-and-borrowing.md)
+explains move semantics, copy types, and common patterns for working with
+fields.
 
 ## Default Field Values
 
-The implemented subset supports field defaults:
+A field can declare a default value:
 
 ```aura check-pass
 class ServerConfig:
@@ -61,7 +78,8 @@ class ServerConfig:
     port: int32 = 8080
 ```
 
-You can then omit those fields during construction:
+Construction can then leave that field out. `local` uses both defaults, and
+`named` overrides only `host`:
 
 ```aura fragment
 local = ServerConfig()
@@ -72,8 +90,9 @@ See [examples/classes/default_fields.au](../examples/classes/default_fields.au).
 
 ## Recursive Fields With `indirect`
 
-Recursive class fields must be marked `indirect`. This gives the child an
-out-of-line representation and keeps the parent size finite:
+A field whose type refers back to its own class must be marked `indirect`. An
+`indirect` field stores the child out of line, so the parent keeps a finite
+size:
 
 ```aura check-pass
 class Node:
@@ -81,13 +100,16 @@ class Node:
     next: indirect Node | None
 ```
 
-An optional field is a union with `None`, and `|` binds more loosely than `indirect`, so `indirect Node | None` is an optional owned child stored indirectly; the `indirect` marker on the member marks the whole field.
+An optional field is a union with `None`. The `|` operator binds more loosely
+than `indirect`, so `indirect Node | None` is an optional owned child stored
+indirectly. The `indirect` marker on the member marks the whole field.
 
 See [examples/classes/indirect_recursive.au](../examples/classes/indirect_recursive.au).
 
 ## `public` Fields And Methods
 
-Aura enforces class visibility across module boundaries. Fields and methods are private by default and must be marked `public` to be used from another module:
+Fields and methods are private by default. Mark them `public` to use them from
+another module:
 
 ```aura check-pass
 class User:
@@ -98,17 +120,19 @@ class User:
         return self.name.clone()
 ```
 
-Within the same module, private fields and methods are still accessible. Across modules:
+Code in the same module can use private fields and methods. Aura enforces
+visibility across module boundaries, so code in another module:
 
-- constructing a class by keyword arguments only exposes `public` participating fields
-- reading a private field is rejected
-- calling a private method is rejected
+- sees only the `public` participating fields when it constructs the class by
+  keyword arguments
+- cannot read a private field
+- cannot call a private method
 
 See [examples/modules/simple_import.au](../examples/modules/simple_import.au).
 
 ## Methods
 
-Aura supports methods declared directly inside the class body.
+Declare methods inside the class body:
 
 ```aura check-pass
 class Counter:
@@ -118,24 +142,33 @@ class Counter:
         return self.value
 ```
 
+Call a method through an instance:
+
+```aura fragment
+counter = Counter(value=4)
+print(counter.read())
+```
+
 ## Receiver Forms
 
-The current compiler accepts these receiver forms. For a full explanation of how borrowing works and why these distinctions matter, see [06-ownership-and-borrowing.md](06-ownership-and-borrowing.md).
+The receiver is a method's first parameter. It decides what the method may do
+with the instance:
 
-- `self`
-  - shared receiver and the default spelling; read-only access
-- `own self`
-  - consuming receiver; takes ownership of a non-copy instance
-- `mut self`
-  - mutable receiver; exclusive access, can modify fields in place
-- no receiver
-  - associated method; called on the class, not an instance
+| Receiver | Access |
+|----------|--------|
+| `self` | Shared, read-only access. This is the default spelling. |
+| `own self` | Consuming. Takes ownership of a non-copy instance. |
+| `mut self` | Mutable. Exclusive access that can change fields in place. |
+| No receiver | Associated method. Called on the class, not an instance. |
 
-A receiver must be first and is never typed explicitly. `self: Counter` is
-rejected because it looks like an instance receiver but would otherwise be an
-ordinary parameter; use `self`, `own self`, or `mut self`.
+[Ownership And Borrowing](06-ownership-and-borrowing.md) explains how
+borrowing works and why these forms differ.
 
-Example:
+A receiver must come first and never has a type annotation. The compiler
+rejects `self: Counter`, because it looks like an instance receiver but would
+be an ordinary parameter. Write `self`, `own self`, or `mut self` instead.
+
+This class uses all four forms:
 
 ```aura check-pass
 class Counter:
@@ -154,14 +187,8 @@ class Counter:
         return Counter(value=0)
 ```
 
-Call them through an instance:
-
-```aura fragment
-counter = Counter(value=4)
-print(counter.read())
-```
-
-Method calls follow the same argument rules as ordinary functions, so methods and associated methods can also use named arguments:
+Method calls follow the same argument rules as ordinary functions. Methods and
+associated methods both accept named arguments:
 
 ```aura check-pass
 class Greeter:
@@ -179,7 +206,8 @@ print(greeter.say(name="aura"))
 
 ## Associated Methods
 
-Methods without a receiver are called through the class name:
+A method without a receiver is an associated method. Call it through the class
+name:
 
 ```aura check-pass
 class Counter:
@@ -197,7 +225,7 @@ See [examples/classes/methods.au](../examples/classes/methods.au).
 
 ## Mutating Methods
 
-Aura supports `mut self` methods and member-target assignment.
+A `mut self` method can assign to the fields of `self`:
 
 ```aura check-pass
 class Counter:
@@ -210,6 +238,8 @@ class Counter:
         self.value = 0
 ```
 
+Call it on a `mut` binding:
+
 ```aura fragment
 mut counter = Counter(value=4)
 counter.bump()
@@ -218,19 +248,7 @@ counter.reset()
 
 See [examples/classes/mutating_methods.au](../examples/classes/mutating_methods.au).
 
-Constructors support positional field arguments as long as they come before any named fields:
-
-```aura check-pass
-class Point:
-    x: int32
-    y: int32 = 9
-
-first = Point(1, 2)
-second = Point(7)
-```
-
 ## Current Limits
 
-The bootstrap compiler does not yet support:
-
-- separate `impl` blocks
+Separate `impl` blocks are not implemented. Declare every method inside the
+class body.

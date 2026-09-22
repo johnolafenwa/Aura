@@ -1,31 +1,33 @@
 # Overview
 
-Aura is a compiled, statically typed programming language with Python-inspired
-syntax, explicit ownership, native executables, and no garbage collector.
+These tutorials teach Aura as the compiler in this repository implements it
+today. They do not teach proposed features that are not built yet.
 
-If you know Python, Aura will feel familiar: indentation defines blocks,
-functions use `def`, classes use `class`, and semicolons are unnecessary. The
-compiler assigns every expression a type, checks how values and resources are
-owned, and validates the program before execution.
+Aura is a compiled, statically typed language with Python-inspired syntax. It
+has explicit ownership, builds native executables, and has no garbage
+collector.
+
+If you know Python, Aura will look familiar. Indentation defines blocks,
+functions use `def`, classes use `class`, and lines need no semicolons. Before
+a program runs, the compiler gives every expression a type and checks how
+values and resources are owned.
 
 Aura 0.3 focuses on reliable applications, agents, and ML infrastructure. The
-long-term goal is a general-purpose systems language capable of building the
-full software stack, including operating systems and device drivers.
-
-These tutorials teach the language as it exists in this repository today, not the full proposal surface.
+long-term goal is a general-purpose systems language that can build the full
+software stack, including operating systems and device drivers.
 
 ## What You Can Learn Today
 
 - top-level scripts and explicit `main`
-- bindings, mutability, `None`, and the current builtin type names
+- bindings, mutability, `None`, and the builtin type names
 - functions, owned return values, typed parameters, and shared or mutable access
 - classes, keyword construction, defaults, receivers, and methods
 - ownership, borrowing, move semantics, copy types, and cloning
 - owned `list[T]`, `dict[K, V]`, and `set[T]` collections with literals, indexing, and iteration
 - enums, exhaustive `match`, built-in `Result[T, E]`, optional `T | None` unions, `Lookup[T]`, and `SendError[T]`
-- strings, string parsing/formatting, numbers, signed computed Duration values, and the current builtin methods
+- strings, string parsing and formatting, numbers, signed computed `Duration` values, and the builtin methods
 - `if`, `elif`, `else`, `while`, `for range(...)`, `break`, and `continue`
-- statement-form `match` over enum variants plus literal `bool`, integer, and `str` cases
+- statement-form `match` over enum variants and over literal `bool`, integer, and `str` cases
 - `with`, `try expr`, queues, structured task groups, task waiting helpers, and task timeouts
 - expression-form `match`, nested enum patterns, and multi-payload variants
 - owned returns, including ordinary copies and explicit non-copy clones or transfers
@@ -37,33 +39,41 @@ These tutorials teach the language as it exists in this repository today, not th
 
 ## What The Bootstrap Compiler Currently Supports
 
-Today's working subset includes:
+The bootstrap compiler is the compiler in this repository. Its working subset
+is the list above. These details fill in the parts that list names only in
+passing:
 
-- `class`, `enum`, and `def`
-- `trait` plus `impl Trait for Type`
+- `class`, `enum`, `def`, `trait`, and `impl Trait for Type`
 - top-level executable statements
 - explicit type annotations and inferred bindings
 - mutable reassignment with `mut`
-- omitted `-> None` return types
+- functions that omit `-> None` from their return type
 - ownership and borrowing with `T` and `mut T`
-- user-defined enums plus built-in `Result`, `Lookup`, `Poll`, and `SendError`, and optional `T | None` unions
-- user-defined generic classes, enums, and functions
-- builtin `list[T]`, `dict[K, V]`, and `set[T]` collections with literals
 - class methods with shared `self`, consuming `own self`, and mutable `mut self`
-- arithmetic, comparisons, strings, booleans, and Duration literals, constructors, conversions, and checked operators
+- user-defined enums, optional `T | None` unions, and the built-in `Result`,
+  `Lookup`, `Poll`, and `SendError` types
+- builtin `list[T]`, `dict[K, V]`, and `set[T]` collections with literals
+- arithmetic, comparisons, strings, and booleans
+- `Duration` literals, constructors, conversions, and checked operators
 - `if`, `elif`, `else`, `while`, `for`, `match`, `with`, `break`, and `continue`
-- `print`, `range`, `cancelled`, `sleep`, `wait_any`, and `wait_all`
-- machine-readable compiler output for AST, analysis, and completions
+- the builtins `print`, `range`, `cancelled`, `sleep`, `wait_any`, and `wait_all`
+- machine-readable compiler output for the syntax tree, analysis, and completions
 
 ## Current Boundaries
 
-Notable limits include:
+Notable limits:
 
-- full dependency registries and version solving beyond local/git package dependencies
-- further direct-backend hardening and the remaining coverage push toward 100%
+- Packages can depend on local paths and git repositories. There is no full
+  package registry and no version solving.
+- The direct native backend is still being hardened.
+- Test coverage has not yet reached 100%.
 
 ## Recommended Companion Material
 
-Keep the `examples/` tree open while reading. The categorized examples mirror these chapters and stay runnable as the language evolves.
+Keep the `examples/` tree open while you read. Its categories mirror these
+chapters, and every example stays runnable.
 
-If you are coming from Python, the single most important chapter is [06-ownership-and-borrowing.md](06-ownership-and-borrowing.md). It explains how Aura manages memory without a garbage collector and shows you how to fix every common compiler error you will encounter.
+If you come from Python, the most important chapter is
+[06-ownership-and-borrowing.md](06-ownership-and-borrowing.md). It explains
+how Aura manages memory without a garbage collector. It also shows how to fix
+each common compiler error you will meet.

@@ -1,8 +1,8 @@
 # Install Aura On Linux
 
-The Aura 0.3 preview supports x86-64 Ubuntu 24.04 and compatible glibc-based
-Linux distributions. The release does not currently include Linux ARM64 or
-musl archives.
+The Aura 0.3 preview supports x86-64 Ubuntu 24.04 and compatible Linux
+distributions that use glibc. The release has no Linux ARM64 or musl
+archives.
 
 ## 1. Confirm The Host
 
@@ -11,7 +11,7 @@ uname -s
 uname -m
 ```
 
-The supported release path reports `Linux` and `x86_64` or `amd64`.
+On a supported host, the output is `Linux`, then `x86_64` or `amd64`.
 
 ## 2. Install Download And Verification Tools
 
@@ -22,7 +22,7 @@ sudo apt update
 sudo apt install -y curl ca-certificates tar coreutils
 ```
 
-`coreutils` supplies `sha256sum`, which the installer uses to verify the
+`coreutils` provides `sha256sum`, which the installer uses to verify the
 downloaded archive.
 
 ## 3. Install Aura
@@ -31,12 +31,13 @@ downloaded archive.
 curl -fsSL https://johnolafenwa.github.io/Aura/install.sh | sh
 ```
 
-The installer selects `x86_64-unknown-linux-gnu`, downloads the archive and
-`SHA256SUMS`, rejects a checksum mismatch, and installs under `~/.local`.
+The installer selects `x86_64-unknown-linux-gnu` and downloads the archive
+and `SHA256SUMS`. It rejects the archive if the checksum does not match, and
+otherwise installs under `~/.local`.
 
 ## 4. Add Aura To Bash
 
-Add `~/.local/bin` to the login environment once:
+Add `~/.local/bin` to your login environment. You only need to do this once:
 
 ```bash
 grep -qxF 'export PATH="$HOME/.local/bin:$PATH"' "$HOME/.profile" || \
@@ -44,8 +45,8 @@ grep -qxF 'export PATH="$HOME/.local/bin:$PATH"' "$HOME/.profile" || \
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
-New login shells will read `~/.profile`. The final command updates the current
-terminal immediately.
+New login shells read `~/.profile`. The last command updates the current
+terminal right away.
 
 ## 5. Verify The Installation
 
@@ -54,7 +55,7 @@ command -v aura
 aura --version
 ```
 
-The version should begin with `aura 0.3.3-preview`.
+The version begins with `aura 0.3.4-preview`.
 
 ## 6. Run A Program
 
@@ -65,7 +66,7 @@ def main():
     print("hello from Aura on Linux")
 ```
 
-Then run it:
+Run it:
 
 ```bash
 aura run hello.au
@@ -73,13 +74,13 @@ aura run hello.au
 
 ## 7. Enable Native Builds
 
-Install the C compiler and linker required by direct native execution:
+Direct native execution needs a C compiler and linker. Install them:
 
 ```bash
 sudo apt install -y build-essential
 ```
 
-Verify the toolchain and build the example:
+Check the toolchain, then build and run the example:
 
 ```bash
 cc --version
@@ -94,10 +95,10 @@ aura upgrade
 aura --version
 ```
 
-`aura upgrade` downloads the current installer, verifies the published release
-checksums, and replaces the compiler and bundled runtime in the same install
-prefix. Set `AURA_INSTALL_PREFIX` when upgrading an installation in a custom
-location.
+`aura upgrade` downloads the current installer and verifies the published
+release checksums. It then replaces the compiler and bundled runtime in the
+same install prefix. If Aura lives in a custom location, set
+`AURA_INSTALL_PREFIX` when you upgrade.
 
 ## Troubleshooting
 
@@ -108,11 +109,12 @@ ls -l "$HOME/.local/bin/aura"
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
-Persist the export in the startup file used by the current shell.
+To make the fix permanent, add the export to the startup file your shell
+reads.
 
 ### `sha256sum` is missing
 
-Install `coreutils`, then rerun the installer:
+Install `coreutils`, then run the installer again:
 
 ```bash
 sudo apt install -y coreutils
@@ -120,9 +122,9 @@ sudo apt install -y coreutils
 
 ### The archive will not start on the distribution
 
-The published Linux binary targets x86-64 glibc systems. Confirm the
+The published Linux binary targets x86-64 glibc systems. Check the
 architecture with `uname -m` and the C library with `ldd --version`. Alpine
-Linux and other musl systems are outside the current distribution matrix.
+Linux and other musl systems are not in the current distribution matrix.
 
 Continue with the [VS Code extension guide](/install/vscode) or
 [Getting Aura Running](/learn/install-and-run).

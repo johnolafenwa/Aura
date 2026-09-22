@@ -1,9 +1,8 @@
 # Converting Between Types
 
-Aura never converts a number behind your back. An `int32` does not quietly
-become an `int64`, and an integer does not drift into a float because it was
-convenient. Every conversion is written down, and there are three ways to
-write one.
+Aura never converts a number for you. An `int32` does not become an `int64`
+on its own, and an integer does not turn into a float. You write every
+conversion, and there are three ways to write one.
 
 ## `as` For Numbers, Checked At Runtime
 
@@ -20,8 +19,8 @@ exact = 3 as float64         # 3.0
 truncated = 3.9 as int64     # 3, toward zero
 ```
 
-`as` is exact or it fails. If the value does not fit the target, the program
-stops with a diagnostic instead of wrapping around:
+`as` is exact or it fails. If the value does not fit the target type, the
+program stops with a diagnostic. It never wraps around:
 
 ```aura
 big: int64 = 5000000000
@@ -32,8 +31,8 @@ narrow = big as int32
 error[AU4002]: integer value `5000000000` does not fit in `int32`
 ```
 
-The same rule applies to floats. An integer too large to be represented
-precisely as a `float64` is a trap, not a silent rounding:
+Floats follow the same rule. If a `float64` cannot hold an integer exactly,
+the conversion traps. It does not round:
 
 ```aura
 n: int64 = 9007199254740993
@@ -45,11 +44,11 @@ error[AU4002]: integer value `9007199254740993` cannot be represented exactly
 as `float64`
 ```
 
-That is the design: `as` means "this fits, and I am telling you it fits."
+Read `as` as a promise: "this value fits the target."
 
 ## `.to_float()` When Rounding Is The Point
 
-Sometimes you *want* the nearest representable float — computing a ratio, say.
+Sometimes you want the nearest float, for example when you compute a ratio.
 `.to_float()` rounds instead of trapping:
 
 ```aura
@@ -57,23 +56,25 @@ n: int64 = 9007199254740993
 print(n.to_float() == 9007199254740992.0)   # true, rounded to nearest
 ```
 
-This is also how you divide integers, since `/` on two integers is rejected:
+`.to_float()` is also how you divide integers, because the checker rejects
+`/` on two integers:
 
 ```aura
 ratio = 7.to_float() / 2.to_float()   # 3.5
 ```
 
-Use `//` when you want the floor instead:
+Use `//` for floor division:
 
 ```aura
 whole = 7 // 2        # 3
 ```
 
-Pick by intent: `as float64` asserts exactness, `.to_float()` accepts rounding.
+Choose by intent. `as float64` asserts that the value is exact.
+`.to_float()` accepts rounding.
 
 ## Parsing And Rendering Text
 
-Text is not a numeric type, so `as` does not apply:
+`as` does not apply to text, because `str` is not a numeric type:
 
 ```aura
 s = "12"
@@ -85,7 +86,8 @@ error[AU2002]: casts are only supported between numeric types, found `str`
 and `int64`
 ```
 
-Text can always fail to parse, so parsing returns a `Result` you must handle:
+Parsing text can always fail, so a parser returns a `Result` that you must
+handle:
 
 ```aura
 match parse_int64("123"):
@@ -95,10 +97,10 @@ match parse_int64("123"):
         print(message)
 ```
 
-`parse_int32`, `parse_int64`, and the float parsers all follow this shape.
+`parse_int32`, `parse_int64`, and the float parsers all work this way.
 
-Going the other way never fails, so it needs no `Result` — use `str(value)` or
-put the value straight into an f-string:
+Turning a number into text never fails, so it needs no `Result`. Use
+`str(value)`, or put the value in an f-string:
 
 ```aura
 n: int64 = 42
@@ -108,8 +110,8 @@ print(f"as text: {n}")
 
 ## Why No Implicit Conversion
 
-The rule that catches Python developers is that passing an `int32` to a
-function expecting `int64` is an error rather than a widening:
+Python developers most often trip on this rule: passing an `int32` to a
+function that expects `int64` is an error. Aura does not widen the value:
 
 ```aura
 def f(x: int64) -> int64:
@@ -119,14 +121,15 @@ y: int32 = 5
 print(f(y))       # error: expected `int64`, found `int32`
 ```
 
-Write `f(y as int64)`. The reason is that implicit numeric conversion is where
-overflow and precision bugs hide — a language that widens silently in one
-direction eventually narrows silently in another. Aura's default integer type
-is `int64` and its default float is `float64`, so most code never mixes widths
-in the first place.
+Write `f(y as int64)` instead.
 
-The one exception is deliberate and narrow: an index position accepts smaller
-integer types, because widening an index can never lose information.
+Implicit numeric conversion is where overflow and precision bugs hide. A
+language that widens silently in one direction ends up narrowing silently in
+another. Aura's default integer type is `int64` and its default float type is
+`float64`, so most code never mixes widths.
+
+There is one deliberate exception. An index position accepts smaller integer
+types, because widening an index never loses information.
 
 ## Quick Reference
 
@@ -141,4 +144,4 @@ integer types, because widening an index can never lose information.
 | Number to text | `str(value)` or `f"{value}"` |
 
 The [Types](/manual/types) chapter gives the full conversion table and the
-exact trap conditions.
+exact conditions that trap.

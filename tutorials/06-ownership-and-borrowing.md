@@ -1,30 +1,49 @@
 # Ownership And Borrowing
 
-If you are coming from Python, this is the most important chapter in the tutorial. Aura does not use a garbage collector. Instead, it tracks who owns each value and when that value can be freed. This system is called **ownership**, and the way you temporarily lend values without giving them away is called **borrowing**.
+If you are coming from Python, this is the most important chapter in the
+tutorial. Aura has no garbage collector. It tracks who owns each value and
+when that value can be freed. This tracking is called ownership. Lending a
+value for a while without giving it away is called borrowing.
 
-This chapter walks through the full model with practical examples, explains why the rules exist, and shows you how to fix every common compiler error you will encounter.
+The chapter builds the model one step at a time:
+
+1. Why ownership exists, and which types copy or move.
+2. How to clone, pass, and borrow values.
+3. How methods, fields, loops, and `match` use the same rules.
+4. Closures, views, and concurrency.
+5. Fixes for the common compiler errors.
 
 ## Why Ownership?
 
-In Python, every value lives on a heap and a garbage collector cleans up when nothing points to it anymore. This is simple, but it has costs: unpredictable pauses, higher memory use, and no deterministic cleanup.
+Every value has exactly one owner at any time. When the owner goes out of
+scope, Aura frees the value immediately. There is no garbage collector and no
+reference counting.
 
-Aura takes a different approach. Every value has exactly **one owner** at any point in time. When the owner goes out of scope, the value is freed immediately. No garbage collector, no reference counting, no surprises.
+Python works differently. Every value lives on a heap, and a garbage collector
+frees it once nothing refers to it. That model is simple, but it brings
+unpredictable pauses, higher memory use, and no deterministic cleanup.
 
-This gives you:
+Ownership gives you:
 
-- **Predictable performance** -- no GC pauses
-- **Deterministic cleanup** -- resources like files and connections close at a known point
-- **Memory safety** -- the compiler rejects programs that would read freed or invalid memory
+- **Predictable performance.** There are no garbage collection pauses.
+- **Deterministic cleanup.** Resources such as files and connections close at
+  a known point.
+- **Memory safety.** The compiler rejects programs that would read freed or
+  invalid memory.
 
-The trade-off is that you need to think about who owns what. The compiler enforces the rules and gives you clear error messages when something is wrong.
+The trade-off is that you need to think about who owns what. The compiler
+enforces the rules and tells you when a program breaks one.
 
 ## Copy Types vs Move Types
 
-Aura divides all types into two categories: **copy types** and **move types**. Understanding this distinction is the foundation of everything that follows.
+Every Aura type is either a copy type or a move type. The rest of this chapter
+builds on that split.
 
 ### Copy types
 
-Copy types are small, fixed-size values that are cheap to duplicate. When you assign a copy type to a new binding or pass it to a function, Aura silently makes a copy. Both the original and the new binding are fully independent.
+A copy type is a small, fixed-size value that is cheap to duplicate.
+Assigning it to a new binding or passing it to a function makes a copy. The
+original and the copy are independent.
 
 The built-in copy types are:
 
@@ -43,11 +62,12 @@ print(x)       # 10 -- still usable
 print(y)       # 10 -- independent copy
 ```
 
-There is no surprise here. You can use `x` and `y` freely because integers are copy types.
+Both `x` and `y` stay usable because `int32` is a copy type.
 
 ### Move types
 
-Move types are values that own heap-allocated data or manage a unique resource. When you assign a move type to a new binding, Aura **moves** ownership. The original binding becomes invalid.
+A move type owns heap-allocated data or manages a unique resource. Assigning
+it to a new binding moves ownership. The original binding becomes invalid.
 
 The built-in move types include:
 
@@ -57,12 +77,15 @@ The built-in move types include:
 - `TaskGroup`
 - user-defined classes (by default)
 
-`Queue[T]` is a copy handle to shared runtime state. `Task[T]` is always safe
-to transfer between tasks, but it is copyable only when its result can be
-observed repeatedly: `T` must be copyable, a `Queue[...]` handle, or a
-recursively repeatable `Task[...]` handle. A task returning `str`,
-`list[...]`, or another non-copy owned value therefore has a move-only handle.
-Copying an allowed handle never copies a queued value or task result.
+Queue and task handles follow their own rules:
+
+- `Queue[T]` is a copy handle to shared runtime state.
+- `Task[T]` is always safe to transfer between tasks. It is copyable only when
+  its result can be observed repeatedly. That means `T` must be copyable, a
+  `Queue[...]` handle, or a recursively repeatable `Task[...]` handle.
+- A task that returns `str`, `list[...]`, or another non-copy owned value
+  therefore has a move-only handle.
+- Copying an allowed handle never copies a queued value or task result.
 
 Here is where Python intuition breaks down:
 
@@ -73,7 +96,7 @@ def main():
     print(other)          # "aura" -- works fine
 ```
 
-If you try to use `name` after the move:
+This version uses `name` after the move:
 
 ```aura check-fail:AU3001
 def main():
@@ -83,14 +106,17 @@ def main():
     print(name)           # COMPILE ERROR
 ```
 
-The compiler rejects this with:
+The compiler rejects it with:
 
 ```
 
 error: use of moved value `name`
 ```
 
-**Why does this happen?** After `other = name`, the `other` binding owns the string data. If `name` were still valid, you would have two bindings pointing to the same heap memory. When both go out of scope, the memory would be freed twice -- a crash. Aura prevents this at compile time.
+**Why does this happen?** After `other = name`, the `other` binding owns the
+string data. If `name` stayed valid, two bindings would point to the same heap
+memory. When both went out of scope, the memory would be freed twice, which
+crashes the program. Aura catches this at compile time.
 
 ### The Python comparison
 
@@ -111,7 +137,7 @@ print(name)            # "aura"
 print(other)           # "aura"
 ```
 
-Collections expose `copy()`:
+Collections use `copy()`:
 
 ```aura check-pass
 def main():
@@ -122,15 +148,15 @@ def main():
     print(ys.len())        # 3 -- unaffected
 ```
 
-Explicit duplication makes the allocation and element-copying cost visible.
-Assignment continues to follow the ordinary copy-or-move rule.
+An explicit call makes the cost of allocating and copying elements visible.
+Plain assignment still follows the copy-or-move rule.
 
-Move types are not automatically cloneable. `random.Rng` exposes no clone
-route, and a class, enum, or collection containing one cannot be cloned through
-a public clone-producing operation. Generic clone helpers infer this
+Move types are not cloneable automatically. `random.Rng` has no clone
+operation. A class, enum, or collection that contains one cannot be cloned
+through a public clone-producing operation. Generic clone helpers infer this
 requirement and reject an unsafe concrete specialization with `AU3007`.
 
-List and str slices are another explicit owned-copy boundary:
+List and `str` slices also produce an explicit owned copy:
 
 ```aura check-pass
 names = ["Ada", "Grace", "Margaret"]
@@ -139,146 +165,18 @@ label = "A🎉Z"[1:2]       # fresh owned str containing 🎉
 print(names.len())         # the sources remain valid
 ```
 
-A list slice copies Copy elements and clones non-Copy elements, so its element
-type must be clone-safe. It rejects a value containing `random.Rng` with
-`AU3007` and a non-repeatable Task result right with `AU3009`. A str slice
-copies its Unicode-scalar range. Neither slice is a view: mutating the returned
-List cannot mutate the source, and the slice cannot be an assignment target.
-
-## Closures Capture By Value
-
-A contextually typed lambda owns every outer local it uses:
-
-```aura check-pass
-def main():
-    label = "compile"
-    length: def() -> int64 = lambda: label.len()
-
-    print(length())
-    print(length())
-```
-
-`label` moves into the closure when the lambda expression is evaluated. Both
-calls work because the body only reads its capture. If the body consumed a
-non-copy capture, the call would consume the closure and a second call would
-report `AU3001`.
-
-Copy captures are snapshots and leave their sources usable. When outer code
-also needs a non-copy value, clone before creating the closure:
-
-```aura check-pass
-def main():
-    label = "compile"
-    captured = label.clone()
-    length: def() -> int64 = lambda: captured.len()
-
-    print(label)
-    print(length())
-```
-
-Without a capture list, bare and `mut` enclosing parameters are not captured.
-Use an explicit exhaustive list for a live shared or mutable loan. A by-value
-closure may cross a task boundary only when every captured value is Transfer;
-a loan closure is always local and non-Transfer.
-
-Stored and arbitrary parameter `def` types remain capture-free. Keep a
-capturing closure in an immutable local, call it directly, pass it to a
-compiler-known repeatable callback, or move a qualifying closure into one task
-start; do not erase its environment metadata through a field, collection, or
-annotated return.
-
-## Local Views, Reborrowing, And Inferred Lifetimes
-
-A view names a live place without taking ownership:
-
-```aura check-pass
-class Counter:
-    value: int64
-
-def main():
-    mut counter = Counter(value=1)
-    view mut value = counter.value
-    view mut nested = value
-    nested = nested + 1
-    print(counter.value)
-```
-
-`nested` is a reborrow of `value`, and its assignment writes immediately to
-`counter.value`. The compiler ends both loans after their final possible use,
-so the later source read is legal even though the view bindings remain in
-lexical scope. Shared views may overlap shared views; a mutable view excludes
-all overlapping source access. Proven-disjoint fields and fixed tuple
-positions can be loaned independently. List elements and dictionary entries
-are also view places: `view item = items[index]` and `view entry = table[key]`
-bind the selected slot in place. Use `view mut` through a mutable source to
-update that slot. Selection is evaluated once when the view is created;
-an invalid position or absent key traps with `AU4003`. Views of proven
-distinct literal positions or keys are disjoint, while a computed selector
-overlaps every selector of the same collection. A structural mutation of the
-collection conflicts with every live element or entry view.
-
-## Returned Views
-
-A function can return access tied to one named receiver or parameter:
-
-```aura check-pass
-class User:
-    name: str
-
-def name(user: User) -> view str from user:
-    return view user.name
-
-def rename(user: mut User) -> view mut str from user:
-    return view mut user.name
-
-def main():
-    mut user = User(name="Ada")
-    view current = name(user)
-    print(current)
-
-    view mut editable = rename(user)
-    editable = "Grace"
-    print(user.name)
-```
-
-The `from` origin is part of the function contract. Mutable results require a
-mutable origin and a mutable view binding. A local, temporary, owned/defaulted
-parameter, or different root cannot escape as the result. Ordinary `-> T`
-returns remain owned.
-
-## Explicit Loan Captures
-
-Capture lists are exhaustive and make live access visible:
-
-```aura check-pass
-class Counter:
-    value: int64
-
-    def add(mut self, amount: int64):
-        self.value += amount
-
-def main():
-    mut counter = Counter(value=1)
-    mut update: def(int64) -> None = lambda [mut counter] amount: counter.add(amount)
-    update(2)
-    update(3)
-    print(counter.value)
-```
-
-`[counter]` is a shared loan, `[mut counter]` is a mutable loan, and `[own
-counter]` is the original by-value Copy/move capture. A mutable-loan closure is
-repeatable through a `mut` closure local. Its source remains exclusively
-loaned until the closure's final use, and the closure cannot enter a task,
-Queue, aggregate, or arbitrary structural `def` boundary.
-
-Run the combined maintained example at
-[examples/basics/views.au](../examples/basics/views.au).
+- A list slice copies copy elements and clones non-copy elements, so its
+  element type must be clone-safe.
+- A list slice rejects a value containing `random.Rng` with `AU3007`. It
+  rejects a non-repeatable task result right with `AU3009`.
+- A `str` slice copies its range of Unicode scalars.
+- Neither slice is a view. Mutating the returned list cannot change the
+  source, and a slice cannot be an assignment target.
 
 ## Passing Values To Functions
 
-Bare function parameters grant logical shared access for every type. An
-implementation may pass copy bits directly, but that does not change the
-source-level contract. To transfer a move value to a function, write `own`:
+A bare parameter type grants shared access, for every type. To transfer a move
+value into a function, write `own`:
 
 ```aura check-fail:AU3001
 class Document:
@@ -294,9 +192,12 @@ def main():
     print(doc.pages)       # COMPILE ERROR: use of moved value `doc`
 ```
 
-The explicit `own` parameter took ownership of `doc`. After the call, `doc` is no longer valid in the calling scope. If the declaration were simply `doc: Document`, it would borrow and the caller could keep using it.
+The `own` parameter takes ownership of `doc`, so `doc` is invalid in `main`
+after the call. With a bare `doc: Document`, the function would borrow and the
+caller could keep using `doc`.
 
-For copy types, shared access can be implemented by passing copied bits:
+For a copy type, the compiler may pass the copied bits to implement shared
+access. That does not change the contract:
 
 ```aura check-pass
 def double(x: int32) -> int32:
@@ -309,12 +210,14 @@ print(value)           # 5 -- still valid, it was copied
 
 ## Borrowing: Lending Without Giving Away
 
-Most of the time you want a function to read or modify a value without taking ownership. This is what **borrowing** does. A borrow is a temporary loan: the function can access the value, but the caller keeps ownership.
+A borrow is a temporary loan. The function can access the value, and the
+caller keeps ownership. Most functions that read or modify a value should
+borrow it.
 
-Aura has two kinds of borrows:
+Aura has two kinds of borrow:
 
-- `T` -- shared, read-only access
-- `mut T` -- exclusive, mutable access
+- `T`: shared, read-only access
+- `mut T`: exclusive, mutable access
 
 ### Shared access with a bare type
 
@@ -332,11 +235,12 @@ print(read(counter))       # 41
 print(counter.value)       # 41 -- counter still belongs to us
 ```
 
-The bare `counter: Counter` declaration is the shared contract: this function
-is looking, not taking. After the call returns, the borrow ends and the caller
-still owns the value.
+The bare `counter: Counter` declaration says the function looks but does not
+take. The borrow ends when the call returns, and the caller still owns the
+value.
 
-You can have multiple shared borrows active at the same time because none of them can modify the value:
+Several shared borrows can be active at once, because none of them can modify
+the value:
 
 ```aura fragment
 def sum_values(a: Counter, b: Counter) -> int32:
@@ -360,7 +264,8 @@ bump(counter)
 print(counter.value)       # 42 -- the change persisted
 ```
 
-The caller must declare the binding as `mut` because the function will modify it. If the binding is not mutable, the compiler rejects the call:
+The caller must declare the binding `mut`, because the function will modify
+it. The compiler rejects the call on an immutable binding:
 
 ```aura fragment
 counter = Counter(value=41)  # not mutable
@@ -374,8 +279,8 @@ error: argument for parameter `counter` in function `bump` must be a mutable pla
 
 ### The exclusivity rule
 
-You cannot have mutable access and another overlapping access to the same
-value at the same time. This prevents data races and aliasing bugs:
+Mutable access cannot overlap any other access to the same value. This rule
+prevents data races and aliasing bugs:
 
 ```aura fragment
 def bad(a: mut Counter, b: Counter):
@@ -385,13 +290,18 @@ mut c = Counter(value=1)
 bad(c, c)    # COMPILE ERROR: overlapping access
 ```
 
-**Why does this rule exist?** Imagine `bad` increments `a.value` while reading `b.value` -- but `a` and `b` are the same object. The final result would depend on the order of operations inside the function, creating a subtle bug. Aura prevents this entirely.
+**Why does this rule exist?** Here `a` and `b` are the same object. The
+function increments `a.value` while it reads `b.value`, so the result would
+depend on the order of operations inside the function. Aura rejects the call.
 
-Think of it like a library book: many people can read it at the same time (shared borrows), or one person can take it home to annotate it (mutable borrow), but you cannot do both at once.
+Think of a library book. Many people can read it at the same time, like shared
+borrows. One person can take it home to annotate it, like a mutable borrow.
+Both cannot happen at once.
 
 ## Method Receivers
 
-Methods on classes use the same borrowing system through **receivers**. The receiver determines what the method can do with the instance:
+Methods use the same borrowing rules through their receiver. The receiver
+decides what the method can do with the instance.
 
 ### `self` -- read the instance
 
@@ -404,7 +314,7 @@ class Account:
 ```
 
 Bare `self` is shared access. The method can read fields but cannot modify
-them, and the caller retains ownership.
+them, and the caller keeps ownership:
 
 ```aura fragment
 account = Account(balance=100.0)
@@ -433,7 +343,7 @@ account.deposit(50.0)
 print(account.display())    # "Balance: 150.0"
 ```
 
-If you forget `mut`:
+Without `mut`, the call fails:
 
 ```aura fragment
 account = Account(balance=100.0)
@@ -450,7 +360,7 @@ class Connection:
         return self.host
 ```
 
-An `own self` receiver takes ownership. A non-copy instance is consumed after the call:
+An `own self` receiver takes ownership. The call consumes a non-copy instance:
 
 ```aura fragment
 conn = Connection(host="example.com")
@@ -459,11 +369,12 @@ print(host)               # "example.com"
 print(conn.host)          # COMPILE ERROR: use of moved value `conn`
 ```
 
-Use `own self` when the method needs to disassemble the instance or transfer ownership of its fields.
+Use `own self` when the method takes the instance apart or transfers ownership
+of its fields.
 
 ### No receiver -- associated methods
 
-Methods without a receiver are called on the class itself, not on an instance:
+A method without a receiver is called on the class itself, not on an instance:
 
 ```aura check-pass
 class Counter:
@@ -487,11 +398,12 @@ c = Counter.zero()
 | no receiver | Factory methods and utilities that do not need an instance | `Counter.zero()` |
 
 If you are not sure, start with bare `self`. Add `own` only when the method
-must consume the instance, or `mut` when it must mutate in place.
+must consume the instance, or `mut` when it must mutate it in place.
 
 ## Field Access And Move Semantics
 
-When you own a value, reading a non-copy field **moves** that field out of the instance:
+When you own a value, reading a non-copy field moves that field out of the
+instance:
 
 ```aura check-fail:AU3001
 class User:
@@ -511,11 +423,14 @@ def main():
 error: use of moved field `name` from `user`
 ```
 
-**Why?** The `str` in `user.name` is a move type. Reading it transfers ownership to `greeting`. The `user` instance no longer has a valid `name` field. The `age` field is `int32` (a copy type), so it is unaffected.
+**Why?** `user.name` is a `str`, which is a move type. Reading it transfers
+ownership to `greeting`, so `user` no longer has a valid `name` field. The
+`age` field is an `int32`, a copy type, so it is unaffected.
 
 ### Reading fields from borrowed values
 
-When you borrow a value, you cannot move non-copy fields out of it because you do not own it:
+You cannot move a non-copy field out of a borrowed value, because you do not
+own it:
 
 ```aura fragment
 def get_name(user: User) -> str:
@@ -527,23 +442,24 @@ def get_name(user: User) -> str:
 error: cannot move non-copy field `name` out of borrowed value `user`
 ```
 
-The function only borrowed `user` -- it has no right to take the `name` away. The fix depends on what you need:
+The function only borrowed `user`, so it has no right to take `name` away.
+Pick the fix that matches what you need.
 
-**Option 1: clone the field**
+**Option 1: clone the field.** The caller's `user` keeps its name:
 
 ```aura fragment
 def get_name(user: User) -> str:
     return user.name.clone()   # explicit copy, user keeps its name
 ```
 
-**Option 2: take ownership of the whole value**
+**Option 2: take ownership of the whole value.** The function consumes `user`:
 
 ```aura fragment
 def get_name(user: own User) -> str:
     return user.name           # consumes user, moves name out
 ```
 
-**Option 3: return a copy-type field instead**
+**Option 3: return a copy-type field instead.** Nothing moves:
 
 ```aura fragment
 def get_age(user: User) -> int32:
@@ -552,7 +468,8 @@ def get_age(user: User) -> int32:
 
 ## Copy Classes
 
-By default, user-defined classes are move types. You can make a class copyable with `copy class`, but only if every field is itself a copy type:
+User-defined classes are move types by default. Write `copy class` to make a
+class copyable. Every field must be a copy type:
 
 ```aura check-pass
 copy class Point:
@@ -565,7 +482,7 @@ print(p1.x)           # 1
 print(p2.x)           # 1
 ```
 
-If any field is a move type, the compiler rejects the `copy` annotation:
+If any field is a move type, the compiler rejects the class with `AU2002`:
 
 ```aura check-fail:AU2002
 copy class Bad:
@@ -578,12 +495,14 @@ copy class Bad:
 error: field `name` on `copy class Bad` must be a copy type, found `str`
 ```
 
-**When to use `copy class`:** Use it for small, value-like types where copying is cheap and expected -- coordinates, colors, dimensions, ranges. Do not use it for types that hold resources or large data.
+**When to use `copy class`:** use it for small, value-like types where
+copying is cheap and expected, such as coordinates, colors, dimensions, and
+ranges. Do not use it for types that hold resources or large data.
 
 ## Borrowing In Loops
 
-Loops use the same readable default. Bare `list` and `set` iteration borrows the
-collection, so it remains usable:
+A bare `for` loop over a `list` or `set` borrows the collection, so the
+collection stays usable after the loop:
 
 ```aura check-pass
 mut names: list[str] = ["Ada", "Grace", "Margaret"]
@@ -602,8 +521,8 @@ def main():
     # names is moved
 ```
 
-**Note:** Even `list[int32]` is itself a move type, but its bare loop still
-borrows. Only `own` consumes it:
+A `list[int32]` is itself a move type, even though its elements are copy
+types. Its bare loop still borrows. Only `own` consumes it:
 
 ```aura check-pass
 mut xs: list[int32] = [1, 2, 3]
@@ -616,7 +535,8 @@ for x in own xs:
 
 ### Bare shared iteration
 
-Bare iteration is the shared form:
+Bare iteration is the shared form, so you can loop over the same collection
+again:
 
 ```aura check-pass
 mut names: list[str] = ["Ada", "Grace", "Margaret"]
@@ -628,11 +548,13 @@ for name in names:   # can iterate again
     print(name)
 ```
 
-For copy element types, the loop variable receives a copy of each element. For non-copy element types, the loop variable is a temporary borrow.
+For a copy element type, the loop variable receives a copy of each element.
+For a non-copy element type, the loop variable is a temporary borrow.
 
 ### Mutable borrow iteration with `mut`
 
-To modify elements during iteration, use `for ... in mut`:
+To modify elements during iteration, use `for ... in mut`. The collection
+binding must be `mut`:
 
 ```aura check-pass
 class Score:
@@ -650,8 +572,6 @@ for score in scores:
 # prints: 2, 4, 6
 ```
 
-This requires the collection binding to be `mut`.
-
 ### Which iteration form to use
 
 | Form | Effect | Use when |
@@ -660,12 +580,9 @@ This requires the collection binding to be `mut`.
 | `for x in own collection` | Consumes the collection | You are done with the collection after the loop |
 | `for x in mut collection` | Mutable borrow, can modify elements | You want to update elements in place |
 
-**Default recommendation:** Use bare `for x in collection` for reads, `own` to
-consume, and `mut` to update.
-
 ### Comprehensions use the bare form
 
-A comprehension is the eager expression counterpart of nested bare loops:
+A comprehension is the eager expression form of nested bare loops:
 
 ```aura check-pass
 names = ["Ada", "Grace"]
@@ -673,15 +590,16 @@ lengths = [name.len() for name in names]
 copies = [name.clone() for name in names]
 ```
 
-The result collection is newly owned, while a list or set clause shares and
-freezes its source. `name.len()` only reads the shared `str`. Storing the
-non-copy `str` itself requires the explicit `.clone()` shown in `copies`;
-the compiler never inserts that clone.
-
-Comprehension clauses have no `mut` or `own` modifier. Use a statement loop for
-mutable or consuming collection traversal. Queue preserves its bare-loop
-exception: each received item arrives owned and may move directly into the
-eager result. Every target disappears after the closing delimiter.
+- The result collection is newly owned.
+- A list or set clause shares its source and freezes it.
+- `name.len()` only reads the shared `str`.
+- Storing the non-copy `str` itself requires the explicit `.clone()` shown in
+  `copies`. The compiler never inserts that clone.
+- Comprehension clauses take no `mut` or `own` modifier. Use a statement loop
+  to mutate or consume a collection.
+- A Queue clause keeps the Queue bare-loop exception. Each received item
+  arrives owned and may move directly into the eager result.
+- Every loop target goes out of scope after the closing delimiter.
 
 ## Borrowing In Match
 
@@ -698,7 +616,7 @@ match result:
 print(result)          # still valid
 ```
 
-To consume the value and receive owned payloads, use `match own`:
+Use `match own` to consume the value and receive owned payloads:
 
 ```aura check-pass
 def main():
@@ -711,7 +629,7 @@ def main():
     # result is moved
 ```
 
-To match and mutate the payload, use `match mut`:
+Use `match mut` to match and mutate the payload:
 
 ```aura check-pass
 mut result: Result[str, str] = Result.Ok("hello")
@@ -723,9 +641,171 @@ match mut result:
         pass
 ```
 
+## Closures Capture By Value
+
+A lambda with a type from its context owns every outer local it uses:
+
+```aura check-pass
+def main():
+    label = "compile"
+    length: def() -> int64 = lambda: label.len()
+
+    print(length())
+    print(length())
+```
+
+- `label` moves into the closure when the lambda expression is evaluated.
+- Both calls work because the body only reads its capture.
+- If the body consumed a non-copy capture, a call would consume the closure.
+  A second call would then report `AU3001`.
+
+A copy capture is a snapshot and leaves its source usable. When outer code
+also needs a non-copy value, clone it before creating the closure:
+
+```aura check-pass
+def main():
+    label = "compile"
+    captured = label.clone()
+    length: def() -> int64 = lambda: captured.len()
+
+    print(label)
+    print(length())
+```
+
+Closures without a capture list follow these rules:
+
+- Bare and `mut` parameters of the enclosing function are not captured. For a
+  live shared or mutable loan, write an explicit, exhaustive capture list. See
+  [Explicit Loan Captures](#explicit-loan-captures).
+- A by-value closure may cross a task boundary only when every captured value
+  is `Transfer`. `Transfer` is the compiler-derived rule for values that may
+  cross between tasks. See [Borrowing And Concurrency](#borrowing-and-concurrency).
+- A loan closure is always local and never `Transfer`.
+
+A `def` type used for a stored value or an arbitrary parameter stays
+capture-free. So a capturing closure has four valid homes:
+
+- an immutable local
+- a direct call
+- a compiler-known repeatable callback
+- one task start, for a qualifying closure moved into it
+
+Do not route a capturing closure through a field, a collection, or an
+annotated return. Those erase its environment metadata.
+
+## Local Views, Reborrowing, And Inferred Lifetimes
+
+A view names a live place without taking ownership. A place is a storage
+location, such as a local, a field, a list element, or a dictionary entry:
+
+```aura check-pass
+class Counter:
+    value: int64
+
+def main():
+    mut counter = Counter(value=1)
+    view mut value = counter.value
+    view mut nested = value
+    nested = nested + 1
+    print(counter.value)
+```
+
+`nested` is a reborrow of `value`, which means a view taken through another
+view. Assigning to `nested` writes immediately to `counter.value`.
+
+The compiler infers how long each loan lives. It ends both loans after their
+final possible use. So the later read of `counter.value` is legal, even though
+both view bindings are still in lexical scope.
+
+Views follow these overlap rules:
+
+- Shared views may overlap other shared views.
+- A mutable view excludes all overlapping access to its source.
+- Fields proven disjoint and fixed tuple positions can be loaned
+  independently.
+
+List elements and dictionary entries are view places too.
+`view item = items[index]` and `view entry = table[key]` bind the selected slot
+in place.
+
+- Use `view mut` through a mutable source to update that slot.
+- The selector is evaluated once, when the view is created. An invalid
+  position or absent key traps with `AU4003`.
+- Views of proven distinct literal positions or keys are disjoint.
+- A computed selector overlaps every selector of the same collection.
+- A structural mutation of the collection conflicts with every live element or
+  entry view.
+
+## Returned Views
+
+A function can return access tied to one named receiver or parameter:
+
+```aura check-pass
+class User:
+    name: str
+
+def name(user: User) -> view str from user:
+    return view user.name
+
+def rename(user: mut User) -> view mut str from user:
+    return view mut user.name
+
+def main():
+    mut user = User(name="Ada")
+    view current = name(user)
+    print(current)
+
+    view mut editable = rename(user)
+    editable = "Grace"
+    print(user.name)
+```
+
+- The `from` origin is part of the function contract.
+- A mutable result requires a mutable origin and a mutable view binding.
+- A local, a temporary, an owned or defaulted parameter, or a different root
+  cannot escape as the result.
+- An ordinary `-> T` return stays owned.
+
+## Explicit Loan Captures
+
+A capture list is exhaustive. It names every captured value, which makes live
+access visible:
+
+```aura check-pass
+class Counter:
+    value: int64
+
+    def add(mut self, amount: int64):
+        self.value += amount
+
+def main():
+    mut counter = Counter(value=1)
+    mut update: def(int64) -> None = lambda [mut counter] amount: counter.add(amount)
+    update(2)
+    update(3)
+    print(counter.value)
+```
+
+| Capture | Meaning |
+|---------|---------|
+| `[counter]` | Shared loan |
+| `[mut counter]` | Mutable loan |
+| `[own counter]` | The original by-value copy or move capture |
+
+A mutable-loan closure:
+
+- is repeatable through a `mut` closure local, like `update` above
+- keeps its source exclusively loaned until the closure's final use
+- cannot enter a task, Queue, aggregate, or arbitrary structural `def`
+  boundary
+
+Run the combined example at
+[examples/basics/views.au](../examples/basics/views.au).
+
 ## Borrowing And Concurrency
 
-Queues transfer ownership of sent values. When you put a value into a queue, it moves:
+A queue takes ownership of each value you send. Putting a value into a queue
+moves it:
 
 ```aura check-pass
 jobs = Queue[str]()
@@ -733,16 +813,20 @@ jobs.put("hello")      # "hello" moves into the queue
 # the sent string is now owned by whichever task receives it
 ```
 
-Queue construction and sending require the payload type to satisfy Aura's
-compiler-derived `Transfer` rule. Copy values, `str`, and aggregates whose
-stored components are all `Transfer` may cross. `random.Rng`, `TaskGroup`,
-shared or mutable access, and live file, process, or network resources may
-not. Keep a live resource on the task that owns it and exchange owned
-descriptions, bytes, snapshot results, or queue/task handles instead.
+Constructing a queue and sending on it require the payload type to satisfy the
+compiler-derived `Transfer` rule:
+
+- **Can cross:** copy values, `str`, and aggregates whose stored components
+  are all `Transfer`.
+- **Cannot cross:** `random.Rng`, `TaskGroup`, shared or mutable access, and
+  live file, process, or network resources.
+
+Keep a live resource on the task that owns it. Exchange owned descriptions,
+bytes, snapshot results, or queue and task handles instead.
 
 Queue handles are cheap copy references. Passing a queue to
-`TaskGroup.start(...)` shares the same underlying queue; you do not need
-`.clone()` for the common case:
+`TaskGroup.start(...)` shares the same underlying queue, so the common case
+needs no `.clone()`:
 
 ```aura check-pass
 def send_message(jobs: Queue[str]):
@@ -764,25 +848,28 @@ with TaskGroup() as group:
     task.result()
 ```
 
-Every task argument and result must also be structurally `Transfer`. This rule
-is checked after generic specialization. A task target may borrow from its
-task-owned capture through a bare parameter, but the captured value itself
-crosses by ownership.
+Every task argument and result must also be structurally `Transfer`. The
+compiler checks this after generic specialization. A task target may borrow
+from its task-owned capture through a bare parameter, but the captured value
+itself crosses by ownership.
 
-Task result observation has a separate repeatability rule. A copy result, a
-`Queue[...]` result, or a recursively repeatable `Task[...]` result may be
-observed repeatedly. For any other transferable result,
-`result()`, `poll()`, and `result_or()` consume the task handle on
-the first attempt, even if that attempt times out, is cancelled, fails, or
-returns a fallback. `wait_any` and `wait_all` consume the complete task list
-for such results; `wait_any` deliberately abandons the unchosen observation
-rights.
+Observing a task result follows a separate repeatability rule:
+
+- A copy result, a `Queue[...]` result, or a recursively repeatable
+  `Task[...]` result may be observed repeatedly.
+- For any other transferable result, `result()`, `poll()`, and `result_or()`
+  consume the task handle on the first attempt. This holds even if that
+  attempt times out, is cancelled, fails, or returns a fallback.
+- For such results, `wait_any` and `wait_all` consume the complete task list.
+  `wait_any` deliberately abandons the observation rights of the tasks it did
+  not choose.
 
 ## Common Patterns And Fixes
 
 ### Pattern: "I need to use a value after passing it to a function"
 
-**Problem:**
+This fails because `archive` takes ownership:
+
 ```aura fragment
 def archive(doc: own Document):
     print(doc.title)
@@ -792,29 +879,33 @@ archive(doc)
 print(doc.title)       # COMPILE ERROR: use of moved value
 ```
 
-**Fix 1 -- remove `own` to use the bare shared-borrow default:**
+**Fix 1:** remove `own` so the parameter uses the bare shared-borrow default:
+
 ```aura fragment
 def archive(doc: Document):
     print(doc.title)
 ```
 
-The bare `doc: Document` declaration is the shared spelling.
+**Fix 2:** keep the owned parameter and pass a new value built from copies
+of the fields. A class does not get a `.clone()` method automatically, so
+clone the non-Copy fields yourself:
 
-**Fix 2 -- keep the owned parameter and clone before passing:**
 ```aura fragment
-archive(doc.clone())
+archive(Document(title=doc.title.clone(), pages=doc.pages))
 print(doc.title)       # doc still valid
 ```
 
 ### Pattern: "I need to read a str field without consuming the owner"
 
-**Problem:**
+This fails because a shared borrow cannot give away its field:
+
 ```aura fragment
 def get_title(doc: Document) -> str:
     return doc.title   # COMPILE ERROR: cannot move out of shared access
 ```
 
-**Fix -- clone the field:**
+**Fix:** clone the field:
+
 ```aura fragment
 def get_title(doc: Document) -> str:
     return doc.title.clone()
@@ -822,14 +913,16 @@ def get_title(doc: Document) -> str:
 
 ### Pattern: "I need to consume collection elements"
 
-**Problem:**
+A bare loop only borrows, so the collection stays available:
+
 ```aura fragment
 for item in items:
     inspect(item)
 print(items.len())     # still available
 ```
 
-**Use `own` when the consumer needs owned items:**
+**Fix:** use `own` when the consumer needs owned items:
+
 ```aura fragment
 for item in own items:
     process(item)
@@ -838,13 +931,15 @@ for item in own items:
 
 ### Pattern: "I need to modify elements in a collection"
 
-**Problem:**
+A bare loop gives shared access, so a mutating method fails:
+
 ```aura fragment
 for score in scores:
     score.double()     # COMPILE ERROR: not mutable
 ```
 
-**Fix -- mutable borrow iterate:**
+**Fix:** iterate with a mutable borrow:
+
 ```aura fragment
 for score in mut scores:
     score.double()
@@ -852,13 +947,15 @@ for score in mut scores:
 
 ### Pattern: "The compiler says my binding must be mutable"
 
-**Problem:**
+A mutating method needs a `mut` binding:
+
 ```aura fragment
 counter = Counter(value=0)
 counter.bump()         # COMPILE ERROR: must be a mutable place
 ```
 
-**Fix -- declare with `mut`:**
+**Fix:** declare the binding with `mut`:
+
 ```aura fragment
 mut counter = Counter(value=0)
 counter.bump()
@@ -866,7 +963,7 @@ counter.bump()
 
 ## Mental Model For Python Developers
 
-Here is how to translate your Python intuition:
+This table maps Python habits to Aura:
 
 | Python concept | Aura equivalent |
 |----------------|-------------------|
@@ -878,27 +975,34 @@ Here is how to translate your Python intuition:
 | `for x in list: ...` (list survives) | `for x in list: ...` (shared; list survives) |
 | No direct equivalent | `for x in own list: ...` (list consumed) |
 
-The key shift is: in Python, assignment creates aliases. In Aura, assignment transfers ownership. Once you internalize this, the rest of the system follows naturally.
+The key shift: in Python, assignment creates an alias. In Aura, assignment
+transfers ownership. The rest of the system follows from that.
 
 ## Summary
 
-1. Every value has one owner. When the owner goes out of scope, the value is freed.
-2. Copy types (numbers, `bool`, `Duration`) are duplicated on assignment. Move types (`str`, `list`, `random.Rng`, classes) transfer ownership.
-3. Use collection `.copy()` or the `.clone()` method exposed by another
-   clone-safe move type when you need an independent owned value;
-   `random.Rng` and values containing it support neither operation.
-4. Bare parameters grant logical shared access for every type. Use `mut T` to
-   lend mutable access and `own T` to transfer ownership.
-5. `mut` access is exclusive -- no other overlapping access can exist at the
+1. Every value has one owner. When the owner goes out of scope, the value is
+   freed.
+2. Copy types, such as numbers, `bool`, and `Duration`, are duplicated on
+   assignment. Move types, such as `str`, `list`, `random.Rng`, and classes,
+   transfer ownership.
+3. For an independent owned value, use collection `.copy()` or the `.clone()`
+   method of another clone-safe move type. `random.Rng` and values containing
+   it support neither.
+4. Bare parameters grant shared access for every type. Use `mut T` to lend
+   mutable access and `own T` to transfer ownership.
+5. `mut` access is exclusive. No other overlapping access can exist at the
    same time.
 6. Method receivers follow the same rules: `self` reads, `mut self` modifies,
    and `own self` consumes.
-7. Bare collection iteration is shared. Use `for x in own collection` to consume and `for x in mut collection` to modify elements.
+7. Bare collection iteration is shared. Use `for x in own collection` to
+   consume and `for x in mut collection` to modify elements.
 8. Use `match value` to pattern-match without consuming.
-9. Queues transfer ownership of sent values and admit only structurally
+9. Queues transfer ownership of sent values and accept only structurally
    `Transfer` payloads. Queue handles are copy values.
 10. Task captures and results must be structurally `Transfer`. A `Task[T]`
-    handle is copyable only for a repeatable `T`; otherwise the first result
+    handle is copyable only for a repeatable `T`. Otherwise the first result
     attempt consumes its unique observation right.
 
-The compiler enforces all of these rules. When you see an error about moved values or borrowing, come back to this chapter -- the fix is almost always one of the patterns listed above.
+When the compiler reports a moved value or a borrowing error, come back to
+this chapter. The fix is almost always one of the
+[common patterns](#common-patterns-and-fixes).

@@ -2,7 +2,7 @@
   "name": "vscode-aura-lang",
   "displayName": "Aura Programming Language",
   "description": "Language support for Aura, a compiled, statically typed programming language with Python-familiar syntax: highlighting, snippets, and compiler-backed LSP.",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "publisher": "JohnOlafenwa",
   "preview": true,
   "icon": "images/aura.png",

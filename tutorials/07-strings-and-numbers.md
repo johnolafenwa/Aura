@@ -1,10 +1,12 @@
 # Strings And Numbers
 
-Aura supports enough numeric and string behavior for real programs. This chapter covers arithmetic, string operations, parsing, formatting, and the numeric type system.
+This chapter covers arithmetic, the numeric types and conversions between
+them, numeric arrays, strings, parsing, formatting, booleans, and `Duration`
+values.
 
 ## Arithmetic
 
-The standard arithmetic operators work on matching numeric types:
+The arithmetic operators work on two values of the same numeric type:
 
 ```aura check-pass
 a: int32 = 6
@@ -18,10 +20,14 @@ print(-b // a)  # -2
 print(-b % a)   # 2
 ```
 
-Integer `/` is intentionally rejected: it is too easy to misread as either
+Aura does not widen numbers implicitly. It rejects a mixed expression such as
+`int32 + int64`. Use an explicit cast instead, as shown in
+[Explicit Numeric Casts](#explicit-numeric-casts).
+
+Integer `/` is rejected on purpose, because it is easy to misread as either
 truncating integer division or floating true division. Use `//` for a floor
-quotient. Both `//` and `%` follow the divisor-sign rule, including when either
-operand is negative:
+quotient. Both `//` and `%` follow the divisor-sign rule, including when
+either operand is negative:
 
 ```aura check-pass
 print(7 // -3)  # -3
@@ -30,16 +36,16 @@ print(-7 // 3)  # -3
 print(-7 % 3)   # 2
 ```
 
-The identity `a == (a // b) * b + (a % b)` holds for nonzero integer `b`.
-Integer `//` and `%` by zero fail at runtime. Floating-point `/` remains true
-division:
+For nonzero integer `b`, the identity `a == (a // b) * b + (a % b)` holds.
+Integer `//` and `%` by zero fail at runtime.
+
+Floating-point `/` is true division:
 
 ```aura check-pass
 print(7.0 / 2.0) # 3.5
 ```
 
-When the inputs are integers and true division is intended, convert both with
-`.to_float()`:
+For true division of two integers, convert both with `.to_float()`:
 
 ```aura check-pass
 numerator: int64 = 7
@@ -48,7 +54,8 @@ print(numerator.to_float() / denominator.to_float()) # 3.5
 ```
 
 Every integer type has `.to_float() -> float64`. It rounds to the nearest
-representable IEEE-754 value using ties-to-even, so large integers may change:
+representable IEEE-754 value using ties-to-even, so a large integer may
+change:
 
 ```aura check-pass
 large: int64 = 9007199254740993
@@ -56,7 +63,7 @@ print(large.to_float()) # 9007199254740992.0
 ```
 
 Floating values also support `//` and `%`. They use the CPython-compatible
-floor/divmod correction, so the remainder follows the divisor's sign even
+floor and divmod correction, so the remainder follows the divisor's sign even
 where a naive host remainder would not. Floating `/`, `//`, and `%` by zero
 fail at runtime.
 
@@ -65,10 +72,10 @@ print(-10.5 // 3.0) # -4.0
 print(-10.5 % 3.0)  # 1.5
 ```
 
-The matching compound assignments are `+=`, `-=`, `*=`, `**=`, `/=`, `%=`,
-and `//=`. Integer `/=` is rejected for the same reason as integer `/`;
-floating `/=` remains true division. `//` can also use the `FloorDiv`
-operator trait when no builtin numeric or Duration rule applies.
+The compound assignments are `+=`, `-=`, `*=`, `**=`, `/=`, `%=`, and `//=`.
+Integer `/=` is rejected for the same reason as integer `/`. Floating `/=` is
+true division. `//` can also use the `FloorDiv` operator trait when no builtin
+numeric or Duration rule applies.
 
 Unary minus works on integers and floats:
 
@@ -79,12 +86,10 @@ temperature: float64 = -3.5
 
 See [examples/numbers/unary_minus.au](../examples/numbers/unary_minus.au).
 
-Aura does not do implicit numeric widening. Mixed expressions like `int32 + int64` are rejected -- use explicit casts instead (see below).
-
 ## Integer Literal Bases
 
-Integer literals can use decimal, hexadecimal, binary, or octal notation.
-Underscores can group digits without changing the value:
+Integer literals can be decimal, hexadecimal, binary, or octal. Underscores
+group digits without changing the value:
 
 ```aura check-pass
 requests = 1_000_000
@@ -93,16 +98,19 @@ permissions: uint16 = 0o755
 flags: uint8 = 0b1010_0110
 ```
 
-The prefixes are case-insensitive. An underscore must sit between two digits
-that are valid in the selected base. The sign remains a unary operator, so
-`-0x7F` means unary minus applied to `0x7F`. Contextual typing and integer
-range checks are identical for every literal spelling.
+- The prefixes are case-insensitive.
+- An underscore must sit between two digits that are valid in the selected
+  base.
+- The sign is a unary operator, so `-0x7F` means unary minus applied to
+  `0x7F`.
+- Contextual typing and integer range checks are the same for every literal
+  spelling.
 
 ## Bitwise Operators And Shifts
 
 Every integer type supports `&`, `|`, `^`, `~`, `<<`, and `>>`. Both operands
-of a binary operation have the same exact integer type. This includes a shift
-count:
+of a binary operation have the same exact integer type, and that includes a
+shift count:
 
 ```aura check-pass
 value: uint32 = 0b1010_0000
@@ -117,14 +125,17 @@ print(value >> four)      # 10
 print(value << four)      # 2560
 ```
 
-A shift count must be in `0..width`. Signed right shift extends the sign bit;
-unsigned right shift fills with zero. Ordinary left shift is checked and
-reports `AU4002` when the mathematical result does not fit. The compound forms
-are `&=`, `|=`, `^=`, `<<=`, and `>>=`.
+- A shift count must be in `0..width`.
+- Signed right shift extends the sign bit. Unsigned right shift fills with
+  zero.
+- Ordinary left shift is checked. It reports `AU4002` when the mathematical
+  result does not fit.
+- The compound forms are `&=`, `|=`, `^=`, `<<=`, and `>>=`.
 
 ## Power, Rounding, And Divmod
 
-`**` is right-associative and more tightly bound than unary minus on its left:
+`**` is right-associative. It binds more tightly than a unary minus on its
+left:
 
 ```aura check-pass
 print(2 ** 3 ** 2) # 512
@@ -133,20 +144,20 @@ print((-2) ** 2)   # 4
 print(2.0 ** -2.0) # 0.25
 ```
 
-Integer power preserves the exact integer type, rejects negative exponents,
-and checks overflow. Floating power preserves the exact floating type and
-reports defined domain and overflow failures.
+Integer power keeps the exact integer type, rejects negative exponents, and
+checks overflow. Floating power keeps the exact floating type and reports
+defined domain and overflow failures.
 
-`round` uses nearest-integer ties-to-even for floating inputs and returns
-`int64`. An integer input is returned unchanged with its exact type:
+`round` rounds a floating input to the nearest integer, with ties to even, and
+returns `int64`. It returns an integer input unchanged, with its exact type:
 
 ```aura check-pass
 print(round(2.5)) # 2
 print(round(3.5)) # 4
 ```
 
-`divmod(left, right)` evaluates both values once and returns the floor quotient
-and divisor-signed remainder together:
+`divmod(left, right)` evaluates both values once. It returns the floor
+quotient and the divisor-signed remainder together:
 
 ```aura check-pass
 quotient, remainder = divmod(-17, 5)
@@ -154,14 +165,14 @@ print(quotient)  # -4
 print(remainder) # 3
 ```
 
-The two arguments have one exact integer or floating type. A zero divisor
+Both arguments must have one exact integer or floating type. A zero divisor
 reports `AU4004`.
 
 ## Explicit Integer Arithmetic Modes
 
-Ordinary integer `+`, `-`, and `*` are checked and report `AU4002` if the
+Ordinary integer `+`, `-`, and `*` are checked. They report `AU4002` if the
 mathematical result does not fit the integer type. Every integer type also
-provides explicit wrapping and saturating alternatives:
+provides explicit wrapping and saturating methods:
 
 ```aura check-pass
 top: int32 = 2147483647
@@ -172,8 +183,8 @@ print(top.wrapping_sub(-1))   # -2147483648
 print(top.saturating_mul(2))  # 2147483647
 ```
 
-Shift operations have the same explicit arithmetic modes. The count has the
-receiver's exact type and must remain below its bit width:
+Shifts have the same explicit modes. The count has the receiver's exact type
+and must stay below its bit width:
 
 ```aura check-pass
 high: uint8 = 0b1000_0000
@@ -185,15 +196,15 @@ print(high.wrapping_shr(one))   # 64
 print(high.saturating_shr(one)) # 64
 ```
 
-The two right-shift methods match ordinary `>>` after count validation.
+The two right-shift methods match ordinary `>>` once the count is valid.
 
-The same six method names are available on integer `Array[T]`. Their right
-operand is either another same-shape `Array[T]` or one scalar of exactly `T`.
+The same six method names work on integer `Array[T]`. The right operand is
+either another `Array[T]` of the same shape or one scalar of exactly `T`.
 
 ## Numeric Arrays
 
-`Array[T]` provides fixed-shape, contiguous, row-major numeric storage for
-exactly `int32`, `int64`, `float32`, and `float64`:
+`Array[T]` is fixed-shape, contiguous, row-major numeric storage. `T` must be
+exactly `int32`, `int64`, `float32`, or `float64`:
 
 ```aura check-pass
 def square(value: float64) -> float64:
@@ -208,21 +219,31 @@ print(first_row.sum()) # 5.0
 print(squares.mean())  # 7.5
 ```
 
-Array/Array arithmetic requires the same dtype and exact shape. Scalar
-arithmetic requires exactly `T`; scalar operands work on either side of
-`+`, `-`, and `*`. `/` is available only for floating Arrays. There is no
-implicit dtype promotion or array-shape broadcasting.
+The element type is called the dtype. Arithmetic follows these rules:
 
-`sum`, `min`, and `max` return `T`; `mean` always returns `float64`.
-Floating `sum`, `min`, and `max` proceed left-to-right in row-major order
-with dtype rounding, floating `mean` accumulates as `float64`, and floating
-reductions propagate NaN. See
-[examples/numbers/numeric_arrays.au](../examples/numbers/numeric_arrays.au)
+- Array-with-Array arithmetic requires the same dtype and the exact same
+  shape.
+- Scalar arithmetic requires a scalar of exactly `T`. The scalar can be on
+  either side of `+`, `-`, and `*`.
+- `/` is available only for floating arrays.
+- There is no implicit dtype promotion and no array-shape broadcasting.
+
+`sum`, `min`, and `max` return `T`. `mean` always returns `float64`. For
+floating arrays:
+
+- `sum`, `min`, and `max` proceed left to right in row-major order, with dtype
+  rounding.
+- `mean` accumulates as `float64`.
+- Reductions propagate NaN.
+
+See [examples/numbers/numeric_arrays.au](../examples/numbers/numeric_arrays.au)
 and [Numeric Arrays](../docs/manual/numeric-arrays.md).
 
 ## Floating-Point Math
 
-Integer literals default to `int64`, whose shorter alias is `int`. Floating-point literals default to `float64`. Both adopt a compatible expected numeric type when the surrounding context requires it:
+Integer literals default to `int64`, whose shorter alias is `int`.
+Floating-point literals default to `float64`. Both adopt a compatible expected
+numeric type when the surrounding context requires one:
 
 ```aura check-pass
 count: int32 = 12
@@ -230,7 +251,12 @@ ratio: float32 = 3.25
 whole: float64 = 2
 ```
 
-An integer literal adopts a `float32` or `float64` context only when its value is exactly representable in that type. This also makes mixed-literal arithmetic read naturally: `7.5 // 2` is floating floor division and `-7.5 % 2` is floating remainder. A bound integer variable is never widened this way. For an inexact value, use an explicit floating spelling when literal rounding is intentional, or call `.to_float()` when converting an integer value intentionally.
+An integer literal adopts a `float32` or `float64` context only when its value
+is exactly representable in that type. So mixed-literal arithmetic reads
+naturally: `7.5 // 2` is floating floor division, and `-7.5 % 2` is floating
+remainder. A bound integer variable is never widened this way. For an inexact
+value, write a floating literal when the rounding is intended. To convert an
+integer value on purpose, call `.to_float()`.
 
 Aura provides builtin numeric helpers:
 
@@ -248,7 +274,15 @@ value: float64 = 81.0
 print(value.sqrt())   # 9.0
 ```
 
-Printed `float32` and `float64` values use the shortest decimal spelling that round-trips to the same source type. Whole-number floats keep a trailing `.0`, signed zero stays `-0.0`, and large or tiny values use concise scientific notation. For example, `9007199254740992.0`, `1e300`, and `1e-300` print without being routed through lower `float32` precision.
+A printed `float32` or `float64` uses the shortest decimal spelling that
+round-trips to the same source type:
+
+- A whole-number float keeps a trailing `.0`.
+- Signed zero stays `-0.0`.
+- Large or tiny values use concise scientific notation.
+
+For example, `9007199254740992.0`, `1e300`, and `1e-300` print without being
+routed through lower `float32` precision.
 
 See [examples/numbers/numeric_builtins.au](../examples/numbers/numeric_builtins.au),
 [examples/numbers/float_sqrt.au](../examples/numbers/float_sqrt.au), and
@@ -275,19 +309,20 @@ narrowed = 1.25 as float32
 widened = 3 as float64
 ```
 
-Integer casts are range-checked and never wrap. A provably invalid literal
-such as `300 as int8` is rejected while checking. A cast from a value computed
-at runtime is checked when it executes and traps cleanly if the value does not
-fit.
+Integer casts are range-checked and never wrap:
 
-Integer-to-float casts follow the same split: literals can be rejected while
-checking, and dynamic values are exactness-checked at runtime. Aura rejects a
-cast that would lose integer precision.
+- The checker rejects a provably invalid literal, such as `300 as int8`.
+- A cast of a value computed at runtime is checked when it executes. It traps
+  cleanly if the value does not fit.
 
-That strict cast is intentionally different from `.to_float()`. For the
-`9007199254740993` value above, `large.to_float()` returns the rounded
-`9007199254740992.0`, while `large as float64` fails because the conversion is
-not exact.
+Integer-to-float casts follow the same split. The checker can reject a
+literal, and a runtime value is checked for exactness when the cast runs. Aura
+rejects a cast that would lose integer precision.
+
+This strict cast differs from `.to_float()` on purpose. Take the
+`9007199254740993` value from [Arithmetic](#arithmetic).
+`large.to_float()` returns the rounded `9007199254740992.0`, but
+`large as float64` fails because the conversion is not exact.
 
 See [examples/numbers/numeric_casts.au](../examples/numbers/numeric_casts.au).
 The combined arithmetic example is
@@ -304,7 +339,12 @@ The combined arithmetic example is
 | `int128` | `uint128` | |
 | `intsize` | `uintsize` | |
 
-Use `int` (the `int64` alias) and `float64` by default. Other explicit widths are useful when you need control over memory layout, value ranges, or a fixed API contract. APIs declared with `int32` remain `int32`; literal defaulting does not widen them. Full-range `uint128` arithmetic is supported:
+Use `int`, the `int64` alias, and `float64` by default. Choose another width
+when you need control over memory layout, value ranges, or a fixed API
+contract. An API declared with `int32` stays `int32`, because literal
+defaulting does not widen it.
+
+`uint128` supports full-range arithmetic:
 
 ```aura check-pass
 value: uint128 = 340282366920938463463374607431768211455
@@ -314,9 +354,10 @@ print(value)
 See [examples/numbers/uint128_values.au](../examples/numbers/uint128_values.au).
 
 Annotated integer widths are enforced at runtime. If a value exceeds its
-annotated type's range, Aura reports an error and preserves the declared type.
+annotated type's range, Aura reports an error and keeps the declared type.
 
-The bootstrap compiler also supports `float32` in typed contexts like class fields and function parameters:
+`float32` also works in typed contexts such as class fields and function
+parameters:
 
 ```aura check-pass
 class Measurement:
@@ -330,8 +371,8 @@ See [examples/numbers/float32_values.au](../examples/numbers/float32_values.au).
 
 ## str Basics
 
-Ordinary strings use matching single or double quotes. Both forms produce the
-same `str`, support the same escapes, and concatenate with `+`:
+An ordinary string uses matching single or double quotes. Both forms produce
+the same `str` and support the same escapes. Join strings with `+`:
 
 ```aura check-pass
 greeting = 'hello' + ", aura"
@@ -340,11 +381,11 @@ quotation = 'the compiler said "ready"'
 ```
 
 The supported escapes are `\n`, `\t`, `\"`, `\'`, `\\`, `\0`, `\xHH`, and
-`\u{H...}`. A one-character literal remains a `str`. Aura has no character
-type.
+`\u{H...}`. A one-character literal is still a `str`, because Aura has no
+character type.
 
 Use three matching quotes for exact multiline text. The compiler keeps the
-first newline, last newline, indentation, spaces, and physical tabs:
+first newline, the last newline, indentation, spaces, and physical tabs:
 
 ```aura check-pass
 prompt = """Summarize the request.
@@ -352,7 +393,8 @@ Return JSON with a label and reason.
 """
 ```
 
-Use lowercase `r` for a single-line value where backslashes are data:
+Use a lowercase `r` prefix for a single-line value where backslashes are
+data:
 
 ```aura check-pass
 model_dir = r"C:\models\agent"
@@ -360,12 +402,12 @@ number_pattern = r'\d+\.\d+'
 ```
 
 A raw string cannot end in an odd run of backslashes. Raw triple strings and
-byte strings are unavailable.
+byte strings are not available.
 
 ## F-Strings
 
-Interpolated strings use the double-quoted `f"..."` form and produce an owned
-`str`; `f'...'` is not supported:
+An f-string uses the double-quoted `f"..."` form and produces an owned `str`.
+The `f'...'` form is not supported:
 
 ```aura check-pass
 name: str = "Aura"
@@ -376,26 +418,37 @@ print(f"success rate: {0.875:+.1%}")
 print(f"delta: {-1.25:09.3f}")
 ```
 
-Interpolations accept any expression, including indexed lookups:
+An interpolation accepts any expression, including an indexed lookup:
 
 ```aura fragment
 print(f"value: {counts['key']}")
 ```
 
-A static format specification follows a top-level colon. It supports a
-one-scalar fill, `<`, `^`, and `>` alignment, numeric signs, minimum width,
-comma grouping, precision, and `d`, `f`, `e`, `x`, `X`, `b`, `o`, `%`, and
-`s` type codes. Width counts Unicode scalars. String precision truncates by
-Unicode scalar count. Numeric precision rounds ties to even. Specifications
-are checked against the interpolation's static type before execution. A
-numeric width beginning with `0` pads after the sign. Decimal grouping always
-uses an explicit `d`, `f`, or `%` code.
+A static format specification follows a top-level colon. It supports:
+
+- a fill of one scalar
+- `<`, `^`, and `>` alignment
+- numeric signs
+- a minimum width
+- comma grouping
+- precision
+- the type codes `d`, `f`, `e`, `x`, `X`, `b`, `o`, `%`, and `s`
+
+The specification follows these rules:
+
+- Width counts Unicode scalars.
+- String precision truncates by Unicode scalar count.
+- Numeric precision rounds ties to even.
+- A numeric width that begins with `0` pads after the sign.
+- Decimal grouping always uses an explicit `d`, `f`, or `%` code.
+- The checker validates each specification against the interpolation's
+  static type before the program runs.
 
 See [examples/strings/f_strings.au](../examples/strings/f_strings.au).
 
 ## Borrowed str Parameters
 
-When a function takes a string it only reads, use `str`:
+When a function only reads a string, declare the parameter as `str`:
 
 ```aura check-pass
 def greet(name: str) -> str:
@@ -406,7 +459,7 @@ See [examples/strings/borrow_str.au](../examples/strings/borrow_str.au).
 
 ## str Methods
 
-Aura provides a rich set of string methods:
+These are the common string methods:
 
 ```aura check-pass
 text = "  aura repo  "
@@ -421,8 +474,8 @@ print(trimmed.to_lower())           # "aura repo"
 print(trimmed.to_upper())           # "AURA REPO"
 ```
 
-`len()` counts Unicode scalar values, while `byte_len()` reports the number of
-bytes in the UTF-8 encoding. Both members return `int64`:
+`len()` counts Unicode scalar values. `byte_len()` reports the number of bytes
+in the UTF-8 encoding. Both return `int64`:
 
 ```aura check-pass
 text = 'A🎉'
@@ -430,8 +483,8 @@ print(text.len())       # 2; O(n)
 print(text.byte_len())  # 5; O(1)
 ```
 
-Integer indexing on `str` remains unavailable, but one-colon slicing
-returns a fresh owned str:
+A `str` has no integer indexing. A one-colon slice returns a fresh owned
+`str`:
 
 ```aura check-pass
 text = "A🎉Z"
@@ -441,21 +494,26 @@ print(text[-2:])   # 🎉Z
 print(text[:])     # A🎉Z
 ```
 
-Endpoints count Unicode scalar values, matching `len()`. They do not count
-UTF-8 bytes or grapheme clusters. Locating scalar boundaries scans the text, so
-String slicing is O(n). Written endpoints use `int64`; negatives
-normalize once. Both effective endpoints must lie in `0..=len`, and start must
-not exceed end. Aura does not clamp invalid bounds like Python: invalid or
-reversed ranges trap with `AU4003`.
+- Endpoints count Unicode scalar values, matching `len()`. They do not count
+  UTF-8 bytes or grapheme clusters.
+- Slicing is O(n), because locating scalar boundaries scans the text.
+- Written endpoints use `int64`. A negative endpoint is normalized once.
+- Both effective endpoints must lie in `0..=len`, and the start must not
+  exceed the end.
+- Aura does not clamp invalid bounds as Python does. An invalid or reversed
+  range traps with `AU4003`.
+- The result is an owned copy, not a view.
 
-The result is an owned copy, not a view. Slice steps and slice assignment are
-unavailable. Character iteration, `ord()`, and `chr()` are also not
-implemented. Strict UTF-8 conversion is available through `text.to_bytes()`
-and `str.from_bytes(payload)`; hexadecimal, base64, typed conversion errors,
-and SHA-256 are taught in [22-bytes.md](22-bytes.md). An explicit `encoding`
-argument remains reserved but unimplemented.
+Slice steps and slice assignment are not available. Character iteration,
+`ord()`, and `chr()` are not implemented.
 
-`strip_prefix(...)` and `strip_suffix(...)` return `str | None`, so they compose with `is not None` or a `match` type pattern:
+`text.to_bytes()` and `str.from_bytes(payload)` convert with strict UTF-8.
+[22-bytes.md](22-bytes.md) covers hexadecimal, base64, typed conversion
+errors, and SHA-256. An explicit `encoding` argument is reserved but not
+implemented.
+
+`strip_prefix(...)` and `strip_suffix(...)` return `str | None`, so they work
+with `is not None` or a `match` type pattern:
 
 ```aura fragment
 match trimmed.strip_prefix("aura "):
@@ -472,7 +530,9 @@ parts = ["aura", "lang", "tests"]
 print("-".join(parts))    # "aura-lang-tests"
 ```
 
-`clone()` creates an independent copy of a string (see [06-ownership-and-borrowing.md](06-ownership-and-borrowing.md) for why this matters):
+`clone()` creates an independent copy of a string.
+[06-ownership-and-borrowing.md](06-ownership-and-borrowing.md) explains why
+this matters.
 
 ```aura check-pass
 text: str = "aura"
@@ -485,7 +545,7 @@ See [examples/strings/string_methods.au](../examples/strings/string_methods.au) 
 
 ## Parsing And Formatting
 
-Aura provides parsing builtins that return `Result`:
+These parsing builtins return a `Result`:
 
 - `parse_int32(text: str) -> Result[int32, str]`
 - `parse_int64(text: str) -> Result[int64, str]`
@@ -501,7 +561,8 @@ match parse_int32("42"):
         print(message)
 ```
 
-Combined with `.to_string()` and `str.join(...)`, these cover the maintained formatting surface.
+Together with `.to_string()` and `str.join(...)`, these builtins cover the
+supported conversions between text and numbers.
 
 See [examples/strings/string_parsing_and_formatting.au](../examples/strings/string_parsing_and_formatting.au).
 
@@ -518,7 +579,7 @@ See [examples/strings/greeting.au](../examples/strings/greeting.au).
 
 ## Booleans And Comparisons
 
-The comparison operators produce `bool`:
+These operators produce `bool`:
 
 - `==`, `!=`, `<`, `<=`, `>`, `>=`
 - `and`, `or`, `not`
@@ -530,7 +591,8 @@ if score >= 90 and not failed:
 
 ## Duration Values
 
-Duration literals are used with the concurrency surface (see [13-concurrency.md](13-concurrency.md)):
+Duration literals work with the concurrency features in
+[13-concurrency.md](13-concurrency.md):
 
 ```aura check-pass
 short_wait: Duration = 5ms
@@ -538,10 +600,10 @@ normal_wait: Duration = 1s
 long_wait: Duration = 2m
 ```
 
-The stored value is an exact signed i128 count of nanoseconds. Literals are
-non-negative integral counts with `ms`, `s`, or `m`; there is no `ns` suffix,
-fractional literal, or unary minus for Duration. Use the signed associated
-constructors when the count is computed:
+A `Duration` stores an exact signed i128 count of nanoseconds. A literal is a
+non-negative whole count with `ms`, `s`, or `m`. There is no `ns` suffix, no
+fractional literal, and no unary minus for Duration. Use the signed
+associated constructors when the count is computed:
 
 ```aura check-pass
 attempt: int64 = 3
@@ -556,12 +618,19 @@ print(Duration.minutes(-1) < 0ms)      # true
 print(Duration.ms(1500).to_seconds())  # 1.5
 ```
 
-Duration supports checked `+` and `-` with another Duration, `* int64` in
-either operand order, `// int64`, and all comparisons. `to_ms()` and
-`to_seconds()` return the nearest representable IEEE-754 binary64 value using
-ties-to-even and may round. Printing uses exact decimal milliseconds with at
-most six fractional digits and trimmed zeros.
-Negative values are useful in calculations but are rejected as sleeps,
+Duration supports:
+
+- checked `+` and `-` with another Duration
+- `* int64` in either operand order
+- `// int64`
+- all comparisons
+
+`to_ms()` and `to_seconds()` return the nearest representable IEEE-754
+binary64 value using ties-to-even, so they may round. Printing uses exact
+decimal milliseconds, with at most six fractional digits and trailing zeros
+trimmed.
+
+Negative values are useful in calculations. They are rejected as sleeps,
 timeouts, deadlines, and restart backoffs.
 
 See [examples/concurrency/duration_arithmetic.au](../examples/concurrency/duration_arithmetic.au).

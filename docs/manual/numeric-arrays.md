@@ -1,11 +1,15 @@
 # Numeric Arrays
 
-`Array[T]` is Aura's owned contiguous CPU numeric container. It is intended
+`Array[T]` is Aura's owned, contiguous numeric container for the CPU. Use it
 for local preprocessing, postprocessing, evaluation, and batch-shaped numeric
-work. It is smaller than a general tensor framework: shape is runtime
-metadata, storage is row-major and host-only, and results own their buffers.
+work. It is smaller than a general tensor framework:
 
-The only dtypes are `int32`, `int64`, `float32`, and `float64`.
+- Shape is runtime metadata.
+- Storage is row-major and lives on the host.
+- Every result owns its buffer.
+
+The only dtypes, or element types, are `int32`, `int64`, `float32`, and
+`float64`.
 
 ```aura
 def main() -> int32:
@@ -22,9 +26,9 @@ def main() -> int32:
 
 ## Grammar
 
-`Array` is a global builtin generic type rather than a module. It uses the
-ordinary specialization, call, member-call, indexing, indexed-assignment, and
-one-colon slice grammar:
+`Array` is a global builtin generic type, not a module. It uses the ordinary
+grammar for specialization, calls, member calls, indexing, indexed assignment,
+and one-colon slices:
 
 ```text
 Array [ dtype ]
@@ -34,18 +38,18 @@ array [ [ expression ] : [ expression ] ]
 ```
 
 The supported `dtype` names are exactly `int32`, `int64`, `float32`, and
-`float64`. Comma-separated Array indexing is distinct from a list index.
-One-colon slicing selects a first-axis range. The complete syntax remains
-defined by [Grammar](/manual/grammar).
+`float64`. Comma-separated Array indexing is different from list indexing. A
+one-colon slice selects a range along the first axis. [Grammar](/manual/grammar)
+defines the complete syntax.
 
-There is no Array literal, dtype value, rank annotation, array-shape broadcast
-syntax, view syntax, step slice, or multidimensional slice tuple.
+Aura has no Array literal, dtype value, rank annotation, array-shape
+broadcast syntax, view syntax, step slice, or multidimensional slice tuple.
 
 ## Typing Rules
 
 ### Constructors
 
-The complete constructor surface is:
+These are all the constructors:
 
 | Constructor | Result |
 | --- | --- |
@@ -53,11 +57,12 @@ The complete constructor surface is:
 | `Array[T].full(shape: list[int64], value: T)` | `Array[T]` |
 | `Array[T].from_list(values: list[T], shape: list[int64])` | `Array[T]` |
 
-`T` must be one of the four maintained dtypes. Shape is a runtime
-`list[int64]`, so rank and dimensions are not part of the static type.
-`from_list` requires exact `list[T]`, copies its scalar elements, and leaves the
-shared source list usable. Constructors never infer a different dtype from a
-mixed numeric source.
+`T` must be one of the four dtypes. Shape is a runtime `list[int64]`, so rank
+and dimensions are not part of the static type.
+
+`from_list` requires exactly `list[T]`. It copies the scalar elements, and the
+shared source list stays usable. Constructors never infer a different dtype
+from a mixed numeric source.
 
 ### Members
 
@@ -75,157 +80,219 @@ mixed numeric source.
 | `max()` | `T` |
 | `mean()` | `float64` for every input dtype |
 
-`map` requires a repeatable callable whose bare parameter and return type
-match exactly. A consuming closure, `mut`/`own` parameter, or unsupported
-result dtype is rejected. `set` and `fill` require a mutable Array place.
+`map` requires a repeatable callable whose bare parameter type and return
+type match exactly. The checker rejects a consuming closure, a `mut` or `own`
+parameter, and an unsupported result dtype. `set` and `fill` require a mutable
+Array place.
 
-Direct indexing uses exactly one `int64` coordinate per runtime axis.
-`array[i, j]` has type `T`; indexed assignment requires a mutable Array place
+### Indexing And Slicing
+
+Direct indexing takes exactly one `int64` coordinate per runtime axis.
+`array[i, j]` has type `T`. Indexed assignment requires a mutable Array place
 and a value of exactly `T`. `array[start:end]` returns `Array[T]`.
 
 ### Operators
 
-`+`, `-`, and `*` accept same-dtype exact-shape Array/Array operands or one
-Array and one scalar of exactly `T`, in either order. They return a fresh
-`Array[T]`. `/` has those forms only for floating Arrays. Integer Array `/`
-is rejected with `AU2003`, as required by ADR-0002.
+`+`, `-`, and `*` accept either of these operand pairs and return a fresh
+`Array[T]`:
 
-There is no array-shape broadcasting or mixed promotion. An `Array[int32]` and
-`Array[int64]` do not combine, and a bound scalar is never implicitly widened
-or narrowed for an Array operation.
+- two Arrays with the same dtype and exactly the same shape
+- one Array and one scalar of exactly `T`, in either order
+
+`/` has the same forms for floating Arrays only. Integer Array `/` is rejected
+with `AU2003`.
+
+There is no array-shape broadcasting and no mixed promotion. An
+`Array[int32]` and an `Array[int64]` do not combine. A bound scalar is never
+implicitly widened or narrowed for an Array operation.
+
+### Wrapping And Saturating Arithmetic
 
 Every scalar integer type, plus `Array[int32]` and `Array[int64]`, provides
 `wrapping_add`, `wrapping_sub`, `wrapping_mul`, `saturating_add`,
-`saturating_sub`, and `saturating_mul`. An Array method accepts either one
-same-dtype scalar or one same-shape Array. Ordinary arithmetic stays checked.
+`saturating_sub`, and `saturating_mul`. The Array methods accept one scalar of
+the same dtype or one Array of the same shape. Ordinary arithmetic stays
+checked.
 
 ## Runtime Semantics
 
-An Array has rank at least one and owns one contiguous row-major buffer.
-Dimensions are `int64`, may be zero, and may not be negative. `len()` is the
-checked product of all dimensions. A zero dimension therefore makes the Array
-empty while preserving its complete shape.
+### Shape And Layout
 
-`zeros`, `full`, and `from_list` lay out elements in row-major order. Direct
-coordinates are translated in that same order. A negative coordinate
-normalizes once against its own axis. `get` returns `None` for an invalid
-coordinate; method `set`, direct indexed read, and direct indexed assignment
-trap. Valid `set` returns the previous scalar in `Some`.
+An Array has rank one or more and owns one contiguous row-major buffer.
+Dimensions are `int64`. They can be zero but not negative. `len()` is the
+checked product of all dimensions, so a zero dimension makes the Array empty
+while keeping its full shape.
+
+`zeros`, `full`, and `from_list` lay out elements in row-major order, and
+direct coordinates map to storage in the same order.
+
+### Coordinates
+
+A negative coordinate is normalized once against its own axis. For an invalid
+coordinate:
+
+- `get` returns `None`.
+- Method `set`, direct indexed reads, and direct indexed assignment trap.
+
+A valid `set` returns the previous scalar as its `T | None` result.
+
+### First-Axis Slices
 
 `array[start:end]` selects complete rows along axis zero. Written endpoints
-have exact type `int32`; omitted bounds and one-time negative normalization
-follow the owned-slice rules. Endpoints never clamp. The fresh result shape is
-`[end - start]` followed by the source's remaining dimensions. Its storage
-never aliases the source.
+have exact type `int32`. Omitted bounds and one-time negative normalization
+follow the owned-slice rules for lists. Endpoints never clamp. The result has
+shape `[end - start]` followed by the source's remaining dimensions. It is
+fresh storage that never aliases the source.
 
-Elementwise Array/Array operations require exactly equal shapes. Scalar forms
-apply the scalar to every row-major element. Results own fresh contiguous
-storage. Floating `/` uses the ordinary floating operator contract. Integer
-`+`, `-`, `*`, and `sum` retain checked overflow. Wrapping operations use
-fixed-width two's-complement modular arithmetic; saturating operations clamp
-at the declared integer width.
+### Arithmetic
 
-`map`, reductions, `fill`, and elementwise kernels traverse row-major
-storage. `sum()` of an empty Array returns the dtype's zero. `min()`, `max()`,
-and `mean()` require at least one element. Floating reductions visit elements
-left to right with deterministic dtype rounding and propagate NaN.
-`mean()` accumulates and reports a `float64` result for every source dtype.
-The contract promises no reassociation or vectorized reduction order.
+- Array/Array operations require exactly equal shapes.
+- Scalar forms apply the scalar to every element in row-major order.
+- Results own fresh contiguous storage.
+- Floating `/` follows the ordinary floating operator rules.
+- Integer `+`, `-`, `*`, and `sum` keep checked overflow.
+- Wrapping operations use fixed-width two's-complement modular arithmetic.
+- Saturating operations clamp at the declared integer width.
+
+### Reductions
+
+`map`, reductions, `fill`, and elementwise kernels walk storage in row-major
+order.
+
+- `sum()` of an empty Array returns the dtype's zero.
+- `min()`, `max()`, and `mean()` require at least one element.
+- Floating reductions visit elements from left to right with deterministic
+  dtype rounding, and they propagate NaN.
+- `mean()` accumulates and returns a `float64` result for every source
+  dtype.
+
+The contract promises no reassociation and no vectorized reduction order.
 
 ## Ownership And Evaluation Order
 
 `Array[T]` is non-Copy and cloneable. Assignment and owned argument passing
-transfer the buffer; `.clone()` is the explicit full-buffer duplicate. It is
-always structurally `Transfer` because its dtype is one of four Transfer
-scalars, but a Task result containing an Array retains the ordinary
-single-consumer observation right. Bare parameters and receivers provide
-shared access. `set` and `fill` require exclusive mutable access.
+move the buffer. `.clone()` is the explicit way to duplicate the whole buffer.
 
-Constructors evaluate arguments left to right and once. Binary operations
-evaluate the left operand before the right, retain both reached Arrays for the
-kernel, and consume neither shared operand. Coordinates evaluate left to
-right. A direct indexed assignment captures its coordinate before evaluating
-the replacement value.
+An Array is always structurally `Transfer`, because every dtype is a
+`Transfer` scalar. A Task result that holds an Array still has the ordinary
+single-consumer observation right. Bare parameters and receivers give shared
+access. `set` and `fill` require exclusive mutable access.
+
+Evaluation order:
+
+- Constructors evaluate their arguments once, from left to right.
+- A binary operation evaluates the left operand, then the right. It keeps both
+  Arrays for the kernel and consumes neither shared operand.
+- Coordinates evaluate from left to right.
+- A direct indexed assignment captures its coordinate before it evaluates the
+  new value.
 
 Elementwise operations, `map`, and first-axis slices allocate a fresh result.
-`map` invokes its repeatable callback once per element in row-major order and
-moves or copies each scalar result into the output. A trap cleans up any
-partial output. Shape snapshots and first-axis slices are owned copies, not
-views.
+`map` calls its repeatable callback once per element in row-major order, and
+moves or copies each scalar result into the output. If a trap occurs, any
+partial output is cleaned up. Shape snapshots and first-axis slices are owned
+copies, not views.
 
 ## Diagnostics
 
-`AU2001` reports an unknown Array member or constructor. `AU2002` reports an
-unsupported dtype, exact argument/callback/result mismatch, or mixed dtype.
-`AU2003` reports unsupported operators, including integer Array `/`, and
-preserves the ordinary checked-integer guidance. `AU2004` reports invalid
-argument binding. `AU2005` reserves slice steps and slice assignment with the
-same owned-copy guidance as list/str slices. `AU3002` reports mutation while
-shared access is active; `AU3003` reports `set`, `fill`, or indexed assignment
-through an immutable place.
+Compile-time codes:
 
-`AU4003` reports an out-of-range direct coordinate or invalid/reversed
-first-axis slice. `get` returns `None` instead of emitting that diagnostic;
-method `set` traps.
+| Code | Cause |
+| --- | --- |
+| `AU2001` | Unknown Array member or constructor. |
+| `AU2002` | Unsupported dtype, mismatched argument, callback, or result type, or mixed dtypes. |
+| `AU2003` | Unsupported operator, including integer Array `/`. The message keeps the ordinary checked-integer guidance. |
+| `AU2004` | Invalid argument binding. |
+| `AU2005` | Slice steps and slice assignment, which are reserved. The message gives the same owned-copy guidance as for list and str slices. |
+| `AU3002` | Mutation while shared access is active. |
+| `AU3003` | `set`, `fill`, or indexed assignment through an immutable place. |
 
-`AU4002` reports checked integer Array arithmetic overflow.
+Runtime codes:
 
-`AU4004` reports floating Array division when any divisor is zero.
+| Code | Cause |
+| --- | --- |
+| `AU4002` | Checked integer Array arithmetic overflows. |
+| `AU4003` | A direct coordinate is out of range, or a first-axis slice is invalid or reversed. `get` returns `None` instead, but method `set` traps. |
+| `AU4004` | Floating Array division with any zero divisor. |
+| `AU4005` | Shape product or element count overflows, or allocation fails. |
+| `AU4007` | Numeric array shape or reduction violation. See below. |
 
-`AU4005` reports shape-product/element-count overflow and allocation failure.
+`AU4007` (`numeric array shape or reduction violation`) covers:
 
-`AU4007` (`numeric array shape or reduction violation`) reports:
+- construction with rank zero or a negative dimension
+- a `from_list` element count that does not match the shape
+- an Array/Array operation whose shapes differ
+- a direct coordinate count that does not match the runtime rank
+- `min`, `max`, or `mean` on an empty Array
 
-- rank-zero or negative-dimension construction
-- `from_list` element-count mismatch
-- exact-shape Array/Array operation mismatch
-- direct coordinate-count/runtime-rank mismatch
-- empty `min`, `max`, or `mean`
-
-These failures are language behavior, not permission for a backend-specific
-panic.
+These traps are defined language behavior. A backend must not panic in their
+place.
 
 ## Backend Support
 
-Constructors, indexing, mutation, first-axis copies, mapping, reductions,
-checked/wrapping/saturating arithmetic, scalar forms, and exact-shape
-elementwise operations are implemented for MIR and direct execution. Direct
-native execution uses dtype-specialized contiguous kernels. The two backends
-share checked types, evaluation order, row-major results, cleanup, and exact
-`AU4003`/`AU4007` behavior.
+MIR and direct execution both implement:
 
-Compiler analysis and the language server expose the same constructors,
+- constructors, indexing, and mutation
+- first-axis copies
+- `map` and reductions
+- checked, wrapping, and saturating arithmetic
+- scalar forms and exact-shape elementwise operations
+
+Direct native execution uses contiguous kernels specialized per dtype. Both
+backends share checked types, evaluation order, row-major results, cleanup,
+and exact `AU4003` and `AU4007` behavior.
+
+The compiler's analysis and the language server expose the same constructors,
 member signatures, result types, hover, definitions, completions, and
-diagnostics. The bundled extension uses that compiler-owned semantic surface.
+diagnostics. The bundled VS Code extension uses that compiler-owned surface.
 
 ## Limits And Implementation-Defined Behavior
 
-Aura 0.3 Arrays are CPU-only, contiguous, row-major, and rank-at-least-one.
-They have no array-shape broadcasting, mixed promotion, views, reshape,
-transpose, matrix multiplication, equality, ordering, multidimensional slicing, step
-slices, slice assignment, autograd, device placement, distributed storage, or
-foreign-buffer aliasing.
+Aura 0.3 Arrays are CPU-only, contiguous, row-major, and have rank one or
+more. They do not have:
 
-Shape metadata is dynamic; the checker does not prove shape compatibility.
-Allocation is limited by host memory and the maintained element-count checks.
-Floating arithmetic follows the existing host IEEE-754 contract. This surface
-is narrower than NumPy's API.
+- array-shape broadcasting or mixed promotion
+- views, reshape, or transpose
+- matrix multiplication
+- equality or ordering
+- multidimensional slicing, step slices, or slice assignment
+- autograd, device placement, or distributed storage
+- aliasing of foreign buffers
+
+Shape metadata is dynamic, and the checker does not prove that shapes are
+compatible. Allocation is limited by host memory and the element-count checks.
+Floating arithmetic follows the host IEEE-754 rules. This API is narrower than
+NumPy's.
 
 ## Measured Performance
 
-The item 7 measurements are labeled **quiet host, not post-reboot; contractual re-measure scheduled with the 0.3.4 release session.**
-Both runs are contractual under the runner's qualification rules: clean detached
-sources, 11 rotating pairs, excluded warmups, exact protocol/checksum validation,
-three empty host inventories and successful input/hash rechecks. No override
-was used. The host is Mac14,9 / Apple M2 Pro / 16 GiB, with Xcode CPython 3.9.6,
-NumPy 2.0.2 and Rust 1.95.0. Measurements are single-threaded, per operation;
-ratios are ratios of medians.
+These measurements were taken on a quiet host, not after a reboot. They have
+not yet been repeated under the full post-reboot protocol.
 
-Before is merge base `a368dce7e7b335c1c0cb800ba5240501a21f02bc`;
-after is implementation head `d9fc79921ba9fed1116634ec9994bcb599aa9f90`.
-Each clean checkout used its own unchanged runner in the same measurement
-session, after the full local gates. Later publication edits do not change
-compiler/runtime sources.
+Both runs are contractual under the benchmark runner's qualification rules:
+
+- clean detached sources
+- 11 rotating pairs, with warmups excluded
+- exact protocol and checksum validation
+- three empty host inventories
+- successful input and hash rechecks
+
+No override was used.
+
+| Setting | Value |
+| --- | --- |
+| Host | Mac14,9 / Apple M2 Pro / 16 GiB |
+| Python | Xcode CPython 3.9.6 |
+| NumPy | 2.0.2 |
+| Rust | 1.95.0 |
+| Threads | single-threaded |
+| Unit | time per operation; ratios are ratios of medians |
+
+"Before" is merge base `a368dce7e7b335c1c0cb800ba5240501a21f02bc`. "After" is
+implementation head `d9fc79921ba9fed1116634ec9994bcb599aa9f90`. Each clean
+checkout ran its own unchanged runner in the same session, after the full
+local gates. Later documentation edits do not change compiler or runtime
+sources.
 
 | Workload (one million `float64` elements) | Aura before | Aura after | Change in time | Before Aura / Rust | After Aura / Rust |
 | --- | ---: | ---: | ---: | ---: | ---: |
@@ -239,39 +306,50 @@ compiler/runtime sources.
 | NumPy sum | 0.173397 ms | 0.172073 ms | -0.7639% |
 | Rust sum | 0.858312 ms | 0.858677 ms | +0.0425% |
 
-Addition meets the task's 1.5x Rust target at 1.006524x, with 79.9591% less
-Aura time; its after Aura/NumPy ratio is 1.006974. The sum ratio is 6.682308
-against NumPy. That gap is chiefly the deterministic reduction-order policy:
-Aura remains within 1.34x of Rust under the same left-to-right order.
-Addition allocates a fresh owned result; sum reuses its input. These exact
-workloads do not establish a general language or Array-API performance ranking.
+Addition meets the 1.5x Rust target at 1.006524x and takes 79.9591% less Aura
+time. Its after Aura/NumPy ratio is 1.006974.
 
-[Before raw](https://github.com/johnolafenwa/Aura/blob/main/work/2026-09-08-pre-batch-1-items-6-7/arrays-before-raw.json),
-[after raw](https://github.com/johnolafenwa/Aura/blob/main/work/2026-09-08-pre-batch-1-items-6-7/arrays-after-raw.json),
-[comparison and controls](https://github.com/johnolafenwa/Aura/blob/main/work/2026-09-08-pre-batch-1-items-6-7/array-publication-comparison.json),
+The sum ratio against NumPy is 6.682308. Most of that gap comes from the
+deterministic reduction-order policy. Under the same left-to-right order, Aura
+stays within 1.34x of Rust.
+
+Addition allocates a fresh owned result, and sum reuses its input. These
+workloads do not rank Aura or the Array API in general.
+
+The [before raw](https://github.com/johnolafenwa/Aura/blob/main/work/2026-09-08-pre-batch-1-items-6-7/arrays-before-raw.json)
+data, [after raw](https://github.com/johnolafenwa/Aura/blob/main/work/2026-09-08-pre-batch-1-items-6-7/arrays-after-raw.json)
+data, [comparison and controls](https://github.com/johnolafenwa/Aura/blob/main/work/2026-09-08-pre-batch-1-items-6-7/array-publication-comparison.json),
 and [SHA256SUMS](https://github.com/johnolafenwa/Aura/blob/main/work/2026-09-08-pre-batch-1-items-6-7/SHA256SUMS)
-retain all observations and source/binary identities.
+keep every observation and the identities of every source and binary.
 
-## Kernel implementation
+## Kernel Implementation
 
-The shared runtime used by MIR and direct execution selects each floating-point
-operation before its slice loop. Release arm64 disassembly contains `fadd.4s`
-and `fadd.2d`, plus the corresponding `fsub`, `fmul` and `fdiv` vector forms,
-including scalar broadcasts. Division validates the first zero divisor after
-fallible output allocation. Integer arithmetic and sequential reductions retain
-their original implementations.
+The shared runtime that MIR and direct execution use picks each floating-point
+operation before entering its slice loop. Release arm64 disassembly contains
+`fadd.4s` and `fadd.2d`, plus the matching `fsub`, `fmul`, and `fdiv` vector
+forms, including scalar broadcasts. Division checks for the first zero
+divisor after the fallible output allocation. Integer arithmetic and
+sequential reductions keep their existing implementations.
 
-Both runtime paths match 1,008 frozen pre-change output-bit and diagnostic cases
-in debug and optimized release builds. The corpus covers all four element types,
-empty and vector-boundary lengths, 1,000,001 elements, NaN payloads, infinities,
-signed zero, arithmetic modes and first-trap indices. The rewrite does not introduce
-reassociation, approximate division or a new numeric policy.
+Both runtime paths match 1,008 frozen output-bit and diagnostic cases,
+recorded before the kernels were written, in debug and optimized release
+builds. The cases cover:
+
+- all four element types
+- empty and vector-boundary lengths, and 1,000,001 elements
+- NaN payloads, infinities, and signed zero
+- arithmetic modes and first-trap indices
+
+The kernels do not reassociate, do not approximate division, and add no new
+numeric policy.
 
 ## Status
 
-Contiguous numeric Arrays and explicit scalar/Array integer arithmetic modes
-are Accepted for Aura 0.3 under
-`architecture_docs/decisions/0041-contiguous-numeric-arrays.md`.
-The maintained contract is the exact surface on this page and contains no
-broader tensor placement, views, shape transformations, or distributed
-execution.
+Contiguous numeric Arrays and explicit scalar and Array integer arithmetic
+modes are part of Aura 0.3. The contract is exactly the surface on this page.
+It does not include tensor placement, views, shape transformations, or
+distributed execution.
+
+Design records:
+[ADR-0041: Contiguous numeric arrays and explicit integer arithmetic modes](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/decisions/0041-contiguous-numeric-arrays.md)
+and [ADR-0002: Integer division and modulo](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/decisions/0002-integer-division-and-modulo.md).

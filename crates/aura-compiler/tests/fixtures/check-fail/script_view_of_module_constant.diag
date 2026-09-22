@@ -1,0 +1,5 @@
+error[AU3004]: module constant `names` cannot be the source of a view; bind it with `mut` or inside a function
+ --> crates/aura-compiler/tests/fixtures/check-fail/script_view_of_module_constant.au:2:14
+  |
+2 | view first = names[0]
+  |              ^

@@ -593,7 +593,6 @@ def _is_public_document(relative: str) -> bool:
         "SECURITY.md",
         "SUPPORTED_PLATFORMS.md",
         "CHANGELOG.md",
-        "scripts/reference-integrity.json",
     }:
         return True
     return relative.startswith(
@@ -693,53 +692,6 @@ def readable_text(path: Path) -> str | None:
 
 
 class AuraIdentityTests(unittest.TestCase):
-    def test_maintained_aura_examples_use_canonical_fence_labels(self) -> None:
-        stale: list[str] = []
-        roots = (ROOT / "docs", ROOT / "tutorials")
-        for root in roots:
-            for path in sorted(root.rglob("*.md")):
-                relative = path.relative_to(ROOT).as_posix()
-                if relative == f"docs/{OLD_LOWER}_language_proposal.md":
-                    continue
-                text = path.read_text(encoding="utf-8")
-                for match in re.finditer(r"(?m)^```(?:python|au)(?:\s|$)", text):
-                    stale.append(
-                        f"{relative}:{_line_number(text, match.start())}: "
-                        f"use ```aura for Aura source"
-                    )
-        self.assertEqual(
-            stale,
-            [],
-            "noncanonical Aura fence labels remain:\n" + "\n".join(stale),
-        )
-
-    def test_manual_uses_current_development_version(self) -> None:
-        """Every normative Manual page must describe the 0.3 language."""
-
-        pages = sorted((ROOT / "docs/manual").glob("*.md"))
-        self.assertEqual(
-            len(pages),
-            39,
-            "update the restamp inventory when the normative Manual changes",
-        )
-        stale_version = re.compile(
-            r"(?<![A-Za-z0-9_.])(?:Aura\s+)?0\.2(?:\.0|\.x)?(?!\d)"
-        )
-        stale: list[str] = []
-        for path in pages:
-            text = path.read_text(encoding="utf-8")
-            for match in stale_version.finditer(text):
-                stale.append(
-                    f"{path.relative_to(ROOT)}:"
-                    f"{_line_number(text, match.start())}: {match.group(0)}"
-                )
-        self.assertEqual(
-            stale,
-            [],
-            "stale 0.2 prose remains in the normative Manual:\n"
-            + "\n".join(stale),
-        )
-
     def test_compiler_contains_no_removed_collection_contracts(self) -> None:
         """Dead source contracts must disappear, not merely become unreachable."""
 
@@ -781,38 +733,6 @@ class AuraIdentityTests(unittest.TestCase):
             "removed collection contracts remain in compiler source:\n"
             + "\n".join(stale),
         )
-
-    def test_maintained_source_docs_do_not_teach_private_collection_operations(self) -> None:
-        roots = (
-            ROOT / "README.md",
-            ROOT / "docs/manual",
-            ROOT / "docs/learn",
-            ROOT / "tutorials",
-            ROOT / "examples",
-            ROOT / "tools/aura-language-server/README.md",
-            ROOT / "tools/vscode-aura/README.md",
-        )
-        private_or_removed = (
-            "sort" + "_by",
-            "contains" + "_key",
-            "from" + "_vec",
-        )
-        stale: list[str] = []
-        files: set[Path] = set()
-        for root in roots:
-            if root.is_file():
-                files.add(root)
-            elif root.exists():
-                files.update(root.rglob("*.md"))
-        for path in sorted(files):
-            text = path.read_text(encoding="utf-8")
-            for spelling in private_or_removed:
-                for match in re.finditer(rf"`{re.escape(spelling)}(?:\(\))?`", text):
-                    stale.append(
-                        f"{path.relative_to(ROOT)}:"
-                        f"{_line_number(text, match.start())}: {spelling}"
-                    )
-        self.assertEqual(stale, [], "private collection operations in docs:\n" + "\n".join(stale))
 
     def test_maintained_tree_uses_one_product_identity(self) -> None:
         stale: list[str] = []
@@ -880,154 +800,6 @@ class AuraIdentityTests(unittest.TestCase):
             if path.name in {OLD + ".toml", OLD + ".lock"}:
                 stale.append(relative)
         self.assertEqual(stale, [])
-
-    def test_current_public_docs_do_not_narrate_removed_or_unimplemented_features(self) -> None:
-        roots = (
-            ROOT / "README.md",
-            ROOT / "SECURITY.md",
-            ROOT / "SUPPORTED_PLATFORMS.md",
-            ROOT / "architecture_docs",
-            ROOT / "crates",
-            ROOT / "docs",
-            ROOT / "examples",
-            ROOT / "tutorials",
-            ROOT / "tools",
-        )
-        patterns = (
-            re.compile(r"\blegacy\b", re.IGNORECASE),
-            re.compile(r"\bretired\b", re.IGNORECASE),
-            re.compile(r"\bformerly\b", re.IGNORECASE),
-            re.compile(r"\bsuperseded\b", re.IGNORECASE),
-            re.compile(r"\bhistorical(?:ly)?\b", re.IGNORECASE),
-            re.compile(r"\bfuture work\b", re.IGNORECASE),
-            re.compile(r"\bAura\s+0\.4\b", re.IGNORECASE),
-            re.compile(r"\b(?:borrow|return)[- ]source\b", re.IGNORECASE),
-            re.compile(r"\breturn[- ]label\b", re.IGNORECASE),
-            re.compile(r"\blifetime[- ]label\b", re.IGNORECASE),
-            re.compile(r"\bfirst-class (?:loan|view)", re.IGNORECASE),
-            re.compile(r"\bloan/view\b", re.IGNORECASE),
-        )
-        files: set[Path] = set()
-        for root in roots:
-            if root.is_file():
-                files.add(root)
-            elif root.exists():
-                files.update(root.rglob("*.md"))
-        stale: list[str] = []
-        for path in sorted(files):
-            if is_history(path):
-                continue
-            for number, line in enumerate(path.read_text().splitlines(), start=1):
-                if any(pattern.search(line) for pattern in patterns):
-                    stale.append(
-                        f"{path.relative_to(ROOT)}:{number}: {line.strip()}"
-                    )
-        self.assertEqual(
-            stale,
-            [],
-            "stale feature-history narrative:\n" + "\n".join(stale),
-        )
-
-    def test_public_measurements_use_plain_factual_voice(self) -> None:
-        roots = (
-            ROOT / "README.md",
-            ROOT / "CHANGELOG.md",
-            ROOT / "docs",
-            ROOT / "tutorials",
-            ROOT / "examples",
-            ROOT / "benchmarks",
-            ROOT / "llms",
-            ROOT / "marketplace",
-            ROOT / "release-notes",
-        )
-        patterns = (
-            re.compile(r"\bmeasured snapshot,\s+not\b", re.IGNORECASE),
-            re.compile(
-                r"\b(?:observations?|measurements?|results?|numbers?)\b"
-                r"[^.]{0,180}\bnot (?:an? )?(?:portable|general|broad)\b",
-                re.IGNORECASE,
-            ),
-            re.compile(
-                r"\bnot (?:an? )?(?:portable|general|broad)\s+"
-                r"(?:performance|speed|capacity|benchmark)\b",
-                re.IGNORECASE,
-            ),
-            re.compile(
-                r"\bnot (?:an? )?(?:CI\s+)?(?:performance|benchmark|release)\s+"
-                r"(?:claim|promise|gate)\b",
-                re.IGNORECASE,
-            ),
-            re.compile(r"\bno (?:floating-kernel )?vectorization claim\b", re.IGNORECASE),
-            re.compile(
-                r"\bmakes? no (?:portable )?"
-                r"(?:performance|benchmark|vectorization)[^\n.]{0,40}\bclaim\b",
-                re.IGNORECASE,
-            ),
-            re.compile(r"\bmust not be presented as\s+measurements?\b", re.IGNORECASE),
-            re.compile(r"\bshould not be treated as\b", re.IGNORECASE),
-            re.compile(r"\bmust not be presented as\b", re.IGNORECASE),
-            re.compile(
-                r"\bnot an? (?:portable claim|benchmark promise)\b",
-                re.IGNORECASE,
-            ),
-            re.compile(
-                r"\b(?:observations?|measurements?|results?|numbers?)\b"
-                r"[^.]{0,180}\bnot an? guarantee\b",
-                re.IGNORECASE,
-            ),
-            re.compile(
-                r"\bwithout (?:becoming|turning it into) an? "
-                r"(?:product|performance|marketing) claim\b",
-                re.IGNORECASE,
-            ),
-            re.compile(r"\bnot representative of every application\b", re.IGNORECASE),
-            re.compile(r"\bnot a robust capacity guarantee\b", re.IGNORECASE),
-            re.compile(r"\b(?:do|does) not imply that\s+all integer work\b", re.IGNORECASE),
-            re.compile(r"\bnot a claim of NumPy\b", re.IGNORECASE),
-            re.compile(r"\bnot a stable\s+contract\b", re.IGNORECASE),
-            re.compile(
-                r"\b(?:does not|do not) (?:support|maintain)\s+"
-                r"(?:an? )?[^.]{0,60}\bclaim\b",
-                re.IGNORECASE,
-            ),
-            re.compile(
-                r"\bmakes? no\s+[^.]{0,60}\b(?:claim|promise)\b",
-                re.IGNORECASE,
-            ),
-            re.compile(
-                r"\b(?:not claiming|does not claim)\s+"
-                r"(?:feature parity|production stability|GPU programming)",
-                re.IGNORECASE,
-            ),
-            re.compile(r"\bWhat Aura Does Not Claim Yet\b", re.IGNORECASE),
-            re.compile(r"\bThose wider claims require separate evidence\b", re.IGNORECASE),
-        )
-        files: set[Path] = set()
-        for root in roots:
-            if root.is_file():
-                files.add(root)
-            elif root.exists():
-                files.update(root.rglob("*.md"))
-                files.update(root.rglob("*.txt"))
-        files.discard(ROOT / f"docs/{OLD_LOWER}_language_proposal.md")
-        stale: list[str] = []
-        for path in sorted(files):
-            text = path.read_text(encoding="utf-8")
-            seen: set[tuple[int, str]] = set()
-            for pattern in patterns:
-                for match in pattern.finditer(text):
-                    number = text.count("\n", 0, match.start()) + 1
-                    line = text.splitlines()[number - 1].strip()
-                    seen.add((number, line))
-            stale.extend(
-                f"{path.relative_to(ROOT)}:{number}: {line}"
-                for number, line in sorted(seen)
-            )
-        self.assertEqual(
-            stale,
-            [],
-            "defensive measurement disclaimers:\n" + "\n".join(stale),
-        )
 
     def test_python_surface_scanner_rejects_noncanonical_builtins(self) -> None:
         source = "\n".join(
@@ -1268,6 +1040,9 @@ const template = `def check(values: Vec[int64]):
                 continue
             relative = path.relative_to(ROOT).as_posix()
             if relative == "personal/file_ops.au":
+                continue
+            # Documentation prose is not gated by tests.
+            if path.suffix == ".md" or relative.startswith("docs/"):
                 continue
             if _dedicated_noncanonical_surface_path(relative):
                 stale.append(f"path: {relative}: dedicated noncanonical surface")

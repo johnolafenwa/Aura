@@ -1,13 +1,14 @@
 # Foreign Function Interface (FFI) v0
 
-Aura FFI v0 calls a deliberately small subset of the platform C ABI. It is
-an unsafe package capability for binding trusted, already-loaded native
-symbols; it is not a general dynamic-library, pointer, or callback system.
+Aura FFI v0 calls a small, fixed subset of the platform C ABI. It is an unsafe
+package capability for binding trusted native symbols that the process has
+already loaded. It is not a general system for dynamic libraries, pointers, or
+callbacks.
 
-Every source file that declares an extern function or opaque handle must belong
-to an Aura package whose manifest explicitly opts in. Compiler embedders
-must therefore use the public path-based checking, lowering, or execution APIs
-for FFI source; source-only APIs cannot establish manifest authorization:
+## Package Opt-In
+
+Every source file that declares an extern function or an opaque handle must
+belong to an Aura package whose manifest opts in:
 
 ```toml
 [package]
@@ -17,10 +18,13 @@ edition = "2026"
 allow_ffi = true
 ```
 
-A standalone `.au` file outside a package cannot declare FFI. If any dependency
-in the package graph enables FFI, the root package must also set
-`allow_ffi = true` and list every reachable FFI-enabled dependency by package
-name, including transitive dependencies:
+A standalone `.au` file outside a package cannot declare FFI. Compiler
+embedders must use the public path-based checking, lowering, or execution APIs
+for FFI source. Source-only APIs cannot establish manifest authorization.
+
+If any dependency in the package graph enables FFI, the root package must also
+set `allow_ffi = true`. It must list every reachable FFI-enabled dependency by
+package name, including transitive dependencies:
 
 ```toml
 [package]
@@ -36,14 +40,16 @@ native_binding = { path = "../native_binding" }
 dependencies = ["native_binding"]
 ```
 
-The report is exact. Duplicate, unknown, unreachable, non-FFI, and root-package
-entries are rejected. An FFI-enabled dependency must opt itself in as well.
-The report grants visibility, not trust: the root application remains
-responsible for reviewing the declarations and the native code they invoke.
+The report must be exact. The resolver rejects duplicate, unknown, unreachable,
+and non-FFI entries, and an entry for the root package. Each FFI-enabled
+dependency must also opt itself in. The report grants visibility, not trust.
+The root application is still responsible for reviewing the declarations and
+the native code they call. [Packages](/manual/packages) documents the manifest
+fields.
 
 ## Grammar
 
-Only bodyless C declarations are accepted:
+FFI accepts only bodyless C declarations:
 
 ```aura
 public extern "C" opaque class ProcessHandle
@@ -57,26 +63,32 @@ def main() -> int32:
     return 0
 ```
 
-`public` has its ordinary module-visibility meaning. A public declaration may
-be imported from another module; a private declaration is local to its
-defining module. The Aura declaration name is the C symbol name. FFI v0 has
-no source spelling for a separate link name, library name, calling convention,
-symbol version, or variadic tail.
+The rules for these declarations:
 
-The ABI string must be exactly `"C"`. Every extern function must spell an
-explicit `-> Type`; use `-> None` for a C function that returns no value.
-Extern functions have no Aura body, type parameters, receiver, defaults, or
-trailing colon. An opaque declaration uses `extern "C" opaque class Name` and
-has no fields, methods, body, or type parameters.
+- **ABI string.** It must be exactly `"C"`.
+- **Symbol name.** The Aura declaration name is the C symbol name. There is no
+  source spelling for a separate link name, library name, calling convention,
+  symbol version, or variadic tail.
+- **Visibility.** `public` has its ordinary module meaning. Another module can
+  import a public declaration. A private declaration is local to its module.
+- **Return type.** Every extern function spells an explicit `-> Type`. Use
+  `-> None` for a C function that returns no value.
+- **No body.** An extern function has no Aura body, type parameters, receiver,
+  defaults, or trailing colon.
+- **Opaque handles.** An opaque declaration is written
+  `extern "C" opaque class Name`. It has no fields, methods, body, or type
+  parameters.
 
-Raw pointer syntax, callback types, and `...` variadics are reserved and
-rejected with teaching diagnostics. Aura code cannot construct an opaque
-handle or use an extern declaration as a first-class function value; externs
-are direct-call-only.
+Raw pointer syntax, callback types, and `...` variadics are reserved. The
+compiler rejects them with teaching diagnostics. Aura code cannot construct an
+opaque handle. An extern declaration is direct-call-only, so it cannot be used
+as a first-class function value.
 
 ## Typing Rules
 
-The accepted scalar surface is fixed:
+### Scalars
+
+The accepted scalar types are fixed:
 
 | Aura type | C ABI value |
 | --- | --- |
@@ -87,12 +99,14 @@ The accepted scalar surface is fixed:
 | `int` | the exact `int64` alias; `int64` is preferred in ABI declarations |
 | `None` | return-only void result |
 
-Scalar parameters must be bare because their bits are passed by value.
-`int128`, `uint128`, `intsize`, `uintsize`, `Duration`, tuples, user classes,
-enums, generic types, and arbitrary collection types do not have an FFI v0
-representation.
+Scalar parameters must be bare, because their bits are passed by value. These
+types have no FFI v0 representation: `int128`, `uint128`, `intsize`,
+`uintsize`, `Duration`, tuples, user classes, enums, generic types, and
+arbitrary collection types.
 
-The three pointer-length parameter forms are:
+### Text And Byte Views
+
+Three parameter forms pass a pointer and a length:
 
 | Aura parameter | C parameters in order | Contract |
 | --- | --- | --- |
@@ -101,162 +115,191 @@ The three pointer-length parameter forms are:
 | `data: mut list[uint8]` | `uint8_t *`, `size_t` | fixed-length writable bytes |
 
 The pointer is valid only during the synchronous foreign call. The native
-callee must not retain it. An empty str or byte view passes a null pointer
-and length zero; a non-empty view passes a valid pointer and its exact byte
-length. A mutable byte view uses a same-length scratch buffer: Aura copies
-the list's initial bytes in, then copies exactly that length back after the
-foreign function returns. The writeback happens even if subsequent result
-validation reports an Aura error. Its length and capacity cannot be changed
-by foreign code. `own str`, `mut str`, and `own list[uint8]` are rejected.
-Text or byte views cannot be returned because v0 has no foreign allocator or
-lifetime contract.
+callee must not keep it.
 
-An opaque handle is one non-null foreign pointer with no Aura-visible
-layout. A bare handle parameter shares the pointer for that call and retains
-the Aura handle. An `own Handle` parameter consumes it, normally for a
-foreign close/free operation. `mut Handle` is reserved. Opaque handles are
-non-Copy, non-cloneable, and never `Transfer`, so they cannot cross a task or
-Queue boundary. A `-> Handle` result that is null is an Aura runtime failure
-(`AU4005`). One nullable form exists: an extern result whose normalized type
-is exactly a declared opaque handle plus `None`, written `-> Handle | None`
-or through an alias of that shape, is marshalled as one C pointer. A null
-pointer constructs `None` and a non-null pointer constructs the owned handle;
-no union tag or aggregate crosses C. Optional scalars, strings, byte views,
-nullable parameters, several handle alternatives, and every other union
-shape are rejected with `AU2010` and need an explicit C adapter. Mutable
-byte-view writeback precedes result translation as before, and the
-resulting handle keeps every opaque-handle rule.
+- An empty `str` or byte view passes a null pointer and length zero.
+- A non-empty view passes a valid pointer and its exact byte length.
+- A mutable byte view uses a same-length scratch buffer. Aura copies the list's
+  bytes in, then copies exactly that length back after the foreign function
+  returns. The writeback happens even if later result validation reports an
+  Aura error. Foreign code cannot change the list's length or capacity.
 
-This non-cloneability is structural through tuples, collections, user classes,
-enum payloads, and generic specializations. `.clone()` and clone-producing
-collection observations such as `get`, projected reads, and `filter` are
-rejected whenever the duplicated value contains an opaque handle. Consuming
-transfer operations such as `pop`, `remove`, and replacement remain allowed.
-Equality and inequality are also rejected for an opaque handle or any value
-that structurally contains one. FFI v0 deliberately does not expose foreign
-addresses or assume that address identity is the native API's semantic
-identity; a binding should expose a stable scalar or str identifier when
-callers need to compare foreign objects. Arithmetic and ordering operators on
-the handle itself are rejected with dedicated diagnostics: raw pointer
-arithmetic and foreign-address ordering are not language capabilities. A
-binding must expose reviewed extern operations or stable scalar/str keys
-instead.
+The checker rejects `own str`, `mut str`, and `own list[uint8]`. An extern
+function cannot return a text or byte view, because v0 has no foreign
+allocator or lifetime contract.
+
+### Opaque Handles
+
+An opaque handle is one non-null foreign pointer with no layout visible to
+Aura.
+
+- A bare handle parameter shares the pointer for that call. The caller keeps
+  the Aura handle.
+- An `own Handle` parameter consumes the handle. This is normally a foreign
+  close or free operation.
+- `mut Handle` is reserved.
+- Handles are not Copy, not cloneable, and never `Transfer`. They cannot cross
+  a task or Queue boundary.
+- A null `-> Handle` result is an Aura runtime failure, `AU4005`.
+
+### Nullable Handle Results
+
+One nullable form exists. An extern result whose normalized type is exactly a
+declared opaque handle plus `None` crosses C as one pointer. Write it as
+`-> Handle | None` or through an alias of that shape. A null pointer becomes
+`None`, and a non-null pointer becomes the owned handle. No union tag or
+aggregate crosses C.
+
+The checker rejects every other union shape with `AU2010`. That includes
+optional scalars, strings, byte views, nullable parameters, and several handle
+alternatives. These need an explicit C adapter. Mutable byte-view writeback
+still happens before result translation. The resulting handle follows every
+opaque-handle rule.
+
+### Handles Inside Other Values
+
+Non-cloneability is structural. It carries through tuples, collections, user
+classes, enum payloads, and generic specializations.
+
+- `.clone()` is rejected when the duplicated value contains an opaque handle.
+  So are clone-producing collection observations such as `get`, projected
+  reads, and `filter`.
+- Consuming operations such as `pop`, `remove`, and replacement are allowed.
+- Equality and inequality are rejected for an opaque handle or any value that
+  structurally contains one.
+- Arithmetic and ordering operators on a handle are rejected with dedicated
+  diagnostics. Raw pointer arithmetic and ordering by foreign address are not
+  language capabilities.
+
+FFI v0 does not expose foreign addresses. It does not assume that address
+identity is the native API's identity. When callers need to compare foreign
+objects, a binding should expose reviewed extern operations or a stable scalar
+or `str` key.
 
 ## Runtime Semantics
 
-The runtime resolves the declaration name against the process-global symbol
-table at the moment of the call. FFI v0 does not open a dynamic library or
-search a user-specified path. The symbol must already be visible to the
-process, commonly because it comes from the platform C runtime or was linked
-into the executable.
+The runtime resolves the declaration name in the process-global symbol table
+at the moment of the call. FFI v0 does not open a dynamic library or search a
+user-specified path. The symbol must already be visible to the process. It
+usually comes from the platform C runtime or is linked into the executable.
 
-Arguments are evaluated left-to-right under ordinary Aura call rules, then
-marshalled to the C ABI. A missing symbol or marshalling failure prevents the
-foreign call. After the function returns, Aura writes back each mutable
-same-length byte scratch buffer and then validates representable results,
-including canonical booleans and non-null opaque handles. Foreign side effects
-and completed byte writeback cannot be rolled back by a later return-value
-validation failure.
+A call runs in this order:
 
-Every foreign call is synchronous. It occupies the current Aura worker
-until the native function returns; it is not moved to the blocking I/O pool
-and does not create an implicit scheduling point. A long or blocking native
-call can therefore delay other tasks pinned to that worker.
+1. Aura evaluates the arguments left to right under ordinary call rules.
+2. Aura marshals the arguments to the C ABI. A missing symbol or a marshalling
+   failure prevents the foreign call.
+3. The foreign function runs.
+4. Aura writes back each mutable byte scratch buffer.
+5. Aura validates the result, including canonical booleans and non-null opaque
+   handles.
 
-FFI declarations are unsafe contracts. Aura cannot verify that a
-process-global symbol exists at compile time or that its real C signature,
-pointer retention, allocation, thread-safety, and mutation behavior match the
-declaration.
+A result validation failure cannot roll back foreign side effects or completed
+byte writeback.
+
+Every foreign call is synchronous. It occupies the current Aura worker until
+the native function returns. It does not move to the blocking I/O pool and
+does not create an implicit scheduling point. A long or blocking native call
+can delay other tasks pinned to that worker.
+
+FFI declarations are unsafe contracts. At compile time, Aura cannot verify
+that a process-global symbol exists. It cannot verify that the real C
+signature, pointer retention, allocation, thread safety, and mutation behavior
+match the declaration.
 
 ## Ownership And Evaluation Order
 
-Ordinary scalar arguments are copied into ABI slots. Bare `str`,
-`list[uint8]`, and opaque-handle arguments remain owned by the caller and are
-available after the call. `mut list[uint8]` requires an exclusive mutable place
-and exposes in-place byte updates after return. An `own` opaque-handle
-argument moves the handle before the call and cannot be used afterward.
+| Argument | Ownership |
+| --- | --- |
+| Scalar | Copied into an ABI slot. |
+| Bare `str`, `list[uint8]`, or opaque handle | Stays owned by the caller and is usable after the call. |
+| `mut list[uint8]` | Needs an exclusive mutable place. In-place byte updates are visible after return. |
+| `own` opaque handle | Moves before the call and cannot be used afterward. |
 
-The declaration's capability is exact; no implicit clone, ownership
-conversion, or pointer-lifetime extension is inserted. Because a process call
-may have irreversible external effects, evaluating a later argument or
-validating the result does not undo earlier evaluation, the foreign call, or
-foreign writes.
+The declared capability is exact. Aura inserts no implicit clone, ownership
+conversion, or pointer-lifetime extension. A foreign call may have
+irreversible external effects. Evaluating a later argument or validating the
+result does not undo earlier evaluation, the foreign call, or foreign writes.
 
 Opaque handles have no automatic foreign destructor. A binding package must
-declare and call the appropriate consuming C function. Dropping an unconsumed
-handle discards only Aura's wrapper and may leak the foreign resource if the
-native API requires explicit destruction.
+declare and call the right consuming C function. Dropping an unconsumed handle
+discards only Aura's wrapper. It may leak the foreign resource if the native
+API needs explicit destruction.
 
-Printing, f-string interpolation, or `str(...)` renders a handle as
+Printing, f-string interpolation, and `str(...)` render a handle as
 `<opaque TypeName>`, using its canonical Aura type name. The pointer address
-is never part of source-visible rendering or diagnostics.
+never appears in source-visible output or diagnostics.
 
 ## Diagnostics
 
-- `AU1101` rejects malformed extern/opaque syntax and gives dedicated
-  guidance for a foreign body, defaults, type parameters, callbacks,
-  variadics, and raw-pointer spelling recognized by the parser.
-- `AU2002` rejects types outside the fixed scalar, view, and opaque-handle
-  table, including returned `str` or `list[uint8]` views.
-- `AU2003` rejects equality or inequality on an opaque handle or a value that
-  structurally contains one.
-- `AU2005` rejects reserved FFI forms, constructing an opaque handle, and
-  callback or raw-pointer contracts that reach static checking.
-- `AU2999` reports missing package opt-in, an inaccurate root dependency
-  report, standalone FFI source, a direct-call-only extern used as a value, or
-  another FFI policy violation without a narrower code.
-- `AU3001` reports use of an opaque handle after an `own` extern call.
-- `AU3004` reports an invalid scalar/view/handle capability.
-- `AU3008` rejects an opaque handle at a task or Queue `Transfer` boundary.
-- `AU4001` reports a non-canonical C boolean result: the returned byte was
-  neither `0` nor `1`.
-- `AU4005` reports a recoverable runtime boundary failure such as a missing
-  process-global symbol, null opaque-handle result, or runtime marshalling
-  failure.
+| Code | Cause |
+| --- | --- |
+| `AU1101` | Malformed extern or opaque syntax. The parser gives dedicated guidance for a foreign body, defaults, type parameters, callbacks, variadics, and raw-pointer spelling. |
+| `AU2002` | A type outside the fixed scalar, view, and opaque-handle tables, including a returned `str` or `list[uint8]` view. |
+| `AU2003` | Equality or inequality on an opaque handle or a value that structurally contains one. |
+| `AU2005` | A reserved FFI form, construction of an opaque handle, or a callback or raw-pointer contract that reaches static checking. |
+| `AU2010` | A union result or parameter other than the `Handle \| None` result form. |
+| `AU2999` | Missing package opt-in, an inaccurate root dependency report, standalone FFI source, an extern used as a value, or another FFI policy violation without a narrower code. |
+| `AU3001` | Use of an opaque handle after an `own` extern call. |
+| `AU3004` | An invalid scalar, view, or handle capability. |
+| `AU3008` | An opaque handle at a task or Queue `Transfer` boundary. |
+| `AU4001` | A non-canonical C boolean result: the returned byte was neither `0` nor `1`. |
+| `AU4005` | A recoverable runtime boundary failure, such as a missing process-global symbol, a null opaque-handle result, or a marshalling failure. |
 
-Aura panics and traps never unwind through a foreign frame: pre-call
-failures stop before entry and post-call failures are raised after return.
-Conversely, FFI v0 cannot catch or translate a native abort, signal, memory
-fault, or foreign unwind. Foreign code must not unwind across the C ABI. Such a
-native failure may terminate the process rather than produce an Aura
-diagnostic. Out-of-bounds writes, a mismatched C signature, or retaining a
-temporary view is outside Aura's memory-safety guarantees.
+Aura panics and traps never unwind through a foreign frame. Pre-call failures
+stop before entry, and post-call failures are raised after return.
+
+FFI v0 cannot catch or translate a native abort, signal, memory fault, or
+foreign unwind. Foreign code must not unwind across the C ABI. Such a native
+failure may terminate the process instead of producing an Aura diagnostic.
+Out-of-bounds writes, a mismatched C signature, and keeping a temporary view
+are outside Aura's memory-safety guarantees.
 
 ## Backend Support
 
 The MIR and direct native backends share one validated ABI description and one
 host-call engine. They must agree on argument layout, ownership, mutable-view
 writeback, results, and Aura diagnostics. The maintained
-`examples/packages/ffi_getpid` package and FFI acceptance test run the same
+`examples/packages/ffi_getpid` package and the FFI acceptance test run the same
 `getpid` declaration on both backends.
 
-Process-global symbol lookup is currently implemented on Unix-family hosts.
-On another host, a call fails with the documented runtime boundary diagnostic
-rather than silently selecting a different ABI. The source declaration still
-must name the host's actual C symbol.
+Process-global symbol lookup is implemented on Unix-family hosts. On other
+hosts, a call fails with the runtime boundary diagnostic. Aura does not
+silently select a different ABI. The declaration must still name the host's
+actual C symbol.
 
 ## Limits And Implementation-Defined Behavior
 
-FFI v0 does not load libraries, select symbols by link name, define C structs
-or unions, pass enums, allocate foreign memory, expose pointer arithmetic,
-return views, represent nullable handles beyond the `Handle | None` result
-form, accept callbacks or variadics, or offer asynchronous foreign calls. C ABI layout outside the explicit table is
-not inferred.
+FFI v0 does not:
+
+- load libraries or select symbols by link name
+- define C structs or unions, or pass enums
+- allocate foreign memory or expose pointer arithmetic
+- return views
+- represent nullable handles beyond the `Handle | None` result form
+- accept callbacks or variadics
+- offer asynchronous foreign calls
+
+Aura does not infer C ABI layout outside the tables above.
 
 Symbol availability and behavior are host-defined. `size_t`, pointer layout,
 and process symbol visibility follow the target platform. The fixed-width
-integer and floating contracts remain exact. A declaration that lies about the
-real native signature has undefined foreign behavior and may corrupt or
-terminate the process; no backend can make such a declaration safe.
+integer and floating-point contracts are exact. A declaration that misstates
+the real native signature has undefined foreign behavior. It may corrupt or
+terminate the process, and no backend can make it safe.
 
 ## Status
 
-FFI v0, its package opt-in and root dependency report, bodyless
-`extern "C"` functions, opaque handles, fixed-width scalars, pointer-length
-views, and Unix process-global lookup are implemented in Aura 0.3.
+Implemented in Aura 0.3:
 
-The `Handle | None` result form is implemented under the Batch 1 phase 1
-design checkpoint. Callbacks, raw pointers, variadics, returned views, other
-nullable shapes, explicit library loading/link configuration, and foreign
-aggregate layout are reserved or unavailable. They are not inferred from
-current syntax.
+- FFI v0 package opt-in and the root dependency report
+- bodyless `extern "C"` functions and opaque handles
+- fixed-width scalars and pointer-length views
+- Unix process-global symbol lookup
+- the `Handle | None` result form
+
+Reserved or unavailable: callbacks, raw pointers, variadics, returned views,
+other nullable shapes, explicit library loading or link configuration, and
+foreign aggregate layout. Aura does not infer them from current syntax.
+
+Design record:
+[anonymous closed union types](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/decisions/0052-anonymous-closed-union-types.md)

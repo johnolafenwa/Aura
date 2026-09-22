@@ -1,10 +1,13 @@
 # Error Propagation
 
-When functions return `Result[T, E]`, chaining multiple fallible operations with `match` can get deeply nested. Aura provides `try expr` to flatten this pattern.
+`try expr` passes an error up to the caller so you do not have to write a `match` for every fallible call. This chapter shows how it works and where you can use it.
 
 ## `try expr`
 
-`try expr` evaluates the expression, which must produce a `Result[T, E]`. If the result is `Ok(value)`, `try` unwraps it and the expression evaluates to the inner value. If the result is `Err(e)`, Aura returns that error from the current function immediately.
+`try expr` evaluates an expression that produces a `Result[T, E]`:
+
+- If the result is `Ok(value)`, the `try` expression evaluates to `value`.
+- If the result is `Err(e)`, the current function returns that error immediately.
 
 ```aura check-pass
 def divide(a: int32, b: int32) -> Result[int32, str]:
@@ -17,12 +20,12 @@ def add_one_after_divide(a: int32, b: int32) -> Result[int32, str]:
     return Result.Ok(value + 1)
 ```
 
-In `add_one_after_divide`, `try divide(a, b)` either:
+Here `try divide(a, b)` does one of two things:
 
-- unwraps the `Ok` payload into `value` and continues, or
-- returns `Result.Err("division by zero")` from `add_one_after_divide` immediately
+- It puts the `Ok` payload in `value`, and the function continues.
+- It returns `Result.Err("division by zero")` from `add_one_after_divide`.
 
-Without `try`, the same function would need a nested `match`:
+Without `try`, the same function needs a `match`:
 
 ```aura fragment
 def add_one_after_divide(a: int32, b: int32) -> Result[int32, str]:
@@ -35,7 +38,7 @@ def add_one_after_divide(a: int32, b: int32) -> Result[int32, str]:
 
 ## Chaining Multiple Operations
 
-`try` shines when chaining several fallible calls:
+`try` is most useful when a function makes several fallible calls:
 
 ```aura fragment
 def compute(input: str) -> Result[int32, str]:
@@ -44,11 +47,11 @@ def compute(input: str) -> Result[int32, str]:
     return Result.Ok(doubled + 1)
 ```
 
-Each `try` either succeeds and continues to the next line, or short-circuits the entire function with the error. This reads top-to-bottom like normal code.
+Each `try` either continues to the next line or returns the error from the whole function. The code reads top to bottom.
 
 ## Using `try` Inside Expressions
 
-`try` can appear inside larger expressions:
+A `try` can appear inside a larger expression:
 
 ```aura check-pass
 def add_parsed(a: str, b: str) -> Result[int32, str]:
@@ -57,7 +60,7 @@ def add_parsed(a: str, b: str) -> Result[int32, str]:
 
 ## Using `try` Inside `with` Blocks
 
-`try` works inside `with` blocks. The resource cleanup still runs when `try` triggers an early return:
+When `try` returns early from inside a `with` block, the resource is still closed:
 
 ```aura fragment
 def process_file(handle: own FileHandle) -> Result[str, str]:
@@ -69,19 +72,15 @@ def process_file(handle: own FileHandle) -> Result[str, str]:
 
 ## Rules
 
-- `try` is only valid inside a function body
-- the enclosing function must return `Result[T, E]`
-- the `try` expression must produce `Result[U, SourceError]`; the enclosing
-  error type may be identical or provide a visible applicable
-  `impl From[SourceError] for TargetError`
-- `try` unwraps `Ok(value)` to the inner type `U`
+- `try` is valid only inside a function body.
+- The enclosing function must return `Result[T, E]`.
+- The `try` operand must produce `Result[U, SourceError]`.
+- `try` unwraps `Ok(value)` to the inner type `U`.
+- The enclosing function's error type must be `SourceError`, or there must be a visible, applicable `impl From[SourceError] for TargetError`.
 
-Exact error types propagate directly. When they differ, Aura calls the
-selected `From.from` implementation before returning `Result.Err(...)`.
-See the Manual's [`From` And `try`](../docs/manual/generics-and-traits.md#from-and-try)
-section for the trait contract and conversion rules.
+When the error types match, the error propagates as is. When they differ, Aura calls the selected `From.from` implementation and returns the converted `Result.Err(...)`. The Manual's [`From` And `try`](../docs/manual/generics-and-traits.md#from-and-try) section gives the trait contract and conversion rules.
 
-See:
+See also:
 
 - [examples/error_handling/try_result.au](../examples/error_handling/try_result.au)
 - [10-results-and-options.md](./10-results-and-options.md)

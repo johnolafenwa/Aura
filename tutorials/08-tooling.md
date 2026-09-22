@@ -1,10 +1,10 @@
 # Tooling
 
-Aura ships with compiler and editor tooling inside the monorepo.
+This chapter covers the tools that ship in the Aura monorepo: the `aura` command-line interface (CLI), the example library, and the VS Code extension.
 
 ## CLI
 
-The `aura` CLI is the primary interface for working with Aura programs:
+Use the `aura` CLI to check, run, and build Aura programs:
 
 ```bash
 cargo run -p aura -- check myfile.au     # type-check without running
@@ -12,7 +12,7 @@ cargo run -p aura -- run myfile.au       # execute through the MIR runtime
 cargo run -p aura -- build -o out myfile.au  # compile to a native binary
 ```
 
-For inspecting compiler internals:
+MIR is the compiler's mid-level intermediate representation. These commands inspect it and the other compiler internals:
 
 ```bash
 cargo run -p aura -- ast myfile.au       # print the syntax tree
@@ -22,46 +22,46 @@ cargo run -p aura -- analyze myfile.au   # diagnostics, symbols, hover info
 cargo run -p aura -- complete --line 5 --character 11 --trigger . myfile.au
 ```
 
-See [01-running-programs.md](01-running-programs.md) for a full walkthrough of each command. The CLI is also documented in [crates/aura/README.md](../crates/aura/README.md).
+[01-running-programs.md](01-running-programs.md) walks through each command. [crates/aura/README.md](../crates/aura/README.md) is the CLI reference.
 
 ## Examples
 
-The categorized example library under `examples/` is part of the development workflow, not just sample code. Compiler tests exercise the examples, so they stay valid as the language evolves. Browse them alongside these tutorials to see runnable code for every feature.
+The `examples/` directory holds runnable programs, sorted by category. Compiler tests run them, so they stay valid as the language changes. Read them alongside these tutorials to see working code for each feature.
 
 ## VS Code
 
-The repo includes:
+The repository includes two editor packages:
 
 - a VS Code extension under `tools/vscode-aura`
 - an Aura language server under `tools/aura-language-server`
 
 ### Editor Features
 
-- **Syntax highlighting** for `.au` files
-- **Completions** with member completion after `.`
-- **Hover** information showing types and signatures
-- **Go-to-definition** including cross-file definitions for imported symbols
-- **Diagnostics** from the compiler's type checker
-- **Document symbols** for navigation
+- **Syntax highlighting** for `.au` files.
+- **Completions**, including member completion after `.`.
+- **Hover** that shows types and signatures.
+- **Go-to-definition**, including definitions of imported symbols in other files.
+- **Diagnostics** from the compiler's type checker.
+- **Document symbols** for navigation.
 
-The editor uses compiler-backed analysis through `aura analyze` and `aura complete`. This means the editor and CLI share the same type-checking engine. The local JS analysis layer is kept only as a fallback when the compiler cannot analyze the current buffer.
+The editor gets its analysis from `aura analyze` and `aura complete`, so the editor and the CLI use the same type checker. A local JavaScript analysis layer runs only as a fallback when the compiler cannot analyze the current buffer.
 
 ### Installation
 
-For development:
+To run the extension from source:
 
-1. Run `npm install` from the repo root
-2. Run `npm run build:extension`
-3. Open the repo in VS Code
-4. Press `F5` to launch an Extension Development Host
-5. Open any `.au` file
+1. Run `npm install` from the repo root.
+2. Run `npm run build:extension`.
+3. Open the repo in VS Code.
+4. Press `F5` to launch an Extension Development Host.
+5. Open any `.au` file.
 
 For a packaged install, see [tools/vscode-aura/INSTALL.md](../tools/vscode-aura/INSTALL.md).
 
 ## Keeping Tutorials Current
 
-This tutorial set tracks the compiler, not the proposal. When a feature is added, changed, or removed:
+These tutorials describe what the compiler implements, not the language proposal. When a feature is added, changed, or removed:
 
-1. update the relevant tutorial chapter
-2. update or add an example program
-3. update `14-current-language-surface.md` if the supported surface changed
+1. Update the tutorial chapter that covers it.
+2. Update or add an example program.
+3. Update `14-current-language-surface.md` if the supported surface changed.

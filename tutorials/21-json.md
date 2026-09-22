@@ -1,12 +1,9 @@
 # Working With JSON Values
 
-Aura's JSON surface gives untrusted JSON its own recursive value and
-typed parse-error enums. It keeps parsing failures recoverable while making
-serialization deterministic enough for service messages, fixtures, and cache
-keys.
-
-The observable gap-fill policy is Accepted under ADR-0021, and the API and
-examples described here are implemented.
+This chapter shows how to parse, inspect, build, and dump JSON. The `json`
+module parses untrusted text into its own recursive value type and reports
+failures as typed errors you can recover from. Its output is deterministic, so
+you can use it for service messages, fixtures, and cache keys.
 
 ## Parse Into A Typed Tree
 
@@ -24,15 +21,21 @@ match result:
         print(error)
 ```
 
-The successful value is not an untyped host object. It is one of seven enum
-variants: `Null`, `Bool`, `Int`, `Float`, `String`, `Array`, or `Object`.
-Ordinary exhaustive `match` can distinguish them.
+A successful parse gives a `json.Value`, not an untyped host object. It is one
+of seven enum variants: `Null`, `Bool`, `Int`, `Float`, `String`, `Array`, or
+`Object`. An ordinary exhaustive `match` tells them apart.
 
-Parse errors are values too. `Syntax` contains a message and location;
-`NumberOutOfRange` identifies a number Aura cannot preserve as `int64` or a
-finite `float64`; `NestingTooDeep` and `InputTooLarge` report their limits.
-Lines and columns start at one, and a column counts Unicode scalar values.
-UTF-8 byte offsets are not used for this field.
+Parse errors are values too:
+
+| `json.Error` variant | Meaning |
+| --- | --- |
+| `Syntax` | Holds a message and a location. |
+| `NumberOutOfRange` | Names a number Aura cannot keep as an `int64` or a finite `float64`. |
+| `NestingTooDeep` | Reports the nesting limit. |
+| `InputTooLarge` | Reports the input-size limit. |
+
+Lines and columns start at one. A column counts Unicode scalar values, not
+UTF-8 byte offsets.
 
 ```aura fragment
 match json.parse("{\"ready\":"):
@@ -46,9 +49,9 @@ match json.parse("{\"ready\":"):
 
 ## Numbers Keep Their JSON Meaning
 
-Parsing classifies the exact source number before binary64 rounding. Any
-mathematical integer in the `int64` range becomes `Value.Int`, even when its
-source uses a decimal point or exponent:
+The parser classifies the exact source number before any binary64 rounding.
+Any mathematical integer in the `int64` range becomes `Value.Int`, even when
+the source uses a decimal point or an exponent:
 
 - `1`, `1.0`, and `1e0` become `Int(1)`
 - `1.5e1` becomes `Int(15)`
@@ -56,10 +59,10 @@ source uses a decimal point or exponent:
 - `1.5` becomes `Float(1.5)`
 - `1e400` returns `NumberOutOfRange`
 
-This keeps a rounded float from masquerading as an exact integer. It also means
-source spelling alone does not select the variant.
+So a rounded float never poses as an exact integer. It also means the source
+spelling alone does not pick the variant.
 
-The scalar accessors are intentionally exact:
+The scalar accessors are exact:
 
 ```aura check-pass
 import json
@@ -75,16 +78,17 @@ match json.as_int(integer):
 print(json.as_float(integer) == None)
 ```
 
-`as_float` does not convert an Int. Perform any numeric conversion explicitly
-after extracting the payload.
+`as_float` does not convert an Int. If you need a numeric conversion, extract
+the payload first and convert it yourself.
 
 ## Borrow To Inspect, Consume To Extract
 
 `json.is_null`, `json.as_bool`, `json.as_int`, and `json.as_float` use the
-ordinary bare parameter default: shared access, so the JSON value
-remains available. Owned `String`, `Array`, and
-Object payloads use the consuming module functions `json.into_string`,
-`json.into_array`, and `json.into_object`:
+ordinary bare parameter default. That default is shared access, so the JSON
+value stays available after the call.
+
+The owned `String`, `Array`, and Object payloads come out through consuming
+functions: `json.into_string`, `json.into_array`, and `json.into_object`.
 
 ```aura check-pass
 import json
@@ -100,14 +104,14 @@ def main():
 ```
 
 An `into_*` call consumes its argument whether or not the variant matches.
-That makes ownership transfer explicit and avoids a hidden deep clone of a
-nested tree.
+Ownership transfer is explicit, and there is no hidden deep clone of a nested
+tree.
 
 ## Build And Dump Deterministically
 
-Construct Values with ordinary qualified enum constructors. One Object can
-contain different JSON kinds because every dictionary value has the same
-`json.Value` type:
+Build values with the ordinary qualified enum constructors. One Object can
+hold different JSON kinds, because every dictionary value has the same type,
+`json.Value`:
 
 ```aura check-pass
 import json
@@ -124,55 +128,70 @@ Compact output sorts object keys, so the first line is:
 {"ready":true,"tags":["compiler","service"],"workers":3}
 ```
 
-Pretty output uses LF line endings, two spaces for each nesting level, one
-space after each colon, and no final newline. Empty arrays and objects remain
-`[]` and `{}`.
+Pretty output follows these rules:
 
-Sorting is a dump rule, not a mutation. The Object's underlying dict keeps its
-insertion order. Parsing duplicate object keys keeps the key's first insertion
-slot but replaces it with the last value.
+- LF line endings
+- two spaces for each nesting level
+- one space after each colon
+- no final newline
+- empty arrays and objects stay `[]` and `{}`
+
+Sorting happens only in the dump. It does not change the value: the Object's
+underlying dict keeps its insertion order. When parsed input repeats an object
+key, the key keeps its first insertion slot and takes the last value.
 
 ## Parse Errors And Dump Traps Are Different
 
-Malformed input is normal at a service boundary, so parse returns
+Malformed input is normal at a service boundary, so `parse` returns a
 `json.Error`. Match it and decide whether to reject, log, or retry.
 
-`json.dumps` has the roadmap-mandated return type `str`, not `Result`.
-Failures therefore trap:
+`json.dumps` returns `str`, not `Result`. So its failures trap:
 
-- invalid indent or depth greater than 128 uses `AU4003`
-- NaN or infinity in a manually constructed Float uses `AU4001`
-- output-cap or allocation failure uses `AU4005`
+| Code | Cause |
+| --- | --- |
+| `AU4003` | An invalid indent, or depth greater than 128. |
+| `AU4001` | NaN or infinity in a manually built Float. |
+| `AU4005` | The output cap is exceeded, or an allocation fails. |
 
-Indent must be `None` or an integer from 0 through 16. Both parse input and dump
-output have independent 67,108,864-byte caps. The exact boundary is accepted.
-Depth counts containers only: a root scalar is depth zero, a root Object or
-Array is depth one, and depth 128 is accepted.
+These limits apply:
 
-Parse and dump also share a 262,144-value structural budget. Every scalar,
-array, object, and object member value counts once; object keys do not count.
-The exact boundary is accepted. Exceeding this budget, like exceeding an output
-cap or encountering a controlled allocation failure, reports `AU4005`.
+- Indent must be `None` or an integer from 0 through 16.
+- Parse input and dump output each have their own 67,108,864-byte cap. The
+  exact boundary is accepted.
+- Depth counts containers only. A root scalar is depth zero, and a root Object
+  or Array is depth one. Depth 128 is accepted.
+- Parse and dump share a 262,144-value structural budget. Every scalar, array,
+  object, and object member value counts once. Object keys do not count. The
+  exact boundary is accepted.
+
+Going over the structural budget reports `AU4005`, as an output-cap overflow
+or a controlled allocation failure does.
 
 ## Strict JSON, Not A Schema System
 
-The parser accepts one strict JSON value plus surrounding JSON whitespace. It
-does not accept comments, trailing commas, leading-zero integers, `NaN`, or
+The parser accepts one strict JSON value with optional JSON whitespace around
+it. It rejects comments, trailing commas, leading-zero integers, `NaN`, and
 infinities.
 
-`json.Value` is useful when the shape is genuinely dynamic or checked by
-application code.
+Use `json.Value` when the shape is truly dynamic or your application code
+checks it.
 
-Derived class/enum schemas and generated codecs remain deferred beyond Phase 6.
-Aura also has no streaming JSON API or arbitrary-precision number type.
+These are not implemented:
 
-`json.is_valid`, `json.stringify_map`, and `json.parse_string_map` provide
-typed operations for flat `dict[str, str]` data. They are distinct from the
-dynamic `json.Value` API.
+- derived class and enum schemas
+- generated codecs
+- a streaming JSON API
+- an arbitrary-precision number type
+
+For flat `dict[str, str]` data, `json.is_valid`, `json.stringify_map`, and
+`json.parse_string_map` provide separate typed operations. They are not part
+of the dynamic `json.Value` API.
 
 ## Full Contract
 
 The normative [JSON Module](../docs/manual/json.md) chapter fixes the complete
 variant shapes, numeric rules, error coordinates, ordering, escaping,
-formatting, ownership, diagnostics, and limits. ADR-0021 records those
-observable policies and their rationale.
+formatting, ownership, diagnostics, and limits.
+
+Design record:
+[ADR-0021](../architecture_docs/decisions/0021-json-value-model-and-codec-policy.md).

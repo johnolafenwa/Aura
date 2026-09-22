@@ -1,16 +1,25 @@
 # Names And Scopes
 
-Aura resolves names statically. A name denotes a local binding, parameter, pattern payload, type parameter, module, function, class, enum, trait, enum variant through a qualified path, or maintained builtin. Name resolution never falls back to dynamic lookup.
+This page covers how Aura resolves names. Resolution is static and never falls back to dynamic lookup. A name denotes one of these:
+
+- a local binding, parameter, or pattern payload
+- a type parameter
+- a module
+- a function, class, enum, or trait
+- an enum variant, through a qualified path
+- a maintained builtin
 
 ## Identifiers And Reserved Names
 
-Identifiers are ASCII letters or `_`, followed by ASCII letters, digits, or `_`. The lexer reserves the words listed by [Lexical Structure](/manual/lexical-structure). `copy`, `self`, `None`, and `_` are contextual identifiers whose special meaning depends on their grammatical position.
+An identifier starts with an ASCII letter or `_`. The rest may be ASCII letters, digits, or `_`. The lexer reserves the words listed in [Lexical Structure](/manual/lexical-structure).
 
-Builtin type names and builtin top-level function names cannot be redefined by user items. `Self` is reserved within trait and implementation type contexts and cannot be declared as a type parameter.
+`copy`, `self`, `None`, and `_` are contextual identifiers. Their special meaning depends on where they appear in the grammar.
+
+User items cannot redefine builtin type names or builtin top-level function names. `Self` is reserved in trait and implementation type contexts. It cannot be declared as a type parameter.
 
 ## Module Scope
 
-One `.au` file defines one module scope. Its top-level item namespace contains:
+One `.au` file defines one module scope. These kinds of name share its top-level namespace:
 
 - classes
 - enums
@@ -21,15 +30,13 @@ One `.au` file defines one module scope. Its top-level item namespace contains:
 - imported names
 - imported module aliases
 
-These categories share the same top-level item name space. A local item cannot reuse a name already imported or declared as another item kind. Trait implementation blocks do not introduce a top-level name; they attach behavior to an existing trait/type combination.
+Because they share one namespace, a local item cannot reuse a name that is already imported or declared as another kind of item. A trait implementation block introduces no top-level name. It attaches behavior to an existing trait and type combination.
 
-Imports are module-level regardless of their textual position in the file. They are resolved before static checking of function bodies and top-level statements.
+Imports belong to the module wherever they appear in the file. The compiler resolves them before it checks function bodies and top-level statements.
 
 ## Module Constants
 
-A bare binding at module level declares an immutable module constant. The
-initializer is required. The annotation is optional, and `public` exposes the
-constant to qualified imports and from-imports.
+A bare binding at module level declares an immutable module constant. The initializer is required and the annotation is optional. `public` exposes the constant to qualified imports and from-imports.
 
     max_attempts: int64 = 5
     service_name = "planner"
@@ -38,33 +45,21 @@ constant to qualified imports and from-imports.
     def main():
         print(service_name)
 
-Functions and types are available to every constant initializer regardless of
-their textual item position. Constants become available in declaration order.
-An initializer may read an earlier constant in the same module. Reading itself
-or a later constant is `AU2001` use before initialization.
+Constants become available in declaration order. An initializer may read an earlier constant in the same module. Reading itself or a later constant is `AU2001`, use before initialization. Functions and types are available to every initializer, wherever they appear in the file.
 
-Aura initializes reachable modules before entry execution. Dependencies run
-before importers, sibling dependencies follow first import order, and constants
-within one module follow declaration order. A module reached through several
-imports initializes once. Initializer failure prevents entry execution.
+**Initialization order.** Aura initializes every reachable module before the entry runs:
 
-Copy-typed reads produce ordinary copied values. A non-Copy read provides
-shared access to the one value stored by its defining module. It cannot move
-the value into owned storage, pass it to an `own` parameter, or request mutable
-access. Use an explicit supported `.clone()` or constructor when independent
-owned data is required.
+- dependencies initialize before the modules that import them
+- sibling dependencies follow first-import order
+- constants within one module follow declaration order
+- a module reached through several imports initializes once
+- an initializer failure prevents the entry from running
 
-Module storage is immutable. Module-level `mut`, reassignment, compound
-assignment, and mutable access are `AU3003` errors. Stateful application data
-belongs in a local value owned by `main` or another explicit owner.
+**Reads.** Reading a Copy-typed constant produces an ordinary copy. Reading a non-Copy constant gives shared access to the one value stored by its defining module. That read cannot move the value into owned storage, pass it to an `own` parameter, or request mutable access. When you need independent owned data, use an explicit supported `.clone()` or a constructor.
 
-An entry script's top-level local environment is separate from module storage.
-The statement `mut count = 0` creates a mutable local in that environment;
-later `count = count + 1` and `count += 1` both reassign it. A fresh bare
-top-level binding still declares a module constant. That constant cannot read a
-top-level script local because constant initialization happens before entry
-statements execute. Use `mut` on the fresh binding to make it another script
-local, or place the computation in `main`.
+**Immutability.** Module storage is immutable. Module-level `mut`, reassignment, compound assignment, and mutable access are `AU3003` errors. Keep stateful application data in a local value owned by `main` or another explicit owner.
+
+**Script locals.** An entry script's top-level locals live apart from module storage. [Top-Level Statement Scope](#top-level-statement-scope) covers them.
 
 ## Imports
 
@@ -76,8 +71,7 @@ import tools.text
 value = tools.text.parse("input")
 ```
 
-An aliased module import binds the complete module under the alias and does
-not introduce the path's first component:
+An aliased module import binds the complete module under the alias. It does not bind the path's first component:
 
 ```aura
 import tools.text as text_tools
@@ -85,39 +79,36 @@ import tools.text as text_tools
 value = text_tools.parse("input")
 ```
 
-From-imports bind the requested public items directly:
+A from-import binds the requested public items directly:
 
 ```aura
 from tools.text import parse, ResultRow
 ```
 
-Each from-import entry may bind a local alias. Direct and aliased entries may
-appear together:
+Each from-import entry may take a local alias. Direct and aliased entries can appear together:
 
 ```aura
 from tools.text import parse as parse_text, ResultRow
 ```
 
-An alias occupies the same module-level namespace as items, module constants,
-and other imports. Duplicate aliases, collisions, reserved names, `_`, and
-duplicate imports of one target in a declaration are rejected. Aliasing
-changes only the local spelling. The target keeps its defining-module and
-nominal identity, visibility, trait implementations, initialization storage,
-and documentation target.
+**Aliases.** An alias occupies the same module-level namespace as items, module constants, and other imports. The compiler rejects:
 
-An import path consists of dot-separated identifiers and maps to a module path inside the current package/dependency graph. Filesystem path traversal is not part of import syntax. Package roots and dependency aliases are described by [Packages](/manual/packages).
+- duplicate aliases
+- aliases that collide with another name
+- reserved names and `_` as aliases
+- duplicate imports of one target in a declaration
 
-Only `public` top-level classes, enums, Aura functions, extern functions,
-extern opaque handle types, traits, and module constants may be imported from
-another module. Class fields and methods also have individual visibility. A
-non-public member remains accessible inside its defining module but is
-rejected across a module boundary. An alias does not bypass that boundary.
+An alias changes only the local spelling. The target keeps its defining module, nominal identity, visibility, trait implementations, initialization storage, and documentation target.
 
-Imports do not mean "include this file". Imported declarations retain their defining module identity, which is used for private access, qualified type names, diagnostics, trait implementations, and go-to-definition.
+**Paths.** An import path is a list of dot-separated identifiers. It maps to a module path inside the current package and dependency graph. Import syntax has no filesystem path traversal. [Packages](/manual/packages) describes package roots and dependency aliases.
+
+**Visibility.** Another module can import only `public` top-level items of these kinds: classes, enums, Aura functions, extern functions, extern opaque handle types, traits, and module constants. Class fields and methods have their own visibility. A non-public member is accessible inside its defining module and rejected across a module boundary. An alias does not bypass that boundary.
+
+**Identity.** An import is not a file include. An imported declaration keeps its defining module identity. Aura uses that identity for private access, qualified type names, diagnostics, trait implementations, and go-to-definition.
 
 ## Type Names
 
-Types are resolved from:
+The compiler resolves a type name from these sources, in order:
 
 1. type parameters in the innermost declaration
 2. `Self` in a trait or trait-implementation method where it is permitted
@@ -125,21 +116,23 @@ Types are resolved from:
 4. module-qualified public types
 5. builtin and builtin-module type names
 
-Type arguments must have exactly the arity declared by the target type. Generic type parameters are in scope throughout their owning class, enum, function, trait, implementation, or method as appropriate. A method may add type parameters to those inherited from its enclosing declaration, but a parameter name cannot duplicate another parameter in the same declaration and `Self` cannot be reused.
+A type's arguments must match the arity it declares.
 
-The implementation rejects duplicate type parameters. Type parameter shadowing between an enclosing generic declaration and an inner method is not a portable language technique; declarations should use distinct names.
+A generic type parameter is in scope throughout the class, enum, function, trait, implementation, or method that owns it. A method may add type parameters to the ones it inherits from its enclosing declaration. A parameter name cannot duplicate another parameter in the same declaration, and a method cannot reuse `Self`.
+
+The implementation rejects duplicate type parameters. Do not rely on an inner method's type parameter shadowing one from its enclosing generic declaration. That is not a portable technique, so give each parameter a distinct name.
 
 ## Function And Method Scope
 
-A function body begins with bindings for its ordinary parameters. A method body additionally binds the contextual receiver `self` when a receiver was declared.
+A function body starts with bindings for its ordinary parameters. A method body also binds the contextual receiver `self` when the method declares a receiver.
 
-Parameter names, `self`, local bindings, loop bindings, `with` bindings, and pattern bindings occupy the function's value namespace. A use is valid only after the binding has been introduced on the current control-flow path.
+Parameter names, `self`, local bindings, loop bindings, `with` bindings, and pattern bindings all live in the function's value namespace. A use is valid only after the binding is introduced on the current control-flow path.
 
-Aura 0.3 does not support local function, class, enum, or trait declarations. Items are module-level or members of their permitted enclosing declaration.
+Aura 0.3 does not support local function, class, enum, or trait declarations. An item lives at module level or as a member of an enclosing declaration that permits it.
 
 ## Local Bindings
 
-An assignment to a previously unseen simple name introduces a binding:
+Assigning to a simple name that has not been seen yet introduces a binding:
 
 ```aura
 def main():
@@ -147,30 +140,31 @@ def main():
     mut count: int32 = 0
 ```
 
-The initializer is checked before the new name becomes available. A binding without `mut` is immutable. A later assignment to an existing name is reassignment, not a new shadowing declaration, and is valid only for a mutable place with the same type.
+The compiler checks the initializer before the new name becomes available. A binding without `mut` is immutable.
 
-`mut` is permitted only when introducing a simple local binding. It cannot redeclare an existing name and cannot prefix a field or index assignment.
+A later assignment to an existing name is a reassignment, not a new shadowing declaration. It is valid only for a mutable place of the same type.
 
-Bindings introduced inside an `if` branch, loop body, match arm, or `with` body do not escape that body. Effects on ownership state of an outer binding are merged conservatively at control-flow joins.
+`mut` is allowed only when introducing a simple local binding. It cannot redeclare an existing name, and it cannot prefix a field or index assignment.
+
+A binding introduced inside an `if` branch, loop body, match arm, or `with` body does not escape that body. At control-flow joins, the checker merges ownership effects on outer bindings conservatively.
 
 ## Lambda Scope
 
-Each lambda creates one parameter scope for its expression body. Parameters
-become visible only after the colon, cannot duplicate one another, and follow
-the ordinary no-shadowing rules. The body may resolve outer locals and owned
-parameters. Those resolved owned values become by-value captures; module
-items, builtins, imports, and the lambda's own parameters do not.
+Each lambda creates one parameter scope for its expression body. Its parameters:
 
-A bare or `mut` parameter of an enclosing function is a capability into the
-caller's storage rather than an owned value and cannot be captured. Lambda
-parameters and captured outer names retain hover and definition identity in
-compiler analysis. See [Closures](/manual/closures).
+- become visible only after the colon
+- cannot duplicate one another
+- follow the ordinary no-shadowing rules
+
+The body may resolve outer locals and owned parameters. Those resolved owned values become by-value captures. Module items, builtins, imports, and the lambda's own parameters are not captured.
+
+A bare or `mut` parameter of an enclosing function cannot be captured. It is a capability into the caller's storage, not an owned value.
+
+Compiler analysis keeps hover and definition identity for lambda parameters and captured outer names. See [Closures](/manual/closures).
 
 ## Comprehension Scope
 
-A comprehension establishes one nested expression scope. Clause targets enter
-that scope progressively in runtime order even though the output expression is
-written before them:
+A comprehension creates one nested expression scope. Clause targets enter that scope one at a time, in runtime order, even though the output expression is written first:
 
     pairs = [
         (left, right)
@@ -178,25 +172,21 @@ written before them:
         for right in values if right > left
     ]
 
-The iterable expression of a clause cannot see that clause's own target. Once
-bound, the target is visible in the clause's filters, every later iterable and
-filter, and the output key/value or element expression. An earlier target is
-therefore visible while selecting an inner iterable.
+A clause's iterable expression cannot see that clause's own target. Once bound, the target is visible in:
 
-Targets use the ordinary `loop-target` grammar and no-shadowing rule. A target
-cannot reuse a local already visible outside the comprehension or an earlier
-clause target. Tuple target leaves enter together after the source item is
-selected. No comprehension target is visible after the closing `]` or `}`.
+- the clause's filters
+- every later iterable and filter
+- the output key/value or element expression
 
-A lambda enclosing a comprehension captures names used by source, filter, and
-output expressions under ADR-0037, but it does not capture comprehension
-targets: those are local to the lambda body. A lambda created inside a
-comprehension may capture a currently bound target only when ADR-0037 permits
-that by-value capture.
+So an earlier target is visible while an inner iterable is selected.
+
+Targets use the ordinary `loop-target` grammar and the no-shadowing rule. A target cannot reuse a local that is visible outside the comprehension, or an earlier clause target. The leaves of a tuple target enter together after the source item is selected. No comprehension target is visible after the closing `]` or `}`.
+
+**Lambdas and comprehensions.** A lambda that encloses a comprehension captures the names used by source, filter, and output expressions, under the capture rules in [Closures](/manual/closures). It does not capture comprehension targets, because those are local to the lambda body. A lambda created inside a comprehension may capture a currently bound target only when those capture rules permit that by-value capture.
 
 ## No-Shadowing Rules
 
-Aura deliberately rejects several ambiguous forms of shadowing:
+Aura rejects these forms of shadowing because they are ambiguous:
 
 - a `for` binding cannot reuse a visible name
 - a comprehension target cannot reuse a visible name or an earlier clause target
@@ -205,19 +195,19 @@ Aura deliberately rejects several ambiguous forms of shadowing:
 - a second `mut name = ...` cannot redeclare `name`
 - assignment to an existing immutable name is not interpreted as a new inner binding
 
-This means a reader can normally associate one local spelling with one logical binding for the duration of a function. Use a distinct name when transforming a value.
+As a result, a reader can normally tie one local spelling to one logical binding for the whole function. Use a distinct name when you transform a value.
 
 ## Block Scope And Control Flow
 
-Each branch, loop body, match arm, and `with` body is checked with a child view of the current local environment. Reads and writes must be valid on every reachable path.
+The checker checks each branch, loop body, match arm, and `with` body against a child view of the current local environment. Reads and writes must be valid on every reachable path.
 
-When control flow joins, a move or partial move that may have happened on any reachable path makes the affected outer place unavailable unless it was definitely reinitialized on all relevant paths. A binding created only inside a child block is never introduced into the parent scope.
+At a control-flow join, a move or partial move that may have happened on any reachable path makes the affected outer place unavailable. The exception is a place that is definitely reinitialized on all relevant paths. A binding created only inside a child block never enters the parent scope.
 
-The compiler recognizes constant `true`, constant `false`, and their grouped/`not` forms for limited reachability and loop-flow reasoning. Programs should still express clear control flow rather than depend on aggressive compile-time evaluation.
+For limited reachability and loop-flow reasoning, the compiler recognizes constant `true` and constant `false`, including grouped and `not` forms. Write clear control flow instead of depending on aggressive compile-time evaluation.
 
 ## Pattern Scope
 
-Each match arm has its own payload-binding scope. Bindings become available only in that arm's body or value expression.
+Each match arm has its own scope for payload bindings. A binding is available only in that arm's body or value expression.
 
 ```aura
 match result:
@@ -227,133 +217,126 @@ match result:
         print(message)
 ```
 
-`_` binds nothing. A lowercase unqualified pattern name is a binding pattern. Variant patterns may be unqualified when the scrutinee type supplies the enum identity; otherwise they use `Enum.Variant` or a module-qualified path.
+- `_` binds nothing.
+- A lowercase unqualified pattern name is a binding pattern.
+- A variant pattern may be unqualified when the scrutinee type supplies the enum identity. Otherwise it uses `Enum.Variant` or a module-qualified path.
 
-Borrowed and mutable-borrowed matches attach borrow provenance to payload bindings. Those bindings cannot be used after a mutation invalidates the matched place.
+Borrowed and mutably borrowed matches attach borrow provenance to their payload bindings. Those bindings cannot be used after a mutation invalidates the matched place.
 
 ## Class And Trait Member Lookup
 
-For a class value, member lookup considers fields and methods declared by the class. Public access rules apply across modules. A method call also considers trait methods from implementations visible through the current module/package context.
+For a class value, member lookup considers the fields and methods the class declares. Public access rules apply across modules. A method call also considers trait methods from implementations visible in the current module and package context.
 
-Trait method selection uses the receiver type, explicit or inferred trait arguments, type-parameter bounds, and implementation specificity. Multiple equally applicable implementations are ambiguous and MUST be rejected instead of selected by source order.
+Trait method selection uses:
 
-Associated methods are methods without a receiver and are referenced through
-the type, for example `Worker.create(...)`. Instance methods require a receiver
-compatible with their declared shared (`self`), consuming (`own self`), or
-mutable (`mut self`) contract.
+- the receiver type
+- explicit or inferred trait arguments
+- type-parameter bounds
+- implementation specificity
+
+When several implementations are equally applicable, the call is ambiguous. The checker rejects it and never picks one by source order.
+
+An associated method has no receiver. You reference it through the type, for example `Worker.create(...)`. An instance method needs a receiver compatible with its declared contract: shared `self`, consuming `own self`, or mutable `mut self`.
 
 ## Builtin Names And Modules
 
-Top-level builtin functions such as `print`, `range`, `sleep`, and `select`
-are available without import. Builtin enum names such as `SelectOutcome` are
-also reserved and available without import. Builtin modules such as `fs`,
-`io`, `net`, `process`, `random`, `sys`, `path`, `bytes`, `json`, `toml`,
-`log`, `trace`, and `metrics` must be imported before their module-qualified
-members are used.
+Top-level builtin functions such as `print`, `range`, `sleep`, and `select` are available without an import. Builtin enum names such as `SelectOutcome` are also reserved and available without an import.
 
-`random.Rng` is the builtin type and constructor spelling for a deterministic
-generator. Its methods remain module-qualified through the receiver type;
-there is no implicit global random-stream name. The secure operations are
-`random.secure_int` and `random.secure_bytes`.
+Builtin modules must be imported before you use their module-qualified members. They include `fs`, `io`, `net`, `process`, `random`, `sys`, `path`, `bytes`, `json`, `toml`, `log`, `trace`, and `metrics`.
 
-Builtin behavior follows declaration origin, not a coincidental module/type
-spelling. A user source file whose logical module name is `random` may declare
-its own `Rng` class; that class remains an ordinary user class in checking,
-analysis, MIR lowering, clone-safety classification, and both backends.
+`random.Rng` is the builtin type and constructor spelling for a deterministic generator. Its methods stay module-qualified through the receiver type. There is no implicit global random-stream name. The secure operations are `random.secure_int` and `random.secure_bytes`.
 
-Builtin enum types such as `Result`, `Lookup`, `Poll`, `QueueReceive`, and `process.Error` use the same qualified-member model as user enums. Short-form variant patterns and constructors are available only where the checker can determine a unique expected enum type.
+Builtin behavior follows where a declaration comes from, not a matching module or type spelling. A user source file whose logical module name is `random` may declare its own `Rng` class. That class stays an ordinary user class in checking, analysis, MIR lowering, clone-safety classification, and both backends. MIR is the compiler's mid-level intermediate representation.
+
+Builtin enum types such as `Result`, `Lookup`, `Poll`, `QueueReceive`, and `process.Error` use the same qualified-member model as user enums. Short-form variant patterns and constructors work only where the checker can determine a unique expected enum type.
 
 ## Top-Level Statement Scope
 
-An entry module may contain executable top-level statements instead of a local
-`main`. Those statements share one top-level local environment and execute in
-source order after reachable module constants finish initialization.
+An entry module may contain executable top-level statements instead of a local `main`. Those statements share one top-level local environment, separate from module storage. They run in source order after the reachable module constants finish initializing.
 
-A `mut` simple-name assignment declares a mutable top-level local. Later plain
-and compound assignments to that name remain in the statement stream and
-update the same local. A bare assignment to a new name is a module constant,
-even when it appears after an executable statement in source order.
+A `mut` simple-name assignment declares a mutable top-level local. For example, `mut count = 0` creates one. Later plain and compound assignments to that name, such as `count = count + 1` and `count += 1`, stay in the statement stream and update the same local.
 
-Imported modules contribute items and eagerly initialized constants. Their
-top-level executable statements are checked as source and do not run as import
-side effects. Reusable executable work belongs inside public functions.
+A bare assignment to a new name is a module constant, even when it appears after an executable statement. That constant cannot read a top-level local, because constants initialize before entry statements run. To fix this, add `mut` to make the new binding another top-level local, or move the computation into `main`.
+
+An imported module contributes items and eagerly initialized constants. Its top-level executable statements are checked as source, but they do not run as import side effects. Put reusable executable work inside public functions.
 
 ## Grammar
 
-Identifier spelling is defined by [Lexical Structure](/manual/lexical-structure).
-The binding positions are module declarations and imports, function and lambda
-parameters, receivers, simple-name assignments, statement-`for`,
-comprehension-clause, and `with` targets, match payloads, and generic parameter lists in the
-[Grammar](/manual/grammar). Member access uses a dot-separated syntactic path;
-it does not add dynamic lookup syntax.
+[Lexical Structure](/manual/lexical-structure) defines identifier spelling. The [Grammar](/manual/grammar) defines these binding positions:
+
+- module declarations and imports
+- function and lambda parameters
+- receivers
+- simple-name assignments
+- statement-`for`, comprehension-clause, and `with` targets
+- match payloads
+- generic parameter lists
+
+Member access uses a dot-separated syntactic path. It adds no dynamic lookup syntax.
 
 ## Typing Rules
 
-Every value and type name is resolved statically in the priority and namespace
-rules above. A resolved value binding carries one fixed type. Reassignment
-requires the existing mutable binding and the same type; it never creates a
-shadow. Generic and `Self` resolution occurs before substitution and bound
-checking. Ambiguous trait implementations and unavailable or private names are
-rejected rather than selected by source order.
+- Every value and type name resolves statically, by the priority and namespace rules above.
+- A resolved value binding has one fixed type.
+- Reassignment requires an existing mutable binding of the same type. It never creates a shadow.
+- Generic and `Self` resolution happens before substitution and bound checking.
+- The checker rejects ambiguous trait implementations and unavailable or private names. It never selects one by source order.
 
 ## Runtime Semantics
 
-Local and parameter references read their statically selected storage place;
-module, type, function, and associated-member names select compiler metadata
-and do not perform a runtime dictionary lookup. Module constants initialize
-once in the dependency and source order defined above. Entry-module executable
-statements then run in source order. Imports do not execute imported top-level
-statements as initialization side effects.
+A local or parameter reference reads its statically selected storage place. Module, type, function, and associated-member names select compiler metadata. None of them performs a runtime dictionary lookup.
+
+Module constants initialize once, in the dependency and source order defined above. The entry module's executable statements then run in source order. Imports never run imported top-level statements as initialization side effects.
 
 ## Ownership And Evaluation Order
 
-Resolving a name has no side effect, but evaluating the resolved place may copy,
-borrow, mutate, or move it according to its type and the surrounding
-expression. Initializers are evaluated before a new local enters scope. Block
-and pattern scopes are entered only for the selected runtime path; ownership
-state from continuing paths is merged conservatively by the checker.
+Resolving a name has no side effect. Evaluating the resolved place may copy, borrow, mutate, or move it, depending on its type and the surrounding expression.
 
-Comprehension clause scopes enter progressively. A target is established only
-after its iterable value is selected and only for the current item. Filters
-and inner clauses that are not reached establish no bindings. The complete
-scope is discarded with the expression.
+An initializer is evaluated before its new local enters scope. Block and pattern scopes are entered only for the runtime path that is selected. The checker merges ownership state from continuing paths conservatively.
+
+Comprehension clause scopes enter one at a time. A target is established only after its iterable value is selected, and only for the current item. Filters and inner clauses that are not reached establish no bindings. The whole scope is discarded with the expression.
 
 ## Diagnostics
 
-`AU2001` reports unknown, unavailable, or unresolved names, including a
-module constant read before initialization and a comprehension target used
-outside its expression. `AU2002` covers
-type-name arity and related expected-type failures. `AU2999` covers duplicate,
-reserved, private, ambiguous, or otherwise invalid name/scope declarations not
-assigned a narrower code. Reads of places invalidated after resolution use
-`AU3001` for a moved place or attempted move from non-Copy module storage,
-`AU3002` for a borrow conflict, `AU3003` for an immutable place or mutable
-module-storage request, and `AU3004` for an invalid ownership mode, with
-related source spans and repair guidance where applicable. Runtime module
-initialization re-entry is `AU4001`.
+| Code | Cause |
+| --- | --- |
+| `AU2001` | An unknown, unavailable, or unresolved name. This includes a module constant read before initialization and a comprehension target used outside its expression. |
+| `AU2002` | Type-name arity and related expected-type failures. |
+| `AU2999` | A duplicate, reserved, private, ambiguous, or otherwise invalid name or scope declaration that has no narrower code. |
+| `AU3001` | A read of a moved place, or an attempted move out of non-Copy module storage. |
+| `AU3002` | A borrow conflict. |
+| `AU3003` | An immutable place, or a request for mutable module storage. |
+| `AU3004` | An invalid ownership mode. |
+| `AU4001` | Runtime re-entry into module initialization. |
+
+`AU3001` through `AU3004` report places that became invalid after resolution. They include related source spans and repair guidance where applicable.
 
 ## Backend Support
 
-Name, visibility, trait, module, and scope resolution are compiler-front-end
-operations shared by MIR execution and direct native builds. Both backends
-receive the same resolved targets and substituted types. Compiler-backed LSP
-hover, definitions, and diagnostics use that same resolution result.
+Name, visibility, trait, module, and scope resolution happen in the compiler front end. MIR execution and direct native builds share that result, so both backends receive the same resolved targets and substituted types. The compiler-backed language server uses the same resolution for hover, definitions, and diagnostics.
 
 ## Limits And Implementation-Defined Behavior
 
-Local declarations and comprehension targets cannot shadow visible locals in
-the positions listed above;
-items cannot be nested in function suites; wildcard or relative-dot imports and
-imported top-level execution are unavailable. Import aliases remain subject to
-the ordinary no-collision and visibility rules.
-Package filesystem mapping is specified by [Packages](/manual/packages), not
-left to implementation-defined name lookup.
+- Local declarations and comprehension targets cannot shadow visible locals in the positions listed above.
+- Items cannot be nested in function suites.
+- Wildcard imports, relative-dot imports, and imported top-level execution are unavailable.
+- Import aliases follow the ordinary no-collision and visibility rules.
+
+[Packages](/manual/packages) specifies how packages map to the filesystem. That mapping is not left to implementation-defined name lookup.
 
 ## Status
 
-Static lexical scope, module imports and aliases, module constants, visibility,
-generic/type namespaces, member lookup, comprehension scopes, and the
-documented entry-module top-level scope are implemented.
-Dynamic names, reflection-based lookup, nested items, import side effects,
-wildcard imports, and user-selectable shadowing are unavailable. No future
-name-resolution form is implied by an identifier that happens to lex today.
+Implemented:
+
+- static lexical scope
+- module imports and aliases
+- module constants
+- visibility
+- generic and type namespaces
+- member lookup
+- comprehension scopes
+- the entry-module top-level scope described above
+
+Unavailable: dynamic names, reflection-based lookup, nested items, import side effects, wildcard imports, and user-selectable shadowing. An identifier that lexes today does not imply any future name-resolution form.
+
+Design record: `architecture_docs/decisions/0037-expression-closures-and-value-capture.md`.
