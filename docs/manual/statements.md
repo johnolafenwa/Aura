@@ -481,7 +481,7 @@ A statement that parses is not legal in every context:
 - `with` requires a supported resource and keeps its cleanup capability intact.
 - Items cannot appear inside suites.
 - Module constants are immutable and cannot use `mut` or reassignment.
-- Module constants cannot read top-level script locals, which initialize later.
+- Module constants are the bindings above the first top-level statement. They cannot read top-level script locals, which initialize later.
 - An entry module cannot mix executable top-level statements with a local `main`.
 
 The complete checker rules are normative in [Static Semantics](/manual/static-semantics). Ownership effects are normative in [Ownership And Borrowing](/manual/ownership-and-borrowing).

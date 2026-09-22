@@ -2259,13 +2259,13 @@ fn top_level_completion_scope_respects_constant_initialization_phase() {
         .iter()
         .any(|completion| completion.name == "third"));
 
-    // Executable top-level statements run after the complete module constant
-    // initialization phase, even when statement and declaration text is
-    // interleaved.
+    // Executable top-level statements see every module constant. A binding
+    // after the first statement is a script local, so it is not yet in scope
+    // at the statement before it.
     let executable_scope = builder.scope_for_line(2);
     assert!(executable_scope.contains_key("first"));
     assert!(executable_scope.contains_key("second"));
-    assert!(executable_scope.contains_key("third"));
+    assert!(!executable_scope.contains_key("third"));
 }
 
 #[test]

@@ -5,6 +5,15 @@ versioning for release artifacts while it remains a technical preview; a minor
 preview release may still contain source and API incompatibilities called out
 in this file.
 
+## Unreleased
+
+- In a script, a bare `name = value` after the first top-level statement
+  declares an immutable top-level local instead of a module constant. It
+  can read earlier locals, and closures can capture it. Bindings above the
+  first statement are still module constants. A function can no longer
+  read a name bound after the first statement, and `public name = value`
+  after a statement is a syntax error (`AU1101`).
+
 ## VS Code extension 0.3.5 — 2026-09-22
 
 - Bundles language server 0.3.4, which speaks semantic interface version 16.
