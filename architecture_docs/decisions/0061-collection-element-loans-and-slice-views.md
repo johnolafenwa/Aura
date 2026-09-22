@@ -126,14 +126,24 @@ to the element projection. Disjointness is proven only between two element
 projections whose selectors are both integer literals with different
 values, or two entry projections whose selectors are literals of the same
 key type with different values; every other pair overlaps conservatively.
-List indexed assignment is an element-level write; dictionary indexed
-assignment is structural. A structural mutation of a root, or a write to a
+List indexed assignment and `set(i, value)` are element-level writes;
+dictionary indexed assignment and `set(k, value)` are structural. A
+structural mutation of a root, or a write to a
 non-disjoint element, while an element or entry loan of that root is live
 is refused statically (`AU3011`, naming the origin and the invalidating
 operation). Invalidation is static: the validator refuses any MIR that
 mutates a collection root or a non-disjoint element while an element loan
 of that root is live, so a backend never sees a dangling element
 descriptor; the runtime keeps only the checks it performs for root loans.
+
+The 2026-09-22 delegated ruling resolves the checkpoint's earlier A3/A4
+conflict: list `set` is allowed only when its selected element is proven
+literal-disjoint from every live element loan, shared or mutable, and its
+old element is returned owned. `set(i, None)` follows the same rule.
+`swap`, `insert`, `pop`, `remove`, `append`, `extend`, `clear`, `sort`,
+`reverse`, `reserve`, and mutable iteration remain whole-collection.
+Dictionary insertion may rehash; only writing through an entry view is an
+element-level entry update.
 
 ### Ownership through element views (A4)
 
