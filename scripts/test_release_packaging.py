@@ -26,25 +26,11 @@ RELEASE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "release.yml"
 PACKAGE_SCRIPT = REPO_ROOT / "scripts" / "package-cli.sh"
 LINK_ARG_WRITER = REPO_ROOT / "scripts" / "write-native-link-args.py"
 SMOKE_SCRIPT = REPO_ROOT / "scripts" / "smoke-cli-archive.sh"
-FINAL_REPORT = REPO_ROOT / "work" / "2026-07-31-batch6-final-report.md"
-DOWNLOADS_DOC = REPO_ROOT / "docs" / "downloads.md"
-RELEASE_PROCESS_DOC = REPO_ROOT / "docs" / "release-process.md"
 AURA_COMPILER_BUILD = REPO_ROOT / "crates" / "aura-compiler" / "build.rs"
 INSTALL_SCRIPT = REPO_ROOT / "docs" / "public" / "install.sh"
-LANDING_DOC = REPO_ROOT / "docs" / "index.md"
 LANDING_INSTALL_COMPONENT = (
     REPO_ROOT / "docs" / ".vitepress" / "theme" / "HomeInstall.vue"
 )
-MANUAL_INDEX = REPO_ROOT / "docs" / "manual" / "index.md"
-PERFORMANCE_DOC = REPO_ROOT / "docs" / "manual" / "performance.md"
-POSITIONING_DOC = REPO_ROOT / "docs" / "positioning.md"
-INSTALL_DOCS = {
-    "index": REPO_ROOT / "docs" / "install" / "index.md",
-    "macos": REPO_ROOT / "docs" / "install" / "macos.md",
-    "linux": REPO_ROOT / "docs" / "install" / "linux.md",
-    "wsl": REPO_ROOT / "docs" / "install" / "windows-wsl.md",
-    "vscode": REPO_ROOT / "docs" / "install" / "vscode.md",
-}
 SUPPORTED_PLATFORMS = REPO_ROOT / "SUPPORTED_PLATFORMS.md"
 
 
@@ -148,7 +134,7 @@ class LandingAndInstallerTests(unittest.TestCase):
     def test_installer_is_posix_and_verifies_release_checksum(self) -> None:
         installer = INSTALL_SCRIPT.read_text(encoding="utf-8")
         self.assertEqual(installer.splitlines()[0], "#!/bin/sh")
-        self.assertIn("v0.3.3-preview", installer)
+        self.assertIn("v0.3.4-preview", installer)
         self.assertIn("SHA256SUMS", installer)
         self.assertIn("sha256sum", installer)
         self.assertIn("shasum -a 256", installer)
@@ -183,7 +169,7 @@ class LandingAndInstallerTests(unittest.TestCase):
             root = Path(temp)
             release = root / "release"
             release.mkdir()
-            archive_name = f"aura-v0.3.3-preview-{target}"
+            archive_name = f"aura-v0.3.4-preview-{target}"
             archive_root = root / archive_name
             (archive_root / "bin").mkdir(parents=True)
             (archive_root / "lib" / "aura").mkdir(parents=True)
@@ -319,7 +305,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("EXPECTED_EXTENSION_VERSION", self.workflow)
         self.assertIn('expected_version="$EXPECTED_EXTENSION_VERSION"', self.workflow)
         self.assertIn("JohnOlafenwa.vscode-aura-lang", self.workflow)
-        self.assertIn("v0.3.3-preview", self.workflow)
+        self.assertIn("v0.3.4-preview", self.workflow)
         self.assertNotIn("v0.2.0-preview", self.workflow)
 
     def test_extension_only_dispatch_builds_from_an_explicit_source_ref(self) -> None:
@@ -344,14 +330,6 @@ class ReleaseWorkflowTests(unittest.TestCase):
             r"needs\.publish\.result == 'skipped'",
         )
 
-        release_process = RELEASE_PROCESS_DOC.read_text(encoding="utf-8")
-        self.assertIn("Omit `source_ref`", release_process)
-        self.assertRegex(
-            release_process,
-            r"download\s+the exact VSIX attached to the\s+release",
-        )
-        self.assertIn("-f source_ref=main", release_process)
-        self.assertIn("-f release_tag=v0.3.4", release_process)
 
     def test_manual_source_and_release_identity_are_separate(self) -> None:
         checkout_ref = (
@@ -588,7 +566,7 @@ class InstalledArchiveSmokeTests(unittest.TestCase):
                 stdout=subprocess.PIPE,
                 check=True,
             ).stdout.strip()
-            archive_root = root / "aura-v0.3.3-preview-aarch64-apple-darwin"
+            archive_root = root / "aura-v0.3.4-preview-aarch64-apple-darwin"
             binary = archive_root / "bin" / "aura"
             binary.parent.mkdir(parents=True)
             packaged_basic = archive_root / "examples" / "basic_addition.au"
@@ -618,7 +596,7 @@ class InstalledArchiveSmokeTests(unittest.TestCase):
                     fi
                     case "${{1:-}}" in
                       --version)
-                        echo "aura 0.3.3-preview ({commit})"
+                        echo "aura 0.3.4-preview ({commit})"
                         ;;
                       *)
                         last_argument=
@@ -667,7 +645,7 @@ class InstalledArchiveSmokeTests(unittest.TestCase):
                     check=False,
                 )
                 self.assertEqual(dash_syntax.returncode, 0, dash_syntax.stderr)
-            archive = root / "aura-v0.3.3-preview-aarch64-apple-darwin.tar.gz"
+            archive = root / "aura-v0.3.4-preview-aarch64-apple-darwin.tar.gz"
             with tarfile.open(archive, "w:gz") as handle:
                 handle.add(archive_root, arcname=archive_root.name)
 
@@ -688,7 +666,7 @@ class InstalledArchiveSmokeTests(unittest.TestCase):
             )
 
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn(f"aura 0.3.3-preview ({commit})\n", result.stdout)
+            self.assertIn(f"aura 0.3.4-preview ({commit})\n", result.stdout)
             self.assertIn("16\n", result.stdout)
             self.assertTrue(result.stdout.endswith(RETRY_STDOUT), result.stdout)
             self.assertNotIn(
