@@ -145,6 +145,59 @@ One complete green hosted CI run is sufficient evidence for a change. Do not
 require repeated or consecutive reruns unless the user explicitly requests
 them for a particular task.
 
+## Documentation Style
+
+Aura's documentation is written for a programmer who knows another language
+and wants to get something done. Write so that reader can find the rule, see
+an example, and move on.
+
+### Shape
+
+- Lead with the point. A page opens by saying what it covers. A section opens
+  with the rule or the answer, then the example, then the details and edge
+  cases.
+- Show code early. Put a short example right after the rule it illustrates.
+  Prefer one small complete example over several fragments.
+- Use a table for reference data: signatures, options, diagnostic codes,
+  platform lists. Use a bulleted list for parallel items. Use prose for an
+  argument or an explanation.
+- Keep headings short and plain. Title Case, as the existing pages do.
+- Say each thing once. Link to the page that owns a topic instead of
+  restating it.
+
+### Sentences
+
+- One idea per sentence. Aim for about 20 words. Split long sentences instead
+  of joining clauses with semicolons.
+- Use the active voice and the present tense: "The checker rejects...", not
+  "It will be rejected by the checker".
+- Use plain words. Prefer "use" to "utilize", "so" to "consequently", "about"
+  to "approximately".
+- No em-dashes. Avoid parentheses; if an aside matters, give it its own
+  sentence.
+- No filler or hedging: drop "simply", "just", "note that", "it is worth
+  noting", "basically", "in order to".
+- No marketing adjectives: "powerful", "seamless", "robust", "blazing".
+  State what the feature does and let the reader judge.
+
+### Content
+
+- State what Aura does today. Do not narrate history ("now supports",
+  "previously", "no longer") outside the CHANGELOG. Do not describe planned
+  work as if it exists; say plainly that something is not implemented, once,
+  where the reader would look for it.
+- Define a term the first time a page uses it. Expand an acronym the first
+  time it appears.
+- Keep internal vocabulary out of user pages: batch, phase, checkpoint,
+  question numbers, internal type names. Cite an ADR only as a closing
+  "Design record" link when the reader may want the rationale.
+- For an error, give the code, what causes it, and how to fix it.
+- Bold only the first words of a list item or paragraph, never a whole
+  sentence.
+- Every claim must be true of the current compiler. When a fact is precise,
+  such as a diagnostic code, a signature, a default, or a limit, keep it
+  exactly.
+
 ## Tutorials And Examples
 
 The `tutorials/` directory should track the implemented subset of Aura, not just the proposal.
