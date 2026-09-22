@@ -56,3 +56,15 @@ method with an ordinary parameter.
 - Check-pass/check-fail fixtures pinning move behavior and diagnostic text.
 - MIR/direct method-call parity fixtures.
 - LSP hover/completion/diagnostic tests plus class examples and tutorials.
+
+## 2026-09-21 — Batch 2 phase 2a amendment: owned bindings as mutable places
+
+Per the Batch 2–3 design checkpoint (section H2, ratified 2026-09-21), every
+binding a consuming form introduces — a `match own` payload or type-pattern
+binding, a `for ... in own` loop target, and tuple-unpack leaves of those
+forms — is a mutable place, like the managed binding `with` creates, so a
+`mut self` method may be called on it without a marker that could not be
+written. Ordinary `name = value` locals keep requiring `mut`; bare and
+`match mut` bindings keep their shared and contained mutable meanings.
+Builtin receivers follow the audited table
+([ADR-0044](0044-canonical-collection-surface.md), 2026-09-21 section).

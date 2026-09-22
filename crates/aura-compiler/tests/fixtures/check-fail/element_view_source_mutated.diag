@@ -1,0 +1,7 @@
+error[AU3002]: cannot mutate `users` while shared view `first` remains live
+ --> crates/aura-compiler/tests/fixtures/check-fail/element_view_source_mutated.au:9:11
+  |
+9 |     users.append(Profile(name="linus", visits=2))
+  |           ^
+  = related crates/aura-compiler/tests/fixtures/check-fail/element_view_source_mutated.au:8:5: view `first` starts here
+  = related crates/aura-compiler/tests/fixtures/check-fail/element_view_source_mutated.au:10:11: last use of view `first` keeps this loan live

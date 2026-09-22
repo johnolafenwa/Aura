@@ -1,0 +1,24 @@
+class Profile:
+    visits: int64
+
+class User:
+    profile: Profile
+
+class Inventory:
+    users: list[User]
+
+def main():
+    mut users = [User(profile=Profile(visits=1))]
+    view mut selected = users
+    selected[0].profile.visits = 4
+    selected[0].profile.visits += 3
+    print(selected[0].profile.visits)
+    mut pairs = [(Profile(visits=2), Profile(visits=5))]
+    view mut pair = pairs[0][1]
+    pair.visits += 10
+    print(pair.visits)
+    mut inventory = Inventory(users=[User(profile=Profile(visits=8))])
+    view mut storage = inventory
+    storage.users[0].profile.visits = 9
+    storage.users[0].profile.visits += 1
+    print(storage.users[0].profile.visits)

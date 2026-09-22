@@ -154,9 +154,12 @@ reassigned.
 
 `view` creates a non-owning alias to one addressable place. Supported places
 are local roots, parameters, receivers, existing views, class-field paths,
-and fixed tuple positions. A source is evaluated once. Collection indexes,
-map keys, set elements, Queue receives, Range values, and computed temporaries
-do not have view identity in Aura 0.3.
+fixed tuple positions, list elements, and dictionary entries, including a
+field or tuple projection inside an element (`users[i].name`). A source is
+evaluated once: an element or entry selector is read when the view is
+created, its bounds or presence is checked there (`AU4003`), and the view
+keeps naming that slot afterwards. Set elements, Queue receives, Range
+values, and computed temporaries do not have view identity in Aura 0.3.
 
     class Counter:
         value: int64
@@ -172,9 +175,26 @@ The mutable assignment writes immediately to `counter.value`; ending the loan
 does not perform delayed copy-back. A shared view permits reads. A mutable view
 is exclusive and blocks every overlapping source access except through itself
 or a contained reborrow. Ancestors overlap descendants, while distinct fixed
-fields and tuple positions are disjoint. A view binding cannot be rebound,
-moved, cloned as a descriptor, stored in an aggregate, or sent across a task
-or Queue boundary.
+fields and tuple positions are disjoint. Two element or entry views of one
+collection are disjoint only when both selectors are literals of different
+values; a selector read from a variable overlaps every element, and a
+structural mutation of the collection overlaps every element view. A view
+binding cannot be rebound, moved, cloned as a descriptor, stored in an
+aggregate, or sent across a task or Queue boundary.
+
+    mut users = [Profile(name="ada", visits=1), Profile(name="linus", visits=2)]
+    view mut ada = users[0]
+    view mut linus = users[1]
+    ada.visits += 1
+    linus.visits += 1
+
+A list element or dictionary entry used as the object of a field access
+(`users[0].visits`) is read in place rather than copied, so a Copy field of a
+non-copy element can be read and a field can be assigned or updated through
+the element (`users[0].visits += 1`). Binding, returning, or passing the
+element itself still needs an explicit `get`, `pop`, or `remove`, and a
+non-copy field read out of an element is refused like a move out of a
+borrowed value.
 
 Loan regions begin at view creation and end after the final possible use,
 conservatively across branches and loops. Their lexical scope is only an upper
@@ -287,6 +307,11 @@ ordinary parameter:
 
     def name(user: User) -> view str from user:
         return view user.name
+
+A returned view names a root, field path, or fixed tuple position of its
+origin; it cannot yet select a list element or dictionary entry (`return
+view items[0]` is refused with `AU3004`), so return a view of the collection
+and select the element at the call site.
 
     def value_mut(counter: mut Counter) -> view mut int64 from counter:
         return view mut counter.value
@@ -609,7 +634,9 @@ diagnostic points to both the later access and the retained-borrow origin.
 `AU3003` reports assignment or mutation through an immutable place, including
 shared `self`. `AU3004`
 reports invalid parameter, receiver, loop, or Queue-iteration ownership modes.
-`AU3005` rejects a direct indexed read of a non-copy list element or dict value;
+`AU3005` rejects a direct indexed read of a non-copy list element or dict value
+in a binding, argument, or operand position (a field access through the element
+and a `view` of it are place reads, not copies);
 `AU3006` rejects the corresponding indexed compound read-modify-write.
 `AU3007` rejects direct or transitive duplication of non-cloneable state,
 including `random.Rng`, opaque FFI handles, capturing closure environments,

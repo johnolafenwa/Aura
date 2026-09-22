@@ -1,0 +1,41 @@
+class Profile:
+    name: str
+    visits: int64
+
+
+def describe(value: int64 | str) -> str:
+    match value:
+        case int64 as number:
+            return f"int {number}"
+        case str as text:
+            return f"str {text}"
+
+
+def main():
+    mut users = [Profile(name="ada", visits=1), Profile(name="linus", visits=2)]
+    users[0].visits = 5
+    print(users[0].visits)
+    users[1].visits += 7
+    print(users[1].visits)
+    i = 0
+    users[i].name = "grace"
+    print(users[0].name)
+    view first = users[0]
+    users[1].visits = 30
+    print(first.visits)
+    print(users[1].visits)
+    mut people: dict[str, Profile] = {"ada": Profile(name="ada", visits=0)}
+    people["ada"].visits = 3
+    people["ada"].visits += 4
+    print(people["ada"].visits)
+    mut values: list[int64 | str] = [1, "two"]
+    view head = values[0]
+    print(describe(head))
+    view mut tail = values[1]
+    tail = 3
+    print(describe(tail))
+    print(values)
+    mut rows = [[1, 2], [3, 4]]
+    for row in rows:
+        view cell = row[1]
+        print(cell)

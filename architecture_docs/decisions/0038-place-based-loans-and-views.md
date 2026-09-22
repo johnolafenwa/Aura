@@ -753,3 +753,25 @@ contract changes. Collection-entry loans remain Batch 2.
 
 Implementation is in Batch 1 phase 1; this dated amendment extends the
 recorded baseline without claiming the feature is already delivered.
+
+## 2026-09-21 — Batch 2 phase 2a amendment: indexed places and iteration
+
+The Batch 2–3 design checkpoint
+([17-batch-2-3-design-checkpoint.md](../17-batch-2-3-design-checkpoint.md),
+sections A1–A6, ratified 2026-09-21) lifts the deferral of `list` indexes
+and `dict` keys recorded under place identity. An element place (`items[i]`)
+and an entry place (`table[key]`) are projections beside fields and tuple
+positions, with evaluate-once selection at loan creation, `AU4003` for an
+out-of-range position or an absent key, literal-only disjointness between
+two element or entry projections, and static invalidation of a live element
+or entry loan by a whole-collection structural mutation or a non-disjoint
+element write (`AU3011`). Bare and mutable list iteration become one root
+loan for the loop region plus a first-class element `ViewBinding` per
+iteration with immediate write-through; `MutableIterationWriteback` is
+retired for lists. An element or entry projection may be a returned view
+with the whole origin root as the static footprint (`Element`/`Entry`
+footprint kinds in exported metadata). Range places (slice views) follow in
+phase 2b. The detailed contract lives in
+[ADR-0061](0061-collection-element-loans-and-slice-views.md)'s 2026-09-21
+section; this ADR's aliasing, lifetime, escape, and task rules apply to the
+new projections unchanged.

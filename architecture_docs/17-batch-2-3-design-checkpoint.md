@@ -334,8 +334,17 @@ overlap rules to the element projection**:
 | Operation on `items: list[T]` | Classification | Effect on live element loans of `items` |
 | --- | --- | --- |
 | `items[j]` shared read, `len`, `in`, `get`, `index`, `count`, `copy`, `map`, `filter`, slicing, bare iteration, bare `match`, passing `items` to a bare parameter | Shared access to `items` | Allowed while every live element loan is shared; rejected (`AU3002`) while a mutable element loan is live |
-| `items[j] = value` (simple indexed assignment) | Element-level write to `items[j]`; replaces in place, never reallocates or shifts | Rejected (`AU3011`) unless `items[j]` is proven disjoint from every live element loan |
-| `append`, `insert`, `extend`, `pop`, `remove`, `clear`, `reverse`, `sort`, `set`, `swap`, `reserve`, `for x in mut items`, passing `items` to a `mut` parameter or `mut self` method, `match mut items`, moving, rebinding, or reinitializing `items` | Whole-collection structural mutation or exclusive access | Rejected (`AU3011` for a mutating method or `mut` argument, `AU3002`/`AU3001` for exclusivity, move, or rebinding as today) while any element loan is live |
+| `items[j] = value` (simple indexed assignment), `items.set(j, value)` | Element-level write to `items[j]`; replaces in place, never reallocates or shifts; `set` returns the owned old element | Rejected (`AU3011`) unless `items[j]` is proven literal-disjoint from every live element loan, shared or mutable |
+| `append`, `insert`, `extend`, `pop`, `remove`, `clear`, `reverse`, `sort`, `swap`, `reserve`, `for x in mut items`, passing `items` to a `mut` parameter or `mut self` method, `match mut items`, moving, rebinding, or reinitializing `items` | Whole-collection structural mutation or exclusive access | Rejected (`AU3011` for a mutating method or `mut` argument, `AU3002`/`AU3001` for exclusivity, move, or rebinding as today) while any element loan is live |
+
+**2026-09-22 amendment (owner's delegated ruling):** list `set(i, value)`
+has the same element-level classification as indexed assignment, including
+`set(i, None)` for an optional element type. Its transferred old element is
+owned. This corrects the earlier A3 table and Q3's blanket classification
+of other mutations, aligning them with A4. The remaining operations in the
+whole-collection row are unchanged. Dictionary `set(k, value)` and indexed
+assignment remain whole-collection because insertion may rehash; only an
+entry-view write is element-level.
 
 | Operation on `table: dict[K, V]` | Classification | Effect on live entry loans of `table` |
 | --- | --- | --- |
@@ -2011,6 +2020,9 @@ Each question lists its alternatives and one recommendation. The
 - B. Treat every mutation, including list indexed assignment, as whole-collection and prove no disjointness.
 - **Recommended: A.**
 - **Ratified: A.**
+
+The 2026-09-22 delegated amendment in A3 adds list `set(i, value)` to the
+element-level writes; all other classifications in this answer are unchanged.
 
 **Q4 — A4: How does ownership move through element views?**
 

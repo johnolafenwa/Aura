@@ -125,7 +125,7 @@ fn view_arguments_cannot_cross_a_task_boundary() {
 fn indexed_collection_elements_cannot_be_returned_as_views() {
     rejects(
         "def first[T](items: list[T]) -> view T from items:\n    return view items[0]\ndef main():\n    values = [1, 2]\n    view head = first(values)\n    print(head)\n",
-        "do not have stable view identity",
+        "a returned view cannot yet select a list element or dictionary entry",
     );
 }
 

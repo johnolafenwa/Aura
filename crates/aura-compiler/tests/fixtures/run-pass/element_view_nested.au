@@ -1,0 +1,26 @@
+class Profile:
+    name: str
+    visits: int64
+
+
+def main():
+    mut rows = [[1, 2], [3, 4]]
+    view mut row = rows[0]
+    view mut cell = row[1]
+    cell = 9
+    print(rows)
+    view last = rows[1]
+    view corner = last[0]
+    print(corner)
+    mut table: dict[str, list[int64]] = {"a": [5, 6]}
+    view mut entry = table["a"]
+    view mut slot = entry[0]
+    slot += 10
+    print(table)
+    mut teams: dict[str, list[Profile]] = {"core": [Profile(name="ada", visits=1)]}
+    view mut core = teams["core"]
+    view mut ada = core[0]
+    ada.visits += 2
+    view mut visits = core[0].visits
+    visits *= 10
+    print(teams["core"][0].visits)

@@ -41,11 +41,13 @@ fn adr0038_direct_view_fixed_point_comparison_ignores_order_not_authority() {
         union_payloads: Vec::new(),
         place: "owner.left".into(),
         conditions: vec![(Variable::from_u32(1), 0), (Variable::from_u32(2), 1)],
+        elements: Vec::new(),
     };
     let b = DirectViewAlternative {
         union_payloads: Vec::new(),
         place: "owner.right".into(),
         conditions: vec![(Variable::from_u32(1), 1)],
+        elements: Vec::new(),
     };
     let left = HashMap::from([(
         "view".into(),
@@ -76,6 +78,7 @@ fn adr0038_direct_view_fixed_point_comparison_ignores_order_not_authority() {
                 union_payloads: Vec::new(),
                 place: b.place.clone(),
                 conditions: vec![],
+                elements: Vec::new(),
             },
         ],
         vec![
@@ -84,6 +87,7 @@ fn adr0038_direct_view_fixed_point_comparison_ignores_order_not_authority() {
                 union_payloads: Vec::new(),
                 place: b.place,
                 conditions: vec![(Variable::from_u32(1), 0)],
+                elements: Vec::new(),
             },
         ],
     ] {
@@ -211,6 +215,7 @@ fn adr0038_direct_view_and_closure_metadata_helpers_preserve_dataflow_invariants
             union_payloads: Vec::new(),
             place: "owner.field".to_string(),
             conditions: vec![(selector, 1)],
+            elements: Vec::new(),
         }]
     );
 
@@ -15681,4 +15686,211 @@ fn runtime_type_wildcards_are_found_inside_callable_contracts() {
         Type::named("str"),
         Type::named("Unknown")
     )));
+}
+
+#[test]
+fn adr0061_direct_view_place_projection_reaches_inside_an_element() {
+    use super::{
+        DirectElementKind, DirectElementSelector, DirectType, DirectViewPlace, ScalarKind,
+    };
+    use cranelift_frontend::Variable;
+    let mut element = DirectViewPlace::static_place("items".to_string());
+    element.alternatives[0]
+        .elements
+        .push(DirectElementSelector {
+            variable: Variable::from_u32(9),
+            selector_ty: DirectType::Scalar(ScalarKind::Int64),
+            element_type: Type::named("Profile"),
+            kind: DirectElementKind::List,
+            projection: String::new(),
+            span: crate::diag::Span::new(1, 1),
+        });
+    let projected = element.project("visits");
+    assert_eq!(projected.alternatives[0].place, "items");
+    assert_eq!(projected.alternatives[0].elements[0].projection, "visits");
+    let nested = projected.project("inner");
+    assert_eq!(
+        nested.alternatives[0].elements[0].projection,
+        "visits.inner"
+    );
+    assert_eq!(nested.clone().project("").alternatives, nested.alternatives);
+}
+
+#[test]
+fn adr0061_direct_codegen_compiles_element_and_entry_loans() {
+    let sources = [
+        // List elements: scalar, string, class with projections, tuple
+        // position, evaluate-once, literal-disjoint mutable views.
+        r#"
+class Profile:
+    name: str
+    visits: int64
+
+def main():
+    mut values = [10, 20, 30]
+    view mut first = values[0]
+    first += 1
+    mut index = 1
+    view mut selected = values[index]
+    index = 2
+    selected = 7
+    view mut left = values[1]
+    view mut right = values[2]
+    left += 1
+    right += 1
+    mut names = ["ada", "linus"]
+    view mut name = names[1]
+    name = name + "!"
+    mut users = [Profile(name="ada", visits=1), Profile(name="linus", visits=2)]
+    view mut ada = users[0]
+    ada.visits += 10
+    view mut visits = users[1].visits
+    visits *= 3
+    view shared = users[0]
+    print(shared.name)
+    users[1].visits = 5
+    users[1].visits += 1
+    print(users[1].visits)
+    pairs = [(1, "one"), (2, "two")]
+    view label = pairs[1][1]
+    print(label)
+    print(values)
+    print(names)
+"#,
+        // Dictionary entries: str, int64, and bool keys, class values with
+        // projections, union values, and assignment through an entry.
+        r#"
+class Profile:
+    name: str
+    visits: int64
+
+def main():
+    mut counts: dict[str, int64] = {"ready": 1}
+    key = "ready"
+    view mut ready = counts[key]
+    ready += 1
+    mut flags: dict[bool, int64] = {true: 1}
+    view mut yes = flags[true]
+    yes += 1
+    mut codes: dict[int64, str] = {7: "seven"}
+    view seven = codes[7]
+    print(seven)
+    mut people: dict[str, Profile] = {"ada": Profile(name="ada", visits=0)}
+    view mut ada = people["ada"]
+    ada.visits += 3
+    view mut visits = people["ada"].visits
+    visits *= 2
+    people["ada"].visits += 1
+    print(people["ada"].visits)
+    mut boxes: dict[str, int64 | str] = {"a": "x"}
+    view mut slot = boxes["a"]
+    slot = 9
+    print(boxes)
+    print(counts)
+    print(flags)
+"#,
+        // Element loans through a loop binding, and nested element views
+        // through an element or entry view (a chain of selections).
+        r#"
+def main():
+    mut rows = [[1, 2], [3, 4]]
+    for row in rows:
+        view cell = row[1]
+        print(cell)
+    view mut row = rows[0]
+    view mut cell = row[1]
+    cell = 9
+    mut table: dict[str, list[int64]] = {"a": [5, 6]}
+    view mut entry = table["a"]
+    view mut slot = entry[0]
+    slot += 10
+    print(rows)
+    print(table)
+"#,
+    ];
+    for source in sources {
+        let module = lower_source_to_mir(source).expect("element view source should lower");
+        emit_host_object(&module).expect("element and entry loans compile on the direct backend");
+    }
+}
+
+#[test]
+fn adr0061_direct_element_loans_preserve_returned_collection_alternatives() {
+    let module = lower_source_to_mir(
+        r#"
+class Shelves:
+    left: list[list[int64]]
+    right: list[list[int64]]
+
+class Ledgers:
+    left: dict[int64, list[int64]]
+    right: dict[int64, list[int64]]
+
+def shelf(shelves: mut Shelves, left: bool) -> view mut list[list[int64]] from shelves:
+    if left:
+        return view mut shelves.left
+    return view mut shelves.right
+
+def ledger(ledgers: mut Ledgers, left: bool) -> view mut dict[int64, list[int64]] from ledgers:
+    if left:
+        return view mut ledgers.left
+    return view mut ledgers.right
+
+def update_shelf(shelves: mut Shelves, left: bool):
+    view mut selected = shelf(shelves, left)
+    view mut row = selected[0]
+    view mut cell = row[1]
+    print(cell)
+    cell += 10
+    print(cell)
+
+def update_ledger(ledgers: mut Ledgers, left: bool):
+    view mut selected = ledger(ledgers, left)
+    view mut entry = selected[7]
+    view mut cell = entry[0]
+    print(cell)
+    cell += 20
+    print(cell)
+
+def main():
+    mut shelves = Shelves(left=[[1, 2]], right=[[3, 4]])
+    update_shelf(shelves, true)
+    update_shelf(shelves, false)
+    print(shelves.left)
+    print(shelves.right)
+    mut ledgers = Ledgers(left={7: [5, 6]}, right={7: [7, 8]})
+    update_ledger(ledgers, true)
+    update_ledger(ledgers, false)
+    print(ledgers.left)
+    print(ledgers.right)
+    view mut left_row = shelves.left[0]
+    view mut first = left_row[0]
+    first += 100
+    print(first)
+    mut pairs = ([8, 9], [10, 11])
+    view mut pair = pairs[1]
+    view mut item = pair[0]
+    item += 30
+    print(item)
+    print(pairs)
+    mut optional: Shelves | None = Shelves(left=[[1, 2]], right=[[3, 4]])
+    match mut optional:
+        case Shelves as present:
+            view mut row = present.right[0]
+            view mut last = row[1]
+            last += 40
+            print(last)
+        case None:
+            print("absent")
+"#,
+    )
+    .expect("an element loan may select through either returned collection view");
+    assert_eq!(
+        crate::run_mir(&module)
+            .expect("both selected collection alternatives should write through")
+            .stdout,
+        "2\n12\n4\n14\n[[1, 12]]\n[[3, 14]]\n5\n25\n7\n27\n{7: [25, 6]}\n{7: [27, 8]}\n101\n40\n([8, 9], [40, 11])\n44\n"
+    );
+    emit_host_object(&module)
+        .expect("direct element loads and stores should compile for every selected alternative");
 }

@@ -759,6 +759,13 @@ impl<'a> FunctionChecker<'a> {
             }
             ExprKind::Index { object, index } => {
                 let object_ty = self.type_of_member_object_expr(object, locals)?;
+                // A list element or dictionary entry is a mutable place when
+                // its collection is (ADR-0061, 2026-09-21 section, A1).
+                if matches!(&object_ty, Type::Named(name, args)
+                    if (name == "list" && args.len() == 1) || (name == "dict" && args.len() == 2))
+                {
+                    return self.is_mutable_place(object, locals);
+                }
                 let Type::Tuple(elements) = object_ty else {
                     return Ok(false);
                 };
@@ -780,6 +787,29 @@ impl<'a> FunctionChecker<'a> {
                     return Ok(false);
                 }
                 Ok(self.view_place(expr, locals)?.is_some())
+            }
+            _ => Ok(false),
+        }
+    }
+
+    /// Whether `expr` is a list element or dictionary entry, or a
+    /// projection inside one (`items[i]`, `users[i].name`, `pairs[i][0]`).
+    pub(super) fn is_collection_element_expr(
+        &self,
+        expr: &Expr,
+        locals: &mut HashMap<String, LocalBinding>,
+    ) -> Result<bool> {
+        match &expr.kind {
+            ExprKind::Group(inner) => self.is_collection_element_expr(inner, locals),
+            ExprKind::Member { object, .. } => self.is_collection_element_expr(object, locals),
+            ExprKind::Index { object, .. } => {
+                let object_ty = self.type_of_member_object_expr(object, locals)?;
+                if matches!(&object_ty, Type::Named(name, args)
+                    if (name == "list" && args.len() == 1) || (name == "dict" && args.len() == 2))
+                {
+                    return Ok(true);
+                }
+                self.is_collection_element_expr(object, locals)
             }
             _ => Ok(false),
         }

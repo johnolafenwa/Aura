@@ -94,3 +94,15 @@ hidden cost.
   `retained_parameter_rejects_nested_argument_consumption.au` pin B2.0-a
   containment when a nested call consumes a retained receiver or earlier
   argument.
+
+## 2026-09-21 — Batch 2 phase 2a amendment: `AU3006` guidance
+
+Compound assignment through a non-Copy element or entry (`table[key] +=
+rhs`) remains `AU3006` under this ADR's rule; the guidance now recommends
+`view mut entry = table[key]` followed by `entry = entry + rhs` or the
+type's own mutating method, which expresses the read-modify-write as an
+explicit write-through instead of a hidden clone
+([ADR-0061](0061-collection-element-loans-and-slice-views.md), 2026-09-21
+section, A1). A dictionary entry loan's key expression is retained as a
+shared read for the probe and not consumed, as this ADR retains an indexed
+read's key today.

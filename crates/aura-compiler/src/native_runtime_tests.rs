@@ -23250,3 +23250,432 @@ fn direct_callable_invoke_claims_indirect_mutable_sinks_into_parameter_order() {
         "invalid direct capture count"
     );
 }
+
+fn element_trap(invoke: impl FnOnce() + Send + 'static) -> Diagnostic {
+    run_lightweight_root_task(move || {
+        super::with_task_runtime_error_capture(|| {
+            invoke();
+            Ok(Value::Unit)
+        })
+    })
+    .expect_err("the element path helper should trap")
+}
+
+fn element_trap_message(invoke: impl FnOnce() + Send + 'static) -> String {
+    element_trap(invoke).message
+}
+
+fn element_path_load(collection: usize, path: &'static str, selectors: &[i64]) -> Value {
+    let loaded = super::aura_direct_element_path_load(
+        collection as *mut OpaqueValue,
+        path.as_ptr(),
+        path.len(),
+        selectors.as_ptr(),
+        selectors.len(),
+        3,
+        9,
+    );
+    unsafe { take_value(loaded) }
+}
+
+fn element_path_store(collection: usize, path: &'static str, selectors: &[i64], value: Value) {
+    expect_unit(super::aura_direct_element_path_store(
+        collection as *mut OpaqueValue,
+        path.as_ptr(),
+        path.len(),
+        selectors.as_ptr(),
+        selectors.len(),
+        boxed_value(value),
+        3,
+        9,
+    ));
+}
+
+fn element_load_trap(collection: usize, path: &'static str, selectors: Vec<i64>) -> Diagnostic {
+    element_trap(move || {
+        let _ = super::aura_direct_element_path_load(
+            collection as *mut OpaqueValue,
+            path.as_ptr(),
+            path.len(),
+            selectors.as_ptr(),
+            selectors.len(),
+            3,
+            9,
+        );
+    })
+}
+
+fn element_store_trap(collection: usize, path: &'static str, selectors: Vec<i64>) -> Diagnostic {
+    element_trap(move || {
+        let _ = super::aura_direct_element_path_store(
+            collection as *mut OpaqueValue,
+            path.as_ptr(),
+            path.len(),
+            selectors.as_ptr(),
+            selectors.len(),
+            boxed_value(Value::Int(IntegerValue::from_i64(1))),
+            4,
+            2,
+        );
+    })
+}
+
+#[test]
+fn adr0061_direct_element_path_helpers_read_and_write_inside_elements() {
+    fn profile(name: &str, visits: i64) -> Value {
+        Value::Instance(InstanceValue {
+            class_name: "Profile".to_string(),
+            fields: BTreeMap::from([
+                ("name".to_string(), Value::String(name.to_string())),
+                (
+                    "visits".to_string(),
+                    Value::Int(IntegerValue::from_i64(visits)),
+                ),
+            ]),
+        })
+    }
+    fn field_visits(value: &Value) -> String {
+        match value {
+            Value::Instance(instance) => instance.fields["visits"].render(),
+            other => panic!("expected an instance, found {other:?}"),
+        }
+    }
+    let users = boxed_value(Value::Vec(VecValue {
+        element_type: Type::named("Profile"),
+        elements: vec![profile("ada", 1), profile("linus", 2)],
+    })) as usize;
+
+    // The whole element, then a projected field through a negative position.
+    assert_eq!(field_visits(&element_path_load(users, "[i]", &[1])), "2");
+    assert_eq!(element_path_load(users, "[i].visits", &[-1]).render(), "2");
+
+    // Writes reach the field, or replace the element, in place.
+    element_path_store(
+        users,
+        "[i].visits",
+        &[0],
+        Value::Int(IntegerValue::from_i64(41)),
+    );
+    element_path_store(users, "[i]", &[1], profile("grace", 5));
+    unsafe {
+        super::with_value(users as *mut OpaqueValue, |value| match value {
+            Value::Vec(vector) => {
+                assert_eq!(field_visits(&vector.elements[0]), "41");
+                assert_eq!(field_visits(&vector.elements[1]), "5");
+            }
+            other => panic!("expected a list, found {other:?}"),
+        })
+    };
+
+    // Traps name the index expression; a write never inserts.
+    let out_of_bounds = element_load_trap(users, "[i]", vec![5]);
+    assert_eq!(out_of_bounds.span, Some(Span::new(3, 9)));
+    assert!(
+        out_of_bounds
+            .message
+            .contains("list index `5` is out of bounds for length `2`"),
+        "{}",
+        out_of_bounds.message
+    );
+    let write_out_of_bounds = element_store_trap(users, "[i].visits", vec![2]);
+    assert_eq!(write_out_of_bounds.span, Some(Span::new(4, 2)));
+    assert!(write_out_of_bounds
+        .message
+        .contains("list index `2` is out of bounds for length `2`"));
+    for (path, selectors, expected) in [
+        ("", vec![], "direct runtime received an empty element path"),
+        ("[i]..name", vec![0], "invalid element path `[i]..name`"),
+        (
+            "[i].age",
+            vec![0],
+            "class `Profile` has no field `age` in path `[i].age`",
+        ),
+        (
+            "[i].[i]",
+            vec![0],
+            "names more selections than were supplied",
+        ),
+        (
+            "[i]",
+            vec![0, 1],
+            "names fewer selections than were supplied",
+        ),
+        ("[i].visits.[i]", vec![0, 0], "indexes non-list `integer`"),
+        ("[i].[k]", vec![0, 0], "keys non-dict `Profile`"),
+        ("[k]", vec![0], "keys non-dict `list`"),
+    ] {
+        let message = element_load_trap(users, path, selectors.clone()).message;
+        assert!(message.contains(expected), "{path}: {message}");
+        let message = element_store_trap(users, path, selectors).message;
+        assert!(message.contains(expected), "{path}: {message}");
+    }
+
+    // Tuple positions and non-projectable elements.
+    let pairs = boxed_value(Value::Vec(VecValue {
+        element_type: Type::Tuple(vec![Type::named("int64"), Type::named("str")]),
+        elements: vec![Value::Tuple(TupleValue {
+            element_types: vec![Type::named("int64"), Type::named("str")],
+            elements: vec![
+                Value::Int(IntegerValue::from_i64(1)),
+                Value::String("one".to_string()),
+            ],
+        })],
+    })) as usize;
+    assert_eq!(element_path_load(pairs, "[i].1", &[0]).render(), "one");
+    element_path_store(pairs, "[i].0", &[0], Value::Int(IntegerValue::from_i64(41)));
+    assert_eq!(element_path_load(pairs, "[i].0", &[0]).render(), "41");
+    for (path, expected) in [
+        (
+            "[i].left",
+            "tuple projection `left` is not a fixed position",
+        ),
+        ("[i].7", "tuple of length 2 has no element at index 7"),
+    ] {
+        assert!(element_load_trap(pairs, path, vec![0])
+            .message
+            .contains(expected));
+        assert!(element_store_trap(pairs, path, vec![0])
+            .message
+            .contains(expected));
+    }
+    let numbers = boxed_value(Value::Vec(VecValue {
+        element_type: Type::named("int64"),
+        elements: vec![Value::Int(IntegerValue::from_i64(3))],
+    })) as usize;
+    assert!(element_load_trap(numbers, "[i].visits", vec![0])
+        .message
+        .contains("cannot access field `[i].visits` on non-instance"));
+    assert!(element_store_trap(numbers, "[i].visits", vec![0])
+        .message
+        .contains("cannot access field `[i].visits` on non-instance"));
+
+    // Dictionary entries (borrowed keys), nested lists inside entries, and
+    // a nested element written in place through two selections.
+    let table = boxed_value(Value::Map(MapValue {
+        key_type: Type::named("str"),
+        value_type: Type::Named("list".to_string(), vec![Type::named("int64")]),
+        entries: vec![(
+            Value::String("a".to_string()),
+            Value::Vec(VecValue {
+                element_type: Type::named("int64"),
+                elements: vec![
+                    Value::Int(IntegerValue::from_i64(5)),
+                    Value::Int(IntegerValue::from_i64(6)),
+                ],
+            }),
+        )],
+    })) as usize;
+    let key = string_value("a") as usize;
+    assert_eq!(
+        element_path_load(table, "[k].[i]", &[key as i64, 1]).render(),
+        "6"
+    );
+    element_path_store(
+        table,
+        "[k].[i]",
+        &[key as i64, 0],
+        Value::Int(IntegerValue::from_i64(15)),
+    );
+    assert_eq!(
+        element_path_load(table, "[k]", &[key as i64]).render(),
+        "[15, 6]"
+    );
+    let missing = string_value("missing") as usize;
+    let missing_key = element_load_trap(table, "[k]", vec![missing as i64]);
+    assert_eq!(missing_key.code, "AU4003");
+    assert_eq!(missing_key.span, Some(Span::new(3, 9)));
+    assert!(missing_key
+        .message
+        .contains("dict key `missing` was not present"));
+    let write_missing_key = element_store_trap(table, "[k].[i]", vec![missing as i64, 0]);
+    assert_eq!(write_missing_key.code, "AU4003");
+    assert!(write_missing_key
+        .message
+        .contains("dict key `missing` was not present"));
+    // Traps without a position keep their message and code.
+    let unspanned = element_trap(move || {
+        let _ = super::aura_direct_element_path_load(
+            users as *mut OpaqueValue,
+            "[i]".as_ptr(),
+            3,
+            [9i64].as_ptr(),
+            1,
+            0,
+            0,
+        );
+    });
+    assert_eq!(unspanned.span, None);
+    assert!(unspanned
+        .message
+        .contains("list index `9` is out of bounds for length `2`"));
+    let unspanned_key = element_trap(move || {
+        let _ = super::aura_direct_element_path_store(
+            table as *mut OpaqueValue,
+            "[k]".as_ptr(),
+            3,
+            [missing as i64].as_ptr(),
+            1,
+            boxed_value(Value::Int(IntegerValue::from_i64(1))),
+            0,
+            0,
+        );
+    });
+    assert_eq!(unspanned_key.code, "AU4003");
+    assert_eq!(unspanned_key.span, None);
+    assert!(unspanned_key
+        .message
+        .contains("dict key `missing` was not present"));
+
+    // Enum payloads and the active union member inside elements.
+    let shapes = boxed_value(Value::Vec(VecValue {
+        element_type: Type::named("Shape"),
+        elements: vec![Value::EnumVariant(EnumVariantValue {
+            enum_name: "Shape".to_string(),
+            variant_name: "Circle".to_string(),
+            payloads: vec![Value::Int(IntegerValue::from_i64(5))],
+        })],
+    })) as usize;
+    let circle = "[i].__variant_payload_Circle_0";
+    assert_eq!(element_path_load(shapes, circle, &[0]).render(), "5");
+    element_path_store(shapes, circle, &[0], Value::Int(IntegerValue::from_i64(6)));
+    assert_eq!(element_path_load(shapes, circle, &[0]).render(), "6");
+    for path in [
+        "[i].__variant_payload_Square_0",
+        "[i].__variant_payload_Circle_3",
+    ] {
+        assert!(element_load_trap(shapes, path, vec![0])
+            .message
+            .contains("does not select the active variant"));
+        assert!(element_store_trap(shapes, path, vec![0])
+            .message
+            .contains("does not select the active variant"));
+    }
+    assert!(element_load_trap(shapes, "[i].radius", vec![0])
+        .message
+        .contains("invalid enum payload projection"));
+    let unions = boxed_value(Value::Vec(VecValue {
+        element_type: Type::named("int64"),
+        elements: vec![Value::Union(Box::new(crate::runtime_value::UnionValue {
+            union_type: Type::named("int64"),
+            member_index: 0,
+            payload: Value::Int(IntegerValue::from_i64(7)),
+        }))],
+    })) as usize;
+    assert_eq!(
+        element_path_load(unions, "[i].__union_payload_0", &[0]).render(),
+        "7"
+    );
+    element_path_store(
+        unions,
+        "[i].__union_payload_0",
+        &[0],
+        Value::Int(IntegerValue::from_i64(8)),
+    );
+    assert_eq!(
+        element_path_load(unions, "[i].__union_payload_0", &[0]).render(),
+        "8"
+    );
+    assert!(element_load_trap(unions, "[i].__union_payload_1", vec![0])
+        .message
+        .contains("does not select the active member"));
+    assert!(element_store_trap(unions, "[i].__union_payload_1", vec![0])
+        .message
+        .contains("does not select the active member"));
+    unsafe {
+        release_value(users as *mut OpaqueValue);
+        release_value(pairs as *mut OpaqueValue);
+        release_value(numbers as *mut OpaqueValue);
+        release_value(table as *mut OpaqueValue);
+        release_value(key as *mut OpaqueValue);
+        release_value(missing as *mut OpaqueValue);
+        release_value(shapes as *mut OpaqueValue);
+        release_value(unions as *mut OpaqueValue);
+    }
+}
+
+#[test]
+fn adr0061_direct_entry_paths_borrow_keys_and_check_selector_counts() {
+    let table = boxed_value(Value::Map(MapValue {
+        key_type: Type::named("str"),
+        value_type: Type::named("int64"),
+        entries: vec![(
+            Value::String("ready".to_string()),
+            Value::Int(IntegerValue::from_i64(1)),
+        )],
+    })) as usize;
+    let key = string_value("ready") as usize;
+    for expected in [2, 3] {
+        element_path_store(
+            table,
+            "[k]",
+            &[key as i64],
+            Value::Int(IntegerValue::from_i64(expected)),
+        );
+        assert_eq!(
+            element_path_load(table, "[k]", &[key as i64]).render(),
+            expected.to_string()
+        );
+        // Each read and write borrows this same handle, whose lifetime
+        // belongs to the loan's caller until EndLoan releases it.
+        assert_eq!(
+            unsafe { take_value(key as *mut OpaqueValue) }.render(),
+            "ready"
+        );
+    }
+    for diagnostic in [
+        element_load_trap(table, "[k]", vec![]),
+        element_store_trap(table, "[k]", vec![]),
+    ] {
+        assert_eq!(
+            diagnostic.message,
+            "element path `[k]` names more selections than were supplied"
+        );
+    }
+    // Refusing an incomplete selector buffer leaves the entry unchanged.
+    assert_eq!(element_path_load(table, "[k]", &[key as i64]).render(), "3");
+    unsafe {
+        release_value(key as *mut OpaqueValue);
+        release_value(table as *mut OpaqueValue);
+    }
+}
+
+#[test]
+fn adr0061_direct_element_paths_keep_collection_field_and_tuple_storage() {
+    let list_type = Type::Named("list".to_string(), vec![Type::named("int64")]);
+    let root = boxed_value(Value::Instance(InstanceValue {
+        class_name: "Shelves".to_string(),
+        fields: BTreeMap::from([(
+            "pairs".to_string(),
+            Value::Tuple(TupleValue {
+                element_types: vec![list_type.clone(), list_type],
+                elements: vec![
+                    Value::Vec(VecValue {
+                        element_type: Type::named("int64"),
+                        elements: vec![Value::Int(IntegerValue::from_i64(5))],
+                    }),
+                    Value::Vec(VecValue {
+                        element_type: Type::named("int64"),
+                        elements: vec![Value::Int(IntegerValue::from_i64(7))],
+                    }),
+                ],
+            }),
+        )]),
+    })) as usize;
+    assert_eq!(element_path_load(root, "pairs.1.[i]", &[0]).render(), "7");
+    element_path_store(
+        root,
+        "pairs.1.[i]",
+        &[0],
+        Value::Int(IntegerValue::from_i64(17)),
+    );
+    // Read the original root, not the copied result of a field extraction.
+    unsafe {
+        super::with_value(root as *mut OpaqueValue, |value| {
+            let Value::Instance(instance) = value else {
+                panic!("expected the original collection owner");
+            };
+            assert_eq!(instance.fields["pairs"].render(), "([5], [17])");
+        });
+        release_value(root as *mut OpaqueValue);
+    }
+}

@@ -1,6 +1,37 @@
 # Task Board
 
-Last updated: 2026-09-21
+Last updated: 2026-09-22
+
+## Batch 2 phase 2a (element and entry loans; in progress)
+
+- Branch `codex/batch-2-phase-2a` from `c308f9ba`; work note
+  `2026-09-21-batch-2-phase-2a.md`; design authority ADR-0061's 2026-09-21
+  section (checkpoint M2). Step 1, the element and entry loan vertical
+  slice, is in the tree: `view [mut] name = items[i]` / `table[key]` with
+  field and tuple projections inside the element, evaluated once, `AU4003`
+  at the index expression on both backends; literal-only disjointness in
+  the checker and the validator; field reads through an element as place
+  reads and element-field assignment through a statement-scoped loan.
+  Next: contextual reads at arguments, receivers, operands, and scrutinees;
+  the A3 invalidation classification (`AU3011`); iteration unification;
+  `lookup`; the receiver-table audit; owned bindings as mutable places;
+  script-scope narrowing. Verification: recorded in the work note as the
+  local chain and hosted runs complete.
+- Step-1 local closeout: the complete `RUST_MIN_STACK=33554432 npm run ci`
+  chain passed for source/tests at `6df54d4b`. Compiler coverage is
+  **96.4791% lines / 97.4090% functions / 95.3016% regions**, with unchanged
+  floors. All 2131 compiler unit tests, 378 CLI tests, 615 parity fixtures,
+  116 LSP tests, and 28 extension tests pass; LSP coverage stays at 100%.
+  Returned-collection write-through and projected element reborrows are
+  fixed and pinned. Subsequent prose/generated-document changes pass
+  reference, tutorial, documentation-build, and hygiene checks.
+- [PR #17](https://github.com/johnolafenwa/Aura/pull/17), tested head
+  `1e4891fb`, passed hosted CI `35707901248` on both platforms on its first
+  attempt (Ubuntu job `106681171662`, macOS job `106681172161`); Docs
+  `35707901153` and Tutorial Examples `35707901218` passed. Hosted coverage
+  is 96.4791 / 97.4090 / 95.3000 on Ubuntu and 96.4767 / 97.4090 / 95.3005
+  on macOS; LSP coverage stays at 100%. Step 1 is verified and ready to
+  merge. See the work note for exact counts and the Daybreak access limitation.
 
 ## Batch 1 representation phase (complete) and Batch 2–3 design checkpoint (ratified)
 

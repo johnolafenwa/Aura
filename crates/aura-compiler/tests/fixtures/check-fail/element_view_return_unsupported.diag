@@ -1,0 +1,5 @@
+error[AU3004]: a returned view cannot yet select a list element or dictionary entry; return a view of the collection and select the element at the call site
+ --> crates/aura-compiler/tests/fixtures/check-fail/element_view_return_unsupported.au:2:21
+  |
+2 |     return view mut values[0]
+  |                     ^

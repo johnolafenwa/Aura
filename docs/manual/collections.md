@@ -90,7 +90,10 @@ owns each produced element, key, and value.
 ## list[T]
 
 `list[T]` preserves element order. `len(values)` and `values.len()` return
-`int64`.
+`int64`. `view name = values[index]` and `view mut name = values[index]`
+bind one element in place, and a field of a class element is read or
+assigned through the index (`values[index].field`) without copying the
+element (see [Statements](/manual/statements)).
 
 | Method | Signature | Contract |
 | --- | --- | --- |
@@ -207,7 +210,9 @@ assignment, and membership are the primary lookup and storage forms:
 
 `keys()` and `copy()` require clone-safe `K`; `values()` requires clone-safe
 `V`; `items()` requires both. These methods return eager snapshots, not live
-views. `get` accepts no default argument. Absence is represented by
+views; `view name = table[key]` and `view mut name = table[key]` are the live
+shared and mutable entry views (see [Statements](/manual/statements)). `get`
+accepts no default argument. Absence is represented by
 `Lookup[V]`: a missing key is `Lookup.Missing`, and a present value is
 `Lookup.Found(value)` even when `V` is itself an optional `T | None` and the
 stored value is `None`.

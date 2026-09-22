@@ -6419,6 +6419,377 @@ pub extern "C-unwind" fn aura_direct_map_set_index_in_place(
     })
 }
 
+/// Borrows the value at `segments` inside `value` (ADR-0061, 2026-09-21
+/// section): an element or entry loan's projected read clones only the
+/// value it reaches, never the element that holds it.
+fn direct_value_at_path<'a>(
+    value: &'a Value,
+    segments: &[&str],
+    full_path: &str,
+) -> std::result::Result<&'a Value, String> {
+    let Some((projection, rest)) = segments.split_first() else {
+        return Ok(value);
+    };
+    let nested = match value {
+        Value::EnumVariant(variant) => {
+            let index = direct_enum_projection_index(variant, projection)?;
+            &variant.payloads[index]
+        }
+        Value::Union(union) => {
+            if !direct_union_projection(union, projection) {
+                return Err(
+                    "union payload projection does not select the active member".to_string()
+                );
+            }
+            &union.payload
+        }
+        Value::Instance(instance) => instance.fields.get(*projection).ok_or_else(|| {
+            format!(
+                "class `{}` has no field `{}` in path `{full_path}`",
+                instance.class_name, projection
+            )
+        })?,
+        Value::Tuple(tuple) => {
+            let index = projection.parse::<usize>().map_err(|_| {
+                format!(
+                    "tuple projection `{projection}` is not a fixed position in path `{full_path}`"
+                )
+            })?;
+            tuple.elements.get(index).ok_or_else(|| {
+                format!(
+                    "tuple of length {} has no element at index {index} in path `{full_path}`",
+                    tuple.elements.len()
+                )
+            })?
+        }
+        other => {
+            return Err(format!(
+                "cannot access field `{full_path}` on non-instance `{}`",
+                value_type_name(other)
+            ))
+        }
+    };
+    direct_value_at_path(nested, rest, full_path)
+}
+
+/// `direct_value_at_path` for a write: the slot is reached in place.
+fn direct_value_at_path_mut<'a>(
+    value: &'a mut Value,
+    segments: &[&str],
+    full_path: &str,
+) -> std::result::Result<&'a mut Value, String> {
+    let Some((projection, rest)) = segments.split_first() else {
+        return Ok(value);
+    };
+    let nested = match value {
+        Value::EnumVariant(variant) => {
+            let index = direct_enum_projection_index(variant, projection)?;
+            &mut variant.payloads[index]
+        }
+        Value::Union(union) => {
+            if !direct_union_projection(union, projection) {
+                return Err(
+                    "union payload projection does not select the active member".to_string()
+                );
+            }
+            &mut union.payload
+        }
+        Value::Instance(instance) => {
+            let class_name = instance.class_name.clone();
+            instance.fields.get_mut(*projection).ok_or_else(|| {
+                format!("class `{class_name}` has no field `{projection}` in path `{full_path}`")
+            })?
+        }
+        Value::Tuple(tuple) => {
+            let index = projection.parse::<usize>().map_err(|_| {
+                format!(
+                    "tuple projection `{projection}` is not a fixed position in path `{full_path}`"
+                )
+            })?;
+            let len = tuple.elements.len();
+            tuple.elements.get_mut(index).ok_or_else(|| {
+                format!(
+                    "tuple of length {len} has no element at index {index} in path `{full_path}`"
+                )
+            })?
+        }
+        other => {
+            return Err(format!(
+                "cannot access field `{full_path}` on non-instance `{}`",
+                value_type_name(other)
+            ))
+        }
+    };
+    direct_value_at_path_mut(nested, rest, full_path)
+}
+
+/// One step of an element path (ADR-0061, 2026-09-21 section): `[i]`
+/// selects a list position and `[k]` a dictionary entry, each consuming
+/// the next selector word; any other segment projects inside the value
+/// reached so far (a field, tuple position, or payload).
+enum DirectElementPathStep<'p> {
+    Index,
+    Key,
+    Projection(&'p str),
+}
+
+fn direct_element_path_steps(
+    path: &str,
+) -> std::result::Result<Vec<DirectElementPathStep<'_>>, String> {
+    if path.is_empty() {
+        return Err("direct runtime received an empty element path".to_string());
+    }
+    path.split('.')
+        .map(|segment| match segment {
+            "" => Err(format!("invalid element path `{path}`")),
+            "[i]" => Ok(DirectElementPathStep::Index),
+            "[k]" => Ok(DirectElementPathStep::Key),
+            projection => Ok(DirectElementPathStep::Projection(projection)),
+        })
+        .collect()
+}
+
+enum DirectElementPathError {
+    OutOfBounds { index: i64, len: usize },
+    MissingKey(Box<Value>),
+    Path(String),
+}
+
+fn direct_element_path_failure(error: DirectElementPathError, line: i64, column: i64) -> ! {
+    match error {
+        DirectElementPathError::OutOfBounds { index, len } => {
+            direct_vec_index_error(index, len, line, column)
+        }
+        DirectElementPathError::MissingKey(key) => direct_map_missing_key_error(&key, line, column),
+        DirectElementPathError::Path(message) => runtime_error(message),
+    }
+}
+
+fn direct_vec_index_error(index: i64, len: usize, line: i64, column: i64) -> ! {
+    let message = format!("list index `{index}` is out of bounds for length `{len}`");
+    match runtime_span(line, column) {
+        Some(span) => runtime_error_at(span, message),
+        None => runtime_error(message),
+    }
+}
+
+fn direct_map_missing_key_error(key: &Value, line: i64, column: i64) -> ! {
+    let message = format!("dict key `{}` was not present", key.render());
+    match runtime_span(line, column) {
+        Some(span) => runtime_diagnostic_error(Diagnostic::coded_at("AU4003", span, message)),
+        None => runtime_diagnostic_error(Diagnostic::coded("AU4003", message)),
+    }
+}
+
+/// The selector words of an element path, borrowed from the caller's
+/// buffer; a path may not name more selections than were supplied, nor
+/// fewer.
+struct DirectElementSelectors<'s> {
+    words: &'s [i64],
+    cursor: usize,
+    path: &'s str,
+}
+
+impl DirectElementSelectors<'_> {
+    fn next(&mut self) -> std::result::Result<i64, DirectElementPathError> {
+        let word = self.words.get(self.cursor).copied().ok_or_else(|| {
+            DirectElementPathError::Path(format!(
+                "element path `{}` names more selections than were supplied",
+                self.path
+            ))
+        })?;
+        self.cursor += 1;
+        Ok(word)
+    }
+
+    fn finish(&self) -> std::result::Result<(), DirectElementPathError> {
+        if self.cursor == self.words.len() {
+            Ok(())
+        } else {
+            Err(DirectElementPathError::Path(format!(
+                "element path `{}` names fewer selections than were supplied",
+                self.path
+            )))
+        }
+    }
+}
+
+fn direct_element_step<'a>(
+    value: &'a Value,
+    step: &DirectElementPathStep<'_>,
+    selectors: &mut DirectElementSelectors<'_>,
+) -> std::result::Result<&'a Value, DirectElementPathError> {
+    match step {
+        DirectElementPathStep::Index => {
+            let index = selectors.next()?;
+            let Value::Vec(vector) = value else {
+                return Err(DirectElementPathError::Path(format!(
+                    "element path `{}` indexes non-list `{}`",
+                    selectors.path,
+                    value_type_name(value)
+                )));
+            };
+            let len = vector.elements.len();
+            normalize_vec_index(index, len)
+                .and_then(|normalized| vector.elements.get(normalized))
+                .ok_or(DirectElementPathError::OutOfBounds { index, len })
+        }
+        DirectElementPathStep::Key => {
+            let Value::Map(map) = value else {
+                return Err(DirectElementPathError::Path(format!(
+                    "element path `{}` keys non-dict `{}`",
+                    selectors.path,
+                    value_type_name(value)
+                )));
+            };
+            let key = unsafe { take_value(selectors.next()? as *mut OpaqueValue) };
+            map.entries
+                .iter()
+                .find(|(candidate, _)| *candidate == key)
+                .map(|(_, entry)| entry)
+                .ok_or_else(|| DirectElementPathError::MissingKey(Box::new(key)))
+        }
+        DirectElementPathStep::Projection(projection) => {
+            direct_value_at_path(value, &[projection], selectors.path)
+                .map_err(DirectElementPathError::Path)
+        }
+    }
+}
+
+fn direct_element_step_mut<'a>(
+    value: &'a mut Value,
+    step: &DirectElementPathStep<'_>,
+    selectors: &mut DirectElementSelectors<'_>,
+) -> std::result::Result<&'a mut Value, DirectElementPathError> {
+    match step {
+        DirectElementPathStep::Index => {
+            let index = selectors.next()?;
+            let Value::Vec(vector) = value else {
+                return Err(DirectElementPathError::Path(format!(
+                    "element path `{}` indexes non-list `{}`",
+                    selectors.path,
+                    value_type_name(value)
+                )));
+            };
+            let len = vector.elements.len();
+            normalize_vec_index(index, len)
+                .and_then(|normalized| vector.elements.get_mut(normalized))
+                .ok_or(DirectElementPathError::OutOfBounds { index, len })
+        }
+        DirectElementPathStep::Key => {
+            let Value::Map(map) = value else {
+                return Err(DirectElementPathError::Path(format!(
+                    "element path `{}` keys non-dict `{}`",
+                    selectors.path,
+                    value_type_name(value)
+                )));
+            };
+            let key = unsafe { take_value(selectors.next()? as *mut OpaqueValue) };
+            map.entries
+                .iter_mut()
+                .find(|(candidate, _)| *candidate == key)
+                .map(|(_, entry)| entry)
+                .ok_or_else(|| DirectElementPathError::MissingKey(Box::new(key)))
+        }
+        DirectElementPathStep::Projection(projection) => {
+            direct_value_at_path_mut(value, &[projection], selectors.path)
+                .map_err(DirectElementPathError::Path)
+        }
+    }
+}
+
+fn direct_element_selector_words<'s>(
+    selectors_ptr: *const i64,
+    selector_count: usize,
+) -> &'s [i64] {
+    unsafe { slice::from_raw_parts(selectors_ptr, selector_count) }
+}
+
+/// Reads the value an element path reaches inside `collection`: an element
+/// or entry loan's read on the direct backend (ADR-0061, 2026-09-21
+/// section). `path` is the chain of `[i]`, `[k]`, and projection steps and
+/// `selectors` the positions (as words) and keys (as borrowed handles) its
+/// `[i]` and `[k]` steps consume, in order. Only the value reached is
+/// cloned; a missing position or key traps at the index expression.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_element_path_load(
+    collection: *mut OpaqueValue,
+    path_ptr: *const u8,
+    path_len: usize,
+    selectors_ptr: *const i64,
+    selector_count: usize,
+    line: i64,
+    column: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let path = decode_bytes(path_ptr, path_len);
+        let steps =
+            direct_element_path_steps(&path).unwrap_or_else(|message| runtime_error(message));
+        let mut selectors = DirectElementSelectors {
+            words: direct_element_selector_words(selectors_ptr, selector_count),
+            cursor: 0,
+            path: &path,
+        };
+        let result = unsafe {
+            with_value(collection, |value| {
+                let mut current = value;
+                for step in &steps {
+                    current = direct_element_step(current, step, &mut selectors)?;
+                }
+                selectors.finish()?;
+                Ok(try_clone_array_containing_value(current))
+            })
+        };
+        match result {
+            Ok(value) => boxed_value(direct_array_result(value, line, column)),
+            Err(error) => direct_element_path_failure(error, line, column),
+        }
+    })
+}
+
+/// Replaces the value an element path reaches inside `collection` in place:
+/// an element or entry loan's write-through on the direct backend. Neither
+/// the collection nor any element on the path is cloned, and a loan never
+/// inserts: a missing position or key traps.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_element_path_store(
+    collection: *mut OpaqueValue,
+    path_ptr: *const u8,
+    path_len: usize,
+    selectors_ptr: *const i64,
+    selector_count: usize,
+    value: *mut OpaqueValue,
+    line: i64,
+    column: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let path = decode_bytes(path_ptr, path_len);
+        let steps =
+            direct_element_path_steps(&path).unwrap_or_else(|message| runtime_error(message));
+        let mut selectors = DirectElementSelectors {
+            words: direct_element_selector_words(selectors_ptr, selector_count),
+            cursor: 0,
+            path: &path,
+        };
+        let stored = unsafe { consume_owned_value(value) };
+        let result = unsafe {
+            value_mut(collection, |value| {
+                let mut current = value;
+                for step in &steps {
+                    current = direct_element_step_mut(current, step, &mut selectors)?;
+                }
+                selectors.finish()?;
+                *current = stored;
+                Ok(())
+            })
+        };
+        match result {
+            Ok(()) => boxed_value(Value::Unit),
+            Err(error) => direct_element_path_failure(error, line, column),
+        }
+    })
+}
+
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_map_clear_in_place(map: *mut OpaqueValue) -> *mut OpaqueValue {
     task_runtime_boundary(|| {

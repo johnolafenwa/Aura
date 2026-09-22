@@ -128,6 +128,8 @@ Aura diagnostics. See [FFI v0](/manual/ffi).
 
 `AU3005` rejects a direct `list` or `dict` indexed read that selects a non-copy
 element or value, and constant tuple indexing that selects a non-copy element.
+A `view` of the element or entry and a field access through it
+(`users[i].visits`) are place reads and are not rejected.
 For collections its guidance is clone-safety aware, classified exactly as the
 rejection is: a clone-safe type is directed to the explicit cloned `get`
 surface; a type carrying non-cloneable `random.Rng` state is directed to

@@ -115,3 +115,15 @@ editor tooling.
   signatures in the API reference and LSP.
 - TaskGroup capture tests for shared and owned targets plus mutable rejection.
 - Forced MIR/direct parity and maintained examples/tutorials.
+
+## 2026-09-21 — Batch 2 phase 2a amendment: loop bindings
+
+Per the Batch 2–3 design checkpoint (sections A5 and H2, ratified
+2026-09-21): `for x in items` and `for x in mut items` bind `x` as a
+shared or mutable element loan of the list (a first-class view binding
+whose region ends on every iteration edge, with immediate write-through
+under `mut`), while `for x in own items` is unchanged and its target is a
+mutable place as every consuming-form binding is. Set iteration keeps its
+shared-only rule; Queue and Range iteration yield owned values and are
+unchanged. Details: [ADR-0061](0061-collection-element-loans-and-slice-views.md),
+2026-09-21 section.

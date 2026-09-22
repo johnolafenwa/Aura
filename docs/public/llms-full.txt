@@ -3842,7 +3842,10 @@ owns each produced element, key, and value.
 ## list[T]
 
 `list[T]` preserves element order. `len(values)` and `values.len()` return
-`int64`.
+`int64`. `view name = values[index]` and `view mut name = values[index]`
+bind one element in place, and a field of a class element is read or
+assigned through the index (`values[index].field`) without copying the
+element (see [Statements](/manual/statements)).
 
 | Method | Signature | Contract |
 | --- | --- | --- |
@@ -3959,7 +3962,9 @@ assignment, and membership are the primary lookup and storage forms:
 
 `keys()` and `copy()` require clone-safe `K`; `values()` requires clone-safe
 `V`; `items()` requires both. These methods return eager snapshots, not live
-views. `get` accepts no default argument. Absence is represented by
+views; `view name = table[key]` and `view mut name = table[key]` are the live
+shared and mutable entry views (see [Statements](/manual/statements)). `get`
+accepts no default argument. Absence is represented by
 `Lookup[V]`: a missing key is `Lookup.Missing`, and a present value is
 `Lookup.Found(value)` even when `V` is itself an optional `T | None` and the
 stored value is `None`.
@@ -5427,11 +5432,16 @@ This page documents known current limits of the Aura compiler and runtime.
   dynamic/negative tuple indexing, or tuple-to-collection conversion. Unpack a
   tuple to take ownership of a non-copy element.
 - Views have identity only for local/parameter/receiver roots, existing views,
-  class-field paths, and fixed tuple positions. Collection indexes and keys,
-  set elements, arbitrary temporaries, and escaping enum-payload views are not
-  loanable. View-bearing aggregates, module storage, multi-origin results,
-  returned loan closures, and lifetime-parameterized structural callable
-  types remain unavailable. Views
+  class-field paths, fixed tuple positions, list elements, and dictionary
+  entries (with field and tuple projections inside an element). Set elements,
+  slices, arbitrary temporaries, and escaping enum-payload views are not
+  loanable; a list element or dictionary entry cannot yet be passed to a
+  `mut` parameter or be the receiver of a mutating method call (bind it with
+  `view mut` first), and a returned view cannot yet select a list element
+  or dictionary entry (return a view of the collection and select at the
+  call site). View-bearing aggregates, module storage, multi-origin
+  results, returned loan closures, and lifetime-parameterized structural
+  callable types remain unavailable. Views
   and loan closures are always non-Transfer.
 - Statement match arms cannot be inline. Expression match arms may use a same-line expression after `case pattern:` or an indented expression body.
 - `for` loop bindings cannot shadow names already visible in the same scope.
@@ -5873,6 +5883,8 @@ Aura diagnostics. See [FFI v0](/manual/ffi).
 
 `AU3005` rejects a direct `list` or `dict` indexed read that selects a non-copy
 element or value, and constant tuple indexing that selects a non-copy element.
+A `view` of the element or entry and a field access through it
+(`users[i].visits`) are place reads and are not rejected.
 For collections its guidance is clone-safety aware, classified exactly as the
 rejection is: a clone-safe type is directed to the explicit cloned `get`
 surface; a type carrying non-cloneable `random.Rng` state is directed to
@@ -13670,9 +13682,12 @@ reassigned.
 
 `view` creates a non-owning alias to one addressable place. Supported places
 are local roots, parameters, receivers, existing views, class-field paths,
-and fixed tuple positions. A source is evaluated once. Collection indexes,
-map keys, set elements, Queue receives, Range values, and computed temporaries
-do not have view identity in Aura 0.3.
+fixed tuple positions, list elements, and dictionary entries, including a
+field or tuple projection inside an element (`users[i].name`). A source is
+evaluated once: an element or entry selector is read when the view is
+created, its bounds or presence is checked there (`AU4003`), and the view
+keeps naming that slot afterwards. Set elements, Queue receives, Range
+values, and computed temporaries do not have view identity in Aura 0.3.
 
     class Counter:
         value: int64
@@ -13688,9 +13703,26 @@ The mutable assignment writes immediately to `counter.value`; ending the loan
 does not perform delayed copy-back. A shared view permits reads. A mutable view
 is exclusive and blocks every overlapping source access except through itself
 or a contained reborrow. Ancestors overlap descendants, while distinct fixed
-fields and tuple positions are disjoint. A view binding cannot be rebound,
-moved, cloned as a descriptor, stored in an aggregate, or sent across a task
-or Queue boundary.
+fields and tuple positions are disjoint. Two element or entry views of one
+collection are disjoint only when both selectors are literals of different
+values; a selector read from a variable overlaps every element, and a
+structural mutation of the collection overlaps every element view. A view
+binding cannot be rebound, moved, cloned as a descriptor, stored in an
+aggregate, or sent across a task or Queue boundary.
+
+    mut users = [Profile(name="ada", visits=1), Profile(name="linus", visits=2)]
+    view mut ada = users[0]
+    view mut linus = users[1]
+    ada.visits += 1
+    linus.visits += 1
+
+A list element or dictionary entry used as the object of a field access
+(`users[0].visits`) is read in place rather than copied, so a Copy field of a
+non-copy element can be read and a field can be assigned or updated through
+the element (`users[0].visits += 1`). Binding, returning, or passing the
+element itself still needs an explicit `get`, `pop`, or `remove`, and a
+non-copy field read out of an element is refused like a move out of a
+borrowed value.
 
 Loan regions begin at view creation and end after the final possible use,
 conservatively across branches and loops. Their lexical scope is only an upper
@@ -13803,6 +13835,11 @@ ordinary parameter:
 
     def name(user: User) -> view str from user:
         return view user.name
+
+A returned view names a root, field path, or fixed tuple position of its
+origin; it cannot yet select a list element or dictionary entry (`return
+view items[0]` is refused with `AU3004`), so return a view of the collection
+and select the element at the call site.
 
     def value_mut(counter: mut Counter) -> view mut int64 from counter:
         return view mut counter.value
@@ -14125,7 +14162,9 @@ diagnostic points to both the later access and the retained-borrow origin.
 `AU3003` reports assignment or mutation through an immutable place, including
 shared `self`. `AU3004`
 reports invalid parameter, receiver, loop, or Queue-iteration ownership modes.
-`AU3005` rejects a direct indexed read of a non-copy list element or dict value;
+`AU3005` rejects a direct indexed read of a non-copy list element or dict value
+in a binding, argument, or operand position (a field access through the element
+and a `view` of it are place reads, not copies);
 `AU3006` rejects the corresponding indexed compound read-modify-write.
 `AU3007` rejects direct or transitive duplication of non-cloneable state,
 including `random.Rng`, opaque FFI handles, capturing closure environments,
@@ -15653,18 +15692,36 @@ See [Ownership And Borrowing](/manual/ownership-and-borrowing) for moves, partia
 `view name = place` creates an immutable shared alias, and `view mut name =
 place` creates a non-rebindable mutable write-through alias. The initializer
 must resolve to a supported addressable root, field path, fixed tuple position,
-or existing view; collection indexes and computed temporaries are rejected.
+list element, dictionary entry, or existing view, with any field or tuple
+projection inside the element; computed temporaries are rejected.
 
     mut pair = (1, 2)
     view mut second = pair[1]
     second = 7
     print(pair)
 
+    mut users = [Profile(name="ada", visits=1)]
+    view mut visits = users[0].visits
+    visits += 1
+    print(users[0].visits)
+
 The binding's pointee type is inferred. Assigning through a mutable view
-changes the source; it does not retarget the view. Static final-use analysis
+changes the source; it does not retarget the view. An element or entry
+selector is evaluated once, when the view is created: a position outside
+the list or an absent key fails there with `AU4003`, and rebinding the index
+variable later does not move the view. Static final-use analysis
 ends its loan as early as control flow safely permits. Overlapping mutation,
 move, rebind, cleanup, or another mutable loan is rejected while it remains
-live. Scope and control-flow exits release active loans before outer cleanup.
+live; two views of different literal positions or keys of one collection are
+disjoint, a computed selector overlaps every element, and any structural
+mutation of the collection (`append`, `remove`, `clear`, ...) overlaps every
+element view. Scope and control-flow exits release active loans before outer
+cleanup.
+
+An assignment whose target projects inside an element or entry
+(`users[i].visits = 5`, `users[i].visits += 1`) writes through a mutable
+element loan that lasts for the statement; the element is updated in place,
+never copied out and written back.
 
 ## Expression Statements
 
@@ -16427,9 +16484,12 @@ returns `None`. `insert` clamps its position to `0..=len`.
 
 A direct read produces `T` or `V` only when that element/value type is
 copyable. For a non-copy list element, use `get(index)` for an explicit
-cloned optional read only when the element type is clone-safe. For a non-copy
-dictionary value, use `get(key)` only when the value type is clone-safe, or
-`remove(key)` to transfer ownership. These non-copy
+cloned optional read only when the element type is clone-safe, or bind the
+element in place with `view name = values[index]`. For a non-copy
+dictionary value, use `get(key)` only when the value type is clone-safe,
+`remove(key)` to transfer ownership, or a `view` of the entry. A field access
+through an element (`values[index].field`) reads or assigns the field in
+place without copying the element. These non-copy
 direct-read rejections use `AU3005`; a non-copy indexed compound assignment
 uses `AU3006` because its initial read has the same ownership problem. A missing dictionary key
 in a direct read is runtime diagnostic `AU4003`. Integer indexing is not
@@ -19328,10 +19388,13 @@ character indexing.
 an optional `T | None` and narrow it; there is no identity comparison between
 arbitrary values.
 
-**Reading a non-copy element out of a list by index is rejected**, because it
-would move a value out of a collection you still own. Use `values.get(index)`,
-which hands you a `Lookup[T]`: `Lookup.Found(value)` containing a clone, or
-`Lookup.Missing`.
+**Reading a non-copy list element into an owned value by index is rejected**,
+because it would move a value out of a collection you still own. Use
+`view value = values[index]` for access in place, or `view mut` through a
+mutable list to update the selected element. For an independent cloned value,
+use `values.get(index)`, which requires clone-safe elements and returns
+`Lookup.Found(value)` containing a clone, or `Lookup.Missing` for an invalid
+position.
 
 **Top-level bindings live in module storage** and cannot be moved out of it.
 If you want to consume a value with an `own` method, do it inside a function.
@@ -21571,13 +21634,16 @@ For `str`, `len()` counts Unicode scalar values and `byte_len()` counts the
 UTF-8 encoding bytes. Both counts are `int64`, so `"A🎉".len()` is `2` while
 `"A🎉".byte_len()` is `5`.
 
-Indexed reads work directly for copy element types. For clone-safe non-copy
-element types like `str` or ordinary user-defined classes, use `get(index)`
-for an explicit cloned read. Appending `.clone()` after `items[index]` cannot
-repair the read because the illegal move would happen before the method call.
-A value containing `random.Rng` must be transferred with
-`pop(index)` because it cannot be cloned, and the rejection names that
-reason directly:
+Indexed reads work directly for copy element types. To access a non-copy
+element in place, bind `view item = items[index]`; use
+`view mut item = items[index]` through a mutable source to update it. To obtain
+an owned value, use `get(index)` for an explicit cloned read when the element
+is clone-safe, or `pop(index)` to transfer the stored element. Appending
+`.clone()` directly after `items[index]` cannot yet repair the read because
+the illegal move would happen before the method call. A value containing
+`random.Rng` cannot be cloned, so obtaining ownership requires a transfer
+such as `pop(index)`.
+For a clone-safe value such as `str`, handle the owned `get` result explicitly:
 
 ```aura check-pass
 names = ["Ada", "Grace"]
@@ -21633,11 +21699,14 @@ Dictionary lookups work inside larger expressions including f-strings:
 print(f"value: {counts['aura']}")
 ```
 
-For a non-copy value type, direct `dictionary[key]` is rejected; Aura never performs a
-hidden clone. When the value type is clone-safe, `get(key)` gives an explicit
-cloned optional read and `remove(key)` transfers the stored value out. When the
-value type carries `random.Rng` state, only `remove(key)` works, and the
-rejection explains that `get(key)` would also be rejected.
+For a non-copy value type, reading `dictionary[key]` into an owned value is
+rejected; Aura never performs a hidden clone. Bind
+`view entry = dictionary[key]` for access in place, or
+`view mut entry = dictionary[key]` through a mutable dictionary to update it.
+To obtain ownership, `get(key)` gives an explicit cloned result when the value
+type is clone-safe, while `remove(key)` transfers the stored value out. A
+value carrying `random.Rng` state cannot be cloned, so use `remove(key)` to
+transfer ownership; an entry view can still access that value in place.
 
 `items()` returns `list[(K, V)]` in insertion order:
 
@@ -22878,8 +22947,14 @@ def main():
 so the later source read is legal even though the view bindings remain in
 lexical scope. Shared views may overlap shared views; a mutable view excludes
 all overlapping source access. Proven-disjoint fields and fixed tuple
-positions can be loaned independently. Collection indexes are not view places
-in Aura 0.3.
+positions can be loaned independently. List elements and dictionary entries
+are also view places: `view item = items[index]` and `view entry = table[key]`
+bind the selected slot in place. Use `view mut` through a mutable source to
+update that slot. Selection is evaluated once when the view is created;
+an invalid position or absent key traps with `AU4003`. Views of proven
+distinct literal positions or keys are disjoint, while a computed selector
+overlaps every selector of the same collection. A structural mutation of the
+collection conflicts with every live element or entry view.
 
 ## Returned Views
 
@@ -25817,10 +25892,13 @@ with guidance to use an eager owned list comprehension or an explicit loop.
 Comprehension clauses do not accept `mut` or `own`; use a statement loop for
 mutable or consuming source traversal.
 
-Indexed expressions remain ordinary values after parsing. Copy-typed element
-reads like `values[idx]` work directly. Clone-safe non-copy list elements use
-`get(index)` for an explicit cloned read. Elements carrying `random.Rng` state
-use `pop(index)` to transfer ownership. Negative list indexes normalize as
+Copy-typed element reads like `values[idx]` work directly. Explicit
+`view item = values[idx]` and `view entry = table[key]` bind elements and
+entries in place, including non-copy values; `view mut` provides write-through
+access from a mutable source. An owned read of a non-copy indexed value is
+still rejected. Clone-safe non-copy list elements use `get(index)` for an
+explicit cloned read; `pop(index)` transfers ownership, including elements
+carrying `random.Rng` state. Negative list indexes normalize as
 `len + index` for direct access and every maintained list index method.
 Dictionary indexing and
 interpolations such as `f"{counts['key']}"` remain supported when the dict
@@ -25833,8 +25911,8 @@ in `0..=len`, and start must not exceed end. Invalid bounds trap with `AU4003`;
 Aura never clamps them. String positions count Unicode scalar values and require
 an O(n) scan. Integer str indexing, step syntax, slice assignment, and
 indexed slice views remain unavailable. Use the separate `view` forms for an
-addressable root, field, or fixed tuple position; slice syntax always owns its
-result.
+addressable root, field, fixed tuple position, list element, or dictionary
+entry; slice syntax always owns its result.
 
 Numeric `Array[T]` values have rank at least one, may contain zero-sized
 dimensions, and use contiguous row-major storage. The constructors are
@@ -26382,10 +26460,12 @@ Current collection notes:
   source and return fresh owned lists; `filter` requires clone-safe `T`
 - list algorithm callbacks have exact bare/shared element parameters; `mut` and
   `own` callback capabilities are rejected without adaptation
-- indexed reads from `list[T]` work directly only when `T` is copy; clone-safe non-copy element reads use `get(index)` for an explicit cloned read, while `pop(index)` transfers any stored element
+- direct indexed reads from `list[T]` require copy `T`; explicit `view` and
+  `view mut` bindings access an element in place, `get(index)` gives an owned
+  cloned result for clone-safe `T`, and `pop(index)` transfers any stored element
 - module-level functions cannot redefine a builtin function name such as `len`, `str`, `abs`, or `print`; that rejection is `AU2007`
 - negative list indexes normalize once as `len + index` for direct reads/writes, `get`, `set`, `pop`, and `swap`
-- `get` returns `None` when the normalized index is invalid; direct access and mutating methods trap
+- `get` returns `Lookup.Missing` when the normalized index is invalid; direct access and mutating methods trap
 - list and str slices accept all four omitted-endpoint forms, return fresh
   owned copies, and never clamp invalid or reversed bounds; str slicing
   counts Unicode scalars in O(n), while list slicing requires clone-safe,
