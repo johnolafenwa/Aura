@@ -226,7 +226,7 @@ was cloned before the write), which the one-call selection chain removes.
 - Complete local chain: passed for the source and tests committed as
   `6df54d4b`; full evidence follows.
 
-### Step 1 closeout in progress (2026-09-22)
+### Step 1 closeout (2026-09-22)
 
 - Owner's delegated ruling, 2026-09-22: list `set(i, value)` is an
   element-level write with the same literal-disjointness requirement as
@@ -293,9 +293,25 @@ was cloned before the write), which the one-call selection chain removes.
   Fenced programs are unchanged. Generated LLM documents were refreshed;
   reference checks, tutorial checks, documentation build, and hygiene passed
   again (`/tmp/aura-b2-step1-doc-checks.log`).
-- Hosted CI on both platforms and the step-1 pull-request merge remain
-  pending. Phase 2a remains in progress; the open items below are not closed
-  by the local gate.
+- Hosted integration: [PR #17](https://github.com/johnolafenwa/Aura/pull/17),
+  tested head `1e4891fb24d96485dcd329193fbe24f7145f3bea` (including the clean
+  merge of `origin/main` at `6038fb28`). [CI run
+  `35707901248`](https://github.com/johnolafenwa/Aura/actions/runs/35707901248)
+  passed Ubuntu 24.04 and macOS 15 on its first attempt; no reruns were needed.
+  Docs `35707901153` and Tutorial Examples `35707901218` also passed.
+- Hosted compiler coverage, with the same unchanged floors:
+
+  | Platform / job | Lines | Functions | Regions |
+  | --- | --- | --- | --- |
+  | Ubuntu 24.04 / `106681171662` | 96.4791% (119391/123748) | 97.4090% (8083/8298) | 95.3000% (177561/186318) |
+  | macOS 15 / `106681172161` | 96.4767% (119388/123748) | 97.4090% (8083/8298) | 95.3005% (177562/186318) |
+
+  Both hosted jobs retain 100% LSP coverage. Full job logs are saved locally
+  as `/tmp/aura-b2-step1-ubuntu-ci.log` and
+  `/tmp/aura-b2-step1-macos-ci.log`.
+- Step 1 has met its local and hosted verification gates and is ready to
+  merge. This evidence-only follow-up changes no compiler or test source.
+  Phase 2a remains in progress; the open items below follow the step-1 merge.
 
 ## Open items
 

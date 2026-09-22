@@ -24,9 +24,14 @@ Last updated: 2026-09-22
   116 LSP tests, and 28 extension tests pass; LSP coverage stays at 100%.
   Returned-collection write-through and projected element reborrows are
   fixed and pinned. Subsequent prose/generated-document changes pass
-  reference, tutorial, documentation-build, and hygiene checks. Hosted CI
-  and the step-1 merge remain pending. See the work note for full evidence
-  and the Daybreak access limitation.
+  reference, tutorial, documentation-build, and hygiene checks.
+- [PR #17](https://github.com/johnolafenwa/Aura/pull/17), tested head
+  `1e4891fb`, passed hosted CI `35707901248` on both platforms on its first
+  attempt (Ubuntu job `106681171662`, macOS job `106681172161`); Docs
+  `35707901153` and Tutorial Examples `35707901218` passed. Hosted coverage
+  is 96.4791 / 97.4090 / 95.3000 on Ubuntu and 96.4767 / 97.4090 / 95.3005
+  on macOS; LSP coverage stays at 100%. Step 1 is verified and ready to
+  merge. See the work note for exact counts and the Daybreak access limitation.
 
 ## Batch 1 representation phase (complete) and Batch 2–3 design checkpoint (ratified)
 
