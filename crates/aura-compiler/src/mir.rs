@@ -11285,7 +11285,7 @@ impl<'a> Lowerer<'a> {
                     returned_descriptor = true;
                     source
                 } else if let Some((collection, selector, projection, span)) =
-                    self.element_loan_source(&view.source)
+                    self.element_loan_source(&view.source, view.mutable)
                 {
                     // `view name = items[i]` or `view name = users[i].name`:
                     // the collection is the loan's source place, the
@@ -12144,7 +12144,8 @@ impl<'a> Lowerer<'a> {
         let AssignTarget::Member { object, field } = target else {
             return None;
         };
-        let (collection, selector, projection, index_span) = self.element_loan_source(object)?;
+        let (collection, selector, projection, index_span) =
+            self.element_loan_source(object, true)?;
         let projection = if projection.is_empty() {
             field.clone()
         } else {
@@ -20622,7 +20623,11 @@ impl<'a> Lowerer<'a> {
     /// selector operand (evaluated once, now), the projection past the
     /// element, and the index expression's span. `None` when the expression
     /// is not an element place.
-    fn element_loan_source(&mut self, expr: &Expr) -> Option<(String, Operand, String, Span)> {
+    fn element_loan_source(
+        &mut self,
+        expr: &Expr,
+        mutable: bool,
+    ) -> Option<(String, Operand, String, Span)> {
         let mut suffix = Vec::new();
         let mut current = grouped_mir_expr(expr);
         let (object, index) = loop {
@@ -20647,12 +20652,13 @@ impl<'a> Lowerer<'a> {
             }
         };
         let span = index.span;
-        let selector_ty = match self.infer_expr_type(object)? {
+        let collection_ty = self.infer_expr_type(object)?;
+        let selector_ty = match &collection_ty {
             Type::Named(name, args) if name == "list" && args.len() == 1 => Type::named("int64"),
             Type::Named(name, args) if name == "dict" && args.len() == 2 => args[0].clone(),
             _ => return None,
         };
-        let collection = self.render_place_expr_option(object)?;
+        let mut collection = self.render_place_expr_option(object)?;
         // A literal selector stays a literal operand so the validator can
         // prove two element loans of one collection disjoint, as the
         // checker does.
@@ -20676,6 +20682,27 @@ impl<'a> Lowerer<'a> {
             Operand::MovePlace(place) => Operand::Place(place),
             literal => literal,
         };
+        // ReborrowElement selects inside its parent's value. Preserve a
+        // collection field/tuple projection through a view as a separate
+        // parent loan before applying the element selector.
+        if let Some((root, projection)) = collection.split_once('.') {
+            if self.view_sources.contains_key(root) {
+                let parent = self.new_typed_temp(collection_ty);
+                self.emit(Instruction::Reborrow {
+                    loan: parent.clone(),
+                    parent: root.to_string(),
+                    projection: projection.to_string(),
+                    mutable,
+                });
+                self.view_sources.insert(parent.clone(), collection);
+                self.loan_source_names
+                    .insert(parent.clone(), parent.clone());
+                if let Some(scope) = self.loan_scopes.last_mut() {
+                    scope.push(parent.clone());
+                }
+                collection = parent;
+            }
+        }
         suffix.reverse();
         Some((collection, selector, suffix.join("."), span))
     }

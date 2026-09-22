@@ -9880,13 +9880,12 @@ impl<'a> FunctionCompiler<'a> {
         &mut self,
         alternative: &DirectViewAlternative,
     ) -> std::result::Result<ValueRef, String> {
-        let value = self.load_static_place(&alternative.place)?;
         let Some(last) = alternative.elements.last() else {
-            return Ok(value);
+            return self.load_static_place(&alternative.place);
         };
         let element_type = last.element_type.clone();
-        let collection = self.ensure_opaque(value)?;
-        let path = self.element_path_operands(&alternative.elements)?;
+        let (collection, projection) = self.load_element_path_root(&alternative.place)?;
+        let path = self.element_path_operands(&projection, &alternative.elements)?;
         let inst = self.builder.ins().call(
             self.element_path_load,
             &[
@@ -9913,9 +9912,8 @@ impl<'a> FunctionCompiler<'a> {
         if alternative.elements.is_empty() {
             return self.store_static_place(&alternative.place, value);
         }
-        let collection = self.load_static_place(&alternative.place)?;
-        let collection = self.ensure_opaque(collection)?;
-        let path = self.element_path_operands(&alternative.elements)?;
+        let (collection, projection) = self.load_element_path_root(&alternative.place)?;
+        let path = self.element_path_operands(&projection, &alternative.elements)?;
         let stored = self.ensure_opaque(value)?;
         let stored = self.transfer_owned_opaque_value(&stored);
         let result = self.builder.ins().call(
@@ -9935,6 +9933,25 @@ impl<'a> FunctionCompiler<'a> {
         Ok(())
     }
 
+    /// Keeps the first runtime-object handle in a collection place and
+    /// leaves its child projections for the element-path walker. Extracting
+    /// an opaque field or tuple slot first would clone that collection, so a
+    /// later element store would update a detached value. Inline union and
+    /// plain-class projections only select words and may be traversed here.
+    fn load_element_path_root(
+        &mut self,
+        place: &str,
+    ) -> std::result::Result<(ValueRef, String), String> {
+        let (root, mut projection) = place.split_once('.').unwrap_or((place, ""));
+        let mut value = self.load_root(root)?;
+        while !projection.is_empty() && !matches!(value.ty, DirectType::Opaque(_)) {
+            let (field, rest) = projection.split_once('.').unwrap_or((projection, ""));
+            value = self.extract_field(value, field)?;
+            projection = rest;
+        }
+        Ok((self.ensure_opaque(value)?, projection.to_string()))
+    }
+
     /// The runtime operands of a selection chain: its path (`[i]`, `[k]`,
     /// and projection steps), a stack buffer of the selector words (list
     /// positions, and dictionary keys as borrowed handles, a scalar key
@@ -9942,9 +9959,10 @@ impl<'a> FunctionCompiler<'a> {
     /// expression's position for traps.
     fn element_path_operands(
         &mut self,
+        projection: &str,
         elements: &[DirectElementSelector],
     ) -> std::result::Result<DirectElementPathOperands, String> {
-        let mut path = String::new();
+        let mut path = projection.to_string();
         for selector in elements {
             if !path.is_empty() {
                 path.push('.');

@@ -7,6 +7,9 @@ in this file.
 
 ## 0.3.4 — Unreleased (technical preview)
 
+- Preserve write-through element and entry loans when their collection is
+  reached through a field, tuple, union payload, or returned collection view
+  on the direct backend; updates now reach the original collection storage.
 - Remove the builtin `Option[T]` type, its `Option.Some`/`Option.None`
   constructors, and the `T?` type suffix. `T | None` is the sole optional
   spelling (ADR-0052); `Option[int64]` is now an ordinary unknown type and `T?`
