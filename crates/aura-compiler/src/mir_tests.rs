@@ -3596,8 +3596,10 @@ fn mir_projection_and_unknown_type_helpers_preserve_fallback_contracts() {
         object: Box::new(expr(ExprKind::Name("roots".to_string()))),
         field: "field".to_string(),
     });
+    let tuple = |_: &Expr| false;
+    let collection = |_: &Expr| true;
     assert_eq!(
-        return_view_projection_set(&member, "origin", &aliases),
+        return_view_projection_set(&member, "origin", &aliases, &tuple),
         vec!["field".to_string(), "base.field".to_string()]
     );
     let index = expr(ExprKind::Index {
@@ -3605,8 +3607,17 @@ fn mir_projection_and_unknown_type_helpers_preserve_fallback_contracts() {
         index: Box::new(expr(ExprKind::Int(2))),
     });
     assert_eq!(
-        return_view_projection_set(&index, "origin", &aliases),
+        return_view_projection_set(&index, "origin", &aliases, &tuple),
         vec!["2".to_string(), "base.2".to_string()]
+    );
+    // A list element or dictionary entry is an element step, whatever the
+    // index expression (ADR-0061 A6).
+    assert_eq!(
+        return_view_projection_set(&index, "origin", &aliases, &collection),
+        vec![
+            RETURNED_ELEMENT_STEP.to_string(),
+            format!("base.{RETURNED_ELEMENT_STEP}")
+        ]
     );
     for invalid_index in [
         ExprKind::Name("dynamic".to_string()),
@@ -3616,15 +3627,27 @@ fn mir_projection_and_unknown_type_helpers_preserve_fallback_contracts() {
             object: Box::new(origin.clone()),
             index: Box::new(expr(invalid_index)),
         });
-        assert!(return_view_projection_set(&invalid, "origin", &aliases).is_empty());
+        assert!(return_view_projection_set(&invalid, "origin", &aliases, &tuple).is_empty());
+        assert_eq!(
+            return_view_projection_set(&invalid, "origin", &aliases, &collection),
+            vec![RETURNED_ELEMENT_STEP.to_string()]
+        );
     }
     assert!(return_view_projection_set(
         &expr(ExprKind::Name("empty".to_string())),
         "origin",
-        &aliases
+        &aliases,
+        &tuple
     )
     .is_empty());
-    assert!(return_view_projection_set(&expr(ExprKind::Int(1)), "origin", &aliases).is_empty());
+    assert!(
+        return_view_projection_set(&expr(ExprKind::Int(1)), "origin", &aliases, &tuple).is_empty()
+    );
+    assert!(returned_projection_matches("[*].name", "[i:3].name"));
+    assert!(returned_projection_matches("items.[*]", "items.[k:s:61]"));
+    assert!(!returned_projection_matches("[*]", "[*]x"));
+    assert!(!returned_projection_matches("[*]", "name"));
+    assert!(!returned_projection_matches("[*]", "[i:0].name"));
 
     let contract = |ty| crate::sema::FunctionParamContract {
         keyword_only: false,

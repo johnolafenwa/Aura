@@ -425,10 +425,44 @@ Fixtures: `iteration_element_loan_write_through`,
 `view_ended_before_loop_exit`. The MIR unit test that pinned the write-back
 latch now pins the element loan and the single safepoint latch.
 
+## A6: returned element and entry views (2026-09-23)
+
+`return view items[i]`, `return view mut table[key]`, a field inside the
+element, nested selections, a local element view returned by name, and a
+forwarded call all work on both backends and across modules.
+
+- Checker: the `AU3004` refusal is gone. A view return is typed as a place
+  read, like a `view` statement, so a generic or non-clone-safe element is
+  not treated as an owned copy. The caller's footprint comes from the
+  projection summary, where an element step now collapses to the
+  collection's path, so the caller's view holds the whole collection.
+- MIR: `return view items[i]` lowers to an element loan that is returned.
+  Returned-view projections spell each element step `[*]`
+  (`RETURNED_ELEMENT_STEP`). The validator's contract gives element loans
+  `collection.[*]` sources, types `[*]` as the element or value, treats it
+  as overlapping any segment, and allows it only in returned projections.
+- Interpreter: a runtime projection such as `[i:0]` matches a declared
+  `[*]` (`returned_projection_matches`).
+- Direct backend: the callee pushes one selector word per element step
+  (`aura_direct_push_returned_view_selector`; a string key is retained), and
+  the caller takes them (`aura_direct_take_returned_view_selector`) and
+  rebuilds the element selections from the origin's type. The callee
+  releases its own key references at `ReturnLoan`; the caller releases its
+  copies when its view ends.
+- The semantic interface schema is now 17.
+
+Fixtures: `returned_element_views` (run-pass),
+`returned_element_view_out_of_range` and `returned_entry_view_missing_key`
+(run-fail, `AU4003` in the callee), and
+`returned_element_view_holds_whole_collection` (check-fail). The
+`element_view_return_unsupported` fixture is gone.
+
+Lesson: the direct native cache is keyed by MIR and the runtime archive, so
+an unchanged fixture can reuse a binary built by an older code generator.
+Fixture sweeps now set a fresh `AURA_CACHE_DIR`.
+
 ## Open items
 
-- Returned element and entry views (A6): `return view items[i]` is still
-  refused (`AU3004`), pinned by `element_view_return_unsupported`.
 - Borrowing a non-copy value into a union parameter (`AU2010`), which
   `element_contextual_union_arguments` needs.
 - The single-source audited receiver table (H1, internal).

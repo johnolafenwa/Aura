@@ -1229,6 +1229,33 @@ impl<'a> FunctionChecker<'a> {
                 };
             }
             ExprKind::Index { object, index } => {
+                // A returned list element or dictionary entry has the whole
+                // collection as its static footprint (ADR-0061 A6): the
+                // element step collapses to the collection's own path.
+                let context = self.returned_view_summary_context(owner_module, enclosing_decl);
+                if matches!(
+                    self.returned_view_expr_type_in_owner(
+                        owner_module,
+                        enclosing_decl,
+                        object,
+                        &context,
+                        substitutions,
+                        aliases,
+                        &mut BTreeSet::new(),
+                    ),
+                    Some(Type::Named(ref name, _)) if name == "list" || name == "dict"
+                ) {
+                    return self.returned_view_expr_projection_summary_with_aliases(
+                        owner_module,
+                        enclosing_decl,
+                        object,
+                        outer_origin,
+                        seen,
+                        aliases,
+                        alias_seen,
+                        substitutions,
+                    );
+                }
                 let ExprKind::Int(index) = index.kind else {
                     return ReturnedProjectionSummary::Unknown;
                 };
@@ -1812,7 +1839,7 @@ impl<'a> FunctionChecker<'a> {
                 self.resolve_member_type(&object_ty, field, expr.span).ok()
             }
             ExprKind::Index { object, index } => {
-                let Type::Tuple(elements) = self.returned_view_expr_type_in_owner(
+                match self.returned_view_expr_type_in_owner(
                     owner_module,
                     enclosing_decl,
                     object,
@@ -1820,14 +1847,20 @@ impl<'a> FunctionChecker<'a> {
                     substitutions,
                     aliases,
                     alias_seen,
-                )?
-                else {
-                    return None;
-                };
-                let ExprKind::Int(index) = index.kind else {
-                    return None;
-                };
-                elements.get(usize::try_from(index).ok()?).cloned()
+                )? {
+                    Type::Tuple(elements) => {
+                        let ExprKind::Int(index) = index.kind else {
+                            return None;
+                        };
+                        elements.get(usize::try_from(index).ok()?).cloned()
+                    }
+                    Type::Named(name, args) => match (name.as_str(), args.as_slice()) {
+                        ("list", [element]) => Some(element.clone()),
+                        ("dict", [_, value]) => Some(value.clone()),
+                        _ => None,
+                    },
+                    _ => None,
+                }
             }
             ExprKind::Call { callee, args } => {
                 let (decl, owner) = self.returned_view_function_in_owner(

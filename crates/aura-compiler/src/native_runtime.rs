@@ -466,6 +466,11 @@ struct DirectTaskRuntimeState {
 struct DirectReturnedViewFrame {
     returned: Option<String>,
     pending_child: Option<String>,
+    /// The selector words of a returned element or entry view, one per `[*]`
+    /// step of the projection, in order (ADR-0061 A6). A string key is an
+    /// owned handle that the caller takes over.
+    returned_selectors: Vec<i64>,
+    pending_child_selectors: Vec<i64>,
     mutable_sinks: Vec<i64>,
 }
 
@@ -3918,12 +3923,14 @@ pub unsafe extern "C-unwind" fn aura_direct_exit_call() {
         if state.call_depth > 0 {
             state.call_depth -= 1;
             let _ = state.call_frames.pop();
-            let returned = state
+            let (returned, selectors) = state
                 .returned_view_frames
                 .pop()
-                .and_then(|frame| frame.returned);
+                .map(|frame| (frame.returned, frame.returned_selectors))
+                .unwrap_or_default();
             if let Some(parent) = state.returned_view_frames.last_mut() {
                 parent.pending_child = returned;
+                parent.pending_child_selectors = selectors;
             }
         }
     });
@@ -8871,6 +8878,41 @@ pub extern "C-unwind" fn aura_direct_set_returned_view_projection(
             // error path consults that state to capture the diagnostic.
             runtime_error("direct returned-view handoff has no active call frame");
         }
+    })
+}
+
+/// Hands one selector word of a returned element or entry view to the caller.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_push_returned_view_selector(word: i64) {
+    task_runtime_boundary(|| {
+        let installed = with_direct_task_runtime_state(|state| {
+            let Some(frame) = state.returned_view_frames.last_mut() else {
+                return false;
+            };
+            frame.returned_selectors.push(word);
+            true
+        });
+        if !installed {
+            runtime_error("direct returned-view handoff has no active call frame");
+        }
+    })
+}
+
+/// The `index`th selector word the callee handed over, or `0` when the
+/// selected projection has fewer element steps.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_take_returned_view_selector(index: i64) -> i64 {
+    task_runtime_boundary(|| {
+        with_direct_task_runtime_state(|state| {
+            usize::try_from(index).ok().and_then(|index| {
+                state
+                    .returned_view_frames
+                    .last()
+                    .and_then(|frame| frame.pending_child_selectors.get(index))
+                    .copied()
+            })
+        })
+        .unwrap_or(0)
     })
 }
 

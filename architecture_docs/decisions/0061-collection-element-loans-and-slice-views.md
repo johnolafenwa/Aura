@@ -179,7 +179,13 @@ the returned-loan projection selector does for field alternatives today.
 Exported callable metadata gains `Element`/`Entry` footprint kinds beside
 whole-root and fixed-projection kinds (checked interface hash change).
 Absence traps at the `return view` expression inside the callee before any
-handoff. The stored-callable contract extends without change; a bound
+handoff. As implemented on 2026-09-23, a returned-view projection spells
+each element step `[*]`, and the direct backend hands the selector words to
+the caller beside the projection; semantic interface schema 17 marks the
+change. The static footprint is the collection place inside the
+origin rather than the whole root: a view returned from `holder.items[i]`
+holds `holder.items`, so `holder.other` stays writable. That is as sound as
+the whole root and more useful. The stored-callable contract extends without change; a bound
 method returning a view of `self` still cannot be packed; task targets
 still cannot return views.
 

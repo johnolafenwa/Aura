@@ -7,6 +7,14 @@ in this file.
 
 ## Unreleased
 
+- A function can return a view of one list element or dictionary entry of its
+  origin: `return view items[i]`, `return view mut table[key]`, or a field
+  inside the element. The index or key is evaluated once in the callee, and
+  an invalid one traps there with `AU4003`. The caller's view reaches the
+  element in place and holds the whole collection while it is live. This was
+  refused with `AU3004`.
+- The semantic interface schema is now 17, because returned-view contracts
+  can name an element step. Tools that pin the schema must update.
 - `for x in mut items:` binds each element as a mutable element view, so a
   write lands in the list immediately instead of when the iteration ends.
   Non-Copy elements are no longer cloned and written back. Iterating a

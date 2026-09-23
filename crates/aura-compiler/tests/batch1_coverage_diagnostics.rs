@@ -122,11 +122,11 @@ fn view_arguments_cannot_cross_a_task_boundary() {
 }
 
 #[test]
-fn indexed_collection_elements_cannot_be_returned_as_views() {
-    rejects(
+fn indexed_collection_elements_can_be_returned_as_views() {
+    aura_compiler::check_source(
         "def first[T](items: list[T]) -> view T from items:\n    return view items[0]\ndef main():\n    values = [1, 2]\n    view head = first(values)\n    print(head)\n",
-        "a returned view cannot yet select a list element or dictionary entry",
-    );
+    )
+    .expect("a generic element view return checks as a place read");
 }
 
 #[test]

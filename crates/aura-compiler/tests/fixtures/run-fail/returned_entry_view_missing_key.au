@@ -1,0 +1,7 @@
+def entry(table: mut dict[str, int64], key: str) -> view mut int64 from table:
+    return view mut table[key]
+
+def main():
+    mut table = {"a": 1}
+    view mut value = entry(table, "missing")
+    value += 1

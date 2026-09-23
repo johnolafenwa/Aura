@@ -1,0 +1,7 @@
+error[AU3002]: cannot read `values[1]` while mutable view `head` remains live; use the view instead
+ --> crates/aura-compiler/tests/fixtures/check-fail/returned_element_view_holds_whole_collection.au:7:11
+  |
+7 |     print(values[1])
+  |           ^
+  = related crates/aura-compiler/tests/fixtures/check-fail/returned_element_view_holds_whole_collection.au:6:5: mutable view `head` starts here
+  = related crates/aura-compiler/tests/fixtures/check-fail/returned_element_view_holds_whole_collection.au:8:5: last use of view `head` keeps this loan live

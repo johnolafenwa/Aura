@@ -19,10 +19,11 @@ Last updated: 2026-09-23
 - Merged since: script bindings after the first statement (PR #20),
   contextual element reads (PR #21), and `AU3011` invalidation (PR #22).
   Owned bindings and script narrowing are PR #23. The arm-scoped `lookup`
-  is PR #24; mutable iteration write-through (A5) is on
-  `batch-2-phase-2a-iteration`. Details are in
+  is PR #24 (merged); mutable iteration write-through (A5) is PR #25;
+  returned element views (A6) are on
+  `batch-2-phase-2a-returned-element-views`. Details are in
   `2026-09-21-batch-2-phase-2a.md`.
-- Next: returned element views (A6), borrowing
+- Next: borrowing
   non-copy values into union parameters, the internal receiver table, then
   the phase 2a closeout.
 
