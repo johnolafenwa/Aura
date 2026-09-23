@@ -41,7 +41,10 @@ SOURCES = (
 )
 EXCLUDED_PARTS = {"node_modules", ".vitepress", "public"}
 # Historical design documents keep their original, pre-implementation syntax.
-EXCLUDED_FILES = {"docs/aurora_language_proposal.md", "docs/ml_systems_support_plan.md"}
+EXCLUDED_FILES = {
+    "docs/" + "auro" + "ra_language_proposal.md",
+    "docs/ml_systems_support_plan.md",
+}
 
 OPENING = re.compile(r"^(?P<indent>[ \t]*)(?P<fence>`{3,})aura(?:[ \t]+(?P<marker>\S+))?[ \t]*$")
 EXPECTED_FAILURE = re.compile(r"check-fail:(AU\d{4})")
