@@ -15480,6 +15480,42 @@ impl<'a> Lowerer<'a> {
         self.program.narrowed_read(self.module_name, expr.span)
     }
 
+    /// A module constant the checker narrowed (for example after `if value
+    /// is not None:` in a script) is read afresh, so the read re-tests the
+    /// proven member on its own temporary; the other arm is unreachable.
+    fn lower_narrowed_constant_read(
+        &mut self,
+        constant: &crate::sema::ConstantInfo,
+        read: &crate::sema::NarrowedRead,
+    ) -> Operand {
+        let Operand::Place(base) = self.lower_constant_read(constant) else {
+            unreachable!("a module constant read lowers to a place");
+        };
+        let tested = self.new_typed_temp(Type::named("bool"));
+        self.emit(Instruction::Assign {
+            target: tested.clone(),
+            value: Rvalue::UnionTagTest {
+                place: base.clone(),
+                union_type: read.union_type.clone(),
+                member_index: read.member_index,
+            },
+        });
+        let proven = self.new_block("narrowed_constant");
+        let impossible = self.new_block("narrowed_constant_impossible");
+        self.terminate(Terminator::Branch {
+            condition: Operand::Place(tested),
+            then_label: self.label(proven),
+            else_label: self.label(impossible),
+        });
+        self.switch_to(impossible);
+        self.terminate(Terminator::Unreachable);
+        self.switch_to(proven);
+        Operand::Place(format!(
+            "{base}.{UNION_PAYLOAD_PROJECTION_PREFIX}{}",
+            read.member_index
+        ))
+    }
+
     /// The union place a narrowed expression tests or reads: a stable local
     /// place, or a view descriptor (with its stable child projection) whose
     /// loan resolves to the tested physical place.
@@ -15501,6 +15537,11 @@ impl<'a> Lowerer<'a> {
     /// same way a type-pattern binding reads a payload through a view.
     fn lower_narrowed_read(&mut self, expr: &Expr) -> Option<Operand> {
         let read = self.narrowed_read(expr)?;
+        if let ExprKind::Name(name) = &grouped_mir_expr(expr).kind {
+            if let Some(constant) = self.resolve_constant_info(name).cloned() {
+                return Some(self.lower_narrowed_constant_read(&constant, &read));
+            }
+        }
         let base = self.narrowed_base_place(expr)?;
         let projected = format!(
             "{base}.{UNION_PAYLOAD_PROJECTION_PREFIX}{}",

@@ -582,12 +582,8 @@ fn public_native_codegen_rejects_invalid_mir_surface() {
         trait_impls: Vec::new(),
         top_level: None,
     };
-    let error = emit_host_native_object(&invalid_module)
-        .expect_err("invalid MIR terminators should fail through the public native codegen API");
-    assert!(
-        error.contains("does not yet support MIR terminator"),
-        "unexpected native codegen error: {error}"
-    );
+    emit_host_native_object(&invalid_module)
+        .expect("an unreachable terminator compiles to a trap through the public API");
 
     let mut invalid_monotonic_module = lower_source_to_mir(
         r#"

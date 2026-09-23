@@ -7,6 +7,14 @@ in this file.
 
 ## Unreleased
 
+- A binding introduced by a consuming form is a mutable place: the element of
+  `for value in own values:`, every leaf of its tuple target, and a `match
+  own` payload or type-pattern binding. Mutating methods and field writes
+  work on it directly.
+- Narrowing applies to top-level script bindings on both backends, including
+  module constants such as `value: int64 | None = 5` followed by
+  `if value is not None:`. The direct backend used to refuse the narrowed
+  read.
 - Mutating a collection while an element or entry view of it is live now
   reports `AU3011`, which names the view and the operation. A structural
   change such as `append` or any dictionary assignment is refused, and so is a

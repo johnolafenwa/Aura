@@ -1,0 +1,6 @@
+error[AU3003]: method `append` requires a mutable receiver
+ --> crates/aura-compiler/tests/fixtures/check-fail/borrowed_loop_binding_is_not_mutable.au:4:13
+  |
+4 |         row.append(9)
+  |             ^
+  = help: declare the receiver place with `mut` before calling a mutating method

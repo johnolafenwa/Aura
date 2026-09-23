@@ -892,7 +892,9 @@ impl FunctionChecker<'_> {
                     LocalBinding {
                         ty: expected_ty.clone(),
                         assignable: borrow_mode == ReceiverKind::BorrowMut,
-                        mutable_place: borrow_mode == ReceiverKind::BorrowMut,
+                        // A `match own` binding owns its value, so it is a
+                        // mutable place (ADR-0061 H2).
+                        mutable_place: borrow_mode != ReceiverKind::Borrow,
                         managed_resource: false,
                         passing,
                         borrow_origin: None,
