@@ -37,7 +37,7 @@ Names are unique within a supervisor. Starting another child with the same name 
 
 A supervisor produces events as children start, exit, and restart. `wait` returns a structured `SupervisorWait` outcome:
 
-```aura
+```aura fragment
 match supervisor.wait(timeout=2s):
     case process.SupervisorWait.Event(process.SupervisorEvent.Exited(name, status, restart_count)):
         print(name)
@@ -55,7 +55,7 @@ Each event carries the child's name, its status or error, and the number of rest
 
 When a timeout and "no event" can share a branch, use `wait_or_none`. It maps a timeout to `None` inside a `Result`:
 
-```aura
+```aura fragment
 match own supervisor.wait_or_none(timeout=500ms):
     case Result.Ok(process.SupervisorEvent as event):
         print(event)
@@ -91,7 +91,7 @@ Each policy has a cost. `Always` can retry a config error a hundred times. `Neve
 
 Prefer this shape:
 
-```aura
+```aura fragment
 with supervisor = process.supervisor():
     try supervisor.start(name="worker", command=["/bin/sleep", "60"], group=true)
     match supervisor.wait(timeout=1s):

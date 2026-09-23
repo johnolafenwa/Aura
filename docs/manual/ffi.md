@@ -51,7 +51,7 @@ fields.
 
 FFI accepts only bodyless C declarations:
 
-```aura
+```aura fragment
 public extern "C" opaque class ProcessHandle
 public extern "C" def getpid() -> int32
 extern "C" def inspect(label: str, data: list[uint8]) -> uint64

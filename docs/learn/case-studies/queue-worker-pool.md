@@ -39,7 +39,7 @@ Consuming the job is the right choice. Once a worker starts on a unit of work, n
 
 A producer puts jobs on a queue and closes the queue when it has nothing more to send:
 
-```aura
+```aura fragment
 def produce(jobs: Queue[Job]):
     jobs.put(Job(id=1, payload="index"))
     jobs.put(Job(id=2, payload="render"))
@@ -55,7 +55,7 @@ Queue handles are copy values, so passing `jobs` to the producer does not remove
 
 A consumer reads jobs until the queue closes, the task group is cancelled, or all producers finish:
 
-```aura
+```aura fragment
 def consume(name: str, jobs: Queue[Job], results: Queue[str]):
     for job in jobs:
         result = f"{name}: {handle(job)}"
@@ -70,7 +70,7 @@ There is no sentinel value, magic token, or special return code. Closing the que
 
 The parent owns the task group, the queues, and the decision about when the pool is done:
 
-```aura
+```aura fragment
 jobs = Queue[Job](capacity=8)
 results = Queue[str]()
 
@@ -118,7 +118,7 @@ Do not make every worker guess. Structured concurrency pays off when you know ex
 
 Pass a timeout when the producer should fail fast:
 
-```aura
+```aura fragment
 match jobs.put(Job(id=4, payload="notify"), timeout=100ms):
     case Result.Ok(_):
         pass

@@ -46,12 +46,13 @@ Direct indexing, `pop`, `set`, and `swap` trap on an invalid position.
 The core mutations have Python-shaped names and typed ownership:
 
 ```aura
-mut values = [10, 20, 30]
-values.insert(-1, 25)
-values.append(40)
-old = values.set(0, 5)
-last = values.pop()
-values.remove(20)
+def main():
+    mut values = [10, 20, 30]
+    values.insert(-1, 25)
+    values.append(40)
+    old = values.set(0, 5)
+    last = values.pop()
+    values.remove(20)
 ```
 
 - `insert` clamps its position to the range from zero through the current
@@ -100,7 +101,7 @@ def descending(value: int32) -> int32:
     return -value
 
 def main():
-    values = [3, 1, 2, 4]
+    values: list[int32] = [3, 1, 2, 4]
     mapped = values.map(doubled)
     filtered = values.filter(is_even)
 
@@ -140,7 +141,7 @@ counts["ready"] = 3
 
 Use `in` to test membership. Use `get` for a lookup that reports absence:
 
-```aura
+```aura fragment
 if "ready" in counts:
     print(counts["ready"])
 
@@ -161,7 +162,7 @@ present. It returns `Lookup.Missing` when the key is absent.
 `keys()`, `values()`, and `items()` return eager owned lists in insertion
 order. Each item is a tuple:
 
-```aura
+```aura fragment
 for key, value in counts.items():
     print(key + ": " + value.to_string())
 ```
@@ -184,7 +185,7 @@ mut names = set[str]()
 Test membership with `in` and `not in`. Change the set with `add`, `remove`,
 and `discard`:
 
-```aura
+```aura fragment
 seen.add(5)
 
 if 2 in seen:

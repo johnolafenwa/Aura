@@ -85,7 +85,7 @@ A file below `src/` maps to its dot-separated path without `.au`:
 
 Local imports do not start with the current package name:
 
-```aura
+```aura fragment
 import helpers.text
 from helpers.text import normalize
 ```
@@ -123,7 +123,7 @@ The dependency key is not a free alias. It must exactly match the resolved
 dependency's `[package].name`, so the manifest name and the import root are
 identical. A dependency package named `util` is imported with that prefix:
 
-```aura
+```aura fragment
 import util.math
 
 print(util.math.double(21))
@@ -293,7 +293,7 @@ from another module. Public classes still enforce field and method visibility
 separately. Trait implementations loaded through package modules take part in
 dispatch with their defining module identities preserved.
 
-```aura
+```aura fragment
 from util.math import double
 
 print(double(21))

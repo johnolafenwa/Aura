@@ -76,7 +76,7 @@ Choose by intent. `as float64` asserts that the value is exact.
 
 `as` does not apply to text, because `str` is not a numeric type:
 
-```aura
+```aura check-fail:AU2002
 s = "12"
 n = s as int64
 ```
@@ -113,7 +113,7 @@ print(f"as text: {n}")
 Python developers most often trip on this rule: passing an `int32` to a
 function that expects `int64` is an error. Aura does not widen the value:
 
-```aura
+```aura check-fail:AU2002
 def f(x: int64) -> int64:
     return x
 

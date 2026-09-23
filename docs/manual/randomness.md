@@ -17,20 +17,7 @@ The secure calls never use, seed, or advance a deterministic `Rng` stream.
 
 ## Example
 
-```aura
-import random
-
-def main() -> int32:
-    mut rng = random.Rng(42)
-    print(rng.next_int(0, 10))
-    print(rng.next_int(-5, 6))
-
-    mut values: list[int64] = [0, 1, 2, 3, 4, 5]
-    mut shuffle_rng = random.Rng(42)
-    shuffle_rng.shuffle(values)
-    print(values)
-    return 0
-```
+<<< ../../examples/randomness/deterministic_rng.au{aura}
 
 This prints `2`, `2`, and `[3, 5, 4, 1, 2, 0]` on separate lines. The maintained program is `examples/randomness/deterministic_rng.au`.
 

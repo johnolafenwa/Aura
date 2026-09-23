@@ -114,7 +114,7 @@ Aura 0.3 has no block comments.
 
 Blocks are indentation-based:
 
-```aura
+```aura fragment
 if ready:
     print("yes")
 else:
@@ -396,7 +396,7 @@ To write a literal brace:
 - Aura 0.3 also treats a lone closing brace outside an interpolation as
   literal text.
 
-```aura
+```aura fragment
 print(f"{{name}} = {name}")
 ```
 

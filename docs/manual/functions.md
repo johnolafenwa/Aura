@@ -75,7 +75,7 @@ def push_name(names: mut list[str], name: own str):
 
 Write the modifier in the declaration, after the colon. A call passes the expression directly, because Aura has no call-site capability prefix:
 
-```aura
+```aura fragment
 mut names = list[str]()
 push_name(names, "Ada")
 ```
@@ -209,7 +209,7 @@ For a non-copy result, the function must produce ownership. It can do that in fo
 - move from an `own` parameter
 - call an operation that consumes an owner
 
-```aura
+```aura fragment
 def copy_name(user: User) -> str:
     return user.name.clone()
 
@@ -282,7 +282,7 @@ def identity[T](value: own T) -> T:
 
 Bounds restrict substitutions:
 
-```aura
+```aura fragment
 def describe[T: Greeter](value: T) -> str:
     return value.greet()
 
@@ -292,7 +292,7 @@ def use_both[T: First + Second](value: T) -> int32:
 
 The checker infers type arguments from the call arguments and from an expected result type when one is available. Explicit specialization fixes them:
 
-```aura
+```aura fragment
 answer = identity[int64](42)
 ```
 

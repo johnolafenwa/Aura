@@ -16,7 +16,7 @@ allow_ffi = true
 
 Then declare a C function with no body and call it directly:
 
-```aura
+```aura fragment
 public extern "C" def getpid() -> int32
 
 def main() -> int32:
@@ -57,7 +57,7 @@ keep these pointers. The string view is not guaranteed to end in a NUL byte.
 
 Use an opaque handle when C owns an object whose layout Aura should not see:
 
-```aura
+```aura fragment
 public extern "C" opaque class Handle
 public extern "C" def acquire() -> Handle
 public extern "C" def inspect(handle: Handle) -> int32

@@ -65,7 +65,7 @@ match io.read_line():
 
 Match specific variants when the program has a specific policy for them:
 
-```aura
+```aura fragment
 match io.read_line():
     case Result.Ok(str as line):
         print(line)

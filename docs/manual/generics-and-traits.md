@@ -29,7 +29,7 @@ def identity[T](value: own T) -> T:
 
 A bound follows a type parameter after `:`. Join bounds with `+` to require every one of them:
 
-```aura
+```aura fragment
 def use_value[T: Display + Score](value: T) -> int32:
     print(value.display())
     return value.score()
@@ -37,7 +37,7 @@ def use_value[T: Display + Score](value: T) -> int32:
 
 Classes and enums can carry bounds too. The checker enforces them when it resolves a construction, and when bounded generic operations use the specialized value:
 
-```aura
+```aura fragment
 class NamedBox[T: Named]:
     value: T
 
@@ -52,7 +52,7 @@ enum MaybeNamed[T: Named]:
 
 A generic call infers its type arguments by unifying the argument types with the parameter type patterns. An expected result type, when one is available, adds constraints. Generic class and enum construction infers the same way from the supplied fields or payloads and an expected constructed type.
 
-```aura
+```aura fragment
 boxed = Box(value=7)          # Box[int64]
 value = identity("Aura")   # str
 ```
@@ -63,7 +63,7 @@ Parameter ownership is fixed at the generic declaration. An unconstrained `T` is
 
 Explicit specialization fixes the type arguments:
 
-```aura
+```aura fragment
 boxed = Box[int64](value=42)
 value = identity[int64](42)
 ok = Result[int32, str].Ok(7)
@@ -144,7 +144,7 @@ def main() -> int32:
 
 The same callable rejects an unsafe concrete specialization:
 
-```aura
+```aura check-fail:AU3007
 import random
 
 def duplicate[T](values: list[T]) -> list[T]:
@@ -156,7 +156,7 @@ def reject(values: list[random.Rng]) -> list[random.Rng]:
 
 The requirement survives a generic-to-generic call:
 
-```aura
+```aura check-fail:AU3007
 import random
 
 def duplicate[T](values: list[T]) -> list[T]:
@@ -171,7 +171,7 @@ def reject(values: list[random.Rng]) -> list[random.Rng]:
 
 A signature-only trait method does not let an implementation add a hidden requirement:
 
-```aura
+```aura check-fail:AU3007
 trait Copier[T]:
     def copy_values(self) -> list[T]
 
@@ -205,7 +205,7 @@ def main() -> int32:
 
 The same contract rejects its unsafe specialization:
 
-```aura
+```aura check-fail:AU3007
 import random
 
 trait Duplicator[T]:
@@ -278,7 +278,7 @@ trait Combine:
 
 An implementation attaches one trait specialization to one target type pattern:
 
-```aura
+```aura fragment
 class Person:
     name: str
 
@@ -289,19 +289,19 @@ impl Greeter for Person:
 
 Implementations can be specialized or generic:
 
-```aura
+```aura fragment
 impl Mapper[int32] for Doubler:
     def map(self, value: own int32) -> int32:
         return value * self.factor
 ```
 
-```aura
+```aura fragment
 impl[T] Mapper[T] for Box[T]:
     def map(self, value: own T) -> T:
         return value
 ```
 
-```aura
+```aura fragment
 impl Displayable for Box[str]:
     def display(self) -> str:
         return self.value.clone()
@@ -378,14 +378,14 @@ A trait method selected for a concrete value also binds as a method value. Outsi
 
 For a type parameter, only the methods justified by its declared bounds are available:
 
-```aura
+```aura fragment
 def say_hello[T: Greeter](value: T):
     print(value.greet())
 ```
 
 A specialized trait bound supplies its type arguments:
 
-```aura
+```aura fragment
 def apply[M: Mapper[int32]](mapper: M, value: int32) -> int32:
     return mapper.map(value)
 ```
@@ -394,7 +394,7 @@ A call is ambiguous and rejected when several bounds, or several equally specifi
 
 Traits can also declare associated methods without `self`:
 
-```aura
+```aura fragment
 trait Factory:
     def make() -> int32
 
@@ -411,7 +411,7 @@ Associated trait methods follow the same rules as receiver methods. Concrete and
 
 A trait can require one or more supertraits:
 
-```aura
+```aura fragment
 trait Labelled: Named:
     def label(self) -> str:
         return "name=" + self.name()

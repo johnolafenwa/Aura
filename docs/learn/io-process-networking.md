@@ -19,7 +19,7 @@ They all work with `match`, `try`, `with`, and `TaskGroup`.
 
 The simplest filesystem calls do the whole job in one step:
 
-```aura
+```aura fragment
 import fs
 
 path = "tmp.txt"
@@ -36,7 +36,7 @@ match fs.read_to_string(path):
 
 For more control, open the file:
 
-```aura
+```aura fragment
 import fs
 import io
 
@@ -57,7 +57,7 @@ def copy_text(source: str, dest: str) -> Result[None, io.Error]:
 
 `print(value)` renders a value and adds a newline. The `io` module covers the rest: writing without a newline, flushing before a prompt, and reading a line from standard input.
 
-```aura
+```aura fragment
 import io
 
 try io.write("name> ")
@@ -81,7 +81,7 @@ match io.read_line():
 
 `process.run` runs a subprocess from a list of arguments and returns a `process.Completed` record. No shell interprets the arguments, so they are not re-split and there are no quoting hazards.
 
-```aura
+```aura fragment
 import process
 
 completed = try process.run(command=["/bin/echo", "aura process"], stdout=process.pipe(), stderr=process.pipe(), timeout=1s, group=true)
@@ -100,7 +100,7 @@ If you omit `timeout`, the call has no deadline. A negative Duration does not me
 
 When a child writes bytes that are not valid UTF-8, use `stdout_bytes()` and `stderr_bytes()`:
 
-```aura
+```aura fragment
 bytes = completed.stdout_bytes()
 print(bytes.len())
 ```
@@ -109,7 +109,7 @@ print(bytes.len())
 
 `process.start` returns a `process.Child` that you can talk to while it runs:
 
-```aura
+```aura fragment
 import process
 
 child = try process.start(command=["/bin/cat"], stdin=process.pipe(), stdout=process.pipe(), stderr=process.pipe(), group=true)
@@ -149,7 +149,7 @@ child.close()
 
 Use `process.supervisor` to manage several named subprocesses: start them, watch their lifetimes, and restart them under a policy.
 
-```aura
+```aura fragment
 import process
 
 with supervisor = process.supervisor():
@@ -173,7 +173,7 @@ with supervisor = process.supervisor():
 
 Network APIs return `Result[..., io.Error]`. Waits accept `timeout=...`. Listeners, streams, and other resources belong in `with` blocks.
 
-```aura
+```aura fragment
 import net
 
 with listener = try net.listen("127.0.0.1:0"):
@@ -228,7 +228,7 @@ To run a server as a child task, let the child create the listener. A `Queue[str
 
 HTTP client helpers return `net.HttpResponse`:
 
-```aura
+```aura fragment
 import net
 
 headers: dict[str, str] = {}

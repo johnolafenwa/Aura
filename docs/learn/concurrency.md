@@ -23,7 +23,7 @@ def double(value: int32) -> int32:
 
 Run it inside a task group:
 
-```aura
+```aura fragment
 with group = TaskGroup():
     task = group.start(double, 21)
 
@@ -93,7 +93,7 @@ application code and keeps large numbers of tasks economical. If measurement
 shows that one child needs a different stack size, give that child its own
 stack:
 
-```aura
+```aura fragment
 def deep_worker(depth: int32) -> int32:
     return visit_tree(depth)
 
@@ -168,12 +168,12 @@ Creating a queue, `put`, and `try_put` all require a structurally `Transfer`
 payload. Each receive moves one value to the consumer.
 
 ```aura
-def producer(jobs: Queue[int32]):
+def producer(jobs: Queue[int64]):
     for value in range(5):
         jobs.put(value)
     jobs.close()
 
-jobs = Queue[int32]()
+jobs = Queue[int64]()
 
 with group = TaskGroup():
     group.start_soon(producer, jobs)
@@ -209,7 +209,7 @@ When a bounded queue is full, `put` waits until space frees up, a timeout
 expires, the queue closes, or the task is cancelled. A failure is a
 `SendError[T]`, which hands the unsent value back to the caller:
 
-```aura
+```aura fragment
 match jobs.put("compile", timeout=50ms):
     case Result.Ok(_):
         print("queued")
@@ -232,16 +232,16 @@ A common shape has one producer and several workers. Every worker reads the
 same queue until the producer closes it:
 
 ```aura
-def worker(name: str, jobs: Queue[int32]):
+def worker(name: str, jobs: Queue[int64]):
     for job in jobs:
         print(f"{name}: {job}")
 
-def produce(jobs: Queue[int32]):
+def produce(jobs: Queue[int64]):
     for job in range(8):
         jobs.put(job)
     jobs.close()
 
-jobs = Queue[int32](capacity=3)
+jobs = Queue[int64](capacity=3)
 
 with group = TaskGroup():
     group.start_soon(produce, jobs)
@@ -264,7 +264,7 @@ to drain the queue.
 Use `select(...)` when the next event may come from sources of different
 kinds. It is an ordinary builtin call:
 
-```aura
+```aura fragment
 outcome = select(messages, task, 50ms)
 
 match own outcome:
@@ -295,8 +295,8 @@ match own outcome:
 Sometimes a program needs to wait on a batch of tasks. `wait_any` returns when
 the first one finishes:
 
-```aura
-tasks: list[Task[int32]] = []
+```aura fragment
+mut tasks: list[Task[int32]] = []
 
 with group = TaskGroup():
     tasks.append(group.start(double, 10))
@@ -316,7 +316,7 @@ with group = TaskGroup():
 `wait_all` returns when every task has produced a value, or when one has
 failed:
 
-```aura
+```aura fragment
 match wait_all(tasks, timeout=1s):
     case WaitAll.Ready(values):
         for value in values:
@@ -418,7 +418,7 @@ Interleaving and ready-task order stay unspecified.
 `yield_now()` adds an explicit cooperative scheduling point between chunks
 that the application chooses:
 
-```aura
+```aura fragment
 def crunch():
     mut chunk: int32 = 0
     while chunk < 100:

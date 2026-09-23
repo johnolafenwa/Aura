@@ -53,7 +53,7 @@ expressions build on:
 - a list, set, or dictionary literal
 - a list, set, or dictionary comprehension
 
-```aura
+```aura fragment
 count
 42
 3.14
@@ -215,7 +215,7 @@ comparison explicit: `(a == b) == c` is a different form that compares a
 
 Parentheses override precedence:
 
-```aura
+```aura fragment
 scaled = (left + right) * factor
 inside = lower < value < upper
 ```
@@ -563,7 +563,7 @@ The target spelling `int` is exactly the same target type as `int64`.
 
 Casts are postfix and bind more tightly than arithmetic:
 
-```aura
+```aura fragment
 whole = 7.9 as int32
 widened = 3 as float64
 total = left + right as int64
@@ -581,7 +581,7 @@ member access, calls, and numeric casts. Suffixes apply from left to right. To
 apply a suffix to the result of a prefix or binary expression, parenthesize
 that expression first:
 
-```aura
+```aura fragment
 users[0].name.clone()
 Result[int32, str].Ok(7)
 value as int64
@@ -594,7 +594,7 @@ The syntax-complexity budget in
 
 A call has zero or more comma-separated arguments:
 
-```aura
+```aura fragment
 print("hello")
 range(1, 4)
 process.run(["echo", "hi"], stdout=process.pipe(), group=true)
@@ -647,7 +647,7 @@ the argument expressions.
 
 Explicit type arguments use brackets:
 
-```aura
+```aura fragment
 box = Box[int32](value=42)
 value = identity[int64](7)
 result = Result[int32, str].Ok(7)
@@ -673,7 +673,7 @@ generic inference, arity, and trait-bound rules.
 `object.member` selects a visible field, method, enum variant, module item, or
 builtin member:
 
-```aura
+```aura fragment
 point.x
 point.distance()
 Status.Ready
@@ -697,7 +697,7 @@ compile-time error.
 `base[index]` evaluates the base, then the index. Direct indexing works on
 lists, dictionaries, and numeric Arrays:
 
-```aura
+```aura fragment
 values[0]
 counts["ready"]
 matrix[1, 2]
@@ -1001,7 +1001,7 @@ evaluated.
 
 An arm contains exactly one expression. It may be inline:
 
-```aura
+```aura fragment
 label = match code:
     case 0: "ok"
     case _: "other"
@@ -1009,7 +1009,7 @@ label = match code:
 
 Or the expression may sit on one indented line after the `case`:
 
-```aura
+```aura fragment
 label = match code:
     case 0:
         "ok"
@@ -1055,7 +1055,7 @@ convert the error. An early return runs active `with` cleanups. See
 An enum constructor names the enum, or a specialized enum, followed by the
 variant:
 
-```aura
+```aura fragment
 result: Result[int32, str] = Result.Ok(7)
 missing: Lookup[str] = Lookup.Missing
 ready = Status.Ready(count=3)
