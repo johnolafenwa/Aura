@@ -5756,7 +5756,7 @@ def main():
 }
 
 #[test]
-fn mutable_vec_writeback_precedes_its_single_safepoint_latch() {
+fn mutable_list_iteration_lends_each_element_and_has_one_safepoint_latch() {
     let module = crate::lower_source_to_mir(
         r#"
 def main():
@@ -5765,44 +5765,48 @@ def main():
         value += 1
 "#,
     )
-    .expect("mutable Vec loop should lower");
+    .expect("mutable list loop should lower");
     let main = module
         .functions
         .iter()
         .find(|function| function.name == "main")
         .expect("main should lower");
 
+    // Each iteration writes through a mutable element loan (ADR-0061 A5);
+    // nothing is cloned out and written back.
+    let instructions = main
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .collect::<Vec<_>>();
+    assert!(instructions.iter().any(|instruction| matches!(
+        instruction,
+        Instruction::BeginElementLoan { source, mutable: true, .. } if source == "values"
+    )));
+    assert!(!instructions.iter().any(|instruction| matches!(
+        instruction,
+        Instruction::Assign {
+            value: Rvalue::Call {
+                callee: CallTarget::Member { field, .. },
+                ..
+            },
+            ..
+        } if field == INTERNAL_VEC_SET_INDEX_FIELD
+    )));
+
     let safepoints = safepoint_blocks(main);
     assert_eq!(
         safepoints.len(),
         1,
-        "mutable Vec iteration should have exactly one latch"
+        "mutable list iteration should have exactly one latch"
     );
     let latch = safepoints[0];
-    let writeback_index = latch
-        .instructions
-        .iter()
-        .position(|instruction| {
-            matches!(
-                instruction,
-                Instruction::Assign {
-                    value: Rvalue::Call {
-                        callee: CallTarget::Member { field, .. },
-                        ..
-                    },
-                    ..
-                } if field == INTERNAL_VEC_SET_INDEX_FIELD
-            )
-        })
-        .expect("mutable Vec latch must write the element back");
-    let safepoint_index = latch
-        .instructions
-        .iter()
-        .position(|instruction| matches!(instruction, Instruction::Safepoint))
-        .expect("mutable Vec latch must include a safepoint");
     assert!(
-        writeback_index < safepoint_index,
-        "mutable element writeback must complete before scheduling can yield"
+        !latch
+            .instructions
+            .iter()
+            .any(|instruction| matches!(instruction, Instruction::EndLoan { .. })),
+        "the element loan ends before the latch, on every edge out of the body"
     );
     assert!(matches!(
         &latch.terminator,

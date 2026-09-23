@@ -398,10 +398,35 @@ Evidence: 26 `lookup_*` fixtures plus the regression fixture pass on both
 backends; every fixture passes on both; all 731 documentation examples
 compile.
 
+## A5: mutable iteration writes through (2026-09-23)
+
+`for x in mut items:` now binds each element as a mutable element loan
+(`lower_mutable_list_iteration`): the length is read once, since the loop
+freezes the list's shape, and each iteration begins the loan with the
+index as its selector. The loan lives in its own loan scope, so fallthrough,
+`continue`, `break`, and `return` all end it through the existing cleanup
+paths. The copy-and-write-back path and `emit_vec_element_writeback` are
+gone. The checker needed no change: it already treated the binding as a
+mutable borrow.
+
+Two bugs found on the way:
+
+- `for x in mut nested[1]:` failed MIR validation, because the write-back
+  call redirected to an element place. The loan path handles it, and the
+  hidden loan that reads the length ends before the elements are lent.
+- A view whose last use sat in an `if`, `else`, or `match` branch ended
+  twice when the branch left the loop with `break`, `continue`, or `return`:
+  the branch ended it up front, then the exit edge ended it again. This also
+  affected explicit `view` bindings on main. Branch lowering now forgets
+  loans it has ended for the rest of that branch and restores the shared
+  state before the next branch (`end_loans_before_branch`).
+
+Fixtures: `iteration_element_loan_write_through`,
+`view_ended_before_loop_exit`. The MIR unit test that pinned the write-back
+latch now pins the element loan and the single safepoint latch.
+
 ## Open items
 
-- Iteration unification (A5): retire `MutableIterationWriteback` for lists
-  so `for x in mut items` writes through immediately.
 - Returned element and entry views (A6): `return view items[i]` is still
   refused (`AU3004`), pinned by `element_view_return_unsupported`.
 - Borrowing a non-copy value into a union parameter (`AU2010`), which

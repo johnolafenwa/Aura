@@ -324,7 +324,7 @@ Iteration over a `list` or `set` depends on the loop form:
 | --- | --- |
 | Bare | Retains and freezes the selected collection for the loop. Yields shared element access. |
 | `own` | Moves the collection into a loop-private source once, at entry. Yields owned elements. Reinitializing the consumed source binding in the body does not switch or truncate the active iteration. |
-| `mut` | Over a mutable list, grants exclusive element access with writeback and retains the collection. Mutable set iteration is rejected. |
+| `mut` | Over a mutable list, binds each element as a mutable element view that writes through at once, and retains the collection. Mutable set iteration is rejected. |
 
 Range iteration yields independent `int64` values from `start` inclusive to `end` exclusive. Explicit `mut` and `own` Range modifiers are rejected with `AU3004`, because there is no place access or ownership transfer to modify. Use the bare form.
 

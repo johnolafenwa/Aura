@@ -11151,7 +11151,11 @@ impl<'a> Lowerer<'a> {
                 .cloned()
                 .collect::<Vec<_>>();
             for loan in ending_inherited.into_iter().rev() {
-                if self.view_sources.contains_key(&loan) {
+                // Forget the loan on this path, so a later `break`,
+                // `continue`, or `return` does not end it again. A branching
+                // caller restores its state before the next branch.
+                if self.view_sources.remove(&loan).is_some() {
+                    self.returned_view_descriptors.remove(&loan);
                     self.emit(Instruction::EndLoan { loan: loan.clone() });
                 }
                 inherited_endings.remove(&loan);
@@ -11172,6 +11176,68 @@ impl<'a> Lowerer<'a> {
             }
         }
         self.loan_scopes.pop();
+    }
+
+    /// Begins an element loan of `source`, or reborrows the element through
+    /// `source`'s root when that root is itself a live loan.
+    fn emit_element_loan(
+        &mut self,
+        loan: &str,
+        source: &str,
+        selector: Operand,
+        projection: String,
+        mutable: bool,
+        span: Span,
+    ) {
+        let root = source.split('.').next().unwrap_or(source);
+        if self.view_sources.contains_key(root) {
+            self.emit(Instruction::ReborrowElement {
+                loan: loan.to_string(),
+                parent: root.to_string(),
+                selector,
+                projection,
+                mutable,
+                span,
+            });
+        } else {
+            self.emit(Instruction::BeginElementLoan {
+                loan: loan.to_string(),
+                source: source.to_string(),
+                selector,
+                projection,
+                mutable,
+                span,
+            });
+        }
+    }
+
+    /// Ends the loans in `ending` that a branch body does not use, before the
+    /// body runs, and forgets them for the body so an exit edge inside it
+    /// does not end them twice. Returns the state to restore once the branch
+    /// is lowered, because a sibling branch still holds those loans.
+    fn end_loans_before_branch(
+        &mut self,
+        ending: &BTreeSet<String>,
+        body_endings: &BTreeSet<String>,
+    ) -> (BTreeMap<String, String>, BTreeSet<String>) {
+        let saved = (
+            self.view_sources.clone(),
+            self.returned_view_descriptors.clone(),
+        );
+        for loan in ending
+            .iter()
+            .rev()
+            .filter(|loan| !body_endings.contains(*loan))
+        {
+            self.emit(Instruction::EndLoan { loan: loan.clone() });
+            self.view_sources.remove(loan);
+            self.returned_view_descriptors.remove(loan);
+        }
+        saved
+    }
+
+    fn restore_branch_loan_state(&mut self, saved: (BTreeMap<String, String>, BTreeSet<String>)) {
+        (self.view_sources, self.returned_view_descriptors) = saved;
     }
 
     fn remove_loans_from_lowering_state(&mut self, loans: &BTreeSet<String>) {
@@ -11359,25 +11425,14 @@ impl<'a> Lowerer<'a> {
                     // into the new caller-side descriptor.
                     self.returned_view_descriptors.insert(loan_name.clone());
                 } else if let Some((selector, projection, span)) = element_selector {
-                    if self.view_sources.contains_key(root) {
-                        self.emit(Instruction::ReborrowElement {
-                            loan: loan_name.clone(),
-                            parent: root.to_string(),
-                            selector,
-                            projection,
-                            mutable: view.mutable,
-                            span,
-                        });
-                    } else {
-                        self.emit(Instruction::BeginElementLoan {
-                            loan: loan_name.clone(),
-                            source: source.clone(),
-                            selector,
-                            projection,
-                            mutable: view.mutable,
-                            span,
-                        });
-                    }
+                    self.emit_element_loan(
+                        &loan_name,
+                        &source,
+                        selector,
+                        projection,
+                        view.mutable,
+                        span,
+                    );
                 } else if self.view_sources.contains_key(root) {
                     let projection = source
                         .strip_prefix(root)
@@ -11597,13 +11652,7 @@ impl<'a> Lowerer<'a> {
                     })
                     .cloned()
                     .collect::<BTreeSet<_>>();
-                for loan in ending_loans
-                    .iter()
-                    .rev()
-                    .filter(|loan| !body_endings.contains(*loan))
-                {
-                    self.emit(Instruction::EndLoan { loan: loan.clone() });
-                }
+                self.end_loans_before_branch(&ending_loans, &body_endings);
                 self.lower_stmts_with_inherited_endings(&with_stmt.body, body_endings);
                 self.remove_loans_from_lowering_state(&ending_loans);
                 if !self.current_terminated() {
@@ -13422,19 +13471,14 @@ impl<'a> Lowerer<'a> {
                 })
                 .cloned()
                 .collect::<BTreeSet<_>>();
-            for loan in ending_loans
-                .iter()
-                .rev()
-                .filter(|loan| !body_endings.contains(*loan))
-            {
-                self.emit(Instruction::EndLoan { loan: loan.clone() });
-            }
+            let saved = self.end_loans_before_branch(&ending_loans, &body_endings);
             self.scoped_names.push(std::collections::HashMap::new());
             self.lower_stmts_with_inherited_endings(&branch.body, body_endings);
             if !self.current_terminated() {
                 self.terminate(Terminator::Goto(self.label(after_block)));
             }
             self.scoped_names.pop();
+            self.restore_branch_loan_state(saved);
 
             next_condition_block = else_block;
         }
@@ -13455,19 +13499,14 @@ impl<'a> Lowerer<'a> {
                 })
                 .cloned()
                 .collect::<BTreeSet<_>>();
-            for loan in ending_loans
-                .iter()
-                .rev()
-                .filter(|loan| !body_endings.contains(*loan))
-            {
-                self.emit(Instruction::EndLoan { loan: loan.clone() });
-            }
+            let saved = self.end_loans_before_branch(&ending_loans, &body_endings);
             self.scoped_names.push(std::collections::HashMap::new());
             self.lower_stmts_with_inherited_endings(else_body, body_endings);
             if !self.current_terminated() {
                 self.terminate(Terminator::Goto(self.label(after_block)));
             }
             self.scoped_names.pop();
+            self.restore_branch_loan_state(saved);
         }
         if let Some(cleanup_block) = false_cleanup_block {
             // The final false edge otherwise jumps directly to the join. Give
@@ -13698,17 +13737,12 @@ impl<'a> Lowerer<'a> {
                     })
                     .cloned()
                     .collect::<BTreeSet<_>>();
-                for loan in ending_loans
-                    .iter()
-                    .rev()
-                    .filter(|loan| !body_endings.contains(*loan))
-                {
-                    self.emit(Instruction::EndLoan { loan: loan.clone() });
-                }
+                let saved = self.end_loans_before_branch(&ending_loans, &body_endings);
                 self.lower_stmts_with_inherited_endings(&arm.body, body_endings);
                 if !self.current_terminated() {
                     self.emit_loan_cleanup_from(self.loan_scopes.len() - 1, None);
                 }
+                self.restore_branch_loan_state(saved);
                 self.remove_loans_from_lowering_state(&pattern_loans.iter().cloned().collect());
                 self.loan_scopes.pop();
                 let writeback_state = writeback_root
@@ -14721,7 +14755,16 @@ impl<'a> Lowerer<'a> {
         let mut tuple_target_source: Option<(String, Type, bool)> = None;
         let iterable_ty = self.infer_expr_type(&for_stmt.iterable);
         let mut owned_iterable_place = None;
-        let iterable = if for_stmt.borrow_mode == Some(ReceiverKind::Value) {
+        let mutable_list_iteration = for_stmt.borrow_mode == Some(ReceiverKind::BorrowMut)
+            && matches!(
+                &iterable_ty,
+                Some(Type::Named(name, args)) if name == "list" && args.len() == 1
+            );
+        let iterable = if mutable_list_iteration {
+            // Each iteration lends the element in place; see
+            // `lower_mutable_list_iteration`.
+            Operand::Unit
+        } else if for_stmt.borrow_mode == Some(ReceiverKind::Value) {
             let source = self.lower_expr_for_owned_value(&for_stmt.iterable, iterable_ty.as_ref());
             let captured = match iterable_ty.clone() {
                 Some(ty) => self.new_typed_temp(ty),
@@ -14757,6 +14800,11 @@ impl<'a> Lowerer<'a> {
             ),
             BindingTarget::Tuple { .. } => None,
         };
+        if mutable_list_iteration {
+            let binding = simple_binding.expect("sema refuses `mut` tuple loop targets");
+            self.lower_mutable_list_iteration(for_stmt, binding, target_scope, lower_body);
+            return;
+        }
         let dispatch_block = self.new_block("for_iter");
         let body_block = self.new_block("for_body");
         let after_block = self.new_block("for_end");
@@ -14957,90 +15005,6 @@ impl<'a> Lowerer<'a> {
                         index: 0,
                     },
                 });
-                if for_stmt.borrow_mode == Some(ReceiverKind::BorrowMut) {
-                    let continue_block = self.new_block("for_vec_continue");
-                    let break_block = self.new_block("for_vec_break");
-                    let return_block = self.new_block("for_vec_return");
-                    let cleanup_depth = self.with_stack.len();
-                    let return_place = self
-                        .return_redirects
-                        .last()
-                        .map(|redirect| redirect.return_place.clone())
-                        .unwrap_or_else(|| self.new_typed_temp(self.return_type.clone()));
-                    let parent_return_label = self
-                        .return_redirects
-                        .last()
-                        .map(|redirect| redirect.label.clone());
-
-                    self.loop_stack.push(LoopLabels {
-                        break_label: self.label(break_block),
-                        continue_label: self.label(continue_block),
-                        cleanup_depth,
-                        loan_depth: self.loan_scopes.len(),
-                    });
-                    self.return_redirects.push(ReturnRedirect {
-                        label: self.label(return_block),
-                        return_place: return_place.clone(),
-                        cleanup_depth,
-                    });
-                    self.scoped_names.push(target_scope.clone());
-                    lower_body(self);
-                    if !self.current_terminated() {
-                        self.terminate(Terminator::Goto(self.label(continue_block)));
-                    }
-                    self.scoped_names.pop();
-                    self.return_redirects.pop();
-                    self.loop_stack.pop();
-
-                    self.switch_to(continue_block);
-                    self.emit_vec_element_writeback(
-                        iterable.clone(),
-                        &for_stmt.iterable,
-                        &index,
-                        &binding,
-                        for_stmt.span,
-                    );
-                    self.emit(Instruction::Assign {
-                        target: index.clone(),
-                        value: Rvalue::Binary {
-                            op: BinaryOp::Add,
-                            left: Operand::Place(index.clone()),
-                            right: Operand::Int(1),
-                            span: for_stmt.span,
-                        },
-                    });
-                    self.emit(Instruction::Safepoint);
-                    self.terminate(Terminator::Goto(self.label(dispatch_block)));
-
-                    self.switch_to(break_block);
-                    self.emit_vec_element_writeback(
-                        iterable.clone(),
-                        &for_stmt.iterable,
-                        &index,
-                        &binding,
-                        for_stmt.span,
-                    );
-                    self.terminate(Terminator::Goto(self.label(after_block)));
-
-                    self.switch_to(return_block);
-                    self.emit_vec_element_writeback(
-                        iterable,
-                        &for_stmt.iterable,
-                        &index,
-                        &binding,
-                        for_stmt.span,
-                    );
-                    if let Some(parent_label) = parent_return_label {
-                        self.terminate(Terminator::Goto(parent_label));
-                    } else {
-                        self.emit_cleanup_range(0, true);
-                        let return_value =
-                            self.move_place_for_type(return_place, &self.return_type);
-                        self.terminate(Terminator::Return(return_value));
-                    }
-                    self.switch_to(after_block);
-                    return;
-                }
                 if !takes_owned {
                     self.emit(Instruction::Assign {
                         target: index.clone(),
@@ -15200,47 +15164,155 @@ impl<'a> Lowerer<'a> {
         self.switch_to(after_block);
     }
 
-    fn emit_vec_element_writeback(
+    /// `for x in mut items:` lends each element in place as a mutable
+    /// element loan bound to `x` (ADR-0061 A5). Writes land in the list as
+    /// they happen, so a later trap cannot discard an earlier write, and a
+    /// non-Copy element is never cloned. The loan ends on every edge out of
+    /// the body: fallthrough, `continue`, `break`, and `return`.
+    fn lower_mutable_list_iteration(
         &mut self,
-        iterable: Operand,
-        iterable_expr: &Expr,
-        index: &str,
-        binding: &str,
-        span: Span,
+        for_stmt: &crate::ast::ForStmt,
+        binding: String,
+        target_scope: HashMap<String, String>,
+        lower_body: &mut dyn FnMut(&mut Self),
     ) {
-        let temp = self.new_typed_temp(Type::Unit);
+        let span = for_stmt.span;
+        let int64 = Type::named("int64");
+        // The loop freezes the list's shape, so its length is read once.
+        let length_call = Expr {
+            kind: ExprKind::Call {
+                callee: Box::new(Expr {
+                    kind: ExprKind::Member {
+                        object: Box::new(for_stmt.iterable.clone()),
+                        field: "len".to_string(),
+                    },
+                    span: for_stmt.iterable.span,
+                }),
+                args: Vec::new(),
+            },
+            span: for_stmt.iterable.span,
+        };
+        let contextual_before = self.contextual_element_loans.clone();
+        let length = self.lower_expr_with_expected(&length_call, Some(&int64));
+        let length = match length {
+            Operand::Int(_) => length,
+            value => {
+                let temp = self.new_typed_temp(int64.clone());
+                self.emit(Instruction::Assign {
+                    target: temp.clone(),
+                    value: Rvalue::Use(value),
+                });
+                Operand::Place(temp)
+            }
+        };
+        // `nested[1].len()` reads through a hidden element loan; end it now
+        // rather than with the `for` statement, which lends the elements.
+        let length_loans = self
+            .contextual_element_loans
+            .difference(&contextual_before)
+            .cloned()
+            .collect::<Vec<_>>();
+        for loan in length_loans.into_iter().rev() {
+            self.end_contextual_element_loan(loan);
+        }
+        let index = self.new_typed_temp(int64.clone());
         self.emit(Instruction::Assign {
-            target: temp,
-            value: Rvalue::Call {
-                callee: CallTarget::Member {
-                    object: iterable,
-                    field: INTERNAL_VEC_SET_INDEX_FIELD.to_string(),
-                    receiver_place: self.render_place_expr_option(iterable_expr),
-                },
-                args: vec![
-                    MirArg {
-                        name: None,
-                        value: Operand::Place(index.to_string()),
-                        writeback_place: None,
-                    },
-                    MirArg {
-                        name: None,
-                        value: Operand::Place(binding.to_string()),
-                        writeback_place: None,
-                    },
-                    MirArg {
-                        name: None,
-                        value: Operand::Int(span.line as u128),
-                        writeback_place: None,
-                    },
-                    MirArg {
-                        name: None,
-                        value: Operand::Int(span.column as u128),
-                        writeback_place: None,
-                    },
-                ],
+            target: index.clone(),
+            value: Rvalue::Use(Operand::Int(0)),
+        });
+        let dispatch_block = self.new_block("for_iter");
+        let body_block = self.new_block("for_body");
+        let continue_block = self.new_block("for_continue");
+        let after_block = self.new_block("for_end");
+        self.terminate(Terminator::Goto(self.label(dispatch_block)));
+
+        self.switch_to(dispatch_block);
+        let more = self.new_typed_temp(Type::named("bool"));
+        self.emit(Instruction::Assign {
+            target: more.clone(),
+            value: Rvalue::Binary {
+                op: BinaryOp::Less,
+                left: Operand::Place(index.clone()),
+                right: length,
+                span,
             },
         });
+        self.terminate(Terminator::Branch {
+            condition: Operand::Place(more),
+            then_label: self.label(body_block),
+            else_label: self.label(after_block),
+        });
+
+        self.switch_to(body_block);
+        let loan_depth = self.loan_scopes.len();
+        self.loan_scopes.push(Vec::new());
+        self.loop_stack.push(LoopLabels {
+            break_label: self.label(after_block),
+            continue_label: self.label(continue_block),
+            cleanup_depth: self.with_stack.len(),
+            loan_depth,
+        });
+        self.scoped_names.push(target_scope);
+        let element = Expr {
+            kind: ExprKind::Index {
+                object: Box::new(for_stmt.iterable.clone()),
+                index: Box::new(Expr {
+                    kind: ExprKind::Name(index.clone()),
+                    span: for_stmt.iterable.span,
+                }),
+            },
+            span: for_stmt.iterable.span,
+        };
+        let (collection, selector, projection, selector_span) = self
+            .element_loan_source(&element, true)
+            .expect("a checked `mut` list iterable is an element-loan source");
+        self.emit_element_loan(
+            &binding,
+            &collection,
+            selector,
+            projection,
+            true,
+            selector_span,
+        );
+        self.view_sources.insert(binding.clone(), collection);
+        let target_name = match &for_stmt.target {
+            BindingTarget::Name { name, .. } => name.clone(),
+            BindingTarget::Tuple { .. } => binding.clone(),
+        };
+        self.loan_source_names.insert(binding.clone(), target_name);
+        if let Some(scope) = self.loan_scopes.last_mut() {
+            scope.push(binding);
+        }
+
+        lower_body(self);
+        if !self.current_terminated() {
+            self.emit_loan_cleanup_from(loan_depth, None);
+            self.terminate(Terminator::Goto(self.label(continue_block)));
+        }
+        self.scoped_names.pop();
+        self.loop_stack.pop();
+        let iteration_loans = self
+            .loan_scopes
+            .pop()
+            .unwrap_or_default()
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        self.remove_loans_from_lowering_state(&iteration_loans);
+
+        self.switch_to(continue_block);
+        self.emit(Instruction::Assign {
+            target: index.clone(),
+            value: Rvalue::Binary {
+                op: BinaryOp::Add,
+                left: Operand::Place(index),
+                right: Operand::Int(1),
+                span,
+            },
+        });
+        self.emit(Instruction::Safepoint);
+        self.terminate(Terminator::Goto(self.label(dispatch_block)));
+
+        self.switch_to(after_block);
     }
 
     fn lower_while(&mut self, while_stmt: &WhileStmt) {

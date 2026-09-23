@@ -7,6 +7,14 @@ in this file.
 
 ## Unreleased
 
+- `for x in mut items:` binds each element as a mutable element view, so a
+  write lands in the list immediately instead of when the iteration ends.
+  Non-Copy elements are no longer cloned and written back. Iterating a
+  nested element, as in `for x in mut grid[1]:`, now works; it used to fail
+  with an internal MIR error.
+- A view whose last use is inside an `if`, `else`, or `match` branch that
+  then leaves the loop with `break`, `continue`, or `return` no longer fails
+  with "ends inactive loan".
 - Lists and dictionaries gain `lookup`, which views an element in place when
   it may be missing. Write `match items.lookup(i):` or `match mut
   table.lookup(key):` with `case Lookup.Found(item):` and `case
