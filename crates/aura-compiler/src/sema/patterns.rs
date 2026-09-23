@@ -38,6 +38,22 @@ fn type_pattern_coverage_diagnostic(mut diagnostic: Diagnostic, has_type_arm: bo
 }
 
 impl FunctionChecker<'_> {
+    /// The collection kind when `match_stmt` is `match table.lookup(key):`
+    /// on a builtin list or dictionary. A user method named `lookup` keeps
+    /// its ordinary call meaning.
+    pub(super) fn lookup_match_collection(
+        &self,
+        match_stmt: &MatchStmt,
+        locals: &mut HashMap<String, LocalBinding>,
+    ) -> Result<Option<(super::lookup::LookupCollection, bool)>> {
+        let Some((table, _)) = super::lookup::lookup_call(&match_stmt.scrutinee) else {
+            return Ok(None);
+        };
+        let table_ty = self.type_of_expr(table, locals)?;
+        Ok(super::lookup::LookupCollection::of_type(&table_ty)
+            .map(|(collection, element)| (collection, self.is_copy_type(element))))
+    }
+
     fn type_pattern_member(
         &self,
         pattern: &crate::ast::TypePattern,

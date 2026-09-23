@@ -736,6 +736,23 @@ in place.
 - A structural mutation of the collection conflicts with every live element or
   entry view.
 
+When the position or key may be missing, match on `lookup` instead of trapping.
+The `Found` arm views the slot in place, and the `Missing` arm runs otherwise:
+
+```aura check-pass
+def main():
+    mut teams = [["ada"], ["grace"]]
+    match mut teams.lookup(5):
+        case Lookup.Found(team):
+            team.append("alan")
+        case Lookup.Missing:
+            teams.append(["alan"])
+    print(teams.len())
+```
+
+`lookup` is only valid as the subject of a `match` statement. The view ends
+with its arm, so the `Missing` arm may still change the list.
+
 ## Returned Views
 
 A function can return access tied to one named receiver or parameter:

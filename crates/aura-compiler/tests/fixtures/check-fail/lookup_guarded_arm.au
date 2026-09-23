@@ -1,0 +1,7 @@
+def main():
+    items = [1, 2]
+    match items.lookup(0):
+        case Lookup.Found(value) if value > 1:
+            print(value)
+        case _:
+            pass

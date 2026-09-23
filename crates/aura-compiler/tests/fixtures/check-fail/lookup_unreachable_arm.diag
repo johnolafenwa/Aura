@@ -1,0 +1,5 @@
+error[AU2002]: this `lookup` arm can never run; an earlier arm already covers it
+ --> crates/aura-compiler/tests/fixtures/check-fail/lookup_unreachable_arm.au:8:9
+  |
+8 |         case _:
+  |         ^

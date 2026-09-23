@@ -1,0 +1,43 @@
+class Owner:
+    name: str
+    pages: int64
+
+def main():
+    mut owners: dict[str, Owner] = {"ci": Owner(name="lint", pages=0)}
+    key = "ci"
+
+    # A mutable entry view writes through, and the key is not consumed.
+    match mut owners.lookup(key):
+        case Lookup.Found(owner):
+            owner.pages = 7
+        case Lookup.Missing:
+            print("no owner")
+    print(owners[key].pages)
+    print(key)
+
+    # A computed key is evaluated once; an absent key takes the `Missing` arm.
+    match owners.lookup("c" + "d"):
+        case Lookup.Found(owner):
+            print(owner.name)
+        case Lookup.Missing:
+            owners["cd"] = Owner(name="release", pages=1)
+    match owners.lookup("c" + "d"):
+        case Lookup.Found(owner):
+            print(owner.name)
+        case Lookup.Missing:
+            print("still missing")
+
+    # Copy values are bound by value, so they can be returned or kept.
+    mut counts = {"a": 1}
+    match mut counts.lookup("a"):
+        case Lookup.Found(n):
+            n += 5
+        case Lookup.Missing:
+            pass
+    mut total = 0
+    match counts.lookup("a"):
+        case Lookup.Found(n):
+            total = n
+        case _:
+            pass
+    print(total)

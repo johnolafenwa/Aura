@@ -1,0 +1,7 @@
+names = ["ada", "grace"]
+print("start")
+match names.lookup(0):
+    case Lookup.Found(name):
+        print(name)
+    case _:
+        pass

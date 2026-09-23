@@ -6766,7 +6766,13 @@ fn builtin_member_completions(receiver_type: &Type) -> Vec<AnalysisCompletion> {
                 AnalysisCompletion {
                     name: "get".to_string(),
                     kind: "method".to_string(),
-                    detail: "get(index: int64) -> Option[T]".to_string(),
+                    detail: BuiltinMember::VecGet.detail().to_string(),
+                },
+                AnalysisCompletion {
+                    name: "lookup".to_string(),
+                    kind: "method".to_string(),
+                    detail: "lookup(index: int64) -> Lookup[view T] (match subject only)"
+                        .to_string(),
                 },
                 AnalysisCompletion {
                     name: "set".to_string(),
@@ -6826,6 +6832,11 @@ fn builtin_member_completions(receiver_type: &Type) -> Vec<AnalysisCompletion> {
                     name: "items".to_string(),
                     kind: "method".to_string(),
                     detail: "items() -> list[(K, V)]".to_string(),
+                },
+                AnalysisCompletion {
+                    name: "lookup".to_string(),
+                    kind: "method".to_string(),
+                    detail: "lookup(key: K) -> Lookup[view V] (match subject only)".to_string(),
                 },
                 AnalysisCompletion {
                     name: "clear".to_string(),

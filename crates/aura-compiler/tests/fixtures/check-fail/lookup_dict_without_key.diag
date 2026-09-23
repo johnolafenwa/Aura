@@ -1,0 +1,5 @@
+error[AU2004]: `lookup` takes exactly one key, found 0 arguments
+ --> crates/aura-compiler/tests/fixtures/check-fail/lookup_dict_without_key.au:3:17
+  |
+3 |     match table.lookup():
+  |                 ^

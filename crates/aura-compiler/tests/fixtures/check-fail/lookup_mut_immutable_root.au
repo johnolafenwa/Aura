@@ -1,0 +1,7 @@
+def main():
+    items = [[1], [2]]
+    match mut items.lookup(0):
+        case Lookup.Found(item):
+            item.append(3)
+        case Lookup.Missing:
+            pass

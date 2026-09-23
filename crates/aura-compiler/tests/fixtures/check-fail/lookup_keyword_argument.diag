@@ -1,0 +1,5 @@
+error[AU2004]: `lookup` does not take keyword arguments
+ --> crates/aura-compiler/tests/fixtures/check-fail/lookup_keyword_argument.au:3:24
+  |
+3 |     match items.lookup(index=0):
+  |                        ^

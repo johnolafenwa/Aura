@@ -1,0 +1,7 @@
+def main():
+    items = [[1], [2]]
+    match own items.lookup(0):
+        case Lookup.Found(item):
+            print(item)
+        case Lookup.Missing:
+            pass

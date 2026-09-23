@@ -1,0 +1,5 @@
+error[AU3004]: module constant `names` cannot be the source of a view; bind it with `mut` or inside a function
+ --> crates/aura-compiler/tests/fixtures/check-fail/lookup_module_constant_view.au:4:23
+  |
+4 |     case Lookup.Found(name):
+  |                       ^

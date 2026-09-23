@@ -121,6 +121,7 @@ the index, as in `values[index].field`, without copying the element. See
 | `sort` | `sort[K](key: def(T) -> K, reverse: bool = false) -> None` | Stably sorts by keys computed once per element. |
 | `copy` | `copy() -> list[T]` | Returns independent owned storage. Requires clone-safe `T`. |
 | `get` | `get(index: int64) -> Lookup[T]` | Returns `Lookup.Found(value)` with a cloned element, or `Lookup.Missing`. Requires clone-safe `T`. |
+| `lookup` | `match [mut] items.lookup(index):` | Runs the `Found` arm with a view of the element, or the `Missing` arm. Only valid as the subject of a `match` statement. |
 | `set` | `set(index: int64, value: own T) -> T` | Replaces the element at a position and moves the old element out. |
 | `swap` | `swap(first: int64, second: int64) -> None` | Swaps two positions. |
 | `reserve` | `reserve(additional: int64) -> None` | Ensures room for `len() + additional` elements. |
@@ -154,6 +155,40 @@ def main():
     print(values[-1])
     print(values.get(-2))
 ```
+
+### Looking Up Without Cloning
+
+`get` clones the element, so it needs a clone-safe `T`. To read or change an
+element in place when the position may be invalid, match on `lookup`:
+
+```aura
+class Job:
+    name: str
+    runs: int64
+
+def main():
+    mut jobs = [Job(name="build", runs=1)]
+    match mut jobs.lookup(0):
+        case Lookup.Found(job):
+            job.runs += 1
+        case Lookup.Missing:
+            print("no job")
+    print(jobs[0].runs)
+```
+
+`lookup` never produces a value. It exists only as the subject of a `match`
+statement, and its arms follow these rules:
+
+- `case Lookup.Found(name):` binds a view of the element for that arm. A bare
+  `match` gives a shared view; `match mut` gives a mutable view whose writes
+  reach the list. `Found(_)` binds nothing.
+- `case Lookup.Missing:` or `case _:` runs when the position is invalid.
+- The position is evaluated once. Arms cannot have guards, and `match own` is
+  refused; use `pop` or `set` to take an element out.
+- While the `Found` view is live, the list cannot change shape (`AU3011`). The
+  `Missing` arm holds no view, so it may append or insert.
+- For a Copy element such as `int64`, a bare `lookup` binds a copy, so the arm
+  can return or store it.
 
 `pop()` removes the final element and traps on an empty list. `remove(value)`
 and `index(value)` search from the start and trap with `AU4008` when the value
@@ -219,6 +254,7 @@ assignment, and membership are the main ways to look up and store entries:
 | --- | --- | --- |
 | `get` | `get(key: K) -> Lookup[V]` | Returns `Lookup.Found(value)` with a cloned value, or `Lookup.Missing` when the key is absent. Requires clone-safe `V`. |
 | `remove` | `remove(key: K) -> Lookup[V]` | Removes the entry and moves its value into `Lookup.Found(value)`, or returns `Lookup.Missing`. |
+| `lookup` | `match [mut] table.lookup(key):` | Runs the `Found` arm with a view of the value, or the `Missing` arm. Only valid as the subject of a `match` statement. |
 | `keys` | `keys() -> list[K]` | Returns cloned keys in insertion order. |
 | `values` | `values() -> list[V]` | Returns cloned values in insertion order. |
 | `items` | `items() -> list[(K, V)]` | Returns cloned key/value tuples in insertion order. |
@@ -249,6 +285,18 @@ def bump(counts: mut dict[str, int32], key: own str):
             counts[key] = count + 1
         case Lookup.Missing:
             counts[key] = 1
+```
+
+To read or update a value in place without cloning it, match on `lookup`. It
+follows the same rules as list `lookup`, with the key read in place:
+
+```aura
+def record_visit(pages: mut dict[str, list[str]], user: own str, page: own str):
+    match mut pages.lookup(user):
+        case Lookup.Found(visited):
+            visited.append(page)
+        case Lookup.Missing:
+            pages[user] = [page]
 ```
 
 An indexed read follows the collection ownership rule for `V`. It traps with
@@ -371,8 +419,9 @@ Collection specializations are invariant and homogeneous. An empty literal
 needs an expected type. Mutating methods and indexed assignment need a mutable
 collection place.
 
-A direct dictionary read follows the ownership rule for `V`. `get` gives an
-optional cloned read for clone-safe `V`. `remove` moves out any stored `V`.
+A direct dictionary read follows the ownership rule for `V`. `get` gives a
+cloned `Lookup[V]` for clone-safe `V`. `lookup` views any `V` in place inside a
+`match`. `remove` moves out any stored `V`.
 
 List callbacks must have exact shared function types:
 

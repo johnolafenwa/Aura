@@ -1,0 +1,5 @@
+error[AU3004]: mutable view source `items[0]` is not mutable
+ --> crates/aura-compiler/tests/fixtures/check-fail/lookup_mut_immutable_root.au:4:27
+  |
+4 |         case Lookup.Found(item):
+  |                           ^

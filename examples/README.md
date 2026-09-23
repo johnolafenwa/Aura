@@ -55,6 +55,7 @@ executable size.
 | `list_polish.au` | Negative direct and method indexes, cloned reads of non-copy values, `mut` iteration, cast-free `list.len()` with `range(...)`, `insert(...)`, `swap(...)`, `reverse()`, `extend(...)`, `clear()`, and list equality | `Ada`, `Grace`, `true`, `4`, `1`, `14`, `13`, `12`, `11`, `true`, `100`, `true`, `true` |
 | `list_algorithms.au` | Eager shared `map` and `filter`, stable natural sorting, stable key sorting that calls the key once per element, and source retention | `[6, 2, 4, 8]`, `[2, 4]`, `[1, 2, 3, 4]`, `[4, 3, 2, 1]`, `second`, `first`, `third`, `[3, 1, 2, 4]` |
 | `dict_basics.au` | `dict[K, V]` literals, `update(...)`, tuple-valued `items()`, indexed writes, indexed reads, and typed optional lookup and removal | `3`, `true`, `1`, `1`, `5`, `(aura, 5)`, `(repo, 3)`, `3`, `3`, `3`, `true` |
+| `lookup_in_place.au` | Arm-scoped `lookup` on lists and dictionaries: a mutable `Found` view that appends in place, the `Missing` arm for an invalid position or absent key, and a shared read | `no team at 2`, `core: 1`, `2`, `1`, `1` |
 | `set_basics.au` | `set[T]` literals, shared-borrow iteration, deduplication, and the set method surface | `3`, `true`, `false`, `true`, `true`, `9`, `true`, `true`, `1` |
 
 ### `classes/`
@@ -366,6 +367,7 @@ cargo run -p aura -- run examples/collections/list_iteration.au
 cargo run -p aura -- run examples/collections/list_polish.au
 cargo run -p aura -- run examples/collections/slices.au
 cargo run -p aura -- run examples/collections/dict_basics.au
+cargo run -p aura -- run examples/collections/lookup_in_place.au
 cargo run -p aura -- run examples/collections/set_basics.au
 cargo run -p aura -- run examples/classes/point_distance.au
 cargo run -p aura -- run examples/classes/methods.au

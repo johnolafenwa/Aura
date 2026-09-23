@@ -1,0 +1,6 @@
+error[AU2005]: `match own` cannot take a value out through `lookup`
+ --> crates/aura-compiler/tests/fixtures/check-fail/lookup_match_own.au:3:5
+  |
+3 |     match own items.lookup(0):
+  |     ^
+  = help: use `remove(key)` to move the value out, or drop `own` to view it in place

@@ -1,0 +1,6 @@
+error[AU2005]: `lookup` arms do not take guards
+ --> crates/aura-compiler/tests/fixtures/check-fail/lookup_guarded_arm.au:4:37
+  |
+4 |         case Lookup.Found(value) if value > 1:
+  |                                     ^
+  = help: test the condition inside the arm body instead

@@ -1,0 +1,9 @@
+def make() -> list[int64]:
+    return [1]
+
+def main():
+    match make().lookup(0):
+        case Lookup.Found(value):
+            print(value)
+        case Lookup.Missing:
+            pass

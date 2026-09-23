@@ -13487,6 +13487,26 @@ impl<'a> Lowerer<'a> {
     }
 
     fn lower_match(&mut self, match_stmt: &MatchStmt, needed_after: &BTreeSet<String>) {
+        if let Some((table, _)) = crate::sema::lookup::lookup_call(&match_stmt.scrutinee) {
+            let lookup = self.infer_expr_type(table).and_then(|table_ty| {
+                crate::sema::lookup::LookupCollection::of_type(&table_ty).map(
+                    |(collection, element)| {
+                        (collection, type_is_copy_in_program(element, self.program))
+                    },
+                )
+            });
+            // The checker already accepted the same rewrite.
+            if let Some(Ok(desugared)) = lookup.map(|(collection, copy_element)| {
+                crate::sema::lookup::desugar_lookup_match(match_stmt, collection, copy_element)
+            }) {
+                for stmt in &desugared {
+                    if !self.lower_stmt(stmt, needed_after) {
+                        break;
+                    }
+                }
+                return;
+            }
+        }
         let scrutinee_ty = self.infer_expr_type(&match_stmt.scrutinee);
         let consumes_scrutinee = match_stmt.capability == ReceiverKind::Value
             && scrutinee_ty

@@ -1,0 +1,5 @@
+error[AU2001]: unknown name `item`
+ --> crates/aura-compiler/tests/fixtures/check-fail/lookup_view_does_not_escape_arm.au:8:11
+  |
+8 |     print(item)
+  |           ^

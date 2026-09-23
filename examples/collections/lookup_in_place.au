@@ -1,0 +1,35 @@
+# `lookup` reads or updates an element in place when it may be absent.
+# Its `Found` arm gets a view, so large or non-clone-safe values are not copied.
+
+class Team:
+    name: str
+    members: list[str]
+
+def add_member(teams: mut list[Team], index: int64, member: own str):
+    match mut teams.lookup(index):
+        case Lookup.Found(team):
+            team.members.append(member)
+        case Lookup.Missing:
+            print("no team at " + index.to_string())
+
+def main():
+    mut teams = [Team(name="core", members=["ada"]), Team(name="docs", members=[])]
+    add_member(teams, -1, "grace")
+    add_member(teams, 2, "alan")
+
+    match teams.lookup(0):
+        case Lookup.Found(team):
+            print(team.name + ": " + team.members.len().to_string())
+        case Lookup.Missing:
+            print("empty")
+
+    mut owners: dict[str, list[str]] = {"parser": ["ada"]}
+    for area in own ["parser", "runtime"]:
+        match mut owners.lookup(area):
+            case Lookup.Found(names):
+                names.append("barbara")
+            case Lookup.Missing:
+                owners[area] = ["barbara"]
+    print(owners["parser"].len())
+    print(owners["runtime"].len())
+    print(teams[1].members.len())

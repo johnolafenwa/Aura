@@ -6183,6 +6183,11 @@ fn analysis_builtin_completion_and_statement_helpers_cover_remaining_branches() 
         ),
         ("map", "map(f: def(T) -> U) -> list[U]"),
         ("filter", "filter(f: def(T) -> bool) -> list[T]"),
+        ("get", "get(index: int64) -> Lookup[T]"),
+        (
+            "lookup",
+            "lookup(index: int64) -> Lookup[view T] (match subject only)",
+        ),
     ] {
         let completion = vec_completions
             .iter()
@@ -6190,6 +6195,13 @@ fn analysis_builtin_completion_and_statement_helpers_cover_remaining_branches() 
             .unwrap_or_else(|| panic!("list.{name} completion should exist"));
         assert_eq!(completion.detail, detail);
     }
+
+    let dict_completions = builtin_member_completions(&Type::Named(
+        "dict".to_string(),
+        vec![Type::named("str"), Type::named("int32")],
+    ));
+    assert!(dict_completions.iter().any(|item| item.name == "lookup"
+        && item.detail == "lookup(key: K) -> Lookup[view V] (match subject only)"));
 
     let queue_completions = builtin_member_completions(&Type::Named(
         "Queue".to_string(),

@@ -33,6 +33,7 @@ mod places;
 use places::PlaceProjection;
 use places::{PlacePath, ProjectionPath};
 mod loans;
+pub(crate) mod lookup;
 #[cfg(test)]
 use loans::block_end_span;
 use loans::{
@@ -4064,14 +4065,20 @@ impl<'a> FunctionChecker<'a> {
                     }
                 }
                 Stmt::Match(match_stmt) => {
-                    self.reject_mutable_returned_view_value(&match_stmt.scrutinee, locals, false)?;
-                    let match_flow = self.check_match(
-                        match_stmt,
-                        locals,
-                        return_type,
-                        loop_depth,
-                        allow_return,
-                    )?;
+                    let match_flow = if let Some((collection, copy_element)) =
+                        self.lookup_match_collection(match_stmt, locals)?
+                    {
+                        let desugared =
+                            lookup::desugar_lookup_match(match_stmt, collection, copy_element)?;
+                        self.check_block(&desugared, locals, return_type, loop_depth, allow_return)?
+                    } else {
+                        self.reject_mutable_returned_view_value(
+                            &match_stmt.scrutinee,
+                            locals,
+                            false,
+                        )?;
+                        self.check_match(match_stmt, locals, return_type, loop_depth, allow_return)?
+                    };
                     if match_flow == BlockFlow::AlwaysReturns {
                         flow = BlockFlow::AlwaysReturns;
                         break;
@@ -14471,6 +14478,11 @@ impl<'a> FunctionChecker<'a> {
                     {
                         BuiltinMember::FloatSqrt.bind_args(args, span)?;
                         Ok(Type::named("float64"))
+                    }
+                    (Type::Named(name, _), "lookup")
+                        if lookup::LookupCollection::is_type_name(name) =>
+                    {
+                        Err(lookup::lookup_outside_match(span))
                     }
                     _ => Err(Diagnostic::at(
                         span,

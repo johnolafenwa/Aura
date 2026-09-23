@@ -191,6 +191,26 @@ or entry loan (shared under a bare scrutinee, mutable under `match mut`).
 There is no app-facing `V | None` `dict.get`: it would hide a clone of the
 value.
 
+The 2026-09-23 delegated implementation ruling fixes the remaining details:
+
+- `lookup` is valid only as the subject of a `match` statement on a named
+  list or dictionary place. A match expression, a temporary receiver, and
+  any other use are `AU2005`, with guidance naming `get` and `remove`.
+  `match own` is `AU2005`; `pop`, `set`, and `remove` move values out.
+- The arms are one `Lookup.Found(name)` or `Lookup.Found(_)` arm and one
+  `Lookup.Missing` or `_` arm. Guards are refused (`AU2005`), and a missing,
+  repeated, or unreachable arm is `AU2002`.
+- For a Copy element, a bare `lookup` binds a copy instead of a shared view.
+  The two read identically, and the copy can be returned or stored.
+  `match mut` always binds a mutable view.
+- The checker and the lowering rewrite the match into a presence test and
+  an ordinary element loan: the key is evaluated once into a hidden local
+  unless it is a simple place, then `if` the position is in range (or the
+  key is present) the `Found` arm runs under `view [mut] name =
+  table[key]`, `else` the absent arm runs. The probe therefore adds no MIR
+  contract. The "lookup probe and its guarded loan" evidence item is met by
+  the existing element-loan validator and forged-MIR tests.
+
 ### Resource capability policy and owned bindings (H1, H2)
 
 The builtin receiver table is enforced at every call site through

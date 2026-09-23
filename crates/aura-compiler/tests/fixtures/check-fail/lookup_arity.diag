@@ -1,0 +1,5 @@
+error[AU2004]: `lookup` takes exactly one position, found 2 arguments
+ --> crates/aura-compiler/tests/fixtures/check-fail/lookup_arity.au:3:17
+  |
+3 |     match items.lookup(0, 1):
+  |                 ^

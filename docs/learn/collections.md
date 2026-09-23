@@ -43,6 +43,24 @@ Use `get` when an invalid position is ordinary input. It returns `Lookup[T]`:
 This keeps an element that is itself `None` distinct from a missing one.
 Direct indexing, `pop`, `set`, and `swap` trap on an invalid position.
 
+When the element is large, or not clone-safe, match on `lookup` instead. The
+`Found` arm gets a view of the element in place, so nothing is copied:
+
+```aura
+def main():
+    mut teams = [["ada"], ["grace", "alan"]]
+    match mut teams.lookup(1):
+        case Lookup.Found(team):
+            team.append("barbara")
+        case Lookup.Missing:
+            print("no team")
+    print(teams[1].len())
+```
+
+`lookup` only works as the subject of a `match` statement. A bare `match`
+gives a shared view and `match mut` gives a mutable one. The view ends with
+its arm, and the list cannot change shape while it is live.
+
 The core mutations have Python-shaped names and typed ownership:
 
 ```aura
@@ -158,6 +176,17 @@ requires a clone-safe `V`.
 
 `remove(key)` moves the value out into `Lookup.Found(value)` when the key is
 present. It returns `Lookup.Missing` when the key is absent.
+
+`lookup(key)` views the value in place instead of cloning it. Like list
+`lookup`, it is only valid as a `match` subject:
+
+```aura fragment
+match mut groups.lookup("admins"):
+    case Lookup.Found(members):
+        members.append("ada")
+    case Lookup.Missing:
+        groups["admins"] = ["ada"]
+```
 
 `keys()`, `values()`, and `items()` return eager owned lists in insertion
 order. Each item is a tuple:

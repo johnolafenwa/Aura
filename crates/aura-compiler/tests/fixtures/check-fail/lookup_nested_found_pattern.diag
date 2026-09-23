@@ -1,0 +1,5 @@
+error[AU2002]: a `lookup` arm must be `Lookup.Found(name)`, `Lookup.Found(_)`, `Lookup.Missing`, or `_`
+ --> crates/aura-compiler/tests/fixtures/check-fail/lookup_nested_found_pattern.au:4:9
+  |
+4 |         case Lookup.Found((a, b)):
+  |         ^

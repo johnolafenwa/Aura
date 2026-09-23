@@ -1,0 +1,12 @@
+print("start")
+names = ["ada", "grace"]
+match names.lookup(-1):
+    case Lookup.Found(name):
+        print(name)
+    case _:
+        print("none")
+match names.lookup(names.len()):
+    case Lookup.Found(name):
+        print(name)
+    case _:
+        print("none")

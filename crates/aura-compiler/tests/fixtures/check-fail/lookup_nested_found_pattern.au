@@ -1,0 +1,7 @@
+def main():
+    pairs = [(1, 2)]
+    match pairs.lookup(0):
+        case Lookup.Found((a, b)):
+            print(a)
+        case Lookup.Missing:
+            pass

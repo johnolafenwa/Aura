@@ -1,0 +1,7 @@
+def main():
+    items = [1, 2]
+    match items.lookup(0):
+        case Lookup.Missing:
+            print("missing")
+        case _:
+            pass
