@@ -1,0 +1,15 @@
+def change_key(key: mut str) -> int64:
+    key = "right"
+    return 9
+
+def show(value: str, marker: int64):
+    print(value)
+    print(marker)
+
+def main():
+    labels: dict[str, str] = {"left": "first", "right": "second"}
+    mut key = "left"
+    show(labels[key], change_key(key))
+    print(key)
+    print(labels["left"])
+    print(labels[key])

@@ -1,0 +1,22 @@
+select 1
+reset
+tail
+7
+0
+reset
+select 0
+head
+7
+1
+reset
+tail
+7
+0
+select 1
+reset
+1
+17
+0
+false
+true
+0

@@ -248,13 +248,21 @@ impl<'a> FunctionChecker<'a> {
                 let parent = self.borrow_call_place(object)?;
                 Some(parent.with_field(field.clone()))
             }
+            // A literal position keeps its syntactic spelling (a tuple
+            // position, or one list element under the overlap rule); a
+            // literal key names that entry; any other selector names a
+            // dynamic element that overlaps every element (ADR-0061).
             ExprKind::Index { object, index } => {
-                let ExprKind::Int(value) = index.kind else {
-                    return None;
-                };
-                let index = usize::try_from(value).ok()?;
-                self.borrow_call_place(object)
-                    .map(|parent| parent.with_tuple(index))
+                let parent = self.borrow_call_place(object)?;
+                Some(match &index.kind {
+                    ExprKind::Int(value) => match usize::try_from(*value) {
+                        Ok(position) => parent.with_tuple(position),
+                        Err(_) => parent.with_element(PlaceSelector::Dynamic),
+                    },
+                    ExprKind::String(value) => parent.with_entry(PlaceSelector::Str(value.clone())),
+                    ExprKind::Bool(value) => parent.with_entry(PlaceSelector::Bool(*value)),
+                    _ => parent.with_element(PlaceSelector::Dynamic),
+                })
             }
             _ => None,
         }
@@ -311,33 +319,24 @@ impl<'a> FunctionChecker<'a> {
                         )
                     })?;
                 }
-                PlaceProjection::Element(_) => {
-                    let element = match &ty {
+                // A selection spelled from syntax alone (a computed index is
+                // a dynamic element) names a list element or a dictionary
+                // value, whichever the collection is.
+                PlaceProjection::Element(_) | PlaceProjection::Entry(_) => {
+                    let selected = match &ty {
                         Type::Named(name, args) if name == "list" && args.len() == 1 => {
                             Some(args[0].clone())
                         }
-                        _ => None,
-                    };
-                    ty = element.ok_or_else(|| {
-                        Diagnostic::coded_at(
-                            "AU3004",
-                            span,
-                            format!("cannot project an element from `{ty}`"),
-                        )
-                    })?;
-                }
-                PlaceProjection::Entry(_) => {
-                    let value = match &ty {
                         Type::Named(name, args) if name == "dict" && args.len() == 2 => {
                             Some(args[1].clone())
                         }
                         _ => None,
                     };
-                    ty = value.ok_or_else(|| {
+                    ty = selected.ok_or_else(|| {
                         Diagnostic::coded_at(
                             "AU3004",
                             span,
-                            format!("cannot project an entry from `{ty}`"),
+                            format!("cannot project an element from `{ty}`"),
                         )
                     })?;
                 }

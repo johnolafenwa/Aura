@@ -1,0 +1,5 @@
+error[AU3005]: cannot implicitly copy `Profile` out of a list index; use `view value = items[index]` for shared access, `items[index].clone()` for an explicit cloned owner, or `pop(index)` or `set(index, value)` to transfer ownership
+ --> crates/aura-compiler/tests/fixtures/check-fail/element_contextual_owned_field.au:7:13
+  |
+7 |     taken = users[0].name
+  |             ^

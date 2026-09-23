@@ -1,0 +1,24 @@
+class Shelf:
+    rows: list[list[int64]]
+
+def bump(value: mut int64):
+    value += 10
+
+def main():
+    mut pair = ([1, 2], [3, 4])
+    bump(pair[1][0])
+    print(pair)
+    mut shelf = Shelf(rows=[[5, 6]])
+    bump(shelf.rows[0][1])
+    print(shelf.rows)
+    mut optional: Shelf | None = Shelf(rows=[[7, 8]])
+    match mut optional:
+        case Shelf as present:
+            bump(present.rows[0][0])
+        case None:
+            pass
+    match optional:
+        case Shelf as present:
+            print(present.rows)
+        case None:
+            print("absent")

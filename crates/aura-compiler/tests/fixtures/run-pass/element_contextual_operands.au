@@ -1,0 +1,11 @@
+def main():
+    names = ["ada", "linus"]
+    labels: dict[str, str] = {"first": "ada", "last": "linus"}
+    print(f"{names[0]} / {labels['last']}")
+    print(names[0] == labels["first"])
+    print(names[1] != labels["first"])
+    print(names[0] == labels["first"] != names[1])
+    print(names[0] + "!")
+    print(names[0] in labels)
+    print(names[0] in names)
+    print(len(names[1]))

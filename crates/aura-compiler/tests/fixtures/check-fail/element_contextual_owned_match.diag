@@ -1,5 +1,5 @@
 error[AU3005]: cannot implicitly copy `str` out of a list index; use `view value = items[index]` for shared access, `items[index].clone()` for an explicit cloned owner, or `pop(index)` or `set(index, value)` to transfer ownership
- --> crates/aura-compiler/tests/fixtures/check-fail/list_index_non_copy_requires_explicit_clone.au:3:18
+ --> crates/aura-compiler/tests/fixtures/check-fail/element_contextual_owned_match.au:3:15
   |
-3 |     first: str = items[0]
-  |                  ^
+3 |     match own names[0]:
+  |               ^

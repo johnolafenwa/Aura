@@ -2817,22 +2817,6 @@ impl<'a> FunctionChecker<'a> {
                                 ),
                             ));
                         }
-                        // A list element or dictionary entry is a mutable
-                        // place for views and assignment, but a call cannot
-                        // yet lend it in place (ADR-0061, 2026-09-21 section:
-                        // contextual element arguments follow).
-                        if self.is_collection_element_expr(&argument.value, locals)? {
-                            return Err(Diagnostic::at(
-                                argument.span,
-                                format!(
-                                    "argument for parameter `{}` in {} must be a mutable place",
-                                    param_decl.name, callee_name
-                                ),
-                            )
-                            .with_help(
-                                "bind the element first with `view mut name = items[i]` and pass the view",
-                            ));
-                        }
                         if let Some(place) = argument_place {
                             self.reject_overlapping_borrow(
                                 &borrowed_places,

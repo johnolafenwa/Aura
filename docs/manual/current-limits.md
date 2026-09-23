@@ -55,9 +55,8 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 
 - Views have identity only for these places: local, parameter, and receiver roots; existing views; class-field paths; fixed tuple positions; list elements; and dictionary entries. Field and tuple projections inside an element are included.
 - Set elements, slices, arbitrary temporaries, and escaping enum-payload views cannot be loaned.
-- A list element or dictionary entry cannot be passed to a `mut` parameter or be the receiver of a mutating method call. Bind it with `view mut` first.
 - A returned view cannot select a list element or dictionary entry. Return a view of the collection and select at the call site.
-- A nested index in one expression, such as `grid[i][j]`, is refused when the inner element is not Copy (`AU3005`). Take the inner element with a view first: `view mut row = grid[i]`, then `row[j]`.
+- A non-copy value, including a list element, cannot be borrowed into a `T | None` or other union parameter (`AU2010`). Pass a clone, or change the parameter to the member type.
 - In a top-level script, an immutable binding is a module constant and cannot be the source of a view (`AU3004`). Bind it with `mut` or inside a function.
 - View-bearing aggregates, module storage, multi-origin results, returned loan closures, and lifetime-parameterized structural callable types are not available.
 - Views and loan closures are never Transfer.

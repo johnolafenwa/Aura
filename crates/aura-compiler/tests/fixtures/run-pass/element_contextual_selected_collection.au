@@ -1,0 +1,40 @@
+class Shelves:
+    left: list[list[int64]]
+    right: list[list[int64]]
+
+class Ledgers:
+    left: dict[str, list[int64]]
+    right: dict[str, list[int64]]
+
+def shelf(shelves: mut Shelves, left: bool) -> view mut list[list[int64]] from shelves:
+    if left:
+        return view mut shelves.left
+    return view mut shelves.right
+
+def ledger(ledgers: mut Ledgers, left: bool) -> view mut dict[str, list[int64]] from ledgers:
+    if left:
+        return view mut ledgers.left
+    return view mut ledgers.right
+
+def bump(value: mut int64):
+    value += 10
+
+def update(shelves: mut Shelves, left: bool):
+    view mut selected = shelf(shelves, left)
+    bump(selected[0][1])
+
+def update_ledger(ledgers: mut Ledgers, left: bool):
+    view mut selected = ledger(ledgers, left)
+    bump(selected["row"][0])
+
+def main():
+    mut shelves = Shelves(left=[[1, 2]], right=[[3, 4]])
+    update(shelves, true)
+    update(shelves, false)
+    print(shelves.left)
+    print(shelves.right)
+    mut ledgers = Ledgers(left={"row": [5, 6]}, right={"row": [7, 8]})
+    update_ledger(ledgers, true)
+    update_ledger(ledgers, false)
+    print(ledgers.left["row"])
+    print(ledgers.right["row"])

@@ -1,0 +1,31 @@
+class Profile:
+    name: str
+    visits: int64
+
+def main():
+    mut users = [Profile(name="ada", visits=1), Profile(name="linus", visits=2)]
+    view mut first = users[0]
+    print(users[1].visits)
+    print(users[1].name)
+    first.visits += 10
+    print(first.visits)
+    mut names = ["left", "right"]
+    view mut head = names[0]
+    print(names[1])
+    head = "changed"
+    print(head)
+    mut labels: dict[str, str] = {"a": "alpha", "b": "beta"}
+    view mut alpha = labels["a"]
+    print(labels["b"])
+    alpha = "new-alpha"
+    print(alpha)
+    mut states: dict[bool, int64] = {true: 7, false: 8}
+    view mut yes = states[true]
+    print(states[false])
+    yes += 1
+    print(yes)
+    mut counts: dict[int64, int64] = {1: 9, 2: 10}
+    view mut one = counts[1]
+    print(counts[2])
+    one += 1
+    print(one)

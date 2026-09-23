@@ -217,7 +217,7 @@ process. They are not Aura diagnostics. See [FFI v0](/manual/ffi).
 | `AU3002` | borrow/loan conflict | An access that overlaps a live borrow or view. | Remove the later use, shorten the scope, select a proven-disjoint place, or create an owned clone. |
 | `AU3003` | mutability violation | Mutation through a shared place or view. | Add `mut`, or declare a mutating receiver as `mut self`. |
 | `AU3004` | ownership or place mode | A source or target in the wrong ownership or place mode. | Use the mode the operation requires, on an addressable place. |
-| `AU3005` | non-copy indexed read | A `list`, `dict`, or constant tuple index that selects a non-copy value. | Use `get`, `remove`, a `view`, or tuple unpacking. |
+| `AU3005` | non-copy indexed read | Moving a non-copy value out of a `list`, `dict`, or constant tuple index, or a shared read of an element that cannot be cloned. | Use a `view`, `.clone()`, `pop`, `remove`, or tuple unpacking. |
 | `AU3006` | non-copy indexed compound assignment | A compound assignment such as `+=` on a non-copy `list` or `dict` element. | Rewrite the update so it needs no hidden clone or move of the stored value. |
 | `AU3007` | non-cloneable state duplication | Copying a value that holds `random.Rng`, an opaque FFI handle, or a capturing closure environment. | Move or remove the existing value, or construct a new generator from an explicit seed. |
 | `AU3008` | non-transferable task/Queue boundary | A task capture, task result, or Queue payload that cannot cross to another task worker. | Pass owned transferable data, and keep host authority on its owning task. |

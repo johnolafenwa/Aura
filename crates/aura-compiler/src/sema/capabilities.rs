@@ -574,7 +574,12 @@ impl<'a> FunctionChecker<'a> {
                         self.ensure_place_not_locked_by_view(&place, None, expr.span, locals)?;
                     }
                 }
-                self.type_of_expr(expr, locals).map(|_| ())
+                // Moving a non-Copy element out of its collection is the one
+                // use of an element that is refused (`AU3005`).
+                let previous = self.index_owned_read.replace(Some(expr.span));
+                let result = self.type_of_expr(expr, locals).map(|_| ());
+                self.index_owned_read.set(previous);
+                result
             }
             // Slices materialize a fresh owned value. Their source and
             // endpoints were fully checked while producing that value; moving
@@ -602,6 +607,15 @@ impl<'a> FunctionChecker<'a> {
     ) -> Result<()> {
         if self.is_copy_type(member_ty) {
             return Ok(());
+        }
+        // Moving a non-Copy field out of a list element or dictionary entry
+        // would move it out of the collection's storage: the element is
+        // treated as moved, which is `AU3005` (ADR-0061, contextual reads).
+        if let Some(element) = self.innermost_collection_element(object, locals)? {
+            let previous = self.index_owned_read.replace(Some(element.span));
+            let result = self.type_of_expr(element, locals);
+            self.index_owned_read.set(previous);
+            result?;
         }
         if let Some(place) = self.borrow_call_place(expr) {
             self.ensure_place_not_locked_by_view(&place, None, expr.span, locals)?;
@@ -789,6 +803,29 @@ impl<'a> FunctionChecker<'a> {
                 Ok(self.view_place(expr, locals)?.is_some())
             }
             _ => Ok(false),
+        }
+    }
+
+    /// The list-element or dictionary-entry index expression that `expr`
+    /// projects through (`users[i]` in `users[i].name.first`), if any.
+    pub(super) fn innermost_collection_element<'e>(
+        &self,
+        expr: &'e Expr,
+        locals: &mut HashMap<String, LocalBinding>,
+    ) -> Result<Option<&'e Expr>> {
+        match &expr.kind {
+            ExprKind::Group(inner) => self.innermost_collection_element(inner, locals),
+            ExprKind::Member { object, .. } => self.innermost_collection_element(object, locals),
+            ExprKind::Index { object, .. } => {
+                let object_ty = self.type_of_member_object_expr(object, locals)?;
+                if matches!(&object_ty, Type::Named(name, args)
+                    if (name == "list" && args.len() == 1) || (name == "dict" && args.len() == 2))
+                {
+                    return Ok(Some(expr));
+                }
+                self.innermost_collection_element(object, locals)
+            }
+            _ => Ok(None),
         }
     }
 

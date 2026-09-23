@@ -1,0 +1,6 @@
+def show(value: str):
+    print(value)
+
+def main():
+    labels: dict[str, str] = {"name": "Aura"}
+    show(labels["missing"])

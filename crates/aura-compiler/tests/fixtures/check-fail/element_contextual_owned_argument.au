@@ -1,0 +1,6 @@
+def consume(value: own str):
+    print(value)
+
+def main():
+    names = ["ada"]
+    consume(names[0])

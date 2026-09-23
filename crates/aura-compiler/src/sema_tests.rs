@@ -4238,11 +4238,11 @@ fn indexed_read_guidance_follows_the_element_clone_safety() {
     for (source, message) in [
         (
             "def main():\n    values: list[str] = [\"one\"]\n    taken = values[0]\n    print(taken)\n",
-            "cannot implicitly copy `str` out of a list index; use `get(index)` for an explicit cloned read instead",
+            "cannot implicitly copy `str` out of a list index; use `view value = items[index]` for shared access, `items[index].clone()` for an explicit cloned owner, or `pop(index)` or `set(index, value)` to transfer ownership",
         ),
         (
             "def main():\n    mut values = dict[str, str]()\n    values[\"a\"] = \"b\"\n    taken = values[\"a\"]\n    print(taken)\n",
-            "cannot implicitly copy `str` out of a dict index; use `get(key)` for an explicit cloned optional read, or `remove(key)` to transfer ownership",
+            "cannot implicitly copy `str` out of a dict index; use `view value = table[key]` for shared access, `table[key].clone()` for an explicit cloned owner, or `remove(key)` to transfer ownership",
         ),
     ] {
         let rejected = crate::check_source(source)
@@ -28464,7 +28464,7 @@ fn adr0038_additional_view_diagnostics_cover_call_and_tuple_place_edges() {
             "is not mutable",
         ),
         (
-            "def bump(value: mut int64):\n    value += 1\n\ndef main():\n    mut values = [1, 2]\n    bump(values[0])\n",
+            "def bump(value: mut int64):\n    value += 1\n\ndef main():\n    values = [1, 2]\n    bump(values[0])\n",
             "must be a mutable place",
         ),
         (
@@ -31148,34 +31148,26 @@ fn explicit_specialization_ast_keeps_the_same_callable_adapter_diagnostic() {
 }
 
 #[test]
-fn adr0061_element_places_read_fields_in_place_and_refuse_element_arguments() {
+fn adr0061_element_places_read_fields_in_place_and_lend_element_arguments() {
     let accepted = "class Profile:\n    name: str\n    visits: int64\n\ndef main():\n    mut users = [Profile(name=\"ada\", visits=1), Profile(name=\"linus\", visits=2)]\n    print(users[0].visits)\n    users[1].visits += 1\n    view mut ada = users[0]\n    view mut linus = users[1]\n    ada.visits += 1\n    linus.visits += 1\n    view shared = users[0]\n    users[1].visits = 5\n    print(shared.visits)\n    mut people: dict[str, Profile] = {\"ada\": Profile(name=\"ada\", visits=0)}\n    people[\"ada\"].visits = 3\n    print(people[\"ada\"].name)\n    mut pairs = [(1, \"one\")]\n    view label = pairs[0][1]\n    print(label)\n";
     crate::check_source(accepted)
         .expect("field reads and writes through elements are place accesses, and literal-disjoint element views coexist");
 
+    // An element or entry is lent in place to a `mut` parameter, including
+    // a field or position inside it (ADR-0061, contextual element loans).
+    for source in [
+        "def bump(value: mut int64):\n    value += 1\n\ndef main():\n    mut values = [1, 2]\n    bump(values[0])\n",
+        "def bump(value: mut int64):\n    value += 1\n\ndef main():\n    mut values = [1, 2]\n    bump((values[1]))\n",
+        "class Profile:\n    name: str\n    visits: int64\n\ndef bump(value: mut int64):\n    value += 1\n\ndef main():\n    mut users = [Profile(name=\"ada\", visits=1)]\n    bump(users[0].visits)\n",
+        "class Profile:\n    name: str\n    visits: int64\n\ndef bump(value: mut int64):\n    value += 1\n\ndef main():\n    mut people: dict[str, Profile] = {\"ada\": Profile(name=\"ada\", visits=1)}\n    bump(people[\"ada\"].visits)\n",
+        "class Profile:\n    name: str\n    visits: int64\n\ndef bump(profile: mut Profile):\n    profile.visits += 1\n\ndef main():\n    mut users = [Profile(name=\"ada\", visits=1)]\n    bump(users[0])\n",
+    ] {
+        crate::check_source(source).expect("an element is lent to a mutable parameter in place");
+    }
+
     let cases = [
         (
             "class Profile:\n    name: str\n    visits: int64\n\ndef main():\n    mut users = [Profile(name=\"ada\", visits=1)]\n    taken = users[0].name\n    print(taken)\n",
-            "cannot implicitly copy `Profile` out of a list index",
-        ),
-        (
-            "def bump(value: mut int64):\n    value += 1\n\ndef main():\n    mut values = [1, 2]\n    bump(values[0])\n",
-            "must be a mutable place",
-        ),
-        (
-            "def bump(value: mut int64):\n    value += 1\n\ndef main():\n    mut values = [1, 2]\n    bump((values[1]))\n",
-            "must be a mutable place",
-        ),
-        (
-            "class Profile:\n    name: str\n    visits: int64\n\ndef bump(value: mut int64):\n    value += 1\n\ndef main():\n    mut users = [Profile(name=\"ada\", visits=1)]\n    bump(users[0].visits)\n",
-            "must be a mutable place",
-        ),
-        (
-            "class Profile:\n    name: str\n    visits: int64\n\ndef bump(value: mut int64):\n    value += 1\n\ndef main():\n    mut people: dict[str, Profile] = {\"ada\": Profile(name=\"ada\", visits=1)}\n    bump(people[\"ada\"].visits)\n",
-            "must be a mutable place",
-        ),
-        (
-            "class Profile:\n    name: str\n    visits: int64\n\ndef bump(profile: mut Profile):\n    profile.visits += 1\n\ndef main():\n    mut users = [Profile(name=\"ada\", visits=1)]\n    bump(users[0])\n",
             "cannot implicitly copy `Profile` out of a list index",
         ),
         (
@@ -31193,6 +31185,10 @@ fn adr0061_element_places_read_fields_in_place_and_refuse_element_arguments() {
         (
             "def main():\n    mut values = [1, 2]\n    view mut first = values[0]\n    view mut again = values[0]\n    first += 1\n    again += 1\n",
             "while mutable loan held by `first` remains live",
+        ),
+        (
+            "def adjust(left: mut int64, right: mut int64):\n    left += right\n\ndef main():\n    mut values = [1, 2]\n    i = 0\n    j = 1\n    adjust(values[i], values[j])\n",
+            "overlaps mutable borrow for parameter `left`",
         ),
     ];
     for (source, expected) in cases {
@@ -31391,9 +31387,16 @@ fn adr0061_contextual_member_reads_restore_owned_read_rules_and_identify_element
             "{source} must be read in place while resolving its member"
         );
         assert_eq!(checker.index_place_read.get(), None);
+        // A shared read of a clone-safe element is a place read; moving it
+        // out of its collection is still `AU3005`.
+        checker
+            .type_of_expr(&expression, &mut locals)
+            .expect("a shared read of an element is a place read");
+        checker.index_owned_read.set(Some(expression.span));
         let error = checker
             .type_of_expr(&expression, &mut locals)
             .expect_err("an owned read must still require a copyable element");
+        checker.index_owned_read.set(None);
         assert_eq!(error.code, "AU3005", "{source}");
     }
     let outer_read = Some(Span::new(20, 3));
@@ -31514,22 +31517,30 @@ fn adr0061_typed_element_and_entry_paths_resolve_values_and_reject_wrong_project
             "{path}.visits"
         );
     }
-    for (path, expected) in [
-        (
-            PlacePath::root("people").with_element(PlaceSelector::Int(2)),
-            "cannot project an element from `dict[int64, Profile]`",
-        ),
-        (
-            PlacePath::root("users").with_entry(PlaceSelector::Int(2)),
-            "cannot project an entry from `list[Profile]`",
-        ),
+    // A selection spelled from syntax alone names a list element or a
+    // dictionary value, whichever the collection is.
+    for path in [
+        PlacePath::root("people").with_element(PlaceSelector::Int(2)),
+        PlacePath::root("users").with_entry(PlaceSelector::Int(2)),
     ] {
-        let span = Span::new(3, 7);
-        let error = checker
-            .place_path_type(&path, &locals, span)
-            .expect_err("a path must retain the collection's projection kind");
-        assert_eq!(error.code, "AU3004");
-        assert_eq!(error.message, expected);
-        assert_eq!(error.span, Some(span));
+        assert_eq!(
+            checker
+                .place_path_type(&path, &locals, Span::new(3, 7))
+                .expect("a selection types through either collection"),
+            Some(Type::named("Profile"))
+        );
     }
+    let span = Span::new(3, 7);
+    let error = checker
+        .place_path_type(
+            &PlacePath::root("users")
+                .with_element(PlaceSelector::Int(0))
+                .with_element(PlaceSelector::Int(1)),
+            &locals,
+            span,
+        )
+        .expect_err("a selection needs a collection");
+    assert_eq!(error.code, "AU3004");
+    assert_eq!(error.message, "cannot project an element from `Profile`");
+    assert_eq!(error.span, Some(span));
 }

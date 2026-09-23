@@ -1,0 +1,20 @@
+class Profile:
+    name: str
+    visits: int64
+
+def count(profile: mut Profile) -> view mut int64 from profile:
+    return view mut profile.visits
+
+def bump(value: mut int64):
+    value += 1
+
+def main():
+    mut people: dict[str, Profile] = {"grace": Profile(name="grace", visits=3)}
+    mut users = [Profile(name="ada", visits=1)]
+    view mut grace = people["grace"]
+    bump(count(grace))
+    print(people["grace"].visits)
+    view mut ada = users[0]
+    view mut visits = count(ada)
+    visits += 10
+    print(users[0].visits)

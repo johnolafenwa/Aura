@@ -242,13 +242,13 @@ List positions follow these rules:
 - Direct access, `set`, `pop`, and `swap` fail at runtime when the normalized position is invalid. `get` returns `None`.
 - `insert` clamps its position to `0..=len`.
 
-A direct read produces `T` or `V` only when that element or value type is copyable. For non-copy contents, use one of these forms instead:
+An element used where a place is borrowed is lent in place: a shared or `mut` argument, a method receiver, an operand, a `match` scrutinee, a field access, or a nested selection. A read that would move a non-copy element out of its collection is refused with `AU3005`. That includes a new binding, an `own` argument, an aggregate element, and a non-Copy field moved out of the element. For non-copy contents, use one of these forms instead:
 
-- **List element.** Use `get(index)` for an explicit cloned optional read, only when the element type is clone-safe. Or bind the element in place with `view name = values[index]`.
-- **Dictionary value.** Use `get(key)` only when the value type is clone-safe. Use `remove(key)` to transfer ownership, or take a `view` of the entry.
-- **Field through an element.** `values[index].field` reads or assigns the field in place without copying the element.
+- **Shared access.** Bind the element in place with `view name = values[index]`.
+- **Explicit copy.** Use `values[index].clone()` or `get(index)` when the element type is clone-safe.
+- **Transfer.** Use `pop(index)`, `set(index, value)`, or `remove(key)`.
 
-These non-copy direct-read rejections use `AU3005`. A non-copy indexed compound assignment uses `AU3006`, because its initial read has the same ownership problem. A missing dictionary key in a direct read is runtime diagnostic `AU4003`. Integer indexing is not defined for `str`.
+A shared read of an element whose type cannot be cloned, such as `random.Rng`, also reports `AU3005`; bind a `view` instead. A non-copy indexed compound assignment uses `AU3006`, because its initial read has the same ownership problem. A missing dictionary key in a direct read is runtime diagnostic `AU4003`. Integer indexing is not defined for `str`.
 
 **Slicing.** A slice suffix is defined on `list[T]`, `str`, and `Array[T]`. It returns a fresh owned value of the source type.
 
