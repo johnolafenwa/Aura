@@ -256,7 +256,24 @@ An entry module may contain executable top-level statements instead of a local `
 
 A `mut` simple-name assignment declares a mutable top-level local. For example, `mut count = 0` creates one. Later plain and compound assignments to that name, such as `count = count + 1` and `count += 1`, stay in the statement stream and update the same local.
 
-A bare assignment to a new name is a module constant, even when it appears after an executable statement. That constant cannot read a top-level local, because constants initialize before entry statements run. To fix this, add `mut` to make the new binding another top-level local, or move the computation into `main`.
+A bare assignment to a new name depends on where it appears:
+
+- Above the first top-level statement, it declares a module constant. Other modules can import it, and it initializes before any statement runs.
+- From the first top-level statement on, it declares an immutable top-level local. It reads earlier locals, and it cannot be reassigned.
+
+Imports and `def`, `class`, `enum`, `trait`, `impl`, and `type` declarations are not statements. So a file whose first executable line comes after its constants keeps all of them as constants.
+
+```aura
+limit = 100                       # module constant
+
+mut scores = [30, 60, 90]         # first statement
+scores.append(120)
+
+total = scores.len()              # immutable top-level local
+print(f"{total} of {limit}")
+```
+
+A `public` binding must be a module constant, so `public name = value` after the first statement is a syntax error (`AU1101`). Functions see module constants but not top-level locals.
 
 An imported module contributes items and eagerly initialized constants. Its top-level executable statements are checked as source, but they do not run as import side effects. Put reusable executable work inside public functions.
 

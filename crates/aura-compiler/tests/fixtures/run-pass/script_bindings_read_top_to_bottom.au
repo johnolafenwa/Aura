@@ -1,0 +1,16 @@
+limit = 100
+
+def describe(count: int64) -> str:
+    return f"{count} of {limit}"
+
+mut scores = [30, 60, 90]
+scores.append(120)
+
+total = scores.len()
+label = "report"
+show: def() -> int64 = lambda: label.len()
+
+print(limit)
+print(total)
+print(show())
+print(describe(total))
