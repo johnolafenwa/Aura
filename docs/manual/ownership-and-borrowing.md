@@ -398,7 +398,7 @@ When an iteration item is a tuple, recursive target leaves inherit the item's pr
 - Shared collection iteration gives shared non-copy leaves.
 - `own` collection iteration gives owned leaves.
 - Bare Queue iteration gives owned leaves, because it receives the item.
-- A tuple target is rejected with `mut` iteration. Recursive mutable tuple writeback is not defined.
+- A tuple target is rejected with `mut` iteration. Bind the tuple to one name instead.
 
 ## Clone
 
@@ -542,7 +542,7 @@ A copy use duplicates a value and a move transfers it. Ordinary parameter borrow
 
 An explicit view carries a compiler/runtime loan descriptor for one source place and generation. Reads and writes resolve through that descriptor without cloning.
 
-Mutable borrowed calls and list iteration write through the original place. `match mut` reconstructs and writes back on every arm exit.
+Mutable borrowed calls and `mut` list iteration write through the original place. Each `mut` loop binding is an element view, so a write lands in the list immediately and a non-Copy element is never cloned. `match mut` reconstructs and writes back on every arm exit.
 
 Simple dict indexed assignment accepts and owns any value type. Direct compound indexed assignment requires a copy `list` element or `dict` value.
 

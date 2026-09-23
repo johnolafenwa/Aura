@@ -1,0 +1,41 @@
+# A view whose last use is a branch condition, or an earlier statement in the
+# branch, ends once on every path, including `break`, `continue`, and `return`.
+def first_over(items: mut list[int64], limit: int64) -> int64:
+    for i in range(items.len()):
+        view mut value = items[i]
+        value += 1
+        if value > limit:
+            return i
+    return -1
+
+def main():
+    mut items = [1, 2]
+    for i in range(3):
+        view mut first = items[0]
+        first += 1
+        if first > 2:
+            break
+    print(items)
+
+    for i in range(3):
+        view mut second = items[1]
+        if second < 4:
+            second += 1
+            continue
+        else:
+            second += 10
+            break
+    print(items)
+
+    mut labels = ["a", "b"]
+    for i in range(2):
+        view mut label = labels[i]
+        match i:
+            case 0:
+                label = label + "!"
+                continue
+            case _:
+                pass
+    print(labels)
+    print(first_over(items, 4))
+    print(items)

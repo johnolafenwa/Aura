@@ -262,7 +262,7 @@ Maintained iterable forms include:
 | `for i in range(start, end):` | Yields `int64` values from `start` up to `end`, excluding `end`. |
 | `for value in values:` | Retains the list and yields shared access for non-copy elements. |
 | `for value in own values:` | Consumes the list and yields owned elements. |
-| `for value in mut values:` | Retains a mutable list and yields mutable access. The iterable place must be mutable. |
+| `for value in mut values:` | Binds each element as a mutable element view. Writes land in the list at once. The iterable place must be mutable. |
 | `for value in set:` | Retains the set and yields shared-borrowed access. |
 | `for value in own set:` | Consumes the set and yields owned elements. |
 | `for value in queue:` | Receives queue items under the scheduler-aware queue iteration contract. |
@@ -276,7 +276,7 @@ When an iterable yields tuples, the loop form decides the ownership of each non-
 - Bare, shared collection iteration gives the leaves shared provenance.
 - `own` collection iteration gives owned leaves.
 - Bare Queue iteration receives an owned item and gives owned leaves.
-- `mut` iteration with a tuple target is rejected, because the minimal tuple support has no recursive element writeback.
+- `mut` iteration with a tuple target is rejected. Bind the tuple to one name and update its positions through it.
 
 ### Queue Iteration
 

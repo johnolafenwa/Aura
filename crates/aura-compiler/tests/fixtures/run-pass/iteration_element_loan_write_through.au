@@ -1,0 +1,48 @@
+# `for x in mut items` binds each element as a mutable element view, so
+# writes land in the list as they happen.
+class Job:
+    tags: list[str]
+    runs: int64
+
+def bump_until(values: mut list[int64], stop: int64) -> int64:
+    mut seen = 0
+    for value in mut values:
+        value += 100
+        seen += 1
+        if seen == stop:
+            return seen
+    return seen
+
+def main():
+    mut grid = [[1, 2], [3]]
+    for row in mut grid:
+        for cell in mut row:
+            cell *= 2
+    print(grid)
+
+    mut nested = [[1], [2]]
+    for x in mut nested[1]:
+        x = 9
+    print(nested)
+
+    mut jobs = [Job(tags=["a"], runs=0), Job(tags=[], runs=5)]
+    for job in mut jobs:
+        job.tags.append("b")
+        job.runs += 1
+        for tag in mut job.tags:
+            tag = tag + "!"
+    print(jobs[0].tags)
+    print(jobs[1].tags)
+    print(jobs[1].runs)
+
+    # `break`, `continue`, and `return` keep the writes made so far.
+    mut values = [1, 2, 3, 4]
+    for value in mut values:
+        if value == 2:
+            continue
+        value *= 10
+        if value == 30:
+            break
+    print(values)
+    print(bump_until(values, 2))
+    print(values)
