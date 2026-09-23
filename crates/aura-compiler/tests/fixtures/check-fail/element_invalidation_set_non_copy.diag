@@ -1,0 +1,7 @@
+error[AU3011]: cannot call `set` on `users` while shared element view `first` of `users[0]` remains live
+ --> crates/aura-compiler/tests/fixtures/check-fail/element_invalidation_set_non_copy.au:7:17
+  |
+7 |     old = users.set(1, Profile(name="grace"))
+  |                 ^
+  = related crates/aura-compiler/tests/fixtures/check-fail/element_invalidation_set_non_copy.au:6:5: view `first` starts here
+  = related crates/aura-compiler/tests/fixtures/check-fail/element_invalidation_set_non_copy.au:8:11: last use of view `first` keeps this loan live

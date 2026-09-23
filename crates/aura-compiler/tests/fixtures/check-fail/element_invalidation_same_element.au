@@ -1,0 +1,5 @@
+def main():
+    mut values = [1, 2, 3]
+    view first = values[0]
+    values[0] = 9
+    print(first)

@@ -1,4 +1,4 @@
-error[AU3002]: cannot mutate `users[0].visits` while shared view `first` remains live
+error[AU3011]: cannot assign `users[0].visits` while shared element view `first` of `users[0]` remains live
  --> crates/aura-compiler/tests/fixtures/check-fail/element_view_write_locked.au:9:5
   |
 9 |     users[0].visits = 5

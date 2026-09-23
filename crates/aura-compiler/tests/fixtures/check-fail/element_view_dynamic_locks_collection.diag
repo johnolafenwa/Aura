@@ -1,4 +1,4 @@
-error[AU3002]: cannot mutate `users[1].visits` while mutable view `selected` remains live
+error[AU3011]: cannot assign `users[1].visits` while mutable element view `selected` of `users[?]` remains live
  --> crates/aura-compiler/tests/fixtures/check-fail/element_view_dynamic_locks_collection.au:10:5
    |
 10 |     users[1].visits = 5

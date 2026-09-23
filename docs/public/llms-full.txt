@@ -2252,7 +2252,7 @@ Aura evaluates a default afresh for each construction that omits the field, so d
 
 A generic class declares type parameters after its name. Each parameter may have a bound:
 
-```aura
+```aura fragment
 class Box[T]:
     value: T
 
@@ -2266,7 +2266,7 @@ Type parameter names must be unique. Every field and method type must be known a
 
 Call the class name to construct a value. Arguments may be positional in field declaration order, named by field, or positional followed by named:
 
-```aura
+```aura fragment
 point = Point(3.0, 4.0)
 server = Server()
 custom = Server("0.0.0.0", port=9090)
@@ -2295,7 +2295,7 @@ Binding positional or named arguments to field slots never reorders evaluation. 
 
 Generic arguments may be explicit:
 
-```aura
+```aura fragment
 box = Box[int32](value=42)
 ```
 
@@ -2345,11 +2345,12 @@ The receiver, when present, is the first method parameter:
 | `mut self` | Exclusive mutable receiver. The call requires a mutable place and may mutate it. |
 | none | Associated method. It is called through the type, not an instance. |
 
-```aura
-mut counter = Counter.zero()
-counter.increment()
-print(counter.get())
-value = counter.into_value()
+```aura fragment
+def main():
+    mut counter = Counter.zero()
+    counter.increment()
+    print(counter.get())
+    value = counter.into_value()
 ```
 
 In every other respect, methods follow the function rules for generic parameters, ordinary parameters, defaults, and owned returns. Ordinary parameter names must be unique and cannot collide with a declared `self` receiver. A typed first parameter such as `self: Counter` is not a receiver. The checker rejects it with a diagnostic that names the valid forms. `Self` may appear in a method's parameter and return types, and it denotes the enclosing class specialization.
@@ -2368,7 +2369,7 @@ See [Closures](/manual/closures#bound-methods).
 
 A field assignment requires a mutable base place:
 
-```aura
+```aura fragment
 mut counter = Counter.zero()
 counter.value = 10
 counter.increment()
@@ -2454,7 +2455,7 @@ class Resource:
 
 The method must be named `close`, use `mut self`, take no ordinary parameters, and return `None`. In Aura 0.3, `with` does not support generic user resource classes.
 
-```aura
+```aura fragment
 with resource = Resource(name="db"):
     print("using resource")
 ```
@@ -3156,6 +3157,7 @@ code's precise rules.
 | `AU3008` | non-transferable task or Queue boundary |
 | `AU3009` | single-consumer task-result duplication |
 | `AU3010` | view escape or returned-view provenance failure |
+| `AU3011` | collection mutation under a live element view |
 | `AU4001` | general runtime trap |
 | `AU4002` | arithmetic overflow or underflow |
 | `AU4003` | bounds or lookup violation |
@@ -3863,7 +3865,7 @@ names the unmet requirement.
 Lists support shared, consuming, and mutable place iteration. Sets support
 shared and consuming iteration, but not mutable iteration.
 
-```aura
+```aura fragment
 for value in values:
     print(value)
 
@@ -3880,7 +3882,7 @@ A bare list or set loop freezes the collection for the duration of the loop.
 Dictionaries are not iterated directly. They expose eager owned snapshots.
 `items()` returns key/value tuples in insertion order:
 
-```aura
+```aura fragment
 for key, value in counts.items():
     print(key + "=" + value.to_string())
 ```
@@ -3940,7 +3942,7 @@ once as `len() + index`. The result must be in `0..len()`.
 - `get` returns `Lookup.Missing` for an invalid position. A present element
   whose value is `None` stays distinct from an absent one.
 
-```aura
+```aura fragment
 match values.get(index):
     case Lookup.Found(value):
         print(value)
@@ -4343,7 +4345,7 @@ into an unlimited wait.
 
 Construct a group with `TaskGroup()` and normally bind it with `with`:
 
-```aura
+```aura fragment
 with group = TaskGroup():
     task = group.start(work, 1)
 ```
@@ -4409,7 +4411,7 @@ Task start follows the same default-binding rule as an ordinary indirect call.
 two `_with_stack` methods take an exact `int64` byte count before the callable
 target:
 
-```aura
+```aura fragment
 with group = TaskGroup():
     parser = group.start_with_stack(512 * 1024, parse_document, source)
     group.start_soon_with_stack(2 * 1024 * 1024, deep_worker, jobs)
@@ -4552,7 +4554,7 @@ bounded = Queue[str](capacity=8)
 
 A `for` loop over a queue receives values:
 
-```aura
+```aura fragment
 for value in jobs:
     print(value)
 ```
@@ -4696,7 +4698,7 @@ A task observes that state through:
 
 A long CPU loop should check `cancelled()` directly:
 
-```aura
+```aura fragment
 while not cancelled():
     do_step()
 ```
@@ -5742,9 +5744,9 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 
 - Views have identity only for these places: local, parameter, and receiver roots; existing views; class-field paths; fixed tuple positions; list elements; and dictionary entries. Field and tuple projections inside an element are included.
 - Set elements, slices, arbitrary temporaries, and escaping enum-payload views cannot be loaned.
-- A list element or dictionary entry cannot be passed to a `mut` parameter or be the receiver of a mutating method call. Bind it with `view mut` first.
 - A returned view cannot select a list element or dictionary entry. Return a view of the collection and select at the call site.
-- A nested index in one expression, such as `grid[i][j]`, is refused when the inner element is not Copy (`AU3005`). Take the inner element with a view first: `view mut row = grid[i]`, then `row[j]`.
+- A non-copy value, including a list element, cannot be borrowed into a `T | None` or other union parameter (`AU2010`). Pass a clone, or change the parameter to the member type.
+- Beside a live element view of the same list, `set(index, value)` works only for a Copy element type. For other element types it is refused with `AU3011`, because it would move the old element out through the collection.
 - In a top-level script, an immutable binding is a module constant and cannot be the source of a view (`AU3004`). Bind it with `mut` or inside a function.
 - View-bearing aggregates, module storage, multi-origin results, returned loan closures, and lifetime-parameterized structural callable types are not available.
 - Views and loan closures are never Transfer.
@@ -6207,12 +6209,13 @@ process. They are not Aura diagnostics. See [FFI v0](/manual/ffi).
 | `AU3002` | borrow/loan conflict | An access that overlaps a live borrow or view. | Remove the later use, shorten the scope, select a proven-disjoint place, or create an owned clone. |
 | `AU3003` | mutability violation | Mutation through a shared place or view. | Add `mut`, or declare a mutating receiver as `mut self`. |
 | `AU3004` | ownership or place mode | A source or target in the wrong ownership or place mode. | Use the mode the operation requires, on an addressable place. |
-| `AU3005` | non-copy indexed read | A `list`, `dict`, or constant tuple index that selects a non-copy value. | Use `get`, `remove`, a `view`, or tuple unpacking. |
+| `AU3005` | non-copy indexed read | Moving a non-copy value out of a `list`, `dict`, or constant tuple index, or a shared read of an element that cannot be cloned. | Use a `view`, `.clone()`, `pop`, `remove`, or tuple unpacking. |
 | `AU3006` | non-copy indexed compound assignment | A compound assignment such as `+=` on a non-copy `list` or `dict` element. | Rewrite the update so it needs no hidden clone or move of the stored value. |
 | `AU3007` | non-cloneable state duplication | Copying a value that holds `random.Rng`, an opaque FFI handle, or a capturing closure environment. | Move or remove the existing value, or construct a new generator from an explicit seed. |
 | `AU3008` | non-transferable task/Queue boundary | A task capture, task result, or Queue payload that cannot cross to another task worker. | Pass owned transferable data, and keep host authority on its owning task. |
 | `AU3009` | single-consumer task-result duplication | Copying the right to observe a task's result. | Keep one owner of the task handle and observe its result once. |
 | `AU3010` | view escape or returned provenance | A view that outlives or does not come from its declared origin. | Return an owned clone, index, or handle, or keep the loan inside the owner's region. |
+| `AU3011` | collection mutation under a live element view | `append`, `remove`, dictionary assignment, or another structural change of a collection while a view of one of its elements or entries is live, or a write to an element the view may select. | End the view first, or write a different literal position. |
 
 The guidance these diagnostics carry is described under
 [Ownership Diagnostics](#ownership-diagnostics).
@@ -6971,7 +6974,7 @@ One variant cannot mix positional and named payloads. Empty parentheses do not d
 
 Enums may be generic and bounded:
 
-```aura
+```aura fragment
 enum Load[T: Named]:
     Ready(T)
     Failed(message: str)
@@ -6988,7 +6991,7 @@ The full declaration and pattern syntax is in [Grammar](/manual/grammar#enums) a
 
 Use the enum type and the variant name:
 
-```aura
+```aura fragment
 ready = Status.Ready(count=3)
 failed = Status.Failed("disk full")
 empty = Status.Empty
@@ -7041,7 +7044,7 @@ A user enum is copyable when every payload type of every variant is statically c
 
 A statement-form `match` runs a statement suite:
 
-```aura
+```aura fragment
 match ready:
     case Status.Ready(count):
         print(count)
@@ -7055,7 +7058,7 @@ The scrutinee is evaluated exactly once. Arms are tried in source order, and onl
 
 An enum match must cover every variant and every relevant nested payload pattern, or end with `_`:
 
-```aura
+```aura fragment
 match ready:
     case Status.Ready(count):
         print(count)
@@ -7072,7 +7075,7 @@ match ready:
 
 A match expression produces a value:
 
-```aura
+```aura fragment
 def status_label(status: own Status) -> str:
     return match status:
         case Status.Ready(count):
@@ -7142,7 +7145,7 @@ Guards:
 
 The fully qualified style is always valid:
 
-```aura
+```aura fragment
 match result:
     case Result.Ok(value):
         print(value)
@@ -7152,7 +7155,7 @@ match result:
 
 When the scrutinee type supplies one unambiguous enum identity, you may omit the enum prefix:
 
-```aura
+```aura fragment
 match result:
     case Ok(value):
         print(value)
@@ -7209,7 +7212,7 @@ A borrowed payload cannot be moved as an owned value. Copy payloads are ordinary
 
 Literal patterns work for `bool`, integer, floating-point, and `str` scrutinees:
 
-```aura
+```aura fragment
 match code:
     case 200:
         print("ok")
@@ -7653,7 +7656,7 @@ A compound assignment selects its target place once. It uses exactly the corresp
 - **Non-copy root or projected target.** The target stays borrowed across the right operand. An overlapping mutable borrow or consumption is rejected with `AU3002`.
 - **Indexed target.** Direct indexed compound assignment requires a copy `list` element or `dict` value. A non-copy indexed element is rejected with `AU3006`. It is not implicitly cloned or destructively moved.
 
-A non-copy direct indexed read is rejected with `AU3005`.
+A non-copy element used where a place is borrowed is lent in place for the statement. Moving it out of its collection is rejected with `AU3005`.
 
 Field and index assignment mutate the selected place. List indices are zero-based.
 
@@ -8025,7 +8028,7 @@ expressions build on:
 - a list, set, or dictionary literal
 - a list, set, or dictionary comprehension
 
-```aura
+```aura fragment
 count
 42
 3.14
@@ -8187,7 +8190,7 @@ comparison explicit: `(a == b) == c` is a different form that compares a
 
 Parentheses override precedence:
 
-```aura
+```aura fragment
 scaled = (left + right) * factor
 inside = lower < value < upper
 ```
@@ -8535,7 +8538,7 @@ The target spelling `int` is exactly the same target type as `int64`.
 
 Casts are postfix and bind more tightly than arithmetic:
 
-```aura
+```aura fragment
 whole = 7.9 as int32
 widened = 3 as float64
 total = left + right as int64
@@ -8553,7 +8556,7 @@ member access, calls, and numeric casts. Suffixes apply from left to right. To
 apply a suffix to the result of a prefix or binary expression, parenthesize
 that expression first:
 
-```aura
+```aura fragment
 users[0].name.clone()
 Result[int32, str].Ok(7)
 value as int64
@@ -8566,7 +8569,7 @@ The syntax-complexity budget in
 
 A call has zero or more comma-separated arguments:
 
-```aura
+```aura fragment
 print("hello")
 range(1, 4)
 process.run(["echo", "hi"], stdout=process.pipe(), group=true)
@@ -8619,7 +8622,7 @@ the argument expressions.
 
 Explicit type arguments use brackets:
 
-```aura
+```aura fragment
 box = Box[int32](value=42)
 value = identity[int64](7)
 result = Result[int32, str].Ok(7)
@@ -8645,7 +8648,7 @@ generic inference, arity, and trait-bound rules.
 `object.member` selects a visible field, method, enum variant, module item, or
 builtin member:
 
-```aura
+```aura fragment
 point.x
 point.distance()
 Status.Ready
@@ -8669,7 +8672,7 @@ compile-time error.
 `base[index]` evaluates the base, then the index. Direct indexing works on
 lists, dictionaries, and numeric Arrays:
 
-```aura
+```aura fragment
 values[0]
 counts["ready"]
 matrix[1, 2]
@@ -8690,10 +8693,11 @@ List indexes use the `int64` index domain.
 
 The same rules apply to indexed assignment and the public List index methods.
 
-A direct list read of a copy element returns the value. Moving a non-copy List
-element by direct indexing is restricted and reports `AU3005`. For an explicit
-cloned optional read of a clone-safe element type, use `get(index)`. To
-transfer a stored value that cannot be cloned, use `pop(index)`. Index
+A direct list read of a copy element returns the value. A non-copy element used
+where a place is borrowed, such as an argument, receiver, or operand, is lent
+in place. Moving a non-copy element out by direct indexing reports `AU3005`.
+For an explicit copy, use `.clone()` or `get(index)`. To transfer a stored
+value, use `pop(index)`. Index
 assignment is a statement target. See
 [Statements](/manual/statements#bindings-and-assignment).
 
@@ -8973,7 +8977,7 @@ evaluated.
 
 An arm contains exactly one expression. It may be inline:
 
-```aura
+```aura fragment
 label = match code:
     case 0: "ok"
     case _: "other"
@@ -8981,7 +8985,7 @@ label = match code:
 
 Or the expression may sit on one indented line after the `case`:
 
-```aura
+```aura fragment
 label = match code:
     case 0:
         "ok"
@@ -9027,7 +9031,7 @@ convert the error. An early return runs active `with` cleanups. See
 An enum constructor names the enum, or a specialized enum, followed by the
 variant:
 
-```aura
+```aura fragment
 result: Result[int32, str] = Result.Ok(7)
 missing: Lookup[str] = Lookup.Missing
 ready = Status.Ready(count=3)
@@ -9179,8 +9183,8 @@ context consumes them. Bare parameters grant logical shared access. `own`
 parameters and consuming receivers move. `mut` parameters grant exclusive
 mutable access.
 
-- A non-copy indexed read reports `AU3005`. Use the safe method surface
-  instead of an implicit copy.
+- A move of a non-copy element out of its collection reports `AU3005`.
+  Borrowed uses of the element are lent in place.
 - `in`, `not in`, `==`, and `!=` read both resulting operands and move
   neither, including structural tuple equality. Evaluation inside an operand
   keeps its ordinary ownership effects.
@@ -9342,7 +9346,7 @@ fields.
 
 FFI accepts only bodyless C declarations:
 
-```aura
+```aura fragment
 public extern "C" opaque class ProcessHandle
 public extern "C" def getpid() -> int32
 extern "C" def inspect(label: str, data: list[uint8]) -> uint64
@@ -9634,7 +9638,7 @@ The 256 MiB read cap is part of the API contract. It also applies to `fs.File.re
 
 `fs.File` is an owned resource. Use `with` for deterministic cleanup:
 
-```aura
+```aura fragment
 def show_file() -> Result[None, io.Error]:
     with file = try fs.open("data.txt"):
         text = try file.read_all()
@@ -9655,7 +9659,7 @@ def show_file() -> Result[None, io.Error]:
 
 Use the text helpers when you know the file is UTF-8:
 
-```aura
+```aura fragment
 def read_config() -> Result[str, io.Error]:
     text = try fs.read_to_string("config.txt")
     return Result.Ok(text)
@@ -9663,7 +9667,7 @@ def read_config() -> Result[str, io.Error]:
 
 Use the byte helpers for binary data or an unknown encoding:
 
-```aura
+```aura fragment
 def read_image_size() -> Result[int64, io.Error]:
     bytes = try fs.read_bytes("image.bin")
     return Result.Ok(bytes.len())
@@ -9695,7 +9699,7 @@ def append_line(path: str, line: str) -> Result[None, io.Error]:
 
 Filesystem errors are `io.Error` values. Match the variants when the program has a different policy for each case:
 
-```aura
+```aura fragment
 match fs.read_to_string("config.txt"):
     case Result.Ok(text):
         print(text)
@@ -9875,7 +9879,7 @@ def push_name(names: mut list[str], name: own str):
 
 Write the modifier in the declaration, after the colon. A call passes the expression directly, because Aura has no call-site capability prefix:
 
-```aura
+```aura fragment
 mut names = list[str]()
 push_name(names, "Ada")
 ```
@@ -10009,7 +10013,7 @@ For a non-copy result, the function must produce ownership. It can do that in fo
 - move from an `own` parameter
 - call an operation that consumes an owner
 
-```aura
+```aura fragment
 def copy_name(user: User) -> str:
     return user.name.clone()
 
@@ -10082,7 +10086,7 @@ def identity[T](value: own T) -> T:
 
 Bounds restrict substitutions:
 
-```aura
+```aura fragment
 def describe[T: Greeter](value: T) -> str:
     return value.greet()
 
@@ -10092,7 +10096,7 @@ def use_both[T: First + Second](value: T) -> int32:
 
 The checker infers type arguments from the call arguments and from an expected result type when one is available. Explicit specialization fixes them:
 
-```aura
+```aura fragment
 answer = identity[int64](42)
 ```
 
@@ -10344,7 +10348,7 @@ def identity[T](value: own T) -> T:
 
 A bound follows a type parameter after `:`. Join bounds with `+` to require every one of them:
 
-```aura
+```aura fragment
 def use_value[T: Display + Score](value: T) -> int32:
     print(value.display())
     return value.score()
@@ -10352,7 +10356,7 @@ def use_value[T: Display + Score](value: T) -> int32:
 
 Classes and enums can carry bounds too. The checker enforces them when it resolves a construction, and when bounded generic operations use the specialized value:
 
-```aura
+```aura fragment
 class NamedBox[T: Named]:
     value: T
 
@@ -10367,7 +10371,7 @@ enum MaybeNamed[T: Named]:
 
 A generic call infers its type arguments by unifying the argument types with the parameter type patterns. An expected result type, when one is available, adds constraints. Generic class and enum construction infers the same way from the supplied fields or payloads and an expected constructed type.
 
-```aura
+```aura fragment
 boxed = Box(value=7)          # Box[int64]
 value = identity("Aura")   # str
 ```
@@ -10378,7 +10382,7 @@ Parameter ownership is fixed at the generic declaration. An unconstrained `T` is
 
 Explicit specialization fixes the type arguments:
 
-```aura
+```aura fragment
 boxed = Box[int64](value=42)
 value = identity[int64](42)
 ok = Result[int32, str].Ok(7)
@@ -10459,7 +10463,7 @@ def main() -> int32:
 
 The same callable rejects an unsafe concrete specialization:
 
-```aura
+```aura check-fail:AU3007
 import random
 
 def duplicate[T](values: list[T]) -> list[T]:
@@ -10471,7 +10475,7 @@ def reject(values: list[random.Rng]) -> list[random.Rng]:
 
 The requirement survives a generic-to-generic call:
 
-```aura
+```aura check-fail:AU3007
 import random
 
 def duplicate[T](values: list[T]) -> list[T]:
@@ -10486,7 +10490,7 @@ def reject(values: list[random.Rng]) -> list[random.Rng]:
 
 A signature-only trait method does not let an implementation add a hidden requirement:
 
-```aura
+```aura check-fail:AU3007
 trait Copier[T]:
     def copy_values(self) -> list[T]
 
@@ -10520,7 +10524,7 @@ def main() -> int32:
 
 The same contract rejects its unsafe specialization:
 
-```aura
+```aura check-fail:AU3007
 import random
 
 trait Duplicator[T]:
@@ -10593,7 +10597,7 @@ trait Combine:
 
 An implementation attaches one trait specialization to one target type pattern:
 
-```aura
+```aura fragment
 class Person:
     name: str
 
@@ -10604,19 +10608,19 @@ impl Greeter for Person:
 
 Implementations can be specialized or generic:
 
-```aura
+```aura fragment
 impl Mapper[int32] for Doubler:
     def map(self, value: own int32) -> int32:
         return value * self.factor
 ```
 
-```aura
+```aura fragment
 impl[T] Mapper[T] for Box[T]:
     def map(self, value: own T) -> T:
         return value
 ```
 
-```aura
+```aura fragment
 impl Displayable for Box[str]:
     def display(self) -> str:
         return self.value.clone()
@@ -10693,14 +10697,14 @@ A trait method selected for a concrete value also binds as a method value. Outsi
 
 For a type parameter, only the methods justified by its declared bounds are available:
 
-```aura
+```aura fragment
 def say_hello[T: Greeter](value: T):
     print(value.greet())
 ```
 
 A specialized trait bound supplies its type arguments:
 
-```aura
+```aura fragment
 def apply[M: Mapper[int32]](mapper: M, value: int32) -> int32:
     return mapper.map(value)
 ```
@@ -10709,7 +10713,7 @@ A call is ambiguous and rejected when several bounds, or several equally specifi
 
 Traits can also declare associated methods without `self`:
 
-```aura
+```aura fragment
 trait Factory:
     def make() -> int32
 
@@ -10726,7 +10730,7 @@ Associated trait methods follow the same rules as receiver methods. Concrete and
 
 A trait can require one or more supertraits:
 
-```aura
+```aura fragment
 trait Labelled: Named:
     def label(self) -> str:
         return "name=" + self.name()
@@ -12176,7 +12180,7 @@ match io.read_line():
 
 Match specific variants when the program has a specific policy for them:
 
-```aura
+```aura fragment
 match io.read_line():
     case Result.Ok(str as line):
         print(line)
@@ -12294,23 +12298,7 @@ enums.
 This program parses a dynamic object, reads an exact integer variant, builds
 a mixed nested tree, and prints compact and pretty output:
 
-```aura
-import json
-
-def main():
-    match json.parse("{\"workers\":3,\"tags\":[\"compiler\",\"service\"]}"):
-        case Result.Ok(value):
-            print(json.dumps(value))
-        case Result.Err(error):
-            print(error)
-
-    integer = json.Value.Int(7)
-    print(json.as_int(integer))
-
-    payload = json.Value.Object({"workers": json.Value.Int(3), "ready": json.Value.Bool(true), "tags": json.Value.Array([json.Value.String("compiler"), json.Value.String("service")])})
-    print(json.dumps(payload))
-    print(json.dumps(payload, indent=2))
-```
+<<< ../../examples/json/dynamic_values.au{aura}
 
 The same program is maintained as `examples/json/dynamic_values.au`.
 
@@ -12996,7 +12984,7 @@ Aura 0.3 has no block comments.
 
 Blocks are indentation-based:
 
-```aura
+```aura fragment
 if ready:
     print("yes")
 else:
@@ -13278,7 +13266,7 @@ To write a literal brace:
 - Aura 0.3 also treats a lone closing brace outside an interpolation as
   literal text.
 
-```aura
+```aura fragment
 print(f"{{name}} = {name}")
 ```
 
@@ -13473,27 +13461,7 @@ conversion.
 
 ## Example
 
-```aura
-import math
-
-def main() -> int32:
-    print(math.pi)
-    print(math.e)
-    print(math.inf)
-    print(math.nan)
-    print(math.floor(-1.25))
-    print(math.ceil(-1.25))
-    print(math.trunc(-1.75))
-    print(math.pow(2.0, -3.0))
-    print(math.exp(0.0))
-    print(math.log(1.0))
-    print(math.log2(8.0))
-    print(math.log10(1000.0))
-    print(math.sin(0.0))
-    print(math.cos(0.0))
-    print(math.tan(0.0))
-    return 0
-```
+<<< ../../examples/numbers/scalar_math.au{aura}
 
 This program prints:
 
@@ -13708,7 +13676,7 @@ Constants become available in declaration order. An initializer may read an earl
 
 An unaliased module import binds the first path component as a namespace:
 
-```aura
+```aura fragment
 import tools.text
 
 value = tools.text.parse("input")
@@ -13716,7 +13684,7 @@ value = tools.text.parse("input")
 
 An aliased module import binds the complete module under the alias. It does not bind the path's first component:
 
-```aura
+```aura fragment
 import tools.text as text_tools
 
 value = text_tools.parse("input")
@@ -13724,13 +13692,13 @@ value = text_tools.parse("input")
 
 A from-import binds the requested public items directly:
 
-```aura
+```aura fragment
 from tools.text import parse, ResultRow
 ```
 
 Each from-import entry may take a local alias. Direct and aliased entries can appear together:
 
-```aura
+```aura fragment
 from tools.text import parse as parse_text, ResultRow
 ```
 
@@ -13852,7 +13820,7 @@ For limited reachability and loop-flow reasoning, the compiler recognizes consta
 
 Each match arm has its own scope for payload bindings. A binding is available only in that arm's body or value expression.
 
-```aura
+```aura fragment
 match result:
     case Result.Ok(value):
         print(value)
@@ -13899,7 +13867,24 @@ An entry module may contain executable top-level statements instead of a local `
 
 A `mut` simple-name assignment declares a mutable top-level local. For example, `mut count = 0` creates one. Later plain and compound assignments to that name, such as `count = count + 1` and `count += 1`, stay in the statement stream and update the same local.
 
-A bare assignment to a new name is a module constant, even when it appears after an executable statement. That constant cannot read a top-level local, because constants initialize before entry statements run. To fix this, add `mut` to make the new binding another top-level local, or move the computation into `main`.
+A bare assignment to a new name depends on where it appears:
+
+- Above the first top-level statement, it declares a module constant. Other modules can import it, and it initializes before any statement runs.
+- From the first top-level statement on, it declares an immutable top-level local. It reads earlier locals, and it cannot be reassigned.
+
+Imports and `def`, `class`, `enum`, `trait`, `impl`, and `type` declarations are not statements. So a file whose first executable line comes after its constants keeps all of them as constants.
+
+```aura
+limit = 100                       # module constant
+
+mut scores = [30, 60, 90]         # first statement
+scores.append(120)
+
+total = scores.len()              # immutable top-level local
+print(f"{total} of {limit}")
+```
+
+A `public` binding must be a module constant, so `public name = value` after the first statement is a syntax error (`AU1101`). Functions see module constants but not top-level locals.
 
 An imported module contributes items and eagerly initialized constants. Its top-level executable statements are checked as source, but they do not run as import side effects. Put reusable executable work inside public functions.
 
@@ -14929,7 +14914,19 @@ Literal selectors with different values give disjoint element views:
 
 A view binding cannot be rebound, moved, cloned as a descriptor, stored in an aggregate, or sent across a task or Queue boundary.
 
-A list element or dictionary entry used as the object of a field access, such as `users[0].visits`, is read in place rather than copied. So a Copy field of a non-copy element can be read, and a field can be assigned or updated through the element, as in `users[0].visits += 1`. Binding, returning, or passing the element itself still needs an explicit `get`, `pop`, or `remove`. A non-copy field read out of an element is refused like a move out of a borrowed value.
+A list element or dictionary entry can be used in place wherever a place is borrowed. Aura lends it for the statement through a hidden element loan, as if you had written a `view`:
+
+- a shared or `mut` argument, such as `show(names[0])` or `bump(values[i])`
+- a method receiver, such as `users[0].describe()` or `counters[i].add(3)`
+- an operand, such as `names[0] == "ada"` or `f"{names[0]}"`
+- a `match` scrutinee, including `match mut messages[0]:`
+- a nested selection, such as `bump(grid[i][j])`
+
+Writes through a `mut` argument, a mutating receiver, or `match mut` land in the collection. The same overlap rules as for views apply: two literal positions or keys are disjoint, and a computed index overlaps every element, so `adjust(values[i], values[j])` with two `mut` parameters is refused.
+
+While an element or entry view is live, mutating the collection is classified. A write to one list element, `values[1] = x` or `values.set(1, x)`, is allowed when its literal position differs from every live element view's. A write to the same element or through a computed index, and any structural change, is refused with `AU3011`. Structural changes are `append`, `insert`, `pop`, `remove`, `clear`, `sort`, `reverse`, `swap`, and every dictionary assignment, because a new key can move every entry. Beside a live element view, `set` is an element write only for a Copy element type, because it moves the old element out.
+
+Moving the element out is still refused (`AU3005`). This covers binding it to a new name, passing it to an `own` parameter, putting it in a new aggregate, and moving a non-Copy field out of it. Use `.clone()` for an explicit copy, or `pop`, `set`, or `remove` to transfer ownership. A shared read of an element whose type cannot be cloned, such as a `random.Rng`, also needs an explicit `view`.
 
 A loan region begins at view creation and ends after the final possible use. The checker computes it conservatively across branches and loops, and the lexical scope is only an upper bound. While the loan is live, the checker rejects rebinding, moving, cleaning up, or structurally mutating an overlapping source. Scope exits, `return`, `break`, `continue`, propagated errors, traps, and cancellation release every loan they leave, in reverse acquisition order.
 
@@ -14979,14 +14976,14 @@ The complete class value cannot be used while any field remains moved. Assigning
 
 A borrower does not own the containing value, so moving a non-copy field through a shared or mutable borrow is rejected:
 
-```aura
+```aura fragment
 def bad(user: User) -> str:
     return user.name # rejected
 ```
 
 Use `.clone()` for a new owned value when the type supports it, or expose an owner method that performs the read or mutation:
 
-```aura
+```aura fragment
 def good(user: User) -> str:
     return user.name.clone()
 ```
@@ -15312,14 +15309,15 @@ Ownership failures are static.
 | `AU3002` | Overlapping or invalid borrows, moving through a borrow, invalid mutable-borrow defaults or task targets, stale borrowed-pattern bindings, consuming a task-result right through shared access, and later mutable or consuming access that overlaps a retained non-copy binary operand, index base, method receiver, or indexed-assignment target. |
 | `AU3003` | Assignment or mutation through an immutable place, including shared `self`. |
 | `AU3004` | Invalid parameter, receiver, loop, or Queue-iteration ownership modes. |
-| `AU3005` | A direct indexed read of a non-copy list element or dict value in a binding, argument, or operand position. |
+| `AU3005` | Moving a non-copy list element or dict value out of its collection, or a shared read of an element whose type cannot be cloned. |
 | `AU3006` | The corresponding indexed compound read-modify-write. |
 | `AU3007` | Direct or transitive duplication of non-cloneable state, including `random.Rng`, opaque FFI handles, capturing closure environments, and unsafe generic specializations. |
 | `AU3008` | A non-Transfer task or Queue boundary. |
 | `AU3009` | A clone, clone-producing collection read, or aggregate copy that would duplicate a single-consumer task-result right. |
 | `AU3010` | An invalid view escape, returned-view origin, or provenance path. |
+| `AU3011` | A mutation of a collection that invalidates a live element or entry view: a structural change, or a write to an element the view may select. |
 
-For `AU3005`, a field access through the element and a `view` of it are place reads, not copies.
+For `AU3005`, every borrowed use of an element is a place read, not a move.
 
 For a retained-expression `AU3002`, the diagnostic points to both the later access and the retained-borrow origin.
 
@@ -15480,7 +15478,7 @@ A file below `src/` maps to its dot-separated path without `.au`:
 
 Local imports do not start with the current package name:
 
-```aura
+```aura fragment
 import helpers.text
 from helpers.text import normalize
 ```
@@ -15518,7 +15516,7 @@ The dependency key is not a free alias. It must exactly match the resolved
 dependency's `[package].name`, so the manifest name and the import root are
 identical. A dependency package named `util` is imported with that prefix:
 
-```aura
+```aura fragment
 import util.math
 
 print(util.math.double(21))
@@ -15688,7 +15686,7 @@ from another module. Public classes still enforce field and method visibility
 separately. Trait implementations loaded through package modules take part in
 dispatch with their defining module identities preserved.
 
-```aura
+```aura fragment
 from util.math import double
 
 print(double(21))
@@ -16375,7 +16373,7 @@ Signature: `process.run(command: list[str], cwd: str | None = None, env: dict[st
 
 Omitting `timeout` means no caller deadline. The runtime marks the absence internally, and no `Duration` value stands for it. An explicit negative timeout is invalid. It does not mean unlimited.
 
-```aura
+```aura fragment
 def run_echo() -> Result[None, process.Error]:
     command = ["/bin/echo", "aura"]
     completed = try process.run(command, stdout=process.pipe(), stderr=process.pipe(), timeout=1s)
@@ -16402,7 +16400,7 @@ Signature: `process.start(command: list[str], cwd: str | None = None, env: dict[
 
 `process.start(...)` returns a live `process.Child`. The defaults suit interactive use: stdout and stderr inherit the parent's streams unless you ask for pipes.
 
-```aura
+```aura fragment
 def start_cat() -> Result[process.Child, process.Error]:
     command = ["/bin/cat"]
     child = try process.start(command, stdin=process.pipe(), stdout=process.pipe(), stderr=process.pipe(), group=true)
@@ -16461,7 +16459,7 @@ Timeouts and cancellation are errors, never `Ok(None)`:
 
 Close a child's stdin pipe when the child expects EOF:
 
-```aura
+```aura fragment
 def close_stdin(child: process.Child) -> Result[None, process.Error]:
     match own child.stdin():
         case process.Pipe as pipe:
@@ -16490,7 +16488,7 @@ The accessor returns an owned `process.Pipe | None`. `match own` moves the pipe 
 
 Use `check` when a failed command should stop the current `Result`-returning function:
 
-```aura
+```aura fragment
 def must_succeed() -> Result[None, process.Error]:
     completed = try process.run(["/bin/false"], timeout=1s)
     try completed.check()
@@ -16501,13 +16499,13 @@ Use the byte methods for tools that may emit binary or non-UTF-8 output.
 
 ## process.supervisor
 
-```aura
+```aura fragment
 process.supervisor() -> process.Supervisor
 ```
 
 A supervisor is a resource that owns named child process specs and emits lifecycle events. Bind it with `with` where you can:
 
-```aura
+```aura fragment
 def wait_for_worker() -> Result[process.SupervisorWait, process.Error]:
     with supervisor = process.supervisor():
         try supervisor.start(name="worker", command=["/bin/sleep", "1"])
@@ -16715,20 +16713,7 @@ The secure calls never use, seed, or advance a deterministic `Rng` stream.
 
 ## Example
 
-```aura
-import random
-
-def main() -> int32:
-    mut rng = random.Rng(42)
-    print(rng.next_int(0, 10))
-    print(rng.next_int(-5, 6))
-
-    mut values: list[int64] = [0, 1, 2, 3, 4, 5]
-    mut shuffle_rng = random.Rng(42)
-    shuffle_rng.shuffle(values)
-    print(values)
-    return 0
-```
+<<< ../../examples/randomness/deterministic_rng.au{aura}
 
 This prints `2`, `2`, and `[3, 5, 4, 1, 2, 0]` on separate lines. The maintained program is `examples/randomness/deterministic_rng.au`.
 
@@ -16983,7 +16968,7 @@ Class, enum, function, trait, and implementation declarations are items, not sta
 
 A compound statement header ends with `:` and `NEWLINE`. An indented suite follows it. A suite contains one or more statements:
 
-```aura
+```aura fragment
 if ready:
     print("ready")
     record_success()
@@ -17027,7 +17012,7 @@ def main():
 
 An assignment target starts with a name and may continue through fields or indices:
 
-```aura
+```aura fragment
 point.x = 4.0
 values[0] = 9
 counts["ready"] = 2
@@ -17061,7 +17046,7 @@ The right side is evaluated once. Its tuple shape and element types must match t
 
 Aura supports the complete arithmetic compound-assignment family `+=`, `-=`, `*=`, `/=`, `%=`, and `//=`:
 
-```aura
+```aura fragment
 count += 1
 total *= scale
 pages //= page_size
@@ -17129,7 +17114,7 @@ An assignment whose target projects inside an element or entry, such as `users[i
 
 Any expression may be used as a statement when its value is not needed:
 
-```aura
+```aura fragment
 print("ready")
 queue.close()
 counter.increment()
@@ -17163,7 +17148,7 @@ A function that does not return `None` must return on every statically reachable
 
 An `if` with zero or more `elif` branches and an optional `else` runs at most one suite:
 
-```aura
+```aura fragment
 if value < 0:
     print("negative")
 elif value == 0:
@@ -17201,7 +17186,7 @@ The checker rejects the first move of a non-copy outer value inside a repeatable
 
 A `for` statement binds one name, or recursively unpacks one tuple target, for each value from an iterable:
 
-```aura
+```aura fragment
 for value in values:
     print(value)
 
@@ -17294,7 +17279,7 @@ for value in range(10):
 
 A statement-form `match` evaluates its scrutinee exactly once and tries its arms in source order. The first matching arm runs:
 
-```aura
+```aura fragment
 match result:
     case Result.Ok(value):
         print(value)
@@ -17318,13 +17303,13 @@ See [Enums And Pattern Matching](/manual/enums-and-match) for pattern forms.
 
 Aura accepts two equivalent binding forms, `with name = expression:` and `with expression as name:`:
 
-```aura
+```aura fragment
 with file = try fs.open("data.txt"):
     text = try file.read_all()
     print(text)
 ```
 
-```aura
+```aura fragment
 with TaskGroup() as group:
     group.start_soon(worker)
 ```
@@ -17382,7 +17367,7 @@ It must be on its own logical line. Use it for an intentionally empty function, 
 
 Imports are module elements, not executable statements. Aura accepts these forms:
 
-```aura
+```aura fragment
 import util.math
 from util.math import double, triple
 import agents.telemetry as telemetry
@@ -17443,7 +17428,7 @@ A statement that parses is not legal in every context:
 - `with` requires a supported resource and keeps its cleanup capability intact.
 - Items cannot appear inside suites.
 - Module constants are immutable and cannot use `mut` or reassignment.
-- Module constants cannot read top-level script locals, which initialize later.
+- Module constants are the bindings above the first top-level statement. They cannot read top-level script locals, which initialize later.
 - An entry module cannot mix executable top-level statements with a local `main`.
 
 The complete checker rules are normative in [Static Semantics](/manual/static-semantics). Ownership effects are normative in [Ownership And Borrowing](/manual/ownership-and-borrowing).
@@ -17792,13 +17777,13 @@ List positions follow these rules:
 - Direct access, `set`, `pop`, and `swap` fail at runtime when the normalized position is invalid. `get` returns `None`.
 - `insert` clamps its position to `0..=len`.
 
-A direct read produces `T` or `V` only when that element or value type is copyable. For non-copy contents, use one of these forms instead:
+An element used where a place is borrowed is lent in place: a shared or `mut` argument, a method receiver, an operand, a `match` scrutinee, a field access, or a nested selection. A read that would move a non-copy element out of its collection is refused with `AU3005`. That includes a new binding, an `own` argument, an aggregate element, and a non-Copy field moved out of the element. For non-copy contents, use one of these forms instead:
 
-- **List element.** Use `get(index)` for an explicit cloned optional read, only when the element type is clone-safe. Or bind the element in place with `view name = values[index]`.
-- **Dictionary value.** Use `get(key)` only when the value type is clone-safe. Use `remove(key)` to transfer ownership, or take a `view` of the entry.
-- **Field through an element.** `values[index].field` reads or assigns the field in place without copying the element.
+- **Shared access.** Bind the element in place with `view name = values[index]`.
+- **Explicit copy.** Use `values[index].clone()` or `get(index)` when the element type is clone-safe.
+- **Transfer.** Use `pop(index)`, `set(index, value)`, or `remove(key)`.
 
-These non-copy direct-read rejections use `AU3005`. A non-copy indexed compound assignment uses `AU3006`, because its initial read has the same ownership problem. A missing dictionary key in a direct read is runtime diagnostic `AU4003`. Integer indexing is not defined for `str`.
+A shared read of an element whose type cannot be cloned, such as `random.Rng`, also reports `AU3005`; bind a `view` instead. A non-copy indexed compound assignment uses `AU3006`, because its initial read has the same ownership problem. A missing dictionary key in a direct read is runtime diagnostic `AU4003`. Integer indexing is not defined for `str`.
 
 **Slicing.** A slice suffix is defined on `list[T]`, `str`, and `Array[T]`. It returns a fresh owned value of the source type.
 
@@ -19219,7 +19204,7 @@ Choose by intent. `as float64` asserts that the value is exact.
 
 `as` does not apply to text, because `str` is not a numeric type:
 
-```aura
+```aura check-fail:AU2002
 s = "12"
 n = s as int64
 ```
@@ -19256,7 +19241,7 @@ print(f"as text: {n}")
 Python developers most often trip on this rule: passing an `int32` to a
 function that expects `int64` is an error. Aura does not widen the value:
 
-```aura
+```aura check-fail:AU2002
 def f(x: int64) -> int64:
     return x
 
@@ -19339,12 +19324,13 @@ Direct indexing, `pop`, `set`, and `swap` trap on an invalid position.
 The core mutations have Python-shaped names and typed ownership:
 
 ```aura
-mut values = [10, 20, 30]
-values.insert(-1, 25)
-values.append(40)
-old = values.set(0, 5)
-last = values.pop()
-values.remove(20)
+def main():
+    mut values = [10, 20, 30]
+    values.insert(-1, 25)
+    values.append(40)
+    old = values.set(0, 5)
+    last = values.pop()
+    values.remove(20)
 ```
 
 - `insert` clamps its position to the range from zero through the current
@@ -19393,7 +19379,7 @@ def descending(value: int32) -> int32:
     return -value
 
 def main():
-    values = [3, 1, 2, 4]
+    values: list[int32] = [3, 1, 2, 4]
     mapped = values.map(doubled)
     filtered = values.filter(is_even)
 
@@ -19433,7 +19419,7 @@ counts["ready"] = 3
 
 Use `in` to test membership. Use `get` for a lookup that reports absence:
 
-```aura
+```aura fragment
 if "ready" in counts:
     print(counts["ready"])
 
@@ -19454,7 +19440,7 @@ present. It returns `Lookup.Missing` when the key is absent.
 `keys()`, `values()`, and `items()` return eager owned lists in insertion
 order. Each item is a tuple:
 
-```aura
+```aura fragment
 for key, value in counts.items():
     print(key + ": " + value.to_string())
 ```
@@ -19477,7 +19463,7 @@ mut names = set[str]()
 Test membership with `in` and `not in`. Change the set with `add`, `remove`,
 and `discard`:
 
-```aura
+```aura fragment
 seen.add(5)
 
 if 2 in seen:
@@ -19550,7 +19536,7 @@ def double(value: int32) -> int32:
 
 Run it inside a task group:
 
-```aura
+```aura fragment
 with group = TaskGroup():
     task = group.start(double, 21)
 
@@ -19620,7 +19606,7 @@ application code and keeps large numbers of tasks economical. If measurement
 shows that one child needs a different stack size, give that child its own
 stack:
 
-```aura
+```aura fragment
 def deep_worker(depth: int32) -> int32:
     return visit_tree(depth)
 
@@ -19695,12 +19681,12 @@ Creating a queue, `put`, and `try_put` all require a structurally `Transfer`
 payload. Each receive moves one value to the consumer.
 
 ```aura
-def producer(jobs: Queue[int32]):
+def producer(jobs: Queue[int64]):
     for value in range(5):
         jobs.put(value)
     jobs.close()
 
-jobs = Queue[int32]()
+jobs = Queue[int64]()
 
 with group = TaskGroup():
     group.start_soon(producer, jobs)
@@ -19736,7 +19722,7 @@ When a bounded queue is full, `put` waits until space frees up, a timeout
 expires, the queue closes, or the task is cancelled. A failure is a
 `SendError[T]`, which hands the unsent value back to the caller:
 
-```aura
+```aura fragment
 match jobs.put("compile", timeout=50ms):
     case Result.Ok(_):
         print("queued")
@@ -19759,16 +19745,16 @@ A common shape has one producer and several workers. Every worker reads the
 same queue until the producer closes it:
 
 ```aura
-def worker(name: str, jobs: Queue[int32]):
+def worker(name: str, jobs: Queue[int64]):
     for job in jobs:
         print(f"{name}: {job}")
 
-def produce(jobs: Queue[int32]):
+def produce(jobs: Queue[int64]):
     for job in range(8):
         jobs.put(job)
     jobs.close()
 
-jobs = Queue[int32](capacity=3)
+jobs = Queue[int64](capacity=3)
 
 with group = TaskGroup():
     group.start_soon(produce, jobs)
@@ -19791,7 +19777,7 @@ to drain the queue.
 Use `select(...)` when the next event may come from sources of different
 kinds. It is an ordinary builtin call:
 
-```aura
+```aura fragment
 outcome = select(messages, task, 50ms)
 
 match own outcome:
@@ -19822,8 +19808,8 @@ match own outcome:
 Sometimes a program needs to wait on a batch of tasks. `wait_any` returns when
 the first one finishes:
 
-```aura
-tasks: list[Task[int32]] = []
+```aura fragment
+mut tasks: list[Task[int32]] = []
 
 with group = TaskGroup():
     tasks.append(group.start(double, 10))
@@ -19843,7 +19829,7 @@ with group = TaskGroup():
 `wait_all` returns when every task has produced a value, or when one has
 failed:
 
-```aura
+```aura fragment
 match wait_all(tasks, timeout=1s):
     case WaitAll.Ready(values):
         for value in values:
@@ -19945,7 +19931,7 @@ Interleaving and ready-task order stay unspecified.
 `yield_now()` adds an explicit cooperative scheduling point between chunks
 that the application chooses:
 
-```aura
+```aura fragment
 def crunch():
     mut chunk: int32 = 0
     while chunk < 100:
@@ -20077,7 +20063,7 @@ class Job:
 
 Construct an instance with named fields:
 
-```aura
+```aura fragment
 job = Job(id=42, queue="image")
 ```
 
@@ -20087,7 +20073,7 @@ it starts at `0`.
 Classes are move types by default. A bare class parameter borrows the value.
 Write `own` to transfer ownership:
 
-```aura
+```aura fragment
 def consume(job: own Job):
     print(job.id)
 
@@ -20098,7 +20084,7 @@ consume(job)
 
 When a helper only needs to read a job, borrow it:
 
-```aura
+```aura fragment
 def describe(job: Job) -> str:
     return job.queue + "#" + job.id.to_string()
 ```
@@ -20126,7 +20112,7 @@ class Job:
 
 Use it:
 
-```aura
+```aura fragment
 mut job = Job(id=42, queue="image")
 job.bump()
 print(job.label())
@@ -20164,7 +20150,7 @@ class Counter:
         return Counter()
 ```
 
-```aura
+```aura fragment
 counter = Counter.zero()
 ```
 
@@ -20181,7 +20167,7 @@ copy class Offset:
 
 A copy class duplicates on assignment:
 
-```aura
+```aura fragment
 a = Offset(x=1, y=2)
 b = a
 print(a.x)
@@ -20207,13 +20193,13 @@ enum JobState:
 
 Construct a variant by naming it:
 
-```aura
+```aura fragment
 state = JobState.Running(worker="worker-a")
 ```
 
 `match` inspects the variant and must cover every case:
 
-```aura
+```aura fragment
 def render_state(state: JobState) -> str:
     return match state:
         case JobState.Queued:
@@ -20240,7 +20226,7 @@ than a class with many optional fields.
 A class can own an enum, and often should. A stable record with a changing
 state is one of the cleanest patterns in Aura:
 
-```aura
+```aura fragment
 class TrackedJob:
     job: Job
     state: JobState = JobState.Queued
@@ -20312,7 +20298,7 @@ allow_ffi = true
 
 Then declare a C function with no body and call it directly:
 
-```aura
+```aura fragment
 public extern "C" def getpid() -> int32
 
 def main() -> int32:
@@ -20353,7 +20339,7 @@ keep these pointers. The string view is not guaranteed to end in a NUL byte.
 
 Use an opaque handle when C owns an object whose layout Aura should not see:
 
-```aura
+```aura fragment
 public extern "C" opaque class Handle
 public extern "C" def acquire() -> Handle
 public extern "C" def inspect(handle: Handle) -> int32
@@ -20415,7 +20401,7 @@ either one.
 
 This is the first error most Python developers hit:
 
-```aura
+```aura check-fail:AU3003
 def main():
     total = 0
     total = total + 1   # error: cannot assign to immutable binding `total`
@@ -20479,7 +20465,7 @@ Three capabilities make up the whole model:
 
 Calls look like Python, with no sigils and no `&`:
 
-```aura
+```aura fragment
 label = "aura"
 print(shout(label))
 print(shout(label))   # fine, shout only reads
@@ -20487,7 +20473,7 @@ print(shout(label))   # fine, shout only reads
 
 Once you give a value away, the compiler holds you to it:
 
-```aura
+```aura fragment
 n = consume(label)
 print(label)
 ```
@@ -20519,7 +20505,7 @@ class Account:
     currency: str = "USD"
 ```
 
-```aura
+```aura fragment
 account = Account(owner="ada", balance=0.0)
 ```
 
@@ -20539,7 +20525,7 @@ class Account:
         return Account(owner=owner, balance=deposit)
 ```
 
-```aura
+```aura fragment
 fresh = Account.new("ada")
 mut acct = Account.opening("grace", 100.0)
 ```
@@ -20552,7 +20538,7 @@ many as it needs, without `@classmethod` decorators.
 
 The receiver uses the same three capabilities as parameters:
 
-```aura
+```aura fragment
     def label(self) -> str:              # reads
         return f"{self.owner}: {self.balance} {self.currency}"
 
@@ -20563,7 +20549,7 @@ The receiver uses the same three capabilities as parameters:
         return self.balance
 ```
 
-```aura
+```aura fragment
 acct.deposit(25.0)
 print(acct.label())
 final = acct.into_balance()   # acct is gone after this
@@ -20598,7 +20584,7 @@ def parse_port(text: str) -> Result[int64, str]:
 
 The caller must handle both outcomes. Errors never propagate invisibly:
 
-```aura
+```aura fragment
 match parse_port("8080"):
     case Result.Ok(port):
         print(f"listening on {port}")
@@ -20653,7 +20639,7 @@ def early(flag: bool):
 When the body returns a value, the signature must say so. Aura does not infer
 the return type from the body:
 
-```aura
+```aura check-fail:AU2002
 def double(n: int64):
     return n * 2
 ```
@@ -21005,7 +20991,7 @@ They all work with `match`, `try`, `with`, and `TaskGroup`.
 
 The simplest filesystem calls do the whole job in one step:
 
-```aura
+```aura fragment
 import fs
 
 path = "tmp.txt"
@@ -21022,7 +21008,7 @@ match fs.read_to_string(path):
 
 For more control, open the file:
 
-```aura
+```aura fragment
 import fs
 import io
 
@@ -21043,7 +21029,7 @@ def copy_text(source: str, dest: str) -> Result[None, io.Error]:
 
 `print(value)` renders a value and adds a newline. The `io` module covers the rest: writing without a newline, flushing before a prompt, and reading a line from standard input.
 
-```aura
+```aura fragment
 import io
 
 try io.write("name> ")
@@ -21067,7 +21053,7 @@ match io.read_line():
 
 `process.run` runs a subprocess from a list of arguments and returns a `process.Completed` record. No shell interprets the arguments, so they are not re-split and there are no quoting hazards.
 
-```aura
+```aura fragment
 import process
 
 completed = try process.run(command=["/bin/echo", "aura process"], stdout=process.pipe(), stderr=process.pipe(), timeout=1s, group=true)
@@ -21086,7 +21072,7 @@ If you omit `timeout`, the call has no deadline. A negative Duration does not me
 
 When a child writes bytes that are not valid UTF-8, use `stdout_bytes()` and `stderr_bytes()`:
 
-```aura
+```aura fragment
 bytes = completed.stdout_bytes()
 print(bytes.len())
 ```
@@ -21095,7 +21081,7 @@ print(bytes.len())
 
 `process.start` returns a `process.Child` that you can talk to while it runs:
 
-```aura
+```aura fragment
 import process
 
 child = try process.start(command=["/bin/cat"], stdin=process.pipe(), stdout=process.pipe(), stderr=process.pipe(), group=true)
@@ -21135,7 +21121,7 @@ child.close()
 
 Use `process.supervisor` to manage several named subprocesses: start them, watch their lifetimes, and restart them under a policy.
 
-```aura
+```aura fragment
 import process
 
 with supervisor = process.supervisor():
@@ -21159,7 +21145,7 @@ with supervisor = process.supervisor():
 
 Network APIs return `Result[..., io.Error]`. Waits accept `timeout=...`. Listeners, streams, and other resources belong in `with` blocks.
 
-```aura
+```aura fragment
 import net
 
 with listener = try net.listen("127.0.0.1:0"):
@@ -21214,7 +21200,7 @@ To run a server as a child task, let the child create the listener. A `Queue[str
 
 HTTP client helpers return `net.HttpResponse`:
 
-```aura
+```aura fragment
 import net
 
 headers: dict[str, str] = {}
@@ -21277,7 +21263,7 @@ def internal(value: int32) -> int32:
 
 From another file, import the module and call its public names:
 
-```aura
+```aura fragment
 import helpers.math
 
 print(helpers.math.double(21))
@@ -21293,7 +21279,7 @@ The compiler enforces this. It is not a convention.
 `helpers.math.double(21)`. Use `from ... import ...` to bring in a single
 name directly:
 
-```aura
+```aura fragment
 from helpers.math import double
 
 print(double(21))
@@ -21309,7 +21295,7 @@ A quick rule for choosing:
 Use `as` when the full module path is too long to repeat, or when two modules
 export the same short name:
 
-```aura
+```aura fragment
 import helpers.math as integer_math
 from helpers.counter import Counter as ReadableCounter
 
@@ -21323,7 +21309,7 @@ module identity, type, visibility, and behavior.
 
 A from-import may mix direct and aliased entries:
 
-```aura
+```aura fragment
 from helpers.math import double as twice, empty
 ```
 
@@ -21387,7 +21373,7 @@ aura deps update util
 
 You import a dependency by its package name:
 
-```aura
+```aura fragment
 import util.math
 
 print(util.math.double(10))
@@ -21566,11 +21552,12 @@ print(other)
 Every other type is a **move type**. That includes `str`, `list[T]`, `dict[K, V]`, `set[T]`, `random.Rng`, ordinary class instances, `TaskGroup`, file handles, process resources, and network resources. Assigning a move value transfers ownership:
 
 ```aura
-name = "aura"
-other = name
+def main():
+    name = "aura"
+    other = name
 
-# name has moved into other. Using name is a compile error.
-print(other)
+    # name has moved into other. Using name is a compile error.
+    print(other)
 ```
 
 The rule stops two bindings from both claiming the same owned value. Because each value has one owner, Aura can close a string, a file handle, or a task group automatically when its owner goes out of scope.
@@ -21608,11 +21595,12 @@ Clone close to the reason for cloning. An explicit `clone()` or `copy()` at the 
 A closure takes its captured values when the lambda expression runs:
 
 ```aura
-label = "compile"
-length: def() -> int64 = lambda: label.len()
+def main():
+    label = "compile"
+    length: def() -> int64 = lambda: label.len()
 
-print(length())
-print(length())
+    print(length())
+    print(length())
 ```
 
 `label` is not a copy type, so it moves into `length`. You can still call the closure many times because its body only reads the captured string. If the body returned `label` itself, the first call would consume the capture and with it the whole closure. A second call would then be a moved-value error.
@@ -21620,12 +21608,13 @@ print(length())
 To keep both owners, clone before you create the closure:
 
 ```aura
-label = "compile"
-captured = label.clone()
-length: def() -> int64 = lambda: captured.len()
+def main():
+    label = "compile"
+    captured = label.clone()
+    length: def() -> int64 = lambda: captured.len()
 
-print(label)
-print(length())
+    print(label)
+    print(length())
 ```
 
 - A copy capture is a snapshot and leaves the source usable.
@@ -21759,12 +21748,13 @@ class Packet:
     id: int32
     body: str
 
-mut packet = Packet(id=1, body="hello")
-body = packet.body
+def main():
+    mut packet = Packet(id=1, body="hello")
+    body = packet.body
 
-print(packet.id)
-packet.body = "replacement"
-print(packet.body)
+    print(packet.id)
+    packet.body = "replacement"
+    print(packet.body)
 ```
 
 `packet.id` stays available because it never moved. `packet.body` is uninitialized after the move and becomes usable again once it is reassigned. This is the rule for top-level bindings, applied field by field.
@@ -21809,7 +21799,7 @@ with group = TaskGroup():
 
 The task owns the capture, so starting it still moves the caller's non-copy value. If the parent also needs the label, clone it before starting the child:
 
-```aura
+```aura fragment
 with group = TaskGroup():
     label = "compile"
     group.start_soon(worker, label.clone())
@@ -21843,7 +21833,7 @@ A task result may be transferable but not repeatable. For such a result, the fir
 
 Owned resources belong inside `with` blocks. These include files, listeners, streams, processes, supervisors, and task groups.
 
-```aura
+```aura fragment
 import fs
 
 with file = try fs.open("data.txt"):
@@ -21961,7 +21951,7 @@ The parsing builtins return `Result`:
 
 ```aura
 def read_limit(text: str) -> Result[int32, str]:
-    match parse_int32(text):
+    match own parse_int32(text):
         case Result.Ok(value):
             if value < 0:
                 return Result.Err("limit must be non-negative")
@@ -22029,7 +22019,7 @@ import fs
 import io
 
 def read_config(path: str) -> str:
-    match fs.read_to_string(path):
+    match own fs.read_to_string(path):
         case Result.Ok(text):
             return text
         case Result.Err(io.Error.NotFound):
@@ -22184,10 +22174,11 @@ Named arguments are always available. Use them whenever a call would otherwise b
 When a callback is one expression, write a lambda and give it a type from context:
 
 ```aura
-offset: int32 = 40
-add: def(int32) -> int32 = lambda value: value + offset
+def main():
+    offset: int32 = 40
+    add: def(int32) -> int32 = lambda value: value + offset
 
-print(add(2))
+    print(add(2))
 ```
 
 The `def(int32) -> int32` annotation gives the parameter and result types. A lambda does not repeat those types inline.
@@ -22203,7 +22194,7 @@ Use a named function when the callback needs more than one statement.
 
 `if`, `elif`, and `else` chain in the usual way:
 
-```aura
+```aura fragment
 if value < 0:
     print("negative")
 elif value == 0:
@@ -28848,8 +28839,9 @@ public functions, classes, enums, traits, and module constants this way.
 
 ## Module Constants
 
-A module constant is a top-level binding. Use one for stable configuration or
-an immutable value that the module's functions share:
+A module constant is a top-level binding that comes before any top-level
+statement. Use one for stable configuration or an immutable value that the
+module's functions share:
 
 ```aura check-pass
 service_name = "planner"

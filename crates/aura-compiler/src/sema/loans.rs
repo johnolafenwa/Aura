@@ -2717,6 +2717,78 @@ impl<'a> FunctionChecker<'a> {
         Ok(())
     }
 
+    /// ADR-0061 A3: a collection operation is either a write to one element
+    /// (`element_place`, such as `values[1] = x` or `values.set(1, x)`) or a
+    /// structural mutation of the whole collection (`None`: `append`,
+    /// `remove`, dictionary assignment, a mutating method). A structural
+    /// mutation while any element or entry view of the collection is live,
+    /// or an element write that overlaps a live element view, is `AU3011`,
+    /// naming the view and the operation. Other conflicts keep the ordinary
+    /// view lock (`AU3002`).
+    pub(super) fn ensure_collection_operation_allowed(
+        &self,
+        collection: &PlacePath,
+        element_place: Option<&PlacePath>,
+        operation: &str,
+        through_view: Option<&str>,
+        span: crate::diag::Span,
+        locals: &HashMap<String, LocalBinding>,
+    ) -> Result<()> {
+        let canonical_collection = self.canonicalize_view_place(collection.clone(), locals);
+        let canonical_element =
+            element_place.map(|place| self.canonicalize_view_place(place.clone(), locals));
+        for (name, binding) in locals {
+            for view in binding.view.iter().chain(&binding.closure_loans) {
+                if self.access_uses_view_or_descendant(name, through_view, locals) {
+                    continue;
+                }
+                let source = &view.source;
+                let depth = canonical_collection.projections.0.len();
+                let selects_element = source.root == canonical_collection.root
+                    && source.projections.0.len() > depth
+                    && source.projections.0[..depth] == canonical_collection.projections.0[..]
+                    && matches!(
+                        source.projections.0[depth],
+                        super::places::PlaceProjection::Element(_)
+                            | super::places::PlaceProjection::Entry(_)
+                    );
+                if !selects_element {
+                    continue;
+                }
+                let conflicts = match &canonical_element {
+                    None => true,
+                    Some(element) => source.overlaps(element),
+                };
+                if !conflicts {
+                    continue;
+                }
+                let kind = if view.kind == crate::ast::ViewKind::Mutable {
+                    "mutable"
+                } else {
+                    "shared"
+                };
+                return Err(Diagnostic::coded_at(
+                    "AU3011",
+                    span,
+                    format!(
+                        "cannot {operation} while {kind} element view `{name}` of `{source}` remains live"
+                    ),
+                )
+                .with_secondary(view.created_at, format!("view `{name}` starts here"))
+                .with_secondary(
+                    view.last_use,
+                    format!("last use of view `{name}` keeps this loan live"),
+                ));
+            }
+        }
+        self.ensure_place_not_locked_by_view(
+            element_place.unwrap_or(collection),
+            through_view,
+            span,
+            locals,
+        )
+    }
+
     pub(super) fn ensure_place_readable(
         &self,
         place: &PlacePath,

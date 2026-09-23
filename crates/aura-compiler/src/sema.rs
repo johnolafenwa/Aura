@@ -4433,7 +4433,37 @@ impl<'a> FunctionChecker<'a> {
                     .get(&place.root)
                     .and_then(|binding| binding.view.as_ref())
                     .map(|_| place.root.as_str());
-                self.ensure_place_not_locked_by_view(&place, through_view, assign.span, locals)?;
+                // List indexed assignment writes one element; dictionary
+                // indexed assignment may insert, so it is structural
+                // (ADR-0061 A3).
+                let is_list = matches!(
+                    self.type_of_member_object_expr(object, locals)?,
+                    Type::Named(ref name, ref args) if name == "list" && args.len() == 1
+                );
+                let target = Expr {
+                    kind: ExprKind::Index {
+                        object: object.clone(),
+                        index: index.clone(),
+                    },
+                    span: assign.span,
+                };
+                let element_place = if is_list {
+                    self.borrow_call_place(&target)
+                } else {
+                    None
+                };
+                let operation = match self.borrow_call_place(&target) {
+                    Some(written) => format!("assign `{written}`"),
+                    None => format!("assign `{}`", self.render_index_target(object)),
+                };
+                self.ensure_collection_operation_allowed(
+                    &place,
+                    element_place.as_ref(),
+                    &operation,
+                    through_view,
+                    assign.span,
+                    locals,
+                )?;
                 self.invalidate_narrowing(&place, assign.span, "indexed assignment", locals);
             }
             if !self.is_mutable_place(object, locals)? {
@@ -4606,7 +4636,34 @@ impl<'a> FunctionChecker<'a> {
                     .get(&path.root)
                     .and_then(|binding| binding.view.as_ref())
                     .map(|_| path.root.as_str());
-                self.ensure_place_not_locked_by_view(&path, through_view, assign.span, locals)?;
+                // A field write inside a list element or dictionary entry is
+                // an element-level write to that element (ADR-0061 A3).
+                let collection = match self.innermost_collection_element(object, locals)? {
+                    Some(Expr {
+                        kind:
+                            ExprKind::Index {
+                                object: collection, ..
+                            },
+                        ..
+                    }) => self.borrow_call_place(collection),
+                    _ => None,
+                };
+                match collection {
+                    Some(collection) => self.ensure_collection_operation_allowed(
+                        &collection,
+                        Some(&path),
+                        &format!("assign `{path}`"),
+                        through_view,
+                        assign.span,
+                        locals,
+                    )?,
+                    None => self.ensure_place_not_locked_by_view(
+                        &path,
+                        through_view,
+                        assign.span,
+                        locals,
+                    )?,
+                }
                 self.invalidate_narrowing(&path, assign.span, "assignment", locals);
             }
             if !self.is_mutable_place(object, locals)? {
@@ -10573,7 +10630,27 @@ impl<'a> FunctionChecker<'a> {
                     }
                 }
 
-                let receiver_ty = self.type_of_expr(object, locals)?;
+                // A mutating list or dictionary method on a local collection
+                // is checked as a collection operation by
+                // `require_mutable_receiver` (ADR-0061 A3), not as a read of
+                // the whole collection, so a disjoint `set` works beside a
+                // live mutable element view and a structural call reports
+                // `AU3011`.
+                let collection_mutation = matches!(&object.kind, ExprKind::Name(name)
+                    if locals.get(name).is_some_and(|binding| matches!(&binding.ty,
+                        Type::Named(collection, args)
+                            if (collection == "list" && args.len() == 1
+                                && matches!(field.as_str(), "append" | "insert" | "extend" | "pop"
+                                    | "remove" | "clear" | "reverse" | "sort" | "set" | "swap"
+                                    | "reserve"))
+                            || (collection == "dict" && args.len() == 2
+                                && matches!(field.as_str(), "set" | "remove" | "clear" | "update"
+                                    | "reserve")))));
+                let receiver_ty = if collection_mutation {
+                    self.type_of_member_object_expr(object, locals)?
+                } else {
+                    self.type_of_expr(object, locals)?
+                };
                 if matches!(receiver_ty, Type::Union(_)) {
                     if let Some(path) = self.member_access_path(object) {
                         self.reject_stale_narrowing(&path, span, locals)?;
@@ -11048,7 +11125,26 @@ impl<'a> FunctionChecker<'a> {
                                     Ok(lookup_type(receiver_args[0].clone()))
                                 }
                                 BuiltinMember::VecSet => {
-                                    self.require_mutable_receiver(object, field, span, locals)?;
+                                    // `set` moves the old element out; beside
+                                    // a live element view that is only an
+                                    // element-level write for a Copy element.
+                                    let element_index = self
+                                        .bound_argument(
+                                            &ordered_args,
+                                            0,
+                                            span,
+                                            "`set` requires an `index` argument",
+                                        )
+                                        .ok()
+                                        .filter(|_| self.is_copy_type(&receiver_args[0]))
+                                        .map(|argument| &argument.value);
+                                    self.require_mutable_receiver_at(
+                                        object,
+                                        field,
+                                        element_index,
+                                        span,
+                                        locals,
+                                    )?;
                                     let index_arg = self.bound_argument(
                                         &ordered_args,
                                         0,
