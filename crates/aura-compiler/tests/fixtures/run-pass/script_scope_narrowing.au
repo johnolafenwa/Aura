@@ -1,0 +1,11 @@
+value: int64 | None = 5
+if value is not None:
+    print(value + 1)
+mut label: str | None = None
+label = "ready"
+if label is not None:
+    print(label.len())
+name: str | None = "aura"
+if name is not None:
+    print(name.len())
+    print(f"{name}!")

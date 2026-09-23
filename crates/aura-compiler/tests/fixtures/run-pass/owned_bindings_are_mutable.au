@@ -1,0 +1,33 @@
+class Counter:
+    count: int64
+
+    def bump(mut self):
+        self.count += 1
+
+def main():
+    mut rows = [[1], [2]]
+    for row in own rows:
+        row.append(9)
+        print(row)
+    mut pairs = [(Counter(count=1), "a")]
+    for (counter, label) in own pairs:
+        counter.bump()
+        print(f"{label}: {counter.count}")
+    mut tags = {"x"}
+    for tag in own tags:
+        tag = tag + "!"
+        print(tag)
+    value: list[int64] | None = [1]
+    match own value:
+        case list[int64] as items:
+            items.append(2)
+            print(items)
+        case None:
+            pass
+    maybe: Counter | None = Counter(count=5)
+    match own maybe:
+        case Counter as counter:
+            counter.bump()
+            print(counter.count)
+        case None:
+            pass

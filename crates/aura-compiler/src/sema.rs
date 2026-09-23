@@ -3393,7 +3393,9 @@ impl<'a> FunctionChecker<'a> {
                     LocalBinding {
                         ty: ty.clone(),
                         assignable: false,
-                        mutable_place: mutable_place && leaf_passing == ReceiverKind::BorrowMut,
+                        mutable_place: mutable_place
+                            && (leaf_passing == ReceiverKind::BorrowMut
+                                || passing == ReceiverKind::Value),
                         managed_resource: false,
                         passing: leaf_passing,
                         borrow_origin: None,
@@ -3440,7 +3442,7 @@ impl<'a> FunctionChecker<'a> {
                     ));
                 }
                 for (element, element_ty) in elements.iter().zip(element_types) {
-                    self.bind_target(element, element_ty, passing, false, locals, context)?;
+                    self.bind_target(element, element_ty, passing, mutable_place, locals, context)?;
                 }
                 Ok(())
             }
@@ -4138,10 +4140,13 @@ impl<'a> FunctionChecker<'a> {
                                 }
                                 _ => ReceiverKind::Value,
                             };
+                            // An owned `for ... in own` binding is a mutable
+                            // place (ADR-0061 H2).
                             (
                                 element_ty,
                                 passing,
-                                passing == ReceiverKind::BorrowMut,
+                                passing == ReceiverKind::BorrowMut
+                                    || borrow_mode == Some(ReceiverKind::Value),
                             )
                         }
                         (Type::Named(name, args), Some(ReceiverKind::BorrowMut))
@@ -4162,7 +4167,7 @@ impl<'a> FunctionChecker<'a> {
                                 }
                                 _ => ReceiverKind::Value,
                             };
-                            (element_ty, passing, false)
+                            (element_ty, passing, borrow_mode == Some(ReceiverKind::Value))
                         }
                         _ => {
                             return Err(Diagnostic::at(

@@ -2425,12 +2425,10 @@ fn handbuilt_mir_safepoint_does_not_mask_a_malformed_terminator() {
         }],
     };
 
-    let error = validate_function(&function, &HashMap::new())
-        .expect_err("a valid safepoint must not make an unsupported terminator valid");
-    assert!(
-        error.contains("does not yet support MIR terminator"),
-        "unexpected malformed-MIR diagnostic: {error}"
-    );
+    // The direct backend compiles every MIR terminator; an unreachable one
+    // after a safepoint is a trap.
+    validate_function(&function, &HashMap::new())
+        .expect("a safepoint before an unreachable terminator is valid");
 }
 
 #[test]
@@ -13027,9 +13025,7 @@ fn native_codegen_helper_utilities_cover_signatures_wildcards_and_metadata() {
         trait_impls: Vec::new(),
         top_level: None,
     };
-    let error = emit_host_object(&invalid_module)
-        .expect_err("invalid modules should be rejected before codegen");
-    assert!(error.contains("does not yet support MIR terminator"));
+    emit_host_object(&invalid_module).expect("an unreachable terminator compiles to a trap");
 }
 
 #[test]
@@ -14240,11 +14236,8 @@ fn validate_function_rejects_unreachable_terminators_for_direct_backend() {
         }],
     };
 
-    let error = validate_function(&function, &HashMap::new()).expect_err("unreachable should fail");
-    assert!(
-        error.contains("does not yet support MIR terminator"),
-        "unexpected error: {error}"
-    );
+    validate_function(&function, &HashMap::new())
+        .expect("the direct backend compiles an unreachable terminator as a trap");
 }
 
 #[test]

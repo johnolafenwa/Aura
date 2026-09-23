@@ -355,6 +355,8 @@ def main():
             print(error)
 ```
 
+An owned binding is a mutable place: `message.append("!")` or a `mut self` method call works on it directly, as it does on a `with` binding. It still cannot be rebound.
+
 A bare `match` keeps the scrutinee and gives shared bindings for non-copy payloads:
 
 ```aura

@@ -6144,11 +6144,10 @@ impl<'a> FunctionCompiler<'a> {
                 }
                 self.builder.ins().trap(TrapCode::unwrap_user(1));
             }
-            other => {
-                return Err(format!(
-                    "direct backend does not support MIR terminator `{:?}`",
-                    other
-                ))
+            // The checker proved this path cannot run (for example the
+            // impossible arm of a narrowed module-constant read).
+            Terminator::Unreachable => {
+                self.builder.ins().trap(TrapCode::unwrap_user(2));
             }
         }
         Ok(())
@@ -17888,7 +17887,7 @@ fn validate_function_in_reachable(
         }
         match &block.terminator {
             Terminator::Return(operand) => validate_operand(operand)?,
-            Terminator::Goto(_) => {}
+            Terminator::Goto(_) | Terminator::Unreachable => {}
             Terminator::Branch { condition, .. } => {
                 validate_non_consuming_operand(condition, "a branch condition")?
             }
@@ -17909,12 +17908,6 @@ fn validate_function_in_reachable(
                 for capture in captures {
                     validate_operand(&capture.value)?;
                 }
-            }
-            other => {
-                return Err(format!(
-                    "direct backend does not yet support MIR terminator `{:?}`",
-                    other
-                ))
             }
         }
     }

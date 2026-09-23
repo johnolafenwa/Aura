@@ -252,7 +252,7 @@ Every target leaf is local to the body and does not escape. A leaf cannot shadow
 
 As with `while`, a narrowing fact established before the loop survives into the body only when no iteration can invalidate it. When the body assigns the place, test it again inside the body.
 
-Use `for value in own values:` when the loop deliberately consumes a `list` or `set` and needs owned element bindings. The collection moves once, at loop entry, into a source private to the loop. Reinitializing the consumed `values` binding in the body does not switch or shorten the active iteration.
+Use `for value in own values:` when the loop deliberately consumes a `list` or `set` and needs owned element bindings. Each owned binding, including every leaf of a tuple target, is a mutable place, so `value.append(1)` or a `mut self` method call works on it. The collection moves once, at loop entry, into a source private to the loop. Reinitializing the consumed `values` binding in the body does not switch or shorten the active iteration.
 
 Maintained iterable forms include:
 
