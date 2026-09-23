@@ -743,7 +743,7 @@ test("persistent compiler service rejects and disposes a mismatched semantic sch
       path: "/virtual/main.au",
       source: "def main():\n    pass\n"
     }),
-    /semantic schema mismatch.*received `8`.*expected `16`/
+    /semantic schema mismatch.*received `8`.*expected `17`/
   );
   assert.equal(service.closed, true);
   assert.equal(invalidations, 1);
