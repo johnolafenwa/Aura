@@ -1,0 +1,19 @@
+# Method calls on a field reached through an element view dispatch on the
+# field's type on both backends.
+class Team:
+    name: str
+    members: list[str]
+
+def add(teams: mut list[Team], member: own str):
+    view mut team = teams[0]
+    team.members.append(member)
+
+def main():
+    mut teams = [Team(name="core", members=["ada"])]
+    add(teams, "grace")
+    view mut first = teams[0]
+    first.members.append("alan")
+    first.name = "runtime"
+    print(first.members.len())
+    print(first.name.to_upper())
+    print(teams[0].members[2])

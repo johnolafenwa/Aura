@@ -1,0 +1,49 @@
+class Job:
+    name: str
+    runs: int64
+
+def main():
+    mut jobs = [Job(name="build", runs=1), Job(name="test", runs=2)]
+
+    # A shared `Found` payload views the element in place.
+    match jobs.lookup(1):
+        case Lookup.Found(job):
+            print(job.name)
+        case Lookup.Missing:
+            print("missing")
+
+    # A mutable payload writes through, and negative positions count from the end.
+    match mut jobs.lookup(-2):
+        case Lookup.Found(job):
+            job.runs += 10
+        case _:
+            print("unreachable")
+    print(jobs[0].runs)
+
+    # Out-of-range positions take the absent arm instead of trapping.
+    match jobs.lookup(5):
+        case Lookup.Found(_):
+            print("found")
+        case Lookup.Missing:
+            print("no job at 5")
+    match jobs.lookup(-3):
+        case Lookup.Found(_):
+            print("found")
+        case _:
+            print("no job at -3")
+
+    # The absent arm may change the list, because no view is live there.
+    match jobs.lookup(2):
+        case Lookup.Found(job):
+            print(job.name)
+        case Lookup.Missing:
+            jobs.append(Job(name="deploy", runs=0))
+    print(jobs.len())
+
+    # A computed position is evaluated once per match.
+    for i in range(4):
+        match jobs.lookup(i * 2 - 1):
+            case Lookup.Found(job):
+                print(job.name)
+            case Lookup.Missing:
+                print("gap")

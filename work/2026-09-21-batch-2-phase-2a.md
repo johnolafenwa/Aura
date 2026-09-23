@@ -353,26 +353,59 @@ execution; `cargo test -p aura-compiler` passes; the complete local
 `npm run ci` chain is green at `2b9fd0f0` (coverage 96.48 / 97.41 / 95.30
 against floors 96.46 / 97.33 / 95.23).
 
+## Item 2: invalidation classification, AU3011 (2026-09-23)
+
+Every collection operation under a live element or entry view is now
+classified as an element-level write or a structural mutation, and a
+conflict reports `AU3011` naming the view, its origin, and the operation.
+List indexed assignment, compound assignment, and `set` on a Copy element
+are element-level writes, allowed when the selector is a literal different
+from every live view. `set` on a non-Copy element stays whole-collection,
+because returning the old element owned would need a move out of a live
+slot. Dictionary assignment and every other mutating method are structural.
+Merged as PR #22.
+
+## H2 and I: owned bindings and script narrowing (2026-09-23)
+
+Bindings introduced by consuming forms (`for ... in own`, their tuple
+leaves, `match own` payloads and type-pattern bindings) are mutable places.
+Narrowing applies to entry-script bindings, and a narrowed module constant
+is re-tested locally with an `Unreachable` arm, which the direct backend now
+compiles as a trap. H1 needed no user-visible change: Queue operations
+already take shared receivers. The single-source audited receiver table
+stays an internal follow-up. PR #23.
+
+## C1: arm-scoped `lookup` (2026-09-23)
+
+`match [mut] table.lookup(key):` on a named list or dictionary runs the
+`Found` arm with an element or entry view and the `Missing` (or `_`) arm
+otherwise. The checker and the lowering share one rewrite in
+`sema/lookup.rs`: the key is evaluated once into a hidden local unless it is
+a simple place, then an `if` on the presence test (`key in table`, or
+`-len <= i < len`) runs the `Found` arm under `view [mut] name = table[key]`.
+No MIR instruction was added, so both backends run it unchanged. A bare
+`lookup` of a Copy element binds a copy, so the value can be returned. The
+2026-09-23 ruling in ADR-0061 records the refusals: match expressions,
+temporaries, `match own`, guards, and malformed arm sets.
+
+Found on the way: the direct backend typed a field reached through an
+element view as the element, so `team.members.append(x)` after `view mut
+team = teams[0]` failed with "does not know dynamic method". Resolving the
+view place now walks the projected fields
+(`element_view_field_method_calls`).
+
+Evidence: 26 `lookup_*` fixtures plus the regression fixture pass on both
+backends; every fixture passes on both; all 731 documentation examples
+compile.
+
 ## Open items
 
-- Contextual element reads at arguments, receivers, operands, and
-  scrutinees (checkpoint M2) are the next step; until then a list element
-  or entry cannot be a `mut` argument or a mutating-method receiver, and a
-  Copy read of `users[1].visits` under a live mutable view of `users[0]` is
-  refused conservatively (the read rule checks the collection root).
-- Returned element and entry views (A6) are not yet in: `return view
-  items[0]` is refused (`AU3004`) rather than lowered, since the return
-  path spelled the element as a tuple position and trapped on both
-  backends (pinned by `element_view_return_unsupported` and the
-  `batch1_coverage_diagnostics` test).
-- `A3` invalidation classification (`AU3011` naming the origin and the
-  operation) is not yet in: a structural mutation under a live element view
-  is refused by the existing `AU3002` view lock.
-- A nested index in one expression (`grid[i][j]`, `table[key][i]`) is
-  refused by the copy rule at the inner index until contextual reads land;
-  the same selection through two views (`view mut row = rows[i]; view mut
-  cell = row[j]`) works on both backends.
-- Reborrowing a negative-indexed element or string-keyed entry through a
-  returned collection view currently reaches the conservative root-loan
-  refusal. Contextual place resolution must preserve the parent loan for
-  these selector forms when the next step generalizes indexed places.
+- Iteration unification (A5): retire `MutableIterationWriteback` for lists
+  so `for x in mut items` writes through immediately.
+- Returned element and entry views (A6): `return view items[i]` is still
+  refused (`AU3004`), pinned by `element_view_return_unsupported`.
+- Borrowing a non-copy value into a union parameter (`AU2010`), which
+  `element_contextual_union_arguments` needs.
+- The single-source audited receiver table (H1, internal).
+- Phase 2a closeout: the final documentation sweep, the local chain, hosted
+  CI, and the completion record in ADR-0061.

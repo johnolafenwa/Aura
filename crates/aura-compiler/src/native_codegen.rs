@@ -9601,10 +9601,34 @@ impl<'a> FunctionCompiler<'a> {
         ))
     }
 
+    fn projected_element_type(&self, element_type: &Type, projection: &str) -> Option<Type> {
+        let mut ty = ensure_direct_type(element_type, &self.classes, "element projection").ok()?;
+        for field in projection.split('.') {
+            ty = direct_field_type_with_enums(&ty, field, &self.classes, &self.enums)?;
+        }
+        Some(direct_type_to_type(&ty))
+    }
+
     fn resolve_view_place(&self, place: &str) -> std::result::Result<DirectViewPlace, String> {
         let (root, projection) = place.split_once('.').unwrap_or((place, ""));
         let mut resolved = if let Some(source) = self.view_places.get(root) {
-            source.clone().project(projection)
+            let mut projected = source.clone().project(projection);
+            // A field reached through an element view has the field's type,
+            // not the element's: `t.members.len()` must dispatch on the list.
+            if !projection.is_empty() {
+                for selector in projected
+                    .alternatives
+                    .iter_mut()
+                    .filter_map(|alternative| alternative.elements.last_mut())
+                {
+                    if let Some(ty) =
+                        self.projected_element_type(&selector.element_type, projection)
+                    {
+                        selector.element_type = ty;
+                    }
+                }
+            }
+            projected
         } else {
             DirectViewPlace::static_place(place.to_string())
         };

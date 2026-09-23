@@ -1,0 +1,3 @@
+def main():
+    items = [1, 2]
+    found = items.lookup(0)

@@ -1,0 +1,7 @@
+def main():
+    table = {"a": 1}
+    match table.lookup():
+        case Lookup.Found(value):
+            print(value)
+        case Lookup.Missing:
+            pass

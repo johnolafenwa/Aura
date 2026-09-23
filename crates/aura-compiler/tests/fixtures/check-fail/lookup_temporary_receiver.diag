@@ -1,0 +1,6 @@
+error[AU2005]: `lookup` needs a named list or dictionary, because its `Found` arm views the stored element in place
+ --> crates/aura-compiler/tests/fixtures/check-fail/lookup_temporary_receiver.au:5:11
+  |
+5 |     match make().lookup(0):
+  |           ^
+  = help: bind the collection to a name first, then `match name.lookup(key):`

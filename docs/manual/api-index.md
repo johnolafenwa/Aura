@@ -210,6 +210,7 @@ cannot be represented or allocated traps with `AU4005`. Malformed data returns
 | `list.append` | `append(value: own T) -> None` | Moves `value` onto the end. |
 | `list.pop` | `pop(index: int64 = -1) -> T` | Removes the element at the normalized position and moves it out. An invalid position traps. |
 | `list.get` | `get(index: int64) -> Lookup[T]` | Normalizes a negative index, then returns `Lookup.Found(value)` with a clone of the element. Returns `Lookup.Missing` when the index is out of bounds. Requires clone-safe `T`. |
+| `list.lookup` | `match [mut] items.lookup(index):` | Normalizes a negative index once. Runs `case Lookup.Found(item):` with a view of the element, or the `Missing` arm when the index is out of bounds. Only valid as a `match` subject. Has no clone requirement. |
 | `list.set` | `set(index: int64, value: own T) -> T` | Replaces the element and moves the old one out. An invalid position traps. |
 | `list.remove` | `remove(value: T) -> None` | Removes the first equal value. A missing value traps with `AU4008`. |
 | `list.index` | `index(value: T) -> int64` | Returns the position of the first equal value. A missing value traps with `AU4008`. |
@@ -235,6 +236,7 @@ cannot be represented or allocated traps with `AU4005`. Malformed data returns
 | `dict.is_empty` | `is_empty() -> bool` | `true` when the dictionary is empty. |
 | `dict.copy` | `copy() -> dict[K, V]` | Returns independent owned storage. Requires clone-safe `K` and `V`. |
 | `dict.get` | `get(key: K) -> Lookup[V]` | Returns `Lookup.Found(value)` with a clone of the value, or `Lookup.Missing` when the key is absent. A stored `None` value is `Found(None)`. Requires clone-safe `V`. |
+| `dict.lookup` | `match [mut] table.lookup(key):` | Runs `case Lookup.Found(value):` with a view of the value, or the `Missing` arm when the key is absent. Only valid as a `match` subject. Has no clone requirement. |
 | `dict.remove` | `remove(key: K) -> Lookup[V]` | Removes the entry and moves its value into `Lookup.Found(value)`, or returns `Lookup.Missing`. Has no clone requirement. |
 | `dict.keys` | `keys() -> list[K]` | Clones of the keys, in insertion order. Requires clone-safe `K`. |
 | `dict.values` | `values() -> list[V]` | Clones of the values, in insertion order. Requires clone-safe `V`. |

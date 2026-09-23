@@ -1,0 +1,6 @@
+error[AU2002]: a `lookup` match needs a `Lookup.Found` arm
+ --> crates/aura-compiler/tests/fixtures/check-fail/lookup_missing_found_arm.au:3:5
+  |
+3 |     match items.lookup(0):
+  |     ^
+  = help: use `if key in table:` when only presence matters

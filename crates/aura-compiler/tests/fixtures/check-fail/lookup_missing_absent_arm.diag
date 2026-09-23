@@ -1,0 +1,6 @@
+error[AU2002]: a `lookup` match must also handle `Lookup.Missing`
+ --> crates/aura-compiler/tests/fixtures/check-fail/lookup_missing_absent_arm.au:3:5
+  |
+3 |     match items.lookup(0):
+  |     ^
+  = help: add `case Lookup.Missing:` or `case _:`

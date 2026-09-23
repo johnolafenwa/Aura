@@ -1,0 +1,6 @@
+error[AU2005]: `lookup` is only available as the subject of a `match` statement
+ --> crates/aura-compiler/tests/fixtures/check-fail/lookup_outside_match.au:3:19
+  |
+3 |     found = items.lookup(0)
+  |                   ^
+  = help: write `match table.lookup(key):` with `case Lookup.Found(item):` and `case Lookup.Missing:` arms; use `get` for an owned clone, or `remove` to take the value out

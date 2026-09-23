@@ -7,6 +7,16 @@ in this file.
 
 ## Unreleased
 
+- Lists and dictionaries gain `lookup`, which views an element in place when
+  it may be missing. Write `match items.lookup(i):` or `match mut
+  table.lookup(key):` with `case Lookup.Found(item):` and `case
+  Lookup.Missing:` arms. Unlike `get`, nothing is cloned, so it works for any
+  element type. `lookup` is only valid as the subject of a `match` statement.
+- The direct backend now handles a method call on a field reached through an
+  element view, such as `team.members.append(name)` after `view mut team =
+  teams[0]`. It used to stop with "does not know dynamic method".
+- Editor completions list `lookup` for lists and dictionaries, and show
+  `Lookup[T]` as the result of list `get`.
 - A binding introduced by a consuming form is a mutable place: the element of
   `for value in own values:`, every leaf of its tuple target, and a `match
   own` payload or type-pattern binding. Mutating methods and field writes

@@ -1134,6 +1134,7 @@ fn maintained_example_subset_runs_via_public_entrypoints_and_direct_codegen() {
         "examples/collections/slices.au",
         "examples/collections/list_polish.au",
         "examples/collections/dict_basics.au",
+        "examples/collections/lookup_in_place.au",
         "examples/collections/set_basics.au",
         "examples/numbers/numeric_builtins.au",
         "examples/strings/string_methods.au",

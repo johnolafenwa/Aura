@@ -1,0 +1,7 @@
+error[AU3011]: cannot call `append` on `items` while shared element view `item` of `items[0]` remains live
+ --> crates/aura-compiler/tests/fixtures/check-fail/lookup_structural_mutation_in_arm.au:5:19
+  |
+5 |             items.append([3])
+  |                   ^
+  = related crates/aura-compiler/tests/fixtures/check-fail/lookup_structural_mutation_in_arm.au:4:27: view `item` starts here
+  = related crates/aura-compiler/tests/fixtures/check-fail/lookup_structural_mutation_in_arm.au:6:19: last use of view `item` keeps this loan live

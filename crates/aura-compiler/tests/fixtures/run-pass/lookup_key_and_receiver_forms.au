@@ -1,0 +1,39 @@
+class Config:
+    key: str
+    slot: int64
+
+class Registry:
+    names: list[str]
+    flags: dict[bool, str]
+
+def main():
+    config = Config(key="b", slot=1)
+    registry = Registry(names=["zero", "one"], flags={true: "on"})
+    table = {"a": "alpha", "b": "beta"}
+
+    # Field keys and field receivers are read in place.
+    match table.lookup(config.key):
+        case Found(value):
+            print(value)
+        case Missing:
+            print("missing")
+    match registry.names.lookup((config.slot)):
+        case Lookup.Found(name):
+            print(name)
+        case _:
+            print("missing")
+    match registry.names.lookup(-1):
+        case Lookup.Found(name):
+            print(name)
+        case _:
+            print("missing")
+    match registry.flags.lookup(true):
+        case Lookup.Found(flag):
+            print(flag)
+        case _:
+            print("missing")
+    match registry.flags.lookup(false):
+        case Lookup.Found(flag):
+            print(flag)
+        case Missing:
+            print("no false flag")

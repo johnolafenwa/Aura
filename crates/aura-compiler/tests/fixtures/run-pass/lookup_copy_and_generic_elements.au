@@ -1,0 +1,34 @@
+def first_or(items: list[int64], fallback: int64) -> int64:
+    match items.lookup(0):
+        case Lookup.Found(value):
+            return value
+        case Lookup.Missing:
+            return fallback
+
+def count_first[T](items: list[T]) -> int64:
+    match items.lookup(0):
+        case Lookup.Found(item):
+            print(item)
+            return 1
+        case Lookup.Missing:
+            return 0
+
+class Shelf:
+    def lookup(self, slot: int64) -> Lookup[int64]:
+        return Lookup.Found(slot * 10)
+
+def main():
+    print(first_or([4, 5], -1))
+    print(first_or([], -1))
+    print(count_first([7]))
+    print(count_first(["s"]))
+    empty: list[str] = []
+    print(count_first(empty))
+
+    # A user method named `lookup` keeps its ordinary meaning.
+    shelf = Shelf()
+    match shelf.lookup(3):
+        case Lookup.Found(value):
+            print(value)
+        case Lookup.Missing:
+            print("missing")

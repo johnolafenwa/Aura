@@ -1,0 +1,5 @@
+def main():
+    items = [[1], [2]]
+    size = match items.lookup(0):
+        case Lookup.Found(item): item.len()
+        case Lookup.Missing: 0

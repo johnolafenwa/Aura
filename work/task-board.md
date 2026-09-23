@@ -1,6 +1,6 @@
 # Task Board
 
-Last updated: 2026-09-22
+Last updated: 2026-09-23
 
 ## Aura 0.3.4 preview release (complete)
 
@@ -16,16 +16,14 @@ Last updated: 2026-09-22
 ## Batch 2 phase 2a (element and entry loans; in progress)
 
 - Step 1 (element and entry views) shipped in 0.3.4 (PR #17).
-- Item 1 (contextual element reads) is rebuilt on `batch-2-phase-2a-item1`:
-  elements are lent in place as arguments, receivers, scrutinees, and in
-  nested selections. Local chain green at `2b9fd0f0` (96.48 / 97.41 /
-  95.30). Codex's first attempt stays unmerged on `codex/batch-2-phase-2a-2`
-  because it broke 76 existing direct-backend fixtures. Details are in
+- Merged since: script bindings after the first statement (PR #20),
+  contextual element reads (PR #21), and `AU3011` invalidation (PR #22).
+  Owned bindings and script narrowing are PR #23. The arm-scoped `lookup`
+  is on `batch-2-phase-2a-lookup`. Details are in
   `2026-09-21-batch-2-phase-2a.md`.
-- Next: A3 invalidation classification (`AU3011`, with `list.set` as an
-  element-level write), iteration unification, returned element views,
-  `lookup`, the receiver audit, owned bindings as mutable places, and
-  borrowing non-copy values into union parameters.
+- Next: iteration unification (A5), returned element views (A6), borrowing
+  non-copy values into union parameters, the internal receiver table, then
+  the phase 2a closeout.
 
 ## Batch 1 representation phase (complete) and Batch 2–3 design checkpoint (ratified)
 
