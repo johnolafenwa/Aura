@@ -1,0 +1,5 @@
+def main():
+    mut table: dict[str, int64] = {"a": 1, "b": 2}
+    view a = table["a"]
+    table["b"] = 5
+    print(a)

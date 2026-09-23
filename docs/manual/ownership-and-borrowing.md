@@ -197,6 +197,8 @@ A list element or dictionary entry can be used in place wherever a place is borr
 
 Writes through a `mut` argument, a mutating receiver, or `match mut` land in the collection. The same overlap rules as for views apply: two literal positions or keys are disjoint, and a computed index overlaps every element, so `adjust(values[i], values[j])` with two `mut` parameters is refused.
 
+While an element or entry view is live, mutating the collection is classified. A write to one list element, `values[1] = x` or `values.set(1, x)`, is allowed when its literal position differs from every live element view's. A write to the same element or through a computed index, and any structural change, is refused with `AU3011`. Structural changes are `append`, `insert`, `pop`, `remove`, `clear`, `sort`, `reverse`, `swap`, and every dictionary assignment, because a new key can move every entry. Beside a live element view, `set` is an element write only for a Copy element type, because it moves the old element out.
+
 Moving the element out is still refused (`AU3005`). This covers binding it to a new name, passing it to an `own` parameter, putting it in a new aggregate, and moving a non-Copy field out of it. Use `.clone()` for an explicit copy, or `pop`, `set`, or `remove` to transfer ownership. A shared read of an element whose type cannot be cloned, such as a `random.Rng`, also needs an explicit `view`.
 
 A loan region begins at view creation and ends after the final possible use. The checker computes it conservatively across branches and loops, and the lexical scope is only an upper bound. While the loan is live, the checker rejects rebinding, moving, cleaning up, or structurally mutating an overlapping source. Scope exits, `return`, `break`, `continue`, propagated errors, traps, and cancellation release every loan they leave, in reverse acquisition order.
@@ -586,6 +588,7 @@ Ownership failures are static.
 | `AU3008` | A non-Transfer task or Queue boundary. |
 | `AU3009` | A clone, clone-producing collection read, or aggregate copy that would duplicate a single-consumer task-result right. |
 | `AU3010` | An invalid view escape, returned-view origin, or provenance path. |
+| `AU3011` | A mutation of a collection that invalidates a live element or entry view: a structural change, or a write to an element the view may select. |
 
 For `AU3005`, every borrowed use of an element is a place read, not a move.
 

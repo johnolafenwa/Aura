@@ -31172,15 +31172,15 @@ fn adr0061_element_places_read_fields_in_place_and_lend_element_arguments() {
         ),
         (
             "class Profile:\n    name: str\n    visits: int64\n\ndef main():\n    mut users = [Profile(name=\"ada\", visits=1)]\n    view first = users[0]\n    users[0].visits = 5\n    print(first.visits)\n",
-            "cannot mutate `users[0].visits` while shared view `first` remains live",
+            "cannot assign `users[0].visits` while shared element view `first` of `users[0]` remains live",
         ),
         (
             "class Profile:\n    name: str\n    visits: int64\n\ndef main():\n    mut users = [Profile(name=\"ada\", visits=1), Profile(name=\"linus\", visits=2)]\n    i = 0\n    view mut selected = users[i]\n    users[1].visits = 5\n    print(selected.visits)\n",
-            "cannot mutate `users[1].visits` while mutable view `selected` remains live",
+            "cannot assign `users[1].visits` while mutable element view `selected` of `users[?]` remains live",
         ),
         (
             "def main():\n    mut table: dict[int64, str] = {7: \"seven\"}\n    view mut seven = table[7]\n    table[7] = \"eight\"\n    print(seven)\n",
-            "while mutable view `seven` remains live",
+            "while mutable element view `seven` of `table[7]` remains live",
         ),
         (
             "def main():\n    mut values = [1, 2]\n    view mut first = values[0]\n    view mut again = values[0]\n    first += 1\n    again += 1\n",

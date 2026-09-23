@@ -7,6 +7,12 @@ in this file.
 
 ## Unreleased
 
+- Mutating a collection while an element or entry view of it is live now
+  reports `AU3011`, which names the view and the operation. A structural
+  change such as `append` or any dictionary assignment is refused, and so is a
+  write to the viewed element or through a computed index. A write to a
+  different literal position, `values[1] = x`, `values[1] += x`, or
+  `values.set(1, x)` for a Copy element, is allowed.
 - In a script, a bare `name = value` after the first top-level statement
   declares an immutable top-level local instead of a module constant. It
   can read earlier locals, and closures can capture it. Bindings above the

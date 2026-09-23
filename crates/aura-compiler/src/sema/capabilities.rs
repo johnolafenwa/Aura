@@ -859,13 +859,48 @@ impl<'a> FunctionChecker<'a> {
         span: crate::diag::Span,
         locals: &mut HashMap<String, LocalBinding>,
     ) -> Result<()> {
+        self.require_mutable_receiver_at(object, method_name, None, span, locals)
+    }
+
+    /// `require_mutable_receiver` for a method that writes one element of a
+    /// list (`set(index, value)`), whose position is `element_index`.
+    pub(super) fn require_mutable_receiver_at(
+        &self,
+        object: &Expr,
+        method_name: &str,
+        element_index: Option<&Expr>,
+        span: crate::diag::Span,
+        locals: &mut HashMap<String, LocalBinding>,
+    ) -> Result<()> {
         if let Some(place) = self.borrow_call_place(object) {
             self.ensure_place_mutation_allowed(&place, span, locals)?;
             let through_view = locals
                 .get(&place.root)
                 .and_then(|binding| binding.view.as_ref())
                 .map(|_| place.root.as_str());
-            self.ensure_place_not_locked_by_view(&place, through_view, span, locals)?;
+            let element_place = element_index.map(|index| match &index.kind {
+                ExprKind::Int(value) => match usize::try_from(*value) {
+                    Ok(position) => place.clone().with_tuple(position),
+                    Err(_) => place
+                        .clone()
+                        .with_element(super::places::PlaceSelector::Dynamic),
+                },
+                _ => place
+                    .clone()
+                    .with_element(super::places::PlaceSelector::Dynamic),
+            });
+            let operation = match &element_place {
+                Some(element) => format!("call `{method_name}` on `{element}`"),
+                None => format!("call `{method_name}` on `{place}`"),
+            };
+            self.ensure_collection_operation_allowed(
+                &place,
+                element_place.as_ref(),
+                &operation,
+                through_view,
+                span,
+                locals,
+            )?;
             self.invalidate_narrowing(&place, span, "a mutating method call", locals);
         }
         if self.is_mutable_place(object, locals)? {

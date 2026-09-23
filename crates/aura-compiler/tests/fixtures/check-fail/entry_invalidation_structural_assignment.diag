@@ -1,0 +1,7 @@
+error[AU3011]: cannot assign `table["b"]` while shared element view `a` of `table["a"]` remains live
+ --> crates/aura-compiler/tests/fixtures/check-fail/entry_invalidation_structural_assignment.au:4:5
+  |
+4 |     table["b"] = 5
+  |     ^
+  = related crates/aura-compiler/tests/fixtures/check-fail/entry_invalidation_structural_assignment.au:3:5: view `a` starts here
+  = related crates/aura-compiler/tests/fixtures/check-fail/entry_invalidation_structural_assignment.au:5:11: last use of view `a` keeps this loan live

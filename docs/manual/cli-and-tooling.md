@@ -602,6 +602,7 @@ code's precise rules.
 | `AU3008` | non-transferable task or Queue boundary |
 | `AU3009` | single-consumer task-result duplication |
 | `AU3010` | view escape or returned-view provenance failure |
+| `AU3011` | collection mutation under a live element view |
 | `AU4001` | general runtime trap |
 | `AU4002` | arithmetic overflow or underflow |
 | `AU4003` | bounds or lookup violation |

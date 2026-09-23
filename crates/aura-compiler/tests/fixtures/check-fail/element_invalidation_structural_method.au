@@ -1,0 +1,5 @@
+def main():
+    mut values = [[1], [2]]
+    view first = values[0]
+    values.clear()
+    print(first)

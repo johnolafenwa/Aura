@@ -223,6 +223,7 @@ process. They are not Aura diagnostics. See [FFI v0](/manual/ffi).
 | `AU3008` | non-transferable task/Queue boundary | A task capture, task result, or Queue payload that cannot cross to another task worker. | Pass owned transferable data, and keep host authority on its owning task. |
 | `AU3009` | single-consumer task-result duplication | Copying the right to observe a task's result. | Keep one owner of the task handle and observe its result once. |
 | `AU3010` | view escape or returned provenance | A view that outlives or does not come from its declared origin. | Return an owned clone, index, or handle, or keep the loan inside the owner's region. |
+| `AU3011` | collection mutation under a live element view | `append`, `remove`, dictionary assignment, or another structural change of a collection while a view of one of its elements or entries is live, or a write to an element the view may select. | End the view first, or write a different literal position. |
 
 The guidance these diagnostics carry is described under
 [Ownership Diagnostics](#ownership-diagnostics).

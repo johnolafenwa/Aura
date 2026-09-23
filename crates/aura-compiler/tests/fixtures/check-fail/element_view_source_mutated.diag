@@ -1,4 +1,4 @@
-error[AU3002]: cannot mutate `users` while shared view `first` remains live
+error[AU3011]: cannot call `append` on `users` while shared element view `first` of `users[0]` remains live
  --> crates/aura-compiler/tests/fixtures/check-fail/element_view_source_mutated.au:9:11
   |
 9 |     users.append(Profile(name="linus", visits=2))

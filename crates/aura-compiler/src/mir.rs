@@ -11944,6 +11944,10 @@ impl<'a> Lowerer<'a> {
             return;
         }
 
+        if self.lower_element_write_beside_loans(assign) {
+            return;
+        }
+
         if let AssignTarget::Index { object, index } = &assign.target {
             let lowered_object = self.lower_expr(object);
             let object_ty = self.infer_expr_type(object);
@@ -19646,6 +19650,9 @@ impl<'a> Lowerer<'a> {
                 if self.lower_vec_algorithm_call(expr, object, field, args, &temp) {
                     return Operand::Place(temp);
                 }
+                if self.lower_vec_set_beside_loans(object, field, args, &temp) {
+                    return Operand::Place(temp);
+                }
 
                 let receiver_place = self.render_place_expr_option(object);
                 let receiver_type = self.infer_expr_type(object);
@@ -20742,27 +20749,7 @@ impl<'a> Lowerer<'a> {
     /// literal selector keeps it disjoint from the live one. `None` when no
     /// loan holds the collection, which keeps the ordinary indexed read.
     fn lower_element_read_beside_loans(&mut self, expr: &Expr) -> Option<Operand> {
-        if !self.is_contextual_element_expr(expr) || !self.contextual_element_root_is_local(expr) {
-            return None;
-        }
-        let root = {
-            let mut current = grouped_mir_expr(expr);
-            loop {
-                match &current.kind {
-                    ExprKind::Member { object, .. } | ExprKind::Index { object, .. } => {
-                        current = grouped_mir_expr(object);
-                    }
-                    ExprKind::Name(name) => break self.render_local_name(name),
-                    _ => return None,
-                }
-            }
-        };
-        if self.view_sources.contains_key(&root)
-            || !self
-                .view_sources
-                .values()
-                .any(|source| source.split('.').next() == Some(root.as_str()))
-        {
+        if !self.element_collection_is_lent(expr) {
             return None;
         }
         let ty = self.infer_expr_type(expr)?;
@@ -20774,13 +20761,154 @@ impl<'a> Lowerer<'a> {
             target: value.clone(),
             loan: loan.clone(),
         });
+        self.end_contextual_element_loan(loan);
+        Some(Operand::Place(value))
+    }
+
+    /// Whether `expr` is an element of a local collection that some live
+    /// loan already holds part of, so a read or write of this element must
+    /// take its own element loan instead of touching the whole collection.
+    fn element_collection_is_lent(&self, expr: &Expr) -> bool {
+        if !self.is_contextual_element_expr(expr) || !self.contextual_element_root_is_local(expr) {
+            return false;
+        }
+        let mut current = grouped_mir_expr(expr);
+        let root = loop {
+            match &current.kind {
+                ExprKind::Member { object, .. } | ExprKind::Index { object, .. } => {
+                    current = grouped_mir_expr(object);
+                }
+                ExprKind::Name(name) => break self.render_local_name(name),
+                _ => return false,
+            }
+        };
+        !self.view_sources.contains_key(&root)
+            && self
+                .view_sources
+                .values()
+                .any(|source| source.split('.').next() == Some(root.as_str()))
+    }
+
+    /// Ends a hidden element loan at once instead of with its statement.
+    fn end_contextual_element_loan(&mut self, loan: String) {
         self.view_sources.remove(&loan);
         self.contextual_element_loans.remove(&loan);
         if let Some(scope) = self.loan_scopes.last_mut() {
             scope.retain(|active| active != &loan);
         }
         self.emit(Instruction::EndLoan { loan });
-        Some(Operand::Place(value))
+    }
+
+    /// `values[1] = x` or `values[1] += x` while another element of `values`
+    /// is lent: the write goes through its own element loan, whose literal
+    /// footprint stays disjoint from the live one (ADR-0061 A3).
+    fn lower_element_write_beside_loans(&mut self, assign: &AssignStmt) -> bool {
+        let AssignTarget::Index { object, index } = &assign.target else {
+            return false;
+        };
+        if !matches!(
+            self.infer_expr_type(object),
+            Some(Type::Named(ref name, ref args)) if name == "list" && args.len() == 1
+        ) {
+            return false;
+        }
+        let target = Expr {
+            kind: ExprKind::Index {
+                object: object.clone(),
+                index: index.clone(),
+            },
+            span: assign.span,
+        };
+        if !self.element_collection_is_lent(&target) {
+            return false;
+        }
+        let Some(element_ty) = self.infer_expr_type(&target) else {
+            return false;
+        };
+        let Some(Operand::Place(loan)) = self.lower_contextual_element_loan(&target, true) else {
+            return false;
+        };
+        let value = if let Some(op) = assign.op {
+            let current = self.new_typed_temp(element_ty.clone());
+            self.emit(Instruction::ReadLoan {
+                target: current.clone(),
+                loan: loan.clone(),
+            });
+            let compound = Expr {
+                kind: ExprKind::Binary {
+                    op,
+                    left: Box::new(Expr {
+                        kind: ExprKind::Name(current),
+                        span: assign.span,
+                    }),
+                    right: Box::new(assign.value.clone()),
+                },
+                span: assign.span,
+            };
+            self.lower_expr_for_owned_value(&compound, Some(&element_ty))
+        } else {
+            self.lower_expr_for_owned_value(&assign.value, Some(&element_ty))
+        };
+        self.emit(Instruction::WriteLoan {
+            loan: loan.clone(),
+            value: Rvalue::Use(value),
+        });
+        self.end_contextual_element_loan(loan);
+        true
+    }
+
+    /// `values.set(1, x)` while another element of `values` is lent: the old
+    /// element is read and the new one written through the element's own
+    /// loan.
+    fn lower_vec_set_beside_loans(
+        &mut self,
+        object: &Expr,
+        field: &str,
+        args: &[Argument],
+        result: &str,
+    ) -> bool {
+        if field != "set"
+            || args.len() != 2
+            || args.iter().any(|argument| argument.name.is_some())
+            || !matches!(
+                self.infer_expr_type(object),
+                Some(Type::Named(ref name, ref type_args)) if name == "list" && type_args.len() == 1
+            )
+        {
+            return false;
+        }
+        let target = Expr {
+            kind: ExprKind::Index {
+                object: Box::new(object.clone()),
+                index: Box::new(args[0].value.clone()),
+            },
+            span: args[0].value.span,
+        };
+        if !self.element_collection_is_lent(&target) {
+            return false;
+        }
+        let Some(element_ty) = self.infer_expr_type(&target) else {
+            return false;
+        };
+        // The checker admits `set` beside a live element view only for a
+        // Copy element, whose old value is read through the loan.
+        if !type_is_copy_in_program(&element_ty, self.program) {
+            return false;
+        }
+        let Some(Operand::Place(loan)) = self.lower_contextual_element_loan(&target, true) else {
+            return false;
+        };
+        self.emit(Instruction::ReadLoan {
+            target: result.to_string(),
+            loan: loan.clone(),
+        });
+        let value = self.lower_expr_for_owned_value(&args[1].value, Some(&element_ty));
+        self.emit(Instruction::WriteLoan {
+            loan: loan.clone(),
+            value: Rvalue::Use(value),
+        });
+        self.end_contextual_element_loan(loan);
+        true
     }
 
     /// Before a call is lowered, an element origin argument has no loan yet;

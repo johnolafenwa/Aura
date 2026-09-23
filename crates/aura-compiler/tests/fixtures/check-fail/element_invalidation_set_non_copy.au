@@ -1,0 +1,9 @@
+class Profile:
+    name: str
+
+def main():
+    mut users = [Profile(name="ada"), Profile(name="linus")]
+    view first = users[0]
+    old = users.set(1, Profile(name="grace"))
+    print(first.name)
+    print(old.name)

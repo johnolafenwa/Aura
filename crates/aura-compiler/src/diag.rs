@@ -227,6 +227,11 @@ pub const DIAGNOSTIC_CODE_REGISTRY: &[DiagnosticCodeInfo] = &[
         title: "view escape or returned-origin violation",
     },
     DiagnosticCodeInfo {
+        code: "AU3011",
+        band: "ownership",
+        title: "collection mutation under a live element view",
+    },
+    DiagnosticCodeInfo {
         code: "AU4001",
         band: "runtime",
         title: "runtime trap",

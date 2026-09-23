@@ -1,0 +1,7 @@
+error[AU3011]: cannot assign `values[?]` while shared element view `first` of `values[0]` remains live
+ --> crates/aura-compiler/tests/fixtures/check-fail/element_invalidation_dynamic_write.au:5:5
+  |
+5 |     values[i] = 9
+  |     ^
+  = related crates/aura-compiler/tests/fixtures/check-fail/element_invalidation_dynamic_write.au:3:5: view `first` starts here
+  = related crates/aura-compiler/tests/fixtures/check-fail/element_invalidation_dynamic_write.au:6:11: last use of view `first` keeps this loan live
