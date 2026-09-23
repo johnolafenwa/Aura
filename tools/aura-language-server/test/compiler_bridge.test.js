@@ -2977,8 +2977,8 @@ test("compiler bridge explains module constants that read top-level script local
     "    def take(own self) -> int64:",
     "        return self.v",
     "",
-    "mut c = C(v=1)",
     "x = c.take()",
+    "mut c = C(v=1)",
     "print(x)",
     ""
   ].join("\n");
@@ -2996,7 +2996,7 @@ test("compiler bridge explains module constants that read top-level script local
       "module constant `x` cannot read top-level script local `c`"
     );
     assert.deepEqual(analysis.diagnostics[0].help, [
-      "declare `x` with `mut` to make it a top-level script local, or move this work into `main`"
+      "move `x` below the first top-level statement to make it a script local, or move this work into `main`"
     ]);
 
     const [diagnostic] = compilerDiagnosticsToLsp(analysis, mainUri);
@@ -3005,8 +3005,8 @@ test("compiler bridge explains module constants that read top-level script local
       "`c` is initialized when top-level entry statements run"
     );
     assert.deepEqual(diagnostic.range, {
-      start: { line: 7, character: 4 },
-      end: { line: 7, character: 5 }
+      start: { line: 6, character: 4 },
+      end: { line: 6, character: 5 }
     });
   } finally {
     fs.rmSync(tempRoot, { recursive: true, force: true });
