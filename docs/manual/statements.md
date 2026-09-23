@@ -21,7 +21,7 @@ Class, enum, function, trait, and implementation declarations are items, not sta
 
 A compound statement header ends with `:` and `NEWLINE`. An indented suite follows it. A suite contains one or more statements:
 
-```aura
+```aura fragment
 if ready:
     print("ready")
     record_success()
@@ -65,7 +65,7 @@ def main():
 
 An assignment target starts with a name and may continue through fields or indices:
 
-```aura
+```aura fragment
 point.x = 4.0
 values[0] = 9
 counts["ready"] = 2
@@ -99,7 +99,7 @@ The right side is evaluated once. Its tuple shape and element types must match t
 
 Aura supports the complete arithmetic compound-assignment family `+=`, `-=`, `*=`, `/=`, `%=`, and `//=`:
 
-```aura
+```aura fragment
 count += 1
 total *= scale
 pages //= page_size
@@ -167,7 +167,7 @@ An assignment whose target projects inside an element or entry, such as `users[i
 
 Any expression may be used as a statement when its value is not needed:
 
-```aura
+```aura fragment
 print("ready")
 queue.close()
 counter.increment()
@@ -201,7 +201,7 @@ A function that does not return `None` must return on every statically reachable
 
 An `if` with zero or more `elif` branches and an optional `else` runs at most one suite:
 
-```aura
+```aura fragment
 if value < 0:
     print("negative")
 elif value == 0:
@@ -239,7 +239,7 @@ The checker rejects the first move of a non-copy outer value inside a repeatable
 
 A `for` statement binds one name, or recursively unpacks one tuple target, for each value from an iterable:
 
-```aura
+```aura fragment
 for value in values:
     print(value)
 
@@ -332,7 +332,7 @@ for value in range(10):
 
 A statement-form `match` evaluates its scrutinee exactly once and tries its arms in source order. The first matching arm runs:
 
-```aura
+```aura fragment
 match result:
     case Result.Ok(value):
         print(value)
@@ -356,13 +356,13 @@ See [Enums And Pattern Matching](/manual/enums-and-match) for pattern forms.
 
 Aura accepts two equivalent binding forms, `with name = expression:` and `with expression as name:`:
 
-```aura
+```aura fragment
 with file = try fs.open("data.txt"):
     text = try file.read_all()
     print(text)
 ```
 
-```aura
+```aura fragment
 with TaskGroup() as group:
     group.start_soon(worker)
 ```
@@ -420,7 +420,7 @@ It must be on its own logical line. Use it for an intentionally empty function, 
 
 Imports are module elements, not executable statements. Aura accepts these forms:
 
-```aura
+```aura fragment
 import util.math
 from util.math import double, triple
 import agents.telemetry as telemetry
@@ -481,7 +481,7 @@ A statement that parses is not legal in every context:
 - `with` requires a supported resource and keeps its cleanup capability intact.
 - Items cannot appear inside suites.
 - Module constants are immutable and cannot use `mut` or reassignment.
-- Module constants cannot read top-level script locals, which initialize later.
+- Module constants are the bindings above the first top-level statement. They cannot read top-level script locals, which initialize later.
 - An entry module cannot mix executable top-level statements with a local `main`.
 
 The complete checker rules are normative in [Static Semantics](/manual/static-semantics). Ownership effects are normative in [Ownership And Borrowing](/manual/ownership-and-borrowing).

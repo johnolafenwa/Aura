@@ -92,7 +92,7 @@ into an unlimited wait.
 
 Construct a group with `TaskGroup()` and normally bind it with `with`:
 
-```aura
+```aura fragment
 with group = TaskGroup():
     task = group.start(work, 1)
 ```
@@ -158,7 +158,7 @@ Task start follows the same default-binding rule as an ordinary indirect call.
 two `_with_stack` methods take an exact `int64` byte count before the callable
 target:
 
-```aura
+```aura fragment
 with group = TaskGroup():
     parser = group.start_with_stack(512 * 1024, parse_document, source)
     group.start_soon_with_stack(2 * 1024 * 1024, deep_worker, jobs)
@@ -301,7 +301,7 @@ bounded = Queue[str](capacity=8)
 
 A `for` loop over a queue receives values:
 
-```aura
+```aura fragment
 for value in jobs:
     print(value)
 ```
@@ -445,7 +445,7 @@ A task observes that state through:
 
 A long CPU loop should check `cancelled()` directly:
 
-```aura
+```aura fragment
 while not cancelled():
     do_step()
 ```

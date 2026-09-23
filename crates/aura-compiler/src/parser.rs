@@ -106,7 +106,10 @@ impl Parser {
         let mut constants = Vec::new();
         let mut items = Vec::new();
         let mut top_level_stmts = Vec::new();
-        let mut top_level_local_names = std::collections::BTreeSet::new();
+        // Module constants are the bindings above the first top-level
+        // statement. From the first statement on, `name = value` is an
+        // immutable script local, so a script reads top to bottom.
+        let mut seen_statement = false;
         self.skip_newlines();
 
         while !self.at_eof() {
@@ -114,13 +117,17 @@ impl Parser {
                 imports.push(self.parse_import()?);
             } else if self.at_type_alias_start() {
                 items.push(self.parse_item()?);
-            } else if self.at_module_constant_start()
-                && !matches!(
-                    self.current_kind(),
-                    TokenKind::Identifier(name) if top_level_local_names.contains(name)
-                )
-            {
+            } else if self.at_module_constant_start() && !seen_statement {
                 constants.push(self.parse_module_constant()?);
+            } else if seen_statement
+                && self.at_simple(&TokenKind::KwPublic)
+                && matches!(self.peek_kind(1), Some(TokenKind::Identifier(_)))
+            {
+                return Err(Diagnostic::coded_at(
+                    "AU1101",
+                    self.current_span(),
+                    "a public module constant must come before the first top-level statement",
+                ));
             } else if self.at_simple(&TokenKind::KwPublic)
                 || self.at_copy_class_start()
                 || self.at_keyword_class()
@@ -133,22 +140,7 @@ impl Parser {
                 items.push(self.parse_item()?);
             } else {
                 let statement = self.parse_stmt()?;
-                // A `mut` binding or a view is a script local: a later
-                // `name = value` assigns to it rather than declaring a
-                // module constant.
-                match &statement {
-                    Stmt::Assign(AssignStmt {
-                        mutable: true,
-                        target: AssignTarget::Name(name),
-                        ..
-                    }) => {
-                        top_level_local_names.insert(name.clone());
-                    }
-                    Stmt::View(view) => {
-                        top_level_local_names.insert(view.name.clone());
-                    }
-                    _ => {}
-                }
+                seen_statement = true;
                 top_level_stmts.push(statement);
             }
             self.skip_newlines();

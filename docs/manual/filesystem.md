@@ -35,7 +35,7 @@ The 256 MiB read cap is part of the API contract. It also applies to `fs.File.re
 
 `fs.File` is an owned resource. Use `with` for deterministic cleanup:
 
-```aura
+```aura fragment
 def show_file() -> Result[None, io.Error]:
     with file = try fs.open("data.txt"):
         text = try file.read_all()
@@ -56,7 +56,7 @@ def show_file() -> Result[None, io.Error]:
 
 Use the text helpers when you know the file is UTF-8:
 
-```aura
+```aura fragment
 def read_config() -> Result[str, io.Error]:
     text = try fs.read_to_string("config.txt")
     return Result.Ok(text)
@@ -64,7 +64,7 @@ def read_config() -> Result[str, io.Error]:
 
 Use the byte helpers for binary data or an unknown encoding:
 
-```aura
+```aura fragment
 def read_image_size() -> Result[int64, io.Error]:
     bytes = try fs.read_bytes("image.bin")
     return Result.Ok(bytes.len())
@@ -96,7 +96,7 @@ def append_line(path: str, line: str) -> Result[None, io.Error]:
 
 Filesystem errors are `io.Error` values. Match the variants when the program has a different policy for each case:
 
-```aura
+```aura fragment
 match fs.read_to_string("config.txt"):
     case Result.Ok(text):
         print(text)

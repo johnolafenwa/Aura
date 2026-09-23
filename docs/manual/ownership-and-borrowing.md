@@ -247,14 +247,14 @@ The complete class value cannot be used while any field remains moved. Assigning
 
 A borrower does not own the containing value, so moving a non-copy field through a shared or mutable borrow is rejected:
 
-```aura
+```aura fragment
 def bad(user: User) -> str:
     return user.name # rejected
 ```
 
 Use `.clone()` for a new owned value when the type supports it, or expose an owner method that performs the read or mutation:
 
-```aura
+```aura fragment
 def good(user: User) -> str:
     return user.name.clone()
 ```

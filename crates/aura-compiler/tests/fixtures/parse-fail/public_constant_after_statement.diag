@@ -1,0 +1,5 @@
+error[AU1101]: a public module constant must come before the first top-level statement
+ --> crates/aura-compiler/tests/fixtures/parse-fail/public_constant_after_statement.au:2:1
+  |
+2 | public limit = 3
+  | ^

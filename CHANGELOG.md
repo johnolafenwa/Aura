@@ -7,6 +7,12 @@ in this file.
 
 ## Unreleased
 
+- In a script, a bare `name = value` after the first top-level statement
+  declares an immutable top-level local instead of a module constant. It
+  can read earlier locals, and closures can capture it. Bindings above the
+  first statement are still module constants. A function can no longer
+  read a name bound after the first statement, and `public name = value`
+  after a statement is a syntax error (`AU1101`).
 - A list element or dictionary entry can be used in place wherever a place
   is borrowed: as a shared or `mut` argument, a method receiver, an operand,
   a `match` or `match mut` scrutinee, and in a nested selection such as

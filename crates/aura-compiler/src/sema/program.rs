@@ -1668,7 +1668,7 @@ pub(crate) fn check_with_context(module: Module, context: ModuleContext) -> Resu
                             ),
                         )
                         .with_help(format!(
-                            "declare `{}` with `mut` to make it a top-level script local, or move this work into `main`",
+                            "move `{}` below the first top-level statement to make it a script local, or move this work into `main`",
                             constant.name
                         )));
                 }

@@ -22,23 +22,7 @@ enums.
 This program parses a dynamic object, reads an exact integer variant, builds
 a mixed nested tree, and prints compact and pretty output:
 
-```aura
-import json
-
-def main():
-    match json.parse("{\"workers\":3,\"tags\":[\"compiler\",\"service\"]}"):
-        case Result.Ok(value):
-            print(json.dumps(value))
-        case Result.Err(error):
-            print(error)
-
-    integer = json.Value.Int(7)
-    print(json.as_int(integer))
-
-    payload = json.Value.Object({"workers": json.Value.Int(3), "ready": json.Value.Bool(true), "tags": json.Value.Array([json.Value.String("compiler"), json.Value.String("service")])})
-    print(json.dumps(payload))
-    print(json.dumps(payload, indent=2))
-```
+<<< ../../examples/json/dynamic_values.au{aura}
 
 The same program is maintained as `examples/json/dynamic_values.au`.
 

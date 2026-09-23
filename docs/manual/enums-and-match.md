@@ -149,7 +149,7 @@ One variant cannot mix positional and named payloads. Empty parentheses do not d
 
 Enums may be generic and bounded:
 
-```aura
+```aura fragment
 enum Load[T: Named]:
     Ready(T)
     Failed(message: str)
@@ -166,7 +166,7 @@ The full declaration and pattern syntax is in [Grammar](/manual/grammar#enums) a
 
 Use the enum type and the variant name:
 
-```aura
+```aura fragment
 ready = Status.Ready(count=3)
 failed = Status.Failed("disk full")
 empty = Status.Empty
@@ -219,7 +219,7 @@ A user enum is copyable when every payload type of every variant is statically c
 
 A statement-form `match` runs a statement suite:
 
-```aura
+```aura fragment
 match ready:
     case Status.Ready(count):
         print(count)
@@ -233,7 +233,7 @@ The scrutinee is evaluated exactly once. Arms are tried in source order, and onl
 
 An enum match must cover every variant and every relevant nested payload pattern, or end with `_`:
 
-```aura
+```aura fragment
 match ready:
     case Status.Ready(count):
         print(count)
@@ -250,7 +250,7 @@ match ready:
 
 A match expression produces a value:
 
-```aura
+```aura fragment
 def status_label(status: own Status) -> str:
     return match status:
         case Status.Ready(count):
@@ -320,7 +320,7 @@ Guards:
 
 The fully qualified style is always valid:
 
-```aura
+```aura fragment
 match result:
     case Result.Ok(value):
         print(value)
@@ -330,7 +330,7 @@ match result:
 
 When the scrutinee type supplies one unambiguous enum identity, you may omit the enum prefix:
 
-```aura
+```aura fragment
 match result:
     case Ok(value):
         print(value)
@@ -387,7 +387,7 @@ A borrowed payload cannot be moved as an owned value. Copy payloads are ordinary
 
 Literal patterns work for `bool`, integer, floating-point, and `str` scrutinees:
 
-```aura
+```aura fragment
 match code:
     case 200:
         print("ok")

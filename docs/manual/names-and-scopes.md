@@ -65,7 +65,7 @@ Constants become available in declaration order. An initializer may read an earl
 
 An unaliased module import binds the first path component as a namespace:
 
-```aura
+```aura fragment
 import tools.text
 
 value = tools.text.parse("input")
@@ -73,7 +73,7 @@ value = tools.text.parse("input")
 
 An aliased module import binds the complete module under the alias. It does not bind the path's first component:
 
-```aura
+```aura fragment
 import tools.text as text_tools
 
 value = text_tools.parse("input")
@@ -81,13 +81,13 @@ value = text_tools.parse("input")
 
 A from-import binds the requested public items directly:
 
-```aura
+```aura fragment
 from tools.text import parse, ResultRow
 ```
 
 Each from-import entry may take a local alias. Direct and aliased entries can appear together:
 
-```aura
+```aura fragment
 from tools.text import parse as parse_text, ResultRow
 ```
 
@@ -209,7 +209,7 @@ For limited reachability and loop-flow reasoning, the compiler recognizes consta
 
 Each match arm has its own scope for payload bindings. A binding is available only in that arm's body or value expression.
 
-```aura
+```aura fragment
 match result:
     case Result.Ok(value):
         print(value)
@@ -256,7 +256,24 @@ An entry module may contain executable top-level statements instead of a local `
 
 A `mut` simple-name assignment declares a mutable top-level local. For example, `mut count = 0` creates one. Later plain and compound assignments to that name, such as `count = count + 1` and `count += 1`, stay in the statement stream and update the same local.
 
-A bare assignment to a new name is a module constant, even when it appears after an executable statement. That constant cannot read a top-level local, because constants initialize before entry statements run. To fix this, add `mut` to make the new binding another top-level local, or move the computation into `main`.
+A bare assignment to a new name depends on where it appears:
+
+- Above the first top-level statement, it declares a module constant. Other modules can import it, and it initializes before any statement runs.
+- From the first top-level statement on, it declares an immutable top-level local. It reads earlier locals, and it cannot be reassigned.
+
+Imports and `def`, `class`, `enum`, `trait`, `impl`, and `type` declarations are not statements. So a file whose first executable line comes after its constants keeps all of them as constants.
+
+```aura
+limit = 100                       # module constant
+
+mut scores = [30, 60, 90]         # first statement
+scores.append(120)
+
+total = scores.len()              # immutable top-level local
+print(f"{total} of {limit}")
+```
+
+A `public` binding must be a module constant, so `public name = value` after the first statement is a syntax error (`AU1101`). Functions see module constants but not top-level locals.
 
 An imported module contributes items and eagerly initialized constants. Its top-level executable statements are checked as source, but they do not run as import side effects. Put reusable executable work inside public functions.
 

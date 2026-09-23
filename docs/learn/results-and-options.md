@@ -88,7 +88,7 @@ The parsing builtins return `Result`:
 
 ```aura
 def read_limit(text: str) -> Result[int32, str]:
-    match parse_int32(text):
+    match own parse_int32(text):
         case Result.Ok(value):
             if value < 0:
                 return Result.Err("limit must be non-negative")
@@ -156,7 +156,7 @@ import fs
 import io
 
 def read_config(path: str) -> str:
-    match fs.read_to_string(path):
+    match own fs.read_to_string(path):
         case Result.Ok(text):
             return text
         case Result.Err(io.Error.NotFound):

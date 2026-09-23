@@ -12,6 +12,9 @@ on:
       - 'package.json'
       - 'package-lock.json'
       - '.github/workflows/docs.yml'
+      - 'crates/**'
+      - 'Cargo.lock'
+      - 'scripts/check_doc_examples.py'
   pull_request:
     paths:
       - '**/*.md'
@@ -22,6 +25,9 @@ on:
       - 'package.json'
       - 'package-lock.json'
       - '.github/workflows/docs.yml'
+      - 'crates/**'
+      - 'Cargo.lock'
+      - 'scripts/check_doc_examples.py'
   workflow_dispatch:
 
 permissions:
@@ -59,6 +65,26 @@ jobs:
         uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b # v4
         with:
           path: docs/.vitepress/dist
+
+  examples:
+    name: Compile documentation examples
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88
+        with:
+          toolchain: 1.95.0
+
+      - name: Build Aura
+        run: cargo build -p aura
+
+      - name: Check every aura code block
+        run: python3 scripts/check_doc_examples.py
 
   deploy:
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'

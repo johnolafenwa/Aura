@@ -47,8 +47,9 @@ public functions, classes, enums, traits, and module constants this way.
 
 ## Module Constants
 
-A module constant is a top-level binding. Use one for stable configuration or
-an immutable value that the module's functions share:
+A module constant is a top-level binding that comes before any top-level
+statement. Use one for stable configuration or an immutable value that the
+module's functions share:
 
 ```aura check-pass
 service_name = "planner"

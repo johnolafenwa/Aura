@@ -4,6 +4,6 @@ class C:
     def take(own self) -> int64:
         return self.v
 
-x = c.take()
 mut c = C(v=1)
+x = c.take()
 print(x)

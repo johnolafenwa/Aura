@@ -63,7 +63,7 @@ names the unmet requirement.
 Lists support shared, consuming, and mutable place iteration. Sets support
 shared and consuming iteration, but not mutable iteration.
 
-```aura
+```aura fragment
 for value in values:
     print(value)
 
@@ -80,7 +80,7 @@ A bare list or set loop freezes the collection for the duration of the loop.
 Dictionaries are not iterated directly. They expose eager owned snapshots.
 `items()` returns key/value tuples in insertion order:
 
-```aura
+```aura fragment
 for key, value in counts.items():
     print(key + "=" + value.to_string())
 ```
@@ -140,7 +140,7 @@ once as `len() + index`. The result must be in `0..len()`.
 - `get` returns `Lookup.Missing` for an invalid position. A present element
   whose value is `None` stays distinct from an absent one.
 
-```aura
+```aura fragment
 match values.get(index):
     case Lookup.Found(value):
         print(value)

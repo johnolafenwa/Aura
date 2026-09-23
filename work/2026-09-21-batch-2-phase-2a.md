@@ -313,6 +313,46 @@ was cloned before the write), which the one-call selection chain removes.
   merge. This evidence-only follow-up changes no compiler or test source.
   Phase 2a remains in progress; the open items below follow the step-1 merge.
 
+## Item 1: contextual element reads (2026-09-23)
+
+Codex's first attempt (saved as `f4c0eedd` on `codex/batch-2-phase-2a-2`)
+introduced a new direct-backend model of borrowed runtime handles and a
+`BeginUnionLoan` MIR instruction. Measured on 2026-09-23 it broke 76 of 539
+existing run-pass fixtures on the direct backend, including returned views,
+generic trait dispatch, and callables, and it broke check-pass, check-fail,
+and run-pass fixtures on the interpreter as well. It was set aside and item
+1 was rebuilt on `batch-2-phase-2a-item1` from `main`, with Codex's
+contextual fixtures as the specification.
+
+Design as landed:
+
+- A contextual element use is a hidden element loan, exactly what an
+  explicit `view` produces, so both backends already supported every case
+  before the change: shared and `mut` arguments, receivers, `match` and
+  `match mut` scrutinees, nested selections, and returned views of element
+  arguments. The loan ends with its statement.
+- Shared operand reads keep their existing read path. A read beside a live
+  element loan goes through its own brief loan with a literal footprint, so
+  `users[1]` stays readable while `users[0]` is mutably viewed.
+- The checker raises `AU3005` only for a move of a non-copy element
+  (binding, `own` argument, aggregate element, or a non-Copy field moved out
+  of an element) and for a shared read of an element type that cannot be
+  cloned. The guidance suggests a `view` first. Call-borrow and readability
+  checks see element places with their selectors.
+- Two bugs that also affect 0.3.4 were fixed on the way: a type-pattern
+  `match` on a union-valued element view failed MIR validation, and a
+  returned view through an element origin projected outside the element on
+  the direct backend.
+
+Left out: `element_contextual_union_arguments`. Borrowing a non-copy value
+into a union parameter is refused for every place today (`AU2010`); that is
+a separate feature, not a contextual read.
+
+Evidence: every fixture passes on the interpreter and on forced direct
+execution; `cargo test -p aura-compiler` passes; the complete local
+`npm run ci` chain is green at `2b9fd0f0` (coverage 96.48 / 97.41 / 95.30
+against floors 96.46 / 97.33 / 95.23).
+
 ## Open items
 
 - Contextual element reads at arguments, receivers, operands, and
