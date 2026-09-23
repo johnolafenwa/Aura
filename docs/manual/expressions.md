@@ -718,10 +718,11 @@ List indexes use the `int64` index domain.
 
 The same rules apply to indexed assignment and the public List index methods.
 
-A direct list read of a copy element returns the value. Moving a non-copy List
-element by direct indexing is restricted and reports `AU3005`. For an explicit
-cloned optional read of a clone-safe element type, use `get(index)`. To
-transfer a stored value that cannot be cloned, use `pop(index)`. Index
+A direct list read of a copy element returns the value. A non-copy element used
+where a place is borrowed, such as an argument, receiver, or operand, is lent
+in place. Moving a non-copy element out by direct indexing reports `AU3005`.
+For an explicit copy, use `.clone()` or `get(index)`. To transfer a stored
+value, use `pop(index)`. Index
 assignment is a statement target. See
 [Statements](/manual/statements#bindings-and-assignment).
 
@@ -1207,8 +1208,8 @@ context consumes them. Bare parameters grant logical shared access. `own`
 parameters and consuming receivers move. `mut` parameters grant exclusive
 mutable access.
 
-- A non-copy indexed read reports `AU3005`. Use the safe method surface
-  instead of an implicit copy.
+- A move of a non-copy element out of its collection reports `AU3005`.
+  Borrowed uses of the element are lent in place.
 - `in`, `not in`, `==`, and `!=` read both resulting operands and move
   neither, including structural tuple equality. Evaluation inside an operand
   keeps its ordinary ownership effects.

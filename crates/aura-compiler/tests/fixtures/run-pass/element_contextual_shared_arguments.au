@@ -1,0 +1,18 @@
+def show(value: str):
+    print(value)
+
+type Show = def(str) -> None
+
+def main():
+    names = ["ada", "linus"]
+    labels: dict[str, str] = {"language": "Aura"}
+    print(names[0])
+    show(labels["language"])
+    callback = Show(show)
+    callback(names[1])
+    copied: str = names[0].clone()
+    label: str = labels["language"].clone()
+    print(copied)
+    print(label)
+    print(names[0])
+    print(labels["language"])

@@ -1,0 +1,5 @@
+def main():
+    names = ["ada"]
+    print(names[0])
+    taken = names[0]
+    print(taken)

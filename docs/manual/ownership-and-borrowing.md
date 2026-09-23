@@ -187,7 +187,17 @@ Literal selectors with different values give disjoint element views:
 
 A view binding cannot be rebound, moved, cloned as a descriptor, stored in an aggregate, or sent across a task or Queue boundary.
 
-A list element or dictionary entry used as the object of a field access, such as `users[0].visits`, is read in place rather than copied. So a Copy field of a non-copy element can be read, and a field can be assigned or updated through the element, as in `users[0].visits += 1`. Binding, returning, or passing the element itself still needs an explicit `get`, `pop`, or `remove`. A non-copy field read out of an element is refused like a move out of a borrowed value.
+A list element or dictionary entry can be used in place wherever a place is borrowed. Aura lends it for the statement through a hidden element loan, as if you had written a `view`:
+
+- a shared or `mut` argument, such as `show(names[0])` or `bump(values[i])`
+- a method receiver, such as `users[0].describe()` or `counters[i].add(3)`
+- an operand, such as `names[0] == "ada"` or `f"{names[0]}"`
+- a `match` scrutinee, including `match mut messages[0]:`
+- a nested selection, such as `bump(grid[i][j])`
+
+Writes through a `mut` argument, a mutating receiver, or `match mut` land in the collection. The same overlap rules as for views apply: two literal positions or keys are disjoint, and a computed index overlaps every element, so `adjust(values[i], values[j])` with two `mut` parameters is refused.
+
+Moving the element out is still refused (`AU3005`). This covers binding it to a new name, passing it to an `own` parameter, putting it in a new aggregate, and moving a non-Copy field out of it. Use `.clone()` for an explicit copy, or `pop`, `set`, or `remove` to transfer ownership. A shared read of an element whose type cannot be cloned, such as a `random.Rng`, also needs an explicit `view`.
 
 A loan region begins at view creation and ends after the final possible use. The checker computes it conservatively across branches and loops, and the lexical scope is only an upper bound. While the loan is live, the checker rejects rebinding, moving, cleaning up, or structurally mutating an overlapping source. Scope exits, `return`, `break`, `continue`, propagated errors, traps, and cancellation release every loan they leave, in reverse acquisition order.
 
@@ -570,14 +580,14 @@ Ownership failures are static.
 | `AU3002` | Overlapping or invalid borrows, moving through a borrow, invalid mutable-borrow defaults or task targets, stale borrowed-pattern bindings, consuming a task-result right through shared access, and later mutable or consuming access that overlaps a retained non-copy binary operand, index base, method receiver, or indexed-assignment target. |
 | `AU3003` | Assignment or mutation through an immutable place, including shared `self`. |
 | `AU3004` | Invalid parameter, receiver, loop, or Queue-iteration ownership modes. |
-| `AU3005` | A direct indexed read of a non-copy list element or dict value in a binding, argument, or operand position. |
+| `AU3005` | Moving a non-copy list element or dict value out of its collection, or a shared read of an element whose type cannot be cloned. |
 | `AU3006` | The corresponding indexed compound read-modify-write. |
 | `AU3007` | Direct or transitive duplication of non-cloneable state, including `random.Rng`, opaque FFI handles, capturing closure environments, and unsafe generic specializations. |
 | `AU3008` | A non-Transfer task or Queue boundary. |
 | `AU3009` | A clone, clone-producing collection read, or aggregate copy that would duplicate a single-consumer task-result right. |
 | `AU3010` | An invalid view escape, returned-view origin, or provenance path. |
 
-For `AU3005`, a field access through the element and a `view` of it are place reads, not copies.
+For `AU3005`, every borrowed use of an element is a place read, not a move.
 
 For a retained-expression `AU3002`, the diagnostic points to both the later access and the retained-borrow origin.
 

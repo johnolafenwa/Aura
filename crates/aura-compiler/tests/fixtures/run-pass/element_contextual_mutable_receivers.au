@@ -1,0 +1,40 @@
+trait Bump:
+    def bump(mut self)
+    def peek(self) -> int64
+
+class Counter:
+    label: str
+    count: int64
+
+    def add(mut self, amount: int64):
+        self.count += amount
+
+impl Bump for Counter:
+    def bump(mut self):
+        self.count += 1
+
+    def peek(self) -> int64:
+        return self.count
+
+def poke[T: Bump](value: mut T):
+    value.bump()
+    value.bump()
+
+def report[T: Bump](value: T) -> int64:
+    return value.peek()
+
+def main():
+    mut counters = [Counter(label="left", count=1), Counter(label="right", count=10)]
+    mut entries: dict[str, Counter] = {"main": Counter(label="entry", count=20)}
+    counters[0].add(3)
+    entries["main"].add(amount=4)
+    counters[0].bump()
+    entries["main"].bump()
+    poke(counters[1])
+    poke(entries["main"])
+    print(report(counters[0]))
+    print(report(counters[1]))
+    print(report(entries["main"]))
+    print(counters[0].count)
+    print(counters[1].count)
+    print(entries["main"].count)

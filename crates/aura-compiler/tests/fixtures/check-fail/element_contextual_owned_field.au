@@ -1,0 +1,8 @@
+class Profile:
+    name: str
+    visits: int64
+
+def main():
+    mut users = [Profile(name="ada", visits=1)]
+    taken = users[0].name
+    print(taken)

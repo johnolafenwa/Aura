@@ -7985,11 +7985,16 @@ fn validate_loan_instruction(
             });
             budget.reserve(function, loan, expanded_path_bytes)?;
             validate_active_loan_path_budget(function, loan, state, expanded_path_bytes)?;
+            // An element or entry loan's sources are its whole collection, so
+            // a projection inside the selected element is typed and checked
+            // relative to the loan itself, and the child keeps the parent's
+            // sources and slot footprint (ADR-0061, 2026-09-21 section).
+            let element_parent = parent_loan.footprints.clone();
             let mut sources = parent_loan
                 .sources
                 .iter()
                 .map(|source| {
-                    if projection.is_empty() {
+                    if projection.is_empty() || element_parent.is_some() {
                         source.clone()
                     } else {
                         format!("{source}.{projection}")
@@ -7998,14 +8003,31 @@ fn validate_loan_instruction(
                 .collect::<Vec<_>>();
             sources.sort();
             sources.dedup();
-            for source in &sources {
-                context.validate_projected_loan_type(function, loan, source)?;
-                validate_projected_place_access(function, source, context, state, None)?;
+            if element_parent.is_some() {
+                let relative = if projection.is_empty() {
+                    parent.clone()
+                } else {
+                    format!("{parent}.{projection}")
+                };
+                context.validate_projected_loan_type(function, loan, &relative)?;
+                // The loan-relative type above already proves the payload
+                // layout; only the active tag and variant need checking.
+                validate_active_union_payload_projection(function, &relative, context, state)?;
+                validate_active_enum_payload_projection(function, &relative, context, state)?;
+            } else {
+                for source in &sources {
+                    context.validate_projected_loan_type(function, loan, source)?;
+                    validate_projected_place_access(function, source, context, state, None)?;
+                }
             }
+            let overlap_places = element_parent
+                .as_deref()
+                .map(<[String]>::to_vec)
+                .unwrap_or_else(|| sources.clone());
             validate_new_loan_overlap(
                 function,
                 loan,
-                &sources,
+                &overlap_places,
                 *mutable,
                 Some(parent),
                 &state.loans,
@@ -8016,7 +8038,7 @@ fn validate_loan_instruction(
                 loan.clone(),
                 ValidatedLoan {
                     sources: sources.into(),
-                    footprints: None,
+                    footprints: element_parent,
                     mutable: *mutable,
                     parent: Some(parent.clone()),
                     returned_descriptor: false,
@@ -9646,6 +9668,11 @@ struct Lowerer<'a> {
     loan_source_names: BTreeMap<String, String>,
     loan_scopes: Vec<Vec<String>>,
     needed_after_current_stmt: BTreeSet<String>,
+    /// Hidden element loans created for contextual element uses.
+    contextual_element_loans: BTreeSet<String>,
+    /// The hidden element loan lent for the element expression at a source
+    /// position, so a returned view of that argument names the loan.
+    contextual_loan_by_span: BTreeMap<(usize, usize), String>,
     view_return_origin: Option<String>,
 }
 
@@ -9829,6 +9856,8 @@ impl<'a> Lowerer<'a> {
             loan_source_names: BTreeMap::new(),
             loan_scopes: Vec::new(),
             needed_after_current_stmt: BTreeSet::new(),
+            contextual_element_loans: BTreeSet::new(),
+            contextual_loan_by_span: BTreeMap::new(),
             view_return_origin: None,
         }
     }
@@ -13086,10 +13115,19 @@ impl<'a> Lowerer<'a> {
         let contract = decl.view_return.as_ref()?;
         let origin = if contract.origin == "self" {
             let receiver = callee_info.receiver.as_ref()?;
-            self.render_place_expr_option(receiver).or_else(|| {
-                self.returned_view_source(receiver)
-                    .map(|(origin, _)| origin)
-            })?
+            match self
+                .contextual_loan_by_span
+                .get(&(receiver.span.line, receiver.span.column))
+            {
+                Some(loan) => loan.clone(),
+                None => self
+                    .contextual_element_origin_placeholder(receiver)
+                    .or_else(|| self.render_place_expr_option(receiver))
+                    .or_else(|| {
+                        self.returned_view_source(receiver)
+                            .map(|(origin, _)| origin)
+                    })?,
+            }
         } else {
             let origin_index = decl
                 .params
@@ -13104,10 +13142,19 @@ impl<'a> Lowerer<'a> {
             )
             .ok()?;
             let origin = ordered.get(origin_index).copied().flatten()?;
-            self.render_place_expr_option(&origin.value).or_else(|| {
-                self.returned_view_source(&origin.value)
-                    .map(|(origin, _)| origin)
-            })?
+            match self
+                .contextual_loan_by_span
+                .get(&(origin.value.span.line, origin.value.span.column))
+            {
+                Some(loan) => loan.clone(),
+                None => self
+                    .contextual_element_origin_placeholder(&origin.value)
+                    .or_else(|| self.render_place_expr_option(&origin.value))
+                    .or_else(|| {
+                        self.returned_view_source(&origin.value)
+                            .map(|(origin, _)| origin)
+                    })?,
+            }
         };
         let projections = if decl.name == crate::sema::SYNTHETIC_CALLABLE_DECL {
             // The callee behind a callable value is opaque here: it may return
@@ -13239,8 +13286,11 @@ impl<'a> Lowerer<'a> {
             .or_else(|| expected.cloned())
             .unwrap_or_else(|| Type::named("Unknown"));
         let _ = self.lower_expr_with_expected(call, Some(&call_type));
+        // Lowering the call may lend an element argument through a hidden
+        // loan; that loan, not the element's spelling, is the origin.
         let origin = self
             .take_lowered_returned_view_origin(call)
+            .or_else(|| self.returned_view_source(call).map(|(origin, _)| origin))
             .unwrap_or(fallback_origin);
         if child_projection.is_empty() {
             self.emit(Instruction::BeginReturnedLoan {
@@ -13278,6 +13328,11 @@ impl<'a> Lowerer<'a> {
     }
 
     fn lowered_writeback_place(&self, expr: &Expr, value: &Operand) -> Option<String> {
+        if let Operand::Place(place) = value {
+            if self.contextual_element_loans.contains(place) {
+                return Some(place.clone());
+            }
+        }
         self.render_place_expr_option(expr).or_else(|| {
             self.returned_view_source(expr).and_then(|_| match value {
                 Operand::Place(place) | Operand::MovePlace(place) => Some(place.clone()),
@@ -13445,6 +13500,13 @@ impl<'a> Lowerer<'a> {
                 value: Rvalue::Use(source),
             });
             Operand::Place(captured)
+        } else if let Some(loan) = self.lower_contextual_element_loan(
+            &match_stmt.scrutinee,
+            match_stmt.capability == ReceiverKind::BorrowMut,
+        ) {
+            // `match items[i]:` and `match mut items[i]:` inspect the element
+            // in place through a loan that lasts for the match.
+            loan
         } else if match_stmt
             .arms
             .iter()
@@ -13457,7 +13519,12 @@ impl<'a> Lowerer<'a> {
             self.lower_expr(&match_stmt.scrutinee)
         };
         let writeback_root = if match_stmt.capability == ReceiverKind::BorrowMut {
-            self.render_place_expr_option(&match_stmt.scrutinee)
+            match &scrutinee {
+                Operand::Place(place) if self.contextual_element_loans.contains(place) => {
+                    Some(place.clone())
+                }
+                _ => self.render_place_expr_option(&match_stmt.scrutinee),
+            }
         } else {
             None
         };
@@ -16071,6 +16138,9 @@ impl<'a> Lowerer<'a> {
                 if self.bound_method_info_at(object).is_some() {
                     return self.lower_expr(object);
                 }
+                if let Some(value) = self.lower_element_read_beside_loans(expr) {
+                    return value;
+                }
                 if let Some(Type::Tuple(element_types)) = self.infer_expr_type(object) {
                     let tuple_index = tuple_constant_index(index)
                         .expect("tuple indices are validated as constant integers by sema");
@@ -17574,6 +17644,26 @@ impl<'a> Lowerer<'a> {
         expected: Option<&Type>,
         passing: ReceiverKind,
     ) -> Operand {
+        if passing == ReceiverKind::BorrowMut {
+            // `bump(values[i])`, `users[i].visit()`: a mutable argument or
+            // receiver that names a list element or dictionary entry lends it
+            // through a statement-scoped element loan, so writes land in the
+            // collection (ADR-0061, 2026-09-21 section, contextual loans).
+            if let Some(value) = self.lower_contextual_element_loan(expr, true) {
+                return value;
+            }
+        }
+        if passing == ReceiverKind::Borrow
+            && self
+                .infer_expr_type(expr)
+                .is_some_and(|ty| !type_is_copy_in_program(&ty, self.program))
+        {
+            // A shared argument or receiver borrows a non-Copy element in
+            // place instead of reading a copy of it.
+            if let Some(value) = self.lower_contextual_element_loan(expr, false) {
+                return value;
+            }
+        }
         if matches!(passing, ReceiverKind::Borrow | ReceiverKind::BorrowMut) {
             if let Some(value) = self.lower_union_injection(expr, expected, false) {
                 return value;
@@ -17778,6 +17868,10 @@ impl<'a> Lowerer<'a> {
                 value: Rvalue::Use(source),
             });
             Operand::Place(captured)
+        } else if let Some(loan) = self
+            .lower_contextual_element_loan(scrutinee_expr, borrow_mode == ReceiverKind::BorrowMut)
+        {
+            loan
         } else if arms
             .iter()
             .any(|arm| pattern_contains_type_arm(&arm.pattern))
@@ -17789,7 +17883,12 @@ impl<'a> Lowerer<'a> {
             self.lower_expr(scrutinee_expr)
         };
         let writeback_root = if borrow_mode == ReceiverKind::BorrowMut {
-            self.render_place_expr_option(scrutinee_expr)
+            match &scrutinee {
+                Operand::Place(place) if self.contextual_element_loans.contains(place) => {
+                    Some(place.clone())
+                }
+                _ => self.render_place_expr_option(scrutinee_expr),
+            }
         } else {
             None
         };
@@ -20619,6 +20718,161 @@ impl<'a> Lowerer<'a> {
     /// The collection place and the once-evaluated selector of an element
     /// or entry view source (`items[i]`, `table[key]`), or `None` when the
     /// expression is not an index of a list or dictionary place.
+    /// Whether `expr` names a list element or dictionary entry, or a field or
+    /// tuple position inside one, without lowering anything.
+    fn is_contextual_element_expr(&self, expr: &Expr) -> bool {
+        match &grouped_mir_expr(expr).kind {
+            ExprKind::Member { object, .. } if self.bound_method_info_at(expr).is_none() => {
+                self.is_contextual_element_expr(object)
+            }
+            ExprKind::Index { object, .. } => match self.infer_expr_type(object) {
+                Some(Type::Tuple(_)) => self.is_contextual_element_expr(object),
+                Some(Type::Named(name, args)) => {
+                    (name == "list" && args.len() == 1) || (name == "dict" && args.len() == 2)
+                }
+                _ => false,
+            },
+            _ => false,
+        }
+    }
+
+    /// Reads an element of a collection that another element loan holds,
+    /// such as `users[1]` while `view mut first = users[0]` is live, through
+    /// its own element loan that begins, reads, and ends here. The loan's
+    /// literal selector keeps it disjoint from the live one. `None` when no
+    /// loan holds the collection, which keeps the ordinary indexed read.
+    fn lower_element_read_beside_loans(&mut self, expr: &Expr) -> Option<Operand> {
+        if !self.is_contextual_element_expr(expr) || !self.contextual_element_root_is_local(expr) {
+            return None;
+        }
+        let root = {
+            let mut current = grouped_mir_expr(expr);
+            loop {
+                match &current.kind {
+                    ExprKind::Member { object, .. } | ExprKind::Index { object, .. } => {
+                        current = grouped_mir_expr(object);
+                    }
+                    ExprKind::Name(name) => break self.render_local_name(name),
+                    _ => return None,
+                }
+            }
+        };
+        if self.view_sources.contains_key(&root)
+            || !self
+                .view_sources
+                .values()
+                .any(|source| source.split('.').next() == Some(root.as_str()))
+        {
+            return None;
+        }
+        let ty = self.infer_expr_type(expr)?;
+        let Operand::Place(loan) = self.lower_contextual_element_loan(expr, false)? else {
+            return None;
+        };
+        let value = self.new_typed_temp(ty);
+        self.emit(Instruction::ReadLoan {
+            target: value.clone(),
+            loan: loan.clone(),
+        });
+        self.view_sources.remove(&loan);
+        self.contextual_element_loans.remove(&loan);
+        if let Some(scope) = self.loan_scopes.last_mut() {
+            scope.retain(|active| active != &loan);
+        }
+        self.emit(Instruction::EndLoan { loan });
+        Some(Operand::Place(value))
+    }
+
+    /// Before a call is lowered, an element origin argument has no loan yet;
+    /// its collection's place stands in so the call is recognized as
+    /// returning a view, and the hidden loan replaces it once the argument
+    /// is lent.
+    fn contextual_element_origin_placeholder(&self, expr: &Expr) -> Option<String> {
+        if !self.is_contextual_element_expr(expr) || !self.contextual_element_root_is_local(expr) {
+            return None;
+        }
+        let mut current = grouped_mir_expr(expr);
+        loop {
+            match &current.kind {
+                ExprKind::Member { object, .. } => current = grouped_mir_expr(object),
+                ExprKind::Index { object, .. } => {
+                    if self.is_contextual_element_expr(object)
+                        || matches!(self.infer_expr_type(object), Some(Type::Tuple(_)))
+                    {
+                        current = grouped_mir_expr(object);
+                    } else {
+                        return self.render_place_expr_option(object);
+                    }
+                }
+                _ => return None,
+            }
+        }
+    }
+
+    /// A hidden element loan needs a local, parameter, or view at the root of
+    /// its collection; a module constant keeps its ordinary read.
+    fn contextual_element_root_is_local(&self, expr: &Expr) -> bool {
+        let mut current = grouped_mir_expr(expr);
+        loop {
+            match &current.kind {
+                ExprKind::Member { object, .. } | ExprKind::Index { object, .. } => {
+                    current = grouped_mir_expr(object);
+                }
+                ExprKind::Name(name) => {
+                    let local = self.render_local_name(name);
+                    return self.local_types.contains_key(&local)
+                        || self.view_sources.contains_key(&local);
+                }
+                _ => return false,
+            }
+        }
+    }
+
+    /// Lends the element or entry `expr` names through a hidden element loan
+    /// that ends with the statement, and returns the loan's place. `None`
+    /// when `expr` is not an element place.
+    fn lower_contextual_element_loan(&mut self, expr: &Expr, mutable: bool) -> Option<Operand> {
+        if !self.is_contextual_element_expr(expr) || !self.contextual_element_root_is_local(expr) {
+            return None;
+        }
+        let ty = self.infer_expr_type(expr)?;
+        let (collection, selector, projection, span) = self.element_loan_source(expr, mutable)?;
+        let loan = self.new_typed_temp(ty);
+        let root = collection
+            .split('.')
+            .next()
+            .unwrap_or(collection.as_str())
+            .to_string();
+        if self.view_sources.contains_key(&root) {
+            self.emit(Instruction::ReborrowElement {
+                loan: loan.clone(),
+                parent: root,
+                selector,
+                projection,
+                mutable,
+                span,
+            });
+        } else {
+            self.emit(Instruction::BeginElementLoan {
+                loan: loan.clone(),
+                source: collection.clone(),
+                selector,
+                projection,
+                mutable,
+                span,
+            });
+        }
+        self.view_sources.insert(loan.clone(), collection);
+        self.loan_source_names.insert(loan.clone(), loan.clone());
+        self.contextual_element_loans.insert(loan.clone());
+        self.contextual_loan_by_span
+            .insert((expr.span.line, expr.span.column), loan.clone());
+        if let Some(scope) = self.loan_scopes.last_mut() {
+            scope.push(loan.clone());
+        }
+        Some(Operand::Place(loan))
+    }
+
     /// `items[i]`, `users[i].name`, `rows[i].0`: the collection place, the
     /// selector operand (evaluated once, now), the projection past the
     /// element, and the index expression's span. `None` when the expression
@@ -20658,7 +20912,17 @@ impl<'a> Lowerer<'a> {
             Type::Named(name, args) if name == "dict" && args.len() == 2 => args[0].clone(),
             _ => return None,
         };
-        let mut collection = self.render_place_expr_option(object)?;
+        // `grid[i][j]`: the inner element is lent first, and the outer
+        // selection reborrows through it. The place renderer would spell
+        // `grid[i]` as a tuple position.
+        let mut collection = if self.is_contextual_element_expr(object) {
+            match self.lower_contextual_element_loan(object, mutable)? {
+                Operand::Place(place) => place,
+                _ => return None,
+            }
+        } else {
+            self.render_place_expr_option(object)?
+        };
         // A literal selector stays a literal operand so the validator can
         // prove two element loans of one collection disjoint, as the
         // checker does.

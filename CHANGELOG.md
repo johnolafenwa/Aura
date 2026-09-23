@@ -13,6 +13,20 @@ in this file.
   first statement are still module constants. A function can no longer
   read a name bound after the first statement, and `public name = value`
   after a statement is a syntax error (`AU1101`).
+- A list element or dictionary entry can be used in place wherever a place
+  is borrowed: as a shared or `mut` argument, a method receiver, an operand,
+  a `match` or `match mut` scrutinee, and in a nested selection such as
+  `bump(grid[i][j])`. Writes through a `mut` argument or mutating receiver
+  land in the collection. Only moving a non-copy element out is refused
+  (`AU3005`), and its message now suggests a `view` first.
+- Reading `users[1]` while a mutable view of `users[0]` is live is allowed;
+  literal positions and keys are disjoint.
+- A returned view of an element argument, such as `view name =
+  label(users[0])` or `bump(count(people["grace"]))`, reaches the element on
+  both backends.
+- A `match` with type patterns over a union-valued element view, such as
+  `view v = labels["name"]` then `match v: case str as text:`, works on both
+  backends. It used to fail MIR validation.
 
 ## VS Code extension 0.3.5 — 2026-09-22
 

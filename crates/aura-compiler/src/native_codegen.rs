@@ -5780,6 +5780,7 @@ impl<'a> FunctionCompiler<'a> {
                 }
                 self.builder.def_var(selector_var, canonical_selector);
                 let origin = self.resolve_view_place(origin)?;
+                let loan_type = direct_type_to_type(&self.local_type(loan)?);
                 let mut alternatives = Vec::new();
                 for origin in origin.alternatives {
                     for projection in projections {
@@ -5790,15 +5791,27 @@ impl<'a> FunctionCompiler<'a> {
                             )
                         })?;
                         conditions.push((selector_var, tag));
-                        let alternative = DirectViewAlternative {
-                            place: if projection.is_empty() {
+                        // Through an element origin, the returned projection
+                        // lies inside the selected element.
+                        let mut elements = origin.elements.clone();
+                        let place = match elements.last_mut() {
+                            Some(selector) if !projection.is_empty() => {
+                                selector.projection = if selector.projection.is_empty() {
+                                    projection.clone()
+                                } else {
+                                    format!("{}.{projection}", selector.projection)
+                                };
+                                selector.element_type = loan_type.clone();
                                 origin.place.clone()
-                            } else {
-                                format!("{}.{}", origin.place, projection)
-                            },
+                            }
+                            _ if projection.is_empty() => origin.place.clone(),
+                            _ => format!("{}.{}", origin.place, projection),
+                        };
+                        let alternative = DirectViewAlternative {
+                            place,
                             conditions,
                             union_payloads: origin.union_payloads.clone(),
-                            elements: origin.elements.clone(),
+                            elements,
                         };
                         if !alternatives.contains(&alternative) {
                             alternatives.push(alternative);
@@ -5814,7 +5827,17 @@ impl<'a> FunctionCompiler<'a> {
                 projection,
                 ..
             } => {
-                let source = self.resolve_view_place(parent)?.project(projection);
+                let mut source = self.resolve_view_place(parent)?.project(projection);
+                // A projection inside a selected element reaches a value of
+                // the reborrow's own type, such as a union member's payload.
+                if !projection.is_empty() {
+                    let reached = direct_type_to_type(&self.local_type(loan)?);
+                    for alternative in &mut source.alternatives {
+                        if let Some(selector) = alternative.elements.last_mut() {
+                            selector.element_type = reached.clone();
+                        }
+                    }
+                }
                 self.view_places.insert(loan.clone(), source);
             }
             Instruction::ReadLoan { target, loan } => {

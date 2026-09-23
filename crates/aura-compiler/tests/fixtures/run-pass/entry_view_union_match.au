@@ -1,0 +1,12 @@
+def main():
+    labels: dict[str, str | None] = {"name": "Aura", "empty": None}
+    view name = labels["name"]
+    match name:
+        case str as text:
+            print(text.len())
+        case None:
+            print(0)
+    size: int64 = match labels["empty"]:
+        case str as text: text.len()
+        case None: -1
+    print(size)

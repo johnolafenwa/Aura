@@ -973,6 +973,11 @@ struct FunctionChecker<'a> {
     /// a member access, whose element or entry is projected rather than
     /// copied (ADR-0061, 2026-09-21 section, contextual reads).
     index_place_read: Rc<std::cell::Cell<Option<crate::diag::Span>>>,
+    /// The index expression currently being moved out of its collection.
+    /// Only a move of a non-Copy element is `AU3005`; every other use of an
+    /// element is a place read through a contextual element loan (ADR-0061,
+    /// 2026-09-21 section, A1).
+    index_owned_read: Rc<std::cell::Cell<Option<crate::diag::Span>>>,
     rng_clone_obligations: Rc<RefCell<BTreeSet<String>>>,
     array_equality_obligations: Rc<RefCell<BTreeSet<String>>>,
     expr_result_entries: Rc<RefCell<HashMap<usize, ExprResultEntry>>>,
@@ -1088,6 +1093,13 @@ impl<'a> FunctionChecker<'a> {
         ))
     }
 
+    /// A shared read of a non-Copy element reads a copy of it, so the
+    /// element type must be clone-safe; otherwise the reader binds a `view`.
+    fn element_read_is_clone_safe(&self, ty: &Type) -> bool {
+        self.nonrepeatable_task_result_in(ty).is_none()
+            && matches!(self.rng_clone_safety(ty), RngCloneSafety::Safe)
+    }
+
     /// Builds the `AU3005` message for a rejected non-copy indexed read.
     ///
     /// The recommended recovery depends on whether the selected value can be
@@ -1107,10 +1119,10 @@ impl<'a> FunctionChecker<'a> {
         }
         match self.rng_clone_safety(ty) {
             RngCloneSafety::Safe if container == "dict" => format!(
-                "cannot implicitly copy `{ty}` out of a dict index; use `get(key)` for an explicit cloned optional read, or `remove(key)` to transfer ownership"
+                "cannot implicitly copy `{ty}` out of a dict index; use `view value = table[key]` for shared access, `table[key].clone()` for an explicit cloned owner, or `remove(key)` to transfer ownership"
             ),
             RngCloneSafety::Safe => format!(
-                "cannot implicitly copy `{ty}` out of a list index; use `get(index)` for an explicit cloned read instead"
+                "cannot implicitly copy `{ty}` out of a list index; use `view value = items[index]` for shared access, `items[index].clone()` for an explicit cloned owner, or `pop(index)` or `set(index, value)` to transfer ownership"
             ),
             RngCloneSafety::ContainsRng => {
                 let reason = Self::non_cloneable_rng_reason(ty);
@@ -1811,6 +1823,7 @@ impl<'a> FunctionChecker<'a> {
             suppress_narrowing: Rc::new(std::cell::Cell::new(false)),
             mutated_captures: Rc::new(RefCell::new(BTreeSet::new())),
             index_place_read: Rc::new(std::cell::Cell::new(None)),
+            index_owned_read: Rc::new(std::cell::Cell::new(None)),
             rng_clone_obligations: Rc::new(RefCell::new(BTreeSet::new())),
             array_equality_obligations: Rc::new(RefCell::new(BTreeSet::new())),
             expr_result_entries: Rc::new(RefCell::new(HashMap::new())),
@@ -1865,6 +1878,7 @@ impl<'a> FunctionChecker<'a> {
             suppress_narrowing: self.suppress_narrowing.clone(),
             mutated_captures: self.mutated_captures.clone(),
             index_place_read: self.index_place_read.clone(),
+            index_owned_read: self.index_owned_read.clone(),
         }
     }
 
@@ -1905,6 +1919,7 @@ impl<'a> FunctionChecker<'a> {
             suppress_narrowing: self.suppress_narrowing.clone(),
             mutated_captures: self.mutated_captures.clone(),
             index_place_read: self.index_place_read.clone(),
+            index_owned_read: self.index_owned_read.clone(),
         }
     }
 
@@ -1941,6 +1956,7 @@ impl<'a> FunctionChecker<'a> {
             suppress_narrowing: self.suppress_narrowing.clone(),
             mutated_captures: self.mutated_captures.clone(),
             index_place_read: self.index_place_read.clone(),
+            index_owned_read: self.index_owned_read.clone(),
         }
     }
 
@@ -1977,6 +1993,7 @@ impl<'a> FunctionChecker<'a> {
             suppress_narrowing: self.suppress_narrowing.clone(),
             mutated_captures: self.mutated_captures.clone(),
             index_place_read: self.index_place_read.clone(),
+            index_owned_read: self.index_owned_read.clone(),
         }
     }
 
@@ -7858,7 +7875,34 @@ impl<'a> FunctionChecker<'a> {
                         }
                     }
                 }
-                let object_ty = self.type_of_expr(object, locals)?;
+                // A list element or dictionary entry is read at its own place: a
+                // live mutable view of `users[0]` leaves `users[1]` readable
+                // (ADR-0061, 2026-09-21 section, literal-only disjointness).
+                let element_path = self
+                    .member_access_path(expr)
+                    .filter(|_| self.member_access_path(object).is_some());
+                let object_ty = match &element_path {
+                    Some(_) => self.type_of_member_object_expr(object, locals)?,
+                    None => self.type_of_expr(object, locals)?,
+                };
+                if let Some(path) = &element_path {
+                    if vec_element_type(&object_ty).is_some()
+                        || map_key_value_types(&object_ty).is_some()
+                    {
+                        let through_view = locals
+                            .get(&path.root)
+                            .and_then(|binding| binding.view.as_ref())
+                            .map(|_| path.root.as_str());
+                        self.ensure_place_readable(path, through_view, expr.span, locals)?;
+                    } else {
+                        let root = PlacePath::root(path.root.clone());
+                        let through_view = locals
+                            .get(&path.root)
+                            .and_then(|binding| binding.view.as_ref())
+                            .map(|_| path.root.as_str());
+                        self.ensure_place_readable(&root, through_view, expr.span, locals)?;
+                    }
+                }
                 let locals_before_index = locals.clone();
                 if let Type::Tuple(element_types) = &object_ty {
                     let tuple_index = match &index.kind {
@@ -7953,6 +7997,8 @@ impl<'a> FunctionChecker<'a> {
                     )?;
                     if !self.is_copy_type(&element_ty)
                         && self.index_place_read.get() != Some(expr.span)
+                        && (self.index_owned_read.get() == Some(expr.span)
+                            || !self.element_read_is_clone_safe(&element_ty))
                     {
                         return Err(Diagnostic::coded_at(
                             "AU3005",
@@ -7999,6 +8045,8 @@ impl<'a> FunctionChecker<'a> {
                     )?;
                     if !self.is_copy_type(value_ty)
                         && self.index_place_read.get() != Some(expr.span)
+                        && (self.index_owned_read.get() == Some(expr.span)
+                            || !self.element_read_is_clone_safe(value_ty))
                     {
                         return Err(Diagnostic::coded_at(
                             "AU3005",

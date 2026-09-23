@@ -1,0 +1,4 @@
+def main():
+    labels: dict[str, str] = {"name": "Aura"}
+    saved = (labels["name"], 1)
+    print(saved)

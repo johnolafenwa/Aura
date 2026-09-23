@@ -294,7 +294,7 @@ A compound assignment selects its target place once. It uses exactly the corresp
 - **Non-copy root or projected target.** The target stays borrowed across the right operand. An overlapping mutable borrow or consumption is rejected with `AU3002`.
 - **Indexed target.** Direct indexed compound assignment requires a copy `list` element or `dict` value. A non-copy indexed element is rejected with `AU3006`. It is not implicitly cloned or destructively moved.
 
-A non-copy direct indexed read is rejected with `AU3005`.
+A non-copy element used where a place is borrowed is lent in place for the statement. Moving it out of its collection is rejected with `AU3005`.
 
 Field and index assignment mutate the selected place. List indices are zero-based.
 

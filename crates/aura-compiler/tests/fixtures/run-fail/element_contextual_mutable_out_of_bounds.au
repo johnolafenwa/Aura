@@ -1,0 +1,6 @@
+def bump(value: mut int64):
+    value += 1
+
+def main():
+    mut values: list[int64] = [1]
+    bump(values[2])
