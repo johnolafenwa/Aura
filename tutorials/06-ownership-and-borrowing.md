@@ -782,6 +782,7 @@ def main():
 - A local, a temporary, an owned or defaulted parameter, or a different root
   cannot escape as the result.
 - An ordinary `-> T` return stays owned.
+- The result can select one list element or dictionary entry, as in `return view mut values[0]`. The caller's view then holds the whole collection until it ends.
 
 ## Explicit Loan Captures
 

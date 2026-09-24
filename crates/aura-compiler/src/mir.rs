@@ -434,10 +434,14 @@ fn place_paths_overlap(left: &str, right: &str) -> bool {
     if left_segments.first() != right_segments.first() {
         return false;
     }
+    // A returned element step names an element only known at run time, so
+    // it overlaps every element or field segment in its position.
     let shared = left_segments
         .iter()
         .zip(right_segments.iter())
-        .take_while(|(lhs, rhs)| lhs == rhs)
+        .take_while(|(lhs, rhs)| {
+            lhs == rhs || **lhs == RETURNED_ELEMENT_STEP || **rhs == RETURNED_ELEMENT_STEP
+        })
         .count();
     shared == left_segments.len() || shared == right_segments.len()
 }
@@ -476,25 +480,73 @@ fn return_view_projection_expr(
     }
 }
 
+/// The spelling of a returned list element or dictionary entry step in a
+/// returned-view projection. The selected element is a runtime fact that the
+/// callee hands over beside the projection (ADR-0061 A6).
+pub(crate) const RETURNED_ELEMENT_STEP: &str = "[*]";
+
+/// The returned-view projection of an element loan: the element step, then
+/// any path inside the element.
+fn returned_element_projection(projection: &str) -> String {
+    if projection.is_empty() {
+        RETURNED_ELEMENT_STEP.to_string()
+    } else {
+        format!("{RETURNED_ELEMENT_STEP}.{projection}")
+    }
+}
+
+/// Whether a runtime returned-view projection, which names the selected
+/// element (`[i:3]`, `[k:s:61]`), is an instance of a declared projection,
+/// which spells each element step `[*]`.
+pub(crate) fn returned_projection_matches(declared: &str, actual: &str) -> bool {
+    if declared == actual {
+        return true;
+    }
+    let declared = declared.split('.').collect::<Vec<_>>();
+    let actual = actual.split('.').collect::<Vec<_>>();
+    declared.len() == actual.len()
+        && declared.iter().zip(&actual).all(|(declared, actual)| {
+            declared == actual
+                || (*declared == RETURNED_ELEMENT_STEP
+                    && actual.starts_with('[')
+                    && actual.ends_with(']')
+                    && *actual != RETURNED_ELEMENT_STEP)
+        })
+}
+
+/// The projections `expr` selects inside `origin`. `is_collection` says
+/// whether an indexed object is a list or dictionary, whose index is an
+/// element step rather than a tuple position.
 fn return_view_projection_set(
     expr: &Expr,
     origin: &str,
     aliases: &BTreeMap<String, Vec<String>>,
+    is_collection: &dyn Fn(&Expr) -> bool,
 ) -> Vec<String> {
-    match &expr.kind {
-        ExprKind::Name(name) if name == origin => vec![String::new()],
-        ExprKind::Name(name) => aliases.get(name).cloned().unwrap_or_default(),
-        ExprKind::Group(inner) => return_view_projection_set(inner, origin, aliases),
-        ExprKind::Member { object, field } => return_view_projection_set(object, origin, aliases)
+    let append = |parents: Vec<String>, segment: &str| {
+        parents
             .into_iter()
             .map(|parent| {
                 if parent.is_empty() {
-                    field.clone()
+                    segment.to_string()
                 } else {
-                    format!("{parent}.{field}")
+                    format!("{parent}.{segment}")
                 }
             })
-            .collect(),
+            .collect::<Vec<_>>()
+    };
+    match &expr.kind {
+        ExprKind::Name(name) if name == origin => vec![String::new()],
+        ExprKind::Name(name) => aliases.get(name).cloned().unwrap_or_default(),
+        ExprKind::Group(inner) => return_view_projection_set(inner, origin, aliases, is_collection),
+        ExprKind::Member { object, field } => append(
+            return_view_projection_set(object, origin, aliases, is_collection),
+            field,
+        ),
+        ExprKind::Index { object, .. } if is_collection(object) => append(
+            return_view_projection_set(object, origin, aliases, is_collection),
+            RETURNED_ELEMENT_STEP,
+        ),
         ExprKind::Index { object, index } => {
             let ExprKind::Int(index) = index.kind else {
                 return Vec::new();
@@ -502,16 +554,10 @@ fn return_view_projection_set(
             let Ok(index) = usize::try_from(index) else {
                 return Vec::new();
             };
-            return_view_projection_set(object, origin, aliases)
-                .into_iter()
-                .map(|parent| {
-                    if parent.is_empty() {
-                        index.to_string()
-                    } else {
-                        format!("{parent}.{index}")
-                    }
-                })
-                .collect()
+            append(
+                return_view_projection_set(object, origin, aliases, is_collection),
+                &index.to_string(),
+            )
         }
         _ => Vec::new(),
     }
@@ -1115,6 +1161,11 @@ struct ValidatedLoan {
     /// collection coexist as the checker allows (ADR-0061, 2026-09-21
     /// section). `None` means the sources themselves.
     footprints: Option<std::sync::Arc<[String]>>,
+    /// The sources spelled through each list element or dictionary entry the
+    /// loan selects (`grid.[*]`), for composing a returned view whose origin
+    /// is this loan (ADR-0061 A6). `None` means the sources are already
+    /// exact.
+    typed_sources: Option<std::sync::Arc<[String]>>,
     mutable: bool,
     parent: Option<String>,
     returned_descriptor: bool,
@@ -1340,6 +1391,62 @@ fn symbolic_loan_contract<'a>(
                 }
                 SymbolicLoanContract {
                     sources,
+                    mutable: *mutable,
+                }
+            }
+            // A returned element or entry view has the whole collection as
+            // its static footprint (ADR-0061 A6); the selected element is a
+            // runtime fact.
+            Instruction::BeginElementLoan {
+                source,
+                projection,
+                mutable,
+                ..
+            } => {
+                let sources = symbolic_loan_place_sources(
+                    source,
+                    definitions,
+                    memo,
+                    visiting,
+                    depth,
+                    function,
+                    budget,
+                )?;
+                SymbolicLoanContract {
+                    sources: project_symbolic_loan_sources(
+                        sources,
+                        &returned_element_projection(projection),
+                        function,
+                        budget,
+                        name,
+                    )?,
+                    mutable: *mutable,
+                }
+            }
+            Instruction::ReborrowElement {
+                parent,
+                projection,
+                mutable,
+                ..
+            } => {
+                let sources = symbolic_loan_contract(
+                    parent,
+                    definitions,
+                    memo,
+                    visiting,
+                    depth.saturating_add(1),
+                    function,
+                    budget,
+                )?
+                .sources;
+                SymbolicLoanContract {
+                    sources: project_symbolic_loan_sources(
+                        sources,
+                        &returned_element_projection(projection),
+                        function,
+                        budget,
+                        name,
+                    )?,
                     mutable: *mutable,
                 }
             }
@@ -2196,6 +2303,27 @@ impl<'a> MirLoanValidationContext<'a> {
         place: &str,
     ) -> std::result::Result<Option<Type>, String> {
         for segment in segments {
+            if segment == RETURNED_ELEMENT_STEP {
+                ty = match &ty {
+                    Type::Named(name, args) => match (name.as_str(), args.as_slice()) {
+                        ("list", [element]) => element.clone(),
+                        ("dict", [_, value]) => value.clone(),
+                        _ => {
+                            return Err(format!(
+                                "invalid MIR element step in `{place}` in `{}` selects inside a non-collection",
+                                function.name
+                            ))
+                        }
+                    },
+                    _ => {
+                        return Err(format!(
+                            "invalid MIR element step in `{place}` in `{}` selects inside a non-collection",
+                            function.name
+                        ))
+                    }
+                };
+                continue;
+            }
             ty = match ty {
                 Type::ReturnedView(_) => {
                     return Err(format!(
@@ -2376,7 +2504,14 @@ impl<'a> MirLoanValidationContext<'a> {
         loan: &str,
         place: &str,
     ) -> std::result::Result<(), String> {
-        let Some(actual) = self.place_type(function, place)? else {
+        validate_canonical_returned_place(function, place)?;
+        let mut segments = place.split('.');
+        let root = segments.next().unwrap_or_default();
+        let actual = match self.root_type(function, root) {
+            Some(ty) => self.project_place_type(function, ty, segments, place)?,
+            None => None,
+        };
+        let Some(actual) = actual else {
             return Ok(());
         };
         let Some(expected) = self.root_type(function, loan) else {
@@ -3689,6 +3824,40 @@ fn validated_loan_sources(
     sources.sort();
     sources.dedup();
     Ok(sources)
+}
+
+/// `validated_loan_sources`, spelled through the element steps of any
+/// element loan on the way (see `ValidatedLoan::typed_sources`).
+fn validated_typed_sources(place: &str, state: &ValidatedLoans) -> Vec<String> {
+    let (root, suffix) = place.split_once('.').unwrap_or((place, ""));
+    let Some(loan) = state.get(root) else {
+        return vec![place.to_string()];
+    };
+    let mut sources = loan
+        .typed_sources
+        .as_ref()
+        .unwrap_or(&loan.sources)
+        .iter()
+        .map(|source| {
+            if suffix.is_empty() {
+                source.clone()
+            } else {
+                format!("{source}.{suffix}")
+            }
+        })
+        .collect::<Vec<_>>();
+    sources.sort();
+    sources.dedup();
+    sources
+}
+
+fn with_element_step(sources: Vec<String>, projection: &str) -> std::sync::Arc<[String]> {
+    let step = returned_element_projection(projection);
+    sources
+        .into_iter()
+        .map(|source| format!("{source}.{step}"))
+        .collect::<Vec<_>>()
+        .into()
 }
 
 fn validated_physical_sources(
@@ -6014,6 +6183,25 @@ fn validate_canonical_mir_identifier(
     Ok(())
 }
 
+/// A returned-view projection may spell an element step `[*]`; every other
+/// segment follows the ordinary place rules.
+fn validate_canonical_returned_place(
+    function: &MirFunction,
+    place: &str,
+) -> std::result::Result<(), String> {
+    let ordinary = place
+        .split('.')
+        .filter(|segment| *segment != RETURNED_ELEMENT_STEP)
+        .collect::<Vec<_>>();
+    if ordinary.is_empty() || place.split('.').next() == Some(RETURNED_ELEMENT_STEP) {
+        return Err(format!(
+            "invalid returned MIR place `{place}` in `{}` has no root",
+            function.name
+        ));
+    }
+    validate_canonical_mir_place(function, &ordinary.join("."))
+}
+
 fn validate_canonical_mir_place(
     function: &MirFunction,
     place: &str,
@@ -7623,6 +7811,8 @@ fn validate_loan_instruction(
             // selected slot when the selector is a literal.
             let sources = vec![source.clone()];
             let footprints = vec![element_loan_footprint(source, selector)];
+            let typed_sources =
+                with_element_step(validated_typed_sources(source, &state.loans), projection);
             context.validate_element_loan_type(function, loan, source, projection)?;
             validate_projected_place_access(function, source, context, state, None)?;
             validate_active_loan_path_budget(function, loan, state, source.len())?;
@@ -7634,6 +7824,7 @@ fn validate_loan_instruction(
                 ValidatedLoan {
                     sources: sources.into(),
                     footprints: Some(footprints.into()),
+                    typed_sources: Some(typed_sources),
                     mutable: *mutable,
                     parent: None,
                     returned_descriptor: false,
@@ -7671,6 +7862,8 @@ fn validate_loan_instruction(
                 ));
             }
             let sources = parent_loan.sources.iter().cloned().collect::<Vec<_>>();
+            let typed_sources =
+                with_element_step(validated_typed_sources(parent, &state.loans), projection);
             let footprints = parent_loan
                 .footprints
                 .as_deref()
@@ -7706,6 +7899,7 @@ fn validate_loan_instruction(
                 ValidatedLoan {
                     sources: sources.into(),
                     footprints: Some(footprints.into()),
+                    typed_sources: Some(typed_sources),
                     mutable: *mutable,
                     parent: Some(parent.clone()),
                     returned_descriptor: false,
@@ -7763,6 +7957,7 @@ fn validate_loan_instruction(
                 ValidatedLoan {
                     sources: sources.into(),
                     footprints: None,
+                    typed_sources: None,
                     mutable: *mutable,
                     parent: None,
                     returned_descriptor: false,
@@ -7790,7 +7985,7 @@ fn validate_loan_instruction(
                 } else {
                     format!("{origin}.{projection}")
                 };
-                validate_canonical_mir_place(function, &synthetic)?;
+                validate_canonical_returned_place(function, &synthetic)?;
             }
             let pending_call = match state.pending_handoff.take() {
                 Some(PendingLoanHandoff::IncomingCall(call)) => call,
@@ -7879,7 +8074,10 @@ fn validate_loan_instruction(
                     function.name
                 ));
             }
-            let origin_sources = validated_loan_sources(origin, &state.loans)?;
+            // An element-loan origin composes through its element step, so
+            // the returned projection lands inside the selected element.
+            validated_loan_sources(origin, &state.loans)?;
+            let origin_sources = validated_typed_sources(origin, &state.loans);
             let alternative_count = origin_sources
                 .len()
                 .saturating_mul(unique_projections.len());
@@ -7937,6 +8135,7 @@ fn validate_loan_instruction(
                 ValidatedLoan {
                     sources: sources.into(),
                     footprints: None,
+                    typed_sources: None,
                     mutable: *mutable,
                     parent,
                     returned_descriptor: true,
@@ -7990,6 +8189,7 @@ fn validate_loan_instruction(
             // relative to the loan itself, and the child keeps the parent's
             // sources and slot footprint (ADR-0061, 2026-09-21 section).
             let element_parent = parent_loan.footprints.clone();
+            let parent_typed = parent_loan.typed_sources.clone();
             let mut sources = parent_loan
                 .sources
                 .iter()
@@ -8039,6 +8239,19 @@ fn validate_loan_instruction(
                 ValidatedLoan {
                     sources: sources.into(),
                     footprints: element_parent,
+                    typed_sources: parent_typed.map(|typed| {
+                        typed
+                            .iter()
+                            .map(|source| {
+                                if projection.is_empty() {
+                                    source.clone()
+                                } else {
+                                    format!("{source}.{projection}")
+                                }
+                            })
+                            .collect::<Vec<_>>()
+                            .into()
+                    }),
                     mutable: *mutable,
                     parent: Some(parent.clone()),
                     returned_descriptor: false,
@@ -11240,6 +11453,13 @@ impl<'a> Lowerer<'a> {
         (self.view_sources, self.returned_view_descriptors) = saved;
     }
 
+    fn is_collection_expr(&self, expr: &Expr) -> bool {
+        matches!(
+            self.infer_expr_type(expr),
+            Some(Type::Named(name, _)) if name == "list" || name == "dict"
+        )
+    }
+
     fn remove_loans_from_lowering_state(&mut self, loans: &BTreeSet<String>) {
         for loan in loans {
             self.view_sources.remove(loan);
@@ -11519,6 +11739,34 @@ impl<'a> Lowerer<'a> {
                 if return_stmt.view.is_some() {
                     if let Some(value) = &return_stmt.value {
                         if let Some(loan) = returned_call_loan {
+                            self.emit(Instruction::ReturnLoan {
+                                loan: loan.clone(),
+                                origin: self
+                                    .view_return_origin
+                                    .clone()
+                                    .expect("checked view returns declare an origin"),
+                            });
+                            returned_loan = Some(loan);
+                        } else if let Some((collection, selector, projection, span)) = self
+                            .element_loan_source(
+                                value,
+                                return_stmt.view == Some(crate::ast::ViewKind::Mutable),
+                            )
+                        {
+                            // `return view items[i]`: lend the element, then
+                            // hand that loan to the caller (ADR-0061 A6). The
+                            // place renderer would spell the index as a tuple
+                            // position.
+                            let loan = self.new_typed_temp(self.return_type.clone());
+                            self.emit_element_loan(
+                                &loan,
+                                &collection,
+                                selector,
+                                projection,
+                                return_stmt.view == Some(crate::ast::ViewKind::Mutable),
+                                span,
+                            );
+                            self.view_sources.insert(loan.clone(), collection);
                             self.emit(Instruction::ReturnLoan {
                                 loan: loan.clone(),
                                 origin: self
@@ -12902,7 +13150,9 @@ impl<'a> Lowerer<'a> {
             };
             &argument.value
         };
-        let mut bases = return_view_projection_set(origin_expr, outer_origin, aliases);
+        let mut bases = return_view_projection_set(origin_expr, outer_origin, aliases, &|object| {
+            self.is_collection_expr(object)
+        });
         if bases.is_empty() {
             bases =
                 self.returned_view_call_projection_set(origin_expr, outer_origin, aliases, seen);
@@ -12946,7 +13196,10 @@ impl<'a> Lowerer<'a> {
         for stmt in body {
             match stmt {
                 Stmt::View(view) => {
-                    let mut selected = return_view_projection_set(&view.source, origin, aliases);
+                    let mut selected =
+                        return_view_projection_set(&view.source, origin, aliases, &|object| {
+                            self.is_collection_expr(object)
+                        });
                     if selected.is_empty() {
                         selected = self.returned_view_call_projection_set(
                             &view.source,
@@ -12963,7 +13216,10 @@ impl<'a> Lowerer<'a> {
                 }
                 Stmt::Return(return_stmt) if return_stmt.view.is_some() => {
                     if let Some(value) = &return_stmt.value {
-                        let selected = return_view_projection_set(value, origin, aliases);
+                        let selected =
+                            return_view_projection_set(value, origin, aliases, &|object| {
+                                self.is_collection_expr(object)
+                            });
                         if selected.is_empty() {
                             projections.extend(
                                 self.returned_view_call_projection_set(

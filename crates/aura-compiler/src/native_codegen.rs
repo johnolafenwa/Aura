@@ -546,6 +546,8 @@ struct NativeCodegen<'a> {
     exit_call: FuncId,
     set_returned_view_projection: FuncId,
     take_returned_view_projection: FuncId,
+    push_returned_view_selector: FuncId,
+    take_returned_view_selector: FuncId,
     print_i64: FuncId,
     print_u64: FuncId,
     print_f32: FuncId,
@@ -1078,6 +1080,8 @@ impl<'a> NativeCodegen<'a> {
             exit_call => ("aura_direct_exit_call", [], None),
             set_returned_view_projection => ("aura_direct_set_returned_view_projection", [types::I64, types::I64], None),
             take_returned_view_projection => ("aura_direct_take_returned_view_projection", [types::I64, types::I64], Some(types::I64)),
+            push_returned_view_selector => ("aura_direct_push_returned_view_selector", [types::I64], None),
+            take_returned_view_selector => ("aura_direct_take_returned_view_selector", [types::I64], Some(types::I64)),
             print_i64 => ("aura_direct_print_i64", [types::I64], None),
             print_u64 => ("aura_direct_print_u64", [types::I64], None),
             print_f32 => ("aura_direct_print_f32", [types::F64], None),
@@ -1573,6 +1577,8 @@ impl<'a> NativeCodegen<'a> {
             exit_call,
             set_returned_view_projection,
             take_returned_view_projection,
+            push_returned_view_selector,
+            take_returned_view_selector,
             print_i64,
             print_u64,
             print_f32,
@@ -2011,6 +2017,12 @@ impl<'a> NativeCodegen<'a> {
         let take_returned_view_projection = self
             .object
             .declare_func_in_func(self.take_returned_view_projection, builder.func);
+        let push_returned_view_selector = self
+            .object
+            .declare_func_in_func(self.push_returned_view_selector, builder.func);
+        let take_returned_view_selector = self
+            .object
+            .declare_func_in_func(self.take_returned_view_selector, builder.func);
         let line = builder.ins().iconst(types::I64, function.span.line as i64);
         let column = builder
             .ins()
@@ -3378,6 +3390,8 @@ impl<'a> NativeCodegen<'a> {
             exit_call,
             set_returned_view_projection,
             take_returned_view_projection,
+            push_returned_view_selector,
+            take_returned_view_selector,
             print_i64,
             print_u64,
             print_f32,
@@ -4702,7 +4716,7 @@ struct FunctionCompiler<'a> {
     view_places: HashMap<String, DirectViewPlace>,
     view_selector_vars: HashMap<String, Variable>,
     /// Owned dictionary keys held by entry loans, released at `EndLoan`.
-    view_element_keys: HashMap<String, Variable>,
+    view_element_keys: HashMap<String, Vec<Variable>>,
     view_selector_tags: HashMap<String, HashMap<String, i64>>,
     closure_selector_vars: HashMap<String, Variable>,
     closure_selector_tags: HashMap<(String, usize), i64>,
@@ -4719,6 +4733,8 @@ struct FunctionCompiler<'a> {
     exit_call: cranelift_codegen::ir::FuncRef,
     set_returned_view_projection: cranelift_codegen::ir::FuncRef,
     take_returned_view_projection: cranelift_codegen::ir::FuncRef,
+    push_returned_view_selector: cranelift_codegen::ir::FuncRef,
+    take_returned_view_selector: cranelift_codegen::ir::FuncRef,
     print_i64: cranelift_codegen::ir::FuncRef,
     print_u64: cranelift_codegen::ir::FuncRef,
     print_f32: cranelift_codegen::ir::FuncRef,
@@ -5781,6 +5797,28 @@ impl<'a> FunctionCompiler<'a> {
                 self.builder.def_var(selector_var, canonical_selector);
                 let origin = self.resolve_view_place(origin)?;
                 let loan_type = direct_type_to_type(&self.local_type(loan)?);
+                // Element steps take their selectors from the callee once, in
+                // order; an unselected projection's extra words read `0`.
+                let element_steps = projections
+                    .iter()
+                    .map(|projection| {
+                        projection
+                            .split('.')
+                            .filter(|segment| *segment == crate::mir::RETURNED_ELEMENT_STEP)
+                            .count()
+                    })
+                    .max()
+                    .unwrap_or(0);
+                let selector_words = (0..element_steps)
+                    .map(|step| {
+                        let index = self.builder.ins().iconst(types::I64, step as i64);
+                        let inst = self
+                            .builder
+                            .ins()
+                            .call(self.take_returned_view_selector, &[index]);
+                        self.builder.inst_results(inst)[0]
+                    })
+                    .collect::<Vec<_>>();
                 let mut alternatives = Vec::new();
                 for origin in origin.alternatives {
                     for projection in projections {
@@ -5791,6 +5829,22 @@ impl<'a> FunctionCompiler<'a> {
                             )
                         })?;
                         conditions.push((selector_var, tag));
+                        if projection
+                            .split('.')
+                            .any(|segment| segment == crate::mir::RETURNED_ELEMENT_STEP)
+                        {
+                            let alternative = self.returned_element_alternative(
+                                loan,
+                                &origin,
+                                projection,
+                                conditions,
+                                &selector_words,
+                            )?;
+                            if !alternatives.contains(&alternative) {
+                                alternatives.push(alternative);
+                            }
+                            continue;
+                        }
                         // Through an element origin, the returned projection
                         // lies inside the selected element.
                         let mut elements = origin.elements.clone();
@@ -5854,7 +5908,7 @@ impl<'a> FunctionCompiler<'a> {
             }
             Instruction::EndLoan { loan } => {
                 self.view_places.remove(loan);
-                if let Some(variable) = self.view_element_keys.remove(loan) {
+                for variable in self.view_element_keys.remove(loan).unwrap_or_default() {
                     let key = self.builder.use_var(variable);
                     self.release_opaque_handle(key);
                 }
@@ -5863,6 +5917,18 @@ impl<'a> FunctionCompiler<'a> {
                 self.emit_returned_view_projection(loan, origin)?;
                 let loan_root = loan.split('.').next().unwrap_or(loan);
                 self.view_places.remove(loan_root);
+                // The caller received retained copies of any string keys; this
+                // path has no EndLoan, so release the loan's own references.
+                // Other paths still end the loan, so the map keeps them.
+                for variable in self
+                    .view_element_keys
+                    .get(loan_root)
+                    .cloned()
+                    .unwrap_or_default()
+                {
+                    let key = self.builder.use_var(variable);
+                    self.release_opaque_handle(key);
+                }
             }
             Instruction::Assign { target, value } => {
                 if let Rvalue::Closure { captures, .. } = value {
@@ -9887,7 +9953,10 @@ impl<'a> FunctionCompiler<'a> {
         self.builder.declare_var(variable, abi);
         self.builder.def_var(variable, words[0]);
         if matches!(selector_ty, DirectType::Opaque(_)) {
-            self.view_element_keys.insert(loan.to_string(), variable);
+            self.view_element_keys
+                .entry(loan.to_string())
+                .or_default()
+                .push(variable);
         }
         let selector = DirectElementSelector {
             variable,
@@ -10101,7 +10170,8 @@ impl<'a> FunctionCompiler<'a> {
     ) -> std::result::Result<(), String> {
         let sources = self.resolve_view_place(loan)?;
         let origins = self.resolve_view_place(origin)?;
-        let mut alternatives = Vec::<(String, Vec<(Variable, i64)>)>::new();
+        let mut alternatives =
+            Vec::<(String, Vec<(Variable, i64)>, Vec<DirectElementSelector>)>::new();
         for source in &sources.alternatives {
             for origin in &origins.alternatives {
                 let projection = if source.place == origin.place {
@@ -10112,9 +10182,26 @@ impl<'a> FunctionCompiler<'a> {
                         .strip_prefix(&format!("{}.", origin.place))
                         .map(str::to_string)
                 };
-                let Some(projection) = projection else {
+                let Some(mut projection) = projection else {
                     continue;
                 };
+                // A returned element or entry view spells each selection
+                // made inside the origin as `[*]` and hands its selector
+                // over at run time (ADR-0061 A6).
+                if !source.elements.starts_with(&origin.elements) {
+                    continue;
+                }
+                let steps = source.elements[origin.elements.len()..].to_vec();
+                for step in &steps {
+                    for segment in std::iter::once(crate::mir::RETURNED_ELEMENT_STEP)
+                        .chain(step.projection.split('.').filter(|part| !part.is_empty()))
+                    {
+                        if !projection.is_empty() {
+                            projection.push('.');
+                        }
+                        projection.push_str(segment);
+                    }
+                }
                 let mut conditions = origin.conditions.clone();
                 let mut compatible = true;
                 for condition in &source.conditions {
@@ -10135,7 +10222,7 @@ impl<'a> FunctionCompiler<'a> {
                         .iter()
                         .any(|candidate| candidate.0 == projection && candidate.1 == conditions)
                 {
-                    alternatives.push((projection, conditions));
+                    alternatives.push((projection, conditions, steps));
                 }
             }
         }
@@ -10147,7 +10234,7 @@ impl<'a> FunctionCompiler<'a> {
 
         let merge = self.builder.create_block();
         let alternative_count = alternatives.len();
-        for (index, (projection, conditions)) in alternatives.into_iter().enumerate() {
+        for (index, (projection, conditions, steps)) in alternatives.into_iter().enumerate() {
             if index + 1 < alternative_count {
                 let selected = self.view_alternative_condition(&DirectViewAlternative {
                     place: String::new(),
@@ -10162,18 +10249,142 @@ impl<'a> FunctionCompiler<'a> {
                     .brif(selected, set_block, &[], next_block, &[]);
                 self.builder.switch_to_block(set_block);
                 self.set_returned_view_projection_value(&projection)?;
+                self.push_returned_view_selectors(&steps);
                 self.builder.ins().jump(merge, &[]);
                 self.builder.seal_block(set_block);
                 self.builder.switch_to_block(next_block);
                 self.builder.seal_block(next_block);
             } else {
                 self.set_returned_view_projection_value(&projection)?;
+                self.push_returned_view_selectors(&steps);
                 self.builder.ins().jump(merge, &[]);
             }
         }
         self.builder.switch_to_block(merge);
         self.builder.seal_block(merge);
         Ok(())
+    }
+
+    /// Hands the selector of each returned element step to the caller as one
+    /// word. A string key is retained, so the caller owns its own reference.
+    fn push_returned_view_selectors(&mut self, steps: &[DirectElementSelector]) {
+        for step in steps {
+            let mut word = self.builder.use_var(step.variable);
+            if matches!(step.selector_ty, DirectType::Opaque(_)) {
+                word = self.retain_opaque_handle(word);
+            } else if self.builder.func.dfg.value_type(word) != types::I64 {
+                word = self.builder.ins().uextend(types::I64, word);
+            }
+            self.builder
+                .ins()
+                .call(self.push_returned_view_selector, &[word]);
+        }
+    }
+
+    /// Rebuilds a returned element or entry view in the caller: each `[*]`
+    /// step of `projection` becomes an element selection whose selector is
+    /// the word the callee handed over.
+    fn returned_element_alternative(
+        &mut self,
+        loan: &str,
+        origin: &DirectViewAlternative,
+        projection: &str,
+        conditions: Vec<(Variable, i64)>,
+        selector_words: &[Value],
+    ) -> std::result::Result<DirectViewAlternative, String> {
+        let mut groups = projection.split(crate::mir::RETURNED_ELEMENT_STEP);
+        let prefix = groups
+            .next()
+            .unwrap_or_default()
+            .trim_end_matches('.')
+            .to_string();
+        let mut place = origin.place.clone();
+        let mut elements = origin.elements.clone();
+        let mut ty = match elements.last() {
+            Some(selector) => ensure_direct_type(
+                &selector.element_type,
+                &self.classes,
+                "returned element origin",
+            )?,
+            None => self.type_of_place(&place)?,
+        };
+        for field in prefix.split('.').filter(|part| !part.is_empty()) {
+            ty = direct_field_type_with_enums(&ty, field, &self.classes, &self.enums).ok_or(
+                format!("direct backend does not know field `{field}` on a returned view origin"),
+            )?;
+        }
+        if !prefix.is_empty() {
+            match elements.last_mut() {
+                Some(selector) if selector.projection.is_empty() => {
+                    selector.projection = prefix.clone()
+                }
+                Some(selector) => selector.projection = format!("{}.{prefix}", selector.projection),
+                None => place = format!("{place}.{prefix}"),
+            }
+            if let Some(selector) = elements.last_mut() {
+                selector.element_type = direct_type_to_type(&ty);
+            }
+        }
+        for (step, fields) in groups.enumerate() {
+            let collection = direct_type_to_type(&ty);
+            let (kind, selector_ty, element) = match &collection {
+                Type::Named(name, args) if name == "list" && args.len() == 1 => (
+                    DirectElementKind::List,
+                    DirectType::Scalar(ScalarKind::Int64),
+                    args[0].clone(),
+                ),
+                Type::Named(name, args) if name == "dict" && args.len() == 2 => (
+                    DirectElementKind::Dict,
+                    ensure_direct_type(&args[0], &self.classes, "dictionary key")?,
+                    args[1].clone(),
+                ),
+                other => {
+                    return Err(format!(
+                        "direct returned loan `{loan}` selects an element inside `{other}`"
+                    ))
+                }
+            };
+            let fields = fields.trim_start_matches('.').to_string();
+            ty = ensure_direct_type(&element, &self.classes, "returned element")?;
+            for field in fields.split('.').filter(|part| !part.is_empty()) {
+                ty = direct_field_type_with_enums(&ty, field, &self.classes, &self.enums).ok_or(
+                    format!("direct backend does not know field `{field}` in a returned element"),
+                )?;
+            }
+            let word = *selector_words.get(step).ok_or(format!(
+                "direct returned loan `{loan}` has no selector for element step {step}"
+            ))?;
+            let abi = selector_ty.abi_types()[0];
+            let word = if abi == types::I64 {
+                word
+            } else {
+                self.builder.ins().ireduce(abi, word)
+            };
+            let variable = Variable::from_u32(self.next_variable_index as u32);
+            self.next_variable_index += 1;
+            self.builder.declare_var(variable, abi);
+            self.builder.def_var(variable, word);
+            if matches!(selector_ty, DirectType::Opaque(_)) {
+                self.view_element_keys
+                    .entry(loan.to_string())
+                    .or_default()
+                    .push(variable);
+            }
+            elements.push(DirectElementSelector {
+                variable,
+                selector_ty,
+                element_type: direct_type_to_type(&ty),
+                kind,
+                projection: fields,
+                span: Span::new(0, 0),
+            });
+        }
+        Ok(DirectViewAlternative {
+            place,
+            conditions,
+            union_payloads: origin.union_payloads.clone(),
+            elements,
+        })
     }
 
     fn set_returned_view_projection_value(

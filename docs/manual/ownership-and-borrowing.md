@@ -347,7 +347,20 @@ A caller can use the result in three ways:
 
 Ordinary owned bindings and aggregate storage cannot receive a returned view.
 
-A returned view names a root, field path, or fixed tuple position of its origin. It cannot select a list element or dictionary entry: `return view items[0]` is refused with `AU3004`. Return a view of the collection and select the element at the call site.
+A returned view names a root, field path, fixed tuple position, list element, or dictionary entry of its origin. The index or key is evaluated once, in the callee, and an invalid position or absent key traps there with `AU4003`:
+
+```aura
+def first(values: mut list[int64]) -> view mut int64 from values:
+    return view mut values[0]
+
+def main():
+    mut values = [1, 2]
+    view mut head = first(values)
+    head += 10
+    print(values)
+```
+
+The caller's view reaches the selected element in place. For the checker, it holds the whole collection, so the caller cannot read another element or change the list while the view is live.
 
 Different return paths can select different fixed projections of the declared origin. The caller locks that origin conservatively, while execution keeps the exact selected projection. A different root is `AU3010`.
 
@@ -618,7 +631,6 @@ Place analysis tracks local roots, fixed tuple positions, and field-prefix paths
 
 These are unavailable:
 
-- returned views of list elements or dictionary entries
 - view-bearing aggregates
 - multi-origin returned views
 - returned loan closures

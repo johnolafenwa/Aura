@@ -1450,6 +1450,7 @@ cannot be represented or allocated traps with `AU4005`. Malformed data returns
 | `list.append` | `append(value: own T) -> None` | Moves `value` onto the end. |
 | `list.pop` | `pop(index: int64 = -1) -> T` | Removes the element at the normalized position and moves it out. An invalid position traps. |
 | `list.get` | `get(index: int64) -> Lookup[T]` | Normalizes a negative index, then returns `Lookup.Found(value)` with a clone of the element. Returns `Lookup.Missing` when the index is out of bounds. Requires clone-safe `T`. |
+| `list.lookup` | `match [mut] items.lookup(index):` | Normalizes a negative index once. Runs `case Lookup.Found(item):` with a view of the element, or the `Missing` arm when the index is out of bounds. Only valid as a `match` subject. Has no clone requirement. |
 | `list.set` | `set(index: int64, value: own T) -> T` | Replaces the element and moves the old one out. An invalid position traps. |
 | `list.remove` | `remove(value: T) -> None` | Removes the first equal value. A missing value traps with `AU4008`. |
 | `list.index` | `index(value: T) -> int64` | Returns the position of the first equal value. A missing value traps with `AU4008`. |
@@ -1475,6 +1476,7 @@ cannot be represented or allocated traps with `AU4005`. Malformed data returns
 | `dict.is_empty` | `is_empty() -> bool` | `true` when the dictionary is empty. |
 | `dict.copy` | `copy() -> dict[K, V]` | Returns independent owned storage. Requires clone-safe `K` and `V`. |
 | `dict.get` | `get(key: K) -> Lookup[V]` | Returns `Lookup.Found(value)` with a clone of the value, or `Lookup.Missing` when the key is absent. A stored `None` value is `Found(None)`. Requires clone-safe `V`. |
+| `dict.lookup` | `match [mut] table.lookup(key):` | Runs `case Lookup.Found(value):` with a view of the value, or the `Missing` arm when the key is absent. Only valid as a `match` subject. Has no clone requirement. |
 | `dict.remove` | `remove(key: K) -> Lookup[V]` | Removes the entry and moves its value into `Lookup.Found(value)`, or returns `Lookup.Missing`. Has no clone requirement. |
 | `dict.keys` | `keys() -> list[K]` | Clones of the keys, in insertion order. Requires clone-safe `K`. |
 | `dict.values` | `values() -> list[V]` | Clones of the values, in insertion order. Requires clone-safe `V`. |
@@ -2822,8 +2824,8 @@ that would collide or change binding. No lexical rename fallback is used.
 requests are:
 
 ```json
-{"id":1,"semantic_interface_version":16,"method":"analyze","path":"/absolute/app.au","source":"print(1)\n"}
-{"id":2,"semantic_interface_version":16,"method":"complete","path":"/absolute/app.au","source":"value.\n","line":0,"character":6,"trigger":"."}
+{"id":1,"semantic_interface_version":17,"method":"analyze","path":"/absolute/app.au","source":"print(1)\n"}
+{"id":2,"semantic_interface_version":17,"method":"complete","path":"/absolute/app.au","source":"value.\n","line":0,"character":6,"trigger":"."}
 ```
 
 Each response is one line. It contains the same `id`,
@@ -3923,6 +3925,7 @@ the index, as in `values[index].field`, without copying the element. See
 | `sort` | `sort[K](key: def(T) -> K, reverse: bool = false) -> None` | Stably sorts by keys computed once per element. |
 | `copy` | `copy() -> list[T]` | Returns independent owned storage. Requires clone-safe `T`. |
 | `get` | `get(index: int64) -> Lookup[T]` | Returns `Lookup.Found(value)` with a cloned element, or `Lookup.Missing`. Requires clone-safe `T`. |
+| `lookup` | `match [mut] items.lookup(index):` | Runs the `Found` arm with a view of the element, or the `Missing` arm. Only valid as the subject of a `match` statement. |
 | `set` | `set(index: int64, value: own T) -> T` | Replaces the element at a position and moves the old element out. |
 | `swap` | `swap(first: int64, second: int64) -> None` | Swaps two positions. |
 | `reserve` | `reserve(additional: int64) -> None` | Ensures room for `len() + additional` elements. |
@@ -3956,6 +3959,40 @@ def main():
     print(values[-1])
     print(values.get(-2))
 ```
+
+### Looking Up Without Cloning
+
+`get` clones the element, so it needs a clone-safe `T`. To read or change an
+element in place when the position may be invalid, match on `lookup`:
+
+```aura
+class Job:
+    name: str
+    runs: int64
+
+def main():
+    mut jobs = [Job(name="build", runs=1)]
+    match mut jobs.lookup(0):
+        case Lookup.Found(job):
+            job.runs += 1
+        case Lookup.Missing:
+            print("no job")
+    print(jobs[0].runs)
+```
+
+`lookup` never produces a value. It exists only as the subject of a `match`
+statement, and its arms follow these rules:
+
+- `case Lookup.Found(name):` binds a view of the element for that arm. A bare
+  `match` gives a shared view; `match mut` gives a mutable view whose writes
+  reach the list. `Found(_)` binds nothing.
+- `case Lookup.Missing:` or `case _:` runs when the position is invalid.
+- The position is evaluated once. Arms cannot have guards, and `match own` is
+  refused; use `pop` or `set` to take an element out.
+- While the `Found` view is live, the list cannot change shape (`AU3011`). The
+  `Missing` arm holds no view, so it may append or insert.
+- For a Copy element such as `int64`, a bare `lookup` binds a copy, so the arm
+  can return or store it.
 
 `pop()` removes the final element and traps on an empty list. `remove(value)`
 and `index(value)` search from the start and trap with `AU4008` when the value
@@ -4021,6 +4058,7 @@ assignment, and membership are the main ways to look up and store entries:
 | --- | --- | --- |
 | `get` | `get(key: K) -> Lookup[V]` | Returns `Lookup.Found(value)` with a cloned value, or `Lookup.Missing` when the key is absent. Requires clone-safe `V`. |
 | `remove` | `remove(key: K) -> Lookup[V]` | Removes the entry and moves its value into `Lookup.Found(value)`, or returns `Lookup.Missing`. |
+| `lookup` | `match [mut] table.lookup(key):` | Runs the `Found` arm with a view of the value, or the `Missing` arm. Only valid as the subject of a `match` statement. |
 | `keys` | `keys() -> list[K]` | Returns cloned keys in insertion order. |
 | `values` | `values() -> list[V]` | Returns cloned values in insertion order. |
 | `items` | `items() -> list[(K, V)]` | Returns cloned key/value tuples in insertion order. |
@@ -4051,6 +4089,18 @@ def bump(counts: mut dict[str, int32], key: own str):
             counts[key] = count + 1
         case Lookup.Missing:
             counts[key] = 1
+```
+
+To read or update a value in place without cloning it, match on `lookup`. It
+follows the same rules as list `lookup`, with the key read in place:
+
+```aura
+def record_visit(pages: mut dict[str, list[str]], user: own str, page: own str):
+    match mut pages.lookup(user):
+        case Lookup.Found(visited):
+            visited.append(page)
+        case Lookup.Missing:
+            pages[user] = [page]
 ```
 
 An indexed read follows the collection ownership rule for `V`. It traps with
@@ -4173,8 +4223,9 @@ Collection specializations are invariant and homogeneous. An empty literal
 needs an expected type. Mutating methods and indexed assignment need a mutable
 collection place.
 
-A direct dictionary read follows the ownership rule for `V`. `get` gives an
-optional cloned read for clone-safe `V`. `remove` moves out any stored `V`.
+A direct dictionary read follows the ownership rule for `V`. `get` gives a
+cloned `Lookup[V]` for clone-safe `V`. `lookup` views any `V` in place inside a
+`match`. `remove` moves out any stored `V`.
 
 List callbacks must have exact shared function types:
 
@@ -5138,7 +5189,7 @@ Each row names a reference area and the tests, fixtures, and maintained examples
 | [FFI v0](/manual/ffi) package authorization and root dependency reports; bodyless extern/opaque grammar; fixed-width scalar, null-empty and pointer-length view ABI; same-length mutable copy-in/out and post-call writeback; opaque ownership and non-Transfer rules; direct-call-only process-global lookup; Unix MIR/direct parity; LSP/editor support; and reserved callbacks/raw pointers/variadics | focused lexer/parser/package/sema/analysis/MIR/native/runtime tests; `crates/aura-compiler/tests/ffi_frontend.rs`; `crates/aura/tests/ffi_acceptance.rs`; `examples/packages/ffi_getpid`; language-server recovery/compiler-bridge tests; extension grammar/snippet tests; and the forced backend parity matrix |
 | Conditional-expression precedence, exact-bool conditions, arm unification/context, lazy condition-first selection, conservative branch moves, analysis, and backend parity | focused conditional parser/sema/MIR/analysis tests; `conditional_expression_*` check/parse fixtures; `conditional_expressions` run fixture and example; compiler-bridge coverage; and the MIR/direct parity matrix |
 | Membership containers and delegation, chained-comparison precedence, at-most-once operand evaluation, short-circuiting, conservative chain checking, and backend parity | `comparison_chains_keep_every_operator_at_one_precedence_level`, `membership_tests_read_supported_containers_and_reject_the_rest`, and `comparison_chains_evaluate_each_operand_once_and_short_circuit`; `membership_*` check-fail and `membership_and_comparison_chains` check-pass fixtures; the `membership_and_comparison_chains` run fixture and example; five Python-shaped acceptance fixtures; and the MIR/direct parity matrix |
-| `enumerate`/`zip` loop-form recognition, operand domain, bare shared default, `int64` positions, shortest-operand `zip` termination, shadowing, function-wide per-loop binding-slot isolation under heterogeneous binding-name reuse, and backend parity | `enumerate_and_zip_iterate_in_lockstep_over_the_bare_loop_default`, `heterogeneous_ordinary_for_bindings_use_distinct_scoped_typed_slots`, `every_ordinary_for_form_uses_a_fresh_scoped_target_slot`, and `ordinary_for_target_scope_starts_after_iterable_evaluation`; `enumerate_requires_indexable_iterable` and `zip_rejects_ownership_modifiers` check-fail fixtures; the reversed heterogeneous `enumerate_and_zip` fixture; `tuple_for_pattern_queue` for recursive target reuse; `list_mut_iteration` for fallthrough/`continue`/`break`/explicit-return writeback; the maintained example; and the MIR/direct parity matrix |
+| `enumerate`/`zip` loop-form recognition, operand domain, bare shared default, `int64` positions, shortest-operand `zip` termination, shadowing, function-wide per-loop binding-slot isolation under heterogeneous binding-name reuse, and backend parity | `enumerate_and_zip_iterate_in_lockstep_over_the_bare_loop_default`, `heterogeneous_ordinary_for_bindings_use_distinct_scoped_typed_slots`, `every_ordinary_for_form_uses_a_fresh_scoped_target_slot`, and `ordinary_for_target_scope_starts_after_iterable_evaluation`; `enumerate_requires_indexable_iterable` and `zip_rejects_ownership_modifiers` check-fail fixtures; the reversed heterogeneous `enumerate_and_zip` fixture; `tuple_for_pattern_queue` for recursive target reuse; `list_mut_iteration` and `iteration_element_loan_write_through` for write-through on fallthrough, `continue`, `break`, and explicit return; the maintained example; and the MIR/direct parity matrix |
 | `len` delegation domain; shared `int64` type and value across `len(x)` and `x.len()` for str, list, dict, and set; `str.byte_len()` as an `int64` UTF-8-byte count; `str` rendering equality with `print` and f-strings; and the reservation of both names | focused semantic, call-surface, MIR, native-codegen, runtime, analysis, and language-server tests; the `len_requires_a_len_member` check-fail fixture; the `len_and_str` run fixture and example; two Python-shaped acceptance fixtures; and the MIR/direct parity matrix |
 | Unified `int64` index domain: direct indices, slices, range bounds and yields, enumerate positions, Array coordinates, selection indices, collection lengths/search positions/capacity arguments, scoped lossless widening of fixed-width integer position values, exact `list[int64]` coordinate containers, and target-stable rejection outside that scope | `index_domain_positions_contextually_type_literals_as_int64`, `index_domain_accepts_default_int64_variables`, and focused semantic/MIR/native/runtime/analysis tests; `index_domain_int64_contract`, `index_domain_lossless_widening`, `index_domain_rejects_uint64`, and boundary fixtures; `index_domain_zero_cast_idioms`, which pins `values[values.len() - 1]`, `range(values.len())`, and enumerate-index-back-into-list without casts; `examples/collections/list_polish.au`; and the forced MIR/direct parity matrix |
 | Canonical `list`/`dict`/`set`/`str` surface: homogeneous literals, exact constructors and method signatures, first-match list search, stable natural/key sorting, typed dictionary absence and eager snapshots, loud/silent set removal, capacity control, exact ownership and evaluation order, `AU4008`/`AU4003`/`AU4005` failures, analysis/editor exposure, and backend parity | focused parser, call-surface, semantic, MIR, native, runtime-value, analysis, language-server, and extension tests; `canonical_collection_surface`, collection capacity, obligation, missing-value, and ownership fixture families; `examples/collections/list_basics.au`, `list_polish.au`, `dict_basics.au`, and `set_basics.au`; the clean-surface identity gate; and the forced MIR/direct parity matrix |
@@ -5744,7 +5795,7 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 
 - Views have identity only for these places: local, parameter, and receiver roots; existing views; class-field paths; fixed tuple positions; list elements; and dictionary entries. Field and tuple projections inside an element are included.
 - Set elements, slices, arbitrary temporaries, and escaping enum-payload views cannot be loaned.
-- A returned view cannot select a list element or dictionary entry. Return a view of the collection and select at the call site.
+- A returned view of a list element or dictionary entry holds the whole collection at the call site. The caller cannot read a different element while it is live.
 - A non-copy value, including a list element, cannot be borrowed into a `T | None` or other union parameter (`AU2010`). Pass a clone, or change the parameter to the member type.
 - Beside a live element view of the same list, `set(index, value)` works only for a Copy element type. For other element types it is refused with `AU3011`, because it would move the old element out through the collection.
 - In a top-level script, an immutable binding is a module constant and cannot be the source of a view (`AU3004`). Bind it with `mut` or inside a function.
@@ -7688,7 +7739,7 @@ Iteration over a `list` or `set` depends on the loop form:
 | --- | --- |
 | Bare | Retains and freezes the selected collection for the loop. Yields shared element access. |
 | `own` | Moves the collection into a loop-private source once, at entry. Yields owned elements. Reinitializing the consumed source binding in the body does not switch or truncate the active iteration. |
-| `mut` | Over a mutable list, grants exclusive element access with writeback and retains the collection. Mutable set iteration is rejected. |
+| `mut` | Over a mutable list, binds each element as a mutable element view that writes through at once, and retains the collection. Mutable set iteration is rejected. |
 
 Range iteration yields independent `int64` values from `start` inclusive to `end` exclusive. Explicit `mut` and `own` Range modifiers are rejected with `AU3004`, because there is no place access or ownership transfer to modify. Use the bare form.
 
@@ -15076,7 +15127,20 @@ A caller can use the result in three ways:
 
 Ordinary owned bindings and aggregate storage cannot receive a returned view.
 
-A returned view names a root, field path, or fixed tuple position of its origin. It cannot select a list element or dictionary entry: `return view items[0]` is refused with `AU3004`. Return a view of the collection and select the element at the call site.
+A returned view names a root, field path, fixed tuple position, list element, or dictionary entry of its origin. The index or key is evaluated once, in the callee, and an invalid position or absent key traps there with `AU4003`:
+
+```aura
+def first(values: mut list[int64]) -> view mut int64 from values:
+    return view mut values[0]
+
+def main():
+    mut values = [1, 2]
+    view mut head = first(values)
+    head += 10
+    print(values)
+```
+
+The caller's view reaches the selected element in place. For the checker, it holds the whole collection, so the caller cannot read another element or change the list while the view is live.
 
 Different return paths can select different fixed projections of the declared origin. The caller locks that origin conservatively, while execution keeps the exact selected projection. A different root is `AU3010`.
 
@@ -15127,7 +15191,7 @@ When an iteration item is a tuple, recursive target leaves inherit the item's pr
 - Shared collection iteration gives shared non-copy leaves.
 - `own` collection iteration gives owned leaves.
 - Bare Queue iteration gives owned leaves, because it receives the item.
-- A tuple target is rejected with `mut` iteration. Recursive mutable tuple writeback is not defined.
+- A tuple target is rejected with `mut` iteration. Bind the tuple to one name instead.
 
 ## Clone
 
@@ -15271,7 +15335,7 @@ A copy use duplicates a value and a move transfers it. Ordinary parameter borrow
 
 An explicit view carries a compiler/runtime loan descriptor for one source place and generation. Reads and writes resolve through that descriptor without cloning.
 
-Mutable borrowed calls and list iteration write through the original place. `match mut` reconstructs and writes back on every arm exit.
+Mutable borrowed calls and `mut` list iteration write through the original place. Each `mut` loop binding is an element view, so a write lands in the list immediately and a non-Copy element is never cloned. `match mut` reconstructs and writes back on every arm exit.
 
 Simple dict indexed assignment accepts and owns any value type. Direct compound indexed assignment requires a copy `list` element or `dict` value.
 
@@ -15347,7 +15411,6 @@ Place analysis tracks local roots, fixed tuple positions, and field-prefix paths
 
 These are unavailable:
 
-- returned views of list elements or dictionary entries
 - view-bearing aggregates
 - multi-origin returned views
 - returned loan closures
@@ -17211,7 +17274,7 @@ Maintained iterable forms include:
 | `for i in range(start, end):` | Yields `int64` values from `start` up to `end`, excluding `end`. |
 | `for value in values:` | Retains the list and yields shared access for non-copy elements. |
 | `for value in own values:` | Consumes the list and yields owned elements. |
-| `for value in mut values:` | Retains a mutable list and yields mutable access. The iterable place must be mutable. |
+| `for value in mut values:` | Binds each element as a mutable element view. Writes land in the list at once. The iterable place must be mutable. |
 | `for value in set:` | Retains the set and yields shared-borrowed access. |
 | `for value in own set:` | Consumes the set and yields owned elements. |
 | `for value in queue:` | Receives queue items under the scheduler-aware queue iteration contract. |
@@ -17225,7 +17288,7 @@ When an iterable yields tuples, the loop form decides the ownership of each non-
 - Bare, shared collection iteration gives the leaves shared provenance.
 - `own` collection iteration gives owned leaves.
 - Bare Queue iteration receives an owned item and gives owned leaves.
-- `mut` iteration with a tuple target is rejected, because the minimal tuple support has no recursive element writeback.
+- `mut` iteration with a tuple target is rejected. Bind the tuple to one name and update its positions through it.
 
 ### Queue Iteration
 
@@ -19323,6 +19386,24 @@ Use `get` when an invalid position is ordinary input. It returns `Lookup[T]`:
 This keeps an element that is itself `None` distinct from a missing one.
 Direct indexing, `pop`, `set`, and `swap` trap on an invalid position.
 
+When the element is large, or not clone-safe, match on `lookup` instead. The
+`Found` arm gets a view of the element in place, so nothing is copied:
+
+```aura
+def main():
+    mut teams = [["ada"], ["grace", "alan"]]
+    match mut teams.lookup(1):
+        case Lookup.Found(team):
+            team.append("barbara")
+        case Lookup.Missing:
+            print("no team")
+    print(teams[1].len())
+```
+
+`lookup` only works as the subject of a `match` statement. A bare `match`
+gives a shared view and `match mut` gives a mutable one. The view ends with
+its arm, and the list cannot change shape while it is live.
+
 The core mutations have Python-shaped names and typed ownership:
 
 ```aura
@@ -19438,6 +19519,17 @@ requires a clone-safe `V`.
 
 `remove(key)` moves the value out into `Lookup.Found(value)` when the key is
 present. It returns `Lookup.Missing` when the key is absent.
+
+`lookup(key)` views the value in place instead of cloning it. Like list
+`lookup`, it is only valid as a `match` subject:
+
+```aura fragment
+match mut groups.lookup("admins"):
+    case Lookup.Found(members):
+        members.append("ada")
+    case Lookup.Missing:
+        groups["admins"] = ["ada"]
+```
 
 `keys()`, `values()`, and `items()` return eager owned lists in insertion
 order. Each item is a tuple:
@@ -25035,6 +25127,23 @@ in place.
 - A computed selector overlaps every selector of the same collection.
 - A structural mutation of the collection conflicts with every live element or
   entry view.
+
+When the position or key may be missing, match on `lookup` instead of trapping.
+The `Found` arm views the slot in place, and the `Missing` arm runs otherwise:
+
+```aura check-pass
+def main():
+    mut teams = [["ada"], ["grace"]]
+    match mut teams.lookup(5):
+        case Lookup.Found(team):
+            team.append("alan")
+        case Lookup.Missing:
+            teams.append(["alan"])
+    print(teams.len())
+```
+
+`lookup` is only valid as the subject of a `match` statement. The view ends
+with its arm, so the `Missing` arm may still change the list.
 
 ## Returned Views
 

@@ -3645,7 +3645,10 @@ impl MirRuntime {
                             "MIR returned loan `{loan}` has no transferred projection"
                         ))
                     })?;
-                if !projections.contains(&projection) {
+                if !projections
+                    .iter()
+                    .any(|declared| crate::mir::returned_projection_matches(declared, &projection))
+                {
                     return Err(Diagnostic::new(format!(
                         "MIR returned loan `{loan}` selected undeclared projection `{projection}`"
                     )));

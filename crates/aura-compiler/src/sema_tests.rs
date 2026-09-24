@@ -31413,27 +31413,10 @@ fn adr0061_contextual_member_reads_restore_owned_read_rules_and_identify_element
         );
     }
     checker.index_place_read.set(None);
-    for (source, expected) in [
-        ("users[0]", true),
-        ("(users[0]).visits", true),
-        ("people[\"ada\"].name", true),
-        ("pairs[0][1]", true),
-        ("pair[0]", false),
-        ("profile.visits", false),
-    ] {
-        let expression = crate::parser::parse_expression(source).unwrap();
-        assert_eq!(
-            checker
-                .is_collection_element_expr(&expression, &mut locals)
-                .unwrap(),
-            expected,
-            "{source}"
-        );
-    }
 }
 
 #[test]
-fn adr0061_returned_element_and_entry_projections_keep_the_step_one_refusal() {
+fn adr0061_returned_element_and_entry_projections_are_accepted() {
     for source in [
         "def first(values: list[int64]) -> view int64 from values:\n    return view values[0]\n",
         "def first(values: mut list[int64]) -> view mut int64 from values:\n    return view mut values[0]\n",
@@ -31441,9 +31424,8 @@ fn adr0061_returned_element_and_entry_projections_keep_the_step_one_refusal() {
         "class Profile:\n    visits: int64\n\ndef visits(values: list[Profile]) -> view int64 from values:\n    return view (values[0].visits)\n",
         "def label(values: list[(int64, str)]) -> view str from values:\n    return view values[0][1]\n",
     ] {
-        let error = crate::check_source(source).expect_err("returned element footprints are deferred until the A6 stage");
-        assert_eq!(error.code, "AU3004", "{source}: {error:?}");
-        assert_eq!(error.message, "a returned view cannot yet select a list element or dictionary entry; return a view of the collection and select the element at the call site", "{source}");
+        crate::check_source(source)
+            .unwrap_or_else(|error| panic!("{source}: {error:?}"));
     }
 }
 

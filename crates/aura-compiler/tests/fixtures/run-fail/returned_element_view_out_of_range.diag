@@ -1,0 +1,6 @@
+error[AU4003]: list index `5` is out of bounds for length `2`
+ --> crates/aura-compiler/tests/fixtures/run-fail/returned_element_view_out_of_range.au:2:28
+  |
+2 |     return view mut values[5]
+  |                            ^
+  = note: Aura call chain (innermost first): first at 1:1 -> main at 4:1

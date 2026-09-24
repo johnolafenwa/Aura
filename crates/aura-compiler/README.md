@@ -6,7 +6,7 @@ Its type system includes transparent aliases, normalized unions, contextual
 member injection, and exhaustive `Type as name` patterns. Shared, mutable, and
 owned matches lower to common tag, loan, and take operations that both
 execution backends consume. The compiler service and persisted semantic
-artifacts use semantic interface schema 16. Aura has no builtin
+artifacts use semantic interface schema 17. Aura has no builtin
 `Option` type.
 
 ## Testing Approach

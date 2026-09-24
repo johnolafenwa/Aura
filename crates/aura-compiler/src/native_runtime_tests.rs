@@ -107,6 +107,42 @@ fn adr0038_direct_returned_view_handoffs_are_call_frame_scoped() {
 }
 
 #[test]
+fn adr0061_direct_returned_element_selectors_hand_off_in_order() {
+    unsafe {
+        super::aura_direct_enter_call(1, 1, b"caller".as_ptr(), b"caller".len());
+        super::aura_direct_enter_call(1, 1, b"callee".as_ptr(), b"callee".len());
+    }
+    super::aura_direct_set_returned_view_projection(b"[*].[*]".as_ptr(), b"[*].[*]".len());
+    super::aura_direct_push_returned_view_selector(3);
+    super::aura_direct_push_returned_view_selector(-1);
+    unsafe {
+        super::aura_direct_exit_call();
+    }
+    let projections = b"[*].[*]";
+    assert_eq!(
+        super::aura_direct_take_returned_view_projection(projections.as_ptr(), projections.len()),
+        0
+    );
+    assert_eq!(super::aura_direct_take_returned_view_selector(0), 3);
+    assert_eq!(super::aura_direct_take_returned_view_selector(1), -1);
+    assert_eq!(
+        super::aura_direct_take_returned_view_selector(2),
+        0,
+        "a projection with fewer element steps reads zero past its selectors"
+    );
+    assert_eq!(super::aura_direct_take_returned_view_selector(-1), 0);
+    unsafe {
+        super::aura_direct_exit_call();
+    }
+    assert_eq!(
+        capture_direct_boundary_error_message(|| {
+            super::aura_direct_push_returned_view_selector(1);
+        }),
+        "direct returned-view handoff has no active call frame"
+    );
+}
+
+#[test]
 fn adr0038_direct_returned_view_projection_handoff_reports_invalid_state() {
     assert_eq!(
         capture_direct_boundary_error_message(|| {

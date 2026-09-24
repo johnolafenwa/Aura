@@ -43,7 +43,7 @@ compiler-owned `semantic_interface_version: 16`. Every request must include
 that exact field:
 
 ```json
-{"id":1,"semantic_interface_version":16,"method":"analyze","path":"/absolute/app.au","source":"print(1)\n"}
+{"id":1,"semantic_interface_version":17,"method":"analyze","path":"/absolute/app.au","source":"print(1)\n"}
 ```
 
 This identity is separate from the numeric schema version of the public

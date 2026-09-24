@@ -1,0 +1,76 @@
+# A function can return a view of one list element or dictionary entry of its
+# origin. The caller's view reaches that element in place.
+class Job:
+    name: str
+    runs: int64
+
+class Board:
+    jobs: list[Job]
+
+    def job(mut self, index: int64) -> view mut Job from self:
+        return view mut self.jobs[index]
+
+def first(values: mut list[int64]) -> view mut int64 from values:
+    return view mut values[0]
+
+def at(values: list[int64], index: int64) -> view int64 from values:
+    return view values[index]
+
+def entry(table: mut dict[str, list[str]], key: str) -> view mut list[str] from table:
+    return view mut table[key]
+
+def cell(grid: mut list[list[int64]], row: int64, column: int64) -> view mut int64 from grid:
+    return view mut grid[row][column]
+
+def name_of(jobs: list[Job], index: int64) -> view str from jobs:
+    return view jobs[index].name
+
+def last_through_alias(values: mut list[int64]) -> view mut int64 from values:
+    view mut tail = values[-1]
+    return view mut tail
+
+def first_of[T](items: list[T]) -> view T from items:
+    return view items[0]
+
+def first_of_row(grid: mut list[list[int64]]) -> view mut int64 from grid:
+    return view mut first(grid[0])
+
+def forwarded(values: mut list[int64]) -> view mut int64 from values:
+    return view mut first(values)
+
+def main():
+    mut values = [1, 2, 3]
+    view mut head = first(values)
+    head += 10
+    print(values)
+    view second = at(values, -2)
+    print(second)
+
+    mut groups: dict[str, list[str]] = {"admins": ["ada"]}
+    view mut admins = entry(groups, "admins")
+    admins.append("grace")
+    print(groups["admins"])
+
+    mut grid = [[1, 2], [3, 4]]
+    view mut corner = cell(grid, 1, 1)
+    corner = 40
+    view mut origin = first_of_row(grid)
+    origin = 10
+    print(grid)
+
+    jobs = [Job(name="build", runs=0), Job(name="test", runs=0)]
+    view label = name_of(jobs, 1)
+    print(label)
+    view first_job = first_of(jobs)
+    print(first_job.name)
+
+    view mut tail = last_through_alias(values)
+    tail = 30
+    view mut again = forwarded(values)
+    again += 100
+    print(values)
+
+    mut board = Board(jobs=[Job(name="lint", runs=1)])
+    view mut job = board.job(0)
+    job.runs += 1
+    print(board.jobs[0].runs)

@@ -1855,6 +1855,23 @@ def main() -> int32:
 }
 
 #[test]
+fn adr0061_returned_element_views_hand_selectors_to_the_caller() {
+    let source = include_str!("../tests/fixtures/run-pass/returned_element_views.au");
+    let mir = lower_source_to_mir(source).expect("returned element views should lower to MIR");
+    let object = emit_host_object(&mir).expect("returned element views should compile directly");
+    let referenced = object_referenced_symbols(&object);
+    for symbol in [
+        "aura_direct_push_returned_view_selector",
+        "aura_direct_take_returned_view_selector",
+    ] {
+        assert!(
+            referenced.iter().any(|name| name.contains(symbol)),
+            "missing {symbol}: {referenced:?}"
+        );
+    }
+}
+
+#[test]
 fn direct_opaque_user_clone_dispatches_to_the_declared_trait_method() {
     let source = include_str!("../tests/fixtures/run-pass/random_opaque_user_clone_dispatch.au");
     let mir = lower_source_to_mir(source).expect("opaque Holder clone source should lower to MIR");

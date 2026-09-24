@@ -3824,17 +3824,6 @@ impl<'a> FunctionChecker<'a> {
                                 "a view return requires an addressable source place",
                             )
                         })?;
-                        // A returned element or entry view (ADR-0061 A6)
-                        // needs the element footprint in the exported
-                        // contract; until it lands, the return path is
-                        // refused rather than lowered.
-                        if self.is_collection_element_expr(value, locals)? {
-                            return Err(Diagnostic::coded_at(
-                                "AU3004",
-                                value.span,
-                                "a returned view cannot yet select a list element or dictionary entry; return a view of the collection and select the element at the call site",
-                            ));
-                        }
                         let returned = self.view_place(value, locals)?.ok_or_else(|| {
                             Diagnostic::coded_at(
                                 "AU3010",
@@ -3895,7 +3884,26 @@ impl<'a> FunctionChecker<'a> {
                             "declare `-> view T from source` and use `return view ...`, or return an explicit owned clone",
                         ));
                     }
-                    let ty = if let Some(value) = &return_stmt.value {
+                    // A view return reads a place, not an owned value: like
+                    // `view name = items[i]`, it takes the place's type and
+                    // never copies the element out.
+                    let returned_place = match (&return_stmt.value, return_stmt.view) {
+                        (Some(value), Some(_))
+                            if self.innermost_collection_element(value, locals)?.is_some() =>
+                        {
+                            self.view_place(value, locals)?
+                        }
+                        _ => None,
+                    };
+                    let place_ty = match (returned_place, &return_stmt.value) {
+                        (Some(place), Some(value)) => {
+                            self.place_path_type(&place, locals, value.span)?
+                        }
+                        _ => None,
+                    };
+                    let ty = if let Some(place_ty) = place_ty {
+                        place_ty
+                    } else if let Some(value) = &return_stmt.value {
                         self.type_of_expr_hint(value, locals, Some(return_type))?
                     } else {
                         Type::Unit

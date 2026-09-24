@@ -1,0 +1,8 @@
+def first(values: mut list[int64]) -> view mut int64 from values:
+    return view mut values[0]
+
+def main():
+    mut values = [1, 2]
+    view mut head = first(values)
+    print(values[1])
+    head += 1

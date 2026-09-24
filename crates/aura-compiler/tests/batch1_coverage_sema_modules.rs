@@ -489,9 +489,15 @@ fn view_projection_through_a_tuple_element_is_typed_by_position() {
 
 #[test]
 fn dynamic_or_negative_index_projections_keep_a_conservative_footprint() {
-    let dynamic = rejects(
+    // A returned list element holds its collection, `holder.items`, so a
+    // sibling field stays writable (ADR-0061 A6); the collection does not.
+    runs(
         "class Holder:\n    items: list[int64]\n    other: int64\ndef pick(holder: Holder, index: int64) -> view int64 from holder:\n    return view holder.items[index]\ndef main():\n    mut holder = Holder(items=[1, 2], other=0)\n    view chosen = pick(holder, 0)\n    holder.other = 3\n    print(chosen)\n",
-        "cannot mutate `holder.other` while shared view `chosen` remains live",
+        "1\n",
+    );
+    let dynamic = rejects(
+        "class Holder:\n    items: list[int64]\n    other: int64\ndef pick(holder: Holder, index: int64) -> view int64 from holder:\n    return view holder.items[index]\ndef main():\n    mut holder = Holder(items=[1, 2], other=0)\n    view chosen = pick(holder, 0)\n    holder.items = [5]\n    print(chosen)\n",
+        "cannot mutate `holder.items` while shared view `chosen` remains live",
     );
     assert_eq!(dynamic.code, "AU3002");
     rejects(
