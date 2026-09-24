@@ -6,7 +6,7 @@
   views ratified in the same checkpoint (section B) and folded in at phase
   2b
 - Date: 2026-09-06; amended 2026-09-21
-- Implementation: Phase 2a in progress
+- Implementation: Phase 2a complete (2026-09-24); phase 2b pending
 - Roadmap: Batch 2
 - Extends: ADR-0016, ADR-0038, ADR-0040, and ADR-0044
 - Related: ADR-0052, ADR-0054, and ADR-0058
@@ -245,3 +245,26 @@ forged-MIR test that fails at `run_mir` and `emit_host_native_object` with
 one shared reason; the coverage floors move only upward; one complete local
 chain and one green hosted run close the phase; the reference agent's diff
 and pinned output are the usability evidence.
+
+Phase 2a closed on 2026-09-24 with this evidence:
+
+- Pull requests #20 through #27 landed the phase: script bindings and
+  narrowing (I), contextual element reads (A1), invalidation (`AU3011`, A3),
+  owned bindings as mutable places (H2), the arm-scoped `lookup` (C1),
+  mutable iteration write-through (A5), returned element and entry views
+  (A6), and the audited receiver table (H1). C2 needed no change.
+- Every run-pass and run-fail fixture runs on MIR and forced direct
+  execution with identical stdout; the sweep uses a fresh native cache,
+  because the cache key does not cover code generator changes.
+- Forged-MIR tests cover the element and entry loan selectors and the
+  returned element step `[*]` at `run_mir`, serialized execution, and
+  `emit_host_native_object` with one shared reason. `lookup` and mutable
+  iteration add no MIR contract: they lower to presence tests and ordinary
+  element loans, and a MIR unit test pins the iteration shape.
+- The coverage floors stayed at 96.46 / 97.33 / 95.23 while the measured
+  totals rose to 96.49 / 97.43 / 95.32. Each pull request passed one
+  complete local chain and one green hosted run.
+- No reference-agent diff was produced for this phase; the fixtures,
+  examples, and tutorial chapters are the usability evidence.
+- Borrowing a non-Copy value into a union parameter (`AU2010`) is outside
+  sections A, C, H, and I and moves to its own design item.

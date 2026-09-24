@@ -483,6 +483,14 @@ binding, and the checker must report `AU3003` exactly when the table says
 per-method call sites still spell their check, so the test is what keeps
 the two from drifting.
 
+## Phase 2a completion (2026-09-24)
+
+Phase 2a is complete. The completion evidence is recorded in ADR-0061
+under "Completion evidence for phase 2a". The last pieces were a forged-MIR
+test for the returned element step (`adr0061_returned_element_steps_are_
+validated_at_every_public_boundary`) and a documentation sweep of the view
+limits and the `AU3004` paragraph.
+
 ## Open items
 
 - Borrowing a non-copy value into a union parameter (`AU2010`), which

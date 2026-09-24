@@ -86,7 +86,7 @@ progress on `codex/batch-1-phase-1`. Option removal remains phase 2.
 58. [ADR-0058: First-class callables and binding contracts](0058-first-class-callables-and-binding-contracts.md) — Accepted; detailed design ratified 2026-09-08; implementation in Batch 1
 59. [ADR-0059: Custom initialization and fallible factories](0059-custom-initialization.md) — Accepted direction; `__init__`, definite initialization, and named fallible factories; detailed design pending
 60. [ADR-0060: Typed context managers and cleanup](0060-typed-context-managers.md) — Accepted direction; generic/multiple managers, typed entry/exit, and failure precedence; detailed design pending
-61. [ADR-0061: Collection-element loans and slice views](0061-collection-element-loans-and-slice-views.md) — Accepted direction; contextual access, explicit owned reads, and invalidation checks; detailed design pending
+61. [ADR-0061: Collection-element loans and slice views](0061-collection-element-loans-and-slice-views.md) — Accepted; element and entry loans, `lookup`, and receiver policy implemented (phase 2a complete); slice views pending (phase 2b)
 62. [ADR-0062: Typed serialization, validation, and schemas](0062-typed-serialization-validation-and-schemas.md) — Accepted direction; compile-time opt-in and shared metadata; detailed design pending
 63. [ADR-0063: Everyday syntax and pattern ergonomics](0063-everyday-syntax-and-pattern-ergonomics.md) — Accepted roadmap direction; syntax/pattern/API details pending
 64. [ADR-0064: Native backend strategy and codegen boundary](0064-native-backend-strategy-and-codegen-boundary.md) — Accepted direction; pre-Batch-1 measurements, incremental thin boundary, and Batch 7 backend decision; detailed design pending

@@ -1,6 +1,6 @@
 # Task Board
 
-Last updated: 2026-09-23
+Last updated: 2026-09-24
 
 ## Aura 0.3.4 preview release (complete)
 
@@ -13,18 +13,18 @@ Last updated: 2026-09-23
   bindings after the first statement (`lang/script-bindings`), then phase 2a
   item 1.
 
-## Batch 2 phase 2a (element and entry loans; in progress)
+## Batch 2 phase 2a (element and entry loans; complete)
 
-- Step 1 (element and entry views) shipped in 0.3.4 (PR #17).
-- Merged since: script bindings after the first statement (PR #20),
-  contextual element reads (PR #21), and `AU3011` invalidation (PR #22).
-  Owned bindings and script narrowing are PR #23. The arm-scoped `lookup`
-  is PR #24 (merged); mutable iteration write-through (A5) is PR #25;
-  returned element views (A6) are PR #26; the audited receiver table (H1)
-  is on `batch-2-phase-2a-receiver-table`. Details are in
-  `2026-09-21-batch-2-phase-2a.md`.
-- Next: the phase 2a closeout. After it, borrowing non-copy values into
-  union parameters (`AU2010`) as its own design item, then phase 2b.
+- Complete on 2026-09-24. Step 1 shipped in 0.3.4 (PR #17); PRs #20
+  through #27 landed script bindings and narrowing, contextual element
+  reads, `AU3011`, owned bindings, `lookup`, mutable iteration
+  write-through, returned element views, and the audited receiver table.
+  The closeout pull request adds the returned-element forged-MIR test and
+  the completion record. Details are in `2026-09-21-batch-2-phase-2a.md`
+  and ADR-0061.
+- Next: borrowing non-copy values into union parameters (`AU2010`) as its
+  own design item, then phase 2b (slice views and returned collection
+  views).
 
 ## Batch 1 representation phase (complete) and Batch 2–3 design checkpoint (ratified)
 
