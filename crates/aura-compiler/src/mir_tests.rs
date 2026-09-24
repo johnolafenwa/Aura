@@ -13257,6 +13257,78 @@ def main():
 }
 
 #[test]
+fn adr0061_returned_element_steps_are_validated_at_every_public_boundary() {
+    let module = crate::lower_source_to_mir(
+        "def first(values: mut list[int64]) -> view mut int64 from values:\n    return view mut values[0]\n\ndef main():\n    mut values = [1, 2]\n    view mut head = first(values)\n    head += 10\n    print(values)\n",
+    )
+    .unwrap();
+    assert_eq!(crate::run_mir(&module).unwrap().stdout, "[11, 2]\n");
+    crate::emit_host_native_object(&module).unwrap();
+    fn edit_function(
+        module: &mut MirModule,
+        function: &str,
+        mut edit: impl FnMut(&mut Instruction),
+    ) {
+        module
+            .functions
+            .iter_mut()
+            .find(|candidate| candidate.name == function)
+            .unwrap()
+            .blocks
+            .iter_mut()
+            .flat_map(|block| &mut block.instructions)
+            .for_each(&mut edit);
+    }
+
+    // A caller cannot claim an element step the callee never returns.
+    let mut deeper = module.clone();
+    edit_function(&mut deeper, "main", |instruction| {
+        if let Instruction::BeginReturnedLoan { projections, .. } = instruction {
+            *projections = vec![format!("{RETURNED_ELEMENT_STEP}.{RETURNED_ELEMENT_STEP}")];
+        }
+    });
+    assert_public_boundaries_reject(
+        &deeper,
+        "invalid returned MIR loan `head` in `main` does not match callee `first` projection contract",
+    );
+
+    // A callee that returns the whole collection cannot be read as an
+    // element step by its caller.
+    let mut whole = module.clone();
+    edit_function(&mut whole, "first", |instruction| {
+        if let Instruction::BeginElementLoan {
+            loan,
+            source,
+            mutable,
+            ..
+        } = instruction
+        {
+            *instruction = Instruction::BeginLoan {
+                loan: loan.clone(),
+                source: source.clone(),
+                mutable: *mutable,
+            };
+        }
+    });
+    let whole_error = crate::run_mir(&whole).expect_err("a whole-list return is not an element");
+    let whole_direct = crate::emit_host_native_object(&whole)
+        .expect_err("the direct backend shares the validator");
+    assert_eq!(
+        whole_error.message.strip_prefix("invalid MIR loan flow: "),
+        Some(whole_direct.as_str())
+    );
+
+    // The element step exists only inside returned projections.
+    let mut ordinary = module;
+    edit_function(&mut ordinary, "main", |instruction| {
+        if let Instruction::ReadLoan { loan, .. } = instruction {
+            *loan = format!("head.{RETURNED_ELEMENT_STEP}");
+        }
+    });
+    assert_public_boundaries_reject(&ordinary, RETURNED_ELEMENT_STEP);
+}
+
+#[test]
 fn adr0061_element_reborrows_cannot_escalate_shared_collection_capabilities() {
     let shared_input = crate::lower_source_to_mir(
         "def read(items: list[int64]):\n    view selected = items[0]\n    print(selected)\ndef main():\n    items = [7]\n    read(items)\n",
