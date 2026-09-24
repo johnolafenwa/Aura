@@ -2564,6 +2564,12 @@ impl BuiltinMember {
         self.call_shape().variadic_passing
     }
 
+    /// The audited receiver capability of a builtin method (ADR-0061 H1):
+    /// `BorrowMut` for an operation that mutates its receiver's value or a
+    /// non-Copy host resource, `Borrow` otherwise. Operations on Copy runtime
+    /// handles, such as `Queue[T]` puts and close, take a shared receiver.
+    /// The checker, the lowering, and the validator all read this table; the
+    /// `builtin_receiver_table_matches_the_checker` test pins the checker.
     pub const fn receiver_passing(self) -> ReceiverKind {
         if matches!(
             self,
@@ -2590,9 +2596,6 @@ impl BuiltinMember {
                 | Self::SetDiscard
                 | Self::SetClear
                 | Self::SetReserve
-                | Self::QueuePut
-                | Self::QueueTryPut
-                | Self::QueueClose
                 | Self::FileWriteAll
                 | Self::FileWriteBytes
                 | Self::FileFlush
