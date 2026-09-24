@@ -32,6 +32,9 @@ def last_through_alias(values: mut list[int64]) -> view mut int64 from values:
 def first_of[T](items: list[T]) -> view T from items:
     return view items[0]
 
+def first_of_row(grid: mut list[list[int64]]) -> view mut int64 from grid:
+    return view mut first(grid[0])
+
 def forwarded(values: mut list[int64]) -> view mut int64 from values:
     return view mut first(values)
 
@@ -51,6 +54,8 @@ def main():
     mut grid = [[1, 2], [3, 4]]
     view mut corner = cell(grid, 1, 1)
     corner = 40
+    view mut origin = first_of_row(grid)
+    origin = 10
     print(grid)
 
     jobs = [Job(name="build", runs=0), Job(name="test", runs=0)]

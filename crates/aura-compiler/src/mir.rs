@@ -1161,6 +1161,11 @@ struct ValidatedLoan {
     /// collection coexist as the checker allows (ADR-0061, 2026-09-21
     /// section). `None` means the sources themselves.
     footprints: Option<std::sync::Arc<[String]>>,
+    /// The sources spelled through each list element or dictionary entry the
+    /// loan selects (`grid.[*]`), for composing a returned view whose origin
+    /// is this loan (ADR-0061 A6). `None` means the sources are already
+    /// exact.
+    typed_sources: Option<std::sync::Arc<[String]>>,
     mutable: bool,
     parent: Option<String>,
     returned_descriptor: bool,
@@ -3819,6 +3824,40 @@ fn validated_loan_sources(
     sources.sort();
     sources.dedup();
     Ok(sources)
+}
+
+/// `validated_loan_sources`, spelled through the element steps of any
+/// element loan on the way (see `ValidatedLoan::typed_sources`).
+fn validated_typed_sources(place: &str, state: &ValidatedLoans) -> Vec<String> {
+    let (root, suffix) = place.split_once('.').unwrap_or((place, ""));
+    let Some(loan) = state.get(root) else {
+        return vec![place.to_string()];
+    };
+    let mut sources = loan
+        .typed_sources
+        .as_ref()
+        .unwrap_or(&loan.sources)
+        .iter()
+        .map(|source| {
+            if suffix.is_empty() {
+                source.clone()
+            } else {
+                format!("{source}.{suffix}")
+            }
+        })
+        .collect::<Vec<_>>();
+    sources.sort();
+    sources.dedup();
+    sources
+}
+
+fn with_element_step(sources: Vec<String>, projection: &str) -> std::sync::Arc<[String]> {
+    let step = returned_element_projection(projection);
+    sources
+        .into_iter()
+        .map(|source| format!("{source}.{step}"))
+        .collect::<Vec<_>>()
+        .into()
 }
 
 fn validated_physical_sources(
@@ -7772,6 +7811,8 @@ fn validate_loan_instruction(
             // selected slot when the selector is a literal.
             let sources = vec![source.clone()];
             let footprints = vec![element_loan_footprint(source, selector)];
+            let typed_sources =
+                with_element_step(validated_typed_sources(source, &state.loans), projection);
             context.validate_element_loan_type(function, loan, source, projection)?;
             validate_projected_place_access(function, source, context, state, None)?;
             validate_active_loan_path_budget(function, loan, state, source.len())?;
@@ -7783,6 +7824,7 @@ fn validate_loan_instruction(
                 ValidatedLoan {
                     sources: sources.into(),
                     footprints: Some(footprints.into()),
+                    typed_sources: Some(typed_sources),
                     mutable: *mutable,
                     parent: None,
                     returned_descriptor: false,
@@ -7820,6 +7862,8 @@ fn validate_loan_instruction(
                 ));
             }
             let sources = parent_loan.sources.iter().cloned().collect::<Vec<_>>();
+            let typed_sources =
+                with_element_step(validated_typed_sources(parent, &state.loans), projection);
             let footprints = parent_loan
                 .footprints
                 .as_deref()
@@ -7855,6 +7899,7 @@ fn validate_loan_instruction(
                 ValidatedLoan {
                     sources: sources.into(),
                     footprints: Some(footprints.into()),
+                    typed_sources: Some(typed_sources),
                     mutable: *mutable,
                     parent: Some(parent.clone()),
                     returned_descriptor: false,
@@ -7912,6 +7957,7 @@ fn validate_loan_instruction(
                 ValidatedLoan {
                     sources: sources.into(),
                     footprints: None,
+                    typed_sources: None,
                     mutable: *mutable,
                     parent: None,
                     returned_descriptor: false,
@@ -8028,7 +8074,10 @@ fn validate_loan_instruction(
                     function.name
                 ));
             }
-            let origin_sources = validated_loan_sources(origin, &state.loans)?;
+            // An element-loan origin composes through its element step, so
+            // the returned projection lands inside the selected element.
+            validated_loan_sources(origin, &state.loans)?;
+            let origin_sources = validated_typed_sources(origin, &state.loans);
             let alternative_count = origin_sources
                 .len()
                 .saturating_mul(unique_projections.len());
@@ -8086,6 +8135,7 @@ fn validate_loan_instruction(
                 ValidatedLoan {
                     sources: sources.into(),
                     footprints: None,
+                    typed_sources: None,
                     mutable: *mutable,
                     parent,
                     returned_descriptor: true,
@@ -8139,6 +8189,7 @@ fn validate_loan_instruction(
             // relative to the loan itself, and the child keeps the parent's
             // sources and slot footprint (ADR-0061, 2026-09-21 section).
             let element_parent = parent_loan.footprints.clone();
+            let parent_typed = parent_loan.typed_sources.clone();
             let mut sources = parent_loan
                 .sources
                 .iter()
@@ -8188,6 +8239,19 @@ fn validate_loan_instruction(
                 ValidatedLoan {
                     sources: sources.into(),
                     footprints: element_parent,
+                    typed_sources: parent_typed.map(|typed| {
+                        typed
+                            .iter()
+                            .map(|source| {
+                                if projection.is_empty() {
+                                    source.clone()
+                                } else {
+                                    format!("{source}.{projection}")
+                                }
+                            })
+                            .collect::<Vec<_>>()
+                            .into()
+                    }),
                     mutable: *mutable,
                     parent: Some(parent.clone()),
                     returned_descriptor: false,

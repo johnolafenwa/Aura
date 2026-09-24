@@ -450,6 +450,11 @@ forwarded call all work on both backends and across modules.
   releases its own key references at `ReturnLoan`; the caller releases its
   copies when its view ends.
 - The semantic interface schema is now 17.
+- Forwarding through an element origin, `return view mut first(grid[0])`,
+  failed validation because an element loan's validated sources name its
+  collection. Validated loans now also carry `typed_sources`, spelled
+  through their element steps, and a returned view composes its origin from
+  those. Overlap and access checks keep the plain sources.
 
 Fixtures: `returned_element_views` (run-pass),
 `returned_element_view_out_of_range` and `returned_entry_view_missing_key`

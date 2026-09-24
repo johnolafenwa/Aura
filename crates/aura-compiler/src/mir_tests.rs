@@ -13045,6 +13045,7 @@ fn batch1_loan_ancestor_walks_stop_on_cycles() {
     let loan = |parent: Option<&str>, returned: bool| ValidatedLoan {
         sources: Vec::<String>::new().into(),
         footprints: None,
+        typed_sources: None,
         mutable: false,
         parent: parent.map(str::to_owned),
         returned_descriptor: returned,
@@ -13084,6 +13085,7 @@ fn batch1_loan_path_budgets_reject_oversized_expansions() {
         ValidatedLoan {
             sources: vec![format!("{huge}a"), format!("{huge}b")].into(),
             footprints: None,
+            typed_sources: None,
             mutable: false,
             parent: None,
             returned_descriptor: false,
