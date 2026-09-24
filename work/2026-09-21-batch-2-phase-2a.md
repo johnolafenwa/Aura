@@ -466,10 +466,28 @@ Lesson: the direct native cache is keyed by MIR and the runtime archive, so
 an unchanged fixture can reuse a binary built by an older code generator.
 Fixture sweeps now set a fresh `AURA_CACHE_DIR`.
 
+## H1: the audited receiver table (2026-09-24)
+
+`BuiltinMember::receiver_passing` is the audited table. The audit found one
+disagreement: the table marked `Queue.put`, `Queue.try_put`, and
+`Queue.close` as `BorrowMut`, while the checker and both backends already
+accepted a shared receiver, as the ratified rule for Copy runtime handles
+requires. The table now says `Borrow` for them. The lowering and the
+validator already read the table, and hover shows the members' detail
+strings, which carry no receiver capability.
+
+`tests/builtin_receiver_table.rs` pins the checker to the table: every
+list, dictionary, set, and Queue method it names is called on an immutable
+binding, and the checker must report `AU3003` exactly when the table says
+`BorrowMut`, and accept every call on a `mut` binding. The checker's
+per-method call sites still spell their check, so the test is what keeps
+the two from drifting.
+
 ## Open items
 
 - Borrowing a non-copy value into a union parameter (`AU2010`), which
-  `element_contextual_union_arguments` needs.
-- The single-source audited receiver table (H1, internal).
+  `element_contextual_union_arguments` needs. This is outside ADR-0061's
+  phase 2a scope (A, C, H, I): it needs a borrowed-union argument form in
+  MIR on both backends, so it moves to its own design item after phase 2a.
 - Phase 2a closeout: the final documentation sweep, the local chain, hosted
   CI, and the completion record in ADR-0061.

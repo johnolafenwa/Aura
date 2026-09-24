@@ -20,12 +20,11 @@ Last updated: 2026-09-23
   contextual element reads (PR #21), and `AU3011` invalidation (PR #22).
   Owned bindings and script narrowing are PR #23. The arm-scoped `lookup`
   is PR #24 (merged); mutable iteration write-through (A5) is PR #25;
-  returned element views (A6) are on
-  `batch-2-phase-2a-returned-element-views`. Details are in
+  returned element views (A6) are PR #26; the audited receiver table (H1)
+  is on `batch-2-phase-2a-receiver-table`. Details are in
   `2026-09-21-batch-2-phase-2a.md`.
-- Next: borrowing
-  non-copy values into union parameters, the internal receiver table, then
-  the phase 2a closeout.
+- Next: the phase 2a closeout. After it, borrowing non-copy values into
+  union parameters (`AU2010`) as its own design item, then phase 2b.
 
 ## Batch 1 representation phase (complete) and Batch 2–3 design checkpoint (ratified)
 
