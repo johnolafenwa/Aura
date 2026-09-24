@@ -239,7 +239,7 @@ shorten the lexical scope, select a proven-disjoint place, or create an owned
 clone. `AU3003` covers mutation through a shared view and calling a
 mutable-repeatable closure through an immutable place. `AU3004` covers
 non-place sources, immutable mutable-view targets, and unsupported projections
-such as collection indexes.
+such as set elements and slices.
 
 **Bound methods.** `AU3002` rejects binding a non-Copy shared or mutable
 parameter. `AU3004` rejects binding a view of a non-Copy value. A Copy receiver
