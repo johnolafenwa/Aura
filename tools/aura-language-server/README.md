@@ -39,7 +39,7 @@ The server starts one persistent compiler service:
 - `aura lsp`
 
 Requests and responses are newline-delimited JSON. Each carries the
-compiler-owned `semantic_interface_version: 16`. Every request must include
+compiler-owned `semantic_interface_version: 17`. Every request must include
 that exact field:
 
 ```json

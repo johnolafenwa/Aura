@@ -511,7 +511,7 @@ compile-time and pre-user-code failures, where they are empty.
 
 The frame arrays are an additive schema-version-1 extension. Schema-version-1
 readers MUST ignore unrecognized object members while still validating the
-fields they use. The compiler-service semantic-interface version is `16`.
+fields they use. The compiler-service semantic-interface version is `17`.
 
 The process exits unsuccessfully after it emits a JSON error report. In JSON
 mode, tools MUST parse standard error as one JSON document and MUST NOT scrape
