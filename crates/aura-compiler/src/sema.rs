@@ -29,9 +29,7 @@ use traits::{
 };
 
 mod places;
-#[cfg(test)]
-use places::PlaceProjection;
-use places::{PlacePath, ProjectionPath};
+use places::{PlacePath, PlaceProjection, ProjectionPath};
 mod loans;
 pub(crate) mod lookup;
 #[cfg(test)]
@@ -10656,16 +10654,8 @@ impl<'a> FunctionChecker<'a> {
                 // the whole collection, so a disjoint `set` works beside a
                 // live mutable element view and a structural call reports
                 // `AU3011`.
-                let collection_mutation = matches!(&object.kind, ExprKind::Name(name)
-                    if locals.get(name).is_some_and(|binding| matches!(&binding.ty,
-                        Type::Named(collection, args)
-                            if (collection == "list" && args.len() == 1
-                                && matches!(field.as_str(), "append" | "insert" | "extend" | "pop"
-                                    | "remove" | "clear" | "reverse" | "sort" | "set" | "swap"
-                                    | "reserve"))
-                            || (collection == "dict" && args.len() == 2
-                                && matches!(field.as_str(), "set" | "remove" | "clear" | "update"
-                                    | "reserve")))));
+                let collection_mutation =
+                    self.is_collection_mutation_receiver(object, field, locals);
                 let receiver_ty = if collection_mutation {
                     self.type_of_member_object_expr(object, locals)?
                 } else {
@@ -14985,6 +14975,62 @@ impl<'a> FunctionChecker<'a> {
                 }
             })
             .collect()
+    }
+
+    /// A mutating list or dictionary method whose receiver is a local, a
+    /// grouped place, or a field path of a local (`values`, `(values)`,
+    /// `box.values`). Such a call is a collection operation rather than a
+    /// read of the whole collection. A receiver with a moved part keeps the
+    /// ordinary read, which reports the move.
+    fn is_collection_mutation_receiver(
+        &self,
+        object: &Expr,
+        method: &str,
+        locals: &HashMap<String, LocalBinding>,
+    ) -> bool {
+        fn field_place_root(expr: &Expr) -> Option<&str> {
+            match &expr.kind {
+                ExprKind::Name(name) => Some(name),
+                ExprKind::Group(inner) => field_place_root(inner),
+                ExprKind::Member { object, .. } => field_place_root(object),
+                _ => None,
+            }
+        }
+        let Some(root) = field_place_root(object) else {
+            return false;
+        };
+        let Some(binding) = locals.get(root) else {
+            return false;
+        };
+        let Some(path) = self.member_access_path(object) else {
+            return false;
+        };
+        if binding.moved || Self::field_path_is_moved(binding, &path.projections) {
+            return false;
+        }
+        let ty = if path.is_root() {
+            binding.ty.clone()
+        } else {
+            let mut ty = binding.ty.clone();
+            for projection in &path.projections.0 {
+                let PlaceProjection::Field(field) = projection else {
+                    return false;
+                };
+                let Ok(next) = self.resolve_member_type(&ty, field, object.span) else {
+                    return false;
+                };
+                ty = next;
+            }
+            ty
+        };
+        matches!(&ty, Type::Named(collection, args)
+            if (collection == "list" && args.len() == 1
+                && matches!(method, "append" | "insert" | "extend" | "pop"
+                    | "remove" | "clear" | "reverse" | "sort" | "set" | "swap"
+                    | "reserve"))
+            || (collection == "dict" && args.len() == 2
+                && matches!(method, "set" | "remove" | "clear" | "update"
+                    | "reserve")))
     }
 
     fn field_path_is_moved(binding: &LocalBinding, path: &ProjectionPath) -> bool {

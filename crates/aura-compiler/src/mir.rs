@@ -21258,7 +21258,6 @@ impl<'a> Lowerer<'a> {
     ) -> bool {
         if field != "set"
             || args.len() != 2
-            || args.iter().any(|argument| argument.name.is_some())
             || !matches!(
                 self.infer_expr_type(object),
                 Some(Type::Named(ref name, ref type_args)) if name == "list" && type_args.len() == 1
@@ -21266,12 +21265,20 @@ impl<'a> Lowerer<'a> {
         {
             return false;
         }
+        // Named arguments bind through the builtin contract, so `index` and
+        // `value` reach their slots whatever order the source spells them.
+        let Ok(bound) = BuiltinMember::VecSet.bind_args(args, args[0].value.span) else {
+            return false;
+        };
+        let (Some(index_arg), Some(value_arg)) = (bound[0], bound[1]) else {
+            return false;
+        };
         let target = Expr {
             kind: ExprKind::Index {
                 object: Box::new(object.clone()),
-                index: Box::new(args[0].value.clone()),
+                index: Box::new(index_arg.value.clone()),
             },
-            span: args[0].value.span,
+            span: index_arg.value.span,
         };
         if !self.element_collection_is_lent(&target) {
             return false;
@@ -21284,6 +21291,11 @@ impl<'a> Lowerer<'a> {
         if !type_is_copy_in_program(&element_ty, self.program) {
             return false;
         }
+        // Source order decides evaluation order: a `value=` spelled before
+        // `index=` is evaluated before the element is selected.
+        let value_first = std::ptr::eq(value_arg, &args[0]);
+        let early_value = value_first
+            .then(|| self.lower_expr_for_owned_value(&value_arg.value, Some(&element_ty)));
         let Some(Operand::Place(loan)) = self.lower_contextual_element_loan(&target, true) else {
             return false;
         };
@@ -21291,7 +21303,10 @@ impl<'a> Lowerer<'a> {
             target: result.to_string(),
             loan: loan.clone(),
         });
-        let value = self.lower_expr_for_owned_value(&args[1].value, Some(&element_ty));
+        let value = match early_value {
+            Some(value) => value,
+            None => self.lower_expr_for_owned_value(&value_arg.value, Some(&element_ty)),
+        };
         self.emit(Instruction::WriteLoan {
             loan: loan.clone(),
             value: Rvalue::Use(value),
@@ -21443,25 +21458,28 @@ impl<'a> Lowerer<'a> {
         // A literal selector stays a literal operand so the validator can
         // prove two element loans of one collection disjoint, as the
         // checker does.
+        let integer_selector = matches!(&selector_ty, Type::Named(name, args)
+            if args.is_empty() && crate::integer::IntegerKind::from_runtime_type_name(name).is_some());
         let lowered = match &index.kind {
-            ExprKind::Int(value) => Operand::Int(*value),
+            ExprKind::Int(value) if integer_selector => Operand::Int(*value),
             ExprKind::String(value) => Operand::String(value.clone()),
             ExprKind::Bool(value) => Operand::Bool(*value),
             _ => self.lower_expr_with_expected(index, Some(&selector_ty)),
         };
         let selector = match lowered {
-            Operand::Place(place) => {
-                // A place read must not be retargeted by a later rebinding:
-                // copy the selector into a fresh temporary now.
+            Operand::MovePlace(place) => Operand::Place(place),
+            literal @ (Operand::Int(_) | Operand::String(_) | Operand::Bool(_)) => literal,
+            // A place read must not be retargeted by a later rebinding, and
+            // any other operand (a float key) has no literal footprint:
+            // copy the selector into a fresh temporary now.
+            operand => {
                 let temp = self.new_typed_temp(selector_ty);
                 self.emit(Instruction::Assign {
                     target: temp.clone(),
-                    value: Rvalue::Use(Operand::Place(place)),
+                    value: Rvalue::Use(operand),
                 });
                 Operand::Place(temp)
             }
-            Operand::MovePlace(place) => Operand::Place(place),
-            literal => literal,
         };
         // ReborrowElement selects inside its parent's value. Preserve a
         // collection field/tuple projection through a view as a separate

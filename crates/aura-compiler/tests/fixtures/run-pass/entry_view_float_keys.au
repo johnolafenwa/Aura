@@ -1,0 +1,29 @@
+def entry(table: dict[float64, int64], key: float64) -> view int64 from table:
+    return view table[key]
+
+
+def narrow(table: mut dict[float32, int64], key: float32) -> view mut int64 from table:
+    return view mut table[key]
+
+
+def main():
+    mut table: dict[float64, int64] = {1.5: 42, -0.25: 7}
+    view literal = table[1.5]
+    print(literal)
+    key = -0.25
+    view mut by_name = table[key]
+    by_name += 1
+    print(table[-0.25])
+    view returned = entry(table, 1.5)
+    print(returned)
+    match mut table.lookup(1.5):
+        case Lookup.Found(value):
+            value += 100
+        case Lookup.Missing:
+            print("missing")
+    print(table[1.5])
+
+    mut small: dict[float32, int64] = {2.5: 1}
+    view mut half = narrow(small, 2.5)
+    half += 4
+    print(small[2.5])

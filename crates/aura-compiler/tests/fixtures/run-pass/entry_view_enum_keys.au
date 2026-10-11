@@ -1,0 +1,21 @@
+enum Color:
+    Red
+    Green
+
+
+enum Slot:
+    Named(str)
+    Numbered(int64)
+
+
+def main():
+    mut colors: dict[Color, int64] = {Color.Red: 1, Color.Green: 2}
+    view mut red = colors[Color.Red]
+    red += 40
+    print(colors[Color.Red])
+
+    mut slots: dict[Slot, int64] = {Slot.Named("a"): 1, Slot.Numbered(3): 2}
+    key = Slot.Numbered(3)
+    view mut numbered = slots[key]
+    numbered *= 5
+    print(slots[Slot.Numbered(3)])

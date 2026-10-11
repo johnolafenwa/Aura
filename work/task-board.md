@@ -2,6 +2,19 @@
 
 Last updated: 2026-10-11
 
+## 0.3.5 review fixes (in review)
+
+- Target: fix the five reproducible defects from the external 0.3.5
+  preview review, each with a forced MIR/direct parity fixture. Authorized
+  scope: compiler and runtime fixes, fixtures, and tracking notes; no
+  release.
+- Done: native returned-view path through a field between selections,
+  keyword `list.set` beside a live view, grouped and field receivers for
+  collection mutations, entry views for every key type, and a sixth defect
+  found while testing: a wide integer literal argument to a view-returning
+  call. Details are in `2026-10-11-v0.3.5-review-fixes.md`.
+- Remaining: hosted CI on the pull request.
+
 ## Aura 0.3.5 preview release (complete)
 
 - Released 2026-10-11 from `main` at `420ddbef` (PR #29) as

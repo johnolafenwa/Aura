@@ -1,0 +1,38 @@
+def entry(table: mut dict[int128, int64], key: int128) -> view mut int64 from table:
+    return view mut table[key]
+
+
+def wide(table: dict[uint64, int64], key: uint64) -> view int64 from table:
+    return view table[key]
+
+
+def main():
+    top: uint64 = 18446744073709551615
+    unsigned: dict[uint64, int64] = {top: 42}
+    view value = unsigned[top]
+    print(value)
+    view returned = wide(unsigned, top)
+    print(returned)
+
+    big: int128 = 18446744073709551617
+    low: int128 = -18446744073709551617
+    mut signed: dict[int128, int64] = {big: 1, low: 2}
+    view mut high = signed[big]
+    high += 10
+    view mut far = entry(signed, low)
+    far += 20
+    view mut literal = entry(signed, 18446744073709551617)
+    literal *= 2
+    match mut signed.lookup(low):
+        case Lookup.Found(slot):
+            slot += 1
+        case Lookup.Missing:
+            print("missing")
+    print(signed[big])
+    print(signed[low])
+
+    huge: uint128 = 340282366920938463463374607431768211455
+    mut widest: dict[uint128, int64] = {huge: 5}
+    view mut edge = widest[huge]
+    edge -= 1
+    print(widest[huge])

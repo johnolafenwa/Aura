@@ -1141,8 +1141,11 @@ impl<'a> FunctionChecker<'a> {
             let Some(pattern) = context.locals.get(&param.name) else {
                 continue;
             };
+            // The parameter type is the hint, so a literal argument takes
+            // the parameter's width as the ordinary argument check does.
             let mut type_locals = locals.clone();
-            let actual = self.type_of_expr(&argument.value, &mut type_locals)?;
+            let actual =
+                self.type_of_expr_hint(&argument.value, &mut type_locals, Some(pattern))?;
             let _ = unify_type_pattern(pattern, &actual, &mut substitutions);
         }
         Ok(substitutions)
