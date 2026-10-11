@@ -53,8 +53,7 @@ accepts one optional trailing comma before the closing delimiter. This
 covers:
 
 - call arguments, including keyword arguments
-- parameter lists of functions, methods, trait methods, extern functions, and
-  lambdas written in parentheses
+- parameter lists of functions, methods, trait methods, and extern functions
 - list, set, and dictionary displays, and comprehension-free collection
   literals
 - tuple values, tuple types, tuple targets, and tuple patterns
@@ -62,7 +61,7 @@ covers:
 - function-type parameter lists
 - enum variant payload declarations and variant payload patterns
 - trait and implementation type-argument lists
-- subscripts with several indices
+- subscripts with several indices, such as `grid[0, 1,]`
 - lambda capture lists
 - parenthesized import lists
 
@@ -71,7 +70,9 @@ exists: inside parentheses, `(x,)` is a one-element tuple and `(x)` is
 grouping. `(x, y,)` is the same two-element tuple as `(x, y)`.
 
 A list that contains only a comma, such as `f(,)` or `[,]`, is rejected.
-Two commas in a row are rejected. A trailing comma is not accepted in a list
+Two commas in a row are rejected. A one-index subscript keeps its meaning, so
+`grid[0,]` is rejected rather than read as a tuple key. Lambda parameter
+lists have no closing delimiter and keep rejecting a trailing comma. A trailing comma is not accepted in a list
 that has no closing delimiter, such as an unparenthesized tuple
 `a, b, = pair`, an unparenthesized `return a, b,`, or an unparenthesized
 import list. The existing required comma of the unparenthesized one-element
@@ -214,32 +215,6 @@ interaction, evaluation order, Copy and non-Copy element bindings, the
 shared lock during the arm, `*rest` clone-safety, class field visibility
 across modules, property rejection, union member tests, coverage, and
 MIR/direct parity for every runnable fixture.
-
-### B4. Implementation refinements
-
-The implementation keeps the rules above with these refinements:
-
-- **Empty parentheses.** `Name()` always parses as a class pattern. A
-  payload-free enum variant is written without parentheses, so `Red()` over
-  an enum is `AU2040`. This keeps `Point()` unambiguous without consulting
-  types in the parser.
-- **Sequence coverage.** Irrefutable arms for every length `0` through
-  `k - 1`, plus an irrefutable arm with `k` fixed elements and a rest, cover
-  every list. `[]` plus `[_, *_]` is the `k = 1` case. Other sequence arms
-  contribute no coverage.
-- **Class coverage.** A class value is also covered by class patterns whose
-  field patterns together cover every value, column by column, such as one
-  arm per variant of an enum field. An irrefutable class pattern remains the
-  simple case.
-- **Diagnostic codes.** Enum variant or type patterns over a class scrutinee
-  report `AU2040`. Rest misplacement detected while parsing reports `AU2041`.
-  A sequence pattern over a non-list scrutinee and a non-exhaustive list or
-  class match keep the general `AU2999` match codes.
-- **Properties.** Aura has no properties yet, so the field rule rejects
-  methods and unknown names with `AU2040`. Properties will fall under the
-  same rejection.
-- **Rest slices.** A named sequence rest builds its list with the same
-  duplication check as a list slice, so a list of `Rng` values rejects it.
 
 ## C. Text and byte conveniences
 

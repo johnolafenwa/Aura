@@ -3434,7 +3434,7 @@ lambda-parameter
 
 - A lambda is the lowest-precedence expression form.
 - The body is exactly one expression. The colon does not introduce an indented suite.
-- Parameter lists do not accept types, defaults, or a trailing comma.
+- Parameter lists do not accept types, defaults, or a trailing comma. A capture list may end with a trailing comma.
 - Zero parameters use `lambda: expression`.
 - A lambda may appear anywhere an expression is accepted, subject to the contextual typing rule below.
 - There is no arrow spelling, statement body, `async` form, or nested `def`.
@@ -5199,7 +5199,8 @@ Each row names a reference area and the tests, fixtures, and maintained examples
 | [Math Module](/manual/math) scalar constants and functions: exact immutable `float64` constant bits, generic once-initialized module storage, exact function signatures, checked `int64` rounding conversions, IEEE-754 identity and exceptional-value classification, finite overflow and domain diagnostics, left-to-right once-only evaluation, and MIR/direct parity | `math_namespace_exposes_exact_generic_float64_constants`, `math_namespace_exposes_the_exact_float64_function_contract`, `math_host_builtins_follow_the_ratified_finite_contract`, `math_host_builtins_classify_every_exception_family`, `math_analysis_exposes_qualified_and_aliased_constant_details`, `math_analysis_completes_and_hovers_the_exact_public_surface`, and focused semantic tests; the `math_module_constants`, `math_module_functions`, and `math_log_domain` fixtures; `examples/numbers/scalar_math.au`; compiler-bridge coverage; and the forced MIR/direct parity matrix |
 | Power, `round`, and `divmod`: right-associative precedence, exact numeric types, checked integer results, ties-to-even conversion, paired floor quotient/remainder, runtime classification, one-time evaluation, and MIR/direct parity | focused parser/sema/integer/runtime-value/MIR/native tests; `numeric_round_divmod`, `bitwise_power`, and numeric failure fixtures; `examples/numbers/bit_packing.au`; language-server and extension coverage; and the forced MIR/direct parity matrix |
 | Exact triple-quoted and raw string forms plus static f-string format specifications: delimiter and escape rules, no whitespace normalization, Unicode-scalar width and string precision, sign-aware numeric zero padding, type-directed numeric codes, binary32 identity, left-to-right evaluation, focused raw/triple-f diagnostics, formatter preservation, and MIR/direct parity | focused lexer/parser/sema/runtime-value/MIR/native tests; `string_literal_forms_and_format_specs`, `fstring_zero_padding`, and `fstring_*` rejection fixtures; `examples/strings/literal_forms_and_formatting.au`; compiler-bridge and extension grammar/snippet tests; and the forced MIR/direct parity matrix |
-| Match guards, or-patterns, and top-level catch-all bindings: exact-`bool` guards, left-to-right alternatives, identical alternative bindings, guarded-arm reachability and exhaustiveness, delayed `match own` extraction, mutable candidate writeback before false continuation/failure/trap and every selected-arm exit, complete-scrutinee binding capabilities, and MIR/direct parity. Class patterns are not implemented | focused parser/sema/MIR/analysis tests; the `match_guard*`, `match_own*`, `match_mut_guard*`, `match_root_binding_patterns`, `or_pattern*`, guarded-exhaustiveness, and focused class-pattern-rejection fixtures; `examples/enums/match_guards_and_or_patterns.au`; compiler-bridge tests; and the forced MIR/direct parity matrix |
+| Match guards, or-patterns, and top-level catch-all bindings: exact-`bool` guards, left-to-right alternatives, identical alternative bindings, guarded-arm reachability and exhaustiveness, delayed `match own` extraction, mutable candidate writeback before false continuation/failure/trap and every selected-arm exit, complete-scrutinee binding capabilities, and MIR/direct parity | focused parser/sema/MIR/analysis tests; the `match_guard*`, `match_own*`, `match_mut_guard*`, `match_root_binding_patterns`, `or_pattern*`, guarded-exhaustiveness, and `match_expression_class_variant_pattern` fixtures; `examples/enums/match_guards_and_or_patterns.au`; compiler-bridge tests; and the forced MIR/direct parity matrix |
+| Tuple rest elements in targets and patterns, list sequence patterns in bare `match`, and keyword class patterns: rest ranges, `AU2041` placement and arity rejections, length tests, owned rest slices, class and union-member selection, field visibility, `match own` field moves, `AU2040` rejections, structural exhaustiveness, analysis hover and definition, and MIR/direct parity | focused parser and analysis tests; the `tuple_rest_unpacking`, `list_sequence_patterns`, `class_patterns`, `class_and_sequence_patterns_nested`, and `class_pattern_imported` run fixtures; the `pattern_*` parse-fail and check-fail fixtures; `class_pattern_private_field`; `examples/enums/structural_patterns.au`; and the forced MIR/direct parity matrix |
 | Module constants: inferred/annotated/public declarations, declaration-order scope, dependency-first and source-ordered eager once-only initialization, one defining storage identity, Copy versus shared non-Copy reads, move/mutation rejection, guarded re-entry, package visibility, analysis/editor exposure, cleanup, and MIR/direct parity | focused parser/sema/MIR/native/runtime/analysis tests; `module_constant*` check/run fixtures; multi-module and package dependency tests; `examples/modules/constants.au`; language-server compiler-bridge tests; and the forced MIR/direct parity matrix |
 | signed-i128-nanosecond Duration literals, exact two-limb direct ABI, constructors, checked arithmetic, `FloorDiv`, comparison, conversion, rendering, and invalid host timers | `duration_literals_scale_to_nonnegative_i128_nanoseconds_at_each_unit_boundary`, parser/MIR/native-codegen/runtime unit tests, Duration run/failure fixtures, native-runtime FFI tests, and the MIR/direct parity matrix |
 | persistent descriptor registrations, heap-ordered deadlines, direct Queue/task-completion/blocking-pool wakeups, wait-epoch race containment, one-winner cleanup, and event-or-deadline idle blocking without a periodic tick | `runtime_reactor` unit tests including `timers_fire_at_the_earliest_deadline_and_preserve_equal_deadline_order`, `one_persistent_fd_registration_aggregates_waiters_and_narrows_interest`, and `waker_coalescing_does_not_lose_inbox_entries_and_ready_is_deduplicated`; runtime-value direct-wakeup and cleanup tests; `scheduler_model` lost-wake/stale-epoch/one-winner state-space tests; `scheduler_mixed_wakeups_complete_in_mir_and_direct_backends`; `scripts/stress-scheduler.sh`; the contractual `scripts/bench-scalable-runtime.py` after-reactor run; and the MIR/direct parity matrix |
@@ -5751,7 +5752,7 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 - Physical newlines continue a logical line only while `(`, `[`, or `{` remains open. Continuation indentation is visual, and delimiter kinds must match.
 - Backslash continuation is not implemented.
 - Ordinary, raw, and f-strings are single-line. Triple-quoted ordinary strings may span physical lines.
-- Source lists do not accept trailing commas. The one exception is the required comma in singleton tuple values, types, targets, and patterns. Multi-element tuples reject a trailing comma.
+- A trailing comma needs a closing `)`, `]`, or `}`. Unparenthesized unpack targets, unparenthesized import lists, and lambda parameter lists reject it.
 - The parser's nesting, postfix-chain, and binary-chain guards allow 128 operations. Deeper input is rejected with a diagnostic.
 - Statement match arms cannot be inline. An expression match arm may put its expression on the same line after `case pattern:` or use an indented expression body.
 - A `for` loop binding cannot shadow a name already visible in the same scope.
@@ -5787,8 +5788,8 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 
 ### Tuples
 
-- Tuples have fixed structural types, recursive unpack targets and patterns, copy-only constant indexing, and non-consuming recursive `==` and `!=` for operands of the same static tuple type.
-- There is no empty tuple, multi-element trailing tuple comma, tuple iteration, tuple method, tuple ordering, named or rest unpacking, mutable tuple-target writeback, dynamic or negative tuple indexing, or tuple-to-collection conversion.
+- Tuples have fixed structural types, recursive unpack targets and patterns with one optional rest element, copy-only constant indexing, and non-consuming recursive `==` and `!=` for operands of the same static tuple type.
+- There is no empty tuple, tuple iteration, tuple method, tuple ordering, named unpacking, mutable tuple-target writeback, dynamic or negative tuple indexing, or tuple-to-collection conversion.
 - To take ownership of a non-Copy element, unpack the tuple.
 
 ### Views
@@ -6128,6 +6129,8 @@ String and format-specification diagnostics are described under
 | `AU2013` | union pattern coverage | Missing, duplicate, unreachable, or nonmember union type arms. | Add the missing arms and remove the others. |
 | `AU2014` | invalidated narrowing | A member use after the `None` test that narrowed the place stopped applying. | Test the current value again. |
 | `AU2015` | callable contract mismatch | A callable whose complete contract differs from the one its destination requires. | Match the contract, or restrict it with an explicit adapter or constructor. |
+| `AU2040` | invalid class pattern | A class pattern with a positional, unknown, private, repeated, or method field, a class that does not match the scrutinee, or a `match mut` class pattern. | Name stored fields visible here, once each, as `field=pattern`. |
+| `AU2041` | invalid rest pattern or target | A `*` rest element outside a tuple or sequence, a second rest element, too few positions for the fixed elements, a `*name` that covers no positions, or a sequence pattern in `match mut` or `match own`. | Keep one rest element per tuple or sequence, and use `*_` when it may cover nothing. |
 | `AU2999` | general compile-time rejection | A rejection that has no narrower public category. | Follow the message. |
 
 **`AU2002` type mismatch.** List `map`, `filter`, and keyed `sort` require the
@@ -7146,7 +7149,9 @@ Expression arms may also use the inline form `case Pattern: expression`. Stateme
 At the top level of a match arm, Aura 0.3 supports:
 
 - an enum variant pattern for an enum scrutinee
-- a recursively nested fixed-arity tuple pattern for a tuple scrutinee
+- a recursively nested tuple pattern for a tuple scrutinee, with at most one rest element
+- a sequence pattern for a `list` scrutinee in a bare `match`
+- a keyword class pattern for a class scrutinee or a union member class
 - a supported literal pattern for a scalar scrutinee
 - a lowercase name that binds the complete scrutinee
 - `_`
@@ -7162,7 +7167,7 @@ Tuple patterns use `(left, right)` or the singleton form `(value,)`, and may nes
             print(left + right)
             print(flag)
 
-The tuple arity and recursive shape must match exactly. Empty tuple patterns, trailing commas after several elements, and rest or star patterns are rejected.
+The tuple arity and recursive shape must match exactly, unless the pattern has a rest element. A trailing comma is optional. Empty tuple patterns are rejected.
 
 Each pattern binding is local to its arm and cannot shadow a name already visible there. `_` never introduces a binding. See [Names And Scopes](/manual/names-and-scopes#pattern-scope).
 
@@ -7279,7 +7284,96 @@ The literal must have the scrutinee's exact scalar type after contextual literal
 
 A Boolean match is exhaustive when unguarded arms cover both `true` and `false`. Integer, floating-point, and string domains are open-ended, so they need a final unguarded wildcard.
 
-Class patterns are not implemented. Use an explicit enum or tag representation, or a wildcard and ordinary code.
+## Rest Elements
+
+A rest element `*name` inside a tuple pattern matches every position that the fixed elements leave over. It binds those positions as a tuple. Write `*_` to ignore them.
+
+```aura
+def main():
+    match (1, "two", 3.0, true):
+        case (first, *middle, last):
+            print(first)
+            print(middle)
+            print(last)
+```
+
+This prints `1`, `(two, 3.0)`, and `true`.
+
+- A tuple pattern has at most one rest element.
+- The fixed elements must not outnumber the tuple positions.
+- Aura has no empty tuple, so `*name` must cover at least one position. `*_` may cover none.
+- `*` outside a tuple or sequence pattern is rejected with `AU2041`.
+
+The same rule applies to [tuple unpacking](/manual/tuples#unpacking) such as `head, *tail = triple`.
+
+## Sequence Patterns
+
+A sequence pattern `[p1, p2, ...]` matches a `list` by length and elements. It works only in a bare `match`.
+
+```aura
+def describe(values: list[int64]) -> str:
+    return match values:
+        case []: "empty"
+        case [only]: f"one: {only}"
+        case [first, *_, last]: f"from {first} to {last}"
+
+def main():
+    print(describe([]))
+    print(describe([7]))
+    print(describe([1, 2, 3, 4]))
+```
+
+- Without a rest element, the list length must equal the element count.
+- With a rest element, the length must be at least the fixed element count.
+- Element bindings are shared borrows of the list elements, as in any bare `match`.
+- A named rest such as `*more` binds a new owned `list` slice of the remaining elements. A list of `Rng` values cannot be sliced, so this is rejected for them.
+- `match mut` and `match own` reject sequence patterns with `AU2041`.
+
+A sequence match needs a final `case _:`, or arms that cover every length. Irrefutable arms for lengths `0` through `k - 1` plus an irrefutable arm with `k` fixed elements and a rest cover every list. `[]` and `[_, *_]` together are exhaustive.
+
+## Class Patterns
+
+A class pattern `Name(field=pattern, ...)` matches a class value and tests the named fields. Every subpattern is keyword-labeled.
+
+```aura
+class Point:
+    x: int64
+    y: int64
+
+def locate(point: Point) -> str:
+    return match point:
+        case Point(x=0, y=0): "origin"
+        case Point(x=0, y=y): f"on the y axis at {y}"
+        case Point(x=x, y=0): f"on the x axis at {x}"
+        case _: "elsewhere"
+
+def main():
+    print(locate(Point(x=0, y=5)))
+```
+
+- Fields left out are not tested. `Point()` matches every `Point`.
+- Each field may appear once. Order does not matter.
+- A field must be a stored field visible at the match. A private field of a class from another module is rejected.
+- The class must be the scrutinee class, or one member of a union scrutinee. Spell it as a declared, imported, or module-qualified class name, such as `geometry.Point`.
+- Field bindings follow the match capability. A bare `match` gives shared borrows. `match own` moves the fields out of the consumed value. `match mut` rejects class patterns.
+- A class match needs a final `case _:`, or class patterns whose field patterns together cover every value.
+
+`Name()` with empty parentheses is always a class pattern. Write a payload-free enum variant without parentheses, as `case Color.Red:`.
+
+The checker reports class pattern errors with `AU2040`:
+
+```aura check-fail:AU2040
+class Point:
+    x: int64
+    y: int64
+
+def main():
+    match Point(x=1, y=2):
+        case Point(z=0):
+            print("z")
+        case _:
+            print("other")
+```
 
 ## Builtin Enum Shapes
 
@@ -7350,7 +7444,9 @@ A match evaluates its scrutinee exactly once, tests arms in source order, and ru
 | `AU2004` | Invalid variant-constructor argument binding. |
 | `AU2013` | Union type-arm coverage: missing members, duplicate coverage, unreachable type arms, nonmembers, and type arms that are not one member. |
 | `AU2014` | A member use through a place whose narrowing fact was invalidated. |
-| `AU2999` | Duplicate variants, invalid payload shapes, missing or unreachable arms, non-exhaustive matches, mismatched alternative bindings, duplicate or subsumed alternatives, class patterns, unsupported pattern forms, and other enum and match rejections. |
+| `AU2040` | A class pattern with a positional, unknown, private, repeated, or method field. A class that is not the scrutinee class or one union member. A class pattern under `match mut`. Enum variant or type patterns over a class scrutinee. |
+| `AU2041` | A rest element outside a tuple or sequence, a second rest element, too few positions for the fixed elements, a `*name` that covers no positions, or a sequence pattern under `match mut` or `match own`. |
+| `AU2999` | Duplicate variants, invalid payload shapes, missing or unreachable arms, non-exhaustive matches, mismatched alternative bindings, duplicate or subsumed alternatives, unsupported pattern forms, and other enum and match rejections. |
 | `AU3001` | Use after `match own`, after a payload move, or after moving an owned candidate before its guard commits. |
 | `AU3002` | Moving through a shared match, overlapping mutable matches, or a `match mut` scrutinee that is not a mutable place. |
 | `AU3003` | Mutation or reassignment through an immutable enum or payload place. |
@@ -7374,6 +7470,7 @@ MIR execution and direct native generation both implement:
 - construction and inference
 - statement and expression matches, with exhaustiveness
 - nested patterns and short variants
+- tuple rest elements, list sequence patterns, and keyword class patterns
 - scalar literal patterns
 - guards and or-patterns
 - top-level catch-all bindings
@@ -7383,7 +7480,7 @@ Both backends receive the same checked arm decision tree. They must agree on sel
 
 ## Limits And Implementation-Defined Behavior
 
-- Aura has no range or rest patterns, named-payload patterns, class or collection destructuring, arbitrary predicate patterns, `Duration` or f-string patterns, or inline suites for statement matches.
+- Aura has no range patterns, named-payload patterns, `dict` or `set` patterns, arbitrary predicate patterns, `Duration` or f-string patterns, or inline suites for statement matches.
 - Expression arms contain exactly one expression.
 - `TaskResult`, `SelectOutcome`, `WaitAny`, and `WaitAll` are move outcome types regardless of their payloads.
 - Scrutinee and arm order, exhaustiveness, payload order, and borrowed-match writeback are language-defined, not implementation-defined.
@@ -7397,6 +7494,7 @@ Implemented on both backends:
 - structural copy and move classification
 - statement and expression matches, with exhaustiveness
 - nested enum patterns, tuple patterns, and scalar literal patterns
+- tuple rest elements, list sequence patterns, and keyword class patterns
 - top-level catch-all bindings, wildcards, and short variants
 - borrowed matching
 - guards, which keep candidate ownership until the arm commits, and or-patterns
@@ -8154,7 +8252,7 @@ evaluation order. The standard style indents continued content by one level.
 
 The other line rules still hold:
 
-- A trailing comma is invalid.
+- A trailing comma before the closing delimiter is optional.
 - A newline outside an open delimiter ends the logical line.
 - A backslash does not continue a line.
 - Ordinary strings and f-strings stay on one line.
@@ -8639,8 +8737,8 @@ follows:
 5. Every omitted parameter must have a default.
 6. Each argument must have the substituted parameter type.
 
-Arguments do not accept a trailing comma. A call may span physical lines while
-its `(` is open.
+Arguments accept one trailing comma before the `)`. A call may span physical
+lines while its `(` is open.
 
 Evaluation follows these rules:
 
@@ -8692,7 +8790,7 @@ Otherwise the brackets are indexing. So `Box[int32](...)` specializes,
 `Result[int32, str].Ok(...)` specializes, and `values[index]` indexes. A bare
 `Box[int32]` is not a general first-class specialized-type value.
 
-Type arguments do not accept a trailing comma.
+Type arguments accept one trailing comma before the `]`.
 [Static Semantics](/manual/static-semantics#contextual-inference) defines
 generic inference, arity, and trait-bound rules.
 
@@ -8883,7 +8981,7 @@ seen = set[int32]()
 `{}` is a dictionary literal. An empty set uses `set[T]()`.
 
 Collection literals may span physical lines while their `[` or `{` is open.
-They do not accept trailing commas.
+They accept one trailing comma before the closing delimiter.
 
 - Lists and sets evaluate elements in source order.
 - Dictionaries evaluate entries in source order, each key before its value.
@@ -9173,8 +9271,6 @@ Aura 0.3 expressions do not include:
 - assignment expressions
 - call-site capability annotations
 - non-numeric casts
-- ordinary trailing commas. The required singleton-tuple comma is the one
-  exception.
 
 Lambdas are expression-bodied and contextually typed. There are no
 statement-bodied lambdas and no implicitly reference-capturing lambdas.
@@ -9304,8 +9400,7 @@ and language-server diagnostics are produced before a backend is selected.
 - The parser caps expression nesting and operator chains at 128.
 - Physical lines continue only while a source delimiter is open. Backslashes
   and multiline string or f-string literals do not continue them.
-- Ordinary trailing commas are unavailable. `(value,)` is the required
-  singleton tuple spelling.
+- `(value,)` is the singleton tuple spelling. `(value)` is grouping.
 - Collection and string resource caps are documented on their feature pages.
 - Comprehensions are eager and have no `mut` or `own` source form. They do not
   provide early exit, lazy resumption, or a user-defined iterable protocol.
@@ -9965,7 +10060,7 @@ Binding is deterministic:
 5. every omitted parameter must have a default
 6. each bound argument must have the parameter's exact substituted type
 
-A positional argument cannot follow a named argument. Parameter and argument lists may span physical lines while their parentheses are open. They do not accept trailing commas in Aura 0.3.
+A positional argument cannot follow a named argument. Parameter and argument lists may span physical lines while their parentheses are open. Each list accepts one trailing comma before its `)`.
 
 ### Keyword-Only Parameters
 
@@ -11014,15 +11109,18 @@ The lexer produces two kinds of tokens used here:
 - Lexical tokens: `IDENT`, `INTEGER`, `FLOAT`, `DURATION`, `STRING`,
   `FSTRING`, and `BOOLEAN`, described below.
 
-A comma-separated source list accepts a trailing comma only when its
-production explicitly adds one. The singleton tuple forms `(value,)`, `(T,)`,
-and `(pattern,)` require their one comma. Multi-element tuples do not accept a
+Every comma-separated list that a production closes with `)`, `]`, or `}`
+accepts one optional `","` before that closing delimiter. The productions
+leave this trailing comma out for brevity. It never changes meaning. The
+singleton tuple forms `(value,)`, `(T,)`, and `(pattern,)` require their one
+comma, and `(value)` stays grouping. A list without a closing delimiter, such
+as an unparenthesized unpack target or import list, does not accept a
 trailing comma.
 
 `NEWLINE` in the productions means a logical newline. A physical newline
 suppressed inside an open `(`, `[`, or `{` never reaches this grammar.
 Delimiter continuation changes token formation, not the expression
-productions. It does not add a trailing comma to any list form.
+productions.
 
 ## Lexical Grammar
 
@@ -11225,8 +11323,10 @@ module-constant
 
 import-declaration
     = "import", identifier-path, [ "as", import-alias ], NEWLINE
-    | "from", identifier-path, "import",
-      import-name, { ",", import-name }, NEWLINE ;
+    | "from", identifier-path, "import", import-names, NEWLINE ;
+
+import-names = import-name, { ",", import-name }
+             | "(", import-name, { ",", import-name }, ")" ;
 
 import-name  = identifier, [ "as", import-alias ] ;
 import-alias = IDENT ;
@@ -11253,8 +11353,9 @@ written local alias. One from-import may mix direct and aliased names.
 Aliasing does not change the target module's identity, visibility, type
 identity, or package resolution path.
 
-Wildcard imports, relative-dot imports, parenthesized import lists, and
-trailing import commas are not part of the grammar.
+A parenthesized import list may span physical lines and may end with a
+trailing comma. Wildcard imports and relative-dot imports are not part of the
+grammar.
 
 ## Items
 
@@ -11396,11 +11497,11 @@ There is no `?` type suffix. An optional type is written as the union
 ordinary AU1101 parse error.
 
 Type lists and type-parameter lists are nonempty when brackets are present.
-They do not accept trailing commas.
+They accept one trailing comma.
 
 - `(T,)` is a singleton tuple type.
 - `(T)` is a grouped type that denotes `T` itself. It exists for precedence.
-- `()` and a trailing comma on a multi-element tuple type are rejected.
+- `()` is rejected.
 
 The grammar places `indirect` before any type primary. Statically, it is valid
 only on a complete named type reference where the recursive-field rules
@@ -11543,8 +11644,8 @@ annotation names one receiver or ordinary parameter as its origin. Static
 semantics validates the view's kind, provenance, and caller-place
 requirements.
 
-Parameter lists, calls, and return annotations do not accept trailing commas.
-Static checking also restricts duplicate names, default placement and
+Parameter lists and calls accept one trailing comma before the `)`. Static
+checking also restricts duplicate names, default placement and
 availability, and mutable task targets.
 
 ## Traits And Implementations
@@ -11639,6 +11740,7 @@ binding-target-list
 
 binding-target
     = identifier
+    | "*", identifier
     | "(", binding-target-list, ")" ;
 
 assignment-operator
@@ -11748,8 +11850,10 @@ closed-pattern
     | INTEGER
     | "-", (INTEGER | FLOAT)
     | tuple-pattern
+    | sequence-pattern
     | type-pattern
     | binding-pattern
+    | class-pattern
     | variant-pattern ;
 
 binding-pattern = IDENT ;
@@ -11762,9 +11866,20 @@ variant-pattern
 
 tuple-pattern
     = "(", pattern, ")"
-    | "(", pattern, ",", ")"
-    | "(", pattern, ",", pattern,
-      { ",", pattern }, ")" ;
+    | "(", element-pattern, ",", ")"
+    | "(", element-pattern, ",", element-pattern,
+      { ",", element-pattern }, ")" ;
+
+sequence-pattern
+    = "[", [ element-pattern, { ",", element-pattern } ], "]" ;
+
+element-pattern = pattern | rest-pattern ;
+
+rest-pattern = "*", ( IDENT | "_" ) ;
+
+class-pattern
+    = identifier-path, "(",
+      [ IDENT, "=", pattern, { ",", IDENT, "=", pattern } ], ")" ;
 ```
 
 Pattern parsing uses these contextual rules:
@@ -11775,7 +11890,11 @@ Pattern parsing uses these contextual rules:
 - One unparenthesized, unqualified name that begins with lowercase ASCII or
   `_` is a binding.
 - A dotted name, a capitalized name, or any name followed by parentheses is a
-  variant pattern.
+  variant pattern, except as the next rule says.
+- A name followed by `()`, or by `(` and `IDENT =`, is a class pattern. Every
+  class-pattern field is keyword-labeled.
+- `*name` and `*_` are rest elements. They may appear once, directly inside a
+  tuple or sequence pattern.
 - Payload patterns are positional, even when the variant declaration used
   named payload fields.
 - A parenthesized comma form is a fixed-arity recursive tuple pattern.
@@ -11791,11 +11910,12 @@ bindings are in scope.
 An unguarded top-level binding is an irrefutable catch-all and must be the
 final arm. A guarded top-level binding does not contribute to exhaustiveness.
 
-There are no range, collection destructuring, rest, named-payload, duration,
-or f-string patterns.
+There are no range, `dict`, `set`, named-payload, duration, or f-string
+patterns.
 
-`match mut` rejects a tuple pattern, because mutable tuple reconstruction and
-writeback are not part of the minimal surface. Statement match arms always
+`match mut` rejects tuple, sequence, and class patterns, because mutable
+reconstruction and writeback are not part of the minimal surface. `match own`
+rejects sequence patterns. Statement match arms always
 contain suites. `case pattern: statement` is not valid.
 
 ## Expressions And Precedence
@@ -12030,15 +12150,15 @@ infer its result from the body. The colon introduces one expression, not a
 suite.
 
 Lambda parameters do not accept annotations, defaults, generics, or a trailing
-comma. A capture list is exhaustive and nonempty. Each entry names an outer
+comma. A capture list is exhaustive and nonempty, and may end with a trailing
+comma. Each entry names an outer
 local place and requests shared, mutable, or by-value owned capture.
 
 ### Tuples, Sets, And Dictionaries
 
 `(value)` is grouping and `(value,)` is a singleton tuple. Tuple value
 expressions require parentheses. An unparenthesized comma is accepted only in
-an unpack target. `()` and a trailing comma on a multi-element tuple are
-rejected.
+an unpack target. `()` is rejected.
 
 A nonempty brace literal is a dictionary when its first element is followed by
 `:`, and a set otherwise. `{}` is an empty dictionary. An empty set uses the
@@ -12152,9 +12272,8 @@ The grammar intentionally excludes:
 - backslash line continuation
 - multiline f-strings
 - local item declarations, decorators, and attributes
-- wildcard, relative-dot, and parenthesized import syntax
-- ordinary trailing commas other than the required singleton-tuple comma
-- collection, range, rest, and class patterns
+- wildcard and relative-dot import syntax
+- `dict`, `set`, and range patterns
 - call-site capability annotations
 - exception statements, `raise`, and `yield`
 - generator expressions and generator functions
@@ -13098,9 +13217,9 @@ def main():
     print(result)
 ```
 
-This program prints `42`. It has no trailing comma after `right`, `22`, or
-`values[1]`, because newline continuation does not change the grammar of
-comma-separated lists.
+This program prints `42`. Newline continuation does not change the grammar of
+comma-separated lists. A trailing comma after `right`, `22`, or `values[1]`
+is optional, as in any bracketed list.
 
 Leading spaces on a continuation line are formatting, not block indentation:
 
@@ -13146,11 +13265,16 @@ Aura has none of these:
 - assignment expressions
 - a lambda arrow, because lambdas use `lambda parameters: expression`
 
-Comma-separated lists do not accept a trailing comma. This applies to
-arguments, parameters, imports, type arguments, generic parameters, enum
-payloads, collection elements, and trait lists. Tuples are the one exception.
-The singleton tuple value, type, target, and pattern forms require one comma.
-Multi-element tuples reject a trailing comma.
+A comma-separated list closed by `)`, `]`, or `}` accepts one trailing comma
+before the closing delimiter. This applies to arguments, parameters,
+parenthesized imports, type arguments, generic parameters, enum payloads,
+collection elements, tuples, patterns, and capture lists. A trailing comma
+never changes meaning. The one special case is `(value,)`, which is a
+singleton tuple, while `(value)` is grouping.
+
+A list without a closing delimiter rejects a trailing comma. This covers an
+unparenthesized tuple target such as `left, right, = pair` and an
+unparenthesized import list. Two commas in a row are always rejected.
 
 ## Integer Literals
 
@@ -13455,7 +13579,7 @@ These lexical limits apply:
 - Source is UTF-8.
 - Physical tabs are rejected outside triple-quoted string content.
 - Continuation requires an unmatched source delimiter.
-- Ordinary lists reject trailing commas.
+- Trailing commas need a closing delimiter.
 - Backslash continuation and multiline f-strings are unavailable.
 - This chapter and [Current Limits](/manual/current-limits) fix the literal
   magnitude and parser-complexity caps.
@@ -13477,7 +13601,6 @@ These forms are unavailable:
 - single-quoted f-strings
 - block comments
 - semicolons
-- ordinary trailing commas, other than the required singleton-tuple comma
 - backslash continuation
 - multiline f-string literals
 
@@ -13753,6 +13876,15 @@ Each from-import entry may take a local alias. Direct and aliased entries can ap
 
 ```aura fragment
 from tools.text import parse as parse_text, ResultRow
+```
+
+Wrap a long from-import list in parentheses. The list may span lines and may end with a trailing comma:
+
+```aura fragment
+from tools.text import (
+    parse as parse_text,
+    ResultRow,
+)
 ```
 
 **Aliases.** An alias occupies the same module-level namespace as items, module constants, and other imports. The compiler rejects:
@@ -15786,7 +15918,8 @@ Source imports have two forms, specified in [Grammar](/manual/grammar#modules-an
 - `import dotted.module [as local]`
 - `from dotted.module import name [as local]`
 
-A from-import may name several direct or aliased names. Import paths are
+A from-import may name several direct or aliased names. Wrap the names in
+parentheses to spread them across lines. Import paths are
 absolute within the resolved local or dependency namespace. The resolver uses
 the path before `as`. The alias is a local binding and is never read as a
 package, directory, or dependency key. Relative imports, wildcard imports, and
@@ -17446,7 +17579,7 @@ from agents.telemetry import record as record_event, Event
 
 Aliases are static local names for resolved modules and declarations. They do not change visibility, nominal identity, trait implementations, initialization storage, or the package path used for resolution.
 
-Aura does not accept wildcard imports, relative-dot imports, parenthesized import lists, or trailing import commas. [Packages](/manual/names-and-scopes#imports) defines import resolution and visibility.
+A from-import list may be wrapped in parentheses, span lines, and end with a trailing comma. Aura does not accept wildcard imports or relative-dot imports. [Packages](/manual/names-and-scopes#imports) defines import resolution and visibility.
 
 An immutable binding at module level is a module constant:
 
@@ -18321,10 +18454,13 @@ binding-target-list
 
 binding-target
     = identifier
+    | "*", identifier
     | "(", binding-target-list, ")" ;
 
 tuple-pattern = "(", pattern, ",", ")"
               | "(", pattern, ",", pattern, { ",", pattern }, ")" ;
+
+rest-pattern = "*", ( identifier | "_" ) ;
 ```
 
 Tuple values are always parenthesized:
@@ -18332,7 +18468,7 @@ Tuple values are always parenthesized:
 - `(value)` is grouping.
 - `(value,)` is a singleton tuple.
 - `()` is not a tuple value.
-- A multi-element tuple has no trailing comma.
+- A multi-element tuple may end with a trailing comma: `(1, 2,)` is `(1, 2)`.
 
 ```aura
 def main():
@@ -18366,7 +18502,20 @@ Tuple types are structural. Two tuple types are equal exactly when they have the
 
 **`indirect`.** `indirect` tuple types are rejected. `indirect` is the facility for recursive named fields. So a class field cannot place its recursive link inside a tuple. Put that link in a separately named `indirect` field instead. The compiler's diagnostic for the tuple case points to that fix.
 
-**Unpacking and patterns.** An unpacking target or tuple pattern must have the scrutinee's exact recursive tuple shape. Each binding leaf receives its corresponding element type. The ordinary binding rules reject duplicate names and a leaf that shadows a visible name. A tuple binding leaf is a name, not a member or index place.
+**Unpacking and patterns.** An unpacking target or tuple pattern must have the scrutinee's exact recursive tuple shape. Each binding leaf receives its corresponding element type.
+
+**Rest elements.** One `*name` element in a target or tuple pattern takes the positions the other elements leave over. It binds them as a tuple of their element types. `*_` ignores them.
+
+```aura
+def main():
+    head, *tail = (1, "two", 3.0)
+    print(head)
+    print(tail)
+    first, *_, last = (1, 2, 3, 4)
+    print(first + last)
+```
+
+This prints `1`, `(two, 3.0)`, and `5`. The fixed elements must not outnumber the tuple positions. Aura has no empty tuple, so `*name` must cover at least one position, while `*_` may cover none. A second rest element, or a rest that is the whole target, is rejected with `AU2041`. The ordinary binding rules reject duplicate names and a leaf that shadows a visible name. A tuple binding leaf is a name, not a member or index place.
 
 **Indexing.** A tuple index must be a non-negative integer literal known at compile time. It must select an existing position, and that element's type must be copyable. The expression has the selected element's type. These are static errors:
 
@@ -18458,6 +18607,7 @@ Mutable-borrow iteration with a tuple target is rejected. Aura does not rebuild 
 | --- | --- |
 | `AU1101` | a malformed tuple expression, type, target, or pattern, or misplaced commas |
 | `AU2002` | an annotated tuple element-type mismatch |
+| `AU2041` | a misplaced or repeated rest element, too few tuple positions for the fixed elements, or a `*name` that covers no positions |
 | `AU2999` | a tuple shape or arity mismatch, reported with the checker's general code |
 | `AU3001` | using a non-copy tuple after whole-source unpacking or `match own`, reported at the move |
 | `AU3002` | trying to move an element through shared unpacking or bare `match` |
@@ -18472,6 +18622,7 @@ Both backends implement tuples: MIR execution and direct native generation. MIR 
 - function returns
 - recursive assignment and loop unpacking
 - tuple patterns
+- rest elements in targets and tuple patterns
 - whole-source ownership
 - copy-only constant indexing
 - recursive structural equality
@@ -18483,12 +18634,10 @@ Maintained parity fixtures require both backends to produce the same output and 
 Aura 0.3 does not have these tuple features:
 
 - an empty tuple
-- a trailing comma on a multi-element tuple
 - tuple iteration
 - tuple methods
 - tuple ordering
 - named tuple elements
-- rest or star unpacking
 - mutable tuple-target writeback
 - tuple slicing
 - dynamic tuple indexing
@@ -18515,6 +18664,7 @@ Tuples are implemented as described on this page:
 - function returns
 - recursive assignment and `for` unpacking
 - recursive tuple patterns
+- rest elements in unpacking targets and tuple patterns
 - structural copy classification
 - whole-source moves
 - shared borrowed destructuring
@@ -19490,6 +19640,26 @@ values.reserve(500)
 Capacity calls do not change the list's contents. A negative request traps
 with `AU4003`. An allocation failure traps with `AU4005`.
 
+### Matching On Shape
+
+A `match` can test a list's length and bind its elements. `*rest` collects
+the elements the other positions leave over into a new list:
+
+```aura
+def summarize(values: list[int64]) -> str:
+    return match values:
+        case []: "nothing"
+        case [only]: f"just {only}"
+        case [first, *rest]: f"{first} and {len(rest)} more"
+
+def main():
+    print(summarize([4, 5, 6]))
+```
+
+This prints `4 and 2 more`. Sequence patterns work only in a bare `match`.
+See [Sequence Patterns](/manual/enums-and-match#sequence-patterns) for the
+full rules.
+
 ## Dictionaries
 
 A dictionary keeps its keys in insertion order:
@@ -20334,6 +20504,26 @@ class TrackedJob:
 
 The fields that never change live on the class. The field that changes is an
 enum, so the compiler can help you handle every transition.
+
+A class pattern reads several fields in one `match` arm. Name each field you
+care about with `field=pattern`:
+
+```aura
+class Reading:
+    sensor: str
+    value: int64
+
+def label(reading: Reading) -> str:
+    return match reading:
+        case Reading(value=0): "idle"
+        case Reading(sensor=name, value=value): f"{name}: {value}"
+
+def main():
+    print(label(Reading(sensor="door", value=3)))
+```
+
+This prints `door: 3`. See
+[Class Patterns](/manual/enums-and-match#class-patterns) for the full rules.
 
 ## Generic Data
 
@@ -21405,6 +21595,15 @@ A from-import may mix direct and aliased entries:
 
 ```aura fragment
 from helpers.math import double as twice, empty
+```
+
+Wrap a long list in parentheses. It may span lines and end with a trailing comma:
+
+```aura fragment
+from helpers.math import (
+    double as twice,
+    empty,
+)
 ```
 
 Both import styles keep the full callable contract. Suppose a public generic
@@ -26393,6 +26592,46 @@ Guards do not count toward coverage. Include an unguarded arm for every member, 
 
 Aura has no builtin `Option` type and no `T?` suffix. `T | None` is the only way to write an optional value. See [union_type_patterns.au](../examples/enums/union_type_patterns.au).
 
+## Matching Lists And Classes
+
+A sequence pattern matches a `list` by its length. A `*name` element collects
+the remaining elements into a new list. Sequence patterns work in a bare
+`match`:
+
+```aura check-pass
+def describe(values: list[int64]) -> str:
+    return match values:
+        case []: "empty"
+        case [only]: f"one: {only}"
+        case [first, *_, last]: f"from {first} to {last}"
+
+print(describe([1, 2, 3, 4]))
+```
+
+This prints `from 1 to 4`. The three arms cover every length, so no `_` arm
+is needed.
+
+A class pattern matches a class value by naming fields with `field=pattern`.
+Fields you leave out are not tested:
+
+```aura check-pass
+class Point:
+    x: int64
+    y: int64
+
+def locate(point: Point) -> str:
+    return match point:
+        case Point(x=0, y=0): "origin"
+        case Point(x=0, y=y): f"on the y axis at {y}"
+        case _: "elsewhere"
+
+print(locate(Point(x=0, y=5)))
+```
+
+This prints `on the y axis at 5`. A class pattern also selects a class member
+of a union, as in `case Point(x=x):` over `Point | None`. See
+[structural_patterns.au](../examples/enums/structural_patterns.au).
+
 ## Testing For `None`
 
 To ask whether a `T | None` value is present, you do not need a `match`. `is None` and `is not None` narrow the tested place in the branch they select:
@@ -27776,8 +28015,8 @@ position, list element, or dictionary entry in place, use a `view` binding.
 A newline continues the expression while `(`, `[`, or `{` is still open.
 
 - Continuation indentation is visual and does not open a block.
-- Ordinary comma-separated forms still reject trailing commas. A singleton
-  tuple needs its one comma.
+- A bracketed comma-separated list may end with a trailing comma. A
+  singleton tuple needs its one comma.
 - A backslash or physical newline inside an ordinary string or f-string does
   not continue the source.
 
@@ -28101,6 +28340,9 @@ The compiler supports these patterns:
   `case value if condition:`
 - the wildcard `case _:`
 - nested enum patterns
+- tuple patterns with one optional rest element, such as `(first, *rest)`
+- list sequence patterns in a bare `match`, such as `[]` and `[head, *tail]`
+- keyword class patterns, such as `Point(x=0, y=y)`
 
 `match value:` matches shared and `match mut value:` matches mutably.
 Statement-form `match` must be exhaustive. Expression-form `match` works in
@@ -29009,8 +29251,17 @@ from helpers.counter import Counter as ReadableCounter
 counter = ReadableCounter(value=2)
 ```
 
-One from-import may mix plain and aliased entries. An alias changes only the
-local spelling. Visibility, type identity, trait implementations, and module
+One from-import may mix plain and aliased entries. Put a long list in
+parentheses to give each entry its own line:
+
+```aura fragment
+from helpers.counter import (
+    Counter as ReadableCounter,
+    make_counter,
+)
+```
+
+An alias changes only the local spelling. Visibility, type identity, trait implementations, and module
 resolution all still use the original declaration.
 
 ## `public` Visibility
@@ -30557,16 +30808,18 @@ value = left + \        # invalid Aura
 A comma or operator at the end of a line does not continue it on its own.
 Keep a delimiter open instead.
 
-A list with more than one element still rejects a trailing comma. Write this:
+A list inside a delimiter may end with a trailing comma. This keeps each line
+the same shape, so adding an element later changes one line:
 
 ```aura check-pass
 values = [
     10,
-    20
+    20,
 ]
 ```
 
-Do not put a comma after `20`.
+The comma after `20` is optional. A trailing comma needs the closing
+delimiter: `left, right, = pair` is rejected.
 
 Ordinary strings and f-strings stay on one line. To split a long calculation,
 break it across delimiters outside the string. Do not put a physical newline
@@ -30604,8 +30857,8 @@ only = (true,)
 ```
 
 `(value)` is still grouping, so a one-element tuple needs its comma:
-`(value,)`. Aura has no empty tuple. A tuple with two or more elements does
-not take a trailing comma.
+`(value,)`. Aura has no empty tuple. A tuple with two or more elements may
+end with a trailing comma, and `(1, 2,)` is the same tuple as `(1, 2)`.
 
 Tuple types look like tuple values:
 
@@ -30700,6 +30953,24 @@ The index must be a non-negative integer literal, must be in bounds, and must
 select a copy element. The checker rejects a variable index or a non-copy
 element. To take ownership of a non-copy element, unpack the tuple.
 
+## Rest Targets
+
+One `*name` target collects the positions the other targets leave over. It
+binds them as a smaller tuple. Use `*_` to drop them:
+
+```aura check-pass
+head, *tail = (1, "two", 3.0)
+print(head)
+print(tail)
+first, *_, last = (1, 2, 3, 4)
+print(first + last)
+```
+
+This prints `1`, `(two, 3.0)`, and `5`. A target has at most one rest element.
+Aura has no empty tuple, so `*name` must cover at least one position. `*_` may
+cover none. The same rest element works inside a tuple pattern, such as
+`case (first, *others):`.
+
 ## Unpacking In Loops
 
 A `for` target can unpack tuple items recursively:
@@ -30745,7 +31016,6 @@ none of these:
 - iteration
 - methods
 - named elements
-- rest or star unpacking
 - slicing
 - dynamic indexing
 - implicit conversion to `list`
@@ -30972,9 +31242,10 @@ The tutorial set covers the topics below.
 - the loop forms `for ... in enumerate(seq):` and
   `for ... in zip(first, second):`. `zip` stops at the shorter sequence.
 - newline continuation inside `()`, `[]`, and `{}`. This covers multiline
-  signatures, calls, grouping, indexing, and collection literals. Ordinary
-  trailing commas, backslash continuation, and multiline f-strings are not
-  available. A singleton tuple still needs its one comma.
+  signatures, calls, grouping, indexing, and collection literals. A trailing
+  comma before the closing delimiter is optional. Backslash continuation and
+  multiline f-strings are not available. A singleton tuple still needs its
+  one comma.
 
 ### Functions And Closures
 
