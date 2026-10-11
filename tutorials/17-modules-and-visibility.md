@@ -105,8 +105,17 @@ from helpers.counter import Counter as ReadableCounter
 counter = ReadableCounter(value=2)
 ```
 
-One from-import may mix plain and aliased entries. An alias changes only the
-local spelling. Visibility, type identity, trait implementations, and module
+One from-import may mix plain and aliased entries. Put a long list in
+parentheses to give each entry its own line:
+
+```aura fragment
+from helpers.counter import (
+    Counter as ReadableCounter,
+    make_counter,
+)
+```
+
+An alias changes only the local spelling. Visibility, type identity, trait implementations, and module
 resolution all still use the original declaration.
 
 ## `public` Visibility
