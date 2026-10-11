@@ -1,0 +1,7 @@
+error[AU3002]: cannot read `counts[0]` while `for ... in mut counts` holds mutable access to it
+ --> crates/aura-compiler/tests/fixtures/check-fail/mutable_iteration_rejects_element_read.au:4:15
+  |
+4 |         print(counts[0])
+  |               ^
+  = related crates/aura-compiler/tests/fixtures/check-fail/mutable_iteration_rejects_element_read.au:3:18: mutable iteration over `counts` starts here
+  = help: read through the loop binding, or read the collection before or after the loop

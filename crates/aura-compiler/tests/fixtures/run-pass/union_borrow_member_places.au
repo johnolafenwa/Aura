@@ -1,0 +1,67 @@
+class Profile:
+    name: str
+    tags: list[str]
+
+class Point:
+    x: int64
+    label: str
+
+def describe(value: str | None) -> str:
+    match value:
+        case None:
+            return "none"
+        case str as text:
+            return f"name {text}"
+
+def count(values: list[int64] | None) -> int64:
+    match values:
+        case None:
+            return -1
+        case list[int64] as found:
+            return len(found)
+
+def locate(point: Point | None) -> str:
+    match point:
+        case None:
+            return "nowhere"
+        case Point as found:
+            return f"{found.label}@{found.x}"
+
+def kind(value: int64 | str | None) -> str:
+    match value:
+        case None:
+            return "none"
+        case int64 as number:
+            return f"int {number}"
+        case str as text:
+            return f"str {text}"
+
+def profile_name(profile: Profile) -> view str from profile:
+    return view profile.name
+
+def main():
+    name = "Ada"
+    print(describe(name))
+    print(describe(None))
+    print(name)
+    mut numbers = [1, 2, 3]
+    print(count(numbers))
+    numbers.append(4)
+    print(count(values=numbers))
+    print(numbers)
+    point = Point(x=3, label="home")
+    print(locate(point))
+    print(point.label)
+    profile = Profile(name="Lin", tags=["admin"])
+    print(describe(profile.name))
+    view borrowed = profile.name
+    print(describe(borrowed))
+    print(describe(profile_name(profile)))
+    other = "Bo"
+    flag = true
+    print(describe(profile.name if flag else other))
+    print(describe(profile.name if not flag else other))
+    print(kind(name))
+    print(kind(7))
+    print(profile.name)
+    print(other)

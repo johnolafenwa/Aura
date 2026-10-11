@@ -18046,6 +18046,15 @@ impl<'a> Lowerer<'a> {
                 return value;
             }
         }
+        if passing == ReceiverKind::Borrow {
+            // A member place passed to a shared union parameter is lent for
+            // the call: the injected union reads the member through the
+            // same element, entry, view, or returned-view loan a member
+            // parameter would take, so no member value is copied.
+            if let Some(value) = self.lower_borrowed_union_injection(expr, expected) {
+                return value;
+            }
+        }
         if passing == ReceiverKind::Borrow
             && self
                 .infer_expr_type(expr)
@@ -18227,6 +18236,33 @@ impl<'a> Lowerer<'a> {
         } else {
             Operand::Place(target)
         })
+    }
+
+    fn lower_borrowed_union_injection(
+        &mut self,
+        expr: &Expr,
+        expected: Option<&Type>,
+    ) -> Option<Operand> {
+        let expected = expected.filter(|expected| matches!(expected, Type::Union(_)))?;
+        if let ExprKind::Group(inner) = &expr.kind {
+            return self.lower_borrowed_union_injection(inner, Some(expected));
+        }
+        let injection = self
+            .program
+            .union_injection(self.module_name, expr.span, expected)?;
+        let value =
+            self.lower_expr_for_passing(expr, Some(&injection.member_type), ReceiverKind::Borrow);
+        let target = self.new_typed_temp(injection.union_type.clone());
+        self.emit(Instruction::Assign {
+            target: target.clone(),
+            value: Rvalue::UnionInject {
+                value,
+                union_type: injection.union_type,
+                member_type: injection.member_type,
+                member_index: injection.member_index,
+            },
+        });
+        Some(Operand::Place(target))
     }
 
     fn is_contextual_none_expr(expr: &Expr) -> bool {

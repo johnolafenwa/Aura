@@ -1,0 +1,7 @@
+error[AU3002]: argument for parameter `extra` in function `both` overlaps mutable borrow for parameter `values`; mutable borrows must be exclusive
+ --> crates/aura-compiler/tests/fixtures/check-fail/union_borrow_overlaps_mutable_argument.au:6:17
+  |
+6 |     both(words, words)
+  |                 ^
+  = related crates/aura-compiler/tests/fixtures/check-fail/union_borrow_overlaps_mutable_argument.au:6:10: mutable borrow for parameter `values` begins here
+  = help: pass non-overlapping places; shared accesses may overlap, but mutable access must remain exclusive

@@ -11572,19 +11572,22 @@ impl<'a> FunctionCompiler<'a> {
         }
         let boxed =
             self.switch_on_union_tag(union, words, &result_ty, |codegen, index, member| {
+                // A handle payload of a borrowed union stays owned by the
+                // union's place. The runtime injection consumes the value
+                // behind the handle it receives, so a borrowed handle is
+                // copied, as the interpreter copies a place read into an
+                // injection; a moved union's payload or a freshly boxed
+                // member moves into the boxed value.
+                let borrowed_handle = !owned && matches!(member.ty, DirectType::Opaque(_));
                 let payload = codegen.ensure_opaque(member)?;
-                if owned {
-                    // The moved union's handle moves into the boxed value.
-                    codegen.mark_temporary_opaque_owned(&payload);
-                }
-                // A borrowed string payload is immutable, so the boxed union
-                // shares it; any other borrowed payload is copied, as the
-                // interpreter copies a place read into an injection.
-                let immutable_payload =
-                    matches!(&payload.ty, DirectType::Opaque(Type::Named(name, args)) if name == "str" && args.is_empty());
-                let transferred = if immutable_payload {
-                    codegen.transfer_opaque_arg(&payload)
+                let transferred = if borrowed_handle {
+                    let inst = codegen
+                        .builder
+                        .ins()
+                        .call(codegen.clone_value, &[payload.values[0]]);
+                    codegen.builder.inst_results(inst)[0]
                 } else {
+                    codegen.mark_temporary_opaque_owned(&payload);
                     codegen.transfer_owned_opaque_value(&payload)
                 };
                 let tag = codegen.builder.ins().iconst(types::I64, index as i64);
