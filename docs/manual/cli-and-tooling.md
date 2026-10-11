@@ -658,6 +658,7 @@ code's precise rules.
 | `AU2013` | union pattern coverage failure |
 | `AU2014` | invalidated narrowing |
 | `AU2015` | callable contract mismatch |
+| `AU2017` | context manager protocol |
 | `AU2999` | general compile-time rejection without a narrower code |
 | `AU3001` | use of a moved value |
 | `AU3002` | borrow violation |

@@ -210,8 +210,11 @@ final = acct.into_balance()   # acct is gone after this
 
 A bare `self` cannot mutate. The compiler tells you to write `mut self`.
 
-A method named `close` is special. It makes the class a managed resource for
-`with` blocks, so pick another name unless that is what you want.
+Context managers use Python's names. A class with `__exit__(mut self)`, and
+optionally `__enter__(mut self)`, works in a `with` block. A class with only
+`close(mut self)` works too, so pick another name for an unrelated method.
+`__exit__` takes no exception arguments. It returns `None`, or a `Result` that
+the enclosing function propagates like `try`.
 
 ### `@property` And `__str__`
 

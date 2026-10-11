@@ -398,23 +398,26 @@ When the enclosing function uses a different error type, the applicable `From` t
 
 ## Resource Lifetime And Cleanup
 
-`with` creates an active cleanup registration after its resource expression succeeds. Leaving the body invokes `close(mut self) -> None` exactly once through that registration.
+`with` creates an active exit registration after an item's expression and its `__enter__` succeed. Leaving the body runs that item's exit exactly once: `__exit__`, a user `close`, or the builtin resource's cleanup.
 
-Cleanup runs on:
+Exits run on:
 
 - normal fallthrough
 - `return`
 - `break` or `continue` that exits the scope
 - `try` error propagation
 - a maintained Aura runtime failure
+- task cancellation
 
-Nested active cleanups run in reverse registration order. If the body is already failing and cleanup also fails, the original body diagnostic stays primary. Each resource's API chapter defines its `close()` behavior.
+Nested active exits run in reverse registration order. Under cancellation, exits run while the cancellation is still pending, so a cancellable wait inside an exit reports cancellation.
+
+An exit that returns `Result[None, E]` propagates its `Err` like `try` only on the normal paths: fallthrough, `return`, and loop control. When the body is already leaving through `try` propagation or cancellation, the exit's `Err` is dropped. When the body traps, the trap stays primary and each failing exit adds a note to it. If an exit itself traps while the body is already failing, the original body diagnostic stays primary. Each resource's API chapter defines its `close()` behavior.
 
 Closing a resource explicitly before scope exit is permitted only where the resource contract makes a repeated close harmless. Otherwise, let the lexical owner perform cleanup.
 
 These rules apply when Aura control flow or a maintained runtime failure exits the task through the language cleanup machinery. Internal scheduler abandonment is different. It is a last-resort containment path, used when the whole scheduler stops while a child is still suspended, such as after root completion or a fatal reactor failure.
 
-Scheduler abandonment marks the remaining task cancelled and releases scheduler-owned and direct-runtime host state. It does not invoke arbitrary Aura cleanup thunks. A direct generated stack may be reset on this path, because it cannot be safely Rust-unwound across Cranelift frames. Use structured `TaskGroup` scopes. Do not depend on scheduler abandonment as a cleanup mechanism.
+Scheduler abandonment marks the remaining task cancelled and releases scheduler-owned and direct-runtime host state. It does not invoke arbitrary Aura cleanup thunks, so no `__exit__` or `close` runs. A direct generated stack may be reset on this path, because it cannot be safely Rust-unwound across Cranelift frames. Use structured `TaskGroup` scopes. Do not depend on scheduler abandonment as a cleanup mechanism.
 
 ## Tasks And Scheduler
 

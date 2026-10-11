@@ -384,26 +384,29 @@ The `indirect` marker stores the whole field indirectly. `|` binds more loosely 
 
 `indirect` applies to the complete type reference that follows it. It is a field-layout marker. It is not a pointer expression and not a runtime operation. At least one field on every recursive layout cycle must be `indirect`.
 
-## User Resource Classes
+## Context Manager Classes
 
-`with` can manage a non-generic user class that declares this exact instance method:
+A class is a context manager when it declares `__exit__(mut self)`. `with` calls its optional `__enter__` before the body and its `__exit__` when control leaves the body:
 
 ```aura
-class Resource:
+class Session:
     name: str
 
-    def close(mut self) -> None:
-        print("closing " + self.name)
+    def __enter__(mut self) -> None:
+        print("open " + self.name)
+
+    def __exit__(mut self) -> None:
+        print("close " + self.name)
 ```
 
-The method must be named `close`, use `mut self`, take no ordinary parameters, and return `None`. In Aura 0.3, `with` does not support generic user resource classes.
+`__exit__` must take `mut self`, take no other parameters, and return `None` or `Result[None, E]`. `__enter__` must take `mut self`, take no other parameters, and return `None` or a view of `self` declared as `view [mut] T from self`. A class without `__exit__` that declares `close(mut self) -> None` is a context manager whose exit is `close`. Generic classes qualify under the same rules. Any other shape is rejected with `AU2017`.
 
 ```aura fragment
-with resource = Resource(name="db"):
-    print("using resource")
+with session = Session(name="db"):
+    print("using session")
 ```
 
-`with` consumes the resource expression into a fresh mutable managed binding. The binding cannot be moved out while cleanup is active. Cleanup runs exactly once per registration, on normal exits and on maintained abnormal exits, in reverse nesting order. See [Execution Model](/manual/execution-model#resource-lifetime-and-cleanup).
+`with` consumes the item expression into a fresh mutable managed binding. The binding cannot be moved out while its exit is registered. The exit runs exactly once per registration, on normal exits and on maintained abnormal exits, in reverse nesting order. [Statements](/manual/statements#with-and-context-managers) defines entry views, multi-item headers, and exits that return `Result`.
 
 ## Grammar
 
@@ -419,13 +422,13 @@ with resource = Resource(name="db"):
 - The receiver mode controls which field accesses are legal.
 - A `copy class` requires every field to be statically copyable.
 - Every direct recursive layout cycle requires `indirect`.
-- The checker checks cross-module visibility and the exact user-resource shape `close(mut self) -> None` before lowering.
+- The checker checks cross-module visibility and the context manager shapes of `__enter__`, `__exit__`, and `close` before lowering.
 
 ## Runtime Semantics
 
 Construction creates one fresh nominal value. For a class with `__init__`, Aura binds the call's arguments, evaluates the field defaults in declaration order, and runs the initializer body on the new object. Otherwise Aura evaluates the supplied field expressions in call-site source order. Each result is copied or moved into its owned field slot before any later field expression runs. Aura then evaluates each omitted field's default in field declaration order, afresh each time. Binding values to field slots does not reorder evaluation, and a supplied field's default is never evaluated.
 
-An instance call invokes the statically selected inherent or trait method. An associated method receives no implicit instance. Class equality compares the nominal class identity and the represented field values. A managed user-resource class is closed exactly once by its active `with` registration, under the cleanup rules in [Execution Model](/manual/execution-model).
+An instance call invokes the statically selected inherent or trait method. An associated method receives no implicit instance. Class equality compares the nominal class identity and the represented field values. A context manager class exits exactly once through its active `with` registration, under the cleanup rules in [Execution Model](/manual/execution-model).
 
 ## Ownership And Evaluation Order
 
@@ -446,12 +449,13 @@ An instance call invokes the statically selected inherent or trait method. An as
 | `AU2004` | Constructor or method argument-binding failure. |
 | `AU2005` | `__init__` called as a method or used as a value, or a decorator other than a bare `@property` line. |
 | `AU2016` | Invalid `__init__` declaration: a receiver other than bare `self`, its own type parameters, a result other than `None`, `return value`, or a trait member named `__init__`. |
+| `AU2017` | A `with` item whose class has no valid `__exit__` or `close`, or whose `__enter__` has the wrong shape. |
 | `AU2043` | An invalid `Display` implementation. See [Generics And Traits](/manual/generics-and-traits#the-display-trait). |
 | `AU2044` | An invalid property declaration. |
 | `AU2045` | Assignment, mutable use, a view, or call syntax on a property. |
 | `AU2999` | Duplicate declaration, invalid visibility, invalid recursive layout, unsupported member use, and other class rejections without a narrower code. |
 | `AU3001` | Use of a moved class or field. |
-| `AU3002` | Overlapping receiver and argument borrows, moving a field through shared access, or an invalid user-resource `close` contract. |
+| `AU3002` | Overlapping receiver and argument borrows, or moving a field through shared access. |
 | `AU3003` | Mutation through an immutable class place, including a shared `self` receiver. |
 | `AU3004` | Invalid ownership or receiver mode, including moving `self` out of `__init__`. |
 | `AU3012` | A field of `self` used before it is initialized, an assignment to a field that may already be initialized, or `self` escaping or returning before every field is set. |
@@ -468,13 +472,12 @@ A trap inside a field default, method, or cleanup body keeps the code for the op
 
 ## Backend Support
 
-MIR execution and direct native generation both implement nominal classes, generic specialization, fields and defaults, all maintained receiver modes, partial moves, structural equality, `copy class`, `indirect`, visibility, and user-resource cleanup. Both backends receive the same checked class and method metadata. Compiler analysis and the language server use that metadata for member resolution and signatures.
+MIR execution and direct native generation both implement nominal classes, generic specialization, fields and defaults, all maintained receiver modes, partial moves, structural equality, `copy class`, `indirect`, visibility, and context manager entry and exit. Both backends receive the same checked class and method metadata. Compiler analysis and the language server use that metadata for member resolution and signatures.
 
 ## Limits And Implementation-Defined Behavior
 
 - Aura 0.3 has no class inheritance, overloads, property setters, or general destructor hook. A class has at most one initializer.
 - An initializer cannot move a field out of `self` or return a `Result`.
-- `with` cannot manage a generic user class directly.
 - A class field default cannot call a user-defined function in the current compiler. Compute the value before construction and pass it as an explicit field argument.
 - `indirect` is only a recursive field-layout marker. Its storage representation is not an observable language contract.
 - The physical order and padding of fields are not observable language contracts.
@@ -491,7 +494,7 @@ Implemented:
 - inherent and associated methods, with all maintained receiver modes
 - partial-field moves
 - recursive `indirect` fields
-- non-generic user-resource classes
+- context manager classes, including generic ones
 - local shared or mutable views of fixed class fields
 - returned-view contracts tied to one receiver or parameter
 - read-only `@property` getters
@@ -499,7 +502,7 @@ Implemented:
 
 Views cannot be stored in class fields or other owned aggregates.
 
-Not implemented: inheritance, properties, custom constructor or destructor hooks, and generic `with` resources. Do not infer them from accepted class syntax.
+Not implemented: inheritance, properties, and destructor hooks. Do not infer them from accepted class syntax.
 
 The fixture `crates/aura-compiler/tests/fixtures/run-pass/explicit_and_default_argument_order.au` pins the constructor evaluation order on both backends.
 

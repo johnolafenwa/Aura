@@ -244,6 +244,7 @@ compiler, CLI, and language-server regression tests cover them instead.
 | File | Shows | Prints |
 | --- | --- | --- |
 | `with_resource.au` | Deterministic cleanup with `with` and `close(mut self)` | `demo`, `closed demo`, `done` |
+| `context_managers.au` | `__enter__` entry views, `__exit__` returning `Result`, and two items in one `with` header | `lock counter`, `flush 2 entries to audit`, `unlock counter with 2 values`, `recorded 2`, then the empty-journal error |
 
 ### `io/`
 
@@ -408,6 +409,7 @@ cargo run -p aura -- run examples/traits/builtin_target_traits.au
 cargo run -p aura -- run examples/traits/display.au
 cargo run -p aura -- run examples/error_handling/try_result.au
 cargo run -p aura -- run examples/resources/with_resource.au
+cargo run -p aura -- run examples/resources/context_managers.au
 cargo run -p aura -- run examples/io/read_text_file.au
 cargo run -p aura -- run examples/io/bytes_file_io.au
 cargo run -p aura -- run examples/io/process_run.au
