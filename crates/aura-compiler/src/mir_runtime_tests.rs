@@ -99,6 +99,32 @@ fn adr0061_element_place_segments_round_trip_keys_and_refuse_invalid_encodings()
         variant("Red", Vec::new()),
         variant("Numbered", vec![Value::Int(IntegerValue::from_i64(3))]),
         variant("Numbered", vec![Value::Int(IntegerValue::from_i64(4))]),
+        Value::Duration(5),
+        Value::Tuple(TupleValue {
+            element_types: vec![
+                Type::named("int64"),
+                Type::named("float64"),
+                Type::named("bool"),
+                Type::named("bool"),
+            ],
+            elements: vec![
+                Value::Int(IntegerValue::from_i64(-1)),
+                Value::Float(0.5),
+                Value::Bool(true),
+                Value::Bool(false),
+            ],
+        }),
+        Value::Union(Box::new(crate::runtime_value::UnionValue {
+            union_type: Type::named("str"),
+            member_index: 1,
+            payload: Value::String("x".to_string()),
+        })),
+        Value::Instance(InstanceValue {
+            class_name: "Point".to_string(),
+            fields: [("x".to_string(), Value::Int(IntegerValue::from_i64(1)))]
+                .into_iter()
+                .collect(),
+        }),
     ];
     for (index, key) in composite.iter().enumerate() {
         let segment = super::entry_key_segment(key).unwrap();

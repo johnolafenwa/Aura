@@ -1851,7 +1851,7 @@ fn parse_entry_key_segment(segment: &str, place: &str) -> Result<EntryKeySelecto
 }
 
 fn parse_hex_bytes(hex: &str) -> Option<Vec<u8>> {
-    if hex.len() % 2 != 0 {
+    if !hex.len().is_multiple_of(2) {
         return None;
     }
     (0..hex.len())

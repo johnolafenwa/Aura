@@ -1,0 +1,7 @@
+error[AU3001]: use of moved field `values` from `box`
+ --> crates/aura-compiler/tests/fixtures/check-fail/element_set_moved_field_receiver.au:7:15
+  |
+7 |     old = box.values.set(0, 30)
+  |               ^
+  = related crates/aura-compiler/tests/fixtures/check-fail/element_set_moved_field_receiver.au:6:17: field moved here
+  = help: use shared access to the field when ownership is not needed, or call `.clone()` before moving it when an independent value is required

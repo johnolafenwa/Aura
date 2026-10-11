@@ -1,0 +1,8 @@
+class Box:
+    values: list[int64]
+
+def main():
+    mut box = Box(values=[10, 20])
+    view mut first = box.values[0]
+    old = box.values.set(0, 30)
+    print(first)
