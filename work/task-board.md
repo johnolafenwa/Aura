@@ -2,20 +2,20 @@
 
 Last updated: 2026-10-11
 
-## Aura 0.3.6 preview release (in progress)
+## Aura 0.3.6 preview release (complete)
 
-- Target: fix the five reproducible defects from the external 0.3.5
-  preview review, each with a forced MIR/direct parity fixture, then merge
-  and release 0.3.6 as John asked.
-- Done: native returned-view path through a field between selections,
-  keyword `list.set` beside a live view, grouped and field receivers for
-  collection mutations, entry views for every key type, and a sixth defect
-  found while testing: a wide integer literal argument to a view-returning
-  call. CLI, compiler, and language server bumped to 0.3.6, extension to
-  0.3.7. Details are in `2026-10-11-v0.3.5-review-fixes.md` and
+- Released 2026-10-11 from `main` at `5652e469` (PR #31) as
+  `v0.3.6-preview`: CLI, compiler, and language server 0.3.6, VS Code
+  extension 0.3.7. It fixes the five defects from the external 0.3.5
+  preview review plus a wide integer literal argument to a view-returning
+  call, each with a forced MIR/direct parity fixture. Hosted CI
+  `38135258181` passed on PR #31, and main CI `38141466384` and Docs
+  `38141466382` are green; the tag push ran Release `38153692915`, which
+  published the GitHub Release and the extension. Details are in
+  `2026-10-11-v0.3.5-review-fixes.md` and
   `2026-10-11-v0.3.6-preview-release.md`.
-- Remaining: hosted CI on PR #31, merge, the `v0.3.6-preview` tag, and the
-  Release run.
+- Next: borrowing non-copy values into union parameters (`AU2010`), then
+  phase 2b (slice views and `Span[T]`).
 
 ## Aura 0.3.5 preview release (complete)
 
