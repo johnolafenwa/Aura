@@ -1,0 +1,8 @@
+class Point:
+    x: int64
+
+impl Display for Point:
+    pass
+
+def main():
+    print(Point(x=1))

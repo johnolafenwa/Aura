@@ -1,0 +1,6 @@
+error[AU2043]: `Display` cannot be implemented for the union type `Left | Right`
+ --> crates/aura-compiler/tests/fixtures/check-fail/display_impl_union_type.au:7:1
+  |
+7 | impl Display for Left | Right:
+  | ^
+  = help: a union renders its active member; implement `Display` for a member class

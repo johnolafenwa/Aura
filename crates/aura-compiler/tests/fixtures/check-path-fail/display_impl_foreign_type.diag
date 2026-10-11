@@ -1,0 +1,6 @@
+error[AU2043]: `Display` for `display_support.shapes.Circle` must be implemented in module `display_support.shapes`, which declares the type
+ --> crates/aura-compiler/tests/fixtures/check-path-fail/display_impl_foreign_type.au:3:1
+  |
+3 | impl Display for Circle:
+  | ^
+  = help: a type has one rendering, chosen by the module that declares it

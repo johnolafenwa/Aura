@@ -7080,6 +7080,20 @@ impl PartialEq for Value {
 
 impl Value {
     pub fn render(&self) -> String {
+        match self.render_inner(None) {
+            Ok(rendered) => rendered,
+            Err(_) => unreachable!("structural rendering without a display hook cannot fail"),
+        }
+    }
+
+    /// Renders the value, asking `hook` first at every class instance and
+    /// enum variant, including the value itself. A hook that returns text
+    /// replaces that node's structural rendering; an error stops rendering.
+    pub(crate) fn render_with_display(&self, hook: &mut DisplayHook<'_>) -> Result<String> {
+        self.render_inner(Some(hook))
+    }
+
+    fn render_inner(&self, mut hook: Option<&mut DisplayHook<'_>>) -> Result<String> {
         enum RenderAction<'a> {
             Value(&'a Value),
             Text(&'a str),
@@ -7093,150 +7107,166 @@ impl Value {
                 RenderAction::Text(text) | RenderAction::Static(text) => {
                     rendered.push_str(text);
                 }
-                RenderAction::Value(value) => match value {
-                    Value::Int(value) => rendered.push_str(&value.to_string()),
-                    Value::Float(value) => rendered.push_str(&render_float(*value)),
-                    Value::Bool(value) => rendered.push_str(if *value { "true" } else { "false" }),
-                    Value::String(value) => rendered.push_str(value),
-                    Value::Tuple(tuple) => {
-                        rendered.push('(');
-                        actions.push(RenderAction::Static(")"));
-                        if tuple.elements.len() == 1 {
-                            actions.push(RenderAction::Static(","));
-                        }
-                        for (index, value) in tuple.elements.iter().enumerate().rev() {
-                            actions.push(RenderAction::Value(value));
-                            if index > 0 {
-                                actions.push(RenderAction::Static(", "));
+                RenderAction::Value(value) => {
+                    if let Some(hook) = hook.as_mut() {
+                        if matches!(value, Value::Instance(_) | Value::EnumVariant(_)) {
+                            if let Some(text) = hook(value) {
+                                rendered.push_str(&text?);
+                                continue;
                             }
                         }
                     }
-                    Value::Vec(values) => {
-                        rendered.push('[');
-                        actions.push(RenderAction::Static("]"));
-                        for (index, value) in values.elements.iter().enumerate().rev() {
-                            actions.push(RenderAction::Value(value));
-                            if index > 0 {
-                                actions.push(RenderAction::Static(", "));
-                            }
+                    match value {
+                        Value::Int(value) => rendered.push_str(&value.to_string()),
+                        Value::Float(value) => rendered.push_str(&render_float(*value)),
+                        Value::Bool(value) => {
+                            rendered.push_str(if *value { "true" } else { "false" })
                         }
-                    }
-                    Value::Array(array) => rendered.push_str(&array.render()),
-                    Value::Set(values) => {
-                        if values.elements.is_empty() {
-                            rendered.push_str("set()");
-                            continue;
-                        }
-                        rendered.push('{');
-                        actions.push(RenderAction::Static("}"));
-                        for (index, value) in values.elements.iter().enumerate().rev() {
-                            actions.push(RenderAction::Value(value));
-                            if index > 0 {
-                                actions.push(RenderAction::Static(", "));
-                            }
-                        }
-                    }
-                    Value::Map(map) => {
-                        rendered.push('{');
-                        actions.push(RenderAction::Static("}"));
-                        for (index, (key, value)) in map.entries.iter().enumerate().rev() {
-                            actions.push(RenderAction::Value(value));
-                            actions.push(RenderAction::Static(": "));
-                            actions.push(RenderAction::Value(key));
-                            if index > 0 {
-                                actions.push(RenderAction::Static(", "));
-                            }
-                        }
-                    }
-                    Value::Duration(value) => rendered.push_str(&render_duration(*value)),
-                    Value::Rng(_) => rendered.push_str("<rng>"),
-                    Value::Range(range) => {
-                        rendered.push_str(&format!("range({}, {})", range.start, range.end));
-                    }
-                    Value::ModuleNamespace(namespace) => {
-                        rendered.push_str(&format!("<module {}>", namespace.path));
-                    }
-                    Value::Function(function) => {
-                        rendered.push_str(&format!("<function {}>", function.name));
-                    }
-                    // `None` is the unit value; an absent optional renders by
-                    // name in `print`, `str`, and interpolation like Python.
-                    Value::Unit => rendered.push_str("None"),
-                    Value::FfiHandle(handle) => {
-                        rendered.push_str(&format!("<opaque {}>", handle.type_name()));
-                    }
-                    Value::Channel(_) => rendered.push_str("<queue>"),
-                    Value::Task(_) => rendered.push_str("<task>"),
-                    Value::TaskGroup(_) => rendered.push_str("<tasks>"),
-                    Value::File(_) => rendered.push_str("<file>"),
-                    Value::TcpListener(_) => rendered.push_str("<tcp-listener>"),
-                    Value::TcpStream(_) => rendered.push_str("<tcp-stream>"),
-                    Value::UdpSocket(_) => rendered.push_str("<udp-socket>"),
-                    Value::UdpDatagram(datagram) => rendered.push_str(&format!(
-                        "<udp-datagram {} {} bytes>",
-                        datagram.address,
-                        datagram.data.len()
-                    )),
-                    Value::HttpListener(_) => rendered.push_str("<http-listener>"),
-                    Value::HttpExchange(_) => rendered.push_str("<http-exchange>"),
-                    Value::HttpResponse(response) => rendered.push_str(&format!(
-                        "<http-response {} {} bytes>",
-                        response.status,
-                        response.body.len()
-                    )),
-                    Value::WebSocketListener(_) => rendered.push_str("<websocket-listener>"),
-                    Value::WebSocket(_) => rendered.push_str("<websocket>"),
-                    Value::ProcessChild(_) => rendered.push_str("<process-child>"),
-                    Value::ProcessPipe(_) => rendered.push_str("<process-pipe>"),
-                    Value::ProcessCompleted(completed) => rendered.push_str(&format!(
-                        "<process-completed {}>",
-                        completed.status().render()
-                    )),
-                    Value::ProcessSupervisor(_) => rendered.push_str("<process-supervisor>"),
-                    Value::UnixListener(_) => rendered.push_str("<unix-listener>"),
-                    Value::UnixStream(_) => rendered.push_str("<unix-stream>"),
-                    Value::TlsListener(_) => rendered.push_str("<tls-listener>"),
-                    Value::TlsStream(_) => rendered.push_str("<tls-stream>"),
-                    Value::Instance(instance) => {
-                        rendered.push_str(nominal_runtime_base_name(&instance.class_name));
-                        rendered.push('(');
-                        actions.push(RenderAction::Static(")"));
-                        let fields = instance
-                            .fields
-                            .iter()
-                            .filter(|(name, _)| name.as_str() != DIRECT_RUNTIME_TYPE_FIELD)
-                            .collect::<Vec<_>>();
-                        for (index, (name, value)) in fields.into_iter().enumerate().rev() {
-                            actions.push(RenderAction::Value(value));
-                            actions.push(RenderAction::Static("="));
-                            actions.push(RenderAction::Text(name));
-                            if index > 0 {
-                                actions.push(RenderAction::Static(", "));
-                            }
-                        }
-                    }
-                    Value::Union(union) => actions.push(RenderAction::Value(&union.payload)),
-                    Value::EnumVariant(variant) => {
-                        rendered.push_str(nominal_runtime_base_name(&variant.enum_name));
-                        rendered.push('.');
-                        rendered.push_str(&variant.variant_name);
-                        if !variant.payloads.is_empty() {
+                        Value::String(value) => rendered.push_str(value),
+                        Value::Tuple(tuple) => {
                             rendered.push('(');
                             actions.push(RenderAction::Static(")"));
-                            for (index, payload) in variant.payloads.iter().enumerate().rev() {
-                                actions.push(RenderAction::Value(payload));
+                            if tuple.elements.len() == 1 {
+                                actions.push(RenderAction::Static(","));
+                            }
+                            for (index, value) in tuple.elements.iter().enumerate().rev() {
+                                actions.push(RenderAction::Value(value));
                                 if index > 0 {
                                     actions.push(RenderAction::Static(", "));
                                 }
                             }
                         }
+                        Value::Vec(values) => {
+                            rendered.push('[');
+                            actions.push(RenderAction::Static("]"));
+                            for (index, value) in values.elements.iter().enumerate().rev() {
+                                actions.push(RenderAction::Value(value));
+                                if index > 0 {
+                                    actions.push(RenderAction::Static(", "));
+                                }
+                            }
+                        }
+                        Value::Array(array) => rendered.push_str(&array.render()),
+                        Value::Set(values) => {
+                            if values.elements.is_empty() {
+                                rendered.push_str("set()");
+                                continue;
+                            }
+                            rendered.push('{');
+                            actions.push(RenderAction::Static("}"));
+                            for (index, value) in values.elements.iter().enumerate().rev() {
+                                actions.push(RenderAction::Value(value));
+                                if index > 0 {
+                                    actions.push(RenderAction::Static(", "));
+                                }
+                            }
+                        }
+                        Value::Map(map) => {
+                            rendered.push('{');
+                            actions.push(RenderAction::Static("}"));
+                            for (index, (key, value)) in map.entries.iter().enumerate().rev() {
+                                actions.push(RenderAction::Value(value));
+                                actions.push(RenderAction::Static(": "));
+                                actions.push(RenderAction::Value(key));
+                                if index > 0 {
+                                    actions.push(RenderAction::Static(", "));
+                                }
+                            }
+                        }
+                        Value::Duration(value) => rendered.push_str(&render_duration(*value)),
+                        Value::Rng(_) => rendered.push_str("<rng>"),
+                        Value::Range(range) => {
+                            rendered.push_str(&format!("range({}, {})", range.start, range.end));
+                        }
+                        Value::ModuleNamespace(namespace) => {
+                            rendered.push_str(&format!("<module {}>", namespace.path));
+                        }
+                        Value::Function(function) => {
+                            rendered.push_str(&format!("<function {}>", function.name));
+                        }
+                        // `None` is the unit value; an absent optional renders by
+                        // name in `print`, `str`, and interpolation like Python.
+                        Value::Unit => rendered.push_str("None"),
+                        Value::FfiHandle(handle) => {
+                            rendered.push_str(&format!("<opaque {}>", handle.type_name()));
+                        }
+                        Value::Channel(_) => rendered.push_str("<queue>"),
+                        Value::Task(_) => rendered.push_str("<task>"),
+                        Value::TaskGroup(_) => rendered.push_str("<tasks>"),
+                        Value::File(_) => rendered.push_str("<file>"),
+                        Value::TcpListener(_) => rendered.push_str("<tcp-listener>"),
+                        Value::TcpStream(_) => rendered.push_str("<tcp-stream>"),
+                        Value::UdpSocket(_) => rendered.push_str("<udp-socket>"),
+                        Value::UdpDatagram(datagram) => rendered.push_str(&format!(
+                            "<udp-datagram {} {} bytes>",
+                            datagram.address,
+                            datagram.data.len()
+                        )),
+                        Value::HttpListener(_) => rendered.push_str("<http-listener>"),
+                        Value::HttpExchange(_) => rendered.push_str("<http-exchange>"),
+                        Value::HttpResponse(response) => rendered.push_str(&format!(
+                            "<http-response {} {} bytes>",
+                            response.status,
+                            response.body.len()
+                        )),
+                        Value::WebSocketListener(_) => rendered.push_str("<websocket-listener>"),
+                        Value::WebSocket(_) => rendered.push_str("<websocket>"),
+                        Value::ProcessChild(_) => rendered.push_str("<process-child>"),
+                        Value::ProcessPipe(_) => rendered.push_str("<process-pipe>"),
+                        Value::ProcessCompleted(completed) => rendered.push_str(&format!(
+                            "<process-completed {}>",
+                            completed.status().render()
+                        )),
+                        Value::ProcessSupervisor(_) => rendered.push_str("<process-supervisor>"),
+                        Value::UnixListener(_) => rendered.push_str("<unix-listener>"),
+                        Value::UnixStream(_) => rendered.push_str("<unix-stream>"),
+                        Value::TlsListener(_) => rendered.push_str("<tls-listener>"),
+                        Value::TlsStream(_) => rendered.push_str("<tls-stream>"),
+                        Value::Instance(instance) => {
+                            rendered.push_str(nominal_runtime_base_name(&instance.class_name));
+                            rendered.push('(');
+                            actions.push(RenderAction::Static(")"));
+                            let fields = instance
+                                .fields
+                                .iter()
+                                .filter(|(name, _)| name.as_str() != DIRECT_RUNTIME_TYPE_FIELD)
+                                .collect::<Vec<_>>();
+                            for (index, (name, value)) in fields.into_iter().enumerate().rev() {
+                                actions.push(RenderAction::Value(value));
+                                actions.push(RenderAction::Static("="));
+                                actions.push(RenderAction::Text(name));
+                                if index > 0 {
+                                    actions.push(RenderAction::Static(", "));
+                                }
+                            }
+                        }
+                        Value::Union(union) => actions.push(RenderAction::Value(&union.payload)),
+                        Value::EnumVariant(variant) => {
+                            rendered.push_str(nominal_runtime_base_name(&variant.enum_name));
+                            rendered.push('.');
+                            rendered.push_str(&variant.variant_name);
+                            if !variant.payloads.is_empty() {
+                                rendered.push('(');
+                                actions.push(RenderAction::Static(")"));
+                                for (index, payload) in variant.payloads.iter().enumerate().rev() {
+                                    actions.push(RenderAction::Value(payload));
+                                    if index > 0 {
+                                        actions.push(RenderAction::Static(", "));
+                                    }
+                                }
+                            }
+                        }
                     }
-                },
+                }
             }
         }
-        rendered
+        Ok(rendered)
     }
 }
+
+/// A rendering callback for nominal values with a `Display` implementation.
+/// It returns `None` when the value has no implementation.
+pub(crate) type DisplayHook<'a> = dyn FnMut(&Value) -> Option<Result<String>> + 'a;
 
 pub(crate) fn render_float(value: f64) -> String {
     format!("{value:?}")
@@ -7658,10 +7688,22 @@ fn apply_format_width(rendered: String, spec: &ParsedFormatSpec, numeric: bool) 
     Ok(output)
 }
 
+#[cfg(test)]
 pub(crate) fn format_runtime_value(
     value: &Value,
     value_type: &Type,
     source: &str,
+) -> Result<String> {
+    format_runtime_value_with(value, value_type, source, &mut |value| Ok(value.render()))
+}
+
+/// Formats a value with an explicit specification, rendering a value with
+/// no numeric or text code through `render`.
+pub(crate) fn format_runtime_value_with(
+    value: &Value,
+    value_type: &Type,
+    source: &str,
+    render: &mut dyn FnMut(&Value) -> Result<String>,
 ) -> Result<String> {
     let spec = parse_format_spec(source).map_err(|error| {
         Diagnostic::coded(
@@ -7743,7 +7785,7 @@ pub(crate) fn format_runtime_value(
             let (negative, magnitude) = integer_magnitude(*integer, 10, false);
             apply_numeric_sign(magnitude, negative, spec.sign)
         }
-        (None, _) => value.render(),
+        (None, _) => render(value)?,
         (Some(code), _) => {
             return Err(Diagnostic::coded(
                 "AU4001",

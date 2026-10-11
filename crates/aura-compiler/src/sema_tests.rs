@@ -8249,6 +8249,7 @@ fn checker_expression_helper_paths_cover_collection_specialization_and_control_e
                     type_param_bounds: BTreeMap::new(),
                 },
             )]),
+            display: false,
         },
         TraitImplInfo {
             module_name: program.module_name.clone(),
@@ -8274,6 +8275,7 @@ fn checker_expression_helper_paths_cover_collection_specialization_and_control_e
                     type_param_bounds: BTreeMap::new(),
                 },
             )]),
+            display: false,
         },
     ];
     let mut checker = FunctionChecker::new(

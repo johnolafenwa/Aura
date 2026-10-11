@@ -1,0 +1,10 @@
+class Counter:
+    count: int64
+
+impl Display for Counter:
+    def display(mut self) -> str:
+        self.count += 1
+        return "counter"
+
+def main():
+    print(Counter(count=0))

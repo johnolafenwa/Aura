@@ -9190,6 +9190,8 @@ pub fn lower(program: &Program) -> MirModule {
         &mut seen_trait_impls,
     );
 
+    push_display_wrappers(program, &mut functions);
+
     let mut constants = Vec::new();
     let mut seen_constants = BTreeSet::new();
     for constant in &program.constant_init_plan {
@@ -9502,6 +9504,99 @@ fn push_imported_module_trait_impls(
                 seen_function_names,
             ));
         }
+    }
+}
+
+/// Prefix of the synthesized MIR function that renders one nominal type
+/// through its `Display` implementation. The suffix is the runtime nominal
+/// name, so both backends build their rendering tables from function names.
+pub const DISPLAY_WRAPPER_PREFIX: &str = "render ";
+
+/// The runtime nominal type rendered by a display wrapper function name.
+pub fn display_wrapper_type_name(function_name: &str) -> Option<&str> {
+    function_name.strip_prefix(DISPLAY_WRAPPER_PREFIX)
+}
+
+/// Synthesizes one ordinary function per `Display` implementation:
+/// `render <Type>(value: own Type) -> str` calls `value.display()`.
+/// The runtime renderer calls it whenever it reaches a value of that nominal
+/// type, at the top level or nested inside an aggregate.
+fn push_display_wrappers(program: &Program, functions: &mut Vec<MirFunction>) {
+    let local = program
+        .trait_impls
+        .iter()
+        .map(|trait_impl| (program.module_name.as_str(), trait_impl));
+    let imported = program.module_registry.values().flat_map(|namespace| {
+        namespace
+            .trait_impls
+            .iter()
+            .map(move |trait_impl| (namespace.path.as_str(), trait_impl))
+    });
+    let mut seen = BTreeSet::new();
+    for (module_name, trait_impl) in local.chain(imported) {
+        if !trait_impl.display {
+            continue;
+        }
+        let Type::Named(type_name, _) = &trait_impl.for_type else {
+            continue;
+        };
+        if !seen.insert(type_name.clone()) {
+            continue;
+        }
+        let method_name = format!(
+            "{}{} for {}.{}",
+            trait_impl.trait_name,
+            format_trait_args(&trait_impl.trait_args),
+            trait_impl.for_type,
+            crate::sema::DISPLAY_METHOD
+        );
+        let (source_path, span) = functions
+            .iter()
+            .find(|function| function.name == method_name)
+            .map(|function| (function.source_path.clone(), function.span))
+            .unwrap_or((None, trait_impl.decl.span));
+        let value_ty = trait_impl.for_type.clone();
+        functions.push(MirFunction {
+            name: format!("{DISPLAY_WRAPPER_PREFIX}{type_name}"),
+            module_name: module_name.to_string(),
+            source_path,
+            span,
+            receiver: None,
+            params: vec![MirParam {
+                name: "value".to_string(),
+                passing: MirReceiverKind::Value,
+                ty: value_ty.clone(),
+                default_function: None,
+                keyword_only: false,
+            }],
+            local_types: vec![
+                MirLocalType {
+                    name: "%t0".to_string(),
+                    ty: Type::named("str"),
+                },
+                MirLocalType {
+                    name: "value".to_string(),
+                    ty: value_ty,
+                },
+            ],
+            return_type: Type::named("str"),
+            entry: "entry".to_string(),
+            blocks: vec![BasicBlock {
+                label: "entry".to_string(),
+                instructions: vec![Instruction::Assign {
+                    target: "%t0".to_string(),
+                    value: Rvalue::Call {
+                        callee: CallTarget::Member {
+                            object: Operand::Place("value".to_string()),
+                            field: crate::sema::DISPLAY_METHOD.to_string(),
+                            receiver_place: Some("value".to_string()),
+                        },
+                        args: Vec::new(),
+                    },
+                }],
+                terminator: Terminator::Return(Operand::MovePlace("%t0".to_string())),
+            }],
+        });
     }
 }
 
@@ -16280,10 +16375,37 @@ impl<'a> Lowerer<'a> {
                                 .infer_expr_type(expr)
                                 .unwrap_or_else(|| Type::named("Unknown"));
                             let value = self.lower_expr_at_sequence_point(expr, None);
-                            MirFormatPart::Formatted {
-                                value,
-                                spec: spec.clone(),
-                                value_type,
+                            if self.has_custom_display(&value_type) {
+                                // A custom Display value renders once, then
+                                // the string subset formats the rendered text.
+                                let rendered = self.new_typed_temp(Type::named("str"));
+                                self.emit(Instruction::Assign {
+                                    target: rendered.clone(),
+                                    value: Rvalue::FormatString {
+                                        parts: vec![MirFormatPart::Value(value)],
+                                    },
+                                });
+                                // Precision truncates the rendered text, so a
+                                // bare precision takes the explicit string code.
+                                let spec = match crate::runtime_value::parse_format_spec(spec) {
+                                    Ok(parsed)
+                                        if parsed.precision.is_some() && parsed.ty.is_none() =>
+                                    {
+                                        format!("{spec}s")
+                                    }
+                                    _ => spec.clone(),
+                                };
+                                MirFormatPart::Formatted {
+                                    value: Operand::Place(rendered),
+                                    spec,
+                                    value_type: Type::named("str"),
+                                }
+                            } else {
+                                MirFormatPart::Formatted {
+                                    value,
+                                    spec: spec.clone(),
+                                    value_type,
+                                }
                             }
                         }
                     };
@@ -22613,6 +22735,17 @@ impl<'a> Lowerer<'a> {
                     .map(|(trait_name, field)| (trait_name.to_string(), field.to_string()))
             })
             .flatten()
+    }
+
+    /// Whether values of `ty` render through a user `Display` implementation.
+    fn has_custom_display(&self, ty: &Type) -> bool {
+        let Type::Named(name, _) = ty else {
+            return false;
+        };
+        self.trait_impls_in_scope().any(|trait_impl| {
+            trait_impl.display
+                && matches!(&trait_impl.for_type, Type::Named(target, _) if target == name)
+        })
     }
 
     fn trait_impls_in_scope(&self) -> impl Iterator<Item = &crate::sema::TraitImplInfo> + '_ {

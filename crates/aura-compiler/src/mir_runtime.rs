@@ -32,7 +32,7 @@ use crate::runtime_value::{
     decode_process_restart_policy, decode_process_stdio, divmod_numeric_values,
     duration_to_host_timer, duration_to_milliseconds, duration_to_seconds,
     evaluate_bytes_host_builtin_ref, evaluate_host_builtin_with_program_args,
-    evaluate_string_to_bytes_host_ref, float_floor_divmod, float_power, format_runtime_value,
+    evaluate_string_to_bytes_host_ref, float_floor_divmod, float_power, format_runtime_value_with,
     host_process_args, io_error, io_read_line, json_array_metadata_is_exact,
     json_dump_error_to_diagnostic, json_int_metadata_is_exact, json_object_metadata_is_exact,
     json_parse_owned_to_runtime, lookup_found, lookup_missing, nominal_runtime_base_name,
@@ -891,6 +891,8 @@ struct MirRuntime {
     union_layouts: Arc<HashMap<String, crate::union_layout::MirUnionLayout>>,
     safepoints_enabled: bool,
     functions: HashMap<String, MirFunction>,
+    /// Runtime nominal type name to its synthesized `Display` wrapper.
+    display_functions: Arc<HashMap<String, String>>,
     classes: HashMap<String, MirClass>,
     trait_impls: Vec<MirTraitImpl>,
     stdout: Arc<Mutex<String>>,
@@ -2624,6 +2626,16 @@ impl MirRuntime {
         for function in &module.functions {
             functions.insert(function.name.clone(), function.clone());
         }
+        let display_functions = Arc::new(
+            module
+                .functions
+                .iter()
+                .filter_map(|function| {
+                    crate::mir::display_wrapper_type_name(&function.name)
+                        .map(|type_name| (type_name.to_string(), function.name.clone()))
+                })
+                .collect::<HashMap<_, _>>(),
+        );
         let mut classes = HashMap::new();
         for class in &module.classes {
             classes.insert(class.name.clone(), class.clone());
@@ -2646,6 +2658,7 @@ impl MirRuntime {
             union_layouts,
             safepoints_enabled,
             functions,
+            display_functions,
             classes,
             trait_impls,
             stdout,
@@ -2659,6 +2672,49 @@ impl MirRuntime {
             constant_states: Arc::new(Mutex::new(HashMap::new())),
             pending_returned_view_projection: None,
             outgoing_returned_view_projection: None,
+        }
+    }
+
+    /// Renders a value for `print`, `str`, and f-strings: every class
+    /// instance or enum variant whose type implements `Display` renders
+    /// through its implementation, at any depth.
+    fn render_display(&mut self, value: &Value) -> Result<String> {
+        if self.display_functions.is_empty() {
+            return Ok(value.render());
+        }
+        let display_functions = self.display_functions.clone();
+        value.render_with_display(&mut |node| {
+            let type_name = match node {
+                Value::Instance(instance) => nominal_runtime_base_name(&instance.class_name),
+                Value::EnumVariant(variant) => nominal_runtime_base_name(&variant.enum_name),
+                _ => return None,
+            };
+            let function_name = display_functions.get(type_name)?;
+            Some(self.call_display_function(function_name, node))
+        })
+    }
+
+    fn call_display_function(&mut self, function_name: &str, value: &Value) -> Result<String> {
+        let function =
+            self.functions.get(function_name).cloned().ok_or_else(|| {
+                Diagnostic::new(format!("unknown MIR function `{function_name}`"))
+            })?;
+        let outcome = self.call_function(
+            &function,
+            None,
+            vec![EvaluatedMirArg {
+                name: None,
+                value: value.clone(),
+                ty: None,
+                writeback_place: None,
+            }],
+        )?;
+        match outcome.value.into_result()? {
+            Value::String(text) => Ok(text),
+            other => Err(Diagnostic::new(format!(
+                "`Display.display` returned `{}` instead of `str`",
+                other.render()
+            ))),
         }
     }
 
@@ -4242,7 +4298,8 @@ impl MirRuntime {
                     match part {
                         MirFormatPart::Literal(text) => append_string_checked(&mut rendered, text)?,
                         MirFormatPart::Value(value) => {
-                            let value = self.evaluate_operand(value, env)?.render();
+                            let value = self.evaluate_operand(value, env)?;
+                            let value = self.render_display(&value)?;
                             append_string_checked(&mut rendered, &value)?;
                         }
                         MirFormatPart::Formatted {
@@ -4251,7 +4308,12 @@ impl MirRuntime {
                             value_type,
                         } => {
                             let value = self.evaluate_operand(value, env)?;
-                            let formatted = format_runtime_value(&value, value_type, spec)?;
+                            let formatted = format_runtime_value_with(
+                                &value,
+                                value_type,
+                                spec,
+                                &mut |value| self.render_display(value),
+                            )?;
                             append_string_checked(&mut rendered, &formatted)?;
                         }
                     }
@@ -4722,7 +4784,7 @@ impl MirRuntime {
                             render_float32(*value as f32)
                         }
                         (Value::Float(value), _) => render_float(*value),
-                        (value, _) => value.render(),
+                        (value, _) => self.render_display(value)?,
                     };
                     let rendered = format!("{}\n", rendered_value);
                     let mut stdout = lock_stdout(&self.stdout);

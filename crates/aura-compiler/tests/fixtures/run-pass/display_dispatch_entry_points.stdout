@@ -1,0 +1,20 @@
+(0, 0)
+(0, 0)
+(0, 0)
+origin is (0, 0)
+[(1, 2), (3, 4)]
+((5, 6),)
+{a: (7, 8)}
+{♥: 1}
+Segment(end=(2, 3), start=(0, 1))
+Hand(cards=[♠, joker 2], owner=ada)
+Shape.Dot((9, 9))
+Shape.Line(Segment(end=(2, 2), start=(1, 1)))
+<1 | 2>
+<(1, 1) | (2, 2)>
+[<a | b>]
+(4, 4)
+None
+text
+12
+♥♠

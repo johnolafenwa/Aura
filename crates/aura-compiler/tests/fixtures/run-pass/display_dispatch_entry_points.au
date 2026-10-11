@@ -1,0 +1,69 @@
+class Point:
+    x: int64
+    y: int64
+
+impl Display for Point:
+    def display(self) -> str:
+        return f"({self.x}, {self.y})"
+
+enum Suit:
+    Hearts
+    Spades
+    Joker(int64)
+
+impl Display for Suit:
+    def display(self) -> str:
+        match self:
+            case Suit.Hearts:
+                return "♥"
+            case Suit.Spades:
+                return "♠"
+            case Suit.Joker(rank):
+                return f"joker {rank}"
+
+class Pair[T]:
+    left: T
+    right: T
+
+impl[T] Display for Pair[T]:
+    def display(self) -> str:
+        return f"<{self.left} | {self.right}>"
+
+class Segment:
+    start: Point
+    end: Point
+
+class Hand:
+    owner: str
+    cards: list[Suit]
+
+enum Shape:
+    Dot(Point)
+    Line(Segment)
+
+def main():
+    origin = Point(x=0, y=0)
+    print(origin)
+    print(str(origin))
+    print(origin.display())
+    print(f"origin is {origin}")
+    print([Point(x=1, y=2), Point(x=3, y=4)])
+    print((Point(x=5, y=6),))
+    print({"a": Point(x=7, y=8)})
+    print({Suit.Hearts: 1})
+    print(Segment(start=Point(x=0, y=1), end=Point(x=2, y=3)))
+    print(Hand(owner="ada", cards=[Suit.Spades, Suit.Joker(2)]))
+    print(Shape.Dot(Point(x=9, y=9)))
+    print(Shape.Line(Segment(start=Point(x=1, y=1), end=Point(x=2, y=2))))
+    print(Pair(left=1, right=2))
+    print(Pair(left=Point(x=1, y=1), right=Point(x=2, y=2)))
+    print([Pair(left="a", right="b")])
+    maybe: Point | None = Point(x=4, y=4)
+    print(maybe)
+    missing: Point | None = None
+    print(missing)
+    either: Point | str = "text"
+    print(either)
+    text = str([Suit.Hearts, Suit.Joker(7)])
+    print(text.len())
+    print(f"{Suit.Hearts}{Suit.Spades}")

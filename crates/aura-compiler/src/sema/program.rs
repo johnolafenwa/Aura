@@ -301,6 +301,9 @@ pub struct TraitImplInfo {
     pub trait_args: Vec<Type>,
     pub for_type: Type,
     pub methods: BTreeMap<String, TraitImplMethodInfo>,
+    /// Whether this implements the prelude `Display` trait, so rendering
+    /// dispatches to it.
+    pub display: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -775,6 +778,14 @@ pub(crate) fn check_with_context(module: Module, context: ModuleContext) -> Resu
                 supertraits,
                 methods,
             },
+        );
+    }
+
+    if !traits.contains_key(super::DISPLAY_TRAIT) && !item_names.contains_key(super::DISPLAY_TRAIT)
+    {
+        traits.insert(
+            super::DISPLAY_TRAIT.to_string(),
+            super::display::prelude_display_trait(),
         );
     }
 
@@ -1369,6 +1380,19 @@ pub(crate) fn check_with_context(module: Module, context: ModuleContext) -> Resu
             &canonical_type_names,
             &impl_type_param_scope,
         )?;
+        let display = super::is_prelude_display(trait_info);
+        if display {
+            super::display::validate_display_target(
+                impl_decl,
+                &for_type,
+                &impl_type_params,
+                &module_name,
+                &classes,
+                &enums,
+                &trait_impls,
+            )?;
+            super::display::validate_display_methods(impl_decl)?;
+        }
         // The target must be a named outer type (`Box[T]`): a bare type
         // parameter has no nominal identity, and a bare tuple has no nominal
         // dispatch table on the direct backend.
@@ -1560,6 +1584,7 @@ pub(crate) fn check_with_context(module: Module, context: ModuleContext) -> Resu
             trait_args,
             for_type,
             methods,
+            display,
         });
     }
 

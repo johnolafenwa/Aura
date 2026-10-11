@@ -602,6 +602,7 @@ struct NativeCodegen<'a> {
     string_trim: FuncId,
     string_join: FuncId,
     stringify_value: FuncId,
+    register_display: FuncId,
     format_value: FuncId,
     abs_value: FuncId,
     min_value: FuncId,
@@ -1136,6 +1137,7 @@ impl<'a> NativeCodegen<'a> {
             string_trim => ("aura_direct_string_trim", [types::I64], Some(types::I64)),
             string_join => ("aura_direct_string_join", [types::I64, types::I64], Some(types::I64)),
             stringify_value => ("aura_direct_stringify_value", [types::I64], Some(types::I64)),
+            register_display => ("aura_direct_register_display", [types::I64, types::I64, types::I64], None),
             format_value => ("aura_direct_format_value", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             abs_value => ("aura_direct_abs", [types::I64], Some(types::I64)),
             min_value => ("aura_direct_min", [types::I64, types::I64], Some(types::I64)),
@@ -1633,6 +1635,7 @@ impl<'a> NativeCodegen<'a> {
             string_trim,
             string_join,
             stringify_value,
+            register_display,
             format_value,
             abs_value,
             min_value,
@@ -4255,6 +4258,34 @@ impl<'a> NativeCodegen<'a> {
         builder
             .ins()
             .call(runtime_init, &[path_ptr, path_len, source_ptr, source_len]);
+        let display_wrappers = self
+            .module
+            .functions
+            .iter()
+            .filter_map(|function| {
+                crate::mir::display_wrapper_type_name(&function.name)
+                    .map(|type_name| (type_name.to_string(), function.name.clone()))
+            })
+            .collect::<Vec<_>>();
+        if !display_wrappers.is_empty() {
+            let register_display = self
+                .object
+                .declare_func_in_func(self.register_display, builder.func);
+            for (type_name, function_name) in display_wrappers {
+                let thunk_id = self.function_thunks[&function_name];
+                let thunk_ref = self.object.declare_func_in_func(thunk_id, builder.func);
+                let thunk_addr = builder.ins().func_addr(types::I64, thunk_ref);
+                let (name_ptr, name_len) = declare_string_constant(
+                    &mut self.object,
+                    &mut self.string_data,
+                    &mut builder,
+                    type_name.as_bytes(),
+                )?;
+                builder
+                    .ins()
+                    .call(register_display, &[name_ptr, name_len, thunk_addr]);
+            }
+        }
         let thunk_ptr = builder.ins().func_addr(types::I64, entry_thunk_ref);
         let result = builder.ins().call(run_root, &[thunk_ptr]);
         let return_code = builder.inst_results(result)[0];
