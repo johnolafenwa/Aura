@@ -1,0 +1,4 @@
+def main():
+    mut counts = [1, 2]
+    for c in mut counts:
+        print(counts[0])

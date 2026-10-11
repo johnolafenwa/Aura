@@ -1,0 +1,7 @@
+def keep(value: str | None) -> None:
+    return None
+
+def main():
+    mut words = ["a", "b"]
+    for word in mut words:
+        keep(words[0])

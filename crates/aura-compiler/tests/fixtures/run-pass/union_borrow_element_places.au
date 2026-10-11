@@ -1,0 +1,41 @@
+class User:
+    name: str
+    roles: list[str]
+
+def describe(value: str | None) -> str:
+    match value:
+        case None:
+            return "none"
+        case str as text:
+            return f"name {text}"
+
+def size(values: list[str] | None) -> int64:
+    match values:
+        case None:
+            return -1
+        case list[str] as found:
+            return len(found)
+
+def main():
+    mut tags = ["admin", "ops", "dev"]
+    print(describe(tags[1]))
+    print(describe(tags[-1]))
+    index = 0
+    print(describe(tags[index]))
+    table = {"a": "alpha", "b": "beta"}
+    print(describe(table["b"]))
+    for tag in tags:
+        print(describe(tag))
+    for tag in mut tags:
+        print(describe(tag))
+        tag = tag + "!"
+    print(tags)
+    users = [User(name="Ada", roles=["admin"]), User(name="Lin", roles=[])]
+    print(describe(users[1].name))
+    print(size(users[0].roles))
+    view first = users[0]
+    print(describe(first.name))
+    grid = [["a", "b"], ["c"]]
+    print(size(grid[0]))
+    print(describe(grid[1][0]))
+    print(grid)

@@ -7732,6 +7732,37 @@ fn direct_union_projection(union: &crate::runtime_value::UnionValue, field: &str
             .is_some_and(|index| index.parse::<usize>().is_ok())
 }
 
+/// Injects a copy of the value behind a retained handle that the caller's
+/// place still owns, then releases that retention. A borrowed payload must
+/// not be taken: another handle shares the same value.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_union_inject_copy(
+    type_ptr: *const u8,
+    type_len: usize,
+    member_index: usize,
+    payload: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let copied = unsafe { with_value(payload, try_clone_array_containing_value) };
+        unsafe {
+            aura_direct_release_value(payload);
+        }
+        let copied = copied.unwrap_or_else(|error| runtime_diagnostic_error(error));
+        let name = decode_bytes(type_ptr, type_len);
+        let union_type = canonical_runtime_type_from_name(&name)
+            .unwrap_or_else(|| runtime_error("invalid union injection type"));
+        let Type::Union(union) = &union_type else {
+            runtime_error("union injection requires a union type");
+        };
+        if member_index >= union.members.len() {
+            runtime_error("union injection member index is out of range");
+        }
+        let injected = crate::union_runtime::inject_union_member(union, member_index, copied)
+            .unwrap_or_else(|message| runtime_error(message));
+        boxed_typed_value(injected, &name)
+    })
+}
+
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_union_inject(
     type_ptr: *const u8,
