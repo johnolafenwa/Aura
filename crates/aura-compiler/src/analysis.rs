@@ -2061,26 +2061,20 @@ impl<'a> AnalysisBuilder<'a> {
         {
             return method.doc.as_ref();
         }
-        self.trait_info_named(&trait_impl.trait_name)
+        let local = trait_impl
+            .trait_name
+            .rsplit('.')
+            .next()
+            .unwrap_or(&trait_impl.trait_name);
+        self.program
+            .traits
+            .get(&trait_impl.trait_name)
             .or_else(|| {
-                let namespace = self.module_namespace(&trait_impl.module_name)?;
-                let local = trait_impl.trait_name.rsplit('.').next()?;
-                namespace.all_traits.get(local)
+                self.module_namespace(&trait_impl.module_name)
+                    .and_then(|namespace| namespace.all_traits.get(local))
             })
             .and_then(|trait_info| trait_info.methods.get(&method.name))
             .and_then(|trait_method| trait_method.decl.doc.as_ref())
-    }
-
-    fn trait_info_named(&self, name: &str) -> Option<&crate::sema::TraitInfo> {
-        self.program.traits.get(name).or_else(|| {
-            let (module_path, item_name) = name.rsplit_once('.')?;
-            self.module_namespace(module_path).and_then(|namespace| {
-                namespace
-                    .traits
-                    .get(item_name)
-                    .or_else(|| namespace.all_traits.get(item_name))
-            })
-        })
     }
 
     /// The docstring of the module at `path`, read from its source file.

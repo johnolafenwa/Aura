@@ -4603,6 +4603,19 @@ fn misplaced_docstrings_in_declaration_bodies_are_au2042() {
         assert_eq!(error.code, "AU2042", "{source}");
         assert!(error.message.contains(fragment), "{}", error.message);
     }
+
+    let error = parse("enum Empty:\n    \"\"\"Only docs.\"\"\"\n")
+        .expect_err("a docstring is not an enum variant");
+    assert!(
+        error.message.contains("at least one variant"),
+        "{}",
+        error.message
+    );
+    let module = parse(
+        "class Marker:\n    \"\"\"Only docs.\"\"\"\ntrait Tag:\n    \"\"\"Only docs.\"\"\"\n",
+    )
+    .expect("docstring-only class and trait bodies are empty bodies");
+    assert_eq!(module.items.len(), 2);
 }
 
 #[test]

@@ -80,9 +80,6 @@ pub(crate) fn public_docstrings(module: &Module) -> Vec<&DocString> {
 fn check_module_documentation_limit(module: &Module) -> Result<()> {
     let docs = public_docstrings(module);
     let total = docs.iter().map(|doc| doc.text.len()).sum::<usize>();
-    if total <= MAX_MODULE_DOCUMENTATION_BYTES {
-        return Ok(());
-    }
     let mut running = 0usize;
     for doc in docs {
         running += doc.text.len();
@@ -96,7 +93,7 @@ fn check_module_documentation_limit(module: &Module) -> Result<()> {
             ));
         }
     }
-    unreachable!("a total above the limit has a literal that crosses it")
+    Ok(())
 }
 
 pub fn parse_expression(source: &str) -> Result<Expr> {
@@ -542,9 +539,10 @@ impl Parser {
         while !self.at_simple(&TokenKind::Dedent) && !self.at_eof() {
             if self.at_field_docstring(fields.last()) {
                 let field_doc = self.take_docstring()?;
-                if let Some(field) = fields.last_mut() {
-                    field.doc = field_doc;
-                }
+                fields
+                    .last_mut()
+                    .expect("a field docstring follows a field")
+                    .doc = field_doc;
                 continue;
             }
             self.reject_misplaced_docstring(
@@ -613,6 +611,9 @@ impl Parser {
             variants.push(self.parse_enum_variant()?);
         }
 
+        if variants.is_empty() {
+            return Err(self.error_here("an enum must declare at least one variant"));
+        }
         self.expect_simple(TokenKind::Dedent)?;
 
         Ok(EnumDecl {
@@ -1753,10 +1754,14 @@ impl Parser {
     /// complete statement.
     fn at_docstring(&self) -> bool {
         matches!(self.current_kind(), TokenKind::TripleStringLiteral(_))
-            && matches!(
-                self.peek_kind(1),
-                Some(TokenKind::Newline | TokenKind::Dedent | TokenKind::Eof)
-            )
+            && self.statement_ends_after_current()
+    }
+
+    fn statement_ends_after_current(&self) -> bool {
+        matches!(
+            self.peek_kind(1),
+            Some(TokenKind::Newline | TokenKind::Dedent | TokenKind::Eof)
+        )
     }
 
     /// A field docstring is on the line directly after the field it follows.
@@ -1771,17 +1776,17 @@ impl Parser {
     }
 
     fn take_docstring(&mut self) -> Result<Option<DocString>> {
-        if !self.at_docstring() {
-            return Ok(None);
-        }
-        let token = self.bump();
-        let TokenKind::TripleStringLiteral(text) = token.kind else {
-            unreachable!("at_docstring checked the token kind");
+        let text = match self.current_kind() {
+            TokenKind::TripleStringLiteral(text) if self.statement_ends_after_current() => {
+                text.clone()
+            }
+            _ => return Ok(None),
         };
+        let span = self.bump().span;
         if text.len() > MAX_DOCSTRING_BYTES {
             return Err(Diagnostic::coded_at(
                 "AU2042",
-                token.span,
+                span,
                 format!(
                     "docstring is {} bytes; the limit is {MAX_DOCSTRING_BYTES} bytes",
                     text.len()
@@ -1789,10 +1794,7 @@ impl Parser {
             ));
         }
         self.eat_simple(&TokenKind::Newline);
-        Ok(Some(DocString {
-            text,
-            span: token.span,
-        }))
+        Ok(Some(DocString { text, span }))
     }
 
     fn reject_misplaced_docstring(&self, message: &str) -> Result<()> {
