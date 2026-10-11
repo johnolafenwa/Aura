@@ -1,4 +1,9 @@
+mod api_docs;
 mod requests;
+pub use api_docs::{
+    api_module_from_program, render_api_markdown, ApiDeclaration, ApiMember, ApiModule,
+    API_DOCS_SCHEMA_VERSION,
+};
 pub use requests::{
     prepare_rename_path_source, references_path_source, rename_path_source,
     signature_help_path_source, AnalysisRename, AnalysisSignatureHelp,
