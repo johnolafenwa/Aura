@@ -465,7 +465,8 @@ field-declaration
 ```
 
 `copy` is contextual and is recognized only immediately before `class`.
-Fields and methods may be interleaved. `pass` permits an otherwise empty class
+A method named `__init__` is the class's initializer. It uses the ordinary
+method grammar. Fields and methods may be interleaved. `pass` permits an otherwise empty class
 body. A comment-only body is not a suite.
 
 ## Enums

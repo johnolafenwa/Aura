@@ -9970,7 +9970,11 @@ fn direct_backend_operand_and_construct_error_surface_reports_expected_diagnosti
     };
     let missing_field_error = emit_host_object(&missing_field_module)
         .expect_err("plain-class construction should require all fields");
-    assert!(missing_field_error.contains("construction for `Pair` is missing field `right`"));
+    assert!(
+        missing_field_error
+            .contains("invalid MIR construction of `Pair` in `main` omits fields outside an initializer's object"),
+        "{missing_field_error}"
+    );
 
     let non_class_construct_module = module_with_main_call(Rvalue::Construct {
         class_name: "int32".to_string(),

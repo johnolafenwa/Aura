@@ -1,0 +1,20 @@
+public class Port:
+    number: int64
+    label: str
+
+    def __init__(self, number: int64):
+        self.number = number
+        self.label = f"port-{number}"
+
+    public def checked(number: int64) -> Result[Port, str]:
+        if number < 1 or number > 65535:
+            return Result.Err(f"port {number} is out of range")
+        return Result.Ok(Port(number))
+
+def main():
+    for number in [80, 70000]:
+        match Port.checked(number):
+            case Result.Ok(port):
+                print(port.label)
+            case Result.Err(error):
+                print(error)

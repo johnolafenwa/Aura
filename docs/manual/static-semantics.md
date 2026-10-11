@@ -344,6 +344,8 @@ Calling a class name constructs a value. Constructor fields may be supplied posi
 
 Every field without a declaration default must be supplied exactly once. Provided and default values must match the substituted field types. Supplied field expressions follow the same source-order capture rule as call arguments. A later field expression cannot change an earlier captured field value.
 
+A class that declares `__init__(self, ...)` is called with the initializer's parameters instead of its fields. The call is checked as a call of the initializer's contract without the receiver, and it returns the class. The initializer's visibility governs calls from other modules. Inside the body, the checker tracks each field as initialized, uninitialized, or maybe initialized. It rejects a read of a field that is not initialized, an assignment to a field that may be initialized, and any use of `self` as a whole before every field is set (`AU3012`). Every `return` and the end of the body must leave every field initialized. See [Classes](/manual/classes#initializers).
+
 A class receiver is declared as shared `self`, consuming `own self`, or mutable `mut self`. A first method parameter written `self: Type` is rejected with guidance naming those forms. A method without a receiver is associated. It is called through the class or type rather than an instance.
 
 ## Enum Construction And Matching

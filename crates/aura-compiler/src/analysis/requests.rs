@@ -455,6 +455,9 @@ fn call_site_contract(
     if let ExprKind::Group(inner) = &callee.kind {
         return call_site_contract(builder, inner, scope);
     }
+    if let Some(contract) = initializer_call_contract(builder, callee, scope) {
+        return Some(contract);
+    }
     let ExprKind::Member { object, field } = &callee.kind else {
         return None;
     };
@@ -509,6 +512,54 @@ fn call_site_contract(
             &substitutions,
         )),
     })
+}
+
+/// A call of a class with `__init__` takes the initializer's parameters and
+/// returns the class.
+fn initializer_call_contract(
+    builder: &AnalysisBuilder<'_>,
+    callee: &Expr,
+    scope: &BTreeMap<String, BindingInfo>,
+) -> Option<Type> {
+    let name = callee_path(callee)?;
+    if scope.contains_key(name.split('.').next()?) {
+        return None;
+    }
+    let class = builder.class_info_for_type_name(&name)?;
+    let initializer = class.initializer()?;
+    Some(Type::Function {
+        params: initializer
+            .decl
+            .params
+            .iter()
+            .zip(&initializer.signature.params)
+            .zip(&initializer.signature.param_passings)
+            .map(|((param, ty), passing)| FunctionParamContract {
+                name: param.name.clone(),
+                keyword_only: param.keyword_only,
+                has_default: param.default.is_some(),
+                passing: *passing,
+                ty: ty.clone(),
+            })
+            .collect(),
+        return_type: Box::new(Type::Named(
+            class.decl.name.clone(),
+            class
+                .decl
+                .type_params
+                .iter()
+                .map(|param| Type::TypeParam(param.clone()))
+                .collect(),
+        )),
+    })
+}
+
+fn callee_path(expr: &Expr) -> Option<String> {
+    match &expr.kind {
+        ExprKind::Name(name) => Some(name.clone()),
+        ExprKind::Member { object, field } => Some(format!("{}.{field}", callee_path(object)?)),
+        _ => None,
+    }
 }
 
 pub fn signature_help_path_source(

@@ -644,7 +644,14 @@ impl<'a> FunctionChecker<'a> {
             }
             let duplication_member = self.builtin_duplication_member(member_ty);
             let clone_supported = duplication_member.is_some();
-            diagnostic = diagnostic.with_help(if clone_supported {
+            diagnostic = diagnostic.with_help(if name == "self" && self.checks_initializer() {
+                match duplication_member {
+                    Some(member) => format!(
+                        "an initializer cannot move a field out of the object under construction; call `.{member}()` on the field to pass an independent value"
+                    ),
+                    None => "an initializer cannot move a field out of the object under construction; move the value before assigning it to the field".to_string(),
+                }
+            } else if clone_supported {
                 format!(
                     "take `{}` as `own {}` when the field should be moved, or call `.{duplication_member}()` on the field to return an independent value",
                     name,

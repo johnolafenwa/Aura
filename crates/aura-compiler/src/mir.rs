@@ -10051,7 +10051,6 @@ fn lower_receiver_kind(receiver: ReceiverKind) -> MirReceiverKind {
 }
 
 #[allow(clippy::too_many_arguments)]
-#[allow(clippy::too_many_arguments)]
 fn lower_function(
     program: &Program,
     name: &str,

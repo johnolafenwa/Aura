@@ -1,0 +1,14 @@
+def take(items: own list[int64]) -> int64:
+    return items.len()
+
+class Buffer:
+    data: list[int64]
+    size: int64
+
+    def __init__(self, capacity: int64):
+        self.data = [capacity]
+        self.size = take(self.data)
+
+def main():
+    buffer = Buffer(3)
+    print(buffer.size)

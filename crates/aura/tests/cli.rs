@@ -2,7 +2,7 @@ use std::fs;
 use std::io::Write;
 #[cfg(unix)]
 use std::io::{BufRead, BufReader, Read};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -15524,4 +15524,59 @@ type Unary = def(int32) -> int32
             "task diagnostic leaked a static alternate or placeholder target:\n{stderr}"
         );
     }
+}
+
+/// A factory that fails after acquiring a builtin file drops the file as an
+/// ordinary owned local. Under a low descriptor limit, three hundred failed
+/// constructions only succeed when every dropped handle is released.
+#[cfg(unix)]
+#[test]
+fn failed_factories_release_builtin_file_handles_on_both_backends() {
+    let source = "import fs\nimport io\n\nclass Pair:\n    first: fs.File\n    second: fs.File\n\n    def __init__(self, first: own fs.File, second: own fs.File):\n        self.first = first\n        self.second = second\n\n    def open(first: str, second: str) -> Result[Pair, io.Error]:\n        left = try fs.open(first)\n        right = try fs.open(second)\n        return Result.Ok(Pair(left, right))\n\ndef main():\n    mut failures = 0\n    for _ in range(300):\n        match Pair.open(\"main.au\", \"missing.txt\"):\n            case Result.Ok(pair):\n                print(\"unexpected\")\n            case Result.Err(error):\n                failures += 1\n    print(failures)\n";
+    let (temp, source_path) = write_temp_source("aura-factory-file-release", source);
+    let limited = |program: &Path, args: &[&str]| {
+        let mut command = Command::new("sh");
+        command
+            .arg("-c")
+            .arg("ulimit -n 64 && exec \"$0\" \"$@\"")
+            .arg(program)
+            .args(args)
+            .current_dir(temp.path());
+        if program != Path::new(aura_bin()) && std::env::var_os("LLVM_PROFILE_FILE").is_some() {
+            command.env("LLVM_PROFILE_FILE", "/dev/null");
+        }
+        command
+            .output()
+            .expect("failed to run under a descriptor limit")
+    };
+    let interpreted = limited(
+        Path::new(aura_bin()),
+        &["run", "--backend", "mir", "main.au"],
+    );
+    assert!(
+        interpreted.status.success(),
+        "{}",
+        String::from_utf8_lossy(&interpreted.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&interpreted.stdout), "300\n");
+
+    let binary = temp.path().join("pair");
+    let build = Command::new(aura_bin())
+        .args(["build", "--backend", "direct", "-o"])
+        .arg(&binary)
+        .arg(&source_path)
+        .output()
+        .expect("failed to run aura build --backend direct");
+    assert!(
+        build.status.success(),
+        "{}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+    let native = limited(&binary, &[]);
+    assert!(
+        native.status.success(),
+        "{}",
+        String::from_utf8_lossy(&native.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&native.stdout), "300\n");
 }

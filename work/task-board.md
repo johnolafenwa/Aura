@@ -2,6 +2,32 @@
 
 Last updated: 2026-10-11
 
+## Batch 3 phase 3a (initialization; in progress)
+
+- Target: `__init__(self, ...)`, field defaults before the body, definite
+  initialization, initializer visibility, named fallible factories, and
+  partial-construction cleanup, per checkpoint section E (Q12-Q16 A) and
+  ADR-0059. Branch `claude/batch-3-5eibyq`; work note
+  `2026-10-11-batch-3-phase-3a.md`.
+- Done: checker (`AU2016`, `AU3012`, `AU2005`, `AU3004`, private
+  initializer `AU2001`), MIR lowering to a receiver-less `C.__init__` with
+  an absent-field object slot, the shared slot validator with forged-MIR
+  refusals, both backends, editor signature help, hover, and completion,
+  semantic interface 18, manual, tutorial chapter 5, and two examples.
+  The slot representation replaces G1's `DropInitialized` action; the
+  deviation is recorded in ADR-0059.
+- Verification: compiler, CLI, fixture, LSP (116/116), clippy, format,
+  hygiene, documentation example (740), and llms checks pass locally.
+  Compiler coverage is measured by hosted CI; the local disk allowance
+  could not hold the instrumented build.
+- Remaining: hosted CI and merge.
+
+## Batch 3 phase 3b (context managers; in progress)
+
+- Target: typed and generic `with` managers, multiple header items, and
+  cleanup under cancellation, per checkpoint section F (Q17-Q22 A) and
+  ADR-0060. Lands after phase 3a on the same branch.
+
 ## Aura 0.3.6 preview release (complete)
 
 - Released 2026-10-11 from `main` at `5652e469` (PR #31) as

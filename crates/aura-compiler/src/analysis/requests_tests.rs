@@ -328,3 +328,39 @@ fn imported_declarations_keep_external_ranges_during_local_rename() {
     crate::emit_host_native_object(&mir).unwrap();
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn initializer_classes_expose_the_initializer_contract() {
+    let source = "class Counter:\n    count: int64\n    label: str = \"n\"\n\n    def __init__(self, start: int64, *, step: int64 = 1):\n        self.count = start + step\n\n    def bump(self) -> int64:\n        return self.count\n\ndef main():\n    counter = Counter(1, step=2)\n    print(counter.bump())\n";
+    let help = signature_help_path_source(path(), source, 11, 22).expect("initializer signature");
+    assert_eq!(
+        help.label,
+        "def(start: int64, *, step: int64 = ...) -> Counter"
+    );
+    assert_eq!(help.active_parameter, 0);
+
+    let output = analyze_path_source(path(), source);
+    assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
+    let hover = output
+        .occurrences
+        .iter()
+        .find(|occurrence| occurrence.line == 11 && occurrence.start_character == 14)
+        .expect("class call hover");
+    assert!(
+        hover
+            .hover
+            .contains("def __init__(self, start: int64, *, step: int64 = ...)"),
+        "{}",
+        hover.hover
+    );
+
+    let members = complete_path_source(path(), source, 12, 18, Some('.')).unwrap();
+    assert!(members.iter().any(|item| item.name == "bump"));
+    assert!(members.iter().all(|item| item.name != "__init__"));
+    let top = complete_path_source(path(), source, 12, 4, None).unwrap();
+    let class = top
+        .iter()
+        .find(|item| item.name == "Counter")
+        .expect("class completion");
+    assert_eq!(class.detail, "Counter(start: int64, *, step: int64 = ...)");
+}

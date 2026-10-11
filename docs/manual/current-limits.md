@@ -29,7 +29,8 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 
 - Direct recursive fields require `indirect`.
 - Empty list, dictionary, and set literals need an expected collection type.
-- Class field defaults cannot call user-defined functions. Compute the value before construction and pass it as an explicit field argument.
+- Class field defaults cannot call user-defined functions. Compute the value before construction, or set the field in `__init__`.
+- An initializer cannot move a field out of `self`, cannot return a `Result`, and has one signature per class. Use a named factory for fallible or alternate construction.
 - An ordinary `-> T` return value is always owned. A Copy result is an ordinary copy. A non-Copy result must be constructed, cloned when clone-safe, moved from owned input, or produced by an owner operation.
 - A function may instead declare one `-> view [mut] T from origin` result tied to a receiver or parameter place.
 - A union value passed through a generic bound dispatches its shared and consuming trait methods on the active member on both backends. A `mut self` trait method reached this way runs on the interpreter. The direct backend reports `AU4001` at that call because it has no write-back path to the active payload behind an erased place. Narrow the union to its member before a mutable call.
