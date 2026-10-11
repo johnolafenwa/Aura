@@ -9534,7 +9534,7 @@ fn operand_place_mention<'a>(operand: &'a Operand, mentions: &mut Vec<&'a str>) 
 fn instruction_place_mentions<'a>(instruction: &'a Instruction, mentions: &mut Vec<&'a str>) {
     match instruction {
         Instruction::Safepoint => {}
-        Instruction::BeginLoan { source, .. } | Instruction::PushCleanup { place: source } => {
+        Instruction::BeginLoan { source, .. } | Instruction::PushCleanup { place: source, .. } => {
             mentions.push(source)
         }
         Instruction::BeginElementLoan {
