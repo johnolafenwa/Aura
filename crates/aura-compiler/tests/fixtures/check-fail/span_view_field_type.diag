@@ -1,0 +1,6 @@
+error[AU3010]: view type `Span[int64]` cannot be a field type
+ --> crates/aura-compiler/tests/fixtures/check-fail/span_view_field_type.au:2:13
+  |
+2 |     window: Span[int64]
+  |             ^
+  = help: `Span[T]` is the type of a slice view: bind one with `view name = items[a:b]` or take one as a bare or `mut` parameter; use `.to_list()` for an owned copy

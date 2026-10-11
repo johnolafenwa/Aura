@@ -1,0 +1,6 @@
+error[AU3010]: view type `Span[int64]` cannot be an owned result type
+ --> crates/aura-compiler/tests/fixtures/check-fail/span_view_owned_result.au:1:35
+  |
+1 | def window(items: list[int64]) -> Span[int64]:
+  |                                   ^
+  = help: `Span[T]` is the type of a slice view: bind one with `view name = items[a:b]` or take one as a bare or `mut` parameter; use `.to_list()` for an owned copy

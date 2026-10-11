@@ -1,0 +1,4 @@
+def main():
+    mut items = [1, 2, 3]
+    view window = items[0:2]
+    window[0] = 5

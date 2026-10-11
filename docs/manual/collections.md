@@ -241,6 +241,88 @@ The key function runs exactly once per element, from first to last. All keys
 are stored before the list changes. If an argument, key, ordering, or
 allocation fails before that point, the list is unchanged.
 
+## Span[T]
+
+`Span[T]` is a view of a contiguous range of a `list[T]`. It reads and writes
+the list's elements in place and never copies them.
+
+<<< @/examples/collections/span_views.au
+
+### Creating A Span
+
+`view part = values[start:end]` lends a range of `values`. `view mut part =
+values[start:end]` lends it for writing and needs a mutable list.
+
+- Endpoints follow the slice rules: `int64` endpoints, an omitted endpoint
+  means the start or end, and a negative endpoint counts from the end once.
+- An invalid or reversed range traps with `AU4003` when the span is created.
+- Slicing a span with `view inner = part[1:]` makes a nested span. Its
+  endpoints are positions in `part`, and it must fit inside `part`.
+
+A parameter of type `Span[T]` or `mut Span[T]` accepts a slice such as
+`total(values[1:3])`, a whole list such as `total(values)`, or an existing
+span. A `mut Span[T]` parameter needs a mutable list or a mutable span.
+
+### Span Operations
+
+Positions in a span count from the start of its range. An invalid position
+traps with `AU4003`.
+
+| Operation | Form | Contract |
+| --- | --- | --- |
+| length | `len(part)`, `part.len()` | Returns the length of the range. |
+| indexing | `part[i]`, `part[i] = value` | Reads or writes one element. Writing needs a mutable span. |
+| iteration | `for x in part:`, `for x in mut part:` | Visits the range in order. `enumerate` and `zip` count from 0. |
+| membership | `value in part` | Tests the range for an equal element. |
+| equality | `part == other` | Compares the range with a list or another span. |
+| `index` | `index(value: T) -> int64` | Returns the position of the first equal element. Traps with `AU4008` when no element is equal. |
+| `count` | `count(value: T) -> int64` | Counts equal elements in the range. |
+| `reverse` | `reverse() -> None` | Reverses the range in place. Needs a mutable span. |
+| `sort` | `sort(reverse: bool = false) -> None` | Stably sorts the range in place. Needs a mutable span. |
+| `swap` | `swap(first: int64, second: int64) -> None` | Swaps two positions. Needs a mutable span. |
+| `fill` | `fill(value: T) -> None` | Writes `value` to every position. Needs a mutable span and a Copy `T`. |
+| `to_list` | `to_list() -> list[T]` | Returns an owned copy of the range. Requires clone-safe `T`. |
+
+A span has a fixed length, so it has no `append`, `pop`, `insert`, or other
+member that changes the list's length. Calling one reports `AU2001`. A value
+slice of a span, such as `copy = part[1:]`, is an owned `list[T]`.
+
+### Returning A Span
+
+A function can return a range of a list parameter. Declare `-> view Span[T]
+from values` and return a slice of `values`, the whole of `values`, a span of
+it, or another call that returns one.
+
+```aura
+def middle(values: list[int64]) -> view Span[int64] from values:
+    return view values[1:-1]
+
+def main():
+    scores = [4, 9, 2, 7]
+    view inner = middle(scores)
+    print(inner.to_list())
+```
+
+Bind the result with `view`, or `view mut` for a `view mut Span[T]` result.
+Using the call in any other position reports `AU3010`. A method cannot return
+a span of its receiver.
+
+### Span Ownership
+
+A span holds a loan of its whole list. While a shared span is live, the list
+can be read but not changed. While a mutable span is live, the list is
+reachable only through that span. A conflicting access reports `AU3002`.
+
+A span is a view, so it cannot be stored or moved:
+
+- It cannot be a field, an owned local, an `own` parameter, an owned result,
+  a type argument, or a tuple element. These report `AU3010`.
+- It cannot be a union member (`AU2010`) or cross a task boundary (`AU3008`).
+- A function with a `Span[T]` parameter or result cannot be used as a function
+  value (`AU3010`). Call it directly.
+- A span has no text form. `print(part)` reports `AU2002`. Print
+  `part.to_list()` instead.
+
 ## dict[K, V]
 
 Dictionaries keep insertion order for iteration and snapshots. Indexing,
@@ -454,22 +536,24 @@ lookups and searches leave their inputs in place.
 
 - `append`, `insert`, `extend`, `add`, `update`, indexed assignment, and
   comprehension output move owned values in.
-- Slices and `copy` produce independent storage.
+- Value slices and `copy` produce independent storage. A `Span[T]` view
+  lends the list instead.
 - No collection operation inserts a hidden clone.
 
 ## Diagnostics
 
 | Code | Cause |
 | --- | --- |
-| `AU2001` | Unknown collection type or member. |
+| `AU2001` | Unknown collection type or member, or a length-changing member on a span. |
 | `AU2002` | Type, arity, homogeneity, or callback mismatch. |
 | `AU3001` | Use after move. |
-| `AU3002` | Conflicting access. |
+| `AU3002` | Conflicting access, including use of a list while a span of it is live. |
+| `AU3010` | A span in an owned position, or an unbound call that returns a span. |
 | `AU3003` | Mutation through an immutable place. |
 | `AU3005`, `AU3006`, `AU3007`, `AU3009` | Ownership or clone-safety violation. |
-| `AU4003` | Invalid position, or a missing key in a direct dictionary read. |
+| `AU4003` | Invalid position or span range, or a missing key in a direct dictionary read. |
 | `AU4005` | Allocation or capacity failure. |
-| `AU4008` | Missing value for list `remove` or `index`, or for set `remove`. |
+| `AU4008` | Missing value for list or span `index`, list `remove`, or set `remove`. |
 
 ## Backend Support
 
@@ -484,7 +568,8 @@ These are not available:
 - mutable set iteration and direct dictionary iteration
 - set algebra and set relations
 - arbitrary user-defined iterables and generator expressions
-- slice steps, slice assignment, and slice views
+- slice steps and slice assignment
+- spans over `str`, `Array`, or a receiver field returned from a method
 - integer indexing of `str`
 
 Set order is not part of the API contract. Allocation is limited by host

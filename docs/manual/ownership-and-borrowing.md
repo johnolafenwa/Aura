@@ -152,6 +152,7 @@ Shared-borrow and `own` parameters can have defaults. An omitted shared default 
 - local roots, parameters, receivers, and existing views
 - class-field paths and fixed tuple positions
 - list elements and dictionary entries, including a field or tuple projection inside an element, such as `users[i].name`
+- list ranges, such as `values[1:3]`, which lend a `Span[T]`. See [Collections](/manual/collections#span-t).
 
 Set elements, Queue receives, Range values, and computed temporaries do not have view identity in Aura 0.3.
 

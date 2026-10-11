@@ -1,0 +1,8 @@
+error[AU3002]: cannot create mutable view of `items` while mutable loan held by `a` remains live
+ --> crates/aura-compiler/tests/fixtures/check-fail/span_view_overlapping_mutable.au:4:5
+  |
+4 |     view mut b = items[2:4]
+  |     ^
+  = related crates/aura-compiler/tests/fixtures/check-fail/span_view_overlapping_mutable.au:3:5: loan held by `a` starts here
+  = related crates/aura-compiler/tests/fixtures/check-fail/span_view_overlapping_mutable.au:5:5: last use of `a` keeps this loan live
+  = help: remove the later use, shorten its scope, or borrow a proven-disjoint field

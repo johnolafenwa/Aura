@@ -1,0 +1,3 @@
+def main():
+    windows: list[Span[int64]] = []
+    print(len(windows))

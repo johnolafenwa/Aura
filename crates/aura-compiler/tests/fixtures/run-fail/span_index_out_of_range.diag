@@ -1,0 +1,6 @@
+error[AU4003]: span index `2` is out of bounds for length `2`
+ --> crates/aura-compiler/tests/fixtures/run-fail/span_index_out_of_range.au:4:18
+  |
+4 |     print(window[2])
+  |                  ^
+  = note: Aura call chain (innermost first): main at 1:1
