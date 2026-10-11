@@ -10272,8 +10272,23 @@ impl<'a> FunctionCompiler<'a> {
             let mut word = self.builder.use_var(step.variable);
             if matches!(step.selector_ty, DirectType::Opaque(_)) {
                 word = self.retain_opaque_handle(word);
-            } else if self.builder.func.dfg.value_type(word) != types::I64 {
-                word = self.builder.ins().uextend(types::I64, word);
+            } else {
+                // A float key travels as its bit pattern.
+                let word_ty = self.builder.func.dfg.value_type(word);
+                if word_ty == types::F64 {
+                    word = self
+                        .builder
+                        .ins()
+                        .bitcast(types::I64, MemFlags::new(), word);
+                } else if word_ty == types::F32 {
+                    word = self
+                        .builder
+                        .ins()
+                        .bitcast(types::I32, MemFlags::new(), word);
+                }
+                if self.builder.func.dfg.value_type(word) != types::I64 {
+                    word = self.builder.ins().uextend(types::I64, word);
+                }
             }
             self.builder
                 .ins()
@@ -10344,7 +10359,7 @@ impl<'a> FunctionCompiler<'a> {
                     ))
                 }
             };
-            let fields = fields.trim_start_matches('.').to_string();
+            let fields = fields.trim_matches('.').to_string();
             ty = ensure_direct_type(&element, &self.classes, "returned element")?;
             for field in fields.split('.').filter(|part| !part.is_empty()) {
                 ty = direct_field_type_with_enums(&ty, field, &self.classes, &self.enums).ok_or(
@@ -10357,6 +10372,15 @@ impl<'a> FunctionCompiler<'a> {
             let abi = selector_ty.abi_types()[0];
             let word = if abi == types::I64 {
                 word
+            } else if abi == types::F64 {
+                self.builder
+                    .ins()
+                    .bitcast(types::F64, MemFlags::new(), word)
+            } else if abi == types::F32 {
+                let bits = self.builder.ins().ireduce(types::I32, word);
+                self.builder
+                    .ins()
+                    .bitcast(types::F32, MemFlags::new(), bits)
             } else {
                 self.builder.ins().ireduce(abi, word)
             };

@@ -7,6 +7,36 @@ in this file.
 
 ## Unreleased
 
+## VS Code extension 0.3.7 — 2026-10-11
+
+- Bundles language server 0.3.6. The semantic interface version stays 17.
+
+## 0.3.6 — 2026-10-11 (technical preview)
+
+Aura 0.3.6 fixes defects in element and entry views reported against 0.3.5.
+It has no breaking changes.
+
+### Fixes
+
+- The direct backend runs a returned view whose path crosses a class field
+  between two collection selections, such as
+  `return view mut boxes[0].values[-1]`. It trapped with `AU4001: invalid
+  element path`.
+- `list.set` with keyword arguments works beside a live view of another
+  element, in any argument order. The MIR backend rejected the program and
+  the direct backend reported `AU2999`.
+- A disjoint `set` and the other mutating collection methods accept a
+  grouped or field receiver, such as `(values).set(1, x)` or
+  `box.values.set(1, x)`, beside a mutable element view. The checker
+  reported `AU3002`.
+- Dictionary entry views work for every dictionary key type on both
+  backends. Float keys, integer keys outside the `int64` range, and enum
+  keys failed on the MIR backend, and a returned view with a float key
+  failed to compile on the direct backend.
+- A view-returning call accepts an integer literal argument that only fits
+  its parameter's wider type, such as an `int128` key. The checker reported
+  that the literal does not fit in `int64`.
+
 ## VS Code extension 0.3.6 — 2026-10-10
 
 - Bundles language server 0.3.5, which speaks semantic interface version 17.

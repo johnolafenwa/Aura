@@ -55,18 +55,85 @@ fn test_function_operand(name: &str, params: Vec<Type>, return_type: Type) -> Op
 
 #[test]
 fn adr0061_element_place_segments_round_trip_keys_and_refuse_invalid_encodings() {
+    use super::EntryKeySelector;
     for key in [
         Value::Int(IntegerValue::from_i64(-7)),
+        Value::Int(IntegerValue::from_u64(u64::MAX)),
+        Value::Int(IntegerValue::from_typed_unsigned(u128::MAX, IntegerKind::Uint128).unwrap()),
+        Value::Int(IntegerValue::from_typed_signed(i128::MIN, IntegerKind::Int128).unwrap()),
         Value::Bool(false),
         Value::Bool(true),
         Value::String(String::new()),
         Value::String("a.b[0] λ".to_string()),
+        Value::Float(1.5),
+        Value::Float(-0.25),
     ] {
         let segment = super::entry_key_segment(&key).unwrap();
-        assert_eq!(
-            super::parse_entry_key_segment(&segment, "entries").unwrap(),
-            key
-        );
+        assert!(!segment[1..segment.len() - 1].contains(['.', '[', ']']));
+        let parsed = super::parse_entry_key_segment(&segment, "entries").unwrap();
+        assert_eq!(parsed, EntryKeySelector::Key(key.clone()));
+        assert!(parsed.matches(&key));
+    }
+    // Keys with no scalar form match by their canonical encoding, which
+    // tells apart values whose rendering could coincide.
+    let tuple = |left: &str, right: &str| {
+        Value::Tuple(TupleValue {
+            element_types: vec![Type::named("str"), Type::named("str")],
+            elements: vec![
+                Value::String(left.to_string()),
+                Value::String(right.to_string()),
+            ],
+        })
+    };
+    let variant = |name: &str, payloads: Vec<Value>| {
+        Value::EnumVariant(EnumVariantValue {
+            enum_name: "Slot".to_string(),
+            variant_name: name.to_string(),
+            payloads,
+        })
+    };
+    let composite = [
+        Value::Unit,
+        tuple("a, b", "c"),
+        tuple("a", "b, c"),
+        variant("Red", Vec::new()),
+        variant("Numbered", vec![Value::Int(IntegerValue::from_i64(3))]),
+        variant("Numbered", vec![Value::Int(IntegerValue::from_i64(4))]),
+        Value::Duration(5),
+        Value::Tuple(TupleValue {
+            element_types: vec![
+                Type::named("int64"),
+                Type::named("float64"),
+                Type::named("bool"),
+                Type::named("bool"),
+            ],
+            elements: vec![
+                Value::Int(IntegerValue::from_i64(-1)),
+                Value::Float(0.5),
+                Value::Bool(true),
+                Value::Bool(false),
+            ],
+        }),
+        Value::Union(Box::new(crate::runtime_value::UnionValue {
+            union_type: Type::named("str"),
+            member_index: 1,
+            payload: Value::String("x".to_string()),
+        })),
+        Value::Instance(InstanceValue {
+            class_name: "Point".to_string(),
+            fields: [("x".to_string(), Value::Int(IntegerValue::from_i64(1)))]
+                .into_iter()
+                .collect(),
+        }),
+    ];
+    for (index, key) in composite.iter().enumerate() {
+        let segment = super::entry_key_segment(key).unwrap();
+        assert!(segment.starts_with("[k:v:"));
+        let parsed = super::parse_entry_key_segment(&segment, "entries").unwrap();
+        assert_eq!(parsed, EntryKeySelector::Encoded(segment.clone()));
+        for (other_index, other) in composite.iter().enumerate() {
+            assert_eq!(parsed.matches(other), index == other_index);
+        }
     }
     assert_eq!(
         super::parse_element_index_segment("[i:12]", "items").unwrap(),
@@ -84,10 +151,16 @@ fn adr0061_element_place_segments_round_trip_keys_and_refuse_invalid_encodings()
         "key",
         "[k:i:1",
         "[k:i:no]",
+        "[k:i:-]",
         "[k:b:yes]",
         "[k:s:f]",
         "[k:s:gg]",
         "[k:s:ff]",
+        "[k:f:3ff8]",
+        "[k:f:zzzzzzzzzzzzzzzz]",
+        "[k:v:]",
+        "[k:v:abc]",
+        "[k:v:zz]",
         "[k:x:1]",
     ] {
         assert_eq!(
@@ -98,8 +171,10 @@ fn adr0061_element_place_segments_round_trip_keys_and_refuse_invalid_encodings()
         );
     }
     assert_eq!(
-        super::entry_key_segment(&Value::Unit).unwrap_err().message,
-        "dict entry loans require an int64, bool, or str key"
+        super::entry_key_segment(&Value::Range(RangeValue { start: 0, end: 1 }))
+            .unwrap_err()
+            .message,
+        "dict entry loans cannot encode key `range(0, 1)`"
     );
 }
 

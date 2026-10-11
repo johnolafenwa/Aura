@@ -1,0 +1,29 @@
+class Box:
+    values: list[int64]
+
+
+class Crate:
+    box: Box
+
+
+def main():
+    mut values = [10, 20]
+    view mut first = values[0]
+    grouped = (values).set(1, 30)
+    first += 1
+    print(grouped)
+    print(values)
+
+    mut box = Box(values=[10, 20])
+    view mut head = box.values[0]
+    field = box.values.set(1, 30)
+    head += 2
+    print(field)
+    print(box.values)
+
+    mut crate = Crate(box=Box(values=[1, 2, 3]))
+    view mut low = crate.box.values[0]
+    nested = (crate.box.values).set(index=2, value=9)
+    low -= 1
+    print(nested)
+    print(crate.box.values)

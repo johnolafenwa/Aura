@@ -1,0 +1,34 @@
+class Box:
+    values: list[int64]
+
+
+class Shelf:
+    boxes: list[Box]
+
+
+def tail(boxes: mut list[Box]) -> view mut int64 from boxes:
+    return view mut boxes[0].values[-1]
+
+
+def named(table: mut dict[str, Box], key: str) -> view mut int64 from table:
+    return view mut table[key].values[0]
+
+
+def deep(shelves: list[Shelf]) -> view int64 from shelves:
+    return view shelves[1].boxes[0].values[1]
+
+
+def main():
+    mut boxes = [Box(values=[10, 20])]
+    view mut answer = tail(boxes)
+    answer += 1
+    print(boxes[0].values)
+
+    mut table: dict[str, Box] = {"a": Box(values=[1, 2])}
+    view mut first = named(table, "a")
+    first *= 7
+    print(table["a"].values)
+
+    shelves = [Shelf(boxes=[Box(values=[0, 0])]), Shelf(boxes=[Box(values=[5, 6])])]
+    view picked = deep(shelves)
+    print(picked)

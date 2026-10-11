@@ -1,0 +1,16 @@
+def note(label: str, value: int64) -> int64:
+    print(label)
+    return value
+
+
+def main():
+    mut values = [10, 20, 30]
+    view first = values[0]
+    named = values.set(index=1, value=21)
+    mixed = values.set(2, value=31)
+    reordered = values.set(value=note("value first", 32), index=2)
+    print(first)
+    print(named)
+    print(mixed)
+    print(reordered)
+    print(values)

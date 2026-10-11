@@ -1081,18 +1081,20 @@ impl Env {
                 element_index_segment(index)
             }
             Value::Map(map) => {
-                if !map
+                // The stored key names the entry, so a later lookup by its
+                // encoding finds exactly this entry.
+                let Some((stored, _)) = map
                     .entries
                     .iter()
-                    .any(|(candidate, _)| *candidate == selector)
-                {
+                    .find(|(candidate, _)| *candidate == selector)
+                else {
                     return Err(Diagnostic::coded_at(
                         "AU4003",
                         span,
                         format!("dict key `{}` was not present", selector.render()),
                     ));
-                }
-                entry_key_segment(&selector)?
+                };
+                entry_key_segment(stored)?
             }
             _ => {
                 return Err(Diagnostic::new(format!(
@@ -1339,7 +1341,7 @@ impl Env {
                     let key = parse_entry_key_segment(segment, place)?;
                     map.entries
                         .iter()
-                        .find(|(candidate, _)| *candidate == key)
+                        .find(|(candidate, _)| key.matches(candidate))
                         .map(|(_, value)| value)
                         .ok_or_else(|| {
                             Diagnostic::new(format!(
@@ -1690,25 +1692,84 @@ fn element_index_segment(index: usize) -> String {
 }
 
 /// The place segment naming a loaned dictionary entry: the key encoded so
-/// that no `.` can split it (`[k:i:<int>]`, `[k:b:<bool>]`, or
-/// `[k:s:<hex utf-8>]`).
+/// that no `.` can split it. Scalar keys keep a readable form
+/// (`[k:i:<int>]` with the full integer value, `[k:b:<bool>]`,
+/// `[k:s:<hex utf-8>]`, `[k:f:<hex f64 bits>]`); every other key admitted by
+/// dictionary equality is `[k:v:<hex>]` of a canonical, length-prefixed
+/// encoding.
 fn entry_key_segment(key: &Value) -> Result<String> {
     Ok(match key {
-        Value::Int(value) => format!("[k:i:{}]", value.as_i128().unwrap_or_default()),
+        Value::Int(value) => format!("[k:i:{value}]"),
         Value::Bool(value) => format!("[k:b:{value}]"),
-        Value::String(value) => {
-            let hex = value
-                .bytes()
-                .map(|byte| format!("{byte:02x}"))
-                .collect::<String>();
-            format!("[k:s:{hex}]")
-        }
-        _ => {
-            return Err(Diagnostic::new(
-                "dict entry loans require an int64, bool, or str key",
-            ))
+        Value::String(value) => format!("[k:s:{}]", hex_bytes(value.as_bytes())),
+        Value::Float(value) => format!("[k:f:{:016x}]", value.to_bits()),
+        other => {
+            let mut encoded = Vec::new();
+            encode_entry_key(other, &mut encoded)?;
+            format!("[k:v:{}]", hex_bytes(&encoded))
         }
     })
+}
+
+fn hex_bytes(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+/// A canonical, injective encoding of a dictionary key value: each value
+/// starts with a tag and every variable-length part carries its length.
+fn encode_entry_key(key: &Value, out: &mut Vec<u8>) -> Result<()> {
+    fn text(out: &mut Vec<u8>, value: &str) {
+        out.extend_from_slice(format!("{}:", value.len()).as_bytes());
+        out.extend_from_slice(value.as_bytes());
+    }
+    match key {
+        Value::Int(value) => out.extend_from_slice(format!("i{value};").as_bytes()),
+        Value::Float(value) => {
+            out.extend_from_slice(format!("f{:016x}", value.to_bits()).as_bytes())
+        }
+        Value::Bool(value) => out.extend_from_slice(if *value { b"b1" } else { b"b0" }),
+        Value::String(value) => {
+            out.push(b's');
+            text(out, value);
+        }
+        Value::Duration(value) => out.extend_from_slice(format!("d{value};").as_bytes()),
+        Value::Unit => out.push(b'u'),
+        Value::Tuple(tuple) => {
+            out.extend_from_slice(format!("t{};", tuple.elements.len()).as_bytes());
+            for element in &tuple.elements {
+                encode_entry_key(element, out)?;
+            }
+        }
+        Value::EnumVariant(variant) => {
+            out.push(b'e');
+            text(out, &variant.enum_name);
+            text(out, &variant.variant_name);
+            out.extend_from_slice(format!("{};", variant.payloads.len()).as_bytes());
+            for payload in &variant.payloads {
+                encode_entry_key(payload, out)?;
+            }
+        }
+        Value::Union(union) => {
+            out.extend_from_slice(format!("n{};", union.member_index).as_bytes());
+            encode_entry_key(&union.payload, out)?;
+        }
+        Value::Instance(instance) => {
+            out.push(b'c');
+            text(out, &instance.class_name);
+            out.extend_from_slice(format!("{};", instance.fields.len()).as_bytes());
+            for (name, value) in &instance.fields {
+                text(out, name);
+                encode_entry_key(value, out)?;
+            }
+        }
+        other => {
+            return Err(Diagnostic::new(format!(
+                "dict entry loans cannot encode key `{}`",
+                other.render()
+            )))
+        }
+    }
+    Ok(())
 }
 
 fn parse_element_index_segment(segment: &str, place: &str) -> Result<usize> {
@@ -1723,7 +1784,27 @@ fn parse_element_index_segment(segment: &str, place: &str) -> Result<usize> {
         })
 }
 
-fn parse_entry_key_segment(segment: &str, place: &str) -> Result<Value> {
+/// A parsed entry selector: a scalar key compared with dictionary
+/// equality, or a canonical encoding compared with each stored key's own
+/// encoding.
+#[derive(Debug, PartialEq)]
+enum EntryKeySelector {
+    Key(Value),
+    Encoded(String),
+}
+
+impl EntryKeySelector {
+    fn matches(&self, candidate: &Value) -> bool {
+        match self {
+            Self::Key(key) => candidate == key,
+            Self::Encoded(segment) => {
+                entry_key_segment(candidate).is_ok_and(|encoded| encoded == *segment)
+            }
+        }
+    }
+}
+
+fn parse_entry_key_segment(segment: &str, place: &str) -> Result<EntryKeySelector> {
     let invalid = || {
         Diagnostic::new(format!(
             "invalid entry selector `{segment}` in MIR place `{place}`"
@@ -1734,29 +1815,49 @@ fn parse_entry_key_segment(segment: &str, place: &str) -> Result<Value> {
         .and_then(|rest| rest.strip_suffix(']'))
         .ok_or_else(invalid)?;
     if let Some(digits) = body.strip_prefix("i:") {
-        let value = digits.parse::<i64>().map_err(|_| invalid())?;
-        return Ok(Value::Int(IntegerValue::from_i64(value)));
+        let value = if digits.starts_with('-') {
+            IntegerValue::from_signed(digits.parse::<i128>().map_err(|_| invalid())?)
+        } else {
+            IntegerValue::from_literal(digits.parse::<u128>().map_err(|_| invalid())?)
+        };
+        return Ok(EntryKeySelector::Key(Value::Int(value)));
     }
     if let Some(flag) = body.strip_prefix("b:") {
         return match flag {
-            "true" => Ok(Value::Bool(true)),
-            "false" => Ok(Value::Bool(false)),
+            "true" => Ok(EntryKeySelector::Key(Value::Bool(true))),
+            "false" => Ok(EntryKeySelector::Key(Value::Bool(false))),
             _ => Err(invalid()),
         };
     }
     if let Some(hex) = body.strip_prefix("s:") {
-        if hex.len() % 2 != 0 {
-            return Err(invalid());
-        }
-        let bytes = (0..hex.len())
-            .step_by(2)
-            .map(|at| u8::from_str_radix(&hex[at..at + 2], 16).map_err(|_| invalid()))
-            .collect::<Result<Vec<u8>>>()?;
-        return String::from_utf8(bytes)
-            .map(Value::String)
+        return String::from_utf8(parse_hex_bytes(hex).ok_or_else(invalid)?)
+            .map(|text| EntryKeySelector::Key(Value::String(text)))
             .map_err(|_| invalid());
     }
+    if let Some(bits) = body.strip_prefix("f:") {
+        if bits.len() != 16 || !bits.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err(invalid());
+        }
+        let bits = u64::from_str_radix(bits, 16).map_err(|_| invalid())?;
+        return Ok(EntryKeySelector::Key(Value::Float(f64::from_bits(bits))));
+    }
+    if let Some(hex) = body.strip_prefix("v:") {
+        if hex.is_empty() || parse_hex_bytes(hex).is_none() {
+            return Err(invalid());
+        }
+        return Ok(EntryKeySelector::Encoded(segment.to_string()));
+    }
     Err(invalid())
+}
+
+fn parse_hex_bytes(hex: &str) -> Option<Vec<u8>> {
+    if !hex.len().is_multiple_of(2) {
+        return None;
+    }
+    (0..hex.len())
+        .step_by(2)
+        .map(|at| u8::from_str_radix(hex.get(at..at + 2)?, 16).ok())
+        .collect()
 }
 
 fn split_place_segments(place: &str) -> Result<Vec<String>> {
@@ -1899,7 +2000,7 @@ fn write_nested_place(
             let slot = map
                 .entries
                 .iter_mut()
-                .find(|(candidate, _)| *candidate == key)
+                .find(|(candidate, _)| key.matches(candidate))
                 .map(|(_, value)| value)
                 .ok_or_else(|| {
                     Diagnostic::new(format!(
