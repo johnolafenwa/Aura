@@ -15615,7 +15615,7 @@ fn fmt_reflows_long_calls_in_files() {
     assert!(output.status.success());
     assert_eq!(
         fs::read_to_string(&path).unwrap(),
-        "def main() -> None:\n    print(\n        \"the first argument value\",\n        \"the second argument value\",\n        \"the third argument value here\"\n    )\n"
+        "def main() -> None:\n    print(\n        \"the first argument value\",\n        \"the second argument value\",\n        \"the third argument value here\",\n    )\n"
     );
     let check = Command::new(aura_bin())
         .args(["fmt", "--check", path.to_str().unwrap()])

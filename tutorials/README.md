@@ -61,9 +61,10 @@ The tutorial set covers the topics below.
 - the loop forms `for ... in enumerate(seq):` and
   `for ... in zip(first, second):`. `zip` stops at the shorter sequence.
 - newline continuation inside `()`, `[]`, and `{}`. This covers multiline
-  signatures, calls, grouping, indexing, and collection literals. Ordinary
-  trailing commas, backslash continuation, and multiline f-strings are not
-  available. A singleton tuple still needs its one comma.
+  signatures, calls, grouping, indexing, and collection literals. A trailing
+  comma before the closing delimiter is optional. Backslash continuation and
+  multiline f-strings are not available. A singleton tuple still needs its
+  one comma.
 
 ### Functions And Closures
 

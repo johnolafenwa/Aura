@@ -53,8 +53,7 @@ accepts one optional trailing comma before the closing delimiter. This
 covers:
 
 - call arguments, including keyword arguments
-- parameter lists of functions, methods, trait methods, extern functions, and
-  lambdas written in parentheses
+- parameter lists of functions, methods, trait methods, and extern functions
 - list, set, and dictionary displays, and comprehension-free collection
   literals
 - tuple values, tuple types, tuple targets, and tuple patterns
@@ -62,7 +61,7 @@ covers:
 - function-type parameter lists
 - enum variant payload declarations and variant payload patterns
 - trait and implementation type-argument lists
-- subscripts with several indices
+- subscripts with several indices, such as `grid[0, 1,]`
 - lambda capture lists
 - parenthesized import lists
 
@@ -71,7 +70,9 @@ exists: inside parentheses, `(x,)` is a one-element tuple and `(x)` is
 grouping. `(x, y,)` is the same two-element tuple as `(x, y)`.
 
 A list that contains only a comma, such as `f(,)` or `[,]`, is rejected.
-Two commas in a row are rejected. A trailing comma is not accepted in a list
+Two commas in a row are rejected. A one-index subscript keeps its meaning, so
+`grid[0,]` is rejected rather than read as a tuple key. Lambda parameter
+lists have no closing delimiter and keep rejecting a trailing comma. A trailing comma is not accepted in a list
 that has no closing delimiter, such as an unparenthesized tuple
 `a, b, = pair`, an unparenthesized `return a, b,`, or an unparenthesized
 import list. The existing required comma of the unparenthesized one-element
@@ -415,10 +416,10 @@ extension enables format-on-save through the standard editor setting.
   shifted to the new indentation, because its indentation is significant.
   A comment that cannot stay at the end of its line in the new layout also
   keeps the statement's original lines.
-- Exploded lists do not gain a trailing comma until every bracketed list
-  accepts one (section A). One constant turns the emission on. A magic
-  trailing comma already keeps a list exploded. A one-element tuple `(x,)` is
-  not a magic trailing comma.
+- An exploded list with two or more elements ends with a trailing comma. A
+  comprehension lays out as one element and never gains one, because its
+  commas separate loop targets. A one-element tuple `(x,)` is not a magic
+  trailing comma.
 - Trailing spaces and tabs outside multi-line strings are removed before the
   input is lexed, so a stray trailing tab is fixed rather than rejected.
 - The safety check compares every token, including `Newline`, `Indent`, and

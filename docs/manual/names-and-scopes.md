@@ -91,6 +91,15 @@ Each from-import entry may take a local alias. Direct and aliased entries can ap
 from tools.text import parse as parse_text, ResultRow
 ```
 
+Wrap a long from-import list in parentheses. The list may span lines and may end with a trailing comma:
+
+```aura fragment
+from tools.text import (
+    parse as parse_text,
+    ResultRow,
+)
+```
+
 **Aliases.** An alias occupies the same module-level namespace as items, module constants, and other imports. The compiler rejects:
 
 - duplicate aliases

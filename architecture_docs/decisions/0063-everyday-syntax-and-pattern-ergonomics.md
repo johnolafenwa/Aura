@@ -1,8 +1,8 @@
 # ADR-0063: Everyday syntax and pattern ergonomics
 
-- Status: Accepted roadmap direction; detailed design pending
+- Status: Accepted; detailed design ratified in the [Batch 4 design checkpoint](../18-batch-4-design-checkpoint.md)
 - Date: 2026-09-06
-- Implementation: Not started
+- Implementation: Trailing commas and parenthesized imports implemented; unpacking, patterns, and text/byte conveniences in progress
 - Roadmap: Batch 4
 - Formatter: Implemented as specified in [checkpoint section F](../18-batch-4-design-checkpoint.md#f-syntax-reflowing-formatter)
 - Extends: ADR-0025, ADR-0026, ADR-0049, and ADR-0051

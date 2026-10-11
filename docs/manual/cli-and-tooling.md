@@ -319,7 +319,8 @@ The formatter works on tokens. It applies these rules:
 | Spacing | One space around binary operators, after a comma, and after a colon in annotations, dictionary entries, and block headers. No space inside brackets, before a comma, before a call or index bracket, or in a slice. |
 | Defaults and keywords | No space around `=` in a keyword argument. A parameter default after a type annotation keeps one space on each side. |
 | Blank lines | At most two blank lines at module level and one inside a body. Two blank lines separate top-level declarations. No blank line starts a body or ends the file. |
-| Reflow | A statement that fits in 88 columns goes on one line. A longer statement breaks its outermost bracket first and puts each element on its own line, indented one level. Breaking repeats inward until each line fits. A signature breaks its parameter list before its result type. |
+| Reflow | A statement that fits in 88 columns goes on one line. A longer statement breaks its outermost bracket first and puts each element on its own line, indented one level. A list of two or more elements then ends with a trailing comma. A comprehension stays one element. Breaking repeats inward until each line fits. A signature breaks its parameter list before its result type. |
+| Magic trailing comma | A bracketed list written with a trailing comma stays one element per line, even when it would fit. A one-element tuple such as `(x,)` is not affected. |
 | Comments | A comment stays on the line it started on. A comment inside a bracketed list keeps that list one element per line. |
 | Literals | String, f-string, raw string, triple-quoted, and number literals keep their exact source text, including docstrings. |
 
@@ -861,9 +862,7 @@ MIR-specific frame-note masking.
   runtime layout described above.
 - `ast`, `ast-json`, and `mir` are inspection formats, not stable
   serialization APIs.
-- The formatter has one fixed style and no configuration. Exploded bracketed
-  lists do not end with a trailing comma, because most bracketed lists do not
-  accept one.
+- The formatter has one fixed style and no configuration.
 - `aura test` discovers tests by the `test_` name prefix, not by annotation.
 - A timed-out test worker cannot be forcibly stopped inside the CLI process.
 

@@ -11,7 +11,7 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 - Physical newlines continue a logical line only while `(`, `[`, or `{` remains open. Continuation indentation is visual, and delimiter kinds must match.
 - Backslash continuation is not implemented.
 - Ordinary, raw, and f-strings are single-line. Triple-quoted ordinary strings may span physical lines.
-- Source lists do not accept trailing commas. The one exception is the required comma in singleton tuple values, types, targets, and patterns. Multi-element tuples reject a trailing comma.
+- A trailing comma needs a closing `)`, `]`, or `}`. Unparenthesized unpack targets, unparenthesized import lists, and lambda parameter lists reject it.
 - The parser's nesting, postfix-chain, and binary-chain guards allow 128 operations. Deeper input is rejected with a diagnostic.
 - Statement match arms cannot be inline. An expression match arm may put its expression on the same line after `case pattern:` or use an indented expression body.
 - A `for` loop binding cannot shadow a name already visible in the same scope.
@@ -48,7 +48,7 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 ### Tuples
 
 - Tuples have fixed structural types, recursive unpack targets and patterns, copy-only constant indexing, and non-consuming recursive `==` and `!=` for operands of the same static tuple type.
-- There is no empty tuple, multi-element trailing tuple comma, tuple iteration, tuple method, tuple ordering, named or rest unpacking, mutable tuple-target writeback, dynamic or negative tuple indexing, or tuple-to-collection conversion.
+- There is no empty tuple, tuple iteration, tuple method, tuple ordering, named or rest unpacking, mutable tuple-target writeback, dynamic or negative tuple indexing, or tuple-to-collection conversion.
 - To take ownership of a non-Copy element, unpack the tuple.
 
 ### Views
@@ -275,7 +275,6 @@ These figures come from the clean Mac14,9 measurement at `181204b`.
 - The default `--backend auto` first tries direct emission. It may package an embedded-MIR launcher when direct emission is unavailable. Use `--backend direct` when fallback is unacceptable.
 - Editor tooling uses a persistent compiler service. If that process is unavailable, recovery is lexical only, with no semantic diagnostics or member inference.
 - `aura fmt` has one fixed style with an 88-column width and no configuration. A statement without brackets cannot break, so it may stay longer than 88 columns.
-- `aura fmt` does not add a trailing comma to an exploded list, because most bracketed lists do not accept one.
 - `aura test` discovers each parameterless `def test_*()` function as a separate result. A file with no such function still runs as one file-level test.
 - Optional `setup()` and `teardown()` run for each selected case. Teardown runs even after a setup or body failure.
 - Parameterized registration returns labeled capture-free `def() -> None` values in `list[(str, def() -> None)]`. Registration runs before `-k` filtering.

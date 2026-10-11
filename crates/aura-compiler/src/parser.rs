@@ -396,6 +396,7 @@ impl Parser {
         let span = self.expect_keyword(TokenKind::KwFrom)?.span;
         let module_path = self.parse_identifier_path()?;
         self.expect_keyword(TokenKind::KwImport)?;
+        let parenthesized = self.eat_simple(&TokenKind::LParen).is_some();
         let mut names = Vec::new();
         let mut targets = std::collections::BTreeSet::new();
         let mut local_names = std::collections::BTreeSet::new();
@@ -429,6 +430,18 @@ impl Parser {
             if self.eat_simple(&TokenKind::Comma).is_none() {
                 break;
             }
+            if parenthesized && self.at_simple(&TokenKind::RParen) {
+                break;
+            }
+            if !parenthesized && self.at_simple(&TokenKind::Newline) {
+                return Err(parse_error(
+                    self.current_span(),
+                    "an unparenthesized import list cannot end with a comma; wrap the names in parentheses",
+                ));
+            }
+        }
+        if parenthesized {
+            self.expect_simple(TokenKind::RParen)?;
         }
         self.expect_newline()?;
         Ok(ImportDecl {
@@ -571,7 +584,7 @@ impl Parser {
                     ty: field_ty,
                     span: field_span,
                 });
-                if self.eat_simple(&TokenKind::Comma).is_none() {
+                if !self.eat_list_comma(&TokenKind::RParen) {
                     break;
                 }
             }
@@ -705,7 +718,7 @@ impl Parser {
         if self.eat_simple(&TokenKind::LBracket).is_some() {
             loop {
                 trait_args.push(self.parse_type()?);
-                if self.eat_simple(&TokenKind::Comma).is_none() {
+                if !self.eat_list_comma(&TokenKind::RBracket) {
                     break;
                 }
             }
@@ -837,7 +850,7 @@ impl Parser {
             if !param_bounds.is_empty() {
                 bounds.insert(type_params.last().unwrap().clone(), param_bounds);
             }
-            if self.eat_simple(&TokenKind::Comma).is_none() {
+            if !self.eat_list_comma(&TokenKind::RBracket) {
                 break;
             }
         }
@@ -878,7 +891,7 @@ impl Parser {
                     self.bump();
                     self.expect_identifier()?;
                     receiver = Some(ReceiverKind::BorrowMut);
-                    if self.eat_simple(&TokenKind::Comma).is_none() {
+                    if !self.eat_list_comma(&TokenKind::RParen) {
                         break;
                     }
                     continue;
@@ -894,7 +907,7 @@ impl Parser {
                     self.bump();
                     self.expect_identifier()?;
                     receiver = Some(ReceiverKind::Value);
-                    if self.eat_simple(&TokenKind::Comma).is_none() {
+                    if !self.eat_list_comma(&TokenKind::RParen) {
                         break;
                     }
                     continue;
@@ -909,7 +922,7 @@ impl Parser {
                     }
                     self.bump();
                     receiver = Some(ReceiverKind::Borrow);
-                    if self.eat_simple(&TokenKind::Comma).is_none() {
+                    if !self.eat_list_comma(&TokenKind::RParen) {
                         break;
                     }
                     continue;
@@ -946,7 +959,7 @@ impl Parser {
                 span,
             });
 
-            if self.eat_simple(&TokenKind::Comma).is_none() {
+            if !self.eat_list_comma(&TokenKind::RParen) {
                 break;
             }
         }
@@ -1447,14 +1460,8 @@ impl Parser {
 
             loop {
                 elements.push(self.parse_pattern()?);
-                if self.eat_simple(&TokenKind::Comma).is_none() {
+                if !self.eat_list_comma(&TokenKind::RParen) {
                     break;
-                }
-                if self.at_simple(&TokenKind::RParen) {
-                    return Err(parse_error(
-                        self.current_span(),
-                        "trailing commas are only allowed for singleton tuple patterns",
-                    ));
                 }
             }
             self.expect_simple(TokenKind::RParen)?;
@@ -1572,7 +1579,7 @@ impl Parser {
                         ));
                     }
                     subpatterns.push(self.parse_pattern()?);
-                    if self.eat_simple(&TokenKind::Comma).is_none() {
+                    if !self.eat_list_comma(&TokenKind::RParen) {
                         break;
                     }
                 }
@@ -1737,14 +1744,8 @@ impl Parser {
                 if self.eat_simple(&TokenKind::RParen).is_none() {
                     loop {
                         elements.push(self.parse_type()?);
-                        if self.eat_simple(&TokenKind::Comma).is_none() {
+                        if !self.eat_list_comma(&TokenKind::RParen) {
                             break;
-                        }
-                        if self.at_simple(&TokenKind::RParen) {
-                            return Err(parse_error(
-                                self.current_span(),
-                                "trailing commas are only allowed for singleton tuple types",
-                            ));
                         }
                     }
                     self.expect_simple(TokenKind::RParen)?;
@@ -1781,7 +1782,7 @@ impl Parser {
                 if self.eat_simple(&TokenKind::LBracket).is_some() {
                     loop {
                         args.push(self.parse_type()?);
-                        if self.eat_simple(&TokenKind::Comma).is_none() {
+                        if !self.eat_list_comma(&TokenKind::RBracket) {
                             break;
                         }
                     }
@@ -1874,7 +1875,7 @@ impl Parser {
                     has_default,
                     span: param_span,
                 });
-                if self.eat_simple(&TokenKind::Comma).is_none() {
+                if !self.eat_list_comma(&TokenKind::RParen) {
                     break;
                 }
             }
@@ -1992,14 +1993,8 @@ impl Parser {
                         mode,
                         span: capture_span,
                     });
-                    if self.eat_simple(&TokenKind::Comma).is_none() {
+                    if !self.eat_list_comma(&TokenKind::RBracket) {
                         break;
-                    }
-                    if self.at_simple(&TokenKind::RBracket) {
-                        return Err(parse_error(
-                            self.current_span(),
-                            "expected a capture name after `,` in lambda capture list",
-                        ));
                     }
                 }
                 self.expect_simple(TokenKind::RBracket)?;
@@ -2449,7 +2444,7 @@ impl Parser {
                 let mut type_args = Vec::new();
                 loop {
                     type_args.push(self.parse_type()?);
-                    if self.eat_simple(&TokenKind::Comma).is_none() {
+                    if !self.eat_list_comma(&TokenKind::RBracket) {
                         break;
                     }
                 }
@@ -2523,7 +2518,7 @@ impl Parser {
                     let mut elements = vec![first];
                     loop {
                         elements.push(self.parse_expr()?);
-                        if self.eat_simple(&TokenKind::Comma).is_none() {
+                        if !self.eat_list_comma(&TokenKind::RBracket) {
                             break;
                         }
                     }
@@ -2691,14 +2686,8 @@ impl Parser {
 
                 loop {
                     elements.push(self.parse_non_tuple_expr()?);
-                    if self.eat_simple(&TokenKind::Comma).is_none() {
+                    if !self.eat_list_comma(&TokenKind::RParen) {
                         break;
-                    }
-                    if self.at_simple(&TokenKind::RParen) {
-                        return Err(parse_error(
-                            self.current_span(),
-                            "trailing commas are only allowed for singleton tuple literals",
-                        ));
                     }
                 }
                 self.expect_simple(TokenKind::RParen)?;
@@ -2730,7 +2719,7 @@ impl Parser {
                 }
 
                 let mut elements = vec![first];
-                while self.eat_simple(&TokenKind::Comma).is_some() {
+                while self.eat_list_comma(&TokenKind::RBracket) {
                     elements.push(self.parse_expr()?);
                     if self.at_simple(&TokenKind::KwFor) {
                         return Err(self.mixed_comprehension_literal_error());
@@ -2766,7 +2755,7 @@ impl Parser {
                     }
 
                     let mut elements = vec![first];
-                    while self.eat_simple(&TokenKind::Comma).is_some() {
+                    while self.eat_list_comma(&TokenKind::RBrace) {
                         elements.push(self.parse_expr()?);
                         if self.at_simple(&TokenKind::KwFor) {
                             return Err(self.mixed_comprehension_literal_error());
@@ -2796,7 +2785,7 @@ impl Parser {
                 }
 
                 let mut entries = vec![MapEntryExpr { key: first, value }];
-                while self.eat_simple(&TokenKind::Comma).is_some() {
+                while self.eat_list_comma(&TokenKind::RBrace) {
                     let key = self.parse_expr()?;
                     self.expect_simple(TokenKind::Colon)?;
                     let value = self.parse_expr()?;
@@ -3006,7 +2995,7 @@ impl Parser {
                 return Err(self.generator_expression_error());
             }
             args.push(argument);
-            if self.eat_simple(&TokenKind::Comma).is_none() {
+            if !self.eat_list_comma(&TokenKind::RParen) {
                 break;
             }
         }
@@ -3141,10 +3130,13 @@ impl Parser {
             if self.eat_simple(&TokenKind::Comma).is_none() {
                 break;
             }
+            if allow_unparenthesized_singleton && self.at_simple(&TokenKind::RParen) {
+                break;
+            }
             if self.binding_target_sequence_terminator() {
                 return Err(parse_error(
                     self.current_span(),
-                    "trailing commas are only allowed for singleton tuple targets",
+                    "an unparenthesized destructuring target cannot end with a comma; wrap the targets in parentheses",
                 ));
             }
         }
@@ -3238,7 +3230,7 @@ impl Parser {
                         if self.at_simple(&TokenKind::Colon) {
                             return Err(self.slice_assignment_error());
                         }
-                        if self.eat_simple(&TokenKind::Comma).is_none() {
+                        if !self.eat_list_comma(&TokenKind::RBracket) {
                             break;
                         }
                     }
@@ -3379,6 +3371,9 @@ impl Parser {
                     }
                     if matches!(self.peek_kind_at(idx), Some(TokenKind::Comma)) {
                         idx += 1;
+                        if matches!(self.peek_kind_at(idx), Some(TokenKind::RParen)) {
+                            break;
+                        }
                         continue;
                     }
                     break;
@@ -3507,6 +3502,9 @@ impl Parser {
             idx = next;
             if matches!(self.peek_kind_at(idx), Some(TokenKind::Comma)) {
                 idx += 1;
+                if matches!(self.peek_kind_at(idx), Some(TokenKind::RBracket)) {
+                    break;
+                }
                 continue;
             }
             break;
@@ -3788,6 +3786,12 @@ impl Parser {
                 format!("expected member name, found {:?}", other),
             )),
         }
+    }
+
+    /// Consumes one list separator. Returns `false` when the list ends:
+    /// there is no comma, or the comma is a trailing comma before `close`.
+    fn eat_list_comma(&mut self, close: &TokenKind) -> bool {
+        self.eat_simple(&TokenKind::Comma).is_some() && !self.at_simple(close)
     }
 
     fn eat_simple(&mut self, kind: &TokenKind) -> Option<Token> {

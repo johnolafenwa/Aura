@@ -328,7 +328,8 @@ Source imports have two forms, specified in [Grammar](/manual/grammar#modules-an
 - `import dotted.module [as local]`
 - `from dotted.module import name [as local]`
 
-A from-import may name several direct or aliased names. Import paths are
+A from-import may name several direct or aliased names. Wrap the names in
+parentheses to spread them across lines. Import paths are
 absolute within the resolved local or dependency namespace. The resolver uses
 the path before `as`. The alias is a local binding and is never read as a
 package, directory, or dependency key. Relative imports, wildcard imports, and

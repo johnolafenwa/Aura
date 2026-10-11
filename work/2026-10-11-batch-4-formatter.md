@@ -28,11 +28,10 @@ Replace the whitespace-only `aura fmt` with a token-based formatter. Add
 - The `aura lsp` compiler service has a `format` method. The language server
   advertises `documentFormattingProvider` and returns one whole-document edit.
   The VS Code extension gets formatting through its language client.
-- `EMIT_TRAILING_COMMAS` in `format.rs` controls the trailing comma on
-  exploded lists. It is off because the parser on `main` rejects most trailing
-  commas. Turn it on once section A merges, then update the golden tests and
-  the "no trailing comma" sentences in `docs/manual/cli-and-tooling.md` and
-  `docs/manual/current-limits.md`.
+- An exploded list of two or more elements ends with a trailing comma, now
+  that every bracketed list accepts one. A comprehension lays out as one
+  element and never gains a comma. When the last element has a trailing
+  comment, the added comma goes before the comment.
 - Updated the CLI manual, current limits, crate and tool READMEs, the tooling
   tutorial, ADR-0063, and the implementation notes in checkpoint section F.
 
@@ -52,7 +51,6 @@ See the final report for the exact commands and results.
 
 ## Follow-Up
 
-- Turn on `EMIT_TRAILING_COMMAS` after section A lands.
 - Decide whether to reformat `examples/` and the documentation code blocks in
   one dedicated change, and then add `aura fmt --check examples` to CI.
 - Breaking long expressions at binary operators inside brackets is not

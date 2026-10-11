@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use super::{format_source, verify, FormatError, Formatter, LINE_WIDTH};
+use super::{format_source, verify, FormatError, LINE_WIDTH};
 use crate::lexer::lex;
 
 fn format(source: &str) -> String {
@@ -187,7 +187,7 @@ fn a_long_line_breaks_its_outermost_bracket_first() {
     let source = "def main() -> None:\n    print(combine(first_value_name, second_value_name), combine(third_value_name, fourth_value))\n";
     assert_formats(
         source,
-        "def main() -> None:\n    print(\n        combine(first_value_name, second_value_name),\n        combine(third_value_name, fourth_value)\n    )\n",
+        "def main() -> None:\n    print(\n        combine(first_value_name, second_value_name),\n        combine(third_value_name, fourth_value),\n    )\n",
     );
 }
 
@@ -196,7 +196,7 @@ fn reflow_repeats_inward_until_lines_fit() {
     let source = "def main() -> None:\n    print(combine(first_value_name_that_is_long, second_value_name_that_is_long, third_value_name_long))\n";
     assert_formats(
         source,
-        "def main() -> None:\n    print(\n        combine(\n            first_value_name_that_is_long,\n            second_value_name_that_is_long,\n            third_value_name_long\n        )\n    )\n",
+        "def main() -> None:\n    print(\n        combine(\n            first_value_name_that_is_long,\n            second_value_name_that_is_long,\n            third_value_name_long,\n        )\n    )\n",
     );
 }
 
@@ -205,7 +205,7 @@ fn a_signature_breaks_its_parameters_before_its_result_type() {
     let source = "def dispatch(request_value: Request, registry_value: dict[str, Tool]) -> Result[Answer, Error]:\n    pass\n";
     assert_formats(
         source,
-        "def dispatch(\n    request_value: Request,\n    registry_value: dict[str, Tool]\n) -> Result[Answer, Error]:\n    pass\n",
+        "def dispatch(\n    request_value: Request,\n    registry_value: dict[str, Tool],\n) -> Result[Answer, Error]:\n    pass\n",
     );
 }
 
@@ -255,7 +255,7 @@ fn comments_stay_on_their_lines() {
 fn a_comment_inside_brackets_keeps_the_list_exploded() {
     assert_formats(
         "def main() -> None:\n    values = [1,   # one\n        # the second\n        2,\n        3]\n    print(max(1, 2  # pick\n    ))\n",
-        "def main() -> None:\n    values = [\n        1,  # one\n        # the second\n        2,\n        3\n    ]\n    print(\n        max(\n            1,\n            2  # pick\n        )\n    )\n",
+        "def main() -> None:\n    values = [\n        1,  # one\n        # the second\n        2,\n        3,\n    ]\n    print(\n        max(\n            1,\n            2,  # pick\n        )\n    )\n",
     );
     assert_formats(
         "def main() -> None:\n    print(len([  # empty\n    ]))\n",
@@ -263,7 +263,7 @@ fn a_comment_inside_brackets_keeps_the_list_exploded() {
     );
     assert_formats(
         "def main() -> None:\n    print(max(1,\n        2\n        # closing note\n    ))\n",
-        "def main() -> None:\n    print(\n        max(\n            1,\n            2\n            # closing note\n        )\n    )\n",
+        "def main() -> None:\n    print(\n        max(\n            1,\n            2,\n            # closing note\n        )\n    )\n",
     );
 }
 
@@ -358,26 +358,29 @@ fn the_token_guard_rejects_changed_output() {
 #[test]
 fn the_token_guard_ignores_trailing_commas_except_one_element_tuples() {
     let original = lex("print([1, 2], (3, 4))\n").unwrap();
-    assert!(
-        verify(&original, "print([1, 2,], (3, 4,))\n").is_err_and(|error| {
-            // The current parser rejects these commas, so the guard reports a
-            // parse failure rather than a token difference.
-            matches!(error, FormatError::Unstable(message) if message.contains("does not parse"))
-        })
-    );
+    assert!(verify(&original, "print([1, 2,], (3, 4,),)\n").is_ok());
     let tuple = lex("x = (1,)\n").unwrap();
-    assert!(verify(&tuple, "x = (1)\n").is_err());
+    assert!(matches!(
+        verify(&tuple, "x = (1)\n"),
+        Err(FormatError::Unstable(message)) if message.contains("changes the token stream")
+    ));
     assert!(verify(&tuple, "x = (\n    1,\n)\n").is_ok());
 }
 
 #[test]
 fn a_magic_trailing_comma_keeps_a_list_exploded() {
-    // The parser does not accept these trailing commas yet, so this drives
-    // the layout engine directly.
-    let source = "values = [1, 2,]\npair = (1,)\ncall(a, b=[3,],)\n";
-    assert_eq!(
-        Formatter::new(source).format(),
-        "values = [\n    1,\n    2,\n]\npair = (1,)\ncall(\n    a,\n    b=[\n        3,\n    ],\n)\n"
+    assert_formats(
+        "def main() -> None:\n    values = [1, 2,]\n    pair = (1,)\n    print(values, pair, max(3, 4,),)\n",
+        "def main() -> None:\n    values = [\n        1,\n        2,\n    ]\n    pair = (1,)\n    print(\n        values,\n        pair,\n        max(\n            3,\n            4,\n        ),\n    )\n",
+    );
+}
+
+#[test]
+fn a_comprehension_never_gains_a_trailing_comma() {
+    let source = "def main() -> None:\n    pairs = [(1, 2)]\n    print([first_value_name + second_value_name for first_value_name, second_value_name in pairs])\n";
+    assert_formats(
+        source,
+        "def main() -> None:\n    pairs = [(1, 2)]\n    print(\n        [\n            first_value_name + second_value_name for first_value_name, second_value_name in pairs\n        ]\n    )\n",
     );
 }
 

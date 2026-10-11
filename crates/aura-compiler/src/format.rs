@@ -19,13 +19,6 @@ pub const LINE_WIDTH: usize = 88;
 
 const INDENT_WIDTH: usize = 4;
 
-/// Whether an exploded list with two or more elements gains a trailing comma.
-///
-/// The parser rejects a trailing comma in most bracketed lists, so the
-/// formatter does not add one yet. Turn this on once every bracketed list
-/// accepts a trailing comma.
-const EMIT_TRAILING_COMMAS: bool = false;
-
 #[derive(Debug)]
 pub enum FormatError {
     /// The input does not lex or parse, so it cannot be formatted.
@@ -501,6 +494,9 @@ struct Group {
     elements: Vec<Element>,
     /// The group must be written one element per line.
     forced: bool,
+    /// An exploded layout ends with a trailing comma. A list of two or more
+    /// elements takes one.
+    takes_trailing_comma: bool,
 }
 
 #[derive(Debug)]
@@ -891,6 +887,20 @@ impl<'a> Formatter<'a> {
                 comma: None,
             });
         }
+        // A comprehension's commas separate its targets, not list elements,
+        // so it lays out as one element with no trailing comma.
+        let comprehension = elements
+            .iter()
+            .flat_map(|element| &element.items)
+            .any(|item| matches!(item, Item::Tok(index) if self.toks[*index].text == "for"));
+        if comprehension && elements.len() > 1 {
+            let mut items = Vec::new();
+            for element in elements.drain(..) {
+                items.extend(element.items);
+                items.extend(element.comma.map(Item::Tok));
+            }
+            elements.push(Element { items, comma: None });
+        }
         let close = *cursor;
         *cursor += 1;
         let magic = elements
@@ -906,11 +916,13 @@ impl<'a> Formatter<'a> {
             .iter()
             .flat_map(|element| &element.items)
             .any(|item| matches!(item, Item::Group(group) if group.forced));
+        let takes_trailing_comma = elements.len() > 1;
         Item::Group(Group {
             open,
             close,
             elements,
             forced: magic || commented || nested_forced,
+            takes_trailing_comma,
         })
     }
 
@@ -949,7 +961,7 @@ impl<'a> Formatter<'a> {
                 self.emit_leading(first, indent + 1, out, emitted);
             }
             let comma = element.comma.or_else(|| {
-                (EMIT_TRAILING_COMMAS && position + 1 == count && count > 1)
+                (position + 1 == count && group.takes_trailing_comma)
                     .then_some(self.synthetic_comma)
             });
             self.layout(None, &element.items, comma, indent + 1, out, emitted);
@@ -1077,7 +1089,13 @@ impl<'a> Formatter<'a> {
                         let tok = &self.toks[*index];
                         let leading_ok =
                             tok.leading.is_empty() || (position == 0 && emitted.contains(index));
-                        let trailing_ok = tok.trailing.is_none() || position + 1 == tokens.len();
+                        // An added trailing comma goes before the comment.
+                        let last = if tokens.last() == Some(&self.synthetic_comma) {
+                            tokens.len().saturating_sub(2)
+                        } else {
+                            tokens.len() - 1
+                        };
+                        let trailing_ok = tok.trailing.is_none() || position == last;
                         if !leading_ok || !trailing_ok {
                             return None;
                         }
@@ -1085,8 +1103,10 @@ impl<'a> Formatter<'a> {
                     let mut text = " ".repeat(indent * INDENT_WIDTH);
                     text.push_str(&self.join(tokens));
                     if let Some(comment) = tokens
-                        .last()
-                        .and_then(|index| self.toks[*index].trailing.as_ref())
+                        .iter()
+                        .rev()
+                        .take(2)
+                        .find_map(|index| self.toks[*index].trailing.as_ref())
                     {
                         text.push_str("  ");
                         text.push_str(comment);

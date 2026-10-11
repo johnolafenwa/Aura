@@ -439,8 +439,8 @@ position, list element, or dictionary entry in place, use a `view` binding.
 A newline continues the expression while `(`, `[`, or `{` is still open.
 
 - Continuation indentation is visual and does not open a block.
-- Ordinary comma-separated forms still reject trailing commas. A singleton
-  tuple needs its one comma.
+- A bracketed comma-separated list may end with a trailing comma. A
+  singleton tuple needs its one comma.
 - A backslash or physical newline inside an ordinary string or f-string does
   not continue the source.
 

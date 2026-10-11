@@ -126,7 +126,7 @@ evaluation order. The standard style indents continued content by one level.
 
 The other line rules still hold:
 
-- A trailing comma is invalid.
+- A trailing comma before the closing delimiter is optional.
 - A newline outside an open delimiter ends the logical line.
 - A backslash does not continue a line.
 - Ordinary strings and f-strings stay on one line.
@@ -611,8 +611,8 @@ follows:
 5. Every omitted parameter must have a default.
 6. Each argument must have the substituted parameter type.
 
-Arguments do not accept a trailing comma. A call may span physical lines while
-its `(` is open.
+Arguments accept one trailing comma before the `)`. A call may span physical
+lines while its `(` is open.
 
 Evaluation follows these rules:
 
@@ -664,7 +664,7 @@ Otherwise the brackets are indexing. So `Box[int32](...)` specializes,
 `Result[int32, str].Ok(...)` specializes, and `values[index]` indexes. A bare
 `Box[int32]` is not a general first-class specialized-type value.
 
-Type arguments do not accept a trailing comma.
+Type arguments accept one trailing comma before the `]`.
 [Static Semantics](/manual/static-semantics#contextual-inference) defines
 generic inference, arity, and trait-bound rules.
 
@@ -855,7 +855,7 @@ seen = set[int32]()
 `{}` is a dictionary literal. An empty set uses `set[T]()`.
 
 Collection literals may span physical lines while their `[` or `{` is open.
-They do not accept trailing commas.
+They accept one trailing comma before the closing delimiter.
 
 - Lists and sets evaluate elements in source order.
 - Dictionaries evaluate entries in source order, each key before its value.
@@ -1145,8 +1145,6 @@ Aura 0.3 expressions do not include:
 - assignment expressions
 - call-site capability annotations
 - non-numeric casts
-- ordinary trailing commas. The required singleton-tuple comma is the one
-  exception.
 
 Lambdas are expression-bodied and contextually typed. There are no
 statement-bodied lambdas and no implicitly reference-capturing lambdas.
@@ -1276,8 +1274,7 @@ and language-server diagnostics are produced before a backend is selected.
 - The parser caps expression nesting and operator chains at 128.
 - Physical lines continue only while a source delimiter is open. Backslashes
   and multiline string or f-string literals do not continue them.
-- Ordinary trailing commas are unavailable. `(value,)` is the required
-  singleton tuple spelling.
+- `(value,)` is the singleton tuple spelling. `(value)` is grouping.
 - Collection and string resource caps are documented on their feature pages.
 - Comprehensions are eager and have no `mut` or `own` source form. They do not
   provide early exit, lazy resumption, or a user-defined iterable protocol.
