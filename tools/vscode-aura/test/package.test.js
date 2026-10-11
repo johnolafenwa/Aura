@@ -697,3 +697,21 @@ test("TextMate tokenization covers alias declarations, unions, contextual is, an
   assert.ok(scopesAt(tokenized, 8, "TaskCallable").includes("support.type.primitive.aura"));
   assert.equal(scopesAt(tokenized, 8, "is").includes("keyword.control.aura"), false);
 });
+
+test("statement-position triple strings get a distinct docstring scope", async () => {
+  const tokenized = await tokenizeAura(
+    [
+      "def area(side: float64) -> float64:",
+      "    \"\"\"Return the area.\\n\"\"\"",
+      "    '''Single quotes.'''",
+      "    text = \"\"\"ordinary\"\"\"",
+      "    return side * side"
+    ].join("\n")
+  );
+  assert.ok(scopesAt(tokenized, 1, "Return the area.").includes("string.quoted.docstring.triple.double.aura"));
+  assert.ok(scopesAt(tokenized, 1, "\\n").includes("constant.character.escape.aura"));
+  assert.ok(scopesAt(tokenized, 2, "Single quotes.").includes("string.quoted.docstring.triple.single.aura"));
+  const ordinary = scopesAt(tokenized, 3, "ordinary");
+  assert.ok(ordinary.includes("string.quoted.triple.double.aura"));
+  assert.ok(!ordinary.some((scope) => scope.includes("docstring")));
+});

@@ -24,6 +24,7 @@ const {
   analyzeWithCompiler,
   completeWithCompiler,
   editorRequestWithCompiler,
+  compilerCompletionToLsp,
   compilerDefinitionAtPosition,
   compilerDiagnosticsToLsp,
   compilerHoverAtPosition,
@@ -96,11 +97,7 @@ connection.onCompletion(async (params, cancellationToken) => {
     cancellationToken
   );
   if (compilerItems) {
-    return compilerItems.map((item) => ({
-      label: item.name,
-      kind: completionKind(item.kind),
-      detail: item.detail || ""
-    }));
+    return compilerItems.map((item) => compilerCompletionToLsp(item, completionKind(item.kind)));
   }
 
   const items = completionsForDocument(

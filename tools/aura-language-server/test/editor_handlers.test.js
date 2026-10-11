@@ -23,6 +23,28 @@ test("compiler-owned editor capabilities and signature conversion", async () => 
   assert.equal(h.calls[0][0], "signature-help");
 });
 
+test("signature help carries docstring and parameter documentation as Markdown", async () => {
+  const h = harness({
+    label: "def(shape: Square, factor: float64) -> Square",
+    parameters: ["shape: Square", "factor: float64"],
+    active_parameter: 1,
+    documentation: "Return a scaled copy.",
+    parameter_documentation: [null, "The multiplier."]
+  });
+  assert.deepEqual(await h.handlers.onSignatureHelp(params), {
+    signatures: [{
+      label: "def(shape: Square, factor: float64) -> Square",
+      documentation: { kind: "markdown", value: "Return a scaled copy." },
+      parameters: [
+        { label: "shape: Square" },
+        { label: "factor: float64", documentation: { kind: "markdown", value: "The multiplier." } }
+      ]
+    }],
+    activeSignature: 0,
+    activeParameter: 1
+  });
+});
+
 test("reference locations and versioned rename edits preserve compiler ranges", async () => {
   let h = harness([range, { ...range, file_path: "/tmp/library.au" }]);
   assert.deepEqual(await h.handlers.onReferences({ ...params, context: { includeDeclaration: true } }), [{ uri: params.textDocument.uri, range: lspRange }, { uri: "file:///tmp/library.au", range: lspRange }]);
