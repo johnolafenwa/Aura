@@ -434,7 +434,7 @@ from agents.telemetry import record as record_event, Event
 
 Aliases are static local names for resolved modules and declarations. They do not change visibility, nominal identity, trait implementations, initialization storage, or the package path used for resolution.
 
-Aura does not accept wildcard imports, relative-dot imports, parenthesized import lists, or trailing import commas. [Packages](/manual/names-and-scopes#imports) defines import resolution and visibility.
+A from-import list may be wrapped in parentheses, span lines, and end with a trailing comma. Aura does not accept wildcard imports or relative-dot imports. [Packages](/manual/names-and-scopes#imports) defines import resolution and visibility.
 
 An immutable binding at module level is a module constant:
 

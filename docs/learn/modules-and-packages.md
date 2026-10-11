@@ -73,6 +73,15 @@ A from-import may mix direct and aliased entries:
 from helpers.math import double as twice, empty
 ```
 
+Wrap a long list in parentheses. It may span lines and end with a trailing comma:
+
+```aura fragment
+from helpers.math import (
+    double as twice,
+    empty,
+)
+```
+
 Both import styles keep the full callable contract. Suppose a public generic
 helper performs an operation that produces a clone. Its inferred clone-safety
 requirement follows the import, and the compiler checks it where the helper

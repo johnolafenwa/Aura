@@ -286,7 +286,7 @@ Tuple patterns use `(left, right)` or the singleton form `(value,)`, and may nes
             print(left + right)
             print(flag)
 
-The tuple arity and recursive shape must match exactly. Empty tuple patterns, trailing commas after several elements, and rest or star patterns are rejected.
+The tuple arity and recursive shape must match exactly. A trailing comma is optional. Empty tuple patterns and rest or star patterns are rejected.
 
 Each pattern binding is local to its arm and cannot shadow a name already visible there. `_` never introduces a binding. See [Names And Scopes](/manual/names-and-scopes#pattern-scope).
 
