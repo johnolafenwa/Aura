@@ -1,0 +1,95 @@
+class Flush:
+    name: str
+    fail: bool
+
+    def __exit__(mut self) -> Result[None, str]:
+        print("flush " + self.name)
+        if self.fail:
+            return Result.Err("flush failed for " + self.name)
+        return Result.Ok(None)
+
+class Code:
+    value: int64
+
+class AppError:
+    message: str
+
+trait From[Source]:
+    def from(value: own Source) -> Self
+
+impl From[Code] for AppError:
+    def from(value: own Code) -> AppError:
+        return AppError(message="code " + str(value.value))
+
+class Commit:
+    code: int64
+
+    def __exit__(mut self) -> Result[None, Code]:
+        print("commit")
+        if self.code != 0:
+            return Result.Err(Code(value=self.code))
+        return Result.Ok(None)
+
+def computed(fail: bool) -> Result[int64, str]:
+    with sink = Flush(name="computed", fail=fail):
+        print("computing")
+        return Result.Ok(42)
+    return Result.Ok(0)
+
+def fallthrough(fail: bool) -> Result[str, str]:
+    with sink = Flush(name="fallthrough", fail=fail):
+        print("body")
+    print("after with")
+    return Result.Ok("finished")
+
+def fail_body() -> Result[int64, str]:
+    return Result.Err("body error wins")
+
+def body_error() -> Result[int64, str]:
+    with sink = Flush(name="body", fail=true):
+        try fail_body()
+    return Result.Ok(0)
+
+def converted() -> Result[int64, AppError]:
+    with Commit(code=9) as commit:
+        print("converted body")
+    return Result.Ok(1)
+
+def loop_exit() -> Result[int64, str]:
+    mut count = 0
+    while true:
+        with sink = Flush(name="loop " + str(count), fail=count == 1):
+            count += 1
+            if count < 5:
+                continue
+            break
+    return Result.Ok(count)
+
+def outer_after_inner_failure() -> Result[int64, str]:
+    with outer = Flush(name="outer", fail=true), inner = Flush(name="inner", fail=true):
+        print("two sinks")
+    return Result.Ok(0)
+
+def show_int(result: Result[int64, str]):
+    match result:
+        case Result.Ok(value):
+            print("ok " + str(value))
+        case Result.Err(message):
+            print("err " + message)
+
+def main():
+    show_int(computed(false))
+    show_int(computed(true))
+    match fallthrough(true):
+        case Result.Ok(value):
+            print("ok " + value)
+        case Result.Err(message):
+            print("err " + message)
+    show_int(body_error())
+    match converted():
+        case Result.Ok(value):
+            print(value)
+        case Result.Err(error):
+            print(error.message)
+    show_int(loop_exit())
+    show_int(outer_after_inner_failure())

@@ -1,0 +1,5 @@
+error[AU2017]: class `Guard` is not a context manager: `__exit__(mut self)` is missing or has the wrong shape
+ --> crates/aura-compiler/tests/fixtures/check-fail/manager_protocol_exit_parameter.au:8:5
+  |
+8 |     with guard = Guard(name="g"):
+  |     ^

@@ -1,0 +1,10 @@
+enter body
+body observed cancellation
+exit body cancelled=true
+exit wait cancelled
+first group joined
+enter first
+acquire second observed cancellation
+exit first cancelled=true
+exit wait cancelled
+second group joined

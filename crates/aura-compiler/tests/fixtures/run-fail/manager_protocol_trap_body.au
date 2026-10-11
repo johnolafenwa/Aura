@@ -1,0 +1,23 @@
+class Tracer:
+    name: str
+
+    def __enter__(mut self) -> None:
+        print("enter " + self.name)
+
+    def __exit__(mut self) -> None:
+        print("exit " + self.name)
+
+class Closer:
+    name: str
+
+    def close(mut self):
+        print("close " + self.name)
+
+def work(items: list[int64]) -> int64:
+    with outer = Tracer(name="outer"), legacy = Closer(name="legacy"):
+        with inner = Tracer(name="inner"):
+            return items[3]
+    return 0
+
+def main():
+    print(work([1, 2]))

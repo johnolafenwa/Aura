@@ -1,0 +1,5 @@
+error[AU1101]: expected `as name` after a with item, or write the item as `name = value`
+ --> crates/aura-compiler/tests/fixtures/parse-fail/manager_multi_item_missing_as.au:8:49
+  |
+8 |     with Tracer(name="a") as a, Tracer(name="b"):
+  |                                                 ^

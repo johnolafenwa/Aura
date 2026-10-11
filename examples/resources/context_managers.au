@@ -1,0 +1,44 @@
+class Lock:
+    name: str
+    values: list[int64]
+
+    def __enter__(mut self) -> view mut list[int64] from self:
+        print("lock " + self.name)
+        return view mut self.values
+
+    def __exit__(mut self) -> None:
+        print("unlock " + self.name + " with " + str(len(self.values)) + " values")
+
+class Journal:
+    name: str
+    entries: list[str]
+
+    def write(mut self, entry: own str):
+        self.entries.append(entry)
+
+    def __exit__(mut self) -> Result[None, str]:
+        if len(self.entries) == 0:
+            return Result.Err("journal " + self.name + " is empty")
+        print("flush " + str(len(self.entries)) + " entries to " + self.name)
+        return Result.Ok(None)
+
+def record(steps: int64) -> Result[int64, str]:
+    with Lock(name="counter", values=[]) as values, journal = Journal(name="audit", entries=[]):
+        mut step = 0
+        while step < steps:
+            values.append(step)
+            journal.write("step " + str(step))
+            step += 1
+    return Result.Ok(steps)
+
+def main():
+    match record(2):
+        case Result.Ok(count):
+            print("recorded " + str(count))
+        case Result.Err(error):
+            print("error: " + error)
+    match record(0):
+        case Result.Ok(count):
+            print("recorded " + str(count))
+        case Result.Err(error):
+            print("error: " + error)

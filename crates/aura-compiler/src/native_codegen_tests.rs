@@ -9908,6 +9908,7 @@ fn direct_backend_operand_and_construct_error_surface_reports_expected_diagnosti
                 instructions: vec![Instruction::PopCleanup {
                     place: "ghost".to_string(),
                     cancel_before_cleanup: false,
+                    run: true,
                 }],
                 terminator: Terminator::Return(Operand::Int(0)),
             }],
@@ -14283,6 +14284,7 @@ fn direct_codegen_ignores_dead_cleanup_and_terminator_metadata_but_checks_cfg_st
                 label: "dead".to_string(),
                 instructions: vec![Instruction::PushCleanup {
                     place: "missing".to_string(),
+                    action: crate::mir::CleanupAction::ResourceClose,
                 }],
                 terminator: Terminator::Unreachable,
             },
@@ -14433,6 +14435,7 @@ fn cleanup_test_function(local_name: &str, ty: Type, place: &str) -> MirFunction
             label: "entry".to_string(),
             instructions: vec![Instruction::PushCleanup {
                 place: place.to_string(),
+                action: crate::mir::CleanupAction::ResourceClose,
             }],
             terminator: Terminator::Return(Operand::Int(0)),
         }],
@@ -14527,6 +14530,7 @@ fn dead_assignments_do_not_poison_reachable_cleanup_type_inference() {
                     },
                     Instruction::PushCleanup {
                         place: "resource".to_string(),
+                        action: crate::mir::CleanupAction::ResourceClose,
                     },
                 ],
                 terminator: Terminator::AssertFail {

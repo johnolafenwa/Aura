@@ -1569,30 +1569,54 @@ impl Parser {
         }))
     }
 
+    /// Parses `with item, item, ...:`. A header with several items is sugar
+    /// for nested single-item statements: each later item becomes the only
+    /// statement of the previous item's body and keeps its own span.
     fn parse_with_stmt(&mut self) -> Result<Stmt> {
         let span = self.expect_keyword(TokenKind::KwWith)?.span;
-        let (binding, value) = if matches!(self.current_kind(), TokenKind::Identifier(_))
+        let mut items = vec![self.parse_with_item(span)?];
+        while !self.at_simple(&TokenKind::Colon) {
+            if self.eat_simple(&TokenKind::Comma).is_none() {
+                return Err(self.error_here("expected ',' or ':' after with item"));
+            }
+            if self.at_simple(&TokenKind::Colon) {
+                return Err(self.error_here("expected a with item after ','"));
+            }
+            let item_span = self.current_span();
+            items.push(self.parse_with_item(item_span)?);
+        }
+        self.expect_simple(TokenKind::Colon)?;
+        self.expect_newline()?;
+        let mut body = self.parse_block()?;
+        while let Some((binding, value, span)) = items.pop() {
+            body = vec![Stmt::With(WithStmt {
+                binding,
+                value,
+                body,
+                span,
+            })];
+        }
+        Ok(body.pop().expect("a with header has at least one item"))
+    }
+
+    fn parse_with_item(&mut self, span: Span) -> Result<(String, Expr, Span)> {
+        if matches!(self.current_kind(), TokenKind::Identifier(_))
             && matches!(self.peek_kind(1), Some(TokenKind::Equal))
         {
             let binding = self.expect_identifier()?;
             self.expect_simple(TokenKind::Equal)?;
             let value = self.parse_expr()?;
-            (binding, value)
+            Ok((binding, value, span))
         } else {
             let value = self.parse_expr()?;
-            self.expect_simple(TokenKind::KwAs)?;
+            if self.eat_simple(&TokenKind::KwAs).is_none() {
+                return Err(self.error_here(
+                    "expected `as name` after a with item, or write the item as `name = value`",
+                ));
+            }
             let binding = self.expect_identifier()?;
-            (binding, value)
-        };
-        self.expect_simple(TokenKind::Colon)?;
-        self.expect_newline()?;
-        let body = self.parse_block()?;
-        Ok(Stmt::With(WithStmt {
-            binding,
-            value,
-            body,
-            span,
-        }))
+            Ok((binding, value, span))
+        }
     }
 
     fn parse_match_arm(&mut self) -> Result<MatchArm> {

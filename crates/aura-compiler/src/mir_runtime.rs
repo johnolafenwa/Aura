@@ -21,9 +21,9 @@ use crate::integer::{
 };
 use crate::json_codec;
 use crate::mir::{
-    CallTarget, Instruction, MirArg, MirClass, MirExternCall, MirExternParam, MirFormatPart,
-    MirFunction, MirMethod, MirModule, MirParam, MirReceiverKind, MirTraitImpl, Operand, Rvalue,
-    Terminator, MIR_LOOP_SAFEPOINT_INTERVAL,
+    CallTarget, CleanupAction, Instruction, ManagerExitResult, MirArg, MirClass, MirExternCall,
+    MirExternParam, MirFormatPart, MirFunction, MirMethod, MirModule, MirParam, MirReceiverKind,
+    MirTraitImpl, Operand, Rvalue, Terminator, MIR_LOOP_SAFEPOINT_INTERVAL,
 };
 use crate::randomness::{self, SecureRandomError};
 use crate::runtime_value::{
@@ -35,15 +35,16 @@ use crate::runtime_value::{
     evaluate_string_to_bytes_host_ref, float_floor_divmod, float_power, format_runtime_value_with,
     host_process_args, io_error, io_read_line, json_array_metadata_is_exact,
     json_dump_error_to_diagnostic, json_int_metadata_is_exact, json_object_metadata_is_exact,
-    json_parse_owned_to_runtime, lookup_found, lookup_missing, nominal_runtime_base_name,
-    optional_absent, optional_bytes_value, optional_present, optional_str_value, optional_value,
-    poll_cancellation, poll_ready, poll_unavailable, prepare_json_codec_source,
-    process_error_cancelled, process_error_io, process_error_no_command, process_error_spawn,
-    process_error_timed_out, process_exit_status, process_stdio_inherit, process_stdio_null,
-    process_stdio_pipe, process_supervisor_event_failed, process_supervisor_wait_cancelled,
-    process_supervisor_wait_event, process_supervisor_wait_timed_out, process_wait_cancelled,
-    process_wait_exited, process_wait_failed, process_wait_timed_out, queue_receive_cancelled,
-    queue_receive_closed, queue_receive_item, queue_receive_timed_out, read_file_limited,
+    json_parse_owned_to_runtime, lookup_found, lookup_missing, manager_exit_failure_note,
+    nominal_runtime_base_name, optional_absent, optional_bytes_value, optional_present,
+    optional_str_value, optional_value, poll_cancellation, poll_ready, poll_unavailable,
+    prepare_json_codec_source, process_error_cancelled, process_error_io, process_error_no_command,
+    process_error_spawn, process_error_timed_out, process_exit_status, process_stdio_inherit,
+    process_stdio_null, process_stdio_pipe, process_supervisor_event_failed,
+    process_supervisor_wait_cancelled, process_supervisor_wait_event,
+    process_supervisor_wait_timed_out, process_wait_cancelled, process_wait_exited,
+    process_wait_failed, process_wait_timed_out, queue_receive_cancelled, queue_receive_closed,
+    queue_receive_item, queue_receive_timed_out, read_file_limited,
     recv_for_registered_producers_iteration, recv_for_task_group_iteration, render_float,
     render_float32, result_err, result_ok, round_numeric_value, run_blocking_io,
     run_lightweight_root_task, runtime_value_to_json, select_runtime_values, send_error_cancelled,
@@ -911,6 +912,10 @@ struct MirRuntime {
     /// Projection selected by ReturnLoan for the current function itself.
     outgoing_returned_view_projection: Option<String>,
 }
+
+/// The interpreter's per-frame exit-action stack: each registered place
+/// with its typed action, innermost last.
+type CleanupStack = Vec<(String, CleanupAction)>;
 
 #[derive(Clone)]
 enum MirConstantState {
@@ -3665,7 +3670,7 @@ impl MirRuntime {
             .collect::<HashMap<_, _>>();
         let mut current_label = function.entry.clone();
         let mut loop_state = HashMap::<String, i128>::new();
-        let mut cleanup_stack = Vec::<String>::new();
+        let mut cleanup_stack = CleanupStack::new();
         let mut safepoint_fuel = MIR_LOOP_SAFEPOINT_INTERVAL;
 
         loop {
@@ -3689,14 +3694,15 @@ impl MirRuntime {
                     Ok(result) => result,
                     Err(payload) if payload.is::<TaskCancelledSignal>() => {
                         env.loans.clear();
-                        let _ = self.unwind_cleanups(&mut cleanup_stack, env, true);
+                        let _ =
+                            self.unwind_cleanups(&mut cleanup_stack, env, true, &mut Vec::new());
                         panic::resume_unwind(payload);
                     }
                     Err(payload) => panic::resume_unwind(payload),
                 };
                 match instruction_result {
                     Ok(Some(value)) => {
-                        self.unwind_cleanups(&mut cleanup_stack, env, true)?;
+                        self.unwind_cleanups(&mut cleanup_stack, env, true, &mut Vec::new())?;
                         return Ok(value);
                     }
                     Ok(None) => {}
@@ -3708,8 +3714,11 @@ impl MirRuntime {
                         // prevent cleanup from observing a writeback that the
                         // trapping child call already published.
                         env.loans.clear();
-                        let _ = self.unwind_cleanups(&mut cleanup_stack, env, true);
-                        return Err(error);
+                        return Err(self.unwind_cleanups_after_trap(
+                            &mut cleanup_stack,
+                            env,
+                            error,
+                        ));
                     }
                 }
             }
@@ -3725,13 +3734,12 @@ impl MirRuntime {
                 Err(error) => {
                     let error = self.annotate_runtime_trap_once(error);
                     env.loans.clear();
-                    let _ = self.unwind_cleanups(&mut cleanup_stack, env, true);
-                    return Err(error);
+                    return Err(self.unwind_cleanups_after_trap(&mut cleanup_stack, env, error));
                 }
             };
             match outcome {
                 BlockOutcome::Return(value) => {
-                    self.unwind_cleanups(&mut cleanup_stack, env, true)?;
+                    self.unwind_cleanups(&mut cleanup_stack, env, true, &mut Vec::new())?;
                     return Ok(value);
                 }
                 BlockOutcome::Goto(next) => {
@@ -3767,7 +3775,7 @@ impl MirRuntime {
         &mut self,
         instruction: &Instruction,
         env: &mut Env,
-        cleanup_stack: &mut Vec<String>,
+        cleanup_stack: &mut CleanupStack,
         safepoint_fuel: &mut u64,
     ) -> Result<Option<Value>> {
         match instruction {
@@ -3929,15 +3937,16 @@ impl MirRuntime {
                 let _ = self.evaluate_owned_operand(value, env)?;
                 Ok(None)
             }
-            Instruction::PushCleanup { place } => {
-                cleanup_stack.push(place.clone());
+            Instruction::PushCleanup { place, action } => {
+                cleanup_stack.push((place.clone(), action.clone()));
                 Ok(None)
             }
             Instruction::PopCleanup {
                 place,
                 cancel_before_cleanup,
+                run,
             } => {
-                self.pop_cleanup(place, cleanup_stack, env, *cancel_before_cleanup)?;
+                self.pop_cleanup(place, cleanup_stack, env, *cancel_before_cleanup, *run)?;
                 Ok(None)
             }
         }
@@ -3949,7 +3958,7 @@ impl MirRuntime {
         terminator: &Terminator,
         env: &mut Env,
         loop_state: &mut HashMap<String, i128>,
-        _cleanup_stack: &mut Vec<String>,
+        _cleanup_stack: &mut CleanupStack,
     ) -> Result<BlockOutcome> {
         match terminator {
             Terminator::Return(value) => Ok(BlockOutcome::Return(
@@ -4097,11 +4106,12 @@ impl MirRuntime {
     fn pop_cleanup(
         &mut self,
         place: &str,
-        cleanup_stack: &mut Vec<String>,
+        cleanup_stack: &mut CleanupStack,
         env: &mut Env,
         cancel_before_cleanup: bool,
+        run: bool,
     ) -> Result<()> {
-        let Some(active_place) = cleanup_stack.pop() else {
+        let Some((active_place, action)) = cleanup_stack.pop() else {
             return Err(Diagnostic::new(format!(
                 "MIR cleanup stack underflow while closing `{}`",
                 place
@@ -4113,135 +4123,219 @@ impl MirRuntime {
                 place, active_place
             )));
         }
-        self.run_cleanup_place(&active_place, env, cancel_before_cleanup)
+        if !run {
+            return Ok(());
+        }
+        self.run_cleanup_place(&active_place, &action, env, cancel_before_cleanup)
+            .map(|_| ())
     }
 
+    /// Drains every registered exit action in reverse order. A manager exit
+    /// that returns `Result.Err` while the frame is already leaving does not
+    /// replace the frame's outcome; its rendered failure is collected in
+    /// `exit_failures` for a trap to attach (checkpoint F5).
     fn unwind_cleanups(
         &mut self,
-        cleanup_stack: &mut Vec<String>,
+        cleanup_stack: &mut CleanupStack,
         env: &mut Env,
         cancel_before_cleanup: bool,
+        exit_failures: &mut Vec<String>,
     ) -> Result<()> {
-        while let Some(place) = cleanup_stack.pop() {
-            self.run_cleanup_place(&place, env, cancel_before_cleanup)?;
+        while let Some((place, action)) = cleanup_stack.pop() {
+            if let Some(failure) =
+                self.run_cleanup_place(&place, &action, env, cancel_before_cleanup)?
+            {
+                exit_failures.push(failure);
+            }
         }
         Ok(())
     }
 
+    /// Runs the frame's exit actions after a trap. The trap stays primary,
+    /// and each exit failure is attached to it as a note.
+    fn unwind_cleanups_after_trap(
+        &mut self,
+        cleanup_stack: &mut CleanupStack,
+        env: &mut Env,
+        error: Diagnostic,
+    ) -> Diagnostic {
+        let mut exit_failures = Vec::new();
+        let _ = self.unwind_cleanups(cleanup_stack, env, true, &mut exit_failures);
+        exit_failures
+            .into_iter()
+            .fold(error, |error, failure| error.with_note(failure))
+    }
+
+    /// Runs one exit action. Returns the rendered failure of a manager exit
+    /// that returned `Result.Err`.
     fn run_cleanup_place(
         &mut self,
         place: &str,
+        action: &CleanupAction,
         env: &mut Env,
         cancel_before_cleanup: bool,
-    ) -> Result<()> {
+    ) -> Result<Option<String>> {
         let resource_type = self.resolve_place_type(place, env);
         let resource = env.read_place(place)?;
+        if let CleanupAction::ManagerExit { exit_result } = action {
+            return self.run_manager_exit(
+                place,
+                resource,
+                resource_type.as_ref(),
+                *exit_result,
+                env,
+            );
+        }
         match resource {
-            Value::TaskGroup(group) => self.close_task_group(group, cancel_before_cleanup),
+            Value::TaskGroup(group) => self
+                .close_task_group(group, cancel_before_cleanup)
+                .map(|()| None),
             Value::File(file) => {
                 file.close();
-                Ok(())
+                Ok(None)
             }
             Value::TcpListener(listener) => {
                 listener.close();
-                Ok(())
+                Ok(None)
             }
             Value::TcpStream(stream) => {
                 stream.close();
-                Ok(())
+                Ok(None)
             }
             Value::UdpSocket(socket) => {
                 socket.close();
-                Ok(())
+                Ok(None)
             }
             Value::HttpListener(listener) => {
                 listener.close();
-                Ok(())
+                Ok(None)
             }
-            Value::HttpExchange(_) => Ok(()),
-            Value::HttpResponse(_) => Ok(()),
-            Value::WebSocketListener(_) => Ok(()),
+            Value::HttpExchange(_) => Ok(None),
+            Value::HttpResponse(_) => Ok(None),
+            Value::WebSocketListener(_) => Ok(None),
             Value::WebSocket(socket) => {
                 let _ = socket.close();
-                Ok(())
+                Ok(None)
             }
             Value::UnixListener(listener) => {
                 listener.close();
-                Ok(())
+                Ok(None)
             }
             Value::UnixStream(stream) => {
                 stream.close();
-                Ok(())
+                Ok(None)
             }
             Value::TlsListener(listener) => {
                 listener.close();
-                Ok(())
+                Ok(None)
             }
             Value::TlsStream(stream) => {
                 stream.close();
-                Ok(())
+                Ok(None)
             }
             Value::ProcessChild(child) => {
                 child.close();
-                Ok(())
+                Ok(None)
             }
             Value::ProcessPipe(pipe) => {
                 pipe.close();
-                Ok(())
+                Ok(None)
             }
-            Value::ProcessCompleted(_) => Ok(()),
+            Value::ProcessCompleted(_) => Ok(None),
             Value::ProcessSupervisor(supervisor) => {
                 supervisor.close();
-                Ok(())
+                Ok(None)
             }
-            Value::Instance(instance) => {
-                let class = self
-                    .classes
-                    .get(&instance.class_name)
-                    .cloned()
-                    .ok_or_else(|| {
-                        Diagnostic::new(format!("unknown MIR class `{}`", instance.class_name))
-                    })?;
-                let method = class
-                    .methods
-                    .iter()
-                    .find(|method| method.name == "close")
-                    .cloned()
-                    .ok_or_else(|| {
-                        Diagnostic::new(format!(
-                            "class `{}` cannot be used with MIR `with` because it has no `close` method",
-                            class.name
-                        ))
-                    })?;
-                let function = self
-                    .functions
-                    .get(&method.function_name)
-                    .cloned()
-                    .ok_or_else(|| {
-                        Diagnostic::new(format!(
-                            "unknown MIR method body `{}`",
-                            method.function_name
-                        ))
-                    })?;
-                let outcome = self.call_function_with_receiver_type(
-                    &function,
-                    Some(Value::Instance(instance)),
-                    Vec::new(),
-                    None,
-                    None,
-                    resource_type.as_ref(),
-                )?;
-                if let Some(updated_receiver) = outcome.updated_receiver {
-                    env.write_place(place, updated_receiver)?;
-                }
-                outcome.value.into_result()?;
-                Ok(())
-            }
+            Value::Instance(instance) => self
+                .call_instance_exit(place, instance, "close", resource_type.as_ref(), env)
+                .map(|_| None),
             _ => Err(Diagnostic::new(format!(
                 "MIR cleanup place `{}` is not a managed resource",
                 place
             ))),
         }
+    }
+
+    /// Runs a manager's `__exit__` from the action stack, on a path that is
+    /// already leaving the frame. A `Result.Err` from the exit is returned as
+    /// rendered text, never as the frame's outcome.
+    fn run_manager_exit(
+        &mut self,
+        place: &str,
+        resource: Value,
+        resource_type: Option<&Type>,
+        exit_result: ManagerExitResult,
+        env: &mut Env,
+    ) -> Result<Option<String>> {
+        let Value::Instance(instance) = resource else {
+            return Err(Diagnostic::new(format!(
+                "MIR manager exit place `{}` is not a class instance",
+                place
+            )));
+        };
+        let (class_name, value) =
+            self.call_instance_exit(place, instance, "__exit__", resource_type, env)?;
+        Ok(match (exit_result, value) {
+            (ManagerExitResult::Result, Value::EnumVariant(variant))
+                if variant.enum_name == "Result" && variant.variant_name == "Err" =>
+            {
+                Some(manager_exit_failure_note(&class_name, &variant))
+            }
+            _ => None,
+        })
+    }
+
+    /// Calls a class instance's exit method, `close` or `__exit__`, with the
+    /// managed place as its `mut self` receiver and writes the receiver back.
+    /// Returns the class name and the method's result.
+    fn call_instance_exit(
+        &mut self,
+        place: &str,
+        instance: InstanceValue,
+        method_name: &str,
+        resource_type: Option<&Type>,
+        env: &mut Env,
+    ) -> Result<(String, Value)> {
+        let class = self
+            .classes
+            .get(&instance.class_name)
+            .cloned()
+            .ok_or_else(|| {
+                Diagnostic::new(format!("unknown MIR class `{}`", instance.class_name))
+            })?;
+        let method = class
+            .methods
+            .iter()
+            .find(|method| method.name == method_name)
+            .cloned()
+            .ok_or_else(|| {
+                Diagnostic::new(format!(
+                    "class `{}` cannot be used with MIR `with` because it has no `{}` method",
+                    class.name, method_name
+                ))
+            })?;
+        let function = self
+            .functions
+            .get(&method.function_name)
+            .cloned()
+            .ok_or_else(|| {
+                Diagnostic::new(format!(
+                    "unknown MIR method body `{}`",
+                    method.function_name
+                ))
+            })?;
+        let outcome = self.call_function_with_receiver_type(
+            &function,
+            Some(Value::Instance(instance)),
+            Vec::new(),
+            None,
+            None,
+            resource_type,
+        )?;
+        if let Some(updated_receiver) = outcome.updated_receiver {
+            env.write_place(place, updated_receiver)?;
+        }
+        Ok((class.name, outcome.value.into_result()?))
     }
 
     #[cfg(test)]

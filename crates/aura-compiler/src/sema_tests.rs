@@ -17288,16 +17288,12 @@ fn checker_match_and_builtin_error_surfaces_cover_remaining_branches() {
                 "builtin resource `net.TlsStream` must be created through its module functions",
             ),
             (
-                "class Resource[T]:\n    value: T\n\n    def close(mut self):\n        pass\n\ndef main() -> None:\n    resource = Resource[int32](value=1)\n    with resource as handle:\n        pass\n",
-                "`with` does not yet support generic resource types",
-            ),
-            (
                 "class Resource:\n    value: int32\n\ndef main() -> None:\n    resource = Resource(value=1)\n    with resource as handle:\n        pass\n",
-                "does not define `close(mut self)`",
+                "class `Resource` is not a context manager",
             ),
             (
                 "class Resource:\n    value: int32\n\n    def close(self) -> int32:\n        return 0\n\ndef main() -> None:\n    resource = Resource(value=1)\n    with resource as handle:\n        pass\n",
-                "`with` resources must define `close(mut self)` returning `None`",
+                "`__exit__(mut self)` is missing or has the wrong shape",
             ),
             (
                 "def make() -> Lookup[int32]:\n    return Lookup[int32].Some()\n\ndef main():\n    pass\n",
@@ -19619,32 +19615,35 @@ fn place_path_and_resource_helpers_cover_remaining_checker_paths() {
         .contains("requires a mutable receiver"));
 
     checker
-        .require_with_resource(&Type::named("TaskGroup"), span)
+        .require_with_manager(&Type::named("TaskGroup"), span)
         .expect("TaskGroup should be allowed in with");
     checker
-        .require_with_resource(&Type::named("Resource"), span)
+        .require_with_manager(&Type::named("Resource"), span)
         .expect("resource with correct close should pass");
-    let generic_with = checker
-        .require_with_resource(
+    let unknown_with = checker
+        .require_with_manager(
             &Type::Named("Box".to_string(), vec![Type::named("int32")]),
             span,
         )
-        .expect_err("generic resources should be rejected");
-    assert!(generic_with
+        .expect_err("unknown classes are not managers");
+    assert_eq!(unknown_with.code, "AU2017");
+    assert!(unknown_with
         .message
-        .contains("does not yet support generic resource types"));
+        .contains("`with` requires a context manager"));
     let bad_with = checker
-        .require_with_resource(&Type::named("BadResource"), span)
+        .require_with_manager(&Type::named("BadResource"), span)
         .expect_err("bad close signature should fail");
-    assert!(bad_with.message.contains("close(mut self)"));
+    assert!(bad_with.message.contains("__exit__(mut self)"));
     let primitive_with = checker
-        .require_with_resource(&Type::named("int32"), span)
+        .require_with_manager(&Type::named("int32"), span)
         .expect_err("primitive values cannot be with resources");
-    assert!(primitive_with.message.contains("requires a class resource"));
+    assert!(primitive_with
+        .message
+        .contains("requires a context manager"));
     let unit_with = checker
-        .require_with_resource(&Type::Unit, span)
+        .require_with_manager(&Type::Unit, span)
         .expect_err("unit values cannot be with resources");
-    assert!(unit_with.message.contains("requires a class resource"));
+    assert!(unit_with.message.contains("requires a context manager"));
 
     checker
         .require_task_startable_function("work", &[], &[], span)

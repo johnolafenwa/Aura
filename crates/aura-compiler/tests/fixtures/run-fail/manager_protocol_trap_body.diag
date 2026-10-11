@@ -1,0 +1,6 @@
+error[AU4003]: list index `3` is out of bounds for length `2`
+ --> crates/aura-compiler/tests/fixtures/run-fail/manager_protocol_trap_body.au:19:26
+   |
+19 |             return items[3]
+   |                          ^
+  = note: Aura call chain (innermost first): work at 16:1 -> main at 22:1

@@ -9885,6 +9885,15 @@ fn build_with_direct_backend_supports_with_cleanup_example() {
 }
 
 #[test]
+fn build_with_direct_backend_supports_context_manager_example() {
+    assert_direct_backend_example_runs(
+        "examples/resources/context_managers.au",
+        "context-managers-direct",
+        CONTEXT_MANAGERS_EXAMPLE_STDOUT,
+    );
+}
+
+#[test]
 fn build_with_direct_backend_supports_trait_dispatch_example() {
     assert_direct_backend_example_runs(
         "examples/traits/greeter.au",
@@ -11036,6 +11045,28 @@ fn run_executes_try_example() {
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
         "6\ndivision by zero\n"
+    );
+}
+
+const CONTEXT_MANAGERS_EXAMPLE_STDOUT: &str = "lock counter\nflush 2 entries to audit\nunlock counter with 2 values\nrecorded 2\nlock counter\nunlock counter with 0 values\nerror: journal audit is empty\n";
+
+#[test]
+fn run_executes_context_manager_example() {
+    let fixture = repo_root().join("examples/resources/context_managers.au");
+    let output = Command::new(aura_bin())
+        .arg("run")
+        .arg(&fixture)
+        .output()
+        .expect("failed to run aura run on context manager example");
+
+    assert!(
+        output.status.success(),
+        "run should succeed for context manager example, stderr was:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        CONTEXT_MANAGERS_EXAMPLE_STDOUT
     );
 }
 

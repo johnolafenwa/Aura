@@ -1,0 +1,14 @@
+import fs
+import io
+
+def copy_file(source: str, target: str) -> Result[None, io.Error]:
+    with input = try fs.open(source), output = try fs.create(target):
+        try output.write_all(try input.read_all())
+    return Result.Ok(None)
+
+def main():
+    match copy_file("in.txt", "out.txt"):
+        case Result.Ok(_):
+            print("copied")
+        case Result.Err(_):
+            print("failed")

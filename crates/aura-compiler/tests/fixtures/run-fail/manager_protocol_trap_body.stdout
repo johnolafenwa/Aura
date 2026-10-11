@@ -1,0 +1,5 @@
+enter outer
+enter inner
+exit inner
+close legacy
+exit outer

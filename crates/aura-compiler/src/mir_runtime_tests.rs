@@ -9737,10 +9737,12 @@ fn mir_runtime_task_detection_helpers_cover_task_and_process_shapes() {
             },
             Instruction::PushCleanup {
                 place: "resource".to_string(),
+                action: crate::mir::CleanupAction::ResourceClose,
             },
             Instruction::PopCleanup {
                 place: "resource".to_string(),
                 cancel_before_cleanup: false,
+                run: true,
             },
             Instruction::Assign {
                 target: "ignored".to_string(),
@@ -18017,13 +18019,16 @@ fn mir_runtime_terminator_and_cleanup_helpers_cover_branch_and_error_paths() {
         .contains("reached unreachable MIR block"));
 
     let underflow = runtime
-        .pop_cleanup("resource", &mut Vec::new(), &mut env, false)
+        .pop_cleanup("resource", &mut Vec::new(), &mut env, false, true)
         .expect_err("missing cleanup entries should fail");
     assert!(underflow.message.contains("cleanup stack underflow"));
 
-    let mut mismatched_stack = vec!["other".to_string()];
+    let mut mismatched_stack = vec![(
+        "other".to_string(),
+        crate::mir::CleanupAction::ResourceClose,
+    )];
     let mismatch = runtime
-        .pop_cleanup("resource", &mut mismatched_stack, &mut env, false)
+        .pop_cleanup("resource", &mut mismatched_stack, &mut env, false, true)
         .expect_err("mismatched cleanup entries should fail");
     assert!(mismatch.message.contains("cleanup stack mismatch"));
 }
@@ -18330,18 +18335,26 @@ fn mir_runtime_entrypoint_call_and_type_helpers_cover_remaining_edges() {
         .execute_instruction(
             &Instruction::PushCleanup {
                 place: "group".to_string(),
+                action: crate::mir::CleanupAction::ResourceClose,
             },
             &mut env,
             &mut cleanup_stack,
             &mut safepoint_fuel,
         )
         .expect("push cleanup should succeed");
-    assert_eq!(cleanup_stack, vec!["group".to_string()]);
+    assert_eq!(
+        cleanup_stack,
+        vec![(
+            "group".to_string(),
+            crate::mir::CleanupAction::ResourceClose
+        )]
+    );
     runtime
         .execute_instruction(
             &Instruction::PopCleanup {
                 place: "group".to_string(),
                 cancel_before_cleanup: true,
+                run: true,
             },
             &mut env,
             &mut cleanup_stack,
@@ -18572,7 +18585,12 @@ fn mir_runtime_cleanup_and_rvalue_helpers_cover_remaining_error_paths() {
         Value::Int(IntegerValue::from_signed(1)),
     );
     let non_resource = runtime
-        .run_cleanup_place("count", &mut env, false)
+        .run_cleanup_place(
+            "count",
+            &crate::mir::CleanupAction::ResourceClose,
+            &mut env,
+            false,
+        )
         .expect_err("non-resource cleanup targets should fail");
     assert!(non_resource.message.contains("is not a managed resource"));
 
@@ -18590,7 +18608,12 @@ fn mir_runtime_cleanup_and_rvalue_helpers_cover_remaining_error_paths() {
         )),
     );
     runtime
-        .run_cleanup_place("completed", &mut env, false)
+        .run_cleanup_place(
+            "completed",
+            &crate::mir::CleanupAction::ResourceClose,
+            &mut env,
+            false,
+        )
         .expect("completed process values should be harmless cleanup resources");
 
     let pipe_child = ProcessChildValue::spawn(
@@ -18618,7 +18641,12 @@ fn mir_runtime_cleanup_and_rvalue_helpers_cover_remaining_error_paths() {
         Value::ProcessPipe(stdout_pipe.clone()),
     );
     runtime
-        .run_cleanup_place("pipe", &mut env, false)
+        .run_cleanup_place(
+            "pipe",
+            &crate::mir::CleanupAction::ResourceClose,
+            &mut env,
+            false,
+        )
         .expect("process pipe cleanup should close the pipe");
 
     env.define_typed(
@@ -18630,7 +18658,12 @@ fn mir_runtime_cleanup_and_rvalue_helpers_cover_remaining_error_paths() {
         }),
     );
     let unknown_class = runtime
-        .run_cleanup_place("ghost", &mut env, false)
+        .run_cleanup_place(
+            "ghost",
+            &crate::mir::CleanupAction::ResourceClose,
+            &mut env,
+            false,
+        )
         .expect_err("unknown MIR classes should fail cleanup");
     assert!(unknown_class.message.contains("unknown MIR class `Ghost`"));
 
@@ -18643,11 +18676,31 @@ fn mir_runtime_cleanup_and_rvalue_helpers_cover_remaining_error_paths() {
         }),
     );
     let missing_close = runtime
-        .run_cleanup_place("worker", &mut env, false)
+        .run_cleanup_place(
+            "worker",
+            &crate::mir::CleanupAction::ResourceClose,
+            &mut env,
+            false,
+        )
         .expect_err("classes without close should fail");
     assert!(missing_close
         .message
         .contains("cannot be used with MIR `with` because it has no `close` method"));
+    let manager_exit = crate::mir::CleanupAction::ManagerExit {
+        exit_result: crate::mir::ManagerExitResult::Unit,
+    };
+    let missing_exit = runtime
+        .run_cleanup_place("worker", &manager_exit, &mut env, false)
+        .expect_err("classes without __exit__ should fail a manager exit");
+    assert!(missing_exit
+        .message
+        .contains("cannot be used with MIR `with` because it has no `__exit__` method"));
+    let non_instance_exit = runtime
+        .run_cleanup_place("count", &manager_exit, &mut env, false)
+        .expect_err("a manager exit needs a class instance");
+    assert!(non_instance_exit
+        .message
+        .contains("MIR manager exit place `count` is not a class instance"));
 
     env.define_typed(
         "broken",
@@ -18658,7 +18711,12 @@ fn mir_runtime_cleanup_and_rvalue_helpers_cover_remaining_error_paths() {
         }),
     );
     let missing_body = runtime
-        .run_cleanup_place("broken", &mut env, false)
+        .run_cleanup_place(
+            "broken",
+            &crate::mir::CleanupAction::ResourceClose,
+            &mut env,
+            false,
+        )
         .expect_err("missing method bodies should fail");
     assert!(missing_body
         .message
@@ -18676,7 +18734,12 @@ fn mir_runtime_cleanup_and_rvalue_helpers_cover_remaining_error_paths() {
         }),
     );
     runtime
-        .run_cleanup_place("managed", &mut env, false)
+        .run_cleanup_place(
+            "managed",
+            &crate::mir::CleanupAction::ResourceClose,
+            &mut env,
+            false,
+        )
         .expect("managed resources with close methods should clean up");
 
     env.define_typed(
@@ -18688,7 +18751,12 @@ fn mir_runtime_cleanup_and_rvalue_helpers_cover_remaining_error_paths() {
         }),
     );
     runtime
-        .run_cleanup_place("borrow_managed", &mut env, false)
+        .run_cleanup_place(
+            "borrow_managed",
+            &crate::mir::CleanupAction::ResourceClose,
+            &mut env,
+            false,
+        )
         .expect("borrowed close receivers should clean up without receiver writeback");
 
     match runtime

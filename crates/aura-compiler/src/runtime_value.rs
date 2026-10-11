@@ -633,6 +633,17 @@ pub struct EnumVariantValue {
     pub payloads: Vec<Value>,
 }
 
+/// The note a trap carries when a manager's `__exit__` also returned
+/// `Result.Err` while the frame was failing (checkpoint F5). Both runtimes
+/// render it identically so backend diagnostics stay byte-equal.
+pub(crate) fn manager_exit_failure_note(class_name: &str, failure: &EnumVariantValue) -> String {
+    let rendered = failure
+        .single_payload()
+        .map(Value::render)
+        .unwrap_or_default();
+    format!("`{class_name}.__exit__` also failed during cleanup: {rendered}")
+}
+
 impl EnumVariantValue {
     pub(crate) fn single_payload(&self) -> Option<&Value> {
         match self.payloads.as_slice() {

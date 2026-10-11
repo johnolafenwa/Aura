@@ -19,9 +19,9 @@ use crate::call::{BuiltinAssociatedFunction, BuiltinMember};
 use crate::diag::Span;
 use crate::ffi::FfiType;
 use crate::mir::{
-    BasicBlock, CallTarget, Instruction, MirArg, MirClass, MirEnum, MirExternCall, MirFormatPart,
-    MirFunction, MirMapEntry, MirMethod, MirModule, MirReceiverKind, MirTraitImpl, Operand, Rvalue,
-    Terminator, NATIVE_LOOP_SAFEPOINT_INTERVAL,
+    BasicBlock, CallTarget, CleanupAction, Instruction, MirArg, MirClass, MirEnum, MirExternCall,
+    MirFormatPart, MirFunction, MirMapEntry, MirMethod, MirModule, MirReceiverKind, MirTraitImpl,
+    Operand, Rvalue, Terminator, NATIVE_LOOP_SAFEPOINT_INTERVAL,
 };
 use crate::native_runtime::{
     encode_direct_ffi_call_spec, DirectFfiCallSpec, DirectFfiParam, DirectFfiType,
@@ -558,6 +558,7 @@ struct NativeCodegen<'a> {
     assert_fail: FuncId,
     assert_fail_detailed: FuncId,
     fail_division_by_zero: FuncId,
+    record_manager_exit_failure: FuncId,
     fail_erased_union_mutable_receiver: FuncId,
     fail_int32_overflow: FuncId,
     fail_integer_overflow: FuncId,
@@ -1106,6 +1107,7 @@ impl<'a> NativeCodegen<'a> {
             assert_fail => ("aura_direct_assert_fail", [types::I64, types::I64, types::I64], None),
             assert_fail_detailed => ("aura_direct_assert_fail_detailed", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], None),
             fail_division_by_zero => ("aura_direct_fail_division_by_zero", [types::I64, types::I64], None),
+            record_manager_exit_failure => ("aura_direct_record_manager_exit_failure", [types::I64, types::I64, types::I64], None),
             fail_erased_union_mutable_receiver => ("aura_direct_fail_erased_union_mutable_receiver", [types::I64, types::I64], None),
             fail_int32_overflow => ("aura_direct_fail_int32_overflow", [types::I64, types::I64, types::I64], None),
             fail_integer_overflow => ("aura_direct_fail_integer_overflow", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], None),
@@ -1607,6 +1609,7 @@ impl<'a> NativeCodegen<'a> {
             assert_fail,
             assert_fail_detailed,
             fail_division_by_zero,
+            record_manager_exit_failure,
             fail_erased_union_mutable_receiver,
             fail_int32_overflow,
             fail_integer_overflow,
@@ -2196,17 +2199,19 @@ impl<'a> NativeCodegen<'a> {
         }
 
         let mut cleanup_places = Vec::<String>::new();
+        let mut cleanup_actions = HashMap::<String, CleanupAction>::new();
         for block in &function.blocks {
             if !reachable_blocks.contains(&block.label) {
                 continue;
             }
             for instruction in &block.instructions {
-                let Instruction::PushCleanup { place } = instruction else {
+                let Instruction::PushCleanup { place, action } = instruction else {
                     continue;
                 };
                 if !cleanup_places.contains(place) {
                     cleanup_places.push(place.clone());
                 }
+                cleanup_actions.insert(place.clone(), action.clone());
             }
         }
         let mut cleanup_active_vars = HashMap::new();
@@ -2384,6 +2389,9 @@ impl<'a> NativeCodegen<'a> {
         let fail_division_by_zero = self
             .object
             .declare_func_in_func(self.fail_division_by_zero, builder.func);
+        let record_manager_exit_failure = self
+            .object
+            .declare_func_in_func(self.record_manager_exit_failure, builder.func);
         let fail_erased_union_mutable_receiver = self
             .object
             .declare_func_in_func(self.fail_erased_union_mutable_receiver, builder.func);
@@ -3415,6 +3423,7 @@ impl<'a> NativeCodegen<'a> {
             contract_descriptors: &mut self.contract_descriptors,
             call_conv: self.call_conv,
             cleanup_places,
+            cleanup_actions,
             cleanup_active_vars,
             cleanup_registration_vars,
             safepoint_fuel,
@@ -3433,6 +3442,7 @@ impl<'a> NativeCodegen<'a> {
             assert_fail,
             assert_fail_detailed,
             fail_division_by_zero,
+            record_manager_exit_failure,
             fail_erased_union_mutable_receiver,
             fail_int32_overflow,
             fail_integer_overflow,
@@ -4117,6 +4127,9 @@ impl<'a> NativeCodegen<'a> {
             })?,
         )?;
 
+        let action = cleanup_action_for_place(function, place);
+        let exit_method = cleanup_exit_method(action.as_ref());
+
         let mut ctx = self.object.make_context();
         ctx.func.signature = thunk_signature(self.call_conv);
         ctx.func.name = UserFuncName::user(0, thunk_id.as_u32());
@@ -4137,7 +4150,12 @@ impl<'a> NativeCodegen<'a> {
                 let close_method = self
                     .classes
                     .get(&class_ty.class_name)
-                    .and_then(|class| class.methods.iter().find(|method| method.name == "close"))
+                    .and_then(|class| {
+                        class
+                            .methods
+                            .iter()
+                            .find(|method| method.name == exit_method)
+                    })
                     .cloned();
                 if let Some(method) = close_method {
                     let target_id = *self.functions.get(&method.function_name).ok_or({
@@ -4150,9 +4168,11 @@ impl<'a> NativeCodegen<'a> {
                     let lowered = unbox_thunk_value(self, &mut builder, raw, &place_ty)?;
                     let inst = builder.ins().call(target_ref, &lowered);
                     let results = builder.inst_results(inst).to_vec();
-                    release_direct_call_results(
+                    release_cleanup_thunk_results(
                         self,
                         &mut builder,
+                        action.as_ref(),
+                        &class_ty.class_name,
                         &method.function_name,
                         &results,
                     )?;
@@ -4172,7 +4192,10 @@ impl<'a> NativeCodegen<'a> {
                         .classes
                         .get(class_name)
                         .and_then(|class| {
-                            class.methods.iter().find(|method| method.name == "close")
+                            class
+                                .methods
+                                .iter()
+                                .find(|method| method.name == exit_method)
                         })
                         .cloned(),
                     _ => None,
@@ -4192,9 +4215,15 @@ impl<'a> NativeCodegen<'a> {
                     let retained = builder.inst_results(retained)[0];
                     let inst = builder.ins().call(target_ref, &[retained]);
                     let results = builder.inst_results(inst).to_vec();
-                    release_direct_call_results(
+                    let class_name = match ty {
+                        Type::Named(class_name, _) => class_name.clone(),
+                        _ => String::new(),
+                    };
+                    release_cleanup_thunk_results(
                         self,
                         &mut builder,
+                        action.as_ref(),
+                        &class_name,
                         &method.function_name,
                         &results,
                     )?;
@@ -4789,6 +4818,8 @@ struct FunctionCompiler<'a> {
     contract_descriptors: &'a mut HashMap<String, callables::ContractDescriptor>,
     call_conv: CallConv,
     cleanup_places: Vec<String>,
+    /// The typed exit action each cleanup place registers.
+    cleanup_actions: HashMap<String, CleanupAction>,
     cleanup_active_vars: HashMap<String, Variable>,
     cleanup_registration_vars: HashMap<String, Variable>,
     safepoint_fuel: Option<Variable>,
@@ -4807,6 +4838,7 @@ struct FunctionCompiler<'a> {
     assert_fail: cranelift_codegen::ir::FuncRef,
     assert_fail_detailed: cranelift_codegen::ir::FuncRef,
     fail_division_by_zero: cranelift_codegen::ir::FuncRef,
+    record_manager_exit_failure: cranelift_codegen::ir::FuncRef,
     fail_erased_union_mutable_receiver: cranelift_codegen::ir::FuncRef,
     fail_int32_overflow: cranelift_codegen::ir::FuncRef,
     fail_integer_overflow: cranelift_codegen::ir::FuncRef,
@@ -6109,17 +6141,20 @@ impl<'a> FunctionCompiler<'a> {
             Instruction::Eval { value } => {
                 let _ = self.load_operand(value)?;
             }
-            Instruction::PushCleanup { place } => {
+            Instruction::PushCleanup { place, .. } => {
                 self.set_cleanup_active(place, true)?;
                 self.register_cleanup_for_place(place)?;
             }
             Instruction::PopCleanup {
                 place,
                 cancel_before_cleanup,
+                run,
             } => {
                 self.unregister_cleanup_for_place(place)?;
                 self.set_cleanup_active(place, false)?;
-                self.emit_cleanup_for_place(place, *cancel_before_cleanup)?;
+                if *run {
+                    self.emit_cleanup_for_place(place, *cancel_before_cleanup)?;
+                }
             }
         }
         self.release_all_temporary_owned();
@@ -6302,7 +6337,7 @@ impl<'a> FunctionCompiler<'a> {
 
     fn emit_return_value(&mut self, value: ValueRef) -> std::result::Result<(), String> {
         let mut return_values = self.export_return_value(value);
-        self.emit_pending_cleanups(true)?;
+        self.emit_pending_cleanups_for(true, false)?;
         self.append_writeback_return_values(&mut return_values)?;
         self.release_all_temporary_owned();
         self.release_all_opaque_roots()?;
@@ -12777,9 +12812,20 @@ impl<'a> FunctionCompiler<'a> {
         Ok(())
     }
 
+    /// Runs every still-registered cleanup inline before `try` propagation
+    /// or a trap. On a trap path, a failing manager exit is recorded for the
+    /// trap's notes; on the `try` path its `Result.Err` is dropped (F5).
     fn emit_pending_cleanups(
         &mut self,
         cancel_before_cleanup: bool,
+    ) -> std::result::Result<(), String> {
+        self.emit_pending_cleanups_for(cancel_before_cleanup, true)
+    }
+
+    fn emit_pending_cleanups_for(
+        &mut self,
+        cancel_before_cleanup: bool,
+        trapping: bool,
     ) -> std::result::Result<(), String> {
         // Cleanup branches are generated off the caller's current control-flow
         // path. Temporaries that were already owned by that caller remain live
@@ -12803,7 +12849,7 @@ impl<'a> FunctionCompiler<'a> {
             self.builder.switch_to_block(run_block);
             self.unregister_cleanup_for_place(&place)?;
             self.builder.def_var(variable, zero);
-            self.emit_cleanup_for_place(&place, cancel_before_cleanup)?;
+            self.emit_cleanup_for_place_recording(&place, cancel_before_cleanup, trapping)?;
             self.release_all_temporary_owned();
             self.builder.ins().jump(next_block, &[]);
             self.builder.seal_block(run_block);
@@ -12909,17 +12955,47 @@ impl<'a> FunctionCompiler<'a> {
         place: &str,
         cancel_before_cleanup: bool,
     ) -> std::result::Result<(), String> {
+        self.emit_cleanup_for_place_recording(place, cancel_before_cleanup, false)
+    }
+
+    /// Runs one cleanup inline. With `record_exit_failure`, a `Result`
+    /// manager exit's value is handed to the runtime so a `Result.Err` is
+    /// attached to the trap that is unwinding this frame.
+    fn emit_cleanup_for_place_recording(
+        &mut self,
+        place: &str,
+        cancel_before_cleanup: bool,
+        record_exit_failure: bool,
+    ) -> std::result::Result<(), String> {
+        let record_exit_failure = record_exit_failure
+            && matches!(
+                self.cleanup_actions.get(place),
+                Some(CleanupAction::ManagerExit {
+                    exit_result: crate::mir::ManagerExitResult::Result
+                })
+            );
         let receiver_ty = self.type_of_place(place)?;
+        let exit_method = cleanup_exit_method(self.cleanup_actions.get(place));
         match &receiver_ty {
             DirectType::PlainClass(class_ty) => {
-                let has_close = self
+                let has_exit = self
                     .classes
                     .get(&class_ty.class_name)
-                    .and_then(|class| class.methods.iter().find(|method| method.name == "close"))
+                    .and_then(|class| {
+                        class
+                            .methods
+                            .iter()
+                            .find(|method| method.name == exit_method)
+                    })
                     .is_some();
-                if has_close {
+                if has_exit {
                     let operand = Operand::Place(place.to_string());
-                    let _ = self.compile_member_call(&operand, "close", Some(place), &[])?;
+                    let result =
+                        self.compile_member_call(&operand, exit_method, Some(place), &[])?;
+                    if record_exit_failure {
+                        let class_name = class_ty.class_name.clone();
+                        self.record_manager_exit_failure_value(&class_name, result)?;
+                    }
                 }
             }
             DirectType::Opaque(ty) => {
@@ -12938,15 +13014,33 @@ impl<'a> FunctionCompiler<'a> {
                     self.release_opaque_handle(self.builder.inst_results(result)[0]);
                     return Ok(());
                 }
-                if self
-                    .compile_opaque_member_call(ty, loaded, "close", Some(place), &[], None)
-                    .is_ok()
+                if let Ok(result) =
+                    self.compile_opaque_member_call(ty, loaded, exit_method, Some(place), &[], None)
                 {
+                    if record_exit_failure {
+                        if let Type::Named(class_name, _) = ty {
+                            self.record_manager_exit_failure_value(class_name, result)?;
+                        }
+                    }
                     return Ok(());
                 }
             }
             DirectType::Scalar(_) | DirectType::Union(_) | DirectType::Callable(_) => {}
         }
+        Ok(())
+    }
+
+    fn record_manager_exit_failure_value(
+        &mut self,
+        class_name: &str,
+        result: ValueRef,
+    ) -> std::result::Result<(), String> {
+        let boxed = self.ensure_opaque(result)?;
+        let (class_ptr, class_len) = self.string_constant(class_name.as_bytes())?;
+        self.builder.ins().call(
+            self.record_manager_exit_failure,
+            &[boxed.values[0], class_ptr, class_len],
+        );
         Ok(())
     }
 
@@ -18261,6 +18355,90 @@ fn direct_type_contains_unknown(ty: &DirectType) -> bool {
     }
 }
 
+/// The method a cleanup action calls on a class place: `__exit__` for a
+/// manager, `close` for a resource.
+fn cleanup_exit_method(action: Option<&CleanupAction>) -> &'static str {
+    match action {
+        Some(CleanupAction::ManagerExit { .. }) => "__exit__",
+        _ => "close",
+    }
+}
+
+/// The action registered for `place` in `function`. Every push of one place
+/// in a function carries the same action, because lowering derives it from
+/// the place's type.
+fn cleanup_action_for_place(function: &MirFunction, place: &str) -> Option<CleanupAction> {
+    function.blocks.iter().find_map(|block| {
+        block
+            .instructions
+            .iter()
+            .find_map(|instruction| match instruction {
+                Instruction::PushCleanup {
+                    place: pushed,
+                    action,
+                } if pushed == place => Some(action.clone()),
+                _ => None,
+            })
+    })
+}
+
+/// Releases a cleanup thunk's call results. A `Result`-returning manager
+/// exit first hands its result to the runtime, which records a `Result.Err`
+/// for the trap being unwound (checkpoint F5).
+fn release_cleanup_thunk_results(
+    codegen: &mut NativeCodegen<'_>,
+    builder: &mut FunctionBuilder<'_>,
+    action: Option<&CleanupAction>,
+    class_name: &str,
+    function_name: &str,
+    results: &[Value],
+) -> std::result::Result<(), String> {
+    let returns_result = matches!(
+        action,
+        Some(CleanupAction::ManagerExit {
+            exit_result: crate::mir::ManagerExitResult::Result
+        })
+    );
+    if returns_result {
+        let return_ty = codegen
+            .function_return_types
+            .get(function_name)
+            .cloned()
+            .ok_or_else(|| {
+                format!(
+                    "direct backend does not know return type for `{}`",
+                    function_name
+                )
+            })?;
+        let return_count = return_ty.value_count().min(results.len());
+        let boxed = box_thunk_value(codegen, builder, &results[..return_count], &return_ty)?;
+        let (class_ptr, class_len) =
+            thunk_string_constant(codegen, builder, class_name.as_bytes())?;
+        let record = codegen
+            .object
+            .declare_func_in_func(codegen.record_manager_exit_failure, builder.func);
+        builder.ins().call(record, &[boxed, class_ptr, class_len]);
+        let release = codegen
+            .object
+            .declare_func_in_func(codegen.release_value, builder.func);
+        builder.ins().call(release, &[boxed]);
+        let mut cursor = return_count;
+        for writeback_ty in codegen
+            .function_writeback_types
+            .get(function_name)
+            .cloned()
+            .unwrap_or_default()
+        {
+            let count = writeback_ty.value_count();
+            let end = (cursor + count).min(results.len());
+            release_direct_values(codegen, builder, &results[cursor..end], &writeback_ty)?;
+            cursor = end;
+        }
+        return Ok(());
+    }
+    release_direct_call_results(codegen, builder, function_name, results)
+}
+
 fn collect_cleanup_places(function: &MirFunction, reachable: &HashSet<String>) -> Vec<String> {
     let mut cleanup_places = Vec::<String>::new();
     for block in &function.blocks {
@@ -18268,7 +18446,7 @@ fn collect_cleanup_places(function: &MirFunction, reachable: &HashSet<String>) -
             continue;
         }
         for instruction in &block.instructions {
-            let Instruction::PushCleanup { place } = instruction else {
+            let Instruction::PushCleanup { place, .. } = instruction else {
                 continue;
             };
             if !cleanup_places.contains(place) {

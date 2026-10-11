@@ -1,0 +1,13 @@
+class Guard:
+    name: str
+
+    def __exit__(mut self) -> Result[int64, str]:
+        return Result.Ok(1)
+
+def work() -> Result[None, str]:
+    with guard = Guard(name="g"):
+        print(guard.name)
+    return Result.Ok(None)
+
+def main():
+    print(work())

@@ -10521,3 +10521,54 @@ fn properties_hover_complete_and_navigate_as_properties() {
         .expect("method completion");
     assert_eq!(method.kind, "method");
 }
+
+#[test]
+fn with_items_bind_entry_views_at_their_declared_names() {
+    let source = "class Reader:\n    text: str\n\n    def __enter__(mut self) -> view str from self:\n        return view self.text\n\n    def __exit__(mut self) -> None:\n        pass\n\nclass Tracer:\n    name: str\n\n    def __enter__(mut self) -> None:\n        pass\n\n    def __exit__(mut self) -> None:\n        pass\n\ndef main():\n    with text = Reader(text=\"text\"), Tracer(name=\"text\") as name:\n        print(text)\n        print(name.name)\n";
+    let analysis = analyze_source(source);
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "{:?}",
+        analysis.diagnostics
+    );
+
+    let header = "    with text = Reader(text=\"text\"), Tracer(name=\"text\") as name:";
+    let text_column = header.find("text").unwrap();
+    let view = occurrence_at(&analysis, 19, text_column);
+    assert_eq!(
+        view.hover,
+        format_value_hover("view", "text", &Type::named("str"))
+    );
+    let name_column = header.find("as name").unwrap() + 3;
+    let tracer = occurrence_at(&analysis, 19, name_column);
+    assert_eq!(
+        tracer.hover,
+        format_value_hover("local", "name", &Type::named("Tracer"))
+    );
+    let body_view = occurrence_at(&analysis, 20, 14);
+    assert_eq!(body_view.hover, view.hover);
+    let definition = body_view
+        .definition
+        .as_ref()
+        .expect("view use has a definition");
+    assert_eq!(
+        (definition.line, definition.start_character),
+        (19, text_column)
+    );
+
+    let completions = complete_source(source, 21, 8, None).expect("body completion");
+    let text = completions
+        .iter()
+        .find(|item| item.name == "text")
+        .expect("the entry view should complete in the body");
+    assert_eq!(text.detail, "str");
+
+    assert_eq!(
+        super::find_with_item_binding("with other = value", "missing"),
+        None
+    );
+    assert_eq!(
+        super::find_with_item_binding("value as alias", "alias"),
+        Some((9, 14))
+    );
+}

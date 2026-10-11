@@ -1,0 +1,9 @@
+class Guard:
+    name: str
+
+    def __exit__(mut self) -> bool:
+        return true
+
+def main():
+    with guard = Guard(name="g"):
+        print(guard.name)

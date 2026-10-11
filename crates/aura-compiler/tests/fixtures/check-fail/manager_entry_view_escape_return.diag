@@ -1,0 +1,6 @@
+error[AU3010]: returned view derives from the manager of the `with` item at 11:5, but the declaration names origin `items`
+ --> crates/aura-compiler/tests/fixtures/check-fail/manager_entry_view_escape_return.au:12:21
+   |
+12 |         return view values
+   |                     ^
+  = related crates/aura-compiler/tests/fixtures/check-fail/manager_entry_view_escape_return.au:10:33: returned-view origin is declared here

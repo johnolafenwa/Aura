@@ -8876,7 +8876,8 @@ fn lowerer_module_resolution_and_rendering_helpers_cover_imported_paths() {
                 instruction,
                 Instruction::PopCleanup {
                     place,
-                    cancel_before_cleanup: true
+                    cancel_before_cleanup: true,
+                    ..
                 } if place == "resource"
         )));
 }

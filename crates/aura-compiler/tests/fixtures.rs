@@ -145,6 +145,17 @@ fn run_fail_fixtures_match_expected_diagnostics() {
             "unexpected runtime diagnostic for {}",
             fixture.display()
         );
+        // A run-fail fixture may also pin the output printed before the
+        // failure, such as the cleanup trace of a trapping `with` body.
+        let stdout_path = fixture.with_extension("stdout");
+        if stdout_path.exists() {
+            assert_eq!(
+                normalize_newlines(error.partial_stdout().unwrap_or_default()),
+                normalize_newlines(&read(&stdout_path)),
+                "unexpected partial stdout for {}",
+                fixture.display()
+            );
+        }
     }
 }
 

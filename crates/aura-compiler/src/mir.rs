@@ -851,13 +851,47 @@ pub enum Instruction {
     Eval {
         value: Operand,
     },
+    /// Registers the exit action of a managed place. The action runs exactly
+    /// once: through the matching `PopCleanup`, or when a trap, `try`
+    /// propagation, or cancellation drains the frame's action stack.
     PushCleanup {
         place: String,
+        #[serde(default)]
+        action: CleanupAction,
     },
+    /// Removes the top exit action. With `run` it also performs the action;
+    /// without it, lowering performs the exit explicitly right after the pop
+    /// (a manager's `__exit__` call and its `Result` routing).
     PopCleanup {
         place: String,
         cancel_before_cleanup: bool,
+        #[serde(default = "cleanup_pop_runs")]
+        run: bool,
     },
+}
+
+fn cleanup_pop_runs() -> bool {
+    true
+}
+
+/// The typed exit action a `PushCleanup` registers (checkpoint G1).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CleanupAction {
+    /// A builtin resource's cleanup, or `close(mut self)` on a class without
+    /// manager dunders.
+    #[default]
+    ResourceClose,
+    /// `__exit__(mut self)` on a manager place.
+    ManagerExit { exit_result: ManagerExitResult },
+}
+
+/// The declared result shape of a manager's `__exit__`.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ManagerExitResult {
+    /// `-> None`.
+    Unit,
+    /// `-> Result[None, E]`.
+    Result,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -8742,21 +8776,27 @@ fn validate_loan_instruction(
             }
         }
         Instruction::Eval { value } => validate_loan_operand(function, value, context, state)?,
-        Instruction::PushCleanup { place } => {
+        Instruction::PushCleanup { place, action } => {
             if place_has_borrowed_value_origin(place, state) {
                 return Err(format!(
                     "invalid MIR cleanup `{place}` in `{}` cannot close a borrowed value",
                     function.name
                 ));
             }
-            validate_checked_loan_place_access(
-                function,
-                place,
-                LoanPlaceAccess::Read,
-                context,
-                state,
-                Some(ProjectedPlaceAuthority::Mutable),
-            )?;
+            // A manager's exit is registered after `__enter__` returns, so a
+            // view-returning entry already holds its loan of the place here.
+            // Registration performs no access; the matching pop is checked as
+            // a mutation and so requires the entry view to have ended.
+            if *action == CleanupAction::ResourceClose {
+                validate_checked_loan_place_access(
+                    function,
+                    place,
+                    LoanPlaceAccess::Read,
+                    context,
+                    state,
+                    Some(ProjectedPlaceAuthority::Mutable),
+                )?;
+            }
         }
         Instruction::PopCleanup { place, .. } => {
             if place_has_borrowed_value_origin(place, state) {
@@ -8805,6 +8845,113 @@ fn mir_successors(terminator: &Terminator) -> Vec<&str> {
     }
 }
 
+/// Checks every typed exit action against its place (checkpoint G1): a
+/// `ManagerExit` names a class with `__exit__` whose result shape matches
+/// the action, follows that class's `__enter__` call on the same place, and
+/// a manager is never registered as a plain `close` resource.
+fn validate_manager_exit_actions(
+    function: &MirFunction,
+    context: &MirLoanValidationContext<'_>,
+) -> std::result::Result<(), String> {
+    let place_type = |place: &str| {
+        function
+            .params
+            .iter()
+            .map(|param| (&param.name, &param.ty))
+            .chain(
+                function
+                    .local_types
+                    .iter()
+                    .map(|local| (&local.name, &local.ty)),
+            )
+            .find(|(name, _)| name.as_str() == place)
+            .map(|(_, ty)| ty.clone())
+    };
+    let manager_class = |place: &str| match place_type(place) {
+        Some(Type::Named(name, _)) => context.classes.get(name.as_str()).copied(),
+        _ => None,
+    };
+    let class_method = |class: &MirClass, name: &str| {
+        class
+            .methods
+            .iter()
+            .find(|method| method.name == name)
+            .cloned()
+    };
+    for block in &function.blocks {
+        for (index, instruction) in block.instructions.iter().enumerate() {
+            let Instruction::PushCleanup { place, action } = instruction else {
+                continue;
+            };
+            let exit_method =
+                manager_class(place).and_then(|class| class_method(class, "__exit__"));
+            let CleanupAction::ManagerExit { exit_result } = action else {
+                if exit_method.is_some() {
+                    return Err(format!(
+                        "invalid MIR cleanup `{place}` in `{}` registers a manager as a `close` resource",
+                        function.name
+                    ));
+                }
+                continue;
+            };
+            let (Some(class), Some(exit_method)) = (manager_class(place), exit_method) else {
+                return Err(format!(
+                    "invalid MIR manager exit `{place}` in `{}` does not name a class with `__exit__`",
+                    function.name
+                ));
+            };
+            let exit_return = context
+                .functions
+                .get(exit_method.function_name.as_str())
+                .map(|exit| &exit.return_type);
+            let declared_result = match exit_return {
+                Some(Type::Unit) => Some(ManagerExitResult::Unit),
+                Some(Type::Named(name, args)) if name == "Result" && args.len() == 2 => {
+                    Some(ManagerExitResult::Result)
+                }
+                _ => None,
+            };
+            if declared_result != Some(*exit_result) {
+                return Err(format!(
+                    "invalid MIR manager exit `{place}` in `{}` declares a {:?} exit result that `{}.__exit__` does not return",
+                    function.name, exit_result, class.name
+                ));
+            }
+            if class_method(class, "__enter__").is_some() {
+                let entered = block.instructions[..index]
+                    .iter()
+                    .rev()
+                    .take_while(|earlier| {
+                        !matches!(earlier, Instruction::Assign { target, .. } if target == place)
+                    })
+                    .any(|earlier| {
+                        matches!(
+                            earlier,
+                            Instruction::Assign {
+                                value: Rvalue::Call {
+                                    callee: CallTarget::Member {
+                                        field,
+                                        receiver_place: Some(receiver),
+                                        ..
+                                    },
+                                    ..
+                                },
+                                ..
+                            } if field == "__enter__" && receiver == place
+                        )
+                    });
+                if !entered {
+                    return Err(format!(
+                        "invalid MIR manager exit `{place}` in `{}` is registered before `{}.__enter__` returns",
+                        function.name, class.name
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 fn validate_function_loan_flow(
     function: &MirFunction,
     context: &MirLoanValidationContext<'_>,
@@ -8815,6 +8962,7 @@ fn validate_function_loan_flow(
     for local in &function.local_types {
         validate_canonical_mir_identifier(function, &local.name, true)?;
     }
+    validate_manager_exit_actions(function, context)?;
     // Duplicate labels and the entry block were rejected when the context was
     // built; unreachable blocks are not walked there, so every successor is
     // still checked here before the flow walk trusts the label index.
@@ -10524,6 +10672,9 @@ struct Lowerer<'a> {
     loop_stack: Vec<LoopLabels>,
     return_redirects: Vec<ReturnRedirect>,
     with_stack: Vec<String>,
+    /// Exit result shape of each active `with` place whose action is a
+    /// manager `__exit__`, keyed by the place in `with_stack`.
+    manager_exits: BTreeMap<String, ManagerExitResult>,
     match_writeback_stack: Vec<MatchWritebackState>,
     local_types: std::collections::BTreeMap<String, Type>,
     /// Original type-parameter identity for roots whose projection-summary
@@ -10722,6 +10873,7 @@ impl<'a> Lowerer<'a> {
             loop_stack: Vec::new(),
             return_redirects: Vec::new(),
             with_stack: Vec::new(),
+            manager_exits: BTreeMap::new(),
             match_writeback_stack: Vec::new(),
             local_types: std::collections::BTreeMap::new(),
             specialized_bound_roots: BTreeMap::new(),
@@ -12607,66 +12759,7 @@ impl<'a> Lowerer<'a> {
                 self.lower_for(for_stmt);
                 true
             }
-            Stmt::With(with_stmt) => {
-                let ending_loans =
-                    self.view_sources
-                        .keys()
-                        .filter(|loan| !needed_after.contains(*loan))
-                        .filter(|loan| {
-                            let source_name = self
-                                .loan_source_names
-                                .get(*loan)
-                                .map(String::as_str)
-                                .unwrap_or(loan);
-                            crate::sema::expr_references_name(&with_stmt.value, source_name)
-                                || with_stmt.body.iter().any(|stmt| {
-                                    crate::sema::stmt_references_name(stmt, source_name)
-                                })
-                        })
-                        .cloned()
-                        .collect::<BTreeSet<_>>();
-                if let Some(inferred) = self.infer_expr_type(&with_stmt.value) {
-                    self.local_types
-                        .entry(with_stmt.binding.clone())
-                        .or_insert(inferred);
-                }
-                let expected = self.infer_expr_type(&with_stmt.value);
-                let value = self.lower_expr_for_owned_value(&with_stmt.value, expected.as_ref());
-                self.emit(Instruction::Assign {
-                    target: with_stmt.binding.clone(),
-                    value: Rvalue::Use(value),
-                });
-                self.emit(Instruction::PushCleanup {
-                    place: with_stmt.binding.clone(),
-                });
-                self.with_stack.push(with_stmt.binding.clone());
-                let body_endings = ending_loans
-                    .iter()
-                    .filter(|loan| {
-                        let source_name = self
-                            .loan_source_names
-                            .get(*loan)
-                            .map(String::as_str)
-                            .unwrap_or(loan);
-                        with_stmt
-                            .body
-                            .iter()
-                            .any(|stmt| crate::sema::stmt_references_name(stmt, source_name))
-                    })
-                    .cloned()
-                    .collect::<BTreeSet<_>>();
-                self.end_loans_before_branch(&ending_loans, &body_endings);
-                self.lower_stmts_with_inherited_endings(&with_stmt.body, body_endings);
-                self.remove_loans_from_lowering_state(&ending_loans);
-                if !self.current_terminated() {
-                    self.emit(Instruction::PopCleanup {
-                        place: with_stmt.binding.clone(),
-                        cancel_before_cleanup: false,
-                    });
-                }
-                self.with_stack.pop();
-                !self.current_terminated()
-            }
+            Stmt::With(with_stmt) => self.lower_with(with_stmt, needed_after),
             Stmt::While(while_stmt) => {
                 self.lower_while(while_stmt);
                 true
@@ -25343,11 +25436,168 @@ impl<'a> Lowerer<'a> {
     fn emit_cleanup_range(&mut self, depth: usize, cancel_before_cleanup: bool) {
         let places = self.with_stack[depth..].to_vec();
         for place in places.into_iter().rev() {
+            self.emit_with_exit(place, cancel_before_cleanup);
+        }
+    }
+
+    /// Leaves one `with` item on a normal exit path. A manager's action is
+    /// popped without running, then `__exit__` is called explicitly so a
+    /// `Result` exit propagates its error as `try` would (checkpoint F5).
+    fn emit_with_exit(&mut self, place: String, cancel_before_cleanup: bool) {
+        let Some(exit_result) = self.manager_exits.get(&place).copied() else {
             self.emit(Instruction::PopCleanup {
                 place,
                 cancel_before_cleanup,
+                run: true,
             });
+            return;
+        };
+        self.emit(Instruction::PopCleanup {
+            place: place.clone(),
+            cancel_before_cleanup,
+            run: false,
+        });
+        let span = Span::new(0, 0);
+        let mut exit_call = crate::sema::manager_method_call(&place, "__exit__", span);
+        if exit_result == ManagerExitResult::Result {
+            exit_call = Expr {
+                kind: ExprKind::Try(Box::new(exit_call)),
+                span,
+            };
         }
+        let value = self.lower_expr(&exit_call);
+        self.emit(Instruction::Eval { value });
+    }
+
+    /// Lowers one `with` item (checkpoint F1-F5). A multi-item header was
+    /// already nested by the parser. The manager value is stored first, then
+    /// entered, and only then is its exit action registered, so a failing
+    /// entry never runs its own exit.
+    fn lower_with(
+        &mut self,
+        with_stmt: &crate::ast::WithStmt,
+        needed_after: &BTreeSet<String>,
+    ) -> bool {
+        let ending_loans = self
+            .view_sources
+            .keys()
+            .filter(|loan| !needed_after.contains(*loan))
+            .filter(|loan| {
+                let source_name = self
+                    .loan_source_names
+                    .get(*loan)
+                    .map(String::as_str)
+                    .unwrap_or(loan);
+                crate::sema::expr_references_name(&with_stmt.value, source_name)
+                    || with_stmt
+                        .body
+                        .iter()
+                        .any(|stmt| crate::sema::stmt_references_name(stmt, source_name))
+            })
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        let manager_ty = self.infer_expr_type(&with_stmt.value);
+        let shape = manager_ty.as_ref().and_then(|ty| {
+            let class_info = match ty {
+                Type::Named(name, _) => self.resolve_class_info(name),
+                _ => None,
+            };
+            crate::sema::classify_manager(ty, class_info).ok()
+        });
+        // A view-returning `__enter__` keeps the manager in a hidden managed
+        // place, a fresh temporary that source code cannot name (F4).
+        let place = if matches!(
+            shape.as_ref().map(|shape| &shape.entry),
+            Some(crate::sema::ManagerEntry::View { .. })
+        ) {
+            match manager_ty.clone() {
+                Some(ty) => self.new_typed_temp(ty),
+                None => self.new_temp(),
+            }
+        } else {
+            if let Some(inferred) = manager_ty.clone() {
+                self.local_types
+                    .entry(with_stmt.binding.clone())
+                    .or_insert(inferred);
+            }
+            with_stmt.binding.clone()
+        };
+        let value = self.lower_expr_for_owned_value(&with_stmt.value, manager_ty.as_ref());
+        self.emit(Instruction::Assign {
+            target: place.clone(),
+            value: Rvalue::Use(value),
+        });
+
+        let span = with_stmt.span;
+        let mut entry_loan = None;
+        self.loan_scopes.push(Vec::new());
+        match shape.as_ref().map(|shape| &shape.entry) {
+            Some(crate::sema::ManagerEntry::Unit) => {
+                let entry = crate::sema::manager_method_call(&place, "__enter__", span);
+                let value = self.lower_expr(&entry);
+                self.emit(Instruction::Eval { value });
+            }
+            Some(crate::sema::ManagerEntry::View { mutable }) => {
+                let view = Stmt::View(crate::ast::ViewStmt {
+                    name: with_stmt.binding.clone(),
+                    mutable: *mutable,
+                    source: crate::sema::manager_method_call(&place, "__enter__", span),
+                    span,
+                });
+                self.lower_stmt(&view, &BTreeSet::new());
+                entry_loan = self
+                    .loan_scopes
+                    .last()
+                    .and_then(|scope| scope.last().cloned());
+            }
+            _ => {}
+        }
+        let action = match shape.as_ref().map(|shape| &shape.exit) {
+            Some(crate::sema::ManagerExit::Unit) => CleanupAction::ManagerExit {
+                exit_result: ManagerExitResult::Unit,
+            },
+            Some(crate::sema::ManagerExit::Result(_)) => CleanupAction::ManagerExit {
+                exit_result: ManagerExitResult::Result,
+            },
+            _ => CleanupAction::ResourceClose,
+        };
+        if let CleanupAction::ManagerExit { exit_result } = &action {
+            self.manager_exits.insert(place.clone(), *exit_result);
+        }
+        self.emit(Instruction::PushCleanup {
+            place: place.clone(),
+            action,
+        });
+        self.with_stack.push(place.clone());
+        let mut body_endings = ending_loans
+            .iter()
+            .filter(|loan| {
+                let source_name = self
+                    .loan_source_names
+                    .get(*loan)
+                    .map(String::as_str)
+                    .unwrap_or(loan);
+                with_stmt
+                    .body
+                    .iter()
+                    .any(|stmt| crate::sema::stmt_references_name(stmt, source_name))
+            })
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        self.end_loans_before_branch(&ending_loans, &body_endings);
+        // The entry view ends after its last use in the body, and always
+        // before the manager's exit runs.
+        body_endings.extend(entry_loan.iter().cloned());
+        self.lower_stmts_with_inherited_endings(&with_stmt.body, body_endings);
+        self.remove_loans_from_lowering_state(&ending_loans);
+        self.remove_loans_from_lowering_state(&entry_loan.into_iter().collect());
+        self.loan_scopes.pop();
+        self.with_stack.pop();
+        if !self.current_terminated() {
+            self.emit_with_exit(place.clone(), false);
+        }
+        self.manager_exits.remove(&place);
+        !self.current_terminated()
     }
 
     fn active_task_group_place(&self) -> Option<String> {

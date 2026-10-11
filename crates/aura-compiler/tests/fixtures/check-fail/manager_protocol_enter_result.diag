@@ -1,0 +1,5 @@
+error[AU2017]: entry of `Guard` must return `None` or a view of `self`
+ --> crates/aura-compiler/tests/fixtures/check-fail/manager_protocol_enter_result.au:11:5
+   |
+11 |     with guard = Guard(count=1):
+   |     ^

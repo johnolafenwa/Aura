@@ -1,0 +1,9 @@
+class Guard:
+    name: str
+
+    def __exit__(mut self, code: int64) -> None:
+        print(code)
+
+def main():
+    with guard = Guard(name="g"):
+        print(guard.name)

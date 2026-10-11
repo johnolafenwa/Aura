@@ -1,0 +1,7 @@
+error[AU4004]: division by zero
+ --> crates/aura-compiler/tests/fixtures/run-fail/manager_exit_result_trap_attached.au:10:26
+   |
+10 |         return Result.Ok(10 // divisor)
+   |                          ^
+  = note: `Flush.__exit__` also failed during cleanup: flush failed for sink
+  = note: Aura call chain (innermost first): work at 8:1 -> main at 13:1

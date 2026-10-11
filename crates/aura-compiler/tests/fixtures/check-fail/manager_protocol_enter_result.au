@@ -1,0 +1,16 @@
+class Guard:
+    count: int64
+
+    def __enter__(mut self) -> Result[None, str]:
+        return Result.Ok(None)
+
+    def __exit__(mut self) -> None:
+        pass
+
+def work() -> Result[None, str]:
+    with guard = Guard(count=1):
+        print(guard.count)
+    return Result.Ok(None)
+
+def main():
+    print(work())

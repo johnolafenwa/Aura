@@ -1,0 +1,21 @@
+computing
+flush computed
+ok 42
+computing
+flush computed
+err flush failed for computed
+body
+flush fallthrough
+err flush failed for fallthrough
+flush body
+err body error wins
+converted body
+commit
+code 9
+flush loop 0
+flush loop 1
+err flush failed for loop 1
+two sinks
+flush inner
+flush outer
+err flush failed for inner

@@ -1,0 +1,50 @@
+class Tracer:
+    name: str
+
+    def __enter__(mut self) -> None:
+        print("enter " + self.name)
+
+    def __exit__(mut self) -> None:
+        print("exit " + self.name)
+
+class Closer:
+    name: str
+
+    def close(mut self):
+        print("close " + self.name)
+
+def acquire(name: own str, fail: bool) -> Result[Tracer, str]:
+    if fail:
+        print("acquire failed " + name)
+        return Result.Err("cannot acquire " + name)
+    return Result.Ok(Tracer(name=name))
+
+def three_items():
+    with first = Tracer(name="first"), Tracer(name=first.name + "+second") as second, third = Closer(name="third"):
+        print("body " + first.name + " " + second.name + " " + third.name)
+    print("after")
+
+def failing_second() -> Result[int64, str]:
+    with first = try acquire("first", false), second = try acquire("second", true):
+        print("unreachable " + first.name + second.name)
+    return Result.Ok(0)
+
+def nested_equivalent():
+    with outer = Tracer(name="outer"):
+        with inner = Tracer(name="inner"):
+            print("nested body")
+
+def early_return() -> str:
+    with a = Tracer(name="a"), b = Tracer(name="b"):
+        return a.name + b.name
+    return ""
+
+def main():
+    three_items()
+    match failing_second():
+        case Result.Ok(_):
+            print("ok")
+        case Result.Err(message):
+            print(message)
+    nested_equivalent()
+    print(early_return())

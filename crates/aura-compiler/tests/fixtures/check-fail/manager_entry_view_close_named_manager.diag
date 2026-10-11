@@ -1,0 +1,7 @@
+error[AU3002]: cannot mutate `guard` while shared view `first` remains live
+ --> crates/aura-compiler/tests/fixtures/check-fail/manager_entry_view_close_named_manager.au:13:15
+   |
+13 |         guard.reset()
+   |               ^
+  = related crates/aura-compiler/tests/fixtures/check-fail/manager_entry_view_close_named_manager.au:12:9: view `first` starts here
+  = related crates/aura-compiler/tests/fixtures/check-fail/manager_entry_view_close_named_manager.au:14:19: last use of view `first` keeps this loan live

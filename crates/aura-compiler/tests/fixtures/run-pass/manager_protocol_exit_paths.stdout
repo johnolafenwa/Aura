@@ -1,0 +1,31 @@
+enter fallthrough
+body
+exit fallthrough
+after
+enter return
+body return
+exit return
+7
+enter loop 0
+exit loop 0
+enter loop 1
+still looping
+exit loop 1
+enter loop 2
+exit loop 2
+loop done
+enter try
+exit try
+body failed
+close-only body
+close legacy
+close is ordinary both
+exit wins both
+enter slot
+3
+exit slot
+enter slot
+text
+exit slot
+enter explicit
+exit explicit

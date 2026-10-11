@@ -1,0 +1,5 @@
+error[AU1101]: expected ',' or ':' after with item
+ --> crates/aura-compiler/tests/fixtures/parse-fail/manager_multi_item_missing_comma.au:8:31
+  |
+8 |     with a = Tracer(name="a") b = Tracer(name="b"):
+  |                               ^

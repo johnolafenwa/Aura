@@ -1,0 +1,5 @@
+error[AU2017]: class `Resource` is not a context manager: `__exit__(mut self)` is missing or has the wrong shape
+ --> crates/aura-compiler/tests/fixtures/check-fail/manager_protocol_close_wrong_shape.au:8:5
+  |
+8 |     with resource = Resource(value=1):
+  |     ^
