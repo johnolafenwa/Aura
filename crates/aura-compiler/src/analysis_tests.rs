@@ -9826,3 +9826,90 @@ fn poll_outcomes_resolve_like_the_other_builtin_enums_in_analysis() {
         Some(Type::Named("Poll".to_string(), vec![Type::Unit]))
     );
 }
+
+#[test]
+fn analysis_records_rest_sequence_and_class_pattern_bindings() {
+    let source = [
+        "class Point:",
+        "    x: int64",
+        "    y: int64",
+        "",
+        "def inspect(point: Point, values: list[int64], triple: (int64, str, bool)):",
+        "    head, *tail = (1, \"two\", true)",
+        "    print(tail)",
+        "    match triple:",
+        "        case (first, *others):",
+        "            print(others)",
+        "    match values:",
+        "        case [one, *more]:",
+        "            print(more)",
+        "        case _:",
+        "            pass",
+        "    match point:",
+        "        case Point(x=0, y=row):",
+        "            print(row)",
+        "        case _:",
+        "            pass",
+        "    print(head)",
+    ]
+    .join("\n");
+
+    let analysis = analyze_source(&source);
+
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "{:?}",
+        analysis.diagnostics
+    );
+    for (name, ty, definition_line, use_line) in [
+        ("tail", "(str, bool)", 5, 6),
+        ("others", "(str, bool)", 8, 9),
+        ("more", "list[int64]", 11, 12),
+        ("row", "int64", 16, 17),
+    ] {
+        let hover = format!(" {name}: {ty}\n");
+        let definition = analysis
+            .occurrences
+            .iter()
+            .find(|occurrence| {
+                occurrence.line == definition_line && occurrence.hover.contains(&hover)
+            })
+            .unwrap_or_else(|| {
+                panic!(
+                    "missing pattern definition occurrence for `{name}`: {:#?}",
+                    analysis.occurrences
+                )
+            });
+        assert_eq!(
+            definition.definition.as_ref().map(|range| range.line),
+            Some(definition_line)
+        );
+        let use_occurrence = analysis
+            .occurrences
+            .iter()
+            .find(|occurrence| occurrence.line == use_line && occurrence.hover.contains(&hover))
+            .unwrap_or_else(|| panic!("missing pattern use occurrence for `{name}`"));
+        assert_eq!(
+            use_occurrence.definition.as_ref().map(|range| range.line),
+            Some(definition_line)
+        );
+    }
+    let class_occurrence = analysis
+        .occurrences
+        .iter()
+        .find(|occurrence| occurrence.line == 16 && occurrence.hover.contains("class Point"))
+        .expect("class pattern name should hover as the class");
+    assert_eq!(
+        class_occurrence.definition.as_ref().map(|range| range.line),
+        Some(0)
+    );
+    let field_occurrence = analysis
+        .occurrences
+        .iter()
+        .find(|occurrence| occurrence.line == 16 && occurrence.hover.contains("field y: int64"))
+        .expect("class pattern field should hover as the field");
+    assert_eq!(
+        field_occurrence.definition.as_ref().map(|range| range.line),
+        Some(2)
+    );
+}

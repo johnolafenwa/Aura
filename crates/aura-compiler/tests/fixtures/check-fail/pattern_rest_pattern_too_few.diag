@@ -1,0 +1,5 @@
+error[AU2041]: tuple pattern has 3 elements besides its rest element but the scrutinee has only 2 positions
+ --> crates/aura-compiler/tests/fixtures/check-fail/pattern_rest_pattern_too_few.au:3:14
+  |
+3 |         case (a, b, c, *_):
+  |              ^

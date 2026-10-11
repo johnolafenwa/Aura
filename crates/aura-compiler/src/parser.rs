@@ -1,13 +1,14 @@
 use crate::ast::{
     Argument, AssertStmt, AssignStmt, AssignTarget, BinaryOp, BindingPattern, BindingTarget,
-    BreakStmt, ClassDecl, CompareLink, CompareOp, ComprehensionClause, ComprehensionOutput,
-    ConstantDecl, ContinueStmt, DestructureStmt, EnumDecl, EnumPayloadFieldDecl, EnumVariantDecl,
-    Expr, ExprKind, ExprStmt, ExternFunctionDecl, ExternOpaqueClassDecl, FieldDecl, ForStmt,
-    FormatPart, FunctionDecl, FunctionTypeParam, IfBranch, IfStmt, ImplDecl, ImportDecl,
-    ImportKind, ImportName, Item, LambdaCapture, LambdaParam, LiteralPattern, LiteralPatternKind,
-    MapEntryExpr, MatchArm, MatchExprArm, MatchStmt, Module, Param, ParamMode, Pattern,
-    ReceiverKind, ReturnStmt, Stmt, TraitDecl, TuplePattern, TypeAliasDecl, TypeRef, TypeRefKind,
-    UnaryOp, VariantPattern, ViewKind, ViewReturn, ViewStmt, WhileStmt, WithStmt,
+    BreakStmt, ClassDecl, ClassPattern, ClassPatternField, CompareLink, CompareOp,
+    ComprehensionClause, ComprehensionOutput, ConstantDecl, ContinueStmt, DestructureStmt,
+    EnumDecl, EnumPayloadFieldDecl, EnumVariantDecl, Expr, ExprKind, ExprStmt, ExternFunctionDecl,
+    ExternOpaqueClassDecl, FieldDecl, ForStmt, FormatPart, FunctionDecl, FunctionTypeParam,
+    IfBranch, IfStmt, ImplDecl, ImportDecl, ImportKind, ImportName, Item, LambdaCapture,
+    LambdaParam, LiteralPattern, LiteralPatternKind, MapEntryExpr, MatchArm, MatchExprArm,
+    MatchStmt, Module, Param, ParamMode, Pattern, ReceiverKind, RestPattern, ReturnStmt,
+    SequencePattern, Stmt, TraitDecl, TuplePattern, TypeAliasDecl, TypeRef, TypeRefKind, UnaryOp,
+    VariantPattern, ViewKind, ViewReturn, ViewStmt, WhileStmt, WithStmt,
 };
 use crate::diag::{Diagnostic, Result, Span};
 use crate::integer::IntegerValue;
@@ -22,14 +23,84 @@ fn parse_error(span: Span, message: impl Into<String>) -> Diagnostic {
 }
 
 fn pattern_span(pattern: &Pattern) -> Span {
+    pattern.span()
+}
+
+fn rest_error(span: Span, message: &str) -> Diagnostic {
+    Diagnostic::coded_at("AU2041", span, message)
+}
+
+/// A rest pattern appears only as a direct element of a tuple or sequence
+/// pattern, at most once in each.
+fn validate_rest_patterns(pattern: &Pattern, rest_allowed: bool) -> Result<()> {
+    let validate_elements = |elements: &[Pattern]| -> Result<()> {
+        let mut seen = false;
+        for element in elements {
+            if let Pattern::Rest(rest) = element {
+                if seen {
+                    return Err(rest_error(
+                        rest.span,
+                        "a tuple or sequence pattern may contain only one `*` rest element",
+                    ));
+                }
+                seen = true;
+            }
+            validate_rest_patterns(element, true)?;
+        }
+        Ok(())
+    };
     match pattern {
-        Pattern::Type(pattern) => pattern.span,
-        Pattern::Or(pattern) => pattern.span,
-        Pattern::Variant(pattern) => pattern.span,
-        Pattern::Tuple(pattern) => pattern.span,
-        Pattern::Binding(pattern) => pattern.span,
-        Pattern::Literal(pattern) => pattern.span,
-        Pattern::Wildcard(span) => *span,
+        Pattern::Rest(rest) if !rest_allowed => Err(rest_error(
+            rest.span,
+            "a `*` rest pattern is allowed only as an element of a tuple or sequence pattern",
+        )),
+        Pattern::Rest(_)
+        | Pattern::Binding(_)
+        | Pattern::Literal(_)
+        | Pattern::Wildcard(_)
+        | Pattern::Type(_) => Ok(()),
+        Pattern::Tuple(tuple) => validate_elements(&tuple.elements),
+        Pattern::Sequence(sequence) => validate_elements(&sequence.elements),
+        Pattern::Or(or_pattern) => or_pattern
+            .alternatives
+            .iter()
+            .try_for_each(|alternative| validate_rest_patterns(alternative, false)),
+        Pattern::Variant(variant) => variant
+            .subpatterns
+            .iter()
+            .try_for_each(|subpattern| validate_rest_patterns(subpattern, false)),
+        Pattern::Class(class) => class
+            .fields
+            .iter()
+            .try_for_each(|field| validate_rest_patterns(&field.pattern, false)),
+    }
+}
+
+/// A rest target appears only as a direct element of a tuple target, at
+/// most once in each.
+fn validate_rest_targets(target: &BindingTarget, rest_allowed: bool) -> Result<()> {
+    match target {
+        BindingTarget::Rest { span, .. } if !rest_allowed => Err(rest_error(
+            *span,
+            "a `*` rest target is allowed only as an element of a tuple target",
+        )),
+        BindingTarget::Rest { .. } | BindingTarget::Name { .. } => Ok(()),
+        BindingTarget::Tuple { elements, .. } => {
+            let mut seen = false;
+            for element in elements {
+                if let BindingTarget::Rest { span, .. } = element {
+                    if seen {
+                        return Err(rest_error(
+                            *span,
+                            "a tuple target may contain only one `*` rest element",
+                        ));
+                    }
+                    seen = true;
+                }
+                validate_rest_targets(element, true)?;
+            }
+            Ok(())
+        }
     }
 }
 
@@ -1055,7 +1126,7 @@ impl Parser {
             self.parse_continue_stmt()
         } else if self.is_view_binding_stmt() {
             self.parse_view_stmt()
-        } else if self.is_destructure_assignment_stmt() {
+        } else if self.at_simple(&TokenKind::Star) || self.is_destructure_assignment_stmt() {
             self.parse_destructure_stmt()
         } else if self.is_assignment_stmt() {
             self.parse_assign_stmt()
@@ -1311,6 +1382,7 @@ impl Parser {
     fn parse_match_arm(&mut self) -> Result<MatchArm> {
         let span = self.expect_keyword(TokenKind::KwCase)?.span;
         let pattern = self.parse_pattern()?;
+        validate_rest_patterns(&pattern, false)?;
         let guard = if self.eat_simple(&TokenKind::KwIf).is_some() {
             Some(self.parse_expr()?)
         } else {
@@ -1330,6 +1402,7 @@ impl Parser {
     fn parse_match_expr_arm(&mut self) -> Result<MatchExprArm> {
         let span = self.expect_keyword(TokenKind::KwCase)?.span;
         let pattern = self.parse_pattern()?;
+        validate_rest_patterns(&pattern, false)?;
         let guard = if self.eat_simple(&TokenKind::KwIf).is_some() {
             Some(self.parse_expr()?)
         } else {
@@ -1373,7 +1446,11 @@ impl Parser {
         loop {
             if matches!(
                 self.current_kind(),
-                TokenKind::Colon | TokenKind::Comma | TokenKind::RParen | TokenKind::KwIf
+                TokenKind::Colon
+                    | TokenKind::Comma
+                    | TokenKind::RParen
+                    | TokenKind::RBracket
+                    | TokenKind::KwIf
             ) {
                 return Err(parse_error(
                     self.current_span(),
@@ -1428,6 +1505,30 @@ impl Parser {
                 },
                 span,
             }));
+        }
+        if self.eat_simple(&TokenKind::Star).is_some() {
+            let name_span = self.current_span();
+            let name = self.expect_identifier().map_err(|_| {
+                parse_error(
+                    name_span,
+                    "a rest pattern is `*name` or `*_`; expected a name after `*`",
+                )
+            })?;
+            return Ok(Pattern::Rest(RestPattern {
+                name: (name != "_").then_some(name),
+                span,
+            }));
+        }
+        if self.eat_simple(&TokenKind::LBracket).is_some() {
+            let mut elements = Vec::new();
+            while !self.at_simple(&TokenKind::RBracket) {
+                elements.push(self.parse_pattern()?);
+                if self.eat_simple(&TokenKind::Comma).is_none() {
+                    break;
+                }
+            }
+            self.expect_simple(TokenKind::RBracket)?;
+            return Ok(Pattern::Sequence(SequencePattern { elements, span }));
         }
         if self.eat_simple(&TokenKind::LParen).is_some() {
             if self.at_simple(&TokenKind::RParen) {
@@ -1550,6 +1651,13 @@ impl Parser {
                 span,
             }));
         }
+        if self.at_simple(&TokenKind::LParen)
+            && (matches!(self.peek_kind(1), Some(TokenKind::RParen))
+                || (matches!(self.peek_kind(1), Some(TokenKind::Identifier(_)))
+                    && matches!(self.peek_kind(2), Some(TokenKind::Equal))))
+        {
+            return self.parse_class_pattern(segments.join("."), span);
+        }
         let variant_name = segments
             .pop()
             .expect("pattern should contain a variant segment");
@@ -1566,9 +1674,9 @@ impl Parser {
                         && matches!(self.peek_kind(1), Some(TokenKind::Equal))
                     {
                         return Err(Diagnostic::coded_at(
-                            "AU2999",
+                            "AU2040",
                             self.current_span(),
-                            "class patterns are not supported; destructure the class before matching or match a separate enum tag",
+                            "a pattern cannot mix positional and keyword subpatterns; a class pattern takes only `field=pattern` subpatterns",
                         ));
                     }
                     subpatterns.push(self.parse_pattern()?);
@@ -1586,6 +1694,43 @@ impl Parser {
             enum_name,
             variant_name,
             subpatterns,
+            span,
+        }))
+    }
+
+    /// `Name(field=pattern, ...)` after the class path and before `(`.
+    fn parse_class_pattern(&mut self, class_name: String, span: Span) -> Result<Pattern> {
+        self.expect_simple(TokenKind::LParen)?;
+        let mut fields = Vec::new();
+        while !self.at_simple(&TokenKind::RParen) {
+            let name_span = self.current_span();
+            if !(matches!(self.current_kind(), TokenKind::Identifier(_))
+                && matches!(self.peek_kind(1), Some(TokenKind::Equal)))
+            {
+                return Err(Diagnostic::coded_at(
+                    "AU2040",
+                    name_span,
+                    format!(
+                        "class pattern `{class_name}` takes only keyword field subpatterns; write `field=pattern`"
+                    ),
+                ));
+            }
+            let name = self.expect_identifier()?;
+            self.expect_simple(TokenKind::Equal)?;
+            let pattern = self.parse_pattern()?;
+            fields.push(ClassPatternField {
+                name,
+                name_span,
+                pattern,
+            });
+            if self.eat_simple(&TokenKind::Comma).is_none() {
+                break;
+            }
+        }
+        self.expect_simple(TokenKind::RParen)?;
+        Ok(Pattern::Class(ClassPattern {
+            class_name,
+            fields,
             span,
         }))
     }
@@ -3166,12 +3311,16 @@ impl Parser {
             return Ok(target);
         }
 
+        let rest = self.eat_simple(&TokenKind::Star).is_some();
         let name = self.expect_identifier().map_err(|_| {
             parse_error(
-                span,
-                "binding targets must be names or recursively nested tuple targets",
+                self.current_span(),
+                "binding targets must be names, `*name` rest targets, or recursively nested tuple targets",
             )
         })?;
+        if rest {
+            return Ok(BindingTarget::Rest { name, span });
+        }
         Ok(BindingTarget::Name { name, span })
     }
 
@@ -3195,6 +3344,15 @@ impl Parser {
                         ));
                     }
                 }
+                BindingTarget::Rest { name, .. } if name == "_" => {}
+                BindingTarget::Rest { name, span } => {
+                    if !names.insert(name.clone()) {
+                        return Err(parse_error(
+                            *span,
+                            format!("duplicate binding target `{name}`"),
+                        ));
+                    }
+                }
                 BindingTarget::Tuple { elements, .. } => {
                     for element in elements {
                         visit(element, names)?;
@@ -3204,6 +3362,7 @@ impl Parser {
             Ok(())
         }
 
+        validate_rest_targets(target, false)?;
         visit(target, &mut std::collections::BTreeSet::new())
     }
 
@@ -4125,7 +4284,7 @@ fn offset_expr_span(expr: &mut Expr, line: usize, column_offset: usize) {
 
 fn offset_binding_target_span(target: &mut BindingTarget, line: usize, column_offset: usize) {
     match target {
-        BindingTarget::Name { span, .. } => {
+        BindingTarget::Name { span, .. } | BindingTarget::Rest { span, .. } => {
             span.line = line;
             span.column += column_offset;
         }

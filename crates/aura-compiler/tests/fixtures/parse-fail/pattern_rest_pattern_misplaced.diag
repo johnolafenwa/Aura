@@ -1,0 +1,5 @@
+error[AU2041]: a `*` rest pattern is allowed only as an element of a tuple or sequence pattern
+ --> crates/aura-compiler/tests/fixtures/parse-fail/pattern_rest_pattern_misplaced.au:6:23
+  |
+6 |         case Wrap.One(*items):
+  |                       ^

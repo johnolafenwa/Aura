@@ -1,0 +1,5 @@
+error[AU2040]: `match mut` does not support class patterns; bind the object as one mutable name and update its fields explicitly
+ --> crates/aura-compiler/tests/fixtures/check-fail/pattern_class_match_mut.au:7:14
+  |
+7 |         case Point(x=x):
+  |              ^

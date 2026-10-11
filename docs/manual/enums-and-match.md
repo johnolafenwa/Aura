@@ -270,7 +270,9 @@ Expression arms may also use the inline form `case Pattern: expression`. Stateme
 At the top level of a match arm, Aura 0.3 supports:
 
 - an enum variant pattern for an enum scrutinee
-- a recursively nested fixed-arity tuple pattern for a tuple scrutinee
+- a recursively nested tuple pattern for a tuple scrutinee, with at most one rest element
+- a sequence pattern for a `list` scrutinee in a bare `match`
+- a keyword class pattern for a class scrutinee or a union member class
 - a supported literal pattern for a scalar scrutinee
 - a lowercase name that binds the complete scrutinee
 - `_`
@@ -286,7 +288,7 @@ Tuple patterns use `(left, right)` or the singleton form `(value,)`, and may nes
             print(left + right)
             print(flag)
 
-The tuple arity and recursive shape must match exactly. Empty tuple patterns, trailing commas after several elements, and rest or star patterns are rejected.
+The tuple arity and recursive shape must match exactly, unless the pattern has a rest element. Empty tuple patterns and trailing commas after several elements are rejected.
 
 Each pattern binding is local to its arm and cannot shadow a name already visible there. `_` never introduces a binding. See [Names And Scopes](/manual/names-and-scopes#pattern-scope).
 
@@ -403,7 +405,96 @@ The literal must have the scrutinee's exact scalar type after contextual literal
 
 A Boolean match is exhaustive when unguarded arms cover both `true` and `false`. Integer, floating-point, and string domains are open-ended, so they need a final unguarded wildcard.
 
-Class patterns are not implemented. Use an explicit enum or tag representation, or a wildcard and ordinary code.
+## Rest Elements
+
+A rest element `*name` inside a tuple pattern matches every position that the fixed elements leave over. It binds those positions as a tuple. Write `*_` to ignore them.
+
+```aura
+def main():
+    match (1, "two", 3.0, true):
+        case (first, *middle, last):
+            print(first)
+            print(middle)
+            print(last)
+```
+
+This prints `1`, `(two, 3.0)`, and `true`.
+
+- A tuple pattern has at most one rest element.
+- The fixed elements must not outnumber the tuple positions.
+- Aura has no empty tuple, so `*name` must cover at least one position. `*_` may cover none.
+- `*` outside a tuple or sequence pattern is rejected with `AU2041`.
+
+The same rule applies to [tuple unpacking](/manual/tuples#unpacking) such as `head, *tail = triple`.
+
+## Sequence Patterns
+
+A sequence pattern `[p1, p2, ...]` matches a `list` by length and elements. It works only in a bare `match`.
+
+```aura
+def describe(values: list[int64]) -> str:
+    return match values:
+        case []: "empty"
+        case [only]: f"one: {only}"
+        case [first, *_, last]: f"from {first} to {last}"
+
+def main():
+    print(describe([]))
+    print(describe([7]))
+    print(describe([1, 2, 3, 4]))
+```
+
+- Without a rest element, the list length must equal the element count.
+- With a rest element, the length must be at least the fixed element count.
+- Element bindings are shared borrows of the list elements, as in any bare `match`.
+- A named rest such as `*more` binds a new owned `list` slice of the remaining elements. A list of `Rng` values cannot be sliced, so this is rejected for them.
+- `match mut` and `match own` reject sequence patterns with `AU2041`.
+
+A sequence match needs a final `case _:`, or arms that cover every length. Irrefutable arms for lengths `0` through `k - 1` plus an irrefutable arm with `k` fixed elements and a rest cover every list. `[]` and `[_, *_]` together are exhaustive.
+
+## Class Patterns
+
+A class pattern `Name(field=pattern, ...)` matches a class value and tests the named fields. Every subpattern is keyword-labeled.
+
+```aura
+class Point:
+    x: int64
+    y: int64
+
+def locate(point: Point) -> str:
+    return match point:
+        case Point(x=0, y=0): "origin"
+        case Point(x=0, y=y): f"on the y axis at {y}"
+        case Point(x=x, y=0): f"on the x axis at {x}"
+        case _: "elsewhere"
+
+def main():
+    print(locate(Point(x=0, y=5)))
+```
+
+- Fields left out are not tested. `Point()` matches every `Point`.
+- Each field may appear once. Order does not matter.
+- A field must be a stored field visible at the match. A private field of a class from another module is rejected.
+- The class must be the scrutinee class, or one member of a union scrutinee. Spell it as a declared, imported, or module-qualified class name, such as `geometry.Point`.
+- Field bindings follow the match capability. A bare `match` gives shared borrows. `match own` moves the fields out of the consumed value. `match mut` rejects class patterns.
+- A class match needs a final `case _:`, or class patterns whose field patterns together cover every value.
+
+`Name()` with empty parentheses is always a class pattern. Write a payload-free enum variant without parentheses, as `case Color.Red:`.
+
+The checker reports class pattern errors with `AU2040`:
+
+```aura check-fail:AU2040
+class Point:
+    x: int64
+    y: int64
+
+def main():
+    match Point(x=1, y=2):
+        case Point(z=0):
+            print("z")
+        case _:
+            print("other")
+```
 
 ## Builtin Enum Shapes
 
@@ -474,7 +565,9 @@ A match evaluates its scrutinee exactly once, tests arms in source order, and ru
 | `AU2004` | Invalid variant-constructor argument binding. |
 | `AU2013` | Union type-arm coverage: missing members, duplicate coverage, unreachable type arms, nonmembers, and type arms that are not one member. |
 | `AU2014` | A member use through a place whose narrowing fact was invalidated. |
-| `AU2999` | Duplicate variants, invalid payload shapes, missing or unreachable arms, non-exhaustive matches, mismatched alternative bindings, duplicate or subsumed alternatives, class patterns, unsupported pattern forms, and other enum and match rejections. |
+| `AU2040` | A class pattern with a positional, unknown, private, repeated, or method field. A class that is not the scrutinee class or one union member. A class pattern under `match mut`. Enum variant or type patterns over a class scrutinee. |
+| `AU2041` | A rest element outside a tuple or sequence, a second rest element, too few positions for the fixed elements, a `*name` that covers no positions, or a sequence pattern under `match mut` or `match own`. |
+| `AU2999` | Duplicate variants, invalid payload shapes, missing or unreachable arms, non-exhaustive matches, mismatched alternative bindings, duplicate or subsumed alternatives, unsupported pattern forms, and other enum and match rejections. |
 | `AU3001` | Use after `match own`, after a payload move, or after moving an owned candidate before its guard commits. |
 | `AU3002` | Moving through a shared match, overlapping mutable matches, or a `match mut` scrutinee that is not a mutable place. |
 | `AU3003` | Mutation or reassignment through an immutable enum or payload place. |
@@ -498,6 +591,7 @@ MIR execution and direct native generation both implement:
 - construction and inference
 - statement and expression matches, with exhaustiveness
 - nested patterns and short variants
+- tuple rest elements, list sequence patterns, and keyword class patterns
 - scalar literal patterns
 - guards and or-patterns
 - top-level catch-all bindings
@@ -507,7 +601,7 @@ Both backends receive the same checked arm decision tree. They must agree on sel
 
 ## Limits And Implementation-Defined Behavior
 
-- Aura has no range or rest patterns, named-payload patterns, class or collection destructuring, arbitrary predicate patterns, `Duration` or f-string patterns, or inline suites for statement matches.
+- Aura has no range patterns, named-payload patterns, `dict` or `set` patterns, arbitrary predicate patterns, `Duration` or f-string patterns, or inline suites for statement matches.
 - Expression arms contain exactly one expression.
 - `TaskResult`, `SelectOutcome`, `WaitAny`, and `WaitAll` are move outcome types regardless of their payloads.
 - Scrutinee and arm order, exhaustiveness, payload order, and borrowed-match writeback are language-defined, not implementation-defined.
@@ -521,6 +615,7 @@ Implemented on both backends:
 - structural copy and move classification
 - statement and expression matches, with exhaustiveness
 - nested enum patterns, tuple patterns, and scalar literal patterns
+- tuple rest elements, list sequence patterns, and keyword class patterns
 - top-level catch-all bindings, wildcards, and short variants
 - borrowed matching
 - guards, which keep candidate ownership until the arm commits, and or-patterns

@@ -1,0 +1,9 @@
+import random
+
+def main():
+    gens = [random.Rng(seed=1), random.Rng(seed=2)]
+    match gens:
+        case [_, *rest]:
+            print(len(rest))
+        case _:
+            pass

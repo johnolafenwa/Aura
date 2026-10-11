@@ -942,7 +942,7 @@ fn tuple_parsing_keeps_container_commas_and_rejects_unsupported_forms() {
         ),
         (
             "left, 1 = pair\n",
-            "binding targets must be names or recursively nested tuple targets",
+            "binding targets must be names, `*name` rest targets, or recursively nested tuple targets",
         ),
     ] {
         let error = parse_stmt_from(source)
@@ -3958,11 +3958,11 @@ fn parser_internal_helpers_cover_member_names_patterns_and_match_terminators() {
         Pattern::Variant(VariantPattern { subpatterns, .. }) if subpatterns.len() == 2
     ));
 
-    let empty_variant_pattern =
-        parse_pattern_from("Result.Ok()").expect("empty variant subpatterns should parse");
+    let empty_class_pattern =
+        parse_pattern_from("Result.Ok()").expect("empty parentheses parse as a class pattern");
     assert!(matches!(
-        empty_variant_pattern,
-        Pattern::Variant(VariantPattern { subpatterns, .. }) if subpatterns.is_empty()
+        empty_class_pattern,
+        Pattern::Class(ClassPattern { fields, .. }) if fields.is_empty()
     ));
 
     let span = Span::new(1, 1);
@@ -4422,4 +4422,79 @@ fn type_ref_span_offsets_cover_callables_and_view_returns() {
         .as_ref()
         .expect("view return survives offsetting");
     assert_eq!((view_return.span.line, view_return.span.column), (4, 3));
+}
+
+#[test]
+fn structural_patterns_parse_rest_sequence_and_class_forms() {
+    let tuple = parse_pattern_from("(first, *rest)").expect("tuple rest pattern should parse");
+    let Pattern::Tuple(tuple) = tuple else {
+        panic!("expected a tuple pattern");
+    };
+    assert!(matches!(
+        &tuple.elements[1],
+        Pattern::Rest(RestPattern { name: Some(name), .. }) if name == "rest"
+    ));
+
+    let sequence = parse_pattern_from("[head, *_, last,]").expect("sequence pattern should parse");
+    let Pattern::Sequence(sequence) = sequence else {
+        panic!("expected a sequence pattern");
+    };
+    assert_eq!(sequence.elements.len(), 3);
+    assert!(matches!(
+        &sequence.elements[1],
+        Pattern::Rest(RestPattern { name: None, .. })
+    ));
+    assert!(matches!(
+        parse_pattern_from("[]").expect("empty sequence pattern should parse"),
+        Pattern::Sequence(SequencePattern { elements, .. }) if elements.is_empty()
+    ));
+
+    let class = parse_pattern_from("geometry.Point(x=0, y=[_, *_])")
+        .expect("keyword class pattern should parse");
+    let Pattern::Class(class) = class else {
+        panic!("expected a class pattern");
+    };
+    assert_eq!(class.class_name, "geometry.Point");
+    assert_eq!(
+        class
+            .fields
+            .iter()
+            .map(|field| field.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["x", "y"]
+    );
+    assert!(matches!(class.fields[1].pattern, Pattern::Sequence(_)));
+
+    let positional = parse_pattern_from("Point(x=0, 1)").expect_err("positional field");
+    assert_eq!(positional.code, "AU2040");
+
+    let target = parse_stmt_from("first, *rest = values\n").expect("rest target should parse");
+    let Stmt::Destructure(destructure) = target else {
+        panic!("expected a destructuring statement, got {target:?}");
+    };
+    let BindingTarget::Tuple { elements, .. } = &destructure.target else {
+        panic!("expected a tuple target");
+    };
+    assert!(matches!(&elements[1], BindingTarget::Rest { name, .. } if name == "rest"));
+    assert!(elements[1].is_rest());
+
+    let twice = parse_stmt_from("*a, *b = values\n").expect_err("two rest targets");
+    assert_eq!(twice.code, "AU2041");
+}
+
+#[test]
+fn rest_element_ranges_split_fixed_positions_around_the_rest() {
+    assert_eq!(
+        crate::ast::rest_element_ranges(&[false, true, false], 5),
+        Some(vec![0..1, 1..4, 4..5])
+    );
+    assert_eq!(
+        crate::ast::rest_element_ranges(&[false, false], 2),
+        Some(vec![0..1, 1..2])
+    );
+    assert_eq!(crate::ast::rest_element_ranges(&[false, false], 3), None);
+    assert_eq!(
+        crate::ast::rest_element_ranges(&[false, true, false], 1),
+        None
+    );
 }

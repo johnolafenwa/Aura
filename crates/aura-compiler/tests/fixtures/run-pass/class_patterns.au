@@ -1,0 +1,66 @@
+class Point:
+    x: int64
+    y: int64
+
+class Box[T]:
+    value: T
+
+class Labeled:
+    label: str
+    point: Point
+
+def where(p: Point) -> str:
+    return match p:
+        case Point(x=0, y=0): "origin"
+        case Point(x=0): "y axis"
+        case Point(y=0, x=x): f"x axis at {x}"
+        case Point(): "elsewhere"
+
+def unwrap(value: Point | str | None) -> str:
+    match value:
+        case Point(x=x, y=y):
+            return f"point {x},{y}"
+        case str as text:
+            return text.clone()
+        case None:
+            return "none"
+
+def main():
+    p = Point(x=0, y=7)
+    match p:
+        case Point(x=0, y=y):
+            print(f"on the y axis at {y}")
+        case Point(x=x, y=_):
+            print(f"x is {x}")
+    print(where(Point(x=0, y=0)))
+    print(where(Point(x=0, y=3)))
+    print(where(Point(x=4, y=0)))
+    print(where(Point(x=4, y=5)))
+    print(unwrap(Point(x=1, y=2)))
+    print(unwrap("text"))
+    print(unwrap(None))
+    b = Box(value=41)
+    match b:
+        case Box(value=v):
+            print(v + 1)
+    labeled = Labeled(label="home", point=Point(x=2, y=3))
+    match labeled:
+        case Labeled(label=name, point=Point(x=2, y=y)):
+            print(f"{name} {y}")
+        case _:
+            print("other")
+    match own labeled:
+        case Labeled(label=name, point=inner):
+            print(name)
+            print(inner.x)
+    pts = [Point(x=1, y=1), Point(x=0, y=5)]
+    match pts:
+        case [Point(x=1), Point(x=0, y=yy)]:
+            print(yy)
+        case _:
+            print("nope")
+    match (Point(x=9, y=9), 3):
+        case (Point(x=9), n):
+            print(n)
+        case _:
+            print("no")

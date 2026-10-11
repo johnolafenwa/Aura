@@ -1,0 +1,4 @@
+def main():
+    match (1, 2):
+        case (a, b, *rest):
+            print(a)

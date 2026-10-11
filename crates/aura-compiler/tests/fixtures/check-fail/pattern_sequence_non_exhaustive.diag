@@ -1,0 +1,5 @@
+error[AU2999]: non-exhaustive match over `list[int64]`: add a final `case _:`, or cover every length, such as with `[]` and `[_, *_]`
+ --> crates/aura-compiler/tests/fixtures/check-fail/pattern_sequence_non_exhaustive.au:3:5
+  |
+3 |     match values:
+  |     ^

@@ -1,0 +1,5 @@
+error[AU2041]: a `*` rest target is allowed only as an element of a tuple target
+ --> crates/aura-compiler/tests/fixtures/parse-fail/pattern_rest_alone.au:2:5
+  |
+2 |     *rest = (1, 2)
+  |     ^

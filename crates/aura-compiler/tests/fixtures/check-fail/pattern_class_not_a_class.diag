@@ -1,0 +1,5 @@
+error[AU2040]: `Red` is not a class; a class pattern names a class, and a variant without a payload is written without parentheses
+ --> crates/aura-compiler/tests/fixtures/check-fail/pattern_class_not_a_class.au:7:14
+  |
+7 |         case Red():
+  |              ^

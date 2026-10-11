@@ -1,0 +1,5 @@
+error[AU2040]: `norm` is a method of `Point`, not a stored field; a class pattern matches stored fields only
+ --> crates/aura-compiler/tests/fixtures/check-fail/pattern_class_method_field.au:9:20
+  |
+9 |         case Point(norm=0):
+  |                    ^

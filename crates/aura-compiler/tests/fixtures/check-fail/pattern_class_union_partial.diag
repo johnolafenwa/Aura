@@ -1,0 +1,5 @@
+error[AU2013]: match does not cover Point
+ --> crates/aura-compiler/tests/fixtures/check-fail/pattern_class_union_partial.au:5:5
+  |
+5 |     match value:
+  |     ^

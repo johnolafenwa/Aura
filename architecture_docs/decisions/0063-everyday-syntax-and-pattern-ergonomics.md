@@ -2,7 +2,7 @@
 
 - Status: Accepted roadmap direction; detailed design pending
 - Date: 2026-09-06
-- Implementation: Not started
+- Implementation: Partial. Tuple rest elements, list sequence patterns, and keyword class patterns are implemented.
 - Roadmap: Batch 4
 - Extends: ADR-0025, ADR-0026, ADR-0049, and ADR-0051
 - Related: ADR-0044, ADR-0046, ADR-0052, ADR-0059, and ADR-0061

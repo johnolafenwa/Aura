@@ -312,12 +312,12 @@ fn s1_sema_fourth_match_statements_and_expressions_pin_shape_diagnostics() {
             "variant `Pair.Both` expects 2 pattern payloads, found 1",
         ),
         (
-            "def main():\n    match [1]:\n        case _:\n            pass\n",
-            "`match` currently requires a tuple, enum, bool, integer, float, or str scrutinee, found `list[int64]`",
+            "def main():\n    match {\"a\": 1}:\n        case _:\n            pass\n",
+            "`match` currently requires a tuple, enum, bool, integer, float, str, list, or class scrutinee, found `dict[str, int64]`",
         ),
         (
-            "def main() -> int32:\n    return match [1]:\n        case _: 0\n",
-            "`match` currently requires a tuple, enum, bool, integer, float, or str scrutinee, found `list[int64]`",
+            "def main() -> int32:\n    return match {\"a\": 1}:\n        case _: 0\n",
+            "`match` currently requires a tuple, enum, bool, integer, float, str, list, or class scrutinee, found `dict[str, int64]`",
         ),
     ] {
         let error = crate::check_source(source)
@@ -590,10 +590,10 @@ fn s1_sema_final_match_expression_or_patterns_preserve_result_types() {
         "class Point:\n    x: int64\n\ndef describe(point: Point) -> str:\n    return match point:\n        case Point(value): \"point\"\n        case _: \"other\"\n\ndef main():\n    print(describe(Point(1)))\n",
     )
     .expect_err("class values cannot use enum-shaped match patterns");
-    assert_eq!(class_pattern.code, "AU2999");
+    assert_eq!(class_pattern.code, "AU2040");
     assert_eq!(
         class_pattern.message,
-        "class patterns are not supported; match an explicit enum/tag representation or use a wildcard and ordinary code"
+        "a match over class `Point` takes keyword class patterns such as `Name(field=pattern)`, `_`, or a name, not enum variant or type patterns"
     );
 }
 
@@ -885,7 +885,7 @@ def whole_enum(state: State) -> State:
         ),
         (
             "class Box:\n    value: int64\n\ndef choose(box: Box) -> int64:\n    return match box:\n        case Ready: 1\n        case whole: whole.value\n\ndef main():\n    pass\n",
-            "class patterns are not supported",
+            "takes keyword class patterns",
         ),
         (
             "def choose(value: bool) -> int64:\n    return match value:\n        case _: 1\n        case true: 2\n\ndef main():\n    pass\n",

@@ -1,0 +1,5 @@
+error[AU2041]: tuple binding has 2 elements besides its rest target but the value has only 1 position
+ --> crates/aura-compiler/tests/fixtures/check-fail/pattern_rest_too_few.au:2:5
+  |
+2 |     a, b, *rest = (1,)
+  |     ^

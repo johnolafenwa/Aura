@@ -302,19 +302,25 @@ pub enum BindingTarget {
         elements: Vec<BindingTarget>,
         span: Span,
     },
+    /// `*name` or `*_` inside a tuple target: binds a tuple of the positions
+    /// it covers, or discards them when `name` is `_`.
+    Rest {
+        name: String,
+        span: Span,
+    },
 }
 
 impl BindingTarget {
     pub fn span(&self) -> Span {
         match self {
-            Self::Name { span, .. } | Self::Tuple { span, .. } => *span,
+            Self::Name { span, .. } | Self::Tuple { span, .. } | Self::Rest { span, .. } => *span,
         }
     }
 
     pub fn name(&self) -> Option<&str> {
         match self {
             Self::Name { name, .. } => Some(name),
-            Self::Tuple { .. } => None,
+            Self::Tuple { .. } | Self::Rest { .. } => None,
         }
     }
 }
@@ -382,6 +388,57 @@ pub enum Pattern {
     Binding(BindingPattern),
     Literal(LiteralPattern),
     Wildcard(Span),
+    /// `*name` or `*_` inside a tuple or sequence pattern.
+    Rest(RestPattern),
+    /// `[p1, *rest, pn]` over a `list[T]` scrutinee.
+    Sequence(SequencePattern),
+    /// `Point(x=pattern, y=pattern)` with keyword field subpatterns.
+    Class(ClassPattern),
+}
+
+impl Pattern {
+    pub fn span(&self) -> Span {
+        match self {
+            Pattern::Type(pattern) => pattern.span,
+            Pattern::Or(pattern) => pattern.span,
+            Pattern::Variant(pattern) => pattern.span,
+            Pattern::Tuple(pattern) => pattern.span,
+            Pattern::Binding(pattern) => pattern.span,
+            Pattern::Literal(pattern) => pattern.span,
+            Pattern::Wildcard(span) => *span,
+            Pattern::Rest(pattern) => pattern.span,
+            Pattern::Sequence(pattern) => pattern.span,
+            Pattern::Class(pattern) => pattern.span,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct RestPattern {
+    /// `None` for `*_`.
+    pub name: Option<String>,
+    pub span: Span,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct SequencePattern {
+    pub elements: Vec<Pattern>,
+    pub span: Span,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct ClassPattern {
+    /// The class name as written, possibly module-qualified (`geo.Point`).
+    pub class_name: String,
+    pub fields: Vec<ClassPatternField>,
+    pub span: Span,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct ClassPatternField {
+    pub name: String,
+    pub name_span: Span,
+    pub pattern: Pattern,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -448,7 +505,9 @@ impl Serialize for ForStmt {
         let mut state = serializer.serialize_struct("ForStmt", 5)?;
         match &self.target {
             BindingTarget::Name { name, .. } => state.serialize_field("binding", name)?,
-            BindingTarget::Tuple { .. } => state.serialize_field("target", &self.target)?,
+            BindingTarget::Tuple { .. } | BindingTarget::Rest { .. } => {
+                state.serialize_field("target", &self.target)?
+            }
         }
         state.serialize_field("iterable", &self.iterable)?;
         state.serialize_field("borrow_mode", &self.borrow_mode)?;
@@ -954,3 +1013,41 @@ impl TypeRef {
 #[cfg(test)]
 #[path = "ast_tests.rs"]
 mod tests;
+
+/// The positions each element of a tuple target or tuple/sequence pattern
+/// covers when the value has `arity` positions. At most one element is a
+/// rest element; it covers every position the fixed elements leave, which
+/// may be none. Returns `None` when the fixed elements do not fit: more
+/// fixed elements than positions, or a count mismatch without a rest.
+pub fn rest_element_ranges(is_rest: &[bool], arity: usize) -> Option<Vec<std::ops::Range<usize>>> {
+    let fixed = is_rest.iter().filter(|rest| !**rest).count();
+    let has_rest = is_rest.iter().any(|rest| *rest);
+    if fixed > arity || (!has_rest && fixed != arity) {
+        return None;
+    }
+    let rest_width = arity - fixed;
+    let mut start = 0;
+    Some(
+        is_rest
+            .iter()
+            .map(|rest| {
+                let width = if *rest { rest_width } else { 1 };
+                let range = start..start + width;
+                start += width;
+                range
+            })
+            .collect(),
+    )
+}
+
+impl BindingTarget {
+    pub fn is_rest(&self) -> bool {
+        matches!(self, Self::Rest { .. })
+    }
+}
+
+impl Pattern {
+    pub fn is_rest(&self) -> bool {
+        matches!(self, Self::Rest(_))
+    }
+}

@@ -1,0 +1,5 @@
+error[AU2041]: a tuple target may contain only one `*` rest element
+ --> crates/aura-compiler/tests/fixtures/parse-fail/pattern_rest_twice.au:2:12
+  |
+2 |     a, *b, *c = (1, 2, 3)
+  |            ^

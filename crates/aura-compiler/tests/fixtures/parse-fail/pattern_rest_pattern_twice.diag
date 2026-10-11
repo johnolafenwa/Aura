@@ -1,0 +1,5 @@
+error[AU2041]: a tuple or sequence pattern may contain only one `*` rest element
+ --> crates/aura-compiler/tests/fixtures/parse-fail/pattern_rest_pattern_twice.au:3:22
+  |
+3 |         case (a, *b, *c):
+  |                      ^

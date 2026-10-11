@@ -1,0 +1,7 @@
+enum Wrap:
+    One(int64)
+
+def main():
+    match Wrap.One(1):
+        case Wrap.One(*items):
+            print(1)

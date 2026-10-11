@@ -1,0 +1,8 @@
+class Point:
+    x: int64
+
+def main():
+    mut point = Point(x=1)
+    match mut point:
+        case Point(x=x):
+            print(x)

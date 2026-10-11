@@ -1,0 +1,15 @@
+class Point:
+    x: int64
+
+class Other:
+    x: int64
+
+def show(value: Point | None):
+    match value:
+        case Other(x=0):
+            print(0)
+        case _:
+            pass
+
+def main():
+    show(None)

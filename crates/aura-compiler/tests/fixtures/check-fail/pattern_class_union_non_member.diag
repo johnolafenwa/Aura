@@ -1,0 +1,5 @@
+error[AU2040]: class pattern `Other` is not a member of `Point | None`
+ --> crates/aura-compiler/tests/fixtures/check-fail/pattern_class_union_non_member.au:9:14
+  |
+9 |         case Other(x=0):
+  |              ^
