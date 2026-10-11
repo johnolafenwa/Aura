@@ -26,15 +26,18 @@ The lexer produces two kinds of tokens used here:
 - Lexical tokens: `IDENT`, `INTEGER`, `FLOAT`, `DURATION`, `STRING`,
   `FSTRING`, and `BOOLEAN`, described below.
 
-A comma-separated source list accepts a trailing comma only when its
-production explicitly adds one. The singleton tuple forms `(value,)`, `(T,)`,
-and `(pattern,)` require their one comma. Multi-element tuples do not accept a
+Every comma-separated list that a production closes with `)`, `]`, or `}`
+accepts one optional `","` before that closing delimiter. The productions
+leave this trailing comma out for brevity. It never changes meaning. The
+singleton tuple forms `(value,)`, `(T,)`, and `(pattern,)` require their one
+comma, and `(value)` stays grouping. A list without a closing delimiter, such
+as an unparenthesized unpack target or import list, does not accept a
 trailing comma.
 
 `NEWLINE` in the productions means a logical newline. A physical newline
 suppressed inside an open `(`, `[`, or `{` never reaches this grammar.
 Delimiter continuation changes token formation, not the expression
-productions. It does not add a trailing comma to any list form.
+productions.
 
 ## Lexical Grammar
 
@@ -239,8 +242,10 @@ module-constant
 
 import-declaration
     = "import", identifier-path, [ "as", import-alias ], NEWLINE
-    | "from", identifier-path, "import",
-      import-name, { ",", import-name }, NEWLINE ;
+    | "from", identifier-path, "import", import-names, NEWLINE ;
+
+import-names = import-name, { ",", import-name }
+             | "(", import-name, { ",", import-name }, ")" ;
 
 import-name  = identifier, [ "as", import-alias ] ;
 import-alias = IDENT ;
@@ -267,8 +272,9 @@ written local alias. One from-import may mix direct and aliased names.
 Aliasing does not change the target module's identity, visibility, type
 identity, or package resolution path.
 
-Wildcard imports, relative-dot imports, parenthesized import lists, and
-trailing import commas are not part of the grammar.
+A parenthesized import list may span physical lines and may end with a
+trailing comma. Wildcard imports and relative-dot imports are not part of the
+grammar.
 
 ## Items
 
@@ -410,11 +416,11 @@ There is no `?` type suffix. An optional type is written as the union
 ordinary AU1101 parse error.
 
 Type lists and type-parameter lists are nonempty when brackets are present.
-They do not accept trailing commas.
+They accept one trailing comma.
 
 - `(T,)` is a singleton tuple type.
 - `(T)` is a grouped type that denotes `T` itself. It exists for precedence.
-- `()` and a trailing comma on a multi-element tuple type are rejected.
+- `()` is rejected.
 
 The grammar places `indirect` before any type primary. Statically, it is valid
 only on a complete named type reference where the recursive-field rules
@@ -564,8 +570,8 @@ annotation names one receiver or ordinary parameter as its origin. Static
 semantics validates the view's kind, provenance, and caller-place
 requirements.
 
-Parameter lists, calls, and return annotations do not accept trailing commas.
-Static checking also restricts duplicate names, default placement and
+Parameter lists and calls accept one trailing comma before the `)`. Static
+checking also restricts duplicate names, default placement and
 availability, and mutable task targets.
 
 ## Traits And Implementations
@@ -1061,15 +1067,15 @@ infer its result from the body. The colon introduces one expression, not a
 suite.
 
 Lambda parameters do not accept annotations, defaults, generics, or a trailing
-comma. A capture list is exhaustive and nonempty. Each entry names an outer
+comma. A capture list is exhaustive and nonempty, and may end with a trailing
+comma. Each entry names an outer
 local place and requests shared, mutable, or by-value owned capture.
 
 ### Tuples, Sets, And Dictionaries
 
 `(value)` is grouping and `(value,)` is a singleton tuple. Tuple value
 expressions require parentheses. An unparenthesized comma is accepted only in
-an unpack target. `()` and a trailing comma on a multi-element tuple are
-rejected.
+an unpack target. `()` is rejected.
 
 A nonempty brace literal is a dictionary when its first element is followed by
 `:`, and a set otherwise. `{}` is an empty dictionary. An empty set uses the
@@ -1183,8 +1189,7 @@ The grammar intentionally excludes:
 - backslash line continuation
 - multiline f-strings
 - local item declarations, decorators, and attributes
-- wildcard, relative-dot, and parenthesized import syntax
-- ordinary trailing commas other than the required singleton-tuple comma
+- wildcard and relative-dot import syntax
 - collection, range, rest, and class patterns
 - call-site capability annotations
 - exception statements, `raise`, and `yield`

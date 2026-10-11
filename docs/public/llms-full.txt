@@ -3439,7 +3439,7 @@ lambda-parameter
 
 - A lambda is the lowest-precedence expression form.
 - The body is exactly one expression. The colon does not introduce an indented suite.
-- Parameter lists do not accept types, defaults, or a trailing comma.
+- Parameter lists do not accept types, defaults, or a trailing comma. A capture list may end with a trailing comma.
 - Zero parameters use `lambda: expression`.
 - A lambda may appear anywhere an expression is accepted, subject to the contextual typing rule below.
 - There is no arrow spelling, statement body, `async` form, or nested `def`.
@@ -5756,7 +5756,7 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 - Physical newlines continue a logical line only while `(`, `[`, or `{` remains open. Continuation indentation is visual, and delimiter kinds must match.
 - Backslash continuation is not implemented.
 - Ordinary, raw, and f-strings are single-line. Triple-quoted ordinary strings may span physical lines.
-- Source lists do not accept trailing commas. The one exception is the required comma in singleton tuple values, types, targets, and patterns. Multi-element tuples reject a trailing comma.
+- A trailing comma needs a closing `)`, `]`, or `}`. Unparenthesized unpack targets, unparenthesized import lists, and lambda parameter lists reject it.
 - The parser's nesting, postfix-chain, and binary-chain guards allow 128 operations. Deeper input is rejected with a diagnostic.
 - Statement match arms cannot be inline. An expression match arm may put its expression on the same line after `case pattern:` or use an indented expression body.
 - A `for` loop binding cannot shadow a name already visible in the same scope.
@@ -5793,7 +5793,7 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 ### Tuples
 
 - Tuples have fixed structural types, recursive unpack targets and patterns, copy-only constant indexing, and non-consuming recursive `==` and `!=` for operands of the same static tuple type.
-- There is no empty tuple, multi-element trailing tuple comma, tuple iteration, tuple method, tuple ordering, named or rest unpacking, mutable tuple-target writeback, dynamic or negative tuple indexing, or tuple-to-collection conversion.
+- There is no empty tuple, tuple iteration, tuple method, tuple ordering, named or rest unpacking, mutable tuple-target writeback, dynamic or negative tuple indexing, or tuple-to-collection conversion.
 - To take ownership of a non-Copy element, unpack the tuple.
 
 ### Views
@@ -7408,7 +7408,7 @@ Tuple patterns use `(left, right)` or the singleton form `(value,)`, and may nes
             print(left + right)
             print(flag)
 
-The tuple arity and recursive shape must match exactly. Empty tuple patterns, trailing commas after several elements, and rest or star patterns are rejected.
+The tuple arity and recursive shape must match exactly. A trailing comma is optional. Empty tuple patterns and rest or star patterns are rejected.
 
 Each pattern binding is local to its arm and cannot shadow a name already visible there. `_` never introduces a binding. See [Names And Scopes](/manual/names-and-scopes#pattern-scope).
 
@@ -8400,7 +8400,7 @@ evaluation order. The standard style indents continued content by one level.
 
 The other line rules still hold:
 
-- A trailing comma is invalid.
+- A trailing comma before the closing delimiter is optional.
 - A newline outside an open delimiter ends the logical line.
 - A backslash does not continue a line.
 - Ordinary strings and f-strings stay on one line.
@@ -8885,8 +8885,8 @@ follows:
 5. Every omitted parameter must have a default.
 6. Each argument must have the substituted parameter type.
 
-Arguments do not accept a trailing comma. A call may span physical lines while
-its `(` is open.
+Arguments accept one trailing comma before the `)`. A call may span physical
+lines while its `(` is open.
 
 Evaluation follows these rules:
 
@@ -8938,7 +8938,7 @@ Otherwise the brackets are indexing. So `Box[int32](...)` specializes,
 `Result[int32, str].Ok(...)` specializes, and `values[index]` indexes. A bare
 `Box[int32]` is not a general first-class specialized-type value.
 
-Type arguments do not accept a trailing comma.
+Type arguments accept one trailing comma before the `]`.
 [Static Semantics](/manual/static-semantics#contextual-inference) defines
 generic inference, arity, and trait-bound rules.
 
@@ -9129,7 +9129,7 @@ seen = set[int32]()
 `{}` is a dictionary literal. An empty set uses `set[T]()`.
 
 Collection literals may span physical lines while their `[` or `{` is open.
-They do not accept trailing commas.
+They accept one trailing comma before the closing delimiter.
 
 - Lists and sets evaluate elements in source order.
 - Dictionaries evaluate entries in source order, each key before its value.
@@ -9419,8 +9419,6 @@ Aura 0.3 expressions do not include:
 - assignment expressions
 - call-site capability annotations
 - non-numeric casts
-- ordinary trailing commas. The required singleton-tuple comma is the one
-  exception.
 
 Lambdas are expression-bodied and contextually typed. There are no
 statement-bodied lambdas and no implicitly reference-capturing lambdas.
@@ -9550,8 +9548,7 @@ and language-server diagnostics are produced before a backend is selected.
 - The parser caps expression nesting and operator chains at 128.
 - Physical lines continue only while a source delimiter is open. Backslashes
   and multiline string or f-string literals do not continue them.
-- Ordinary trailing commas are unavailable. `(value,)` is the required
-  singleton tuple spelling.
+- `(value,)` is the singleton tuple spelling. `(value)` is grouping.
 - Collection and string resource caps are documented on their feature pages.
 - Comprehensions are eager and have no `mut` or `own` source form. They do not
   provide early exit, lazy resumption, or a user-defined iterable protocol.
@@ -10213,7 +10210,7 @@ Binding is deterministic:
 5. every omitted parameter must have a default
 6. each bound argument must have the parameter's exact substituted type
 
-A positional argument cannot follow a named argument. Parameter and argument lists may span physical lines while their parentheses are open. They do not accept trailing commas in Aura 0.3.
+A positional argument cannot follow a named argument. Parameter and argument lists may span physical lines while their parentheses are open. Each list accepts one trailing comma before its `)`.
 
 ### Keyword-Only Parameters
 
@@ -11265,15 +11262,18 @@ The lexer produces two kinds of tokens used here:
 - Lexical tokens: `IDENT`, `INTEGER`, `FLOAT`, `DURATION`, `STRING`,
   `FSTRING`, and `BOOLEAN`, described below.
 
-A comma-separated source list accepts a trailing comma only when its
-production explicitly adds one. The singleton tuple forms `(value,)`, `(T,)`,
-and `(pattern,)` require their one comma. Multi-element tuples do not accept a
+Every comma-separated list that a production closes with `)`, `]`, or `}`
+accepts one optional `","` before that closing delimiter. The productions
+leave this trailing comma out for brevity. It never changes meaning. The
+singleton tuple forms `(value,)`, `(T,)`, and `(pattern,)` require their one
+comma, and `(value)` stays grouping. A list without a closing delimiter, such
+as an unparenthesized unpack target or import list, does not accept a
 trailing comma.
 
 `NEWLINE` in the productions means a logical newline. A physical newline
 suppressed inside an open `(`, `[`, or `{` never reaches this grammar.
 Delimiter continuation changes token formation, not the expression
-productions. It does not add a trailing comma to any list form.
+productions.
 
 ## Lexical Grammar
 
@@ -11467,7 +11467,9 @@ There is no semicolon, assignment expression, unary plus, or lambda arrow.
 ## Modules And Imports
 
 ```ebnf
-module = { module-element }, EOF ;
+module = [ docstring ], { module-element }, EOF ;
+
+docstring = TRIPLE_STRING, NEWLINE ;
 
 module-element = import-declaration | module-constant | item | statement ;
 
@@ -11476,8 +11478,10 @@ module-constant
 
 import-declaration
     = "import", identifier-path, [ "as", import-alias ], NEWLINE
-    | "from", identifier-path, "import",
-      import-name, { ",", import-name }, NEWLINE ;
+    | "from", identifier-path, "import", import-names, NEWLINE ;
+
+import-names = import-name, { ",", import-name }
+             | "(", import-name, { ",", import-name }, ")" ;
 
 import-name  = identifier, [ "as", import-alias ] ;
 import-alias = IDENT ;
@@ -11504,8 +11508,9 @@ written local alias. One from-import may mix direct and aliased names.
 Aliasing does not change the target module's identity, visibility, type
 identity, or package resolution path.
 
-Wildcard imports, relative-dot imports, parenthesized import lists, and
-trailing import commas are not part of the grammar.
+A parenthesized import list may span physical lines and may end with a
+trailing comma. Wildcard imports and relative-dot imports are not part of the
+grammar.
 
 ## Items
 
@@ -11647,11 +11652,11 @@ There is no `?` type suffix. An optional type is written as the union
 ordinary AU1101 parse error.
 
 Type lists and type-parameter lists are nonempty when brackets are present.
-They do not accept trailing commas.
+They accept one trailing comma.
 
 - `(T,)` is a singleton tuple type.
 - `(T)` is a grouped type that denotes `T` itself. It exists for precedence.
-- `()` and a trailing comma on a multi-element tuple type are rejected.
+- `()` is rejected.
 
 The grammar places `indirect` before any type primary. Statically, it is valid
 only on a complete named type reference where the recursive-field rules
@@ -11690,7 +11695,8 @@ class-declaration
     = [ "copy" ], "class", identifier,
       [ bounded-type-parameters ],
       ":", NEWLINE, INDENT,
-      class-member, { class-member },
+      ( docstring, { class-member }
+      | class-member, { class-member } ),
       DEDENT ;
 
 class-member
@@ -11700,8 +11706,13 @@ class-member
 
 field-declaration
     = identifier, ":", type,
-      [ "=", expression ], NEWLINE ;
+      [ "=", expression ], NEWLINE,
+      [ docstring ] ;
 ```
+
+`TRIPLE_STRING` is a plain triple-quoted string token. A field docstring must
+start on the line directly after the field. A class body whose only entry is a
+docstring is an empty class, the same as `pass`.
 
 `copy` is contextual and is recognized only immediately before `class`.
 Fields and methods may be interleaved. `pass` permits an otherwise empty class
@@ -11713,6 +11724,7 @@ body. A comment-only body is not a suite.
 enum-declaration
     = "enum", identifier, [ bounded-type-parameters ],
       ":", NEWLINE, INDENT,
+      [ docstring ],
       enum-variant, { enum-variant },
       DEDENT ;
 
@@ -11794,8 +11806,8 @@ annotation names one receiver or ordinary parameter as its origin. Static
 semantics validates the view's kind, provenance, and caller-place
 requirements.
 
-Parameter lists, calls, and return annotations do not accept trailing commas.
-Static checking also restricts duplicate names, default placement and
+Parameter lists and calls accept one trailing comma before the `)`. Static
+checking also restricts duplicate names, default placement and
 availability, and mutable task targets.
 
 ## Traits And Implementations
@@ -11805,7 +11817,8 @@ trait-declaration
     = "trait", identifier, [ plain-type-parameters ], ":",
       [ type, { ",", type }, ":" ],
       NEWLINE, INDENT,
-      trait-member, { trait-member },
+      ( docstring, { trait-member }
+      | trait-member, { trait-member } ),
       DEDENT ;
 
 trait-member
@@ -11816,7 +11829,9 @@ trait-method
     = "def", identifier, [ bounded-type-parameters ],
       "(", [ method-parameter-list ], ")",
       [ return-annotation ],
-      ( NEWLINE | ":", NEWLINE, suite ) ;
+      ( NEWLINE | ":", NEWLINE, docstring-suite | ":", NEWLINE, suite ) ;
+
+docstring-suite = INDENT, docstring, DEDENT ;
 
 impl-declaration
     = "impl", [ bounded-type-parameters ],
@@ -11836,15 +11851,22 @@ expressed through supertraits or method constraints, not inline in the trait
 parameter list.
 
 A trait method is either signature-only, with a newline immediately after the
-return annotation, or provides one default body after `:`.
+return annotation or a docstring-only body, or provides one default body after
+`:`.
 
 The second colon in a trait header separates an optional comma-separated
 supertrait list from the body, for example `trait Child: Parent, Named:`.
 
 ## Suites And Statements
 
+A docstring in a suite is metadata only on a function or method body. In other
+suites, a triple-quoted string is an ordinary expression statement.
+[Docstrings And API Docs](/manual/docstrings) has the documentation rules.
+
 ```ebnf
-suite = INDENT, statement, { statement }, DEDENT ;
+suite
+    = INDENT, statement, { statement }, DEDENT
+    | INDENT, docstring, { statement }, DEDENT ;
 
 statement
     = assignment-statement
@@ -12281,15 +12303,15 @@ infer its result from the body. The colon introduces one expression, not a
 suite.
 
 Lambda parameters do not accept annotations, defaults, generics, or a trailing
-comma. A capture list is exhaustive and nonempty. Each entry names an outer
+comma. A capture list is exhaustive and nonempty, and may end with a trailing
+comma. Each entry names an outer
 local place and requests shared, mutable, or by-value owned capture.
 
 ### Tuples, Sets, And Dictionaries
 
 `(value)` is grouping and `(value,)` is a singleton tuple. Tuple value
 expressions require parentheses. An unparenthesized comma is accepted only in
-an unpack target. `()` and a trailing comma on a multi-element tuple are
-rejected.
+an unpack target. `()` is rejected.
 
 A nonempty brace literal is a dictionary when its first element is followed by
 `:`, and a set otherwise. `{}` is an empty dictionary. An empty set uses the
@@ -12403,8 +12425,7 @@ The grammar intentionally excludes:
 - backslash line continuation
 - multiline f-strings
 - local item declarations, decorators, and attributes
-- wildcard, relative-dot, and parenthesized import syntax
-- ordinary trailing commas other than the required singleton-tuple comma
+- wildcard and relative-dot import syntax
 - collection, range, rest, and class patterns
 - call-site capability annotations
 - exception statements, `raise`, and `yield`
@@ -13349,9 +13370,9 @@ def main():
     print(result)
 ```
 
-This program prints `42`. It has no trailing comma after `right`, `22`, or
-`values[1]`, because newline continuation does not change the grammar of
-comma-separated lists.
+This program prints `42`. Newline continuation does not change the grammar of
+comma-separated lists. A trailing comma after `right`, `22`, or `values[1]`
+is optional, as in any bracketed list.
 
 Leading spaces on a continuation line are formatting, not block indentation:
 
@@ -13397,11 +13418,16 @@ Aura has none of these:
 - assignment expressions
 - a lambda arrow, because lambdas use `lambda parameters: expression`
 
-Comma-separated lists do not accept a trailing comma. This applies to
-arguments, parameters, imports, type arguments, generic parameters, enum
-payloads, collection elements, and trait lists. Tuples are the one exception.
-The singleton tuple value, type, target, and pattern forms require one comma.
-Multi-element tuples reject a trailing comma.
+A comma-separated list closed by `)`, `]`, or `}` accepts one trailing comma
+before the closing delimiter. This applies to arguments, parameters,
+parenthesized imports, type arguments, generic parameters, enum payloads,
+collection elements, tuples, patterns, and capture lists. A trailing comma
+never changes meaning. The one special case is `(value,)`, which is a
+singleton tuple, while `(value)` is grouping.
+
+A list without a closing delimiter rejects a trailing comma. This covers an
+unparenthesized tuple target such as `left, right, = pair` and an
+unparenthesized import list. Two commas in a row are always rejected.
 
 ## Integer Literals
 
@@ -13710,7 +13736,7 @@ These lexical limits apply:
 - Source is UTF-8.
 - Physical tabs are rejected outside triple-quoted string content.
 - Continuation requires an unmatched source delimiter.
-- Ordinary lists reject trailing commas.
+- Trailing commas need a closing delimiter.
 - Backslash continuation and multiline f-strings are unavailable.
 - This chapter and [Current Limits](/manual/current-limits) fix the literal
   magnitude and parser-complexity caps.
@@ -13732,7 +13758,6 @@ These forms are unavailable:
 - single-quoted f-strings
 - block comments
 - semicolons
-- ordinary trailing commas, other than the required singleton-tuple comma
 - backslash continuation
 - multiline f-string literals
 
@@ -14008,6 +14033,15 @@ Each from-import entry may take a local alias. Direct and aliased entries can ap
 
 ```aura fragment
 from tools.text import parse as parse_text, ResultRow
+```
+
+Wrap a long from-import list in parentheses. The list may span lines and may end with a trailing comma:
+
+```aura fragment
+from tools.text import (
+    parse as parse_text,
+    ResultRow,
+)
 ```
 
 **Aliases.** An alias occupies the same module-level namespace as items, module constants, and other imports. The compiler rejects:
@@ -16041,7 +16075,8 @@ Source imports have two forms, specified in [Grammar](/manual/grammar#modules-an
 - `import dotted.module [as local]`
 - `from dotted.module import name [as local]`
 
-A from-import may name several direct or aliased names. Import paths are
+A from-import may name several direct or aliased names. Wrap the names in
+parentheses to spread them across lines. Import paths are
 absolute within the resolved local or dependency namespace. The resolver uses
 the path before `as`. The alias is a local binding and is never read as a
 package, directory, or dependency key. Relative imports, wildcard imports, and
@@ -17701,7 +17736,7 @@ from agents.telemetry import record as record_event, Event
 
 Aliases are static local names for resolved modules and declarations. They do not change visibility, nominal identity, trait implementations, initialization storage, or the package path used for resolution.
 
-Aura does not accept wildcard imports, relative-dot imports, parenthesized import lists, or trailing import commas. [Packages](/manual/names-and-scopes#imports) defines import resolution and visibility.
+A from-import list may be wrapped in parentheses, span lines, and end with a trailing comma. Aura does not accept wildcard imports or relative-dot imports. [Packages](/manual/names-and-scopes#imports) defines import resolution and visibility.
 
 An immutable binding at module level is a module constant:
 
@@ -18587,7 +18622,7 @@ Tuple values are always parenthesized:
 - `(value)` is grouping.
 - `(value,)` is a singleton tuple.
 - `()` is not a tuple value.
-- A multi-element tuple has no trailing comma.
+- A multi-element tuple may end with a trailing comma: `(1, 2,)` is `(1, 2)`.
 
 ```aura
 def main():
@@ -18738,7 +18773,6 @@ Maintained parity fixtures require both backends to produce the same output and 
 Aura 0.3 does not have these tuple features:
 
 - an empty tuple
-- a trailing comma on a multi-element tuple
 - tuple iteration
 - tuple methods
 - tuple ordering
@@ -21660,6 +21694,15 @@ A from-import may mix direct and aliased entries:
 
 ```aura fragment
 from helpers.math import double as twice, empty
+```
+
+Wrap a long list in parentheses. It may span lines and end with a trailing comma:
+
+```aura fragment
+from helpers.math import (
+    double as twice,
+    empty,
+)
 ```
 
 Both import styles keep the full callable contract. Suppose a public generic
@@ -28102,8 +28145,8 @@ position, list element, or dictionary entry in place, use a `view` binding.
 A newline continues the expression while `(`, `[`, or `{` is still open.
 
 - Continuation indentation is visual and does not open a block.
-- Ordinary comma-separated forms still reject trailing commas. A singleton
-  tuple needs its one comma.
+- A bracketed comma-separated list may end with a trailing comma. A
+  singleton tuple needs its one comma.
 - A backslash or physical newline inside an ordinary string or f-string does
   not continue the source.
 
@@ -29335,8 +29378,17 @@ from helpers.counter import Counter as ReadableCounter
 counter = ReadableCounter(value=2)
 ```
 
-One from-import may mix plain and aliased entries. An alias changes only the
-local spelling. Visibility, type identity, trait implementations, and module
+One from-import may mix plain and aliased entries. Put a long list in
+parentheses to give each entry its own line:
+
+```aura fragment
+from helpers.counter import (
+    Counter as ReadableCounter,
+    make_counter,
+)
+```
+
+An alias changes only the local spelling. Visibility, type identity, trait implementations, and module
 resolution all still use the original declaration.
 
 ## `public` Visibility
@@ -30883,16 +30935,18 @@ value = left + \        # invalid Aura
 A comma or operator at the end of a line does not continue it on its own.
 Keep a delimiter open instead.
 
-A list with more than one element still rejects a trailing comma. Write this:
+A list inside a delimiter may end with a trailing comma. This keeps each line
+the same shape, so adding an element later changes one line:
 
 ```aura check-pass
 values = [
     10,
-    20
+    20,
 ]
 ```
 
-Do not put a comma after `20`.
+The comma after `20` is optional. A trailing comma needs the closing
+delimiter: `left, right, = pair` is rejected.
 
 Ordinary strings and f-strings stay on one line. To split a long calculation,
 break it across delimiters outside the string. Do not put a physical newline
@@ -30930,8 +30984,8 @@ only = (true,)
 ```
 
 `(value)` is still grouping, so a one-element tuple needs its comma:
-`(value,)`. Aura has no empty tuple. A tuple with two or more elements does
-not take a trailing comma.
+`(value,)`. Aura has no empty tuple. A tuple with two or more elements may
+end with a trailing comma, and `(1, 2,)` is the same tuple as `(1, 2)`.
 
 Tuple types look like tuple values:
 
@@ -31298,9 +31352,10 @@ The tutorial set covers the topics below.
 - the loop forms `for ... in enumerate(seq):` and
   `for ... in zip(first, second):`. `zip` stops at the shorter sequence.
 - newline continuation inside `()`, `[]`, and `{}`. This covers multiline
-  signatures, calls, grouping, indexing, and collection literals. Ordinary
-  trailing commas, backslash continuation, and multiline f-strings are not
-  available. A singleton tuple still needs its one comma.
+  signatures, calls, grouping, indexing, and collection literals. A trailing
+  comma before the closing delimiter is optional. Backslash continuation and
+  multiline f-strings are not available. A singleton tuple still needs its
+  one comma.
 
 ### Functions And Closures
 

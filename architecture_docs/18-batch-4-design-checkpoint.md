@@ -53,8 +53,7 @@ accepts one optional trailing comma before the closing delimiter. This
 covers:
 
 - call arguments, including keyword arguments
-- parameter lists of functions, methods, trait methods, extern functions, and
-  lambdas written in parentheses
+- parameter lists of functions, methods, trait methods, and extern functions
 - list, set, and dictionary displays, and comprehension-free collection
   literals
 - tuple values, tuple types, tuple targets, and tuple patterns
@@ -62,7 +61,7 @@ covers:
 - function-type parameter lists
 - enum variant payload declarations and variant payload patterns
 - trait and implementation type-argument lists
-- subscripts with several indices
+- subscripts with several indices, such as `grid[0, 1,]`
 - lambda capture lists
 - parenthesized import lists
 
@@ -71,7 +70,9 @@ exists: inside parentheses, `(x,)` is a one-element tuple and `(x)` is
 grouping. `(x, y,)` is the same two-element tuple as `(x, y)`.
 
 A list that contains only a comma, such as `f(,)` or `[,]`, is rejected.
-Two commas in a row are rejected. A trailing comma is not accepted in a list
+Two commas in a row are rejected. A one-index subscript keeps its meaning, so
+`grid[0,]` is rejected rather than read as a tuple key. Lambda parameter
+lists have no closing delimiter and keep rejecting a trailing comma. A trailing comma is not accepted in a list
 that has no closing delimiter, such as an unparenthesized tuple
 `a, b, = pair`, an unparenthesized `return a, b,`, or an unparenthesized
 import list. The existing required comma of the unparenthesized one-element

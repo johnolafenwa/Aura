@@ -1,0 +1,14 @@
+from helpers.counter import (
+    Counter as ReadableCounter,
+)
+from helpers.math import (
+    double,
+    empty,
+)
+
+def main() -> int32:
+    counter = ReadableCounter(value=double(value=21,),)
+    print(counter.read())
+    missing: int32 | None = empty[int32]()
+    print(missing)
+    return 0

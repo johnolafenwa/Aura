@@ -1,0 +1,86 @@
+from math import (
+    pi,
+    floor as round_down,
+)
+
+
+enum Shape:
+    Circle(radius: float64,)
+    Pair(int64, int64,)
+
+
+class Box[T,]:
+    value: T
+
+
+trait Describe[T,]:
+    def describe(self) -> str
+
+
+impl Describe[int64,] for Box[int64,]:
+    def describe(self) -> str:
+        return f"box of {self.value}"
+
+
+def add(
+    left: int64,
+    right: int64,
+) -> int64:
+    return left + right
+
+
+def scaled(
+    value: int64,
+    *,
+    factor: int64 = 2,
+) -> int64:
+    return value * factor
+
+
+def first_of(pair: own (int64, str,),) -> int64:
+    (number, _,) = pair
+    return number
+
+
+def main():
+    numbers = [
+        1,
+        2,
+        3,
+    ]
+    ages: dict[str, int64,] = {"ada": 36, "alan": 41,}
+    unique = {7, 8,}
+    pair = (1, "one",)
+    single = (9,)
+    print(numbers)
+    print(ages)
+    print(unique)
+    print(single)
+    print(add(1, 2,))
+    print(scaled(4, factor=3,))
+    print(first_of((5, "five",),))
+    (left, right,) = (10, "ten",)
+    print(left)
+    print(right)
+    for (key, value,) in [(1, 2,), (3, 4,),]:
+        print(key + value)
+    match pair:
+        case (1, name,):
+            print(name)
+        case _:
+            print("other")
+    shape = Shape.Pair(3, 4,)
+    match shape:
+        case Shape.Pair(x, y,):
+            print(x + y)
+        case _:
+            pass
+    box = Box[int64,](value=6)
+    print(box.describe())
+    grid = {(0, 1,): "a"}
+    print(grid[0, 1,])
+    combine: def(left: int64, right: int64,) -> int64 = add
+    print(combine(20, 22,))
+    count = lambda [own numbers,]: len(numbers)
+    print(count())
+    print(round_down(pi,))

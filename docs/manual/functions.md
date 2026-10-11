@@ -110,7 +110,7 @@ Binding is deterministic:
 5. every omitted parameter must have a default
 6. each bound argument must have the parameter's exact substituted type
 
-A positional argument cannot follow a named argument. Parameter and argument lists may span physical lines while their parentheses are open. They do not accept trailing commas in Aura 0.3.
+A positional argument cannot follow a named argument. Parameter and argument lists may span physical lines while their parentheses are open. Each list accepts one trailing comma before its `)`.
 
 ### Keyword-Only Parameters
 

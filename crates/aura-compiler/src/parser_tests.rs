@@ -6,6 +6,24 @@ fn parse_item_from(source: &str) -> Result<Item> {
     parser.parse_item()
 }
 
+/// Serializes a syntax tree without its source positions, so two spellings
+/// that differ only in layout or trailing commas compare equal.
+fn shape_of(value: &impl serde::Serialize) -> serde_json::Value {
+    fn strip(value: &mut serde_json::Value) {
+        match value {
+            serde_json::Value::Object(map) => {
+                map.retain(|key, _| !key.ends_with("span"));
+                map.values_mut().for_each(strip);
+            }
+            serde_json::Value::Array(items) => items.iter_mut().for_each(strip),
+            _ => {}
+        }
+    }
+    let mut value = serde_json::to_value(value).expect("syntax trees serialize");
+    strip(&mut value);
+    value
+}
+
 fn parse_stmt_from(source: &str) -> Result<Stmt> {
     let tokens = lex(source)?;
     let mut parser = Parser::new(tokens);
@@ -99,12 +117,19 @@ fn adr0038_parser_rejects_invalid_view_returns_and_capture_lists() {
         parse_expression("lambda [value, value]: value").expect_err("capture names must be unique");
     assert_eq!(duplicate.message, "duplicate lambda capture `value`");
 
-    let trailing = parse_expression("lambda [value,]: value")
-        .expect_err("capture lists reject a trailing comma");
+    let trailing =
+        parse_expression("lambda [value,]: value").expect("capture lists accept a trailing comma");
     assert_eq!(
-        trailing.message,
-        "expected a capture name after `,` in lambda capture list"
+        shape_of(&trailing),
+        shape_of(
+            &parse_expression("lambda [value]: value")
+                .expect("capture list without a trailing comma")
+        )
     );
+
+    let empty_slot = parse_expression("lambda [value,,]: value")
+        .expect_err("a capture list cannot contain an empty slot");
+    assert_eq!(empty_slot.message, "expected identifier");
 }
 
 #[test]
@@ -628,8 +653,18 @@ fn function_type_syntax_requires_an_arrow_and_rejects_indirect() {
     );
 
     let trailing_comma = parse_item_from("def apply(callback: def(int32,) -> bool):\n    pass\n")
-        .expect_err("function type parameter lists must not accept an empty trailing slot");
-    assert_eq!(trailing_comma.message, "expected a function parameter type");
+        .expect("function type parameter lists accept a trailing comma");
+    assert_eq!(
+        shape_of(&trailing_comma),
+        shape_of(
+            &parse_item_from("def apply(callback: def(int32) -> bool):\n    pass\n")
+                .expect("function type without a trailing comma")
+        )
+    );
+
+    let empty_slot = parse_item_from("def apply(callback: def(int32,,) -> bool):\n    pass\n")
+        .expect_err("function type parameter lists must not accept an empty slot");
+    assert_eq!(empty_slot.message, "expected a function parameter type");
 
     let missing_arrow = parse_item_from("def apply(callback: def(int32) bool):\n    pass\n")
         .expect_err("function types must spell their result after an arrow");
@@ -860,9 +895,9 @@ fn tuple_parsing_keeps_container_commas_and_rejects_unsupported_forms() {
         );
     }
 
-    for source in ["()", "(1, 2,)", "(1,)", "(1, 2)"] {
+    for source in ["()", "(1, 2,,)", "(1,)", "(1, 2)", "(1, 2,)"] {
         let parsed = parse_expression(source);
-        if source == "(1,)" || source == "(1, 2)" {
+        if source == "(1,)" || source == "(1, 2)" || source == "(1, 2,)" {
             assert!(parsed.is_ok(), "{source} should be a valid tuple");
         } else {
             let error = parsed.expect_err("unsupported tuple form should fail");
@@ -900,28 +935,16 @@ fn tuple_parsing_keeps_container_commas_and_rejects_unsupported_forms() {
         Pattern::Binding(BindingPattern { ref name, .. }) if name == "name"
     ));
 
-    for (source, expected) in [
-        ("()", "empty tuple patterns are not supported"),
-        (
-            "(left, right,)",
-            "trailing commas are only allowed for singleton tuple patterns",
-        ),
-    ] {
+    for (source, expected) in [("()", "empty tuple patterns are not supported")] {
         let error = parse_pattern_from(source)
             .expect_err("unsupported tuple pattern syntax must produce a teaching diagnostic");
         assert_eq!(error.message, expected);
     }
 
-    for (source, expected) in [
-        (
-            "def invalid(value: ()):\n    pass\n",
-            "empty tuple types are not supported",
-        ),
-        (
-            "def invalid(value: (int32, str,)):\n    pass\n",
-            "trailing commas are only allowed for singleton tuple types",
-        ),
-    ] {
+    for (source, expected) in [(
+        "def invalid(value: ()):\n    pass\n",
+        "empty tuple types are not supported",
+    )] {
         let error = parse_item_from(source)
             .expect_err("unsupported tuple type syntax must produce a teaching diagnostic");
         assert_eq!(error.message, expected);
@@ -933,8 +956,8 @@ fn tuple_parsing_keeps_container_commas_and_rejects_unsupported_forms() {
             "an unparenthesized destructuring target cannot end with a comma; write `(name,)` for a singleton tuple target",
         ),
         (
-            "(left, right,) = pair\n",
-            "trailing commas are only allowed for singleton tuple targets",
+            "left, right, = pair\n",
+            "an unparenthesized destructuring target cannot end with a comma; wrap the targets in parentheses",
         ),
         (
             "((), right) = pair\n",
@@ -3048,13 +3071,16 @@ fn s1_frontend_fstring_format_specs_require_a_real_expression_before_the_colon()
 }
 
 #[test]
-fn s1_frontend_multi_element_tuple_types_reject_a_trailing_comma() {
-    let error = parse_item_from("def accept(value: (int64, str,)):\n    pass\n")
-        .expect_err("only singleton tuple types accept a trailing comma");
-    assert_eq!(error.code, "AU1101");
+fn s1_frontend_multi_element_tuple_types_accept_a_trailing_comma() {
     assert_eq!(
-        error.message,
-        "trailing commas are only allowed for singleton tuple types"
+        shape_of(
+            &parse_item_from("def accept(value: (int64, str,)):\n    pass\n")
+                .expect("a multi-element tuple type accepts a trailing comma")
+        ),
+        shape_of(
+            &parse_item_from("def accept(value: (int64, str)):\n    pass\n")
+                .expect("tuple type without a trailing comma")
+        )
     );
 }
 
@@ -4168,7 +4194,7 @@ fn declaration_parser_reports_the_exact_stage_that_rejected_incomplete_syntax() 
         ("import app.\n", "expected identifier"),
         ("import app extra\n", "expected Newline"),
         ("from app import \n", "expected identifier"),
-        ("from app import one,\n", "expected identifier"),
+        ("from app import one,,\n", "expected identifier"),
         ("from app import one two\n", "expected Newline"),
         ("extern \"C\" opaque nope Handle\n", "expected KwClass"),
         ("extern \"C\" opaque class \n", "expected identifier"),
@@ -4707,4 +4733,142 @@ fn module_documentation_limit_counts_public_documentation_only() {
         .map(|doc| doc.text.as_str())
         .collect::<Vec<_>>();
     assert_eq!(texts, ["m", "c", "x", "pm", "e", "t", "tm", "im"]);
+}
+
+#[test]
+fn batch4_trailing_commas_parse_like_the_list_without_them() {
+    let pairs = [
+        (
+            "from app.tools import (\n    one,\n    two as second,\n)\n",
+            "from app.tools import one, two as second\n",
+        ),
+        ("from app import (one)\n", "from app import one\n"),
+        (
+            "enum Shape:\n    Pair(int64, int64,)\n    Named(width: int64,)\n",
+            "enum Shape:\n    Pair(int64, int64)\n    Named(width: int64)\n",
+        ),
+        (
+            "class Box[T, U,]:\n    value: T\n",
+            "class Box[T, U]:\n    value: T\n",
+        ),
+        (
+            "impl[T: Show,] Render[T,] for Box[T,]:\n    pass\n",
+            "impl[T: Show] Render[T] for Box[T]:\n    pass\n",
+        ),
+        (
+            "class Calc:\n    def add(self, left: int64, *, right: int64 = 1,) -> int64:\n        return left\n",
+            "class Calc:\n    def add(self, left: int64, *, right: int64 = 1) -> int64:\n        return left\n",
+        ),
+        (
+            "class Calc:\n    def touch(mut self,):\n        pass\n",
+            "class Calc:\n    def touch(mut self):\n        pass\n",
+        ),
+        (
+            "class Calc:\n    def take(own self,):\n        pass\n",
+            "class Calc:\n    def take(own self):\n        pass\n",
+        ),
+        ("class Calc:\n    def read(self,):\n        pass\n", "class Calc:\n    def read(self):\n        pass\n"),
+        (
+            "def apply(callback: def(value: int64, *, scale: int64 = ...,) -> int64):\n    pass\n",
+            "def apply(callback: def(value: int64, *, scale: int64 = ...) -> int64):\n    pass\n",
+        ),
+        (
+            "def main():\n    total = add(1, scale=2,)\n",
+            "def main():\n    total = add(1, scale=2)\n",
+        ),
+        (
+            "def main():\n    values = [1, 2,]\n    unique = {1, 2,}\n    ages = {\"a\": 1,}\n",
+            "def main():\n    values = [1, 2]\n    unique = {1, 2}\n    ages = {\"a\": 1}\n",
+        ),
+        (
+            "def main():\n    pair = (1, 2,)\n    (left, right,) = pair\n",
+            "def main():\n    pair = (1, 2)\n    (left, right) = pair\n",
+        ),
+        (
+            "def main():\n    for (left, right,) in pairs:\n        pass\n",
+            "def main():\n    for (left, right) in pairs:\n        pass\n",
+        ),
+        (
+            "def main():\n    match pair:\n        case (left, Shape.Pair(x, y,),):\n            pass\n",
+            "def main():\n    match pair:\n        case (left, Shape.Pair(x, y)):\n            pass\n",
+        ),
+        (
+            "def main():\n    box = Box[int64, str,](value=1)\n    item = grid[0, 1,]\n    grid[0, 1,] = item\n",
+            "def main():\n    box = Box[int64, str](value=1)\n    item = grid[0, 1]\n    grid[0, 1] = item\n",
+        ),
+        (
+            "def main():\n    value: dict[str, (int64, str,),] = {}\n",
+            "def main():\n    value: dict[str, (int64, str)] = {}\n",
+        ),
+        (
+            "def main():\n    count = lambda [own values, mut total,]: total\n",
+            "def main():\n    count = lambda [own values, mut total]: total\n",
+        ),
+        (
+            "def main():\n    values = [\n        1,\n        2,\n    ]\n",
+            "def main():\n    values = [1, 2]\n",
+        ),
+    ];
+    for (with_comma, without_comma) in pairs {
+        let with_comma_module =
+            parse(with_comma).unwrap_or_else(|error| panic!("{with_comma:?}: {error}"));
+        let without_comma_module =
+            parse(without_comma).unwrap_or_else(|error| panic!("{without_comma:?}: {error}"));
+        assert_eq!(
+            shape_of(&with_comma_module),
+            shape_of(&without_comma_module),
+            "{with_comma:?} should parse like {without_comma:?}"
+        );
+    }
+}
+
+#[test]
+fn batch4_trailing_commas_keep_grouping_and_singleton_tuples_distinct() {
+    assert!(matches!(
+        parse_expression("(1)").expect("grouping").kind,
+        ExprKind::Group(_)
+    ));
+    assert!(matches!(
+        parse_expression("(1,)").expect("singleton tuple").kind,
+        ExprKind::Tuple(ref elements) if elements.len() == 1
+    ));
+    assert!(matches!(
+        parse_expression("(1, 2,)").expect("pair").kind,
+        ExprKind::Tuple(ref elements) if elements.len() == 2
+    ));
+}
+
+#[test]
+fn batch4_trailing_commas_reject_empty_slots_and_open_lists() {
+    for (source, expected) in [
+        ("def main():\n    f(,)\n", "unexpected token in expression: Comma"),
+        ("def main():\n    values = [,]\n", "unexpected token in expression: Comma"),
+        ("def main():\n    values = [1,,]\n", "unexpected token in expression: Comma"),
+        ("def main():\n    f(1,,)\n", "unexpected token in expression: Comma"),
+        ("def main():\n    item = grid[0,]\n", "unexpected token in expression: RBracket"),
+        (
+            "from app import one,\n",
+            "an unparenthesized import list cannot end with a comma; wrap the names in parentheses",
+        ),
+        ("from app import ()\n", "expected identifier"),
+        ("from app import (,)\n", "expected identifier"),
+        ("import (app)\n", "expected identifier"),
+        (
+            "def main():\n    left, right, = pair\n",
+            "an unparenthesized destructuring target cannot end with a comma; wrap the targets in parentheses",
+        ),
+        (
+            "def main():\n    for left, right, in pairs:\n        pass\n",
+            "an unparenthesized destructuring target cannot end with a comma; wrap the targets in parentheses",
+        ),
+        ("def add(left: int64,,):\n    pass\n", "expected identifier"),
+    ] {
+        let error = parse(source).expect_err(source);
+        assert_eq!(error.code, "AU1101", "{source}");
+        assert!(
+            error.message.contains(expected),
+            "{source:?} produced {:?}, expected {expected:?}",
+            error.message
+        );
+    }
 }
