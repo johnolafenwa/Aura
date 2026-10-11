@@ -77,14 +77,19 @@ is integrated separately.
   test binaries pass; the library suite passes except
   `package::tests::package_io_helpers_cover_local_error_paths`, which fails
   only because the sandbox runs as root and can write to a `0o500` directory.
-- `cargo test -p aura --test backend_parity -- --ignored`: see the final
-  report for this branch.
+- `cargo test -p aura --test backend_parity -- --ignored`: every fixture
+  through `union_match_*`, including all `manager_*` fixtures, matched on MIR
+  and direct. The run then stopped at a direct link with `No space left on
+  device` on the shared workstation, so the remaining fixtures still need a
+  complete run.
 - `npm run check:doc-examples`: all 739 examples pass.
 - LSP: the new `compiler_bridge` test passes.
 - Coverage gates were not run on this branch: the shared workstation had
   under 6 GiB free while another agent's build used the rest.
 
 ## Follow-Up
+
+- Run the full backend parity gate on a machine with enough free disk.
 
 - Run `npm run coverage:compiler:check` and `npm run coverage:lsp:check`
   after integration with phase 3a.
