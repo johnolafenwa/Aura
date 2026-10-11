@@ -77,19 +77,18 @@ is integrated separately.
   test binaries pass; the library suite passes except
   `package::tests::package_io_helpers_cover_local_error_paths`, which fails
   only because the sandbox runs as root and can write to a `0o500` directory.
-- `cargo test -p aura --test backend_parity -- --ignored`: every fixture
-  through `union_match_*`, including all `manager_*` fixtures, matched on MIR
-  and direct. The run then stopped at a direct link with `No space left on
-  device` on the shared workstation, so the remaining fixtures still need a
-  complete run.
+- `cargo test -p aura --test backend_parity -- --ignored`: every run-pass
+  and run-fail fixture matches on MIR and direct, run on phase 3b combined
+  with phase 3a. The combined run adds `init_with_context_managers`, an
+  initializer that enters two managers in one header.
+- The semantic interface moves to schema 19, because a class with
+  `__enter__` or `__exit__` now means something different under `with`.
 - `npm run check:doc-examples`: all 739 examples pass.
 - LSP: the new `compiler_bridge` test passes.
 - Coverage gates were not run on this branch: the shared workstation had
   under 6 GiB free while another agent's build used the rest.
 
 ## Follow-Up
-
-- Run the full backend parity gate on a machine with enough free disk.
 
 - Run `npm run coverage:compiler:check` and `npm run coverage:lsp:check`
   after integration with phase 3a.

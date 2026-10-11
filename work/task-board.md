@@ -48,7 +48,14 @@ Last updated: 2026-10-12
 
 - Target: typed and generic `with` managers, multiple header items, and
   cleanup under cancellation, per checkpoint section F (Q17-Q22 A) and
-  ADR-0060. Lands after phase 3a on the same branch.
+  ADR-0060. Work note `2026-10-11-batch-3-phase-3b.md`.
+- Done: `__enter__`/`__exit__` managers and `close`-only managers, generic
+  managers, multi-item headers, entry views, `Result` exits, typed MIR
+  cleanup actions with validator refusals, both backends, editor hover,
+  docs, and `examples/resources/context_managers.au`. `AU2017` joins the
+  registry. Semantic interface 19.
+- Verification: full forced backend parity passes on 3a and 3b combined.
+- Remaining: the pull request after phase 3a merges, and hosted CI.
 
 ## Batch 2 completion: union borrowing and phase 2b (complete)
 
