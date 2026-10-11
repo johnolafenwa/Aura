@@ -1,0 +1,5 @@
+error[AU2002]: argument type mismatch for class `Server`: expected `int64`, found `str`
+ --> crates/aura-compiler/tests/fixtures/check-fail/init_argument_type_mismatch.au:8:18
+  |
+8 |     print(Server("eighty").port)
+  |                  ^

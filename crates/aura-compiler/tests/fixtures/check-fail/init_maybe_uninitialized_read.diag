@@ -1,0 +1,6 @@
+error[AU3012]: field `left` may be uninitialized here
+ --> crates/aura-compiler/tests/fixtures/check-fail/init_maybe_uninitialized_read.au:8:27
+  |
+8 |         self.right = self.left
+  |                           ^
+  = help: assign `self.left` on every path that reaches this use

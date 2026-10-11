@@ -1,0 +1,5 @@
+import init_private_support.net
+
+def main():
+    connection = init_private_support.net.Connection(3)
+    print(connection.handle)

@@ -1,0 +1,6 @@
+error[AU2016]: initializer `__init__` cannot declare its own type parameters
+ --> crates/aura-compiler/tests/fixtures/check-fail/init_type_params.au:4:5
+  |
+4 |     def __init__[T](self, port: int64, extra: T):
+  |     ^
+  = help: declare the type parameters on the class; the class call infers them

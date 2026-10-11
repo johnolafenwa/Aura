@@ -1,0 +1,6 @@
+error[AU2016]: initializer must be `def __init__(self, ...)` with a bare `self` receiver
+ --> crates/aura-compiler/tests/fixtures/check-fail/init_mut_self_receiver.au:4:5
+  |
+4 |     def __init__(mut self, port: int64):
+  |     ^
+  = help: write `def __init__(self, ...)`; the class call supplies the object, and the body assigns its fields

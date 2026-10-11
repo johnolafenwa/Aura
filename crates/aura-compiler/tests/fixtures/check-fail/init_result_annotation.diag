@@ -1,0 +1,6 @@
+error[AU2016]: initializer `__init__` cannot declare a result type
+ --> crates/aura-compiler/tests/fixtures/check-fail/init_result_annotation.au:4:40
+  |
+4 |     def __init__(self, port: int64) -> Result[None, str]:
+  |                                        ^
+  = help: the class call returns the new object; use a named factory returning `Result[Class, Error]` for fallible construction

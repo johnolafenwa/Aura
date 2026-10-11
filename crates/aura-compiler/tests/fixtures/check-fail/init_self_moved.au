@@ -1,0 +1,12 @@
+class Token:
+    text: str
+
+    def __init__(self, text: str):
+        self.text = text.clone()
+        keep(self)
+
+def keep(token: own Token):
+    print(token.text)
+
+def main():
+    print(Token("a").text)

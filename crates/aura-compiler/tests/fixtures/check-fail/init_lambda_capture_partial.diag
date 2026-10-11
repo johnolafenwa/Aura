@@ -1,0 +1,6 @@
+error[AU3012]: partially initialized `self` cannot escape
+ --> crates/aura-compiler/tests/fixtures/check-fail/init_lambda_capture_partial.au:7:16
+  |
+7 |         read = lambda: self.value
+  |                ^
+  = help: initialize `step` before using `self` as a whole

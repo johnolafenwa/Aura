@@ -1,0 +1,8 @@
+public class Connection:
+    public handle: int64
+
+    def __init__(self, handle: int64):
+        self.handle = handle
+
+    public def open(handle: int64) -> Connection:
+        return Connection(handle)

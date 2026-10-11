@@ -1,0 +1,11 @@
+class Counter:
+    value: int64
+    step: int64
+
+    def __init__(self):
+        self.value = 1
+        read = lambda: self.value
+        self.step = read()
+
+def main():
+    print(Counter().step)

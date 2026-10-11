@@ -1,0 +1,12 @@
+class Config:
+    mode: str
+    level: int64
+
+    def __init__(self, raw: int64):
+        self.level = raw
+        if raw < 0:
+            return
+        self.mode = "on"
+
+def main():
+    print(Config(1).mode)

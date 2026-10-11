@@ -1,0 +1,27 @@
+def grow(items: mut list[int64], count: int64):
+    mut index = 0
+    while index < count:
+        items.append(index)
+        index += 1
+
+def total(items: list[int64]) -> int64:
+    mut sum = 0
+    for item in items:
+        sum += item
+    return sum
+
+class Stats:
+    items: list[int64]
+    sum: int64
+    name: str
+
+    def __init__(self, count: int64):
+        self.items = []
+        grow(self.items, count)
+        self.sum = total(self.items)
+        view first = self.items
+        self.name = f"stats-{first.len()}"
+
+def main():
+    stats = Stats(4)
+    print(f"{stats.name} {stats.sum} {stats.items}")

@@ -1,0 +1,6 @@
+error[AU3012]: field `left` is used before it is initialized
+ --> crates/aura-compiler/tests/fixtures/check-fail/init_read_before_init.au:6:27
+  |
+6 |         self.right = self.left + value
+  |                           ^
+  = help: assign `self.left` before this use

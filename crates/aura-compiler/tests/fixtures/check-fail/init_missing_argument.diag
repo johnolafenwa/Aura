@@ -1,0 +1,5 @@
+error[AU2004]: class `Server` is missing required argument `host`
+ --> crates/aura-compiler/tests/fixtures/check-fail/init_missing_argument.au:8:11
+  |
+8 |     print(Server().host)
+  |           ^

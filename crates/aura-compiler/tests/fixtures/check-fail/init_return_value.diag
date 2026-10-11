@@ -1,0 +1,6 @@
+error[AU2016]: initializer `__init__` cannot return a value
+ --> crates/aura-compiler/tests/fixtures/check-fail/init_return_value.au:6:16
+  |
+6 |         return None
+  |                ^
+  = help: use a bare `return`; the class call returns the new object

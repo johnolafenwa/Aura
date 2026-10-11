@@ -1,0 +1,23 @@
+def note(label: str, value: int64) -> int64:
+    print(f"argument {label}")
+    return value
+
+def fallback() -> int64:
+    print("parameter default")
+    return 99
+
+class Trace:
+    first: int64
+    second: int64
+    third: int64
+    marker: str = "field default"
+
+    def __init__(self, first: int64, second: int64, third: int64 = fallback()):
+        print(f"body sees {self.marker}")
+        self.first = first
+        self.second = second
+        self.third = third
+
+def main():
+    trace = Trace(second=note("b", 2), first=note("a", 1))
+    print(f"{trace.first} {trace.second} {trace.third}")

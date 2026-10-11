@@ -1,0 +1,12 @@
+class Pair:
+    left: int64
+    right: int64
+
+    def __init__(self, value: int64):
+        if value > 0:
+            self.left = value
+        self.left = 0
+        self.right = 1
+
+def main():
+    print(Pair(1).left)

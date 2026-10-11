@@ -1,0 +1,13 @@
+class Profile:
+    name: str
+
+class User:
+    profile: Profile
+    id: int64
+
+    def __init__(self, id: int64):
+        self.profile.name = "anonymous"
+        self.id = id
+
+def main():
+    print(User(1).id)

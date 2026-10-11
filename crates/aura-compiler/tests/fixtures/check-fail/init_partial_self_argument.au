@@ -1,0 +1,14 @@
+class Buffer:
+    data: list[int64]
+    label: str
+
+    def __init__(self):
+        self.data = []
+        show(self)
+        self.label = "buf"
+
+def show(buffer: Buffer):
+    print(buffer.label)
+
+def main():
+    print(Buffer().label)

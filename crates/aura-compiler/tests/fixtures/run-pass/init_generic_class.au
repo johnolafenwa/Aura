@@ -1,0 +1,28 @@
+class Box[T]:
+    value: T
+    count: int64
+
+    def __init__(self, value: own T, count: int64 = 1):
+        self.value = value
+        self.count = count
+
+    def get(self) -> int64:
+        return self.count
+
+class Pair[K, V]:
+    key: K
+    value: V
+
+    def __init__(self, key: own K, value: own V):
+        self.key = key
+        self.value = value
+
+def main():
+    inferred = Box("text")
+    explicit = Box[int64](value=7, count=3)
+    expected: Box[str] = Box("hint")
+    pair = Pair(1, "one")
+    print(f"{inferred.value} {inferred.get()}")
+    print(f"{explicit.value} {explicit.get()}")
+    print(expected.value)
+    print(f"{pair.key} {pair.value}")

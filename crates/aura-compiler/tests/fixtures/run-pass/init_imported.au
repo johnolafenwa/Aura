@@ -1,0 +1,19 @@
+import init_imported_support.net
+
+def main():
+    endpoint = init_imported_support.net.Endpoint("example.org")
+    print(endpoint.token())
+    tls = init_imported_support.net.Endpoint(host="example.org", port=443)
+    print(tls.token())
+    match init_imported_support.net.Connection.open(7):
+        case Result.Ok(connection):
+            print(connection.label)
+        case Result.Err(error):
+            print(error)
+    match init_imported_support.net.Connection.open(-1):
+        case Result.Ok(connection):
+            print(connection.label)
+        case Result.Err(error):
+            print(error)
+    boxed = init_imported_support.net.Box(5)
+    print(boxed.value)

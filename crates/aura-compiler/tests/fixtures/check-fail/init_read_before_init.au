@@ -1,0 +1,10 @@
+class Pair:
+    left: int64
+    right: int64
+
+    def __init__(self, value: int64):
+        self.right = self.left + value
+        self.left = value
+
+def main():
+    print(Pair(1).left)

@@ -1,0 +1,5 @@
+error[AU2004]: class `Counter` expects 1 argument, found 2
+ --> crates/aura-compiler/tests/fixtures/check-fail/init_field_constructor_argument.au:9:15
+  |
+9 |     counter = Counter(name="hits", value=3)
+  |               ^

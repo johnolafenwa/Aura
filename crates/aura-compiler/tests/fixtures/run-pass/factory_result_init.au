@@ -1,0 +1,28 @@
+class Port:
+    number: int64
+    label: str
+
+    def __init__(self, number: int64):
+        self.number = number
+        self.label = f"port-{number}"
+
+    def parse(text: str) -> Result[Port, str]:
+        number = try parse_number(text)
+        if number < 1 or number > 65535:
+            return Result.Err(f"port {number} is out of range")
+        return Result.Ok(Port(number))
+
+def parse_number(text: str) -> Result[int64, str]:
+    if text == "80":
+        return Result.Ok(80)
+    if text == "70000":
+        return Result.Ok(70000)
+    return Result.Err(f"not a number: {text}")
+
+def main():
+    for text in ["80", "70000", "web"]:
+        match Port.parse(text):
+            case Result.Ok(port):
+                print(port.label)
+            case Result.Err(error):
+                print(error)

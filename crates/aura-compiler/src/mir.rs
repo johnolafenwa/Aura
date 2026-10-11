@@ -2534,7 +2534,9 @@ impl<'a> MirLoanValidationContext<'a> {
     }
 
     fn root_allows_mutable_loan(&self, function: &MirFunction, root: &str) -> bool {
-        if root == "self" {
+        // `self` names the receiver only in a method that has one; an
+        // initializer's `self` is an ordinary owned local.
+        if root == "self" && function.receiver.is_some() {
             return matches!(
                 function.receiver,
                 Some(MirReceiverKind::Value | MirReceiverKind::BorrowMut)
@@ -2547,7 +2549,7 @@ impl<'a> MirLoanValidationContext<'a> {
     }
 
     fn root_allows_owned_take(&self, function: &MirFunction, root: &str) -> bool {
-        if root == "self" {
+        if root == "self" && function.receiver.is_some() {
             return function.receiver == Some(MirReceiverKind::Value);
         }
         if let Some(param) = function.params.iter().find(|param| param.name == root) {
@@ -9115,16 +9117,11 @@ pub fn lower(program: &Program) -> MirModule {
         let mut methods = Vec::new();
         for method in class.methods.values() {
             let qualified_name = mir_class_method_name(program, class, &method.decl.name);
-            functions.extend(lower_function(
+            functions.extend(lower_class_method(
                 program,
                 &qualified_name,
-                &class.module_name,
-                ClosureOwner::ClassMethod {
-                    class_name: class.decl.name.clone(),
-                    method_name: method.decl.name.clone(),
-                },
-                method.decl.receiver,
-                Some(Type::Named(
+                class,
+                Type::Named(
                     class_name.clone(),
                     class
                         .decl
@@ -9133,17 +9130,13 @@ pub fn lower(program: &Program) -> MirModule {
                         .cloned()
                         .map(Type::TypeParam)
                         .collect(),
-                )),
-                &method.decl,
-                &method.signature.params,
-                &method.signature.param_passings,
-                &method.signature.return_type,
-                method.type_param_bounds.clone(),
+                ),
+                method,
             ));
             methods.push(MirMethod {
                 name: method.decl.name.clone(),
                 function_name: qualified_name,
-                receiver: method.decl.receiver.map(lower_receiver_kind),
+                receiver: lower_class_method_receiver(method),
             });
         }
         classes.push(MirClass {
@@ -9425,16 +9418,11 @@ fn push_imported_module_classes_from_namespace(
                 namespace.path, class.decl.name, method.decl.name
             );
             if seen_function_names.insert(qualified_name.clone()) {
-                functions.extend(lower_function(
+                functions.extend(lower_class_method(
                     program,
                     &qualified_name,
-                    &class.module_name,
-                    ClosureOwner::ClassMethod {
-                        class_name: class.decl.name.clone(),
-                        method_name: method.decl.name.clone(),
-                    },
-                    method.decl.receiver,
-                    Some(Type::Named(
+                    class,
+                    Type::Named(
                         class_name.clone(),
                         class
                             .decl
@@ -9443,18 +9431,14 @@ fn push_imported_module_classes_from_namespace(
                             .cloned()
                             .map(Type::TypeParam)
                             .collect(),
-                    )),
-                    &method.decl,
-                    &method.signature.params,
-                    &method.signature.param_passings,
-                    &method.signature.return_type,
-                    method.type_param_bounds.clone(),
+                    ),
+                    method,
                 ));
             }
             methods.push(MirMethod {
                 name: method.decl.name.clone(),
                 function_name: qualified_name,
-                receiver: method.decl.receiver.map(lower_receiver_kind),
+                receiver: lower_class_method_receiver(method),
             });
         }
         classes.push(MirClass {
@@ -9622,6 +9606,7 @@ fn lower_receiver_kind(receiver: ReceiverKind) -> MirReceiverKind {
 }
 
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)]
 fn lower_function(
     program: &Program,
     name: &str,
@@ -9635,6 +9620,88 @@ fn lower_function(
     return_type: &Type,
     type_param_bounds: BTreeMap<String, Vec<crate::sema::TraitBound>>,
 ) -> Vec<MirFunction> {
+    lower_function_or_initializer(
+        program,
+        name,
+        module_name,
+        metadata_owner,
+        receiver,
+        receiver_type,
+        function,
+        param_types,
+        param_passings,
+        return_type,
+        type_param_bounds,
+        None,
+    )
+}
+
+/// Lowers a class method, or the class's `__init__` as the function the
+/// class call invokes (ADR-0059). An initializer has no receiver: it builds
+/// the object in its own `self` local, whose fields start as the declaration
+/// defaults and are otherwise absent until the body assigns them, and every
+/// completion path returns that local. Definite initialization proves that
+/// no path reads an absent field or returns an incomplete object.
+fn lower_class_method(
+    program: &Program,
+    name: &str,
+    class: &crate::sema::ClassInfo,
+    class_type: Type,
+    method: &crate::sema::MethodInfo,
+) -> Vec<MirFunction> {
+    let initializer = method.decl.name == crate::sema::INITIALIZER_NAME;
+    lower_function_or_initializer(
+        program,
+        name,
+        &class.module_name,
+        ClosureOwner::ClassMethod {
+            class_name: class.decl.name.clone(),
+            method_name: method.decl.name.clone(),
+        },
+        method.decl.receiver,
+        Some(class_type.clone()),
+        &method.decl,
+        &method.signature.params,
+        &method.signature.param_passings,
+        if initializer {
+            &class_type
+        } else {
+            &method.signature.return_type
+        },
+        method.type_param_bounds.clone(),
+        initializer.then_some(class),
+    )
+}
+
+/// The MIR receiver of a class method; an initializer has none.
+fn lower_class_method_receiver(method: &crate::sema::MethodInfo) -> Option<MirReceiverKind> {
+    if method.decl.name == crate::sema::INITIALIZER_NAME {
+        None
+    } else {
+        method.decl.receiver.map(lower_receiver_kind)
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn lower_function_or_initializer(
+    program: &Program,
+    name: &str,
+    module_name: &str,
+    metadata_owner: ClosureOwner,
+    receiver: Option<ReceiverKind>,
+    receiver_type: Option<Type>,
+    function: &crate::ast::FunctionDecl,
+    param_types: &[Type],
+    param_passings: &[ReceiverKind],
+    return_type: &Type,
+    type_param_bounds: BTreeMap<String, Vec<crate::sema::TraitBound>>,
+    initializer: Option<&crate::sema::ClassInfo>,
+) -> Vec<MirFunction> {
+    let receiver = if initializer.is_some() {
+        None
+    } else {
+        receiver
+    };
     let params = function
         .params
         .iter()
@@ -9691,7 +9758,7 @@ fn lower_function(
         lowerer
             .local_types
             .insert("self".to_string(), receiver_type);
-        if receiver != Some(ReceiverKind::Value) {
+        if initializer.is_none() && receiver != Some(ReceiverKind::Value) {
             lowerer.non_owning_roots.insert("self".to_string());
         }
     }
@@ -9749,16 +9816,25 @@ fn lower_function(
             },
         });
         lowerer.terminate(Terminator::Return(Operand::Place(result)));
+    } else if let Some(class) = initializer {
+        lowerer.initializer_self = true;
+        lowerer.emit_initializer_slot(class, return_type);
+        lowerer.lower_stmts(&function.body);
     } else {
         lowerer.lower_stmts(&function.body);
     }
+    let default_return = if initializer.is_some() {
+        Operand::MovePlace("self".to_string())
+    } else {
+        default_return_operand(return_type)
+    };
     let functions = lowerer.finish_with_generated(MirFunctionSpec {
         name: name.to_string(),
         span: function.span,
         receiver: receiver.map(lower_receiver_kind),
         params,
         return_type: return_type.clone(),
-        default_return: default_return_operand(return_type),
+        default_return,
     });
     functions.into_iter().chain(default_functions).collect()
 }
@@ -9887,6 +9963,9 @@ struct Lowerer<'a> {
     /// position, so a returned view of that argument names the loan.
     contextual_loan_by_span: BTreeMap<(usize, usize), String>,
     view_return_origin: Option<String>,
+    /// Lowering a class initializer: `self` is the owned object under
+    /// construction and a bare `return` returns it.
+    initializer_self: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -10072,7 +10151,44 @@ impl<'a> Lowerer<'a> {
             contextual_element_loans: BTreeSet::new(),
             contextual_loan_by_span: BTreeMap::new(),
             view_return_origin: None,
+            initializer_self: false,
         }
+    }
+
+    /// Allocates the object an initializer builds: the declaration defaults
+    /// are evaluated afresh, in field order, and every other field stays
+    /// absent until the body's first assignment to it.
+    fn emit_initializer_slot(&mut self, class: &crate::sema::ClassInfo, class_type: &Type) {
+        let Type::Named(class_name, _) = class_type else {
+            unreachable!("an initializer builds a named class type");
+        };
+        let fields = class
+            .decl
+            .fields
+            .iter()
+            .filter_map(|field| {
+                let default = field.default.as_ref()?;
+                let field_type = class
+                    .fields
+                    .get(&field.name)
+                    .expect("checked class field should have a semantic type")
+                    .ty
+                    .clone();
+                let value = self.lower_field_default(default, &field_type, &class.module_name);
+                self.retarget_operand_place(&value, &field_type);
+                Some(MirFieldInit {
+                    name: field.name.clone(),
+                    value,
+                })
+            })
+            .collect();
+        self.emit(Instruction::Assign {
+            target: "self".to_string(),
+            value: Rvalue::Construct {
+                class_name: class_name.clone(),
+                fields,
+            },
+        });
     }
 
     fn with_metadata_owner(mut self, owner: ClosureOwner) -> Self {
@@ -11048,15 +11164,46 @@ impl<'a> Lowerer<'a> {
         if class.decl.type_params.is_empty() {
             return Some(Type::named(result_name));
         }
-
-        let mut next_positional_field = 0usize;
-        let mut saw_named = false;
         let type_params = class
             .decl
             .type_params
             .iter()
             .cloned()
             .collect::<BTreeSet<_>>();
+        if let Some(initializer) = class.initializer() {
+            let bound = bind_call_arguments(
+                class_name,
+                &callable_params_from_decl(&initializer.decl.params),
+                args,
+                Span::new(1, 1),
+                CallConvention::PositionalOrNamed,
+            )
+            .ok()?;
+            let mut substitutions = std::collections::HashMap::new();
+            for (argument, param_type) in bound.iter().zip(initializer.signature.params.iter()) {
+                let Some(argument) = argument else {
+                    continue;
+                };
+                let actual_ty = self.infer_expr_type(&argument.value)?;
+                crate::sema::type_pattern_matches(
+                    param_type,
+                    &actual_ty,
+                    &type_params,
+                    &mut substitutions,
+                );
+            }
+            return class
+                .decl
+                .type_params
+                .iter()
+                .map(|type_param| substitutions.get(type_param).cloned())
+                .collect::<Option<Vec<_>>>()
+                .map(|resolved_args| Type::Named(result_name.clone(), resolved_args))
+                .or_else(|| Some(Type::named(result_name)));
+        }
+
+        let mut next_positional_field = 0usize;
+        let mut saw_named = false;
         let mut substitutions = std::collections::HashMap::new();
 
         for argument in args {
@@ -11731,6 +11878,8 @@ impl<'a> Lowerer<'a> {
                     } else {
                         self.lower_expr_for_owned_value(value, Some(&return_type))
                     }
+                } else if self.initializer_self {
+                    Operand::MovePlace("self".to_string())
                 } else {
                     Operand::Unit
                 };
@@ -19277,6 +19426,10 @@ impl<'a> Lowerer<'a> {
                     });
                     return Operand::Place(temp);
                 }
+                if class.initializer().is_some() {
+                    self.lower_initializer_call(&class, name, args, callee.span, &temp);
+                    return Operand::Place(temp);
+                }
                 let constructor_type = expected
                     .filter(|expected| {
                         matches!(expected, Type::Named(expected_name, _) if expected_name == name)
@@ -19733,6 +19886,16 @@ impl<'a> Lowerer<'a> {
                             return Operand::Place(temp);
                         }
                         if let Some(class) = namespace.classes.get(field).cloned() {
+                            if class.initializer().is_some() {
+                                self.lower_initializer_call(
+                                    &class,
+                                    field,
+                                    args,
+                                    callee.span,
+                                    &temp,
+                                );
+                                return Operand::Place(temp);
+                            }
                             let runtime_class_name = mir_runtime_class_name(self.program, &class);
                             let qualified_class_name = format!("{}.{}", module_path, field);
                             let constructor_type = expected
@@ -20745,6 +20908,39 @@ impl<'a> Lowerer<'a> {
                 .map(Type::TypeParam),
             _ => None,
         }
+    }
+
+    /// A class call of a class with `__init__` calls the initializer
+    /// function with the arguments bound to its parameters (ADR-0059).
+    fn lower_initializer_call(
+        &mut self,
+        class: &crate::sema::ClassInfo,
+        surface_name: &str,
+        args: &[Argument],
+        span: Span,
+        target: &str,
+    ) {
+        let initializer = class
+            .initializer()
+            .expect("an initializer call lowers only for a class with `__init__`");
+        let lowered_args = self.lower_user_args(
+            &format!("class `{surface_name}`"),
+            &initializer.decl.params,
+            args,
+            span,
+            Some(&initializer.signature.param_passings),
+        );
+        self.emit(Instruction::Assign {
+            target: target.to_string(),
+            value: Rvalue::Call {
+                callee: CallTarget::Name(mir_class_method_name(
+                    self.program,
+                    class,
+                    crate::sema::INITIALIZER_NAME,
+                )),
+                args: lowered_args,
+            },
+        });
     }
 
     fn lower_user_args(

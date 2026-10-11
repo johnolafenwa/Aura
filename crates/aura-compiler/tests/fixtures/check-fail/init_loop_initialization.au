@@ -1,0 +1,9 @@
+class Totals:
+    sum: int64
+
+    def __init__(self, values: list[int64]):
+        for value in values:
+            self.sum = value
+
+def main():
+    print(Totals([1, 2]).sum)

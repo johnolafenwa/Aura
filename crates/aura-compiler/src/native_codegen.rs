@@ -9636,10 +9636,14 @@ impl<'a> FunctionCompiler<'a> {
 
                 let mut values = Vec::new();
                 for field in &class_ty.fields {
-                    let operand = by_name.get(&field.name).ok_or(format!(
-                        "direct backend construction for `{}` is missing field `{}`",
-                        class_name, field.name
-                    ))?;
+                    // An initializer's object starts with only its defaulted
+                    // fields; definite initialization proves that the body
+                    // writes every other field before any read, so the slot
+                    // holds inert zero words until then (ADR-0059).
+                    let Some(operand) = by_name.get(&field.name) else {
+                        values.extend(field.ty.zero_values(&mut self.builder));
+                        continue;
+                    };
                     let value = self.load_operand_for_target(operand, &field.ty)?;
                     let coerced = self.coerce_value(value, &field.ty)?;
                     values.extend(coerced.values);

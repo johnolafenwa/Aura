@@ -327,6 +327,16 @@ impl<'a> FunctionChecker<'a> {
                 }
                 return Err(diagnostic);
             }
+            if name == "self" && self.checks_initializer() {
+                return Err(Diagnostic::coded_at(
+                    "AU3004",
+                    span,
+                    "the object under construction cannot be moved out of `__init__`",
+                )
+                .with_help(
+                    "the class call returns `self` to its caller; pass `self` as a bare or `mut` argument instead",
+                ));
+            }
             let mut diagnostic =
                 Diagnostic::at(span, format!("cannot move borrowed value `{}`", name));
             if let Some(origin) = binding.borrowed_at {

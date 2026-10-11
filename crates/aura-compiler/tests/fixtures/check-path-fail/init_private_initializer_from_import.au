@@ -1,0 +1,5 @@
+from init_private_support.net import Connection
+
+def main():
+    connection = Connection(handle=3)
+    print(connection.handle)

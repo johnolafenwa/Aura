@@ -1,0 +1,31 @@
+class Buffer:
+    data: list[int64]
+    capacity: int64
+    label: str
+
+    def __init__(self, capacity: int64, *, label: str = "buf"):
+        if capacity < 0:
+            self.capacity = 0
+        elif capacity > 4:
+            self.capacity = 4
+        else:
+            self.capacity = capacity
+        self.data = []
+        mut index = 0
+        while index < self.capacity:
+            self.data.append(index * 10)
+            index += 1
+        self.label = label.clone()
+        self.reset_last()
+
+    def reset_last(mut self):
+        if self.data.len() > 0:
+            self.data[self.data.len() - 1] = -1
+
+    def show(self) -> str:
+        return f"{self.label} {self.capacity} {self.data}"
+
+def main():
+    print(Buffer(-3).show())
+    print(Buffer(2, label="two").show())
+    print(Buffer(9).show())

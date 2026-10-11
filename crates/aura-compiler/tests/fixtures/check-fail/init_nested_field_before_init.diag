@@ -1,0 +1,6 @@
+error[AU3012]: field `profile` is used before it is initialized
+ --> crates/aura-compiler/tests/fixtures/check-fail/init_nested_field_before_init.au:9:9
+  |
+9 |         self.profile.name = "anonymous"
+  |         ^
+  = help: assign `self.profile` before this use
