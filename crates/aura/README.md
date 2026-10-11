@@ -138,6 +138,7 @@ aura deps update util
 | `aura deps update [package]` | Refreshes git dependencies for the current package or workspace and rewrites `Aura.lock`. |
 | `aura new <project-path>` | Creates `Aura.toml` and `src/main.au`. It never overwrites an existing path. |
 | `aura fmt [--check] [path ...]` | Normalizes line endings, trailing whitespace, and final newlines. `--check` verifies without writing. |
+| `aura doc [--out DIR] [--json] [path ...]` | Checks each source and writes one API page per module with its public declarations and docstrings. Without `--out`, pages go to standard output. `--json` writes one JSON document per module. |
 | `aura test [--timeout-ms N] [path ...]` | Runs package-aware Aura tests. |
 | `aura lsp` | Runs the persistent JSON-lines compiler service for editor tooling. |
 | `aura ast <file.au>` | Prints the parsed syntax tree. |

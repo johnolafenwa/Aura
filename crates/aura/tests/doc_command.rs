@@ -82,7 +82,10 @@ fn doc_writes_markdown_for_one_file_to_stdout() {
     let output = aura(&temp.path, &["doc", "lib/geometry/shapes.au"]);
     assert!(output.status.success(), "{}", stderr(&output));
     let page = stdout(&output);
-    assert!(page.starts_with("# Module `shapes`\n\nPlane shapes.\n"), "{page}");
+    assert!(
+        page.starts_with("# Module `shapes`\n\nPlane shapes.\n"),
+        "{page}"
+    );
     assert!(page.contains("\n## Class `Square`\n\n```aura\nclass Square\n```\n\nA square.\n"));
     assert!(page.contains("- `side: float64`: Length of one side.\n"));
     assert!(page.contains("```aura\ndef scale(shape: Square, factor: float64) -> Square\n```"));
@@ -98,7 +101,10 @@ fn doc_writes_one_page_per_module_under_out() {
     let markdown = fs::read_to_string(temp.path.join("api/geometry.shapes.md")).expect("page");
     assert!(markdown.starts_with("# Module `geometry.shapes`\n"));
     let main = fs::read_to_string(temp.path.join("api/main.md")).expect("main page");
-    assert_eq!(main, "# Module `main`\n\nThis module has no public declarations.\n");
+    assert_eq!(
+        main,
+        "# Module `main`\n\nThis module has no public declarations.\n"
+    );
     assert!(stdout(&output).contains("geometry.shapes.md"));
 
     let output = aura(&temp.path, &["doc", "--json", "--out", "json", "lib"]);
@@ -110,8 +116,14 @@ fn doc_writes_one_page_per_module_under_out() {
     assert_eq!(json["schema_version"], 1);
     assert_eq!(json["module"], "geometry.shapes");
     assert_eq!(json["doc"], "Plane shapes.");
-    assert_eq!(json["declarations"][0]["fields"][0]["doc"], "Length of one side.");
-    assert_eq!(json["declarations"][1]["parameters"][1]["doc"], "The multiplier.");
+    assert_eq!(
+        json["declarations"][0]["fields"][0]["doc"],
+        "Length of one side."
+    );
+    assert_eq!(
+        json["declarations"][1]["parameters"][1]["doc"],
+        "The multiplier."
+    );
 
     let output = aura(&temp.path, &["doc", "--json", "lib/geometry/shapes.au"]);
     assert!(output.status.success());
@@ -121,10 +133,18 @@ fn doc_writes_one_page_per_module_under_out() {
 #[test]
 fn doc_reports_check_errors_and_bad_arguments() {
     let temp = package("aura-doc-errors");
-    fs::write(temp.path.join("broken.au"), "def main():\n    print(missing)\n").expect("broken");
+    fs::write(
+        temp.path.join("broken.au"),
+        "def main():\n    print(missing)\n",
+    )
+    .expect("broken");
     let output = aura(&temp.path, &["doc", "broken.au"]);
     assert_eq!(output.status.code(), Some(1));
-    assert!(stderr(&output).contains("unknown name `missing`"), "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("unknown name `missing`"),
+        "{}",
+        stderr(&output)
+    );
 
     let output = aura(&temp.path, &["doc", "--bogus"]);
     assert_eq!(output.status.code(), Some(2));
@@ -139,7 +159,10 @@ fn doc_reports_check_errors_and_bad_arguments() {
 
     fs::create_dir_all(temp.path.join("other/geometry")).expect("dup dir");
     fs::write(temp.path.join("other/geometry/shapes.au"), SHAPES).expect("dup");
-    let output = aura(&temp.path, &["doc", "lib/geometry/shapes.au", "other/geometry/shapes.au"]);
+    let output = aura(
+        &temp.path,
+        &["doc", "lib/geometry/shapes.au", "other/geometry/shapes.au"],
+    );
     assert_eq!(output.status.code(), Some(1));
     assert!(stderr(&output).contains("two modules named `shapes`"));
 }

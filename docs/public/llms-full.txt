@@ -2242,6 +2242,8 @@ class Point:
 
 A class body contains one or more fields, methods, or `pass` entries, in any order. Field names must be unique among fields. Method names must be unique among methods.
 
+A class body may also hold a class docstring as its first entry and a field docstring directly after each field. See [Docstrings And API Docs](/manual/docstrings).
+
 Every field has an explicit type. A field may have a default expression of exactly that type:
 
 ```aura
@@ -2591,6 +2593,7 @@ aura check app.au
 | `aura deps update [name]` | Refresh all git dependencies or one named dependency. |
 | `aura new path` | Create `Aura.toml` and `src/main.au` without overwriting an existing path. |
 | `aura fmt [--check] [paths...]` | Normalize Aura source whitespace or verify formatting. |
+| `aura doc [--out DIR] [--json] [paths...]` | Check each source and write one API page per module, in Markdown or JSON. See [Docstrings And API Docs](/manual/docstrings#generated-api-docs). |
 | `aura test [-k substring] [--format json] [--timeout-ms N] [paths...]` | Discover package-aware `.au` tests, select canonical case names, and report one result per case. Defaults to `tests/` and a 30-second per-case timeout. |
 | `aura upgrade` | Download and run the verified installer to replace the compiler and bundled runtime with the latest published release. |
 | `aura lsp` | Run the persistent JSON-lines compiler service used by the language server. |
@@ -2976,7 +2979,9 @@ assertions.
 
 The VS Code extension keeps one persistent `aura lsp` process. It provides
 diagnostics, symbols, hover, go-to-definition, and completions through the
-Language Server Protocol (LSP). Requests are debounced, cancellable,
+Language Server Protocol (LSP). Hover, completion, and signature help show
+declaration docstrings, as [Docstrings And API Docs](/manual/docstrings)
+describes. Requests are debounced, cancellable,
 version-guarded, and invalidated by dependency.
 
 If the compiler process cannot start, a small lexical recovery layer provides
@@ -6020,6 +6025,7 @@ These figures come from the clean Mac14,9 measurement at `181204b`.
 - Parameterized registration returns labeled capture-free `def() -> None` values in `list[(str, def() -> None)]`. Registration runs before `-k` filtering.
 - Test discovery is based on the name prefix. Test annotations are not implemented.
 - A timed-out `aura test` stops waiting but cannot terminate its worker thread. The timed-out program may continue host side effects until the process exits.
+- One docstring is limited to 65,536 UTF-8 bytes, and one module's public documentation to 4,194,304 bytes. Exceeding either is `AU2042`. Enum variants, `impl` blocks, and local bindings have no documentation. `aura doc` writes Markdown or JSON, not HTML.
 - Recursive `aura fmt` and `aura test` traversal follows directory symlinks without cycle detection in 0.3.
 
 ### Native Artifact Profile
@@ -6128,6 +6134,7 @@ String and format-specification diagnostics are described under
 | `AU2013` | union pattern coverage | Missing, duplicate, unreachable, or nonmember union type arms. | Add the missing arms and remove the others. |
 | `AU2014` | invalidated narrowing | A member use after the `None` test that narrowed the place stopped applying. | Test the current value again. |
 | `AU2015` | callable contract mismatch | A callable whose complete contract differs from the one its destination requires. | Match the contract, or restrict it with an explicit adapter or constructor. |
+| `AU2042` | invalid docstring or documentation limit | A triple-quoted string in a class, enum, trait, or `impl` body outside a documentation position, or documentation over a size limit. | Move the string to the first slot or directly after a field, or shorten the documentation. |
 | `AU2999` | general compile-time rejection | A rejection that has no narrower public category. | Follow the message. |
 
 **`AU2002` type mismatch.** List `map`, `filter`, and keyed `sort` require the
@@ -6228,6 +6235,20 @@ one required, in these cases:
 The message names the difference. A safe restriction requires an explicit
 `Unary(function)` adapter or a `Callable[...]`/`TaskCallable[...]` constructor.
 A bare written contract never performs that restriction.
+
+**`AU2042` invalid docstring or documentation limit.** The parser reports
+`AU2042` in these cases:
+
+- a triple-quoted string in a class body that is not the class docstring and
+  not on the line directly after a field
+- a triple-quoted string in an enum body after the enum docstring, or in a
+  trait body after the trait docstring
+- a triple-quoted string in an `impl` body
+- one docstring over 65,536 UTF-8 bytes
+- a module's public documentation over 4,194,304 UTF-8 bytes in total
+
+A limit message gives the measured and permitted byte counts. See
+[Docstrings And API Docs](/manual/docstrings) for the documentation positions.
 
 **`AU2999` general compile-time rejection.** This is the maintained catch-all
 for compile-time rejections that do not yet have a narrower public category. It
@@ -6871,6 +6892,231 @@ Design records:
 [ADR-0019: Duration conversion and timer policy](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/decisions/0019-duration-conversion-and-timer-policy.md)
 and
 [ADR-0033: Structural Transfer and task-result consumption](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/decisions/0033-structural-transfer-and-task-results.md).
+
+## Source: docs/manual/docstrings.md
+
+# Docstrings And API Docs
+
+A docstring is a plain triple-quoted string that documents a declaration.
+This page covers where a docstring goes, how editors and `aura doc` present
+it, and the limits the compiler enforces.
+
+```aura
+"""Plane shapes and their measurements."""
+
+public class Square:
+    """A square with equal sides."""
+
+    public side: float64
+    """Length of one side."""
+
+    public def area(self) -> float64:
+        """Return the area."""
+        return self.side * self.side
+
+public def scale(shape: Square, factor: float64) -> Square:
+    """Return a scaled copy.
+
+    Args:
+        shape: The square to scale.
+        factor: The multiplier for each side.
+    """
+    return Square(side=shape.side * factor)
+```
+
+Docstrings are metadata. They produce no runtime value, no allocation, and no
+instruction. Changing a docstring does not change the program's behavior or
+its compiled code.
+
+## Where A Docstring Goes
+
+A docstring is the complete first statement of one of these bodies:
+
+| Declaration | First slot |
+| --- | --- |
+| Module | The first statement of the file, before every import. |
+| `class` | The first statement of the class body. |
+| `enum` | The first statement of the enum body, before the variants. |
+| `trait` | The first statement of the trait body. |
+| Function or method | The first statement of the body. |
+| Trait or `impl` method | The first statement of the body. |
+
+Comments and blank lines before the docstring do not count as statements.
+Both `"""..."""` and `'''...'''` work.
+
+A function whose body is only a docstring is a function with an empty body.
+It returns `None`:
+
+```aura
+def reserved():
+    """Not implemented yet."""
+```
+
+## Fields
+
+A field docstring is a plain triple-quoted string on the line directly after
+the field declaration:
+
+```aura
+class Config:
+    """Settings for one run."""
+
+    retries: int64 = 3
+    """How many times a failed request is sent again."""
+```
+
+A blank line between the field and the string makes the string misplaced.
+Enum variants have no documentation.
+
+## Parameters
+
+Document parameters in the function docstring under an `Args:` heading. Each
+entry is `name: description`, indented under the heading. Indent continuation
+lines further:
+
+```aura
+def clamp(value: int64, low: int64, high: int64) -> int64:
+    """Limit a value to a closed range.
+
+    Args:
+        value: The number to limit.
+        low: The smallest result.
+        high: The largest result. It must not be
+            smaller than `low`.
+    """
+    if value < low:
+        return low
+    if value > high:
+        return high
+    return value
+```
+
+The section is presentation data. Hover, signature help, and `aura doc` read
+it. The compiler does not check that the names match the parameters.
+
+## Trait Methods
+
+A trait method whose body is only a docstring stays signature-only. Each
+implementation must still define it:
+
+```aura
+trait Shape:
+    """A plane figure."""
+
+    def area(self) -> float64:
+        """Return the area in square units."""
+
+    def describe(self) -> str:
+        """Return a short description. This method has a default body."""
+        return "a shape"
+
+class Square:
+    side: float64
+
+impl Shape for Square:
+    def area(self) -> float64:
+        return self.side * self.side
+```
+
+Hover on a call that resolves to an implementation shows the implementation
+method's docstring. When the implementation has none, hover shows the trait
+method's docstring.
+
+## What Is Not A Docstring
+
+These strings are ordinary expression statements, with no documentation
+meaning:
+
+- a triple-quoted string after the first statement of a function body
+- a module string after an import
+- an f-string, a raw string, or a single-line string
+- a triple-quoted string that is part of a larger expression
+
+A triple-quoted string in a class, enum, trait, or `impl` body that is not
+in a documentation position is an error, because those bodies have no other
+use for a string. The error is `AU2042`:
+
+```aura check-fail:AU2042
+class Point:
+    x: int64
+
+    """This string is not directly after a field."""
+```
+
+An `impl` block has no docstring of its own. Document its methods instead.
+
+## Presentation
+
+Editors and `aura doc` show a normalized form of the text. The stored text
+does not change. Normalization does this:
+
+1. Split the text into lines.
+2. Remove leading and trailing blank lines.
+3. Keep the first line's text after its leading spaces.
+4. Find the smallest indentation of the remaining non-blank lines, counting
+   spaces only. Remove that many leading spaces from each of them.
+5. Remove trailing spaces from every line.
+
+Tabs are content, not indentation. Docstrings may use Markdown. Code blocks
+and lists keep their relative indentation.
+
+In the language server:
+
+- **Hover** shows the fenced signature, then the docstring, then any other
+  notes. Raw HTML is escaped, and control characters other than tab and
+  newline are shown as `\u{...}` escapes.
+- **Completion** items carry the first non-empty line of the docstring as
+  their documentation, cut at 160 characters with `…`.
+- **Signature help** shows the whole docstring, and each parameter shows its
+  `Args:` entry.
+
+Docstrings of imported public declarations appear in hover the same way as
+local ones.
+
+## Generated API Docs
+
+`aura doc` checks each source and writes one page per module:
+
+```bash
+aura doc src --out docs/api
+```
+
+| Option | Effect |
+| --- | --- |
+| `path ...` | Files or directories to document. The default is the current directory. |
+| `--out DIR` | Write one file per module into `DIR`. Without it, pages go to standard output. |
+| `--json` | Write one JSON document per module instead of Markdown. |
+
+A page lists the module docstring and every public declaration: constants,
+type aliases, classes with their public fields and methods, enums with their
+variants, traits with their methods, and functions. Each entry has its
+signature and its normalized docstring. Parameters with an `Args:` entry are
+listed with their descriptions. Private declarations are omitted.
+
+A module's name is the file stem for a file argument. For a directory
+argument, it is the dotted path below the directory, such as
+`geometry.shapes` for `geometry/shapes.au`. Two modules with the same name
+are an error.
+
+The JSON form has `schema_version`, `module`, `doc`, and `declarations`.
+Each declaration has `kind`, `name`, `signature`, `doc`, and, when present,
+`parameters`, `fields`, `variants`, and `methods`.
+
+`aura doc` does not run code in the documentation.
+
+## Limits
+
+| Limit | Value |
+| --- | --- |
+| One docstring | 65,536 UTF-8 bytes after escape processing |
+| A module's public documentation | 4,194,304 UTF-8 bytes in total |
+
+Public documentation counts the module docstring and the docstrings of
+public declarations and their public members, trait methods, and `impl`
+methods. Private documentation does not count. Exceeding a limit is
+`AU2042` at the docstring, with the measured and permitted byte counts.
+
+Design record: [ADR-0056: Docstrings and documentation metadata](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/decisions/0056-docstrings-and-documentation-metadata.md).
 
 ## Source: docs/manual/enums-and-match.md
 
@@ -9875,6 +10121,8 @@ def add(left: int32, right: int32) -> int32:
 
 Every ordinary parameter has an explicit type. The return annotation is optional, and omitting it is exactly the same as writing `-> None`. An ordinary `-> T` return is owned. A returned view uses the separate `-> view [mut] T from origin` form.
 
+A plain triple-quoted string as the first statement of the body is the function's docstring. It documents parameters under an `Args:` heading and does not run. See [Docstrings And API Docs](/manual/docstrings).
+
 ```aura
 def square(value: int32) -> int32:
     return value * value
@@ -10602,6 +10850,9 @@ A trait declares a nominal method contract:
 trait Greeter:
     def greet(self) -> str
 ```
+
+A trait method whose body is only a docstring is still signature-only. See
+[Docstrings And API Docs](/manual/docstrings#trait-methods).
 
 A trait method is either signature-only, ending at the newline, or has a default body after `:`:
 
@@ -13240,6 +13491,10 @@ denotes the absence member instead. Aura has no null value apart from these
 typed forms, and no `?` type suffix.
 
 ## str Literals
+
+A plain triple-quoted string in the first statement slot of a module, class,
+enum, trait, or function is a docstring rather than a value. See
+[Docstrings And API Docs](/manual/docstrings).
 
 Ordinary string literals are single-line and use matching single or double
 quotes:
@@ -21511,6 +21766,32 @@ external contract.
 Keep helper functions private unless another module needs them. A smaller
 public surface is easier to keep stable.
 
+## Documenting A Module
+
+Write a docstring at the top of the module and as the first statement of each
+public declaration. Importers see it on hover, and `aura doc` builds a page
+from it:
+
+```aura
+"""A counter that only moves forward."""
+
+public class Counter:
+    """Counts events. The count never decreases."""
+
+    value: int32 = 0
+
+    public def inc(mut self):
+        """Add one to the count."""
+        self.value += 1
+```
+
+```bash
+aura doc src --out api
+```
+
+The page lists public declarations only, so the private `value` field stays
+out of it. [Docstrings And API Docs](/manual/docstrings) has the rules.
+
 ## Notes On Editor Tooling
 
 `aura analyze` and `aura complete` can read an editor buffer through
@@ -26084,6 +26365,46 @@ cargo run -p aura -- complete --line 5 --character 11 --trigger . myfile.au
 
 [01-running-programs.md](01-running-programs.md) walks through each command. [crates/aura/README.md](../crates/aura/README.md) is the CLI reference.
 
+## Documenting Code
+
+A docstring is a triple-quoted string as the first statement of a module,
+class, enum, trait, or function. A field docstring goes on the line directly
+after the field. Document parameters under an `Args:` heading:
+
+```aura
+"""Temperature helpers."""
+
+public class Reading:
+    """One sensor sample."""
+
+    public celsius: float64
+    """The temperature in degrees Celsius."""
+
+public def to_fahrenheit(reading: Reading) -> float64:
+    """Convert a reading to degrees Fahrenheit.
+
+    Args:
+        reading: The sample to convert.
+    """
+    return reading.celsius * 9.0 / 5.0 + 32.0
+
+def main():
+    print(to_fahrenheit(Reading(celsius=100.0)))
+```
+
+Docstrings do not run. Editors show them on hover, in completions, and in
+signature help. `aura doc` turns them into one Markdown page per module:
+
+```bash
+cargo run -p aura -- doc examples/modules/pkg/inventory.au
+cargo run -p aura -- doc src --out api        # one file per module
+cargo run -p aura -- doc --json src --out api # JSON instead of Markdown
+```
+
+`examples/modules/documented_api.au` uses the documented module
+`examples/modules/pkg/inventory.au`. [Docstrings And API Docs](../docs/manual/docstrings.md)
+has the full rules.
+
 ## Examples
 
 The `examples/` directory holds runnable programs, sorted by category. Compiler tests run them, so they stay valid as the language changes. Read them alongside these tutorials to see working code for each feature.
@@ -26099,7 +26420,8 @@ The repository includes two editor packages:
 
 - **Syntax highlighting** for `.au` files.
 - **Completions**, including member completion after `.`.
-- **Hover** that shows types and signatures.
+- **Hover** that shows types, signatures, and docstrings.
+- **Signature help** that shows the docstring and each parameter's `Args:` entry.
 - **Go-to-definition**, including definitions of imported symbols in other files.
 - **Diagnostics** from the compiler's type checker.
 - **Document symbols** for navigation.
@@ -27625,6 +27947,10 @@ The compiler supports these statements:
   F-strings stay double-quoted as `f"..."`, but an interpolation may contain
   either quote form. Write strings as quoted literals. `str(...)` is not a
   constructor.
+- **Docstrings:** a triple-quoted string as the first statement of a module,
+  class, enum, trait, or function documents it, and one on the line after a
+  field documents the field. Docstrings do not run. See
+  [08-tooling.md](08-tooling.md#documenting-code).
 - **Tuples:** parenthesized values such as `(name, count)` and the singleton
   `(value,)`.
 - **Collections:** list literals such as `[1, 2, 3]`, dictionary literals
@@ -31088,6 +31414,8 @@ The tutorial set covers the topics below.
 - CLI inspection commands such as `check`, `ast`, `ast-json`, `analyze`,
   `complete`, and `mir`
 - compiler-backed VS Code diagnostics, navigation, and completions
+- docstrings on modules, classes, fields, enums, traits, and functions, shown
+  in editor hover and generated into API pages by `aura doc`
 
 ## Maintenance Rule
 

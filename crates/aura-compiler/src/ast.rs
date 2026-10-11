@@ -105,6 +105,27 @@ pub fn docstring_args(text: &str) -> Vec<(String, String)> {
     entries
 }
 
+/// A normalized docstring without its `Args:` section, for pages that list
+/// the parameters separately.
+pub fn docstring_without_args(normalized: &str) -> String {
+    let lines = normalized.split('\n').collect::<Vec<_>>();
+    let indent = |line: &str| line.len() - line.trim_start_matches(' ').len();
+    let Some(heading) = lines.iter().position(|line| line.trim() == "Args:") else {
+        return normalized.to_string();
+    };
+    let heading_indent = indent(lines[heading]);
+    let end = lines[heading + 1..]
+        .iter()
+        .position(|line| !line.trim().is_empty() && indent(line) <= heading_indent)
+        .map_or(lines.len(), |offset| heading + 1 + offset);
+    let mut kept = lines[..heading].to_vec();
+    kept.extend_from_slice(&lines[end..]);
+    while kept.last().is_some_and(|line| line.trim().is_empty()) {
+        kept.pop();
+    }
+    kept.join("\n")
+}
+
 /// The first non-empty line of a normalized docstring, truncated to
 /// `limit` Unicode scalar values with a trailing ellipsis.
 pub fn docstring_summary(text: &str, limit: usize) -> Option<String> {

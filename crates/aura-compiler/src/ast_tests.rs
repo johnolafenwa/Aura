@@ -743,3 +743,20 @@ fn docstring_args_section_is_presentation_data() {
         ]
     );
 }
+
+#[test]
+fn docstring_without_args_keeps_other_sections() {
+    use crate::ast::docstring_without_args;
+    assert_eq!(docstring_without_args("No args."), "No args.");
+    assert_eq!(
+        docstring_without_args(
+            "Summary.\n\nArgs:\n    a: One.\n\n    b: Two.\nReturns:\n    The sum."
+        ),
+        "Summary.\n\nReturns:\n    The sum."
+    );
+    assert_eq!(
+        docstring_without_args("Summary.\n\nArgs:\n    a: One.\n"),
+        "Summary."
+    );
+    assert_eq!(docstring_without_args("Args:\n    a: One."), "");
+}

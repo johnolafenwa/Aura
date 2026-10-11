@@ -40,6 +40,11 @@ const SOURCE: &str = concat!(
     "public trait Plain:\n",
     "    def plain(mut self, value: own str) -> str\n",
     "public def area[T](shape: Shape[T]) -> float64:\n",
+    "    \"\"\"Area.\n",
+    "\n",
+    "    Args:\n",
+    "        shape: Only an argument list.\n",
+    "    \"\"\"\n",
     "    return 0.0\n",
     "def private_function():\n",
     "    \"\"\"Not listed.\"\"\"\n",
@@ -92,8 +97,14 @@ fn api_docs_list_only_public_declarations_with_normalized_docs() {
     );
     assert_eq!(point.methods.len(), 1);
     let moved = &point.methods[0];
-    assert_eq!(moved.signature, "def moved(self, *, by: int64 = ...) -> int64");
-    assert_eq!(moved.parameters[0].doc.as_deref(), Some("Distance to move."));
+    assert_eq!(
+        moved.signature,
+        "def moved(self, *, by: int64 = ...) -> int64"
+    );
+    assert_eq!(
+        moved.parameters[0].doc.as_deref(),
+        Some("Distance to move.")
+    );
     let shape = &module.declarations[3];
     assert_eq!(
         shape
@@ -110,19 +121,31 @@ fn api_docs_list_only_public_declarations_with_normalized_docs() {
         module.declarations[6].methods[0].signature,
         "def plain(mut self, value: own str) -> str"
     );
-    assert_eq!(module.declarations[7].parameters[0].doc, None);
+    assert_eq!(
+        module.declarations[7].parameters[0].doc.as_deref(),
+        Some("Only an argument list.")
+    );
 }
 
 #[test]
 fn api_docs_render_markdown_pages_and_json() {
     let markdown = render_api_markdown(&module());
-    assert!(markdown.starts_with("# Module `geometry`\n\nShapes and &lt;units>.\n\nIndented detail.\n"));
-    assert!(markdown.contains("\n## Class `Point`\n\n```aura\nclass Point[T: Shaped]\n```\n\nA point.\n"));
-    assert!(markdown.contains("\nFields:\n\n- `x: T`: Horizontal.\n  Second line.\n- `y: int64 = ...`\n"));
+    assert!(
+        markdown.starts_with("# Module `geometry`\n\nShapes and &lt;units>.\n\nIndented detail.\n")
+    );
+    assert!(markdown
+        .contains("\n## Class `Point`\n\n```aura\nclass Point[T: Shaped]\n```\n\nA point.\n"));
+    assert!(markdown
+        .contains("\nFields:\n\n- `x: T`: Horizontal.\n  Second line.\n- `y: int64 = ...`\n"));
     assert!(markdown.contains("\n### Method `moved`\n"));
     assert!(markdown.contains("\nParameters:\n\n- `by: int64 = ...`: Distance to move.\n"));
+    assert!(markdown.contains("\nReturn a moved coordinate.\n\nParameters:\n"));
+    assert!(!markdown.contains("Args:"));
     assert!(markdown.contains("\nVariants:\n\n- `Circle(radius: float64)`\n"));
     assert!(markdown.contains("\n## Constant `LIMIT`\n"));
+    assert!(markdown.contains(
+        "```aura\ndef area[T](shape: Shape[T]) -> float64\n```\n\nArea.\n\nParameters:\n"
+    ));
     assert!(!markdown.contains("Internal"));
     assert!(!markdown.contains("private_function"));
 
@@ -169,7 +192,10 @@ fn api_docs_include_public_extern_declarations() {
             .collect::<Vec<_>>(),
         [
             ("extern class", "extern \"C\" opaque class Handle"),
-            ("extern function", "extern \"C\" def acquire(flags: int32) -> Handle"),
+            (
+                "extern function",
+                "extern \"C\" def acquire(flags: int32) -> Handle"
+            ),
         ]
     );
 }

@@ -12,11 +12,13 @@ every layer of software, including operating systems and device drivers.
 This preview extension is the maintained VS Code support for `.au` source
 files. It provides:
 
-- Aura syntax highlighting and language-aware indentation
+- Aura syntax highlighting and language-aware indentation, with a distinct
+  `string.quoted.docstring` scope for statement-position triple-quoted strings
 - snippets for functions, classes, matching, concurrency, lambdas, and the
   foreign function interface (FFI)
-- compiler-backed diagnostics, completions, hover, go-to-definition, and
-  document symbols
+- compiler-backed diagnostics, completions, hover, signature help,
+  go-to-definition, and document symbols, with docstrings in hover,
+  completions, and signature help
 - recovery while you edit incomplete functions, member access, comprehensions,
   slices, and numeric arrays
 

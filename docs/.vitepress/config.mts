@@ -130,6 +130,7 @@ export default defineConfig({
             { text: 'Process Module', link: '/manual/process' },
             { text: 'Control-Plane Modules', link: '/manual/control-plane' },
             { text: 'Packages', link: '/manual/packages' },
+            { text: 'Docstrings And API Docs', link: '/manual/docstrings' },
             { text: 'CLI And Tooling', link: '/manual/cli-and-tooling' },
             { text: 'API Index', link: '/manual/api-index' },
             { text: 'Diagnostics', link: '/manual/diagnostics' },

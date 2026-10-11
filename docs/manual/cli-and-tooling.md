@@ -34,6 +34,7 @@ aura check app.au
 | `aura deps update [name]` | Refresh all git dependencies or one named dependency. |
 | `aura new path` | Create `Aura.toml` and `src/main.au` without overwriting an existing path. |
 | `aura fmt [--check] [paths...]` | Normalize Aura source whitespace or verify formatting. |
+| `aura doc [--out DIR] [--json] [paths...]` | Check each source and write one API page per module, in Markdown or JSON. See [Docstrings And API Docs](/manual/docstrings#generated-api-docs). |
 | `aura test [-k substring] [--format json] [--timeout-ms N] [paths...]` | Discover package-aware `.au` tests, select canonical case names, and report one result per case. Defaults to `tests/` and a 30-second per-case timeout. |
 | `aura upgrade` | Download and run the verified installer to replace the compiler and bundled runtime with the latest published release. |
 | `aura lsp` | Run the persistent JSON-lines compiler service used by the language server. |
@@ -419,7 +420,9 @@ assertions.
 
 The VS Code extension keeps one persistent `aura lsp` process. It provides
 diagnostics, symbols, hover, go-to-definition, and completions through the
-Language Server Protocol (LSP). Requests are debounced, cancellable,
+Language Server Protocol (LSP). Hover, completion, and signature help show
+declaration docstrings, as [Docstrings And API Docs](/manual/docstrings)
+describes. Requests are debounced, cancellable,
 version-guarded, and invalidated by dependency.
 
 If the compiler process cannot start, a small lexical recovery layer provides

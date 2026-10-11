@@ -1,10 +1,10 @@
 # ADR-0056: Docstrings and documentation metadata
 
-- Status: Accepted direction; detailed design pending
+- Status: Accepted; detailed design ratified in the [Batch 4 design checkpoint](../18-batch-4-design-checkpoint.md#d-docstrings-and-generated-api-docs)
 - Ratified direction: 2026-09-06, user approval of the priority roadmap
 - Date: 2026-08-02
 - Version target: Aura 0.4
-- Implementation: Not started
+- Implementation: Implemented in Batch 4 (first-slot and field docstrings, `Args:` parameter sections, `AU2042` limits, hover, completion, signature help, and `aura doc`). Decorator retention waits for decorators, and property documentation lands with properties.
 - Roadmap decision: Batch S1, design-only checkpoint
 - Related: ADR-0025, ADR-0037, ADR-0046, ADR-0050, ADR-0053, and ADR-0055
 

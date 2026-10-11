@@ -14,6 +14,8 @@ class Point:
 
 A class body contains one or more fields, methods, or `pass` entries, in any order. Field names must be unique among fields. Method names must be unique among methods.
 
+A class body may also hold a class docstring as its first entry and a field docstring directly after each field. See [Docstrings And API Docs](/manual/docstrings).
+
 Every field has an explicit type. A field may have a default expression of exactly that type:
 
 ```aura

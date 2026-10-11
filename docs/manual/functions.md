@@ -18,6 +18,8 @@ def add(left: int32, right: int32) -> int32:
 
 Every ordinary parameter has an explicit type. The return annotation is optional, and omitting it is exactly the same as writing `-> None`. An ordinary `-> T` return is owned. A returned view uses the separate `-> view [mut] T from origin` form.
 
+A plain triple-quoted string as the first statement of the body is the function's docstring. It documents parameters under an `Args:` heading and does not run. See [Docstrings And API Docs](/manual/docstrings).
+
 ```aura
 def square(value: int32) -> int32:
     return value * value

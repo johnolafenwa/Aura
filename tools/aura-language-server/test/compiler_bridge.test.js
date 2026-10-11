@@ -6315,3 +6315,16 @@ test("compiler completions carry docstring summaries as Markdown documentation",
   });
   assert.deepEqual(compilerCompletionToLsp({ name: "side" }, 5), { label: "side", kind: 5, detail: "" });
 });
+
+test("compiler hover shows imported docstrings from a real example", async () => {
+  const documentedPath = path.join(repoRoot, "examples/modules/documented_api.au");
+  const documentedSource = fs.readFileSync(documentedPath, "utf8");
+  const analysis = await analyzeWithCompiler(`file://${documentedPath}`, documentedSource);
+  assert.ok(analysis);
+  assert.equal(analysis.diagnostics.length, 0);
+  const hovers = analysis.occurrences.map((occurrence) => occurrence.hover);
+  assert.ok(hovers.some((hover) => hover.startsWith("```aura\nmodule pkg.inventory\n```\n\nStock records for a small shop.")));
+  assert.ok(hovers.some((hover) => hover.includes("method restock(mut self, amount: int64) -> None\n```\n\nAdd units to the shelf.")));
+  assert.ok(hovers.some((hover) => hover.includes("method label(self) -> str\n```\n\nReturn a one-line label.")));
+  assert.ok(hovers.some((hover) => hover.includes("enum pkg.inventory.Level\n```\n\nHow full a shelf is.")));
+});

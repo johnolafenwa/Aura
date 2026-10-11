@@ -649,10 +649,11 @@ fn handle_doc_command(args: Vec<String>) {
     }
     let mut pages: Vec<(String, String)> = Vec::new();
     for input in &inputs {
-        let paths = collect_aura_source_paths(std::slice::from_ref(input)).unwrap_or_else(|error| {
-            eprintln!("{error}");
-            process::exit(1);
-        });
+        let paths =
+            collect_aura_source_paths(std::slice::from_ref(input)).unwrap_or_else(|error| {
+                eprintln!("{error}");
+                process::exit(1);
+            });
         for path in paths {
             let name = doc_module_name(input, &path);
             let program = check_path(&path).unwrap_or_else(|error| {

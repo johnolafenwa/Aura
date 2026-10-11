@@ -3635,6 +3635,10 @@ fn additional_module_examples_run_with_expected_output() {
     let cases = [
         ("examples/modules/namespace_import_types.au", "4\ntrue\n1\n"),
         ("examples/modules/trait_impl_imports.au", "Ada\nAda\n"),
+        (
+            "examples/modules/documented_api.au",
+            "empty\nlow\nfull\ntea x13\n",
+        ),
     ];
 
     for (relative_path, expected_stdout) in cases {

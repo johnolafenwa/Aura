@@ -47,7 +47,12 @@ fn normalized(doc: Option<&DocString>) -> Option<String> {
         .filter(|text| !text.trim().is_empty())
 }
 
-fn declaration(kind: &str, name: &str, signature: String, doc: Option<&DocString>) -> ApiDeclaration {
+fn declaration(
+    kind: &str,
+    name: &str,
+    signature: String,
+    doc: Option<&DocString>,
+) -> ApiDeclaration {
     ApiDeclaration {
         kind: kind.to_string(),
         name: name.to_string(),
@@ -184,7 +189,11 @@ pub fn api_module_from_program(module_name: &str, program: &Program) -> ApiModul
                             "{}: {}{}",
                             field.name,
                             lower_type_ref(&field.ty),
-                            if field.default.is_some() { " = ..." } else { "" }
+                            if field.default.is_some() {
+                                " = ..."
+                            } else {
+                                ""
+                            }
                         ),
                         doc: normalized(field.doc.as_ref()),
                     })
@@ -332,7 +341,17 @@ fn push_declaration(output: &mut String, entry: &ApiDeclaration, level: &str) {
         entry.name,
         entry.signature
     ));
-    push_doc(output, entry.doc.as_ref());
+    // A documented parameter list replaces the prose `Args:` section.
+    let doc = if entry
+        .parameters
+        .iter()
+        .any(|parameter| parameter.doc.is_some())
+    {
+        entry.doc.as_deref().map(crate::ast::docstring_without_args)
+    } else {
+        entry.doc.clone()
+    };
+    push_doc(output, doc.as_ref());
     push_members(output, "Parameters:", &entry.parameters);
     push_members(output, "Fields:", &entry.fields);
     push_members(output, "Variants:", &entry.variants);
