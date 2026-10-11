@@ -32,7 +32,7 @@ representation, and the direct backend compiles native code.
 | `copy_return_selection.au` | Choosing and forwarding owned Copy values | `7` |
 | `pass_keyword.au` | The `pass` no-op statement in empty classes and functions | `0` |
 | `assertions.au` | Comparison and membership assertions whose failure diagnostics capture both operands. Default and custom assertion statements on exact boolean conditions. Runs only the passing path. | `checking`, `all assertions passed` |
-| `multiline_expressions.au` | A function signature, grouped arithmetic, calls, list literals, and a dictionary literal split across physical lines inside `()`, `[]`, and `{}`. The no-trailing-comma and single-line-string rules still apply. | `80`, `20` |
+| `multiline_expressions.au` | A function signature, grouped arithmetic, calls, list literals, and a dictionary literal split across physical lines inside `()`, `[]`, and `{}`. Some lists end with an optional trailing comma. Strings stay on one line. | `80`, `20` |
 | `len_and_str.au` | The `int64` results of `str.len()`, `str.byte_len()`, `list.len()`, `dict.len()`, and `set.len()`. Shows `len(value) == value.len()`, Unicode scalar length versus UTF-8 byte length, and `str(value)` producing the print rendering. | `2`, `4`, `2`, `[alpha, beta]` |
 | `tuples.au` | Fixed tuple values and return types, whole-source unpacking, copy-only constant indexing, tuple-target iteration, recursive tuple patterns, and same-type recursive `==` and `!=` that keep both operands. Ordering stays rejected. | `Aura`, `7`, `20`, `ready:2`, `done:3`, `3`, `true` |
 
@@ -189,6 +189,7 @@ seven real loopback requests.
 | `constants.au` | Inferred, annotated, public, and source-ordered module constants beside a local `main` | `planner`, `5` |
 | `simple_import.au` | Local file modules with `import ...`, `from ... import ...`, and `public` module boundaries | `10`, `2` |
 | `import_aliases.au` | Local module aliases and from-import aliases with canonical target identity | `10`, `2` |
+| `parenthesized_imports.au` | From-import lists wrapped in parentheses across lines, with trailing commas | `42`, `None` |
 | `function_values.au` | Stores a namespace-qualified imported function, then calls it directly and through a `def(int32) -> int32` parameter. Also specializes an imported zero-argument generic function from context and uses the result as a `TaskGroup.start` target. | `10`, `12`, `none` |
 | `namespace_import_types.au` | Namespace-qualified class construction, enum variants, and qualified `match` arms through `import ...` | `4`, `true`, `1` |
 | `trait_impl_imports.au` | Trait impls imported across package modules, including bounded generic calls and direct trait-method use | `Ada`, `Ada` |
