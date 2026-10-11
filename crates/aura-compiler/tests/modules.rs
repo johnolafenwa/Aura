@@ -203,6 +203,52 @@ def main() -> int32:
 }
 
 #[test]
+fn parenthesized_from_imports_span_lines_and_accept_a_trailing_comma() {
+    let temp = TempDir::new("aura-modules-parenthesized-import");
+    temp.write(
+        "pkg/types.au",
+        r#"public class Counter:
+    public value: int32
+
+public def twice(value: int32) -> int32:
+    return value * 2
+"#,
+    );
+    let main_path = temp.write(
+        "main.au",
+        r#"from pkg.types import (
+    Counter as Meter,
+    twice,
+)
+
+def main() -> int32:
+    meter = Meter(value=twice(value=4,),)
+    print(meter.value)
+    return 0
+"#,
+    );
+
+    let output = run_path(&main_path).expect("a parenthesized from-import should run");
+    assert_eq!(output.stdout, "8\n");
+
+    let invalid_path = temp.write(
+        "invalid.au",
+        r#"from pkg.types import (twice, missing)
+
+def main() -> int32:
+    return twice(value=4)
+"#,
+    );
+    let error =
+        check_path(&invalid_path).expect_err("a parenthesized import still resolves every name");
+    assert!(
+        error.message.contains("no export named `missing`"),
+        "unexpected diagnostic: {}",
+        error.message
+    );
+}
+
+#[test]
 fn import_aliases_preserve_visibility_and_reject_module_scope_collisions() {
     let temp = TempDir::new("aura-modules-alias-visibility");
     temp.write(

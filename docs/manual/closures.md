@@ -49,7 +49,7 @@ lambda-parameter
 
 - A lambda is the lowest-precedence expression form.
 - The body is exactly one expression. The colon does not introduce an indented suite.
-- Parameter lists do not accept types, defaults, or a trailing comma.
+- Parameter lists do not accept types, defaults, or a trailing comma. A capture list may end with a trailing comma.
 - Zero parameters use `lambda: expression`.
 - A lambda may appear anywhere an expression is accepted, subject to the contextual typing rule below.
 - There is no arrow spelling, statement body, `async` form, or nested `def`.
