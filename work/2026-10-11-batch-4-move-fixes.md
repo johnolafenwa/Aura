@@ -60,10 +60,14 @@ Fix two defects found on `main` at `5652e46`:
 
 - Both new `run-pass` fixtures match their `.stdout` on `run --backend mir`
   and on a `build --backend direct` binary.
-- `cargo test -p aura-compiler --test fixtures`, the full
-  `cargo test -p aura-compiler` and `cargo test -p aura` suites,
-  `cargo fmt --all --check`, `npm run check:clippy`,
-  `npm run check:doc-examples`, and `npm run check:hygiene`.
+- `cargo test -p aura-compiler --test fixtures` passes after the merge with
+  `origin/main`. Every other `aura-compiler` and `aura` test binary passes
+  except tests that failed on the shared workstation for environmental
+  reasons: a root-run permission check in `package_tests`, wall-clock
+  latency tests under a load average near 17 on 4 cores, and `cli` tests
+  whose runtime build hit a full disk.
+- `cargo fmt --all --check`, `npm run check:clippy`,
+  `npm run check:doc-examples`, and `npm run check:hygiene` pass.
 - Local coverage and the full parity matrix were left to hosted CI because
   the shared workstation is short on disk.
 
