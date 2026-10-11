@@ -67,7 +67,7 @@ Any behavior change MUST update these in the same pass:
 - the work record
 
 The repository commit identifies the precise revision of the specification.
-The rendered Manual is stamped with source version 0.3.5 (technical preview)
+The rendered Manual is stamped with source version 0.3.6 (technical preview)
 and its implementation baseline commit. Release builds supply that commit
 without writing a self-referential hash into this source page. The
 [Manual overview](/manual/) gives the exact precedence and the local fallback.

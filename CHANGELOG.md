@@ -7,6 +7,15 @@ in this file.
 
 ## Unreleased
 
+## VS Code extension 0.3.7 — 2026-10-11
+
+- Bundles language server 0.3.6. The semantic interface version stays 17.
+
+## 0.3.6 — 2026-10-11 (technical preview)
+
+Aura 0.3.6 fixes defects in element and entry views reported against 0.3.5.
+It has no breaking changes.
+
 ### Fixes
 
 - The direct backend runs a returned view whose path crosses a class field
