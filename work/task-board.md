@@ -1,15 +1,17 @@
 # Task Board
 
-Last updated: 2026-10-10
+Last updated: 2026-10-11
 
-## Aura 0.3.5 preview release (in progress)
+## Aura 0.3.5 preview release (complete)
 
-- Target: release the completed phase 2a work as `v0.3.5-preview` from
-  `main` at `1a3e4174`. CLI, compiler, and language server 0.3.5; VS Code
-  extension 0.3.6. Branch `claude/project-thread-9qn1f9`; work note
-  `2026-10-10-v0.3.5-preview-release.md`.
-- Remaining: hosted CI on the release pull request, merge, annotated tag,
-  and the Release workflow dispatch.
+- Released 2026-10-11 from `main` at `420ddbef` (PR #29) as
+  `v0.3.5-preview`: CLI, compiler, and language server 0.3.5, VS Code
+  extension 0.3.6. Hosted CI `38093579653` and Docs `38093579652` green on
+  both platforms; the tag push ran Release `38125107495`, which published
+  the GitHub Release and the extension to the Visual Studio Marketplace and
+  Open VSX. Details are in `2026-10-10-v0.3.5-preview-release.md`.
+- Next: borrowing non-copy values into union parameters (`AU2010`), then
+  phase 2b (slice views and `Span[T]`).
 
 ## Aura 0.3.4 preview release (complete)
 
