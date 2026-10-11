@@ -1139,6 +1139,7 @@ fn maintained_example_subset_runs_via_public_entrypoints_and_direct_codegen() {
         "examples/numbers/numeric_builtins.au",
         "examples/strings/string_methods.au",
         "examples/strings/string_parsing_and_formatting.au",
+        "examples/strings/text_parsing.au",
         "examples/concurrency/task_group_start.au",
         "examples/concurrency/queue_timeout.au",
         "examples/concurrency/queue_get_timeout_named.au",

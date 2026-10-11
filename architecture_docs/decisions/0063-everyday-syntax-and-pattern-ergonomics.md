@@ -2,7 +2,8 @@
 
 - Status: Accepted roadmap direction; detailed design pending
 - Date: 2026-09-06
-- Implementation: Not started
+- Implementation: In progress. Text and byte conveniences are implemented as
+  specified in [the Batch 4 design checkpoint](../18-batch-4-design-checkpoint.md#c-text-and-byte-conveniences).
 - Roadmap: Batch 4
 - Extends: ADR-0025, ADR-0026, ADR-0049, and ADR-0051
 - Related: ADR-0044, ADR-0046, ADR-0052, ADR-0059, and ADR-0061

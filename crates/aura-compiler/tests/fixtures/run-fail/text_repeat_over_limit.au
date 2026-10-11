@@ -1,0 +1,3 @@
+def main():
+    print("x".repeat(67108864).byte_len())
+    print("xy".repeat(33554433).byte_len())

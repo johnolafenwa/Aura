@@ -81,6 +81,15 @@ safety boundary, diagnostics, and backend rules.
 | `str.strip_prefix` | `strip_prefix(text: str) -> str \| None` | Returns the rest of the string when the prefix matches, or `None` when it does not. An empty rest is a present `""`. |
 | `str.strip_suffix` | `strip_suffix(text: str) -> str \| None` | Returns the rest of the string when the suffix matches, or `None` when it does not. An empty rest is a present `""`. |
 | `str.trim` | `trim() -> str` | Removes leading and trailing Unicode whitespace. |
+| `str.trim_start` | `trim_start() -> str` | Removes leading Unicode whitespace. |
+| `str.trim_end` | `trim_end() -> str` | Removes trailing Unicode whitespace. |
+| `str.split_once` | `split_once(separator: str) -> (str, str) \| None` | Splits at the first occurrence of `separator`. Returns `None` when it is absent. An empty `separator` traps with `AU4003`. |
+| `str.rsplit_once` | `rsplit_once(separator: str) -> (str, str) \| None` | Splits at the last occurrence of `separator`. Returns `None` when it is absent. An empty `separator` traps with `AU4003`. |
+| `str.lines` | `lines() -> list[str]` | Splits at each `\n` and removes one `\r` before each `\n`. A final line terminator adds no empty line. An empty string has no lines. |
+| `str.split_whitespace` | `split_whitespace() -> list[str]` | Splits on runs of Unicode whitespace and drops empty parts. |
+| `str.find` | `find(text: str) -> int64 \| None` | Index of the first occurrence of `text`, counted in Unicode scalar values. O(n). Returns `None` when it is absent. An empty `text` returns `0`. |
+| `str.count` | `count(text: str) -> int64` | Number of non-overlapping occurrences of `text`. An empty `text` traps with `AU4003`. |
+| `str.repeat` | `repeat(count: int64) -> str` | Concatenates `count` copies. A negative `count` traps with `AU4003`. A result above the 64 MiB string limit traps with `AU4005` before it allocates. |
 | `str.join` | `join(parts: list[str]) -> str` | Joins `parts` with the receiver as the separator. |
 | `str.clone` | `clone() -> str` | Returns a new owned string. |
 
@@ -189,6 +198,9 @@ up-front output size checks, and the cryptographic scope of SHA-256.
 | `bytes.base64_decode` | `base64_decode(text: str) -> Result[list[uint8], bytes.Error]` | Strict decode of canonical standard-alphabet input. |
 | `bytes.sha256` | `sha256(value: list[uint8]) -> list[uint8]` | Fresh raw 32-byte FIPS 180-4 digest. |
 | `bytes.sha256_string` | `sha256_string(text: str) -> list[uint8]` | SHA-256 of the text's exact UTF-8 bytes. |
+| `bytes.starts_with` | `starts_with(value: list[uint8], prefix: list[uint8]) -> bool` | Tests for a byte prefix. An empty `prefix` matches. |
+| `bytes.ends_with` | `ends_with(value: list[uint8], suffix: list[uint8]) -> bool` | Tests for a byte suffix. An empty `suffix` matches. |
+| `bytes.find` | `find(value: list[uint8], needle: list[uint8]) -> int64 \| None` | Byte index of the first occurrence of `needle`. Returns `None` when it is absent. An empty `needle` returns `0`. |
 
 Every input above uses shared access and stays usable after the call. An
 `encoding` argument is reserved but not implemented. Expanded output that

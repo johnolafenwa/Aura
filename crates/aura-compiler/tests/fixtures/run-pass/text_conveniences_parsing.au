@@ -1,0 +1,67 @@
+import bytes
+
+class Entry:
+    key: str
+    value: str
+
+def parse_entry(line: str) -> Entry | None:
+    pair = line.split_once("=")
+    if pair is None:
+        return None
+    key, value = pair
+    return Entry(key=key.trim_end(), value=value.trim_start())
+
+def extension(path: str) -> str:
+    pair = path.rsplit_once(".")
+    if pair is None:
+        return "(none)"
+    _, suffix = pair
+    return suffix
+
+def main():
+    config = "# settings\u{d}\nname = aura\u{d}\n  mode=fast  \n\nbroken line\npath = /usr/local/bin\n"
+    mut entries: list[Entry] = []
+    for raw in config.lines():
+        line = raw.trim_start()
+        if line.starts_with("#") or line == "":
+            continue
+        match own parse_entry(line):
+            case None:
+                print("skip: " + line)
+            case Entry as entry:
+                entries.append(entry)
+    for entry in entries:
+        print(f"{entry.key}={entry.value.trim_end()};")
+        print(entry.value.count("/"))
+
+    print(extension("archive.tar.gz"))
+    print(extension("README"))
+
+    title = "Report"
+    print(title)
+    print("=".repeat(title.len()))
+    words = "the quick  brown\tfox jumps over the lazy dog".split_whitespace()
+    print(len(words))
+    sentence = " ".join(words)
+    print(sentence.count("the"))
+    match sentence.find("fox"):
+        case None:
+            print("missing")
+        case int64 as at:
+            print(sentence[at:])
+
+    header = "AURA\x00\x01payload".to_bytes()
+    magic = "AURA".to_bytes()
+    print(bytes.starts_with(header, magic))
+    print(bytes.starts_with(header, header))
+    print(bytes.ends_with(header, header))
+    match bytes.find(header, header):
+        case None:
+            print("missing")
+        case int64 as at:
+            print(at)
+    match bytes.find(header, "payload".to_bytes()):
+        case None:
+            print("missing")
+        case int64 as at:
+            print(bytes.hex_encode(header[at - 2:at]))

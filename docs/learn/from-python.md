@@ -314,6 +314,19 @@ Unicode scalar values, and `len()` counts those. A slice such as `s[1:4]`
 gives you an owned copy. Use slices, or operations in the style of
 `s.split("")`, instead of indexing single characters.
 
+**Some string methods have other names.** Aura keeps one naming scheme
+around `trim`, `strip_prefix`, and `starts_with`:
+
+| Python | Aura |
+| --- | --- |
+| `s.lstrip()`, `s.rstrip()` | `s.trim_start()`, `s.trim_end()` |
+| `s.partition(sep)` | `s.split_once(sep)`, which returns `(str, str) \| None` |
+| `s.rpartition(sep)` | `s.rsplit_once(sep)` |
+| `s.splitlines()` | `s.lines()`, which splits at `\n` and `\r\n` only |
+| `s.split()` | `s.split_whitespace()` |
+| `s.find(sub)` | `s.find(sub)`, which returns `int64 \| None` instead of `-1` |
+| `s * n` | `s.repeat(n)` |
+
 **`is` only tests for `None`.** `value is None` and `value is not None` check
 an optional `T | None` and narrow it. There is no identity comparison between
 arbitrary values.

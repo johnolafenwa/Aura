@@ -1,0 +1,19 @@
+skip: broken line
+name=aura;
+0
+mode=fast;
+0
+path=/usr/local/bin;
+3
+gz
+(none)
+Report
+======
+9
+2
+fox jumps over the lazy dog
+true
+true
+true
+0
+0001

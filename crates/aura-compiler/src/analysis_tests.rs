@@ -2045,6 +2045,107 @@ def main():
 }
 
 #[test]
+fn text_and_byte_conveniences_complete_and_hover_with_exact_signatures() {
+    let text_source = "def inspect(text: str):\n    text.\n\ndef main() -> int32:\n    return 0\n";
+    let line_index = text_source
+        .lines()
+        .position(|line| line.contains("text."))
+        .expect("source has a member access");
+    let character = text_source
+        .lines()
+        .nth(line_index)
+        .unwrap()
+        .find('.')
+        .unwrap()
+        + 1;
+    let completions = complete_source(text_source, line_index, character, Some('.'))
+        .expect("string member completion should succeed");
+    for (name, detail) in [
+        ("trim_start", "trim_start() -> str"),
+        ("trim_end", "trim_end() -> str"),
+        (
+            "split_once",
+            "split_once(separator: str) -> (str, str) | None",
+        ),
+        (
+            "rsplit_once",
+            "rsplit_once(separator: str) -> (str, str) | None",
+        ),
+        ("lines", "lines() -> list[str]"),
+        ("split_whitespace", "split_whitespace() -> list[str]"),
+        ("find", "find(text: str) -> int64 | None"),
+        ("count", "count(text: str) -> int64"),
+        ("repeat", "repeat(count: int64) -> str"),
+    ] {
+        let item = completions
+            .iter()
+            .find(|item| item.name == name)
+            .unwrap_or_else(|| panic!("missing `{name}` completion"));
+        assert_eq!(item.detail, detail);
+    }
+
+    let module_source = "import bytes\n\ndef main() -> int32:\n    bytes.\n    return 0\n";
+    let module_items = complete_source(module_source, 3, 10, Some('.'))
+        .expect("bytes module completion should succeed");
+    for (name, detail) in [
+        (
+            "starts_with",
+            "starts_with(value: list[uint8], prefix: list[uint8]) -> bool",
+        ),
+        (
+            "ends_with",
+            "ends_with(value: list[uint8], suffix: list[uint8]) -> bool",
+        ),
+        (
+            "find",
+            "find(value: list[uint8], needle: list[uint8]) -> int64 | None",
+        ),
+    ] {
+        let item = module_items
+            .iter()
+            .find(|item| item.name == name)
+            .unwrap_or_else(|| panic!("missing `bytes.{name}` completion"));
+        assert_eq!(item.detail, detail);
+    }
+
+    let analysis = analyze_source(
+        r#"
+import bytes
+
+def main():
+    line = "key = value"
+    pair = line.split_once("=")
+    at = line.find("v")
+    copies = "ab".repeat(2)
+    rows = line.lines()
+    data = line.to_bytes()
+    found = bytes.find(data, "v".to_bytes())
+"#,
+    );
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "{:?}",
+        analysis.diagnostics
+    );
+    for expected in [
+        "split_once(separator: str) -> (str, str) | None",
+        "Splits at the first occurrence of `separator`",
+        "find(text: str) -> int64 | None",
+        "repeat(count: int64) -> str",
+        "lines() -> list[str]",
+        "find(value: list[uint8], needle: list[uint8]) -> int64 | None",
+    ] {
+        assert!(
+            analysis
+                .occurrences
+                .iter()
+                .any(|occurrence| occurrence.hover.contains(expected)),
+            "missing hover containing `{expected}`"
+        );
+    }
+}
+
+#[test]
 fn compiler_duration_tooling_exposes_static_constructors_and_instance_conversions() {
     let static_source = "def main() -> int32:\n    Duration.\n    return 0\n";
     let static_names = completion_names_after_marker(static_source, "Duration.");

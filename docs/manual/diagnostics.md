@@ -648,7 +648,8 @@ proves the error.
 | `AU1002` | A raw or triple-quoted f-string prefix. The guidance names the supported form. |
 | `AU1101` | Malformed static format grammar, nested fields, unsupported codes, or a width or precision above `1_000_000`. |
 | `AU2002` | A valid specification that does not fit the interpolation's static type. |
-| `AU4005` | Constructed string output above the 64 MiB limit. The trap happens before the oversized append changes the partial result. |
+| `AU4003` | An empty separator in `str.split_once` or `str.rsplit_once`, an empty text in `str.count`, or a negative `str.repeat` count. |
+| `AU4005` | Constructed string output above the 64 MiB limit. The trap happens before the oversized append changes the partial result. `str.repeat` checks the full size before it allocates. |
 
 Python allows decimal grouping without an explicit type code, as in
 `f"{n:,}"`. Aura requires the numeric code: use `f"{n:,d}"`, `f"{n:,f}"`, or

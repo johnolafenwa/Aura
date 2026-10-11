@@ -1,0 +1,5 @@
+error[AU2002]: argument type mismatch for function `find`: expected `list[uint8]`, found `str`
+ --> crates/aura-compiler/tests/fixtures/check-fail/bytes_find_needle_type.au:5:28
+  |
+5 |     print(bytes.find(data, "b"))
+  |                            ^
