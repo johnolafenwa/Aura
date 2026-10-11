@@ -1,0 +1,6 @@
+error[AU2045]: property `area` is read-only and cannot be passed as `mut`
+ --> crates/aura-compiler/tests/fixtures/check-fail/property_mut_argument.au:25:16
+   |
+25 |     bump(shape.area)
+   |                ^
+  = help: a property computes a fresh value on each read; bind it to a local to change the copy

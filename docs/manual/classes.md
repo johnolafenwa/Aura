@@ -139,6 +139,62 @@ A method named without a call is a value:
 
 See [Closures](/manual/closures#bound-methods).
 
+## Properties
+
+A property is a computed value that reads like a field. Mark a shared method with `@property` on the line before it, and read it without parentheses:
+
+```aura
+class Reply:
+    prompt_tokens: int64
+    completion_tokens: int64
+
+    @property
+    def total_tokens(self) -> int64:
+        return self.prompt_tokens + self.completion_tokens
+
+def main():
+    reply = Reply(prompt_tokens=10, completion_tokens=5)
+    print(reply.total_tokens)
+    print(f"{reply.total_tokens} tokens")
+```
+
+`reply.total_tokens` evaluates `reply` once and calls the getter once. The result is a fresh owned value, so a non-Copy result can be moved or bound to a `mut` local without affecting the receiver.
+
+A getter must have this exact shape:
+
+- It is a method in a class body. A module function, a trait method, and an `impl` method cannot be a property.
+- Its receiver is bare shared `self`.
+- It has no parameters and no type parameters.
+- It returns an owned value other than `None`. A view result is rejected.
+- Its name does not collide with a field of the class.
+
+`@property` is the only decorator. It stands alone on the line before `def`, and it takes no arguments. Any other `@name` line is `AU2005`.
+
+A property is read-only. The checker rejects each of these with `AU2045`:
+
+- assignment and compound assignment, such as `reply.total_tokens = 3`
+- assignment through the result, such as `shape.origin.x = 4`
+- a `mut` argument, a `mut self` method call, or a `match mut` scrutinee
+- a `view` or `view mut` of the property
+- call syntax, such as `reply.total_tokens()`
+
+```aura check-fail:AU2045
+class Reply:
+    prompt_tokens: int64
+
+    @property
+    def doubled(self) -> int64:
+        return self.prompt_tokens * 2
+
+def main():
+    mut reply = Reply(prompt_tokens=1)
+    reply.doubled = 4
+```
+
+To change the value, bind it to a local first. The local is an independent copy.
+
+A property is not a trait member. An imported class exposes its `public` properties, and a private property is readable only in its own module.
+
 ## Mutation
 
 A field assignment requires a mutable base place:
@@ -238,7 +294,7 @@ with resource = Resource(name="db"):
 
 ## Grammar
 
-[Grammar](/manual/grammar#classes) holds the normative productions for `class`, `copy class`, visibility, type parameters, fields, field defaults, `indirect`, methods, receivers, and associated methods. A class suite contains fields, methods, and `pass`. Aura has no separate grammar for constructors, properties, inheritance, or destructors.
+[Grammar](/manual/grammar#classes) holds the normative productions for `class`, `copy class`, visibility, type parameters, fields, field defaults, `indirect`, methods, receivers, and associated methods. A class suite contains fields, methods, `@property` methods, and `pass`. Aura has no separate grammar for constructors, inheritance, or destructors.
 
 ## Typing Rules
 
@@ -274,6 +330,10 @@ An instance call invokes the statically selected inherent or trait method. An as
 | `AU2001` | Unresolved class, field type, method, or member. |
 | `AU2002` | Field, default, or constructor type mismatch. Generic arity or bound failure. A non-copy field in a `copy class`. |
 | `AU2004` | Constructor or method argument-binding failure. |
+| `AU2005` | A decorator other than a bare `@property` line. |
+| `AU2043` | An invalid `Display` implementation. See [Generics And Traits](/manual/generics-and-traits#the-display-trait). |
+| `AU2044` | An invalid property declaration. |
+| `AU2045` | Assignment, mutable use, a view, or call syntax on a property. |
 | `AU2999` | Duplicate declaration, invalid visibility, invalid recursive layout, unsupported member use, and other class rejections without a narrower code. |
 | `AU3001` | Use of a moved class or field. |
 | `AU3002` | Overlapping receiver and argument borrows, moving a field through shared access, or an invalid user-resource `close` contract. |
@@ -296,7 +356,7 @@ MIR execution and direct native generation both implement nominal classes, gener
 
 ## Limits And Implementation-Defined Behavior
 
-- Aura 0.3 has no class inheritance, overloads, property syntax, custom constructor hook, or general destructor hook.
+- Aura 0.3 has no class inheritance, overloads, property setters, custom constructor hook, or general destructor hook.
 - `with` cannot manage a generic user class directly.
 - A class field default cannot call a user-defined function in the current compiler. Compute the value before construction and pass it as an explicit field argument.
 - `indirect` is only a recursive field-layout marker. Its storage representation is not an observable language contract.
@@ -316,6 +376,8 @@ Implemented:
 - non-generic user-resource classes
 - local shared or mutable views of fixed class fields
 - returned-view contracts tied to one receiver or parameter
+- read-only `@property` getters
+- custom rendering through the prelude `Display` trait
 
 Views cannot be stored in class fields or other owned aggregates.
 

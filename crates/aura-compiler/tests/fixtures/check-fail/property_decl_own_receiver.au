@@ -1,0 +1,9 @@
+class Token:
+    text: str
+
+    @property
+    def taken(own self) -> str:
+        return self.text
+
+def main():
+    pass

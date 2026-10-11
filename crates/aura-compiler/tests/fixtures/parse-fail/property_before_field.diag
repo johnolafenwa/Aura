@@ -1,0 +1,5 @@
+error[AU2044]: `@property` must come directly before a method in a class body
+ --> crates/aura-compiler/tests/fixtures/parse-fail/property_before_field.au:2:5
+  |
+2 |     @property
+  |     ^

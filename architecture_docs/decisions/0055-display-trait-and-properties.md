@@ -1,11 +1,14 @@
 # ADR-0055: Display trait and read-only properties
 
-- Status: Accepted direction; detailed design pending
+- Status: Accepted; detailed design ratified in the
+  [Batch 4 design checkpoint](../18-batch-4-design-checkpoint.md#e-display-and-read-only-properties);
+  implemented in Batch 4
 - Ratified direction: 2026-09-06, user approval of the priority roadmap
 - Date: 2026-08-02
 - Version target: Aura 0.4
-- Implementation: Not started
-- Roadmap decision: Batch S1, design-only checkpoint
+- Implementation: Display and read-only properties implemented in Batch 4;
+  property docstrings follow the ADR-0056 docstring work
+- Roadmap decision: Batch S1, design-only checkpoint; Batch 4 section E
 - Parser coordination: ADR-0053; ordinary decorator execution is not a prerequisite
 - Related: ADR-0004, ADR-0013, ADR-0015, ADR-0016, ADR-0022,
   ADR-0028, ADR-0030, ADR-0033, ADR-0038, ADR-0046, and ADR-0052

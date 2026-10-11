@@ -352,6 +352,7 @@ fn function_decl(name: &str, return_type: &str) -> FunctionDecl {
         view_return: None,
         body: Vec::new(),
         span: Span::new(1, 1),
+        property: None,
     }
 }
 
@@ -9825,4 +9826,87 @@ fn poll_outcomes_resolve_like_the_other_builtin_enums_in_analysis() {
         infer_builtin_variant_call("Poll", "Unavailable", &[], |_| None),
         Some(Type::Named("Poll".to_string(), vec![Type::Unit]))
     );
+}
+
+#[test]
+fn properties_hover_complete_and_navigate_as_properties() {
+    let source = [
+        "class Reply:",
+        "    prompt_tokens: int64",
+        "    completion_tokens: int64",
+        "    @property",
+        "    def total_tokens(self) -> int64:",
+        "        return self.prompt_tokens + self.completion_tokens",
+        "    def doubled(self) -> int64:",
+        "        return self.total_tokens * 2",
+        "def main():",
+        "    reply = Reply(prompt_tokens=1, completion_tokens=2)",
+        "    print(reply.total_tokens)",
+        "    print(reply.doubled())",
+        "",
+    ]
+    .join("\n");
+    let analysis = analyze_source(&source);
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "{:?}",
+        analysis.diagnostics
+    );
+    for (line, character) in [(7, 20), (10, 16)] {
+        let occurrence = analysis
+            .occurrences
+            .iter()
+            .find(|occurrence| {
+                occurrence.line == line
+                    && occurrence.start_character <= character
+                    && character < occurrence.end_character
+            })
+            .unwrap_or_else(|| panic!("no occurrence at {line}:{character}"));
+        assert_eq!(
+            occurrence.hover,
+            "```aura\nproperty total_tokens: int64\n```"
+        );
+        let definition = occurrence
+            .definition
+            .as_ref()
+            .expect("a property read navigates to its getter");
+        assert_eq!((definition.line, definition.start_character), (4, 4));
+    }
+
+    let class = analysis
+        .symbols
+        .iter()
+        .find(|symbol| symbol.name == "Reply")
+        .expect("class symbol");
+    let kinds = class
+        .children
+        .iter()
+        .map(|child| {
+            (
+                child.name.as_str(),
+                child.kind.as_str(),
+                child.detail.as_str(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        kinds.contains(&("total_tokens", "property", "int64")),
+        "{kinds:?}"
+    );
+    assert!(kinds.contains(&("doubled", "method", "int64")), "{kinds:?}");
+
+    let completion_source = source.replace("    print(reply.total_tokens)\n", "    reply.\n");
+    let completions =
+        complete_source(&completion_source, 10, 10, Some('.')).expect("member completions");
+    let property = completions
+        .iter()
+        .find(|completion| completion.name == "total_tokens")
+        .expect("property completion");
+    assert_eq!(property.kind, "property");
+    assert_eq!(property.detail, "int64");
+    let method = completions
+        .iter()
+        .find(|completion| completion.name == "doubled")
+        .expect("method completion");
+    assert_eq!(method.kind, "method");
 }

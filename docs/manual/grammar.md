@@ -220,9 +220,10 @@ comma.
 = == != < <= > >=
 + += - -= * *= ** **= / /= // //= % %=
 & &= | |= ^ ^= ~ << <<= >> >>=
-->
+-> @
 ```
 
+`@` appears only in the `@property` marker of a class method.
 There is no semicolon, assignment expression, unary plus, or lambda arrow.
 
 ## Modules And Imports
@@ -457,7 +458,8 @@ class-declaration
 class-member
     = "pass", NEWLINE
     | [ "public" ], field-declaration
-    | [ "public" ], method-declaration ;
+    | [ "public" ], method-declaration
+    | "@", "property", NEWLINE, [ "public" ], method-declaration ;
 
 field-declaration
     = identifier, ":", type,
@@ -465,6 +467,7 @@ field-declaration
 ```
 
 `copy` is contextual and is recognized only immediately before `class`.
+`property` after `@` is the only accepted marker name.
 Fields and methods may be interleaved. `pass` permits an otherwise empty class
 body. A comment-only body is not a suite.
 
@@ -1163,7 +1166,7 @@ The grammar intentionally excludes:
 - semicolons and multiple statements on one physical line
 - backslash line continuation
 - multiline f-strings
-- local item declarations, decorators, and attributes
+- local item declarations, attributes, and decorators other than `@property`
 - wildcard, relative-dot, and parenthesized import syntax
 - ordinary trailing commas other than the required singleton-tuple comma
 - collection, range, rest, and class patterns

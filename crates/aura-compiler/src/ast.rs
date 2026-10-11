@@ -141,6 +141,10 @@ pub struct FunctionDecl {
     pub view_return: Option<ViewReturn>,
     pub body: Vec<Stmt>,
     pub span: Span,
+    /// The span of the `@property` marker when this method declares a
+    /// read-only computed property.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub property: Option<Span>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]

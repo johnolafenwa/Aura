@@ -1,0 +1,6 @@
+@property
+def answer() -> int64:
+    return 42
+
+def main():
+    pass

@@ -551,6 +551,14 @@ impl<'a> FunctionChecker<'a> {
                     }
                 }
                 let object_ty = self.type_of_member_object_expr(object, locals)?;
+                // A property read is a fresh owned result: moving it leaves
+                // the receiver untouched.
+                if self
+                    .property_read_type(&object_ty, field, expr.span)?
+                    .is_some()
+                {
+                    return Ok(());
+                }
                 let member_ty = self.resolve_member_type(&object_ty, field, expr.span)?;
                 self.consume_typed_member_value_expr(
                     expr, object, field, &object_ty, &member_ty, locals,
@@ -696,6 +704,12 @@ impl<'a> FunctionChecker<'a> {
         };
         if let ExprKind::Member { object, field } = &ungrouped.kind {
             let object_ty = self.type_of_member_object_expr(object, locals)?;
+            if self
+                .property_read_type(&object_ty, field, ungrouped.span)?
+                .is_some()
+            {
+                return Ok(());
+            }
             let member_ty = self.resolve_member_type(&object_ty, field, ungrouped.span)?;
             if !self.is_copy_type(&member_ty) {
                 if let Some(root) = self.borrowed_root_binding_name(object, locals) {
@@ -849,6 +863,7 @@ impl<'a> FunctionChecker<'a> {
         span: crate::diag::Span,
         locals: &mut HashMap<String, LocalBinding>,
     ) -> Result<()> {
+        self.reject_property_place(object, "mutated", locals)?;
         if let Some(place) = self.borrow_call_place(object) {
             self.ensure_place_mutation_allowed(&place, span, locals)?;
             let through_view = locals

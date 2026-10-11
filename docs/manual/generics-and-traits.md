@@ -474,6 +474,71 @@ Some operators never use traits:
 
 An operator that selects a trait method also enforces that method's substituted clone-safety obligations.
 
+## The `Display` Trait
+
+Every module sees a prelude trait that customizes how a value renders. The
+prelude declares it as:
+
+```text
+trait Display:
+    def display(self) -> str
+```
+
+Implement it for a class or enum that the same module declares:
+
+```aura
+copy class Money:
+    cents: int64
+
+impl Display for Money:
+    def display(self) -> str:
+        return f"${self.cents // 100}.{self.cents % 100:02}"
+
+class Invoice:
+    total: Money
+    lines: list[Money]
+
+def main():
+    price = Money(cents=1250)
+    print(price)
+    print(f"due: {price}")
+    print(str(price) == price.display())
+    print(Invoice(total=price, lines=[price, Money(cents=5)]))
+```
+
+The program prints `$12.50`, `due: $12.50`, `true`, and
+`Invoice(lines=[$12.50, $0.05], total=$12.50)`.
+
+`print(value)`, `str(value)`, and an f-string field without a format
+specification all call `display`. So does the rendering of a value nested
+inside a list, tuple, set, dictionary, class field, enum payload, or union. A
+type without an implementation keeps its structural rendering.
+
+An implementation has these rules. `AU2043` reports each violation:
+
+- The target is a class or enum declared in the implementing module. A
+  builtin type, a tuple, a union, a type parameter, and another module's type
+  are rejected.
+- A generic target covers every specialization with distinct type parameters,
+  as in `impl[T] Display for Box[T]:`. A specialized target such as
+  `Box[int64]` and a bounded parameter such as `T: Ord[T]` are rejected,
+  because one type has one rendering.
+- A type has at most one `Display` implementation.
+- The block defines exactly `def display(self) -> str`. It has a shared
+  receiver, no parameters, no type parameters, and an owned `str` result.
+
+A module that declares or imports its own item named `Display` uses that item
+instead. Implementations of a user trait named `Display` do not change
+rendering.
+
+In an f-string, a value with a `Display` implementation accepts the string
+subset of the format grammar: fill, alignment, width, precision, and `s`.
+Precision truncates the rendered text first, then padding applies. A sign,
+zero padding, a thousands separator, or a numeric type code is `AU2002`.
+
+A `print` call renders its whole line before it writes. If a `display` call
+traps, that `print` writes nothing.
+
 ## `From` And `try`
 
 When `try` propagates `Result[T, SourceError]` from a function that returns `Result[U, TargetError]`:
@@ -551,6 +616,7 @@ No generic or trait boundary inserts a hidden clone, coercion, or ownership-mode
 | `AU2006` | A trait method name that collides with a builtin member. Rename the trait method. |
 | `AU2010` | A type parameter that a union-member argument cannot determine. Specialize explicitly. |
 | `AU2013` | A type arm over a type parameter. Use `case None` and a catch-all. |
+| `AU2043` | An invalid `Display` implementation: a foreign, builtin, tuple, union, or type-parameter target, a target that does not cover every specialization, a bounded parameter, an overlapping implementation, or a `display` method that does not match the trait. |
 | `AU2999` | Duplicate or invalid implementations, method-conformance or supertrait failure, unsupported implementation targets, and other generic or trait rejections. |
 | `AU3001` | Use after an owned generic value or receiver has moved. |
 | `AU3002` | A borrow conflict, or storing through a bare shared generic parameter. |
@@ -601,6 +667,7 @@ Implemented:
 - nominal traits and bounds, supertraits, and default methods
 - generic and specialized implementations with unique-most-specific dispatch
 - operator traits, `Self`, and `From`-based `try` conversion
+- the prelude `Display` trait and its rendering dispatch
 - inferred clone-safety contracts
 - type parameters as union members, renormalizing specialization, remainder inference, and universal generic body checks
 

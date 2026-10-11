@@ -1,0 +1,24 @@
+class Reply:
+    prompt_tokens: int64
+    completion_tokens: int64
+    words: list[str]
+
+    @property
+    def total_tokens(self) -> int64:
+        return self.prompt_tokens + self.completion_tokens
+
+    @property
+    def shouted(self) -> list[str]:
+        mut out: list[str] = []
+        for word in self.words:
+            out.append(word.to_upper())
+        return out
+
+def main():
+    reply = Reply(prompt_tokens=10, completion_tokens=5, words=["hi", "there"])
+    print(reply.total_tokens)
+    print(f"{reply.total_tokens * 2} doubled")
+    mut loud = reply.shouted
+    loud.append("!")
+    print(loud)
+    print(reply.words)

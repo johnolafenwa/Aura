@@ -53,6 +53,9 @@ pub struct Program {
     /// progressively scoped iterable inference.
     pub comprehensions: BTreeMap<ComprehensionId, ComprehensionInfo>,
     pub top_level_stmts: Vec<Stmt>,
+    /// Source positions of property reads, each rewritten into a call of
+    /// its getter (line and column of the property name).
+    pub property_reads: BTreeSet<(usize, usize)>,
 }
 
 #[derive(Clone, Debug)]
@@ -399,6 +402,10 @@ pub struct FunctionSignature {
 // crate-private. Public callers must use the source wrappers (which reject
 // unmanifested FFI) or path APIs (which enforce package opt-in and reports).
 pub(crate) fn check_with_context(module: Module, context: ModuleContext) -> Result<Program> {
+    super::property_reads::check_with_property_reads(module, context, check_with_context_once)
+}
+
+fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Program> {
     let module_name = if context.module_name.is_empty() {
         "<main>".to_string()
     } else {
@@ -616,6 +623,10 @@ pub(crate) fn check_with_context(module: Module, context: ModuleContext) -> Resu
                 }
             }
             Item::Function(function_decl) => {
+                super::property_reads::reject_property_outside_class(
+                    function_decl,
+                    "a module-level function",
+                )?;
                 if BuiltinFunction::from_name(&function_decl.name).is_some() {
                     return Err(Diagnostic::coded_at(
                         "AU2007",
@@ -705,6 +716,10 @@ pub(crate) fn check_with_context(module: Module, context: ModuleContext) -> Resu
         )?;
         let mut methods = BTreeMap::new();
         for method in &trait_decl.methods {
+            super::property_reads::reject_property_outside_class(
+                method,
+                &format!("a method of trait `{}`", trait_decl.name),
+            )?;
             validate_type_params(&method.type_params, method.span, "trait method")?;
             validate_params(
                 method.receiver,
@@ -1000,6 +1015,7 @@ pub(crate) fn check_with_context(module: Module, context: ModuleContext) -> Resu
             }
         }
 
+        super::property_reads::validate_class_properties(class_decl, &methods)?;
         classes.insert(
             class_decl.name.clone(),
             ClassInfo {
@@ -1313,6 +1329,12 @@ pub(crate) fn check_with_context(module: Module, context: ModuleContext) -> Resu
             continue;
         };
         validate_type_params(&impl_decl.type_params, impl_decl.span, "impl")?;
+        for method in &impl_decl.methods {
+            super::property_reads::reject_property_outside_class(
+                method,
+                &format!("a method of an `impl {}` block", impl_decl.trait_name),
+            )?;
+        }
         let trait_info = traits.get(&impl_decl.trait_name).ok_or_else(|| {
             Diagnostic::at(
                 impl_decl.span,
@@ -1769,6 +1791,7 @@ pub(crate) fn check_with_context(module: Module, context: ModuleContext) -> Resu
         closures: BTreeMap::new(),
         comprehensions: field_default_comprehensions.clone(),
         top_level_stmts: module.top_level_stmts.clone(),
+        property_reads: BTreeSet::new(),
     };
 
     let local_main = program

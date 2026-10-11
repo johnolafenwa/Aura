@@ -23,6 +23,7 @@ fn dummy_function(name: &str) -> FunctionDecl {
         view_return: None,
         body: vec![],
         span: Span::new(1, 1),
+        property: None,
     }
 }
 

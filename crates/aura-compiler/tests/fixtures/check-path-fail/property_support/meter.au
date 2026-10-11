@@ -1,0 +1,10 @@
+public class Meter:
+    public reading: int64
+
+    @property
+    public def doubled(self) -> int64:
+        return self.reading * 2
+
+    @property
+    def hidden(self) -> int64:
+        return self.reading + 1

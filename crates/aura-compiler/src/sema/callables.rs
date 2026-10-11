@@ -2788,6 +2788,7 @@ impl<'a> FunctionChecker<'a> {
                         }
                     }
                     ReceiverKind::BorrowMut => {
+                        self.reject_property_place(&argument.value, "passed as `mut`", locals)?;
                         let argument_place = self.borrow_call_place(&argument.value);
                         if let Some(place) = argument_place.as_ref() {
                             self.ensure_place_mutation_allowed(place, argument.span, locals)?;

@@ -794,8 +794,12 @@ fn lexes_nested_interpolations_and_reports_duration_overflow() {
     let float_overflow = lex("value = 1e1000\n").unwrap_err();
     assert!(float_overflow.message.contains("out of range"));
 
-    let invalid = lex("value = @\n").unwrap_err();
-    assert!(invalid.message.contains("unexpected character `@`"));
+    let invalid = lex("value = $\n").unwrap_err();
+    assert!(invalid.message.contains("unexpected character `$`"));
+
+    let decorator = kinds("@property\n");
+    assert_eq!(decorator[0], TokenKind::At);
+    assert_eq!(decorator[1], TokenKind::Identifier("property".to_string()));
 }
 
 #[test]

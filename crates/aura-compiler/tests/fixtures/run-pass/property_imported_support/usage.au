@@ -1,0 +1,11 @@
+public class Usage:
+    public prompt_tokens: int64
+    public completion_tokens: int64
+
+    @property
+    public def total_tokens(self) -> int64:
+        return self.prompt_tokens + self.completion_tokens
+
+    @property
+    public def label(self) -> str:
+        return f"{self.total_tokens} tokens"

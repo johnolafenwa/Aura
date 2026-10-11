@@ -4488,6 +4488,17 @@ fn render_direct_display(value: &Value) -> String {
     rendered.unwrap_or_else(|error| runtime_diagnostic_error(error))
 }
 
+/// Renders an opaque value. Without `Display` implementations the shared
+/// value renders in place. A `Display` body is user code, so the value is
+/// cloned first and its lock is not held while that code runs.
+fn render_direct_value(value: *mut OpaqueValue) -> String {
+    if direct_display_thunks().is_empty() {
+        unsafe { with_value(value, Value::render) }
+    } else {
+        render_direct_display(&unsafe { value_ref(value) })
+    }
+}
+
 fn call_direct_display_thunk(thunk: usize, value: &Value) -> String {
     let argument = boxed_value(value.clone());
     let mut arguments = [argument as i64];
@@ -4511,7 +4522,7 @@ fn call_direct_display_thunk(thunk: usize, value: &Value) -> String {
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_stringify_value(value: *mut OpaqueValue) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
-        let rendered = render_direct_display(&unsafe { value_ref(value) });
+        let rendered = render_direct_value(value);
         boxed_value(Value::String(rendered))
     })
 }
@@ -7213,7 +7224,7 @@ pub extern "C-unwind" fn aura_direct_unbox_bool(value: *mut OpaqueValue) -> i64 
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_print_value(value: *mut OpaqueValue) {
     task_runtime_boundary(|| {
-        let mut rendered = render_direct_display(&unsafe { value_ref(value) });
+        let mut rendered = render_direct_value(value);
         rendered.push('\n');
         write_stdout(&rendered);
     })

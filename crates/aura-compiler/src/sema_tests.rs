@@ -7597,6 +7597,7 @@ fn function_decl(name: &str) -> FunctionDecl {
         view_return: None,
         body: Vec::new(),
         span: Span::new(1, 1),
+        property: None,
     }
 }
 

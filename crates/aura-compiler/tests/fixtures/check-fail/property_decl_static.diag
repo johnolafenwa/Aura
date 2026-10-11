@@ -1,0 +1,7 @@
+error[AU2044]: property `default` is invalid: its receiver must be bare shared `self`
+ --> crates/aura-compiler/tests/fixtures/check-fail/property_decl_static.au:5:5
+  |
+5 |     def default() -> str:
+  |     ^
+  = related crates/aura-compiler/tests/fixtures/check-fail/property_decl_static.au:4:5: `@property` is declared here
+  = help: declare it as `def default(self) -> Type:`

@@ -78,6 +78,7 @@ pub(crate) fn synthetic_returned_view_decl(
         }),
         body: Vec::new(),
         span,
+        property: None,
     })
 }
 
@@ -4200,6 +4201,7 @@ impl<'a> FunctionChecker<'a> {
         span: crate::diag::Span,
         locals: &mut HashMap<String, LocalBinding>,
     ) -> Result<Option<PlacePath>> {
+        self.reject_property_place(scrutinee, "matched with `match mut`", locals)?;
         let Some(access) = self.borrow_call_place(scrutinee) else {
             return Err(Diagnostic::coded_at(
                 "AU3002",

@@ -1,0 +1,6 @@
+error[AU2045]: property `area` is read-only and cannot be updated
+ --> crates/aura-compiler/tests/fixtures/check-fail/property_compound_assign.au:25:5
+   |
+25 |     shape.area += 3
+   |     ^
+  = help: a property computes a fresh value on each read; bind it to a local to change the copy
