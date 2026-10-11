@@ -99,16 +99,18 @@ value = left + \        # invalid Aura
 A comma or operator at the end of a line does not continue it on its own.
 Keep a delimiter open instead.
 
-A list with more than one element still rejects a trailing comma. Write this:
+A list inside a delimiter may end with a trailing comma. This keeps each line
+the same shape, so adding an element later changes one line:
 
 ```aura check-pass
 values = [
     10,
-    20
+    20,
 ]
 ```
 
-Do not put a comma after `20`.
+The comma after `20` is optional. A trailing comma needs the closing
+delimiter: `left, right, = pair` is rejected.
 
 Ordinary strings and f-strings stay on one line. To split a long calculation,
 break it across delimiters outside the string. Do not put a physical newline

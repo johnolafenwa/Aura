@@ -14,8 +14,8 @@ only = (true,)
 ```
 
 `(value)` is still grouping, so a one-element tuple needs its comma:
-`(value,)`. Aura has no empty tuple. A tuple with two or more elements does
-not take a trailing comma.
+`(value,)`. Aura has no empty tuple. A tuple with two or more elements may
+end with a trailing comma, and `(1, 2,)` is the same tuple as `(1, 2)`.
 
 Tuple types look like tuple values:
 
