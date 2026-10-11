@@ -1,0 +1,21 @@
+class Countdown:
+    start: int64
+    steps: list[int64]
+    double: def(value: int64) -> int64
+
+    def __init__(self, start: int64):
+        mut current = start
+        while true:
+            if current <= 0:
+                self.start = start
+                break
+            current -= 1
+        self.steps = [step for step in range(start)]
+        self.double = lambda value: value * 2
+
+def main():
+    countdown = Countdown(3)
+    print(countdown.start)
+    print(countdown.steps)
+    double = countdown.double
+    print(double(21))

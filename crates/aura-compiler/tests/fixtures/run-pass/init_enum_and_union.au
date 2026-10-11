@@ -1,0 +1,30 @@
+enum Shape:
+    Circle(int64)
+    Rect(int64, int64)
+
+class Area:
+    kind: str
+    value: int64
+    note: str | None
+
+    def __init__(self, shape: Shape, note: str | None = None):
+        match shape:
+            case Shape.Circle(radius):
+                self.kind = "circle"
+                self.value = 3 * radius * radius
+            case Shape.Rect(width, height):
+                self.kind = "rect"
+                self.value = width * height
+        if note is not None:
+            self.note = note.clone()
+        else:
+            self.note = None
+
+def describe(area: Area) -> str:
+    if area.note is not None:
+        return f"{area.kind} {area.value} ({area.note})"
+    return f"{area.kind} {area.value}"
+
+def main():
+    print(describe(Area(Shape.Circle(2))))
+    print(describe(Area(Shape.Rect(3, 4), note="wide")))

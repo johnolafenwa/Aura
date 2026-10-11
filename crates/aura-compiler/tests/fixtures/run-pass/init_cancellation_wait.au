@@ -1,0 +1,32 @@
+class Probe:
+    label: str
+    outcome: str
+
+    def __init__(self, label: str, inbox: Queue[int32]):
+        self.label = label.clone()
+        match inbox.get(timeout=5s):
+            case QueueReceive.Item(value):
+                self.outcome = f"item {value}"
+            case QueueReceive.Cancelled:
+                self.outcome = "cancelled"
+            case QueueReceive.Closed:
+                self.outcome = "closed"
+            case QueueReceive.TimedOut:
+                self.outcome = "timed out"
+
+def worker(inbox: Queue[int32], results: Queue[str]):
+    probe = Probe("waiting", inbox)
+    results.put(f"{probe.label}: {probe.outcome}")
+
+def main():
+    inbox = Queue[int32]()
+    results = Queue[str]()
+    with TaskGroup() as group:
+        group.start(worker, inbox, results)
+        sleep(10ms)
+        group.cancel()
+    match results.get(timeout=1s):
+        case QueueReceive.Item(text):
+            print(text)
+        case _:
+            print("no result")

@@ -1,0 +1,24 @@
+trait Named:
+    def name(self) -> str
+
+class User:
+    label: str
+
+impl Named for User:
+    def name(self) -> str:
+        return self.label.clone()
+
+class Badge[T: Named]:
+    owner: T
+    text: str
+
+    def __init__(self, owner: own T, *, prefix: str = "badge"):
+        self.text = f"{prefix}:{owner.name()}"
+        self.owner = owner
+
+def main():
+    badge = Badge(User(label="ada"))
+    custom = Badge(User(label="grace"), prefix="vip")
+    print(badge.text)
+    print(custom.text)
+    print(custom.owner.name())
