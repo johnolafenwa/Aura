@@ -3723,7 +3723,12 @@ fn direct_text_methods_dispatch_every_opcode_with_mir_semantics() {
         vec!["a", "b", "", "c\r"]
     );
     assert_eq!(
-        direct_text_list(direct_text_method("split_whitespace", " a\u{3000}b  ", None, 0)),
+        direct_text_list(direct_text_method(
+            "split_whitespace",
+            " a\u{3000}b  ",
+            None,
+            0
+        )),
         vec!["a", "b"]
     );
     let index = expect_optional_payload(direct_text_method("find", "日本語", Some("語"), 0));
@@ -3739,11 +3744,21 @@ fn direct_text_methods_dispatch_every_opcode_with_mir_semantics() {
     );
 
     let split = crate::native_codegen::text_method_opcode("split_once").unwrap();
-    let error = direct_text_method_trap(split, Value::String("a".into()), Some(Value::String(String::new())), 0);
+    let error = direct_text_method_trap(
+        split,
+        Value::String("a".into()),
+        Some(Value::String(String::new())),
+        0,
+    );
     assert_eq!(error.code, "AU4003");
     assert_eq!(error.message, "`split_once` separator cannot be empty");
     let count = crate::native_codegen::text_method_opcode("count").unwrap();
-    let error = direct_text_method_trap(count, Value::String("a".into()), Some(Value::String(String::new())), 0);
+    let error = direct_text_method_trap(
+        count,
+        Value::String("a".into()),
+        Some(Value::String(String::new())),
+        0,
+    );
     assert_eq!(error.code, "AU4003");
     let repeat = crate::native_codegen::text_method_opcode("repeat").unwrap();
     let error = direct_text_method_trap(repeat, Value::String("a".into()), None, -1);
@@ -3752,12 +3767,19 @@ fn direct_text_methods_dispatch_every_opcode_with_mir_semantics() {
     assert_eq!(error.code, "AU4005");
     let error = direct_text_method_trap(split, Value::String("a".into()), None, 0);
     assert_eq!(error.message, "`split_once` requires a `str` argument");
-    let error = direct_text_method_trap(split, Value::String("a".into()), Some(Value::Bool(true)), 0);
-    assert!(error.message.contains("requires a `str` argument"), "{error:?}");
+    let error =
+        direct_text_method_trap(split, Value::String("a".into()), Some(Value::Bool(true)), 0);
+    assert!(
+        error.message.contains("requires a `str` argument"),
+        "{error:?}"
+    );
     let error = direct_text_method_trap(repeat, Value::Bool(true), None, 1);
     assert_eq!(error.message, "expected `str`, found `bool`");
     let error = direct_text_method_trap(99, Value::String("a".into()), None, 0);
-    assert!(error.message.contains("unknown direct text method opcode"), "{error:?}");
+    assert!(
+        error.message.contains("unknown direct text method opcode"),
+        "{error:?}"
+    );
 }
 
 fn direct_byte_list(bytes: &[u8]) -> *mut OpaqueValue {
@@ -3789,7 +3811,10 @@ fn direct_byte_search_builtins_borrow_both_lists() {
     assert_eq!(unsafe { take_value(ends) }, Value::Bool(false));
     let found = direct_host_builtin_call(
         "bytes::find",
-        &[direct_byte_list(&[0, 255, 0, 255, 7]), direct_byte_list(&[255, 7])],
+        &[
+            direct_byte_list(&[0, 255, 0, 255, 7]),
+            direct_byte_list(&[255, 7]),
+        ],
     );
     assert_eq!(expect_optional_present(found).render(), "3");
     let missing = direct_host_builtin_call(
