@@ -246,7 +246,7 @@ allocation fails before that point, the list is unchanged.
 `Span[T]` is a view of a contiguous range of a `list[T]`. It reads and writes
 the list's elements in place and never copies them.
 
-<<< @/examples/collections/span_views.au
+<<< ../../examples/collections/span_views.au{aura}
 
 ### Creating A Span
 
