@@ -1,0 +1,8 @@
+def main():
+    name = "aura"
+    match (name, 1):
+        case (text, 1):
+            print(text)
+        case _:
+            print("other")
+    print(name)

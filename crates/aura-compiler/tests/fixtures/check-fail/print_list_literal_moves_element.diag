@@ -1,0 +1,8 @@
+error[AU3001]: use of moved value `values`
+ --> crates/aura-compiler/tests/fixtures/check-fail/print_list_literal_moves_element.au:4:11
+  |
+4 |     print(values)
+  |           ^
+  = related crates/aura-compiler/tests/fixtures/check-fail/print_list_literal_moves_element.au:3:12: value moved here
+  = help: pass shared access when ownership is not needed, or call `.copy()` at the move site when an independent value is required
+  = fix: replace crates/aura-compiler/tests/fixtures/check-fail/print_list_literal_moves_element.au:3:18-3:18 with `.copy()`

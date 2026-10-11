@@ -1,0 +1,17 @@
+def show(entry: (str, int64)):
+    print(entry)
+
+def main():
+    count = 2
+    name = "aura"
+    print((count, 3))
+    print([count, count])
+    print(len({count: count}))
+    print(f"{(count, 4)}")
+    print((count, 1) == (2, 1))
+    print((name.clone(), count))
+    show((name.clone(), count))
+    print(len([name.clone()]))
+    print(count)
+    print(name)
+    print((name, count))
