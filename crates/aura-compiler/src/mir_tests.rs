@@ -4030,6 +4030,7 @@ fn json_runtime_enums_keep_their_module_qualified_identity() {
                 type_param_bounds: std::collections::BTreeMap::new(),
                 variants: Vec::new(),
                 span: Span::new(1, 1),
+                doc: None,
             },
             type_param_bounds: std::collections::BTreeMap::new(),
             variants: std::collections::BTreeMap::new(),
@@ -13566,4 +13567,64 @@ def main():
         &inactive_parent,
         "invalid MIR element reborrow `first` in `main` has inactive parent `second`",
     );
+}
+
+#[test]
+fn docstring_edits_do_not_change_executable_mir() {
+    // Each variant keeps the same line layout, so spans are comparable. The
+    // documented versions differ only in docstring text or in replacing a
+    // docstring line with a comment.
+    let program = |module_doc: &str, class_doc: &str, field_doc: &str, method_doc: &str| {
+        format!(
+            concat!(
+                "{module_doc}\n",
+                "class Counter:\n",
+                "    {class_doc}\n",
+                "    count: int64\n",
+                "    {field_doc}\n",
+                "    def bump(mut self):\n",
+                "        {method_doc}\n",
+                "        self.count += 1\n",
+                "trait Named:\n",
+                "    {method_doc}\n",
+                "    def name(self) -> str{trait_colon}\n",
+                "        {method_doc}\n",
+                "impl Named for Counter:\n",
+                "    def name(self) -> str:\n",
+                "        {method_doc}\n",
+                "        return \"counter\"\n",
+                "def main():\n",
+                "    {method_doc}\n",
+                "    mut counter = Counter(count=0)\n",
+                "    counter.bump()\n",
+                "    print(counter.count)\n",
+                "    print(counter.name())\n",
+            ),
+            module_doc = module_doc,
+            class_doc = class_doc,
+            field_doc = field_doc,
+            method_doc = method_doc,
+            trait_colon = if method_doc.starts_with('#') { "" } else { ":" },
+        )
+    };
+    let lower = |source: &str| {
+        let module = crate::lower_source_to_mir(source).expect("source should lower");
+        serde_json::to_string(&module).expect("MIR should serialize")
+    };
+    let comments = lower(&program("# m", "# c", "# f", "# d"));
+    let documented = lower(&program(
+        "\"\"\"Module docs.\"\"\"",
+        "\"\"\"Class docs.\"\"\"",
+        "\"\"\"Field docs.\"\"\"",
+        "\"\"\"Method docs.\"\"\"",
+    ));
+    let edited = lower(&program(
+        "'''Edited module docs with more text.'''",
+        "'''Edited class docs.'''",
+        "'''Edited field docs.'''",
+        "'''Edited method docs that are longer.'''",
+    ));
+    assert_eq!(documented, comments);
+    assert_eq!(edited, comments);
+    assert!(!documented.contains("Method docs"));
 }

@@ -1,0 +1,5 @@
+error[AU2999]: impl of `Shape` for `Square` is missing method `area`
+ --> crates/aura-compiler/tests/fixtures/check-fail/docstring_trait_signature_only_method.au:9:1
+  |
+9 | impl Shape for Square:
+  | ^

@@ -4423,3 +4423,275 @@ fn type_ref_span_offsets_cover_callables_and_view_returns() {
         .expect("view return survives offsetting");
     assert_eq!((view_return.span.line, view_return.span.column), (4, 3));
 }
+
+fn doc_text(doc: &Option<DocString>) -> Option<&str> {
+    doc.as_ref().map(|doc| doc.text.as_str())
+}
+
+#[test]
+fn docstrings_attach_to_every_first_slot_and_produce_no_statement() {
+    let module = parse(concat!(
+        "# leading comment\n",
+        "\n",
+        "\"\"\"Module docs.\"\"\"\n",
+        "import math\n",
+        "public class Point:\n",
+        "    # comment before the class docstring\n",
+        "    '''Class docs.'''\n",
+        "    x: int64\n",
+        "    \"\"\"Field x.\"\"\"\n",
+        "    y: int64 = (\n",
+        "        1\n",
+        "    )\n",
+        "    \"\"\"Field y after a multi-line default.\"\"\"\n",
+        "    z: int64\n",
+        "    def norm(self) -> int64:\n",
+        "        \"\"\"Method docs.\"\"\"\n",
+        "        return self.x\n",
+        "enum Color:\n",
+        "    \"\"\"Enum docs.\"\"\"\n",
+        "    Red\n",
+        "trait Shape:\n",
+        "    \"\"\"Trait docs.\"\"\"\n",
+        "    def area(self) -> int64:\n",
+        "        \"\"\"Signature-only method docs.\"\"\"\n",
+        "    def twice(self) -> int64:\n",
+        "        \"\"\"Default method docs.\"\"\"\n",
+        "        return self.area() * 2\n",
+        "impl Shape for Point:\n",
+        "    def area(self) -> int64:\n",
+        "        \"\"\"Implementation docs.\"\"\"\n",
+        "        return 0\n",
+        "def only_docs():\n",
+        "    \"\"\"Only docs.\"\"\"\n",
+    ))
+    .expect("documented declarations should parse");
+    assert_eq!(doc_text(&module.doc), Some("Module docs."));
+    assert_eq!(module.imports.len(), 1);
+    let Item::Class(class_decl) = &module.items[0] else {
+        panic!("expected a class");
+    };
+    assert_eq!(doc_text(&class_decl.doc), Some("Class docs."));
+    assert_eq!(doc_text(&class_decl.fields[0].doc), Some("Field x."));
+    assert_eq!(
+        doc_text(&class_decl.fields[1].doc),
+        Some("Field y after a multi-line default.")
+    );
+    assert_eq!(class_decl.fields[2].doc, None);
+    assert_eq!(doc_text(&class_decl.methods[0].doc), Some("Method docs."));
+    assert_eq!(class_decl.methods[0].body.len(), 1);
+    assert!(matches!(class_decl.methods[0].body[0], Stmt::Return(_)));
+    let Item::Enum(enum_decl) = &module.items[1] else {
+        panic!("expected an enum");
+    };
+    assert_eq!(doc_text(&enum_decl.doc), Some("Enum docs."));
+    let Item::Trait(trait_decl) = &module.items[2] else {
+        panic!("expected a trait");
+    };
+    assert_eq!(doc_text(&trait_decl.doc), Some("Trait docs."));
+    assert_eq!(
+        doc_text(&trait_decl.methods[0].doc),
+        Some("Signature-only method docs.")
+    );
+    assert!(trait_decl.methods[0].body.is_empty());
+    assert_eq!(
+        doc_text(&trait_decl.methods[1].doc),
+        Some("Default method docs.")
+    );
+    assert_eq!(trait_decl.methods[1].body.len(), 1);
+    let Item::Impl(impl_decl) = &module.items[3] else {
+        panic!("expected an impl");
+    };
+    assert_eq!(
+        doc_text(&impl_decl.methods[0].doc),
+        Some("Implementation docs.")
+    );
+    let Item::Function(function_decl) = &module.items[4] else {
+        panic!("expected a function");
+    };
+    assert_eq!(doc_text(&function_decl.doc), Some("Only docs."));
+    assert!(matches!(function_decl.body.as_slice(), [Stmt::Pass(_)]));
+}
+
+#[test]
+fn only_a_complete_plain_triple_string_in_a_first_slot_is_documentation() {
+    let module = parse(concat!(
+        "import math\n",
+        "\"\"\"After an import, this is a statement.\"\"\"\n",
+        "def raw() -> int64:\n",
+        "    r\"\"\"\n",
+        "    return 1\n",
+        "def single() -> int64:\n",
+        "    \"single quoted\"\n",
+        "    return 1\n",
+        "def fstring() -> int64:\n",
+        "    f\"text {1}\"\n",
+        "    return 1\n",
+        "def concatenated() -> str:\n",
+        "    return \"\"\"a\"\"\" + \"b\"\n",
+        "def expression():\n",
+        "    \"\"\"a\"\"\".upper()\n",
+        "def later() -> int64:\n",
+        "    value = 1\n",
+        "    \"\"\"Later string.\"\"\"\n",
+        "    return value\n",
+    ));
+    // `r"""` is a lexical error, which keeps raw strings out of first slots.
+    assert!(module.is_err());
+
+    let module = parse(concat!(
+        "import math\n",
+        "\"\"\"After an import, this is a statement.\"\"\"\n",
+        "def single() -> int64:\n",
+        "    \"single quoted\"\n",
+        "    return 1\n",
+        "def fstring() -> int64:\n",
+        "    f\"text {1}\"\n",
+        "    return 1\n",
+        "def concatenated() -> str:\n",
+        "    return \"\"\"a\"\"\" + \"b\"\n",
+        "def expression():\n",
+        "    \"\"\"a\"\"\".upper()\n",
+        "def later() -> int64:\n",
+        "    value = 1\n",
+        "    \"\"\"Later string.\"\"\"\n",
+        "    return value\n",
+    ))
+    .expect("ordinary strings should parse as statements");
+    assert_eq!(module.doc, None);
+    assert_eq!(module.top_level_stmts.len(), 1);
+    for item in &module.items {
+        let Item::Function(function_decl) = item else {
+            panic!("expected functions");
+        };
+        assert_eq!(function_decl.doc, None, "{}", function_decl.name);
+    }
+    let Item::Function(later) = &module.items[4] else {
+        panic!("expected a function");
+    };
+    assert_eq!(later.body.len(), 3);
+    assert!(
+        matches!(&later.body[1], Stmt::Expr(ExprStmt { expr, .. }) if matches!(&expr.kind, ExprKind::String(text) if text == "Later string."))
+    );
+}
+
+#[test]
+fn misplaced_docstrings_in_declaration_bodies_are_au2042() {
+    for (source, fragment) in [
+        (
+            "class Point:\n    x: int64\n\n    \"\"\"Not adjacent.\"\"\"\n",
+            "class body",
+        ),
+        (
+            "class Point:\n    \"\"\"Docs.\"\"\"\n    \"\"\"Second.\"\"\"\n",
+            "class body",
+        ),
+        (
+            "enum Color:\n    Red\n    \"\"\"Variant.\"\"\"\n",
+            "enum body",
+        ),
+        (
+            "trait Shape:\n    def area(self) -> int64\n    \"\"\"Late.\"\"\"\n",
+            "trait body",
+        ),
+        (
+            "impl Shape for Point:\n    \"\"\"Impl.\"\"\"\n    pass\n",
+            "implementation block",
+        ),
+    ] {
+        let error = parse(source).expect_err("misplaced docstring should be rejected");
+        assert_eq!(error.code, "AU2042", "{source}");
+        assert!(error.message.contains(fragment), "{}", error.message);
+    }
+}
+
+#[test]
+fn docstring_size_limits_count_utf8_bytes_after_escapes() {
+    let limit = MAX_DOCSTRING_BYTES;
+    let at_limit = format!("def f():\n    \"\"\"{}\"\"\"\n", "a".repeat(limit));
+    parse(&at_limit).expect("a docstring of exactly the limit is accepted");
+
+    let over = format!("def f():\n    \"\"\"{}\"\"\"\n", "a".repeat(limit + 1));
+    let error = parse(&over).expect_err("one byte over the limit is rejected");
+    assert_eq!(error.code, "AU2042");
+    assert_eq!(error.span, Some(Span::new(2, 5)));
+    assert!(error.message.contains(&format!("{} bytes", limit + 1)));
+    assert!(error.message.contains(&format!("limit is {limit} bytes")));
+
+    // `é` is two bytes, so one fewer `a` plus the scalar crosses the limit.
+    let multibyte = format!("def f():\n    \"\"\"{}é\"\"\"\n", "a".repeat(limit - 1));
+    assert_eq!(
+        parse(&multibyte).expect_err("multibyte overflow").code,
+        "AU2042"
+    );
+    // An escape counts its decoded bytes, not its spelling.
+    let escaped = format!("def f():\n    \"\"\"{}\\n\"\"\"\n", "a".repeat(limit - 1));
+    parse(&escaped).expect("a decoded newline counts as one byte");
+}
+
+#[test]
+fn module_documentation_limit_counts_public_documentation_only() {
+    let chunk = MAX_DOCSTRING_BYTES;
+    let count = MAX_MODULE_DOCUMENTATION_BYTES / chunk;
+    let function = |index: usize, public: bool, size: usize| {
+        format!(
+            "{}def f{index}():\n    \"\"\"{}\"\"\"\n",
+            if public { "public " } else { "" },
+            "a".repeat(size)
+        )
+    };
+    let exact = (0..count)
+        .map(|index| function(index, true, chunk))
+        .collect::<String>();
+    parse(&exact).expect("exactly the module limit is accepted");
+
+    let private_extra = format!("{exact}{}", function(count, false, chunk));
+    parse(&private_extra).expect("private documentation is not counted");
+
+    let over = format!("{exact}{}", function(count, true, 1));
+    let error = parse(&over).expect_err("one public byte over the module limit");
+    assert_eq!(error.code, "AU2042");
+    assert_eq!(error.span, Some(Span::new(count * 2 + 2, 5)));
+    assert!(error.message.contains(&format!(
+        "{} bytes; the limit is {MAX_MODULE_DOCUMENTATION_BYTES} bytes",
+        MAX_MODULE_DOCUMENTATION_BYTES + 1
+    )));
+
+    let members = concat!(
+        "\"\"\"m\"\"\"\n",
+        "public class C:\n",
+        "    \"\"\"c\"\"\"\n",
+        "    public x: int64\n",
+        "    \"\"\"x\"\"\"\n",
+        "    y: int64\n",
+        "    \"\"\"private field\"\"\"\n",
+        "    public def m(self):\n",
+        "        \"\"\"pm\"\"\"\n",
+        "    def p(self):\n",
+        "        \"\"\"private method\"\"\"\n",
+        "class Hidden:\n",
+        "    \"\"\"hidden\"\"\"\n",
+        "public enum E:\n",
+        "    \"\"\"e\"\"\"\n",
+        "    A\n",
+        "enum PrivateEnum:\n",
+        "    \"\"\"private enum\"\"\"\n",
+        "    A\n",
+        "public trait T:\n",
+        "    \"\"\"t\"\"\"\n",
+        "    def tm(self):\n",
+        "        \"\"\"tm\"\"\"\n",
+        "trait PrivateTrait:\n",
+        "    \"\"\"private trait\"\"\"\n",
+        "impl T for C:\n",
+        "    def tm(self):\n",
+        "        \"\"\"im\"\"\"\n",
+        "type Alias = int64\n",
+    );
+    let module = parse(members).expect("members parse");
+    let texts = public_docstrings(&module)
+        .into_iter()
+        .map(|doc| doc.text.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(texts, ["m", "c", "x", "pm", "e", "t", "tm", "im"]);
+}

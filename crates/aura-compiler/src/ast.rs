@@ -4,8 +4,126 @@ use serde::ser::SerializeStruct;
 use serde::{Deserialize, Serialize, Serializer};
 use std::collections::BTreeMap;
 
+/// Declaration documentation recorded from a first-slot triple-quoted string.
+///
+/// `text` is the literal's exact decoded content. Presentation layers derive a
+/// readable form with [`normalize_docstring`]; the stored text is never
+/// rewritten. Documentation produces no executable statement.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct DocString {
+    pub text: String,
+    pub span: Span,
+}
+
+/// The shared presentation normalization for docstrings.
+///
+/// Leading and trailing blank lines are removed, the first line keeps its own
+/// text after its leading spaces, the smallest space indentation of the
+/// remaining non-blank lines is removed from each of them, and trailing
+/// spaces are removed from every line. Tabs are content.
+pub fn normalize_docstring(text: &str) -> String {
+    let mut lines = text.split('\n').collect::<Vec<_>>();
+    while lines
+        .first()
+        .is_some_and(|line| line.trim_matches(' ').is_empty())
+    {
+        lines.remove(0);
+    }
+    while lines
+        .last()
+        .is_some_and(|line| line.trim_matches(' ').is_empty())
+    {
+        lines.pop();
+    }
+    let Some((first, rest)) = lines.split_first() else {
+        return String::new();
+    };
+    let margin = rest
+        .iter()
+        .filter(|line| !line.trim_matches(' ').is_empty())
+        .map(|line| line.len() - line.trim_start_matches(' ').len())
+        .min()
+        .unwrap_or(0);
+    let mut normalized = vec![first.trim_start_matches(' ').trim_end_matches(' ')];
+    for line in rest {
+        let line = if line.trim_matches(' ').is_empty() {
+            ""
+        } else {
+            &line[margin..]
+        };
+        normalized.push(line.trim_end_matches(' '));
+    }
+    normalized.join("\n")
+}
+
+/// The entries of a docstring's `Args:` section, as `(name, description)`.
+///
+/// The section starts at a line that reads `Args:` after normalization. Each
+/// entry is `name: description`, indented under the heading. Lines indented
+/// further than the entry continue its description. The section ends at the
+/// first non-blank line indented no deeper than the heading. The compiler does
+/// not validate the section; it is presentation data.
+pub fn docstring_args(text: &str) -> Vec<(String, String)> {
+    let normalized = normalize_docstring(text);
+    let lines = normalized.split('\n').collect::<Vec<_>>();
+    let indent = |line: &str| line.len() - line.trim_start_matches(' ').len();
+    let Some(heading) = lines.iter().position(|line| line.trim() == "Args:") else {
+        return Vec::new();
+    };
+    let heading_indent = indent(lines[heading]);
+    let mut entries: Vec<(String, String)> = Vec::new();
+    let mut entry_indent = None;
+    for line in &lines[heading + 1..] {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let line_indent = indent(line);
+        if line_indent <= heading_indent {
+            break;
+        }
+        let entry_level = *entry_indent.get_or_insert(line_indent);
+        let text = line.trim();
+        let entry = (line_indent <= entry_level)
+            .then(|| text.split_once(':'))
+            .flatten()
+            .filter(|(name, _)| {
+                !name.is_empty() && name.chars().all(|ch| ch == '_' || ch.is_alphanumeric())
+            });
+        match (entry, entries.last_mut()) {
+            (Some((name, description)), _) => {
+                entries.push((name.to_string(), description.trim().to_string()));
+            }
+            (None, Some((_, description))) => {
+                if !description.is_empty() {
+                    description.push('\n');
+                }
+                description.push_str(text);
+            }
+            (None, None) => {}
+        }
+    }
+    entries
+}
+
+/// The first non-empty line of a normalized docstring, truncated to
+/// `limit` Unicode scalar values with a trailing ellipsis.
+pub fn docstring_summary(text: &str, limit: usize) -> Option<String> {
+    let normalized = normalize_docstring(text);
+    let line = normalized.lines().find(|line| !line.trim().is_empty())?;
+    let line = line.trim();
+    if line.chars().count() > limit {
+        let mut summary = line.chars().take(limit).collect::<String>();
+        summary.push('\u{2026}');
+        Some(summary)
+    } else {
+        Some(line.to_string())
+    }
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct Module {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub doc: Option<DocString>,
     pub imports: Vec<ImportDecl>,
     pub constants: Vec<ConstantDecl>,
     pub items: Vec<Item>,
@@ -93,6 +211,8 @@ pub struct ClassDecl {
     pub fields: Vec<FieldDecl>,
     pub methods: Vec<FunctionDecl>,
     pub span: Span,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub doc: Option<DocString>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -102,6 +222,8 @@ pub struct FieldDecl {
     pub ty: TypeRef,
     pub default: Option<Expr>,
     pub span: Span,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub doc: Option<DocString>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -112,6 +234,8 @@ pub struct EnumDecl {
     pub type_param_bounds: BTreeMap<String, Vec<TypeRef>>,
     pub variants: Vec<EnumVariantDecl>,
     pub span: Span,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub doc: Option<DocString>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -141,6 +265,8 @@ pub struct FunctionDecl {
     pub view_return: Option<ViewReturn>,
     pub body: Vec<Stmt>,
     pub span: Span,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub doc: Option<DocString>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -184,6 +310,8 @@ pub struct TraitDecl {
     pub supertraits: Vec<TypeRef>,
     pub methods: Vec<FunctionDecl>,
     pub span: Span,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub doc: Option<DocString>,
 }
 
 #[derive(Clone, Debug, Serialize)]

@@ -1,0 +1,5 @@
+error[AU2042]: misplaced docstring: a string in a class body must be the class docstring or directly follow a field
+ --> crates/aura-compiler/tests/fixtures/parse-fail/docstring_misplaced_class_body.au:4:5
+  |
+4 |     """Separated from the field by a blank line."""
+  |     ^

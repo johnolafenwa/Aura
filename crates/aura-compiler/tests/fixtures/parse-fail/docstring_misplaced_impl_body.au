@@ -1,0 +1,7 @@
+class Point:
+    x: int64
+
+impl Clone for Point:
+    """Implementation blocks have no documentation."""
+    def clone(self) -> Point:
+        return Point(x=self.x)

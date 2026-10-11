@@ -78,6 +78,7 @@ pub(crate) fn synthetic_returned_view_decl(
         }),
         body: Vec::new(),
         span,
+        doc: None,
     })
 }
 
