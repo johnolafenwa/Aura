@@ -7,66 +7,90 @@ in this file.
 
 ## Unreleased
 
-- A function can return a view of one list element or dictionary entry of its
-  origin: `return view items[i]`, `return view mut table[key]`, or a field
-  inside the element. The index or key is evaluated once in the callee, and
-  an invalid one traps there with `AU4003`. The caller's view reaches the
-  element in place and holds the whole collection while it is live. This was
-  refused with `AU3004`.
-- The semantic interface schema is now 17, because returned-view contracts
-  can name an element step. Tools that pin the schema must update.
-- `for x in mut items:` binds each element as a mutable element view, so a
-  write lands in the list immediately instead of when the iteration ends.
-  Non-Copy elements are no longer cloned and written back. Iterating a
-  nested element, as in `for x in mut grid[1]:`, now works; it used to fail
-  with an internal MIR error.
-- A view whose last use is inside an `if`, `else`, or `match` branch that
-  then leaves the loop with `break`, `continue`, or `return` no longer fails
-  with "ends inactive loan".
-- Lists and dictionaries gain `lookup`, which views an element in place when
-  it may be missing. Write `match items.lookup(i):` or `match mut
-  table.lookup(key):` with `case Lookup.Found(item):` and `case
-  Lookup.Missing:` arms. Unlike `get`, nothing is cloned, so it works for any
-  element type. `lookup` is only valid as the subject of a `match` statement.
-- The direct backend now handles a method call on a field reached through an
-  element view, such as `team.members.append(name)` after `view mut team =
-  teams[0]`. It used to stop with "does not know dynamic method".
-- Editor completions list `lookup` for lists and dictionaries, and show
-  `Lookup[T]` as the result of list `get`.
-- A binding introduced by a consuming form is a mutable place: the element of
-  `for value in own values:`, every leaf of its tuple target, and a `match
-  own` payload or type-pattern binding. Mutating methods and field writes
-  work on it directly.
+## VS Code extension 0.3.6 — 2026-10-10
+
+- Bundles language server 0.3.5, which speaks semantic interface version 17.
+- Completions list `lookup` for lists and dictionaries, and show `Lookup[T]`
+  as the result of list `get`.
+
+## 0.3.5 — 2026-10-10 (technical preview)
+
+Aura 0.3.5 completes element and entry views. A list element or dictionary
+entry works in place wherever a place is borrowed, a function can return a
+view of one, and `for x in mut items:` writes through to the list.
+
+### Breaking changes
+
+- The semantic interface schema is version 17, because returned-view
+  contracts can name an element step. Tools that pin the schema must update.
+- In a script, a bare `name = value` after the first top-level statement
+  declares an immutable top-level local instead of a module constant. It can
+  read earlier locals, and closures can capture it. Bindings above the first
+  statement are still module constants. A function cannot read a name bound
+  after the first statement, and `public name = value` after a statement is a
+  syntax error (`AU1101`).
+- Mutating a collection while an element or entry view of it is live reports
+  `AU3011`, which names the view and the operation. A structural change such
+  as `append` or any dictionary assignment is refused, and so is a write to
+  the viewed element or through a computed index. A write to a different
+  literal position, such as `values[1] = x`, `values[1] += x`, or
+  `values.set(1, x)` for a Copy element, is allowed.
+
+### Language
+
+- **Elements in place.** A list element or dictionary entry can be a shared
+  or `mut` argument, a method receiver, an operand, a `match` or `match mut`
+  scrutinee, or part of a nested selection such as `bump(grid[i][j])`. Writes
+  through a `mut` argument or mutating receiver land in the collection.
+  Moving a non-copy element out is refused with `AU3005`, and the message
+  suggests a `view` first.
+- **Returned element views.** A function can return a view of one element or
+  entry of its origin: `return view items[i]`, `return view mut table[key]`,
+  or a field inside the element. The index or key is evaluated once in the
+  callee, and an invalid one traps there with `AU4003`. The caller's view
+  holds the whole collection while it is live. A returned view of an element
+  argument, such as `view name = label(users[0])`, reaches the element.
+- **`lookup`.** Lists and dictionaries gain `lookup`, which views an element
+  in place when it may be missing. Write `match items.lookup(i):` or
+  `match mut table.lookup(key):` with `case Lookup.Found(item):` and
+  `case Lookup.Missing:` arms. Nothing is cloned, so it works for any element
+  type. `lookup` is valid only as the subject of a `match` statement.
+- **Mutable iteration.** `for x in mut items:` binds each element as a
+  mutable element view, so a write lands in the list immediately. Non-Copy
+  elements are not cloned and written back. A nested element such as
+  `for x in mut grid[1]:` can be iterated.
+- **Owned bindings.** A binding introduced by a consuming form is a mutable
+  place: the element of `for value in own values:`, every leaf of its tuple
+  target, and a `match own` payload or type-pattern binding.
+- Reading `users[1]` while a mutable view of `users[0]` is live is allowed.
+  Literal positions and keys are disjoint.
 - Narrowing applies to top-level script bindings on both backends, including
   module constants such as `value: int64 | None = 5` followed by
-  `if value is not None:`. The direct backend used to refuse the narrowed
-  read.
-- Mutating a collection while an element or entry view of it is live now
-  reports `AU3011`, which names the view and the operation. A structural
-  change such as `append` or any dictionary assignment is refused, and so is a
-  write to the viewed element or through a computed index. A write to a
-  different literal position, `values[1] = x`, `values[1] += x`, or
-  `values.set(1, x)` for a Copy element, is allowed.
-- In a script, a bare `name = value` after the first top-level statement
-  declares an immutable top-level local instead of a module constant. It
-  can read earlier locals, and closures can capture it. Bindings above the
-  first statement are still module constants. A function can no longer
-  read a name bound after the first statement, and `public name = value`
-  after a statement is a syntax error (`AU1101`).
-- A list element or dictionary entry can be used in place wherever a place
-  is borrowed: as a shared or `mut` argument, a method receiver, an operand,
-  a `match` or `match mut` scrutinee, and in a nested selection such as
-  `bump(grid[i][j])`. Writes through a `mut` argument or mutating receiver
-  land in the collection. Only moving a non-copy element out is refused
-  (`AU3005`), and its message now suggests a `view` first.
-- Reading `users[1]` while a mutable view of `users[0]` is live is allowed;
-  literal positions and keys are disjoint.
-- A returned view of an element argument, such as `view name =
-  label(users[0])` or `bump(count(people["grace"]))`, reaches the element on
-  both backends.
+  `if value is not None:`.
+
+### Fixes
+
+- Iterating a nested element with `for x in mut grid[1]:` failed with an
+  internal MIR error.
+- A view whose last use is inside an `if`, `else`, or `match` branch that
+  then leaves the loop with `break`, `continue`, or `return` failed with
+  "ends inactive loan".
+- The direct backend stopped with "does not know dynamic method" on a method
+  call on a field reached through an element view, such as
+  `team.members.append(name)` after `view mut team = teams[0]`.
+- The direct backend refused a narrowed read of a top-level script binding.
 - A `match` with type patterns over a union-valued element view, such as
-  `view v = labels["name"]` then `match v: case str as text:`, works on both
-  backends. It used to fail MIR validation.
+  `view v = labels["name"]` then `match v: case str as text:`, failed MIR
+  validation.
+- Every `aura` code block in the documentation compiles. Seventeen broken
+  examples were corrected.
+
+### Current limits
+
+- Slice views and `Span[T]` are not implemented. A slice in value position
+  is a fresh owned list.
+- A non-copy value cannot be borrowed into a union parameter (`AU2010`).
+  Pass an owned value or a clone.
 
 ## VS Code extension 0.3.5 — 2026-09-22
 

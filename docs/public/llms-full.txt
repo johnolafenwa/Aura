@@ -228,7 +228,7 @@ limits.
 
 # Why Aura
 
-Aura 0.3.4 is a technical preview of a compiled, statically typed language for
+Aura 0.3.5 is a technical preview of a compiled, statically typed language for
 reliable software. It combines Python-inspired syntax, deterministic
 ownership, structured concurrency, typed failure, and native executables.
 
@@ -384,7 +384,7 @@ exact boundaries of that surface.
 
 # Downloads
 
-Aura 0.3.4 is a technical preview. The compiler, command-line tools, editor
+Aura 0.3.5 is a technical preview. The compiler, command-line tools, editor
 extension, reference manual, and source all ship from the
 [Aura GitHub repository](https://github.com/johnolafenwa/Aura).
 
@@ -409,7 +409,7 @@ For step-by-step instructions, pick a platform guide:
 - [Windows 11 through Ubuntu on WSL 2](/install/windows-wsl)
 
 To install by hand, download the archive for your platform from the
-[v0.3.4-preview release](https://github.com/johnolafenwa/Aura/releases/tag/v0.3.4-preview).
+[v0.3.5-preview release](https://github.com/johnolafenwa/Aura/releases/tag/v0.3.5-preview).
 Each release includes Linux x64, macOS x64, and macOS arm64 archives and a
 `SHA256SUMS` manifest.
 
@@ -428,7 +428,7 @@ Install **Aura Programming Language** from either public extension registry:
 - [Open VSX](https://open-vsx.org/extension/JohnOlafenwa/vscode-aura-lang)
 
 Both registries carry the same package, with the plain extension version
-`0.3.5`. The extension needs the `aura` executable on `PATH`. Its semantic
+`0.3.6`. The extension needs the `aura` executable on `PATH`. Its semantic
 editor features run through the `aura lsp` server that the compiler provides.
 
 To install from a terminal:
@@ -438,7 +438,7 @@ code --install-extension JohnOlafenwa.vscode-aura-lang
 ```
 
 To install by hand, download
-[`aura-language.vsix`](https://github.com/johnolafenwa/Aura/releases/download/v0.3.4-preview/aura-language.vsix)
+[`aura-language.vsix`](https://github.com/johnolafenwa/Aura/releases/download/v0.3.5-preview/aura-language.vsix)
 from the GitHub Release. Then run **Extensions: Install from VSIX...** in
 VS Code.
 
@@ -484,7 +484,7 @@ curl -fsSL https://johnolafenwa.github.io/Aura/install.sh | sh
 aura --version
 ```
 
-The output begins with `aura 0.3.4-preview`. The rest of the line is the
+The output begins with `aura 0.3.5-preview`. The rest of the line is the
 source commit the binary was built from.
 
 ## What Gets Installed
@@ -594,7 +594,7 @@ command -v aura
 aura --version
 ```
 
-The version begins with `aura 0.3.4-preview`.
+The version begins with `aura 0.3.5-preview`.
 
 ## 6. Run A Program
 
@@ -696,7 +696,7 @@ The installer uses `curl`, `tar`, and `shasum`, which macOS already includes:
 curl -fsSL https://johnolafenwa.github.io/Aura/install.sh | sh
 ```
 
-The script downloads the matching `v0.3.4-preview` archive. It checks the
+The script downloads the matching `v0.3.5-preview` archive. It checks the
 archive against the release's `SHA256SUMS` file before it copies anything
 into the installation prefix.
 
@@ -724,7 +724,7 @@ aura --version
 The command path ends in `.local/bin/aura`. The version begins with:
 
 ```text
-aura 0.3.4-preview
+aura 0.3.5-preview
 ```
 
 ## 5. Run A Program
@@ -848,7 +848,7 @@ codium --install-extension JohnOlafenwa.vscode-aura-lang
 A VSIX file is a packaged VS Code extension.
 
 1. Download `aura-language.vsix` from the
-   [v0.3.4-preview release](https://github.com/johnolafenwa/Aura/releases/tag/v0.3.4-preview).
+   [v0.3.5-preview release](https://github.com/johnolafenwa/Aura/releases/tag/v0.3.5-preview).
 2. Open the Command Palette and choose **Extensions: Install from VSIX...**.
 
 To install from a terminal instead:
@@ -1100,7 +1100,7 @@ runtime. It covers the complete syntax, name and type rules, ownership,
 execution, module APIs, diagnostics, limits, and tool contracts, in enough
 detail to reconstruct the language accurately.
 
-This Manual documents **Aura 0.3.4 (technical preview)**. The release stamp
+This Manual documents **Aura 0.3.5 (technical preview)**. The release stamp
 below records the implementation baseline commit the Manual was rendered from.
 
 The stamp uses the first commit source that applies:
@@ -2595,7 +2595,7 @@ aura check app.au
 | `aura upgrade` | Download and run the verified installer to replace the compiler and bundled runtime with the latest published release. |
 | `aura lsp` | Run the persistent JSON-lines compiler service used by the language server. |
 | `aura help` / `aura --help` | Print usage. |
-| `aura version` / `aura --version` | Print the build channel and 12-hex-digit source commit. Release archives print `aura 0.3.4-preview (0123456789ab)`. Source builds print `aura 0.3.4-dev (0123456789ab)`. |
+| `aura version` / `aura --version` | Print the build channel and 12-hex-digit source commit. Release archives print `aura 0.3.5-preview (0123456789ab)`. Source builds print `aura 0.3.5-dev (0123456789ab)`. |
 
 MIR is Aura's mid-level intermediate representation. The editor query
 commands `signature-help`, `references`, `prepare-rename`, and `rename` are
@@ -2710,7 +2710,7 @@ build.
 
 ## Native Executable Profile
 
-Workspace release builds of Aura 0.3.4 use `opt-level=3`, fat LTO, one codegen
+Workspace release builds of Aura 0.3.5 use `opt-level=3`, fat LTO, one codegen
 unit, `debug=false`, and `strip="symbols"`. Panic unwinding stays enabled for
 the runtime's `extern "C-unwind"` boundaries. This profile reduces shipped
 compiler metadata. It does not strip the runtime archive's linkable symbols or
@@ -3236,7 +3236,7 @@ publishes three things into the cache: its binary, that artifact's SHA-256,
 and a key-bound unique entry identity. The cache key covers:
 
 - native cache format `v5`
-- compiler-owned semantic-interface schema version `16`
+- compiler-owned semantic-interface schema version `17`
 - this compiler's version
 - the host target
 - the backend
@@ -3335,7 +3335,7 @@ directories to mode `0700`.
 
 The language server delegates semantic analysis and completion to the
 persistent compiler service. Every JSON-lines request and response identifies
-semantic-interface schema version `16`. A missing or different identity closes
+semantic-interface schema version `17`. A missing or different identity closes
 the incompatible service. It also invalidates all document analysis before the
 lexical recovery path is used, so cached function-type or ownership metadata
 cannot cross compiler versions. The lexical fallback is recovery-only. It is
@@ -6554,7 +6554,7 @@ compile-time and pre-user-code failures, where they are empty.
 
 The frame arrays are an additive schema-version-1 extension. Schema-version-1
 readers MUST ignore unrecognized object members while still validating the
-fields they use. The compiler-service semantic-interface version is `16`.
+fields they use. The compiler-service semantic-interface version is `17`.
 
 The process exits unsuccessfully after it emits a JSON error report. In JSON
 mode, tools MUST parse standard error as one JSON document and MUST NOT scrape
@@ -12801,7 +12801,7 @@ Any behavior change MUST update these in the same pass:
 - the work record
 
 The repository commit identifies the precise revision of the specification.
-The rendered Manual is stamped with source version 0.3.4 (technical preview)
+The rendered Manual is stamped with source version 0.3.5 (technical preview)
 and its implementation baseline commit. Release builds supply that commit
 without writing a self-referential hash into this source page. The
 [Manual overview](/manual/) gives the exact precedence and the local fallback.
@@ -18081,7 +18081,7 @@ The local `main` takes no parameters and returns `None` or `int32`. An imported 
 
 # Status And Compatibility
 
-Aura 0.3.4 is a technical preview. It is suitable for compiler and runtime evaluation, examples, and controlled experiments. It is not a production systems-language release, and it is not a security boundary for untrusted programs.
+Aura 0.3.5 is a technical preview. It is suitable for compiler and runtime evaluation, examples, and controlled experiments. It is not a production systems-language release, and it is not a security boundary for untrusted programs.
 
 This page states what the maintained language contract is, which surface it currently covers, and how that surface may change.
 
@@ -18264,7 +18264,7 @@ See [Execution Model](/manual/execution-model) and [Current Limits](/manual/curr
 - Both maintained backends produce complete typed runtime frames. Diagnostics carry innermost-first Aura call frames and youngest-first task ancestry.
 - Each public schema-version-1 frame span has its own required source `path`. The analysis/LSP editor shape permits an optional `file_path` for source-only analysis.
 - The public diagnostic schema stays at version `1`, because the always-present arrays are an additive extension.
-- Compiler-service and editor transport uses semantic schema version `16`. This version includes structural function values, import aliases, and the expanded numeric expression surface. It forwards the same diagnostic records.
+- Compiler-service and editor transport uses semantic schema version `17`. This version includes structural function values, import aliases, and the expanded numeric expression surface, and returned views of list elements and dictionary entries. It forwards the same diagnostic records.
 
 ## Platform And Distribution Support
 
@@ -20843,7 +20843,7 @@ To install by hand, download the archive for a supported host and extract it.
 Keep its directory layout intact:
 
 ```text
-aura-v0.3.4-preview-<target>/
+aura-v0.3.5-preview-<target>/
 ├── bin/aura
 ├── lib/aura/
 │   ├── libaura_compiler.a
@@ -20913,8 +20913,8 @@ aura --version
 On Unix shells, consider adding that export to your shell profile.
 
 Preview builds print their channel and source commit, for example
-`aura 0.3.4-preview (0123456789ab)`. Source-checkout builds print the channel
-as `aura 0.3.4-dev (0123456789ab)`.
+`aura 0.3.5-preview (0123456789ab)`. Source-checkout builds print the channel
+as `aura 0.3.5-dev (0123456789ab)`.
 
 ## Install The VS Code Extension
 
@@ -22788,8 +22788,8 @@ cargo run -p aura -- --version
 ```
 
 `--version` prints the build channel and a 12-hex-digit source commit. A
-source checkout prints something like `aura 0.3.4-dev (0123456789ab)`. A
-release archive prints `aura 0.3.4-preview (0123456789ab)`.
+source checkout prints something like `aura 0.3.5-dev (0123456789ab)`. A
+release archive prints `aura 0.3.5-preview (0123456789ab)`.
 
 Use `deps update` to refresh git dependencies. You do not need to delete
 `Aura.lock` by hand:
