@@ -1030,7 +1030,7 @@ impl FunctionChecker<'_> {
                     shared_match_scrutinee,
                 )
             }
-            Pattern::Rest(rest) => Err(super::structural_patterns::rest_outside_sequence(rest)),
+            Pattern::Rest(_) => unreachable!("the parser rejects a lone rest pattern"),
             Pattern::Sequence(sequence) => self.bind_sequence_pattern_locals(
                 sequence,
                 expected_ty,
@@ -2075,6 +2075,16 @@ impl FunctionChecker<'_> {
                 .iter()
                 .flat_map(|pattern| self.typed_pattern_members(pattern, expected_ty))
                 .collect::<BTreeSet<_>>();
+            if let Pattern::Class(class) = pattern {
+                if current.is_empty() {
+                    return self.union_class_pattern_is_covered(
+                        patterns,
+                        class,
+                        expected_ty,
+                        &covered,
+                    );
+                }
+            }
             return !current.is_empty() && current.is_subset(&covered);
         }
         match pattern {
@@ -2206,6 +2216,40 @@ impl FunctionChecker<'_> {
         }
     }
 
+    /// Whether earlier arms already match every value a refutable class
+    /// pattern over a union can match: an arm that covers its whole member,
+    /// or an earlier class pattern on the same member that covers it.
+    fn union_class_pattern_is_covered(
+        &self,
+        patterns: &[&Pattern],
+        class: &crate::ast::ClassPattern,
+        expected_ty: &Type,
+        covered_members: &BTreeSet<String>,
+    ) -> bool {
+        let Ok(target) = self.class_pattern_target(class, expected_ty) else {
+            return false;
+        };
+        let key = target
+            .member
+            .canonical_key(self.module_name, self.canonical_type_names);
+        if covered_members.contains(&key) {
+            return true;
+        }
+        let mut pending = patterns.to_vec();
+        while let Some(previous) = pending.pop() {
+            match previous {
+                Pattern::Or(or_pattern) => pending.extend(or_pattern.alternatives.iter()),
+                Pattern::Class(previous)
+                    if self.class_pattern_is_covered_by(previous, class, expected_ty) =>
+                {
+                    return true;
+                }
+                _ => {}
+            }
+        }
+        false
+    }
+
     pub(super) fn pattern_is_covered_by_pattern(
         &self,
         previous: &Pattern,
@@ -2213,9 +2257,19 @@ impl FunctionChecker<'_> {
         expected_ty: &Type,
     ) -> bool {
         if matches!(expected_ty, Type::Union(_) | Type::Unit) {
+            let previous_members = self.typed_pattern_members(previous, expected_ty);
+            if let Pattern::Class(class) = current {
+                if self.typed_pattern_members(current, expected_ty).is_empty() {
+                    return self.union_class_pattern_is_covered(
+                        &[previous],
+                        class,
+                        expected_ty,
+                        &previous_members,
+                    );
+                }
+            }
             let current = self.typed_pattern_members(current, expected_ty);
-            return !current.is_empty()
-                && current.is_subset(&self.typed_pattern_members(previous, expected_ty));
+            return !current.is_empty() && current.is_subset(&previous_members);
         }
         if self.pattern_covers_entire_type(previous, expected_ty) {
             return true;

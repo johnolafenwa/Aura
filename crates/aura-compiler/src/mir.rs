@@ -14647,6 +14647,17 @@ impl<'a> Lowerer<'a> {
     /// The member a class pattern tests and its stored field types,
     /// specialized by the scrutinee. For a union scrutinee the member index
     /// is the union's own.
+    /// Resolves a class name as a pattern or a checked type spells it,
+    /// including a module-alias spelling such as `geometry.Point`.
+    fn resolve_pattern_class_info(&self, name: &str) -> Option<&crate::sema::ClassInfo> {
+        self.resolve_class_info(name).or_else(|| {
+            self.program
+                .canonical_type_names
+                .get(name)
+                .and_then(|canonical| self.resolve_class_info(canonical))
+        })
+    }
+
     fn class_pattern_layout(
         &self,
         pattern: &crate::ast::ClassPattern,
@@ -14655,60 +14666,34 @@ impl<'a> Lowerer<'a> {
         let (member_index, member) = match scrutinee_ty {
             Some(Type::Union(union)) => {
                 // The checker proved the pattern names exactly one class
-                // member. Members spell resolvable class names; the pattern
-                // may spell the class through a module alias, so a unique
-                // declared-name match selects it.
-                let leaf = pattern
-                    .class_name
-                    .rsplit('.')
-                    .next()
-                    .unwrap_or(&pattern.class_name);
-                let candidates = union
+                // member, possibly through a module alias.
+                let named = self
+                    .resolve_pattern_class_info(&pattern.class_name)
+                    .map(|info| (&info.module_name, &info.decl.name));
+                let (index, member) = union
                     .members
                     .iter()
                     .enumerate()
-                    .filter(|(_, member)| match member {
-                        Type::Named(name, _) => self
-                            .resolve_class_info(name)
-                            .is_some_and(|info| info.decl.name == leaf),
-                        _ => false,
+                    .find(|(_, member)| {
+                        matches!(member, Type::Named(name, _) if self
+                            .resolve_pattern_class_info(name)
+                            .map(|info| (&info.module_name, &info.decl.name))
+                            == named)
                     })
-                    .collect::<Vec<_>>();
-                let (index, member) = match candidates.as_slice() {
-                    [only] => *only,
-                    _ => {
-                        let named = self
-                            .resolve_class_info(&pattern.class_name)
-                            .or_else(|| {
-                                self.program
-                                    .canonical_type_names
-                                    .get(&pattern.class_name)
-                                    .and_then(|name| self.resolve_class_info(name))
-                            })
-                            .map(|info| (info.module_name.clone(), info.decl.name.clone()));
-                        *candidates
-                            .iter()
-                            .find(|(_, member)| match member {
-                                Type::Named(name, _) => {
-                                    self.resolve_class_info(name).map(|info| {
-                                        (info.module_name.clone(), info.decl.name.clone())
-                                    }) == named
-                                }
-                                _ => false,
-                            })
-                            .expect("checked class pattern names a union member")
-                    }
-                };
+                    .expect("checked class pattern names a union member");
                 (Some(index), member.clone())
             }
-            Some(ty) => (None, ty.clone()),
-            None => unreachable!("checked class patterns have a typed scrutinee"),
+            ty => (
+                None,
+                ty.cloned()
+                    .expect("checked class patterns have a typed scrutinee"),
+            ),
         };
         let Type::Named(name, args) = &member else {
             unreachable!("a checked class pattern member is a named class type");
         };
         let class_info = self
-            .resolve_class_info(name)
+            .resolve_pattern_class_info(name)
             .expect("checked class pattern member is a class");
         let substitutions = substitutions_from_decl_type_args(&class_info.decl.type_params, args);
         let fields = class_info
@@ -14814,10 +14799,10 @@ impl<'a> Lowerer<'a> {
         let list_ty = scrutinee_ty
             .cloned()
             .expect("checked sequence patterns have a list scrutinee");
-        let element_ty = match &list_ty {
-            Type::Named(name, args) if name == "list" && args.len() == 1 => args[0].clone(),
-            _ => unreachable!("checked sequence patterns have a list scrutinee"),
+        let Type::Named(_, list_args) = &list_ty else {
+            unreachable!("checked sequence patterns have a list scrutinee")
         };
+        let element_ty = list_args[0].clone();
         let int64 = Type::named("int64");
         let rest_index = pattern.elements.iter().position(Pattern::is_rest);
         let fixed = pattern.elements.len() - usize::from(rest_index.is_some());

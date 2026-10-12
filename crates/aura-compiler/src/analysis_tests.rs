@@ -9913,3 +9913,29 @@ fn analysis_records_rest_sequence_and_class_pattern_bindings() {
         Some(2)
     );
 }
+
+#[test]
+fn analysis_resolves_class_patterns_over_union_members() {
+    let source = [
+        "class Point:",
+        "    x: int64",
+        "",
+        "def inspect(value: Point | None) -> int64:",
+        "    return match value:",
+        "        case Point(x=x): x",
+        "        case None: 0",
+    ]
+    .join("\n");
+    let analysis = analyze_source(&source);
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "{:?}",
+        analysis.diagnostics
+    );
+    let field = analysis
+        .occurrences
+        .iter()
+        .find(|occurrence| occurrence.line == 5 && occurrence.hover.contains("field x: int64"))
+        .expect("union member class pattern field should hover");
+    assert_eq!(field.definition.as_ref().map(|range| range.line), Some(1));
+}

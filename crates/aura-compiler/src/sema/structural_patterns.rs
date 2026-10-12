@@ -12,14 +12,6 @@ pub(super) struct ClassPatternTarget {
     pub fields: Vec<(String, Type)>,
 }
 
-pub(super) fn rest_outside_sequence(rest: &RestPattern) -> Diagnostic {
-    Diagnostic::coded_at(
-        "AU2041",
-        rest.span,
-        "a `*` rest pattern is allowed only as an element of a tuple or sequence pattern",
-    )
-}
-
 impl FunctionChecker<'_> {
     /// The class a class pattern names, through a module alias when the
     /// written path uses one.

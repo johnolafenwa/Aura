@@ -2519,12 +2519,7 @@ impl<'a> AnalysisBuilder<'a> {
         class: &crate::ast::ClassPattern,
         expected_type: Option<&Type>,
     ) -> Option<Type> {
-        let class_info = self
-            .class_info_for_type_name(&class.class_name)
-            .or_else(|| {
-                let canonical = self.program.canonical_type_names.get(&class.class_name)?;
-                self.class_info_for_type_name(canonical)
-            })?;
+        let class_info = self.class_info_for_type_name(&class.class_name)?;
         let identity = (&class_info.module_name, &class_info.decl.name);
         let same_class = |ty: &Type| {
             self.class_info_for_type_name(base_type_name(ty))
@@ -2532,8 +2527,7 @@ impl<'a> AnalysisBuilder<'a> {
         };
         match expected_type {
             Some(Type::Union(union)) => union.members.iter().find(|ty| same_class(ty)).cloned(),
-            Some(ty) if same_class(ty) => Some(ty.clone()),
-            _ => Some(Type::named(&class.class_name)),
+            ty => ty.filter(|ty| same_class(ty)).cloned(),
         }
     }
 

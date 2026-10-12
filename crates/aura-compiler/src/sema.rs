@@ -678,13 +678,10 @@ fn statement_span(stmt: &Stmt) -> crate::diag::Span {
 
 fn collect_binding_target_names(target: &crate::ast::BindingTarget, names: &mut BTreeSet<String>) {
     match target {
-        crate::ast::BindingTarget::Name { name, .. } => {
+        // A `*_` rest target inserts `_`, which never names a local.
+        crate::ast::BindingTarget::Name { name, .. }
+        | crate::ast::BindingTarget::Rest { name, .. } => {
             names.insert(name.clone());
-        }
-        crate::ast::BindingTarget::Rest { name, .. } => {
-            if name != "_" {
-                names.insert(name.clone());
-            }
         }
         crate::ast::BindingTarget::Tuple { elements, .. } => {
             for element in elements {
@@ -806,9 +803,12 @@ fn pattern_contains_variant_shape(pattern: &Pattern) -> bool {
             .any(pattern_contains_variant_shape),
         Pattern::Tuple(pattern) => pattern.elements.iter().any(pattern_contains_variant_shape),
         Pattern::Sequence(pattern) => pattern.elements.iter().any(pattern_contains_variant_shape),
-        Pattern::Class(_) | Pattern::Rest(_) => false,
         Pattern::Variant(_) => true,
-        Pattern::Binding(_) | Pattern::Literal(_) | Pattern::Wildcard(_) => false,
+        Pattern::Class(_)
+        | Pattern::Rest(_)
+        | Pattern::Binding(_)
+        | Pattern::Literal(_)
+        | Pattern::Wildcard(_) => false,
     }
 }
 
@@ -3510,11 +3510,7 @@ impl<'a> FunctionChecker<'a> {
                 }
                 Ok(())
             }
-            BindingTarget::Rest { span, .. } => Err(Diagnostic::coded_at(
-                "AU2041",
-                *span,
-                "a `*` rest target is allowed only as an element of a tuple target",
-            )),
+            BindingTarget::Rest { .. } => unreachable!("the parser rejects a lone rest target"),
         }
     }
 
