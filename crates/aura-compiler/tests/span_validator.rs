@@ -99,3 +99,46 @@ fn a_range_used_after_its_base_loan_ends_is_refused() {
     let reason = assert_rejected_on_both_boundaries(encoded);
     assert!(reason.contains("uses ended loan `a`"), "{reason}");
 }
+
+fn forged_fill_message(edit: impl FnOnce(&mut Value)) -> String {
+    let mut encoded = lowered_fill();
+    let instructions = main_instructions(&mut encoded);
+    let call = fill_call(instructions);
+    edit(&mut instructions[call]["Assign"]["value"]["Call"]);
+    let mir: MirModule =
+        serde_json::from_value(encoded).expect("forged span module remains syntactically valid");
+    run_mir(&mir)
+        .expect_err("the interpreter must reject the forged span call")
+        .message
+}
+
+#[test]
+fn forged_span_calls_are_refused_by_the_interpreter() {
+    let set_field = |field: &str| {
+        let field = field.to_string();
+        move |call: &mut Value| call["callee"]["Member"]["field"] = Value::String(field)
+    };
+    let cases: Vec<(Box<dyn FnOnce(&mut Value)>, &str)> = vec![
+        (
+            Box::new(set_field("__span_bogus")),
+            "unknown internal span operation `__span_bogus`",
+        ),
+        (
+            Box::new(|call: &mut Value| {
+                call["args"][0]["value"] = serde_json::json!({ "Bool": true })
+            }),
+            "internal span operation `__span_fill` expects an integer operand 0",
+        ),
+        (
+            Box::new(set_field("__span_restore")),
+            "span restore expects a list operand",
+        ),
+        (
+            Box::new(set_field("__span_eq")),
+            "span equality expects a list operand",
+        ),
+    ];
+    for (edit, expected) in cases {
+        assert_eq!(forged_fill_message(edit), expected);
+    }
+}

@@ -58,3 +58,75 @@ fn slice_views_need_a_list_source() {
         "a returned slice view needs a `list[T]` or `Span[T]` source, found `str`",
     );
 }
+
+#[test]
+fn span_types_are_refused_outside_view_positions() {
+    rejects(
+        "def f(p: Span[int64] = [1]) -> int64:\n    return len(p)\ndef main():\n    pass\n",
+        "AU3010",
+        "view type `Span[int64]` cannot be a parameter with a default",
+    );
+    rejects(
+        "type R = Callable[def(p: Span[int64]) -> int64]\ndef main():\n    pass\n",
+        "AU3010",
+        "view type `Span[int64]` cannot appear in a function type",
+    );
+    rejects(
+        "def f(p: Span[int64, str]) -> int64:\n    return 1\ndef main():\n    pass\n",
+        "AU2002",
+        "`Span` expects exactly one type argument",
+    );
+    rejects(
+        "enum E:\n    A(Span[int64])\ndef main():\n    pass\n",
+        "AU3010",
+        "view type `Span[int64]` cannot be an enum payload type",
+    );
+    rejects(
+        "class S:\n    x: int64\n\n    def m(self, items: list[int64]) -> Span[int64]:\n        return items[0:1]\n\ndef main():\n    pass\n",
+        "AU3010",
+        "view type `Span[int64]` cannot be an owned result type",
+    );
+    rejects(
+        "trait K:\n    def m(self, items: list[int64]) -> Span[int64]\n\ndef main():\n    pass\n",
+        "AU3010",
+        "view type `Span[int64]` cannot be an owned result type",
+    );
+}
+
+#[test]
+fn a_span_argument_for_a_list_parameter_suggests_to_list() {
+    let error = check_source(&format!(
+        "def g(xs: list[int64]) -> int64:\n    return len(xs)\n{SHARED}    print(g(part))\n"
+    ))
+    .expect_err("a span is not an owned list");
+    assert_eq!(error.code, "AU2002", "{}", error.message);
+    assert_eq!(
+        error.message,
+        "argument type mismatch for function `g`: expected `list[int64]`, found `Span[int64]`"
+    );
+    assert!(
+        error
+            .help
+            .iter()
+            .any(|help| help.contains("span.to_list()")),
+        "{:?}",
+        error.help
+    );
+}
+
+const RETURNS_SPAN: &str =
+    "def head(items: list[int64]) -> view Span[int64] from items:\n    return view items[0:1]\n";
+
+#[test]
+fn a_returned_span_binds_with_its_own_kind_before_slicing() {
+    rejects(
+        &format!("{RETURNS_SPAN}def main():\n    items = [1, 2, 3]\n    view p = head(items)[0:1]\n    print(len(p))\n"),
+        "AU3004",
+        "bind the returned view with `view` before taking a slice view of it",
+    );
+    rejects(
+        &format!("{RETURNS_SPAN}def main():\n    mut items = [1, 2, 3]\n    view mut p = head(items)\n    print(len(p))\n"),
+        "AU3010",
+        "a returned view must initialize a view binding with the same shared or mutable kind",
+    );
+}
