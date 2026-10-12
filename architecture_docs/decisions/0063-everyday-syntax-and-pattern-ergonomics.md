@@ -6,6 +6,7 @@
   conveniences, tuple rest elements, list sequence patterns, and keyword
   class patterns implemented
 - Roadmap: Batch 4
+- Formatter: Implemented as specified in [checkpoint section F](../18-batch-4-design-checkpoint.md#f-syntax-reflowing-formatter)
 - Extends: ADR-0025, ADR-0026, ADR-0049, and ADR-0051
 - Related: ADR-0044, ADR-0046, ADR-0052, ADR-0059, and ADR-0061
 
