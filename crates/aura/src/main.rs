@@ -4,6 +4,7 @@ use std::io::{self, BufRead, Read};
 use std::path::{Path, PathBuf};
 use std::process::{self, Command};
 
+use aura_compiler::format::{format_source, FormatError};
 use aura_compiler::{
     analyze_path_source, check_path, check_path_with_source, complete_path_source,
     emit_host_native_object_with_metadata, lower_path_to_checked_mir, lower_path_to_mir,
@@ -571,16 +572,42 @@ fn handle_new_command(args: Vec<String>) {
 
 fn handle_fmt_command(args: Vec<String>) {
     let mut check_only = false;
+    let mut from_stdin = false;
     let mut inputs = Vec::new();
     for argument in args {
         if argument == "--check" {
             check_only = true;
+        } else if argument == "--stdin" {
+            from_stdin = true;
         } else if argument.starts_with('-') {
             eprintln!("unknown aura fmt option `{argument}`");
             process::exit(2);
         } else {
             inputs.push(PathBuf::from(argument));
         }
+    }
+    if from_stdin {
+        if !inputs.is_empty() {
+            eprintln!("aura fmt --stdin does not take source paths");
+            process::exit(2);
+        }
+        let mut source = String::new();
+        io::stdin()
+            .read_to_string(&mut source)
+            .unwrap_or_else(|error| {
+                eprintln!("failed to read standard input: {error}");
+                process::exit(1);
+            });
+        let formatted = format_or_exit("<stdin>", &source);
+        if check_only {
+            if formatted != source {
+                eprintln!("would format `<stdin>`");
+                process::exit(1);
+            }
+        } else {
+            write_stdout(&formatted);
+        }
+        return;
     }
     if inputs.is_empty() {
         inputs.push(PathBuf::from("."));
@@ -595,14 +622,7 @@ fn handle_fmt_command(args: Vec<String>) {
             eprintln!("failed to read `{}`: {error}", path.display());
             process::exit(1);
         });
-        let formatted = format_aura_source(&source);
-        if let Err(error) = parse_source(&formatted) {
-            eprintln!(
-                "{}",
-                error.render_with_source(&path.display().to_string(), &formatted)
-            );
-            process::exit(1);
-        }
+        let formatted = format_or_exit(&path.display().to_string(), &source);
         if source != formatted {
             changed.push(path.clone());
             if !check_only {
@@ -621,26 +641,18 @@ fn handle_fmt_command(args: Vec<String>) {
     }
 }
 
-fn format_aura_source(source: &str) -> String {
-    // Triple-quoted string contents are exact source data, including trailing
-    // spaces and tabs on physical lines. Until the formatter has a token-aware
-    // whitespace pass, preserve the entire file whenever one is present.
-    if source.contains("\"\"\"") || source.contains("'''") {
-        let mut formatted = source.trim_end_matches('\r').to_string();
-        if !formatted.is_empty() && !formatted.ends_with('\n') {
-            formatted.push('\n');
+fn format_or_exit(label: &str, source: &str) -> String {
+    match format_source(source) {
+        Ok(formatted) => formatted,
+        Err(FormatError::Syntax(error)) => {
+            eprintln!("{}", error.render_with_source(label, source));
+            process::exit(1);
         }
-        return formatted;
+        Err(FormatError::Unstable(message)) => {
+            eprintln!("`{label}`: {message}");
+            process::exit(1);
+        }
     }
-    let mut formatted = source
-        .lines()
-        .map(|line| line.trim_end_matches([' ', '\t', '\r']))
-        .collect::<Vec<_>>()
-        .join("\n");
-    if !formatted.is_empty() {
-        formatted.push('\n');
-    }
-    formatted
 }
 
 fn collect_aura_source_paths(inputs: &[PathBuf]) -> Result<Vec<PathBuf>, String> {
@@ -1638,6 +1650,17 @@ fn lsp_result_for_request(request: &JsonValue) -> Result<JsonValue, String> {
         "signature-help" | "references" | "prepare-rename" | "rename" => {
             editor_request(method, path, source, request)
         }
+        "format" => Ok(match format_source(source) {
+            Ok(formatted) => serde_json::json!({ "formatted": formatted }),
+            Err(FormatError::Syntax(error)) => serde_json::json!({
+                "formatted": JsonValue::Null,
+                "error": error.render_with_source(path, source)
+            }),
+            Err(FormatError::Unstable(message)) => serde_json::json!({
+                "formatted": JsonValue::Null,
+                "error": message
+            }),
+        }),
         _ => Err(format!("unknown LSP compiler request method `{method}`")),
     }
 }

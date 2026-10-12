@@ -137,7 +137,8 @@ aura deps update util
 | `aura build -o <output> <file.au>` | Compiles a standalone native binary. |
 | `aura deps update [package]` | Refreshes git dependencies for the current package or workspace and rewrites `Aura.lock`. |
 | `aura new <project-path>` | Creates `Aura.toml` and `src/main.au`. It never overwrites an existing path. |
-| `aura fmt [--check] [path ...]` | Normalizes line endings, trailing whitespace, and final newlines. `--check` verifies without writing. |
+| `aura fmt [--check] [path ...]` | Formats source files: indentation, spacing, blank lines, and 88-column reflow. `--check` lists files that would change without writing. |
+| `aura fmt --stdin [--check]` | Formats standard input to standard output. |
 | `aura test [--timeout-ms N] [path ...]` | Runs package-aware Aura tests. |
 | `aura lsp` | Runs the persistent JSON-lines compiler service for editor tooling. |
 | `aura ast <file.au>` | Prints the parsed syntax tree. |
