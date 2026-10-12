@@ -69,6 +69,7 @@ use crate::runtime_value::{
     DIRECT_RUNTIME_TYPE_SEPARATOR,
 };
 use crate::sema::Type;
+use crate::text_methods;
 
 const DIRECT_FFI_SPEC_MAGIC: &[u8; 4] = b"AUFI";
 #[doc(hidden)]
@@ -1963,7 +1964,7 @@ fn is_dynamic_bytes_host_builtin(name: &str) -> bool {
             | "bytes::sha256_string"
             | "str.to_bytes"
             | "str.from_bytes"
-    )
+    ) || text_methods::is_bytes_search_builtin(name)
 }
 
 fn evaluate_direct_bytes_host_builtin(
@@ -1972,6 +1973,15 @@ fn evaluate_direct_bytes_host_builtin(
 ) -> std::result::Result<Value, Diagnostic> {
     debug_assert!(is_dynamic_bytes_host_builtin(name));
     args.validate(name)?;
+    if text_methods::is_bytes_search_builtin(name) {
+        let value = args.with_borrow(name, 0, |value| {
+            text_methods::bytes_search_operand(name, value)
+        })?;
+        let pattern = args.with_borrow(name, 1, |pattern| {
+            text_methods::bytes_search_operand(name, pattern)
+        })?;
+        return Ok(text_methods::evaluate_bytes_search(name, &value, &pattern));
+    }
     args.with_borrow(name, 0, |value| {
         evaluate_bytes_host_builtin_ref(name, value)
             .expect("classified byte host builtins are registered with the shared adapter")
@@ -4838,6 +4848,47 @@ pub extern "C-unwind" fn aura_direct_string_trim(value: *mut OpaqueValue) -> *mu
             "expected `str`, found `{}`",
             value_type_name(other)
         )),
+    })
+}
+
+/// Dispatches one `str` text-convenience method. `opcode` indexes
+/// `text_methods::TEXT_METHOD_NAMES`. `argument` is an owned `str` handle or
+/// null; `count` is the scalar argument of `repeat`.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_string_text_method(
+    opcode: i64,
+    value: *mut OpaqueValue,
+    argument: *mut OpaqueValue,
+    count: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let method = usize::try_from(opcode)
+            .ok()
+            .and_then(|index| text_methods::TEXT_METHOD_NAMES.get(index))
+            .unwrap_or_else(|| runtime_error("unknown direct text method opcode"));
+        let argument = if argument.is_null() {
+            None
+        } else {
+            let Value::String(argument) = (unsafe { take_value(argument) }) else {
+                runtime_error(format!("`{method}` requires a `str` argument"));
+            };
+            Some(argument)
+        };
+        let result = unsafe {
+            with_value(value, |value| match value {
+                Value::String(text) => {
+                    text_methods::evaluate_text_method(method, text, argument.as_deref(), count)
+                }
+                other => Err(Diagnostic::new(format!(
+                    "expected `str`, found `{}`",
+                    value_type_name(other)
+                ))),
+            })
+        };
+        match result {
+            Ok(value) => boxed_value(value),
+            Err(error) => runtime_diagnostic_error(error),
+        }
     })
 }
 
@@ -7810,6 +7861,37 @@ fn direct_union_projection(union: &crate::runtime_value::UnionValue, field: &str
         && field
             .strip_prefix("__union_payload_")
             .is_some_and(|index| index.parse::<usize>().is_ok())
+}
+
+/// Injects a copy of the value behind a retained handle that the caller's
+/// place still owns, then releases that retention. A borrowed payload must
+/// not be taken: another handle shares the same value.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_union_inject_copy(
+    type_ptr: *const u8,
+    type_len: usize,
+    member_index: usize,
+    payload: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let copied = unsafe { with_value(payload, try_clone_array_containing_value) };
+        unsafe {
+            aura_direct_release_value(payload);
+        }
+        let copied = copied.unwrap_or_else(|error| runtime_diagnostic_error(error));
+        let name = decode_bytes(type_ptr, type_len);
+        let union_type = canonical_runtime_type_from_name(&name)
+            .unwrap_or_else(|| runtime_error("invalid union injection type"));
+        let Type::Union(union) = &union_type else {
+            runtime_error("union injection requires a union type");
+        };
+        if member_index >= union.members.len() {
+            runtime_error("union injection member index is out of range");
+        }
+        let injected = crate::union_runtime::inject_union_member(union, member_index, copied)
+            .unwrap_or_else(|message| runtime_error(message));
+        boxed_typed_value(injected, &name)
+    })
 }
 
 #[cfg_attr(not(coverage), no_mangle)]

@@ -1,0 +1,7 @@
+error[AU3002]: cannot read `words[0]` while `for ... in mut words` holds mutable access to it
+ --> crates/aura-compiler/tests/fixtures/check-fail/mutable_iteration_rejects_union_argument_read.au:7:14
+  |
+7 |         keep(words[0])
+  |              ^
+  = related crates/aura-compiler/tests/fixtures/check-fail/mutable_iteration_rejects_union_argument_read.au:6:21: mutable iteration over `words` starts here
+  = help: read through the loop binding, or read the collection before or after the loop

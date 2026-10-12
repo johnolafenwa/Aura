@@ -1,0 +1,21 @@
+class Account:
+    owner: str
+    nickname: str | None
+
+def greeting(name: str | None) -> str:
+    match name:
+        case str as text:
+            return f"hello, {text}"
+        case None:
+            return "hello, guest"
+
+def main():
+    names = ["Ada", "Lin"]
+    print(greeting(names[1]))
+    print(greeting(None))
+    account = Account(owner="Grace", nickname=None)
+    print(greeting(account.owner))
+    print(greeting(account.nickname))
+    for name in names:
+        print(greeting(name))
+    print(names)

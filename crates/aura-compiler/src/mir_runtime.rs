@@ -68,6 +68,7 @@ use crate::runtime_value::{
     NANOS_PER_MILLISECOND, NANOS_PER_MINUTE, NANOS_PER_SECOND,
 };
 use crate::sema::{substitute_type, Type};
+use crate::text_methods;
 
 const MIR_FLOOR_DIVISION_OPERANDS_ERROR: &str =
     "MIR floor division requires matching numeric operands";
@@ -2528,6 +2529,31 @@ fn evaluate_json_mir_host_call(
 }
 
 fn evaluate_bytes_mir_host_call(name: &str, args: &[MirArg], env: &Env) -> Option<Result<Value>> {
+    if text_methods::is_bytes_search_builtin(name) {
+        let pattern_name = match name {
+            "bytes::starts_with" => "prefix",
+            "bytes::ends_with" => "suffix",
+            _ => "needle",
+        };
+        let bound = match bind_mir_arg_refs(&["value", pattern_name], args) {
+            Ok(bound) => bound,
+            Err(error) => return Some(Err(error)),
+        };
+        let mut operands = Vec::with_capacity(2);
+        for argument in &bound {
+            let operand = borrow_mir_operand(&argument.value, env)
+                .and_then(|value| text_methods::bytes_search_operand(name, value.as_value()));
+            match operand {
+                Ok(operand) => operands.push(operand),
+                Err(error) => return Some(Err(error)),
+            }
+        }
+        return Some(Ok(text_methods::evaluate_bytes_search(
+            name,
+            &operands[0],
+            &operands[1],
+        )));
+    }
     let expected_name = match name {
         "bytes::hex_encode" | "bytes::base64_encode" | "bytes::sha256" | "str.to_bytes" => "value",
         "bytes::hex_decode" | "bytes::base64_decode" | "bytes::sha256_string" => "text",
@@ -7468,6 +7494,32 @@ impl MirRuntime {
                     return Err(Diagnostic::new("`trim` does not take arguments"));
                 }
                 Ok(Value::String(text.trim().to_string()))
+            }
+            "trim_start" | "trim_end" | "split_once" | "rsplit_once" | "lines"
+            | "split_whitespace" | "find" | "count" | "repeat" => {
+                let parameters: &[&str] = match field {
+                    "split_once" | "rsplit_once" => &["separator"],
+                    "find" | "count" => &["text"],
+                    "repeat" => &["count"],
+                    _ => &[],
+                };
+                let values = evaluate_named_args(args, env)?;
+                let bound = bind_builtin_args(parameters, values)?;
+                let (argument, count) = match (field, bound.first()) {
+                    ("repeat", Some(argument)) => {
+                        (None, expect_i64_value(&argument.value, "str.repeat(...)")?)
+                    }
+                    (_, Some(argument)) => {
+                        let Value::String(argument) = &argument.value else {
+                            return Err(Diagnostic::new(format!(
+                                "`{field}` requires a `str` argument"
+                            )));
+                        };
+                        (Some(argument.as_str()), 0)
+                    }
+                    (_, None) => (None, 0),
+                };
+                text_methods::evaluate_text_method(field, &text, argument, count)
             }
             "clone" => {
                 if !args.is_empty() {

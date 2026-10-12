@@ -42,7 +42,7 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 - Raw strings are single-line. Raw triple strings, raw f-strings, and byte-string literals are not implemented.
 - F-strings use static format specifications. Dynamic width, nested fields, conversion flags, locale formatting, and the `g`, `G`, `n`, `c`, `#`, `0`, and `=` forms are not implemented.
 - `str` has scalar-count `len()`, UTF-8 `byte_len()`, and owned Unicode-scalar slicing. It has no integer indexing, `chars()`, `ord()`, or `chr()`.
-- One concatenated or formatted `str` result is limited to 64 MiB. Aura checks each append before it happens and reports `AU4005` without committing an oversized partial result.
+- One concatenated, formatted, or repeated `str` result is limited to 64 MiB. Aura checks each append before it happens and reports `AU4005` without committing an oversized partial result.
 - `list[uint8]` is the bytes type, and UTF-8 conversion is explicit. The reserved `encoding` argument, non-UTF-8 text codecs, byte-string literals, URL-safe or unpadded base64, streaming codecs, incremental hashes, and HMAC are not implemented.
 
 ### Tuples
@@ -56,7 +56,6 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 - Views have identity only for these places: local, parameter, and receiver roots; existing views; class-field paths; fixed tuple positions; list elements; and dictionary entries. Field and tuple projections inside an element are included.
 - Set elements, slices, arbitrary temporaries, and escaping enum-payload views cannot be loaned.
 - A returned view of a list element or dictionary entry holds the whole collection at the call site. The caller cannot read a different element while it is live.
-- A non-copy value, including a list element, cannot be borrowed into a `T | None` or other union parameter (`AU2010`). Pass a clone, or change the parameter to the member type.
 - Beside a live element view of the same list, `set(index, value)` works only for a Copy element type. For other element types it is refused with `AU3011`, because it would move the old element out through the collection.
 - In a top-level script, an immutable binding above the first top-level statement is a module constant and cannot be the source of a view (`AU3004`). Bind it with `mut`, below the first statement, or inside a function.
 - View-bearing aggregates, module storage, multi-origin results, returned loan closures, and lifetime-parameterized structural callable types are not available.

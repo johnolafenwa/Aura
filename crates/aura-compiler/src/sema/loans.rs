@@ -2837,6 +2837,23 @@ impl<'a> FunctionChecker<'a> {
         locals: &HashMap<String, LocalBinding>,
     ) -> Result<()> {
         let place = self.canonicalize_view_place(place.clone(), locals);
+        // The loop binding is the only route to a collection held by a
+        // mutable loop.
+        if let Some((held, origin)) = self
+            .mutable_iteration_places
+            .borrow()
+            .iter()
+            .find(|(held, _)| held.overlaps(&place))
+            .cloned()
+        {
+            return Err(Diagnostic::coded_at(
+                "AU3002",
+                span,
+                format!("cannot read `{place}` while `for ... in mut {held}` holds mutable access to it"),
+            )
+            .with_secondary(origin, format!("mutable iteration over `{held}` starts here"))
+            .with_help("read through the loop binding, or read the collection before or after the loop"));
+        }
         for (name, binding) in locals {
             for view in binding.view.iter().chain(&binding.closure_loans) {
                 if view.kind != crate::ast::ViewKind::Mutable

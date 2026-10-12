@@ -1,0 +1,20 @@
+class Holder:
+    events: Queue[str]
+    name: str
+
+def send(queue: Queue[str] | None, message: str) -> bool:
+    match queue:
+        case None:
+            return false
+        case Queue[str] as found:
+            found.put(message.clone())
+            return true
+
+def main():
+    events = Queue[str](capacity=4)
+    print(send(events, "first"))
+    print(send(None, "lost"))
+    holder = Holder(events=Queue[str](capacity=2), name="h")
+    print(send(holder.events, "second"))
+    print(events.get())
+    print(holder.events.get())

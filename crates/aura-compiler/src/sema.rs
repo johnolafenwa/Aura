@@ -71,7 +71,7 @@ mod type_budget;
 mod type_budget_tests;
 mod types;
 pub(crate) use types::builtin_enum_variants;
-pub(crate) use types::{lookup_type, optional_type, poll_type};
+pub(crate) use types::{lookup_type, optional_type, poll_type, text_convenience_result_type};
 
 /// Whether a type has a `None` member: the unit type itself, a union that
 /// contains it, or a type parameter whose instantiation may.
@@ -968,6 +968,9 @@ struct FunctionChecker<'a> {
     type_param_bounds: BTreeMap<String, Vec<TraitBound>>,
     implicit_borrowed_params: BTreeMap<String, Type>,
     active_match_borrow_places: Rc<RefCell<Vec<ActiveMatchBorrow>>>,
+    /// Collection places a `for ... in mut` loop holds exclusively while its
+    /// body is checked, with the iterable's span.
+    mutable_iteration_places: Rc<RefCell<Vec<(PlacePath, crate::diag::Span)>>>,
     /// Set while an argument bound to a `mut` union parameter is typed: the
     /// declared union is exposed whole, so refinements do not apply.
     suppress_narrowing: Rc<std::cell::Cell<bool>>,
@@ -1824,6 +1827,7 @@ impl<'a> FunctionChecker<'a> {
             type_param_bounds: BTreeMap::new(),
             implicit_borrowed_params: BTreeMap::new(),
             active_match_borrow_places: Rc::new(RefCell::new(Vec::new())),
+            mutable_iteration_places: Rc::new(RefCell::new(Vec::new())),
             suppress_narrowing: Rc::new(std::cell::Cell::new(false)),
             mutated_captures: Rc::new(RefCell::new(BTreeSet::new())),
             index_place_read: Rc::new(std::cell::Cell::new(None)),
@@ -1871,6 +1875,7 @@ impl<'a> FunctionChecker<'a> {
             type_param_bounds: self.type_param_bounds.clone(),
             implicit_borrowed_params: self.implicit_borrowed_params.clone(),
             active_match_borrow_places: self.active_match_borrow_places.clone(),
+            mutable_iteration_places: self.mutable_iteration_places.clone(),
             rng_clone_obligations: self.rng_clone_obligations.clone(),
             array_equality_obligations: self.array_equality_obligations.clone(),
             expr_result_entries: self.expr_result_entries.clone(),
@@ -1912,6 +1917,7 @@ impl<'a> FunctionChecker<'a> {
             type_param_bounds,
             implicit_borrowed_params: self.implicit_borrowed_params.clone(),
             active_match_borrow_places: self.active_match_borrow_places.clone(),
+            mutable_iteration_places: self.mutable_iteration_places.clone(),
             rng_clone_obligations: self.rng_clone_obligations.clone(),
             array_equality_obligations: self.array_equality_obligations.clone(),
             expr_result_entries: self.expr_result_entries.clone(),
@@ -1949,6 +1955,7 @@ impl<'a> FunctionChecker<'a> {
             type_param_bounds: self.type_param_bounds.clone(),
             implicit_borrowed_params: self.implicit_borrowed_params.clone(),
             active_match_borrow_places: self.active_match_borrow_places.clone(),
+            mutable_iteration_places: self.mutable_iteration_places.clone(),
             rng_clone_obligations: self.rng_clone_obligations.clone(),
             array_equality_obligations: self.array_equality_obligations.clone(),
             expr_result_entries: self.expr_result_entries.clone(),
@@ -1986,6 +1993,7 @@ impl<'a> FunctionChecker<'a> {
             type_param_bounds: self.type_param_bounds.clone(),
             implicit_borrowed_params: self.implicit_borrowed_params.clone(),
             active_match_borrow_places: self.active_match_borrow_places.clone(),
+            mutable_iteration_places: self.mutable_iteration_places.clone(),
             rng_clone_obligations: sink,
             array_equality_obligations: self.array_equality_obligations.clone(),
             expr_result_entries: self.expr_result_entries.clone(),
@@ -4264,13 +4272,29 @@ impl<'a> FunctionChecker<'a> {
                             &mut body_locals,
                             "loop",
                         )?;
-                        self.check_block(
+                        let mutable_iteration =
+                            if effective_borrow_mode == Some(ReceiverKind::BorrowMut) {
+                                self.borrowed_iterable_place(&for_stmt.iterable, locals)?
+                                    .map(|place| self.canonicalize_view_place(place, locals))
+                            } else {
+                                None
+                            };
+                        if let Some(place) = &mutable_iteration {
+                            self.mutable_iteration_places
+                                .borrow_mut()
+                                .push((place.clone(), for_stmt.iterable.span));
+                        }
+                        let checked = self.check_block(
                             &for_stmt.body,
                             &mut body_locals,
                             return_type,
                             loop_depth + 1,
                             allow_return,
-                        )?;
+                        );
+                        if mutable_iteration.is_some() {
+                            self.mutable_iteration_places.borrow_mut().pop();
+                        }
+                        checked?;
                         let killed = Self::narrowing_killed_by_body(locals, &body_locals);
                         if killed.is_empty() {
                             break body_locals;
@@ -11643,7 +11667,47 @@ impl<'a> FunctionChecker<'a> {
                                 BuiltinMember::StringToLower
                                 | BuiltinMember::StringToUpper
                                 | BuiltinMember::StringTrim
+                                | BuiltinMember::StringTrimStart
+                                | BuiltinMember::StringTrimEnd
                                 | BuiltinMember::StringClone => Ok(Type::named("str")),
+                                BuiltinMember::StringLines
+                                | BuiltinMember::StringSplitWhitespace => {
+                                    Ok(Type::Named("list".to_string(), vec![Type::named("str")]))
+                                }
+                                BuiltinMember::StringSplitOnce
+                                | BuiltinMember::StringRsplitOnce
+                                | BuiltinMember::StringFind
+                                | BuiltinMember::StringCount
+                                | BuiltinMember::StringRepeat => {
+                                    let expected = if builtin_member == BuiltinMember::StringRepeat
+                                    {
+                                        Type::named("int64")
+                                    } else {
+                                        Type::named("str")
+                                    };
+                                    let argument = self.bound_argument(
+                                        &ordered_args,
+                                        0,
+                                        span,
+                                        format!("`{field}` requires one argument"),
+                                    )?;
+                                    let actual = self.type_of_expr_hint(
+                                        &argument.value,
+                                        locals,
+                                        Some(&expected),
+                                    )?;
+                                    if actual != expected {
+                                        return Err(Diagnostic::coded_at(
+                                            "AU2002",
+                                            argument.span,
+                                            format!(
+                                                "`{field}` expects `{expected}`, found `{actual}`"
+                                            ),
+                                        ));
+                                    }
+                                    Ok(text_convenience_result_type(field)
+                                        .expect("text convenience methods have a result type"))
+                                }
                                 BuiltinMember::StringJoin => {
                                     let parts_arg = self.bound_argument(
                                         &ordered_args,

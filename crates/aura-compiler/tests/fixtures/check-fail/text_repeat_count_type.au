@@ -1,0 +1,2 @@
+def main():
+    print("ab".repeat("3"))

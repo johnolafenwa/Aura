@@ -26,7 +26,7 @@ use crate::mir::{
 use crate::native_runtime::{
     encode_direct_ffi_call_spec, DirectFfiCallSpec, DirectFfiParam, DirectFfiType,
 };
-use crate::sema::{lookup_type, optional_type};
+use crate::sema::{lookup_type, optional_type, text_convenience_result_type};
 use crate::sema::{substitute_type, FunctionParamContract, Type};
 
 use callables::{CallableShape, CallableShapeKey};
@@ -601,6 +601,7 @@ struct NativeCodegen<'a> {
     string_strip_suffix: FuncId,
     string_trim: FuncId,
     string_join: FuncId,
+    string_text_method: FuncId,
     stringify_value: FuncId,
     register_display: FuncId,
     format_value: FuncId,
@@ -708,6 +709,7 @@ struct NativeCodegen<'a> {
     tuple_element: FuncId,
     tuple_take_element: FuncId,
     union_inject: FuncId,
+    union_inject_copy: FuncId,
     union_tag_test: FuncId,
     union_tag: FuncId,
     union_payload_copy: FuncId,
@@ -931,6 +933,16 @@ fn split_field_path_segments<'a>(
     }
 }
 
+/// The opcode the direct runtime's text dispatcher expects for one
+/// `str` text-convenience method. It must match
+/// `native_runtime::aura_direct_string_text_method`.
+pub(crate) fn text_method_opcode(field: &str) -> Option<i64> {
+    crate::text_methods::TEXT_METHOD_NAMES
+        .iter()
+        .position(|name| *name == field)
+        .map(|index| index as i64)
+}
+
 fn ordered_named_args<'a>(
     expected_names: &[&str],
     args: &'a [MirArg],
@@ -1136,6 +1148,7 @@ impl<'a> NativeCodegen<'a> {
             string_strip_suffix => ("aura_direct_string_strip_suffix", [types::I64, types::I64], Some(types::I64)),
             string_trim => ("aura_direct_string_trim", [types::I64], Some(types::I64)),
             string_join => ("aura_direct_string_join", [types::I64, types::I64], Some(types::I64)),
+            string_text_method => ("aura_direct_string_text_method", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             stringify_value => ("aura_direct_stringify_value", [types::I64], Some(types::I64)),
             register_display => ("aura_direct_register_display", [types::I64, types::I64, types::I64], None),
             format_value => ("aura_direct_format_value", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
@@ -1243,6 +1256,7 @@ impl<'a> NativeCodegen<'a> {
             tuple_element => ("aura_direct_tuple_element", [types::I64, types::I64], Some(types::I64)),
             tuple_take_element => ("aura_direct_tuple_take_element", [types::I64, types::I64], Some(types::I64)),
             union_inject => ("aura_direct_union_inject", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
+            union_inject_copy => ("aura_direct_union_inject_copy", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             union_tag_test => ("aura_direct_union_tag_test", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             union_tag => ("aura_direct_union_tag", [types::I64], Some(types::I64)),
             union_payload_copy => ("aura_direct_union_payload_copy", [types::I64, types::I64], Some(types::I64)),
@@ -1634,6 +1648,7 @@ impl<'a> NativeCodegen<'a> {
             string_strip_suffix,
             string_trim,
             string_join,
+            string_text_method,
             stringify_value,
             register_display,
             format_value,
@@ -1741,6 +1756,7 @@ impl<'a> NativeCodegen<'a> {
             tuple_element,
             tuple_take_element,
             union_inject,
+            union_inject_copy,
             union_tag_test,
             union_tag,
             union_payload_copy,
@@ -2471,6 +2487,9 @@ impl<'a> NativeCodegen<'a> {
         let string_join = self
             .object
             .declare_func_in_func(self.string_join, builder.func);
+        let string_text_method = self
+            .object
+            .declare_func_in_func(self.string_text_method, builder.func);
         let stringify_value = self
             .object
             .declare_func_in_func(self.stringify_value, builder.func);
@@ -2777,6 +2796,9 @@ impl<'a> NativeCodegen<'a> {
         let union_inject = self
             .object
             .declare_func_in_func(self.union_inject, builder.func);
+        let union_inject_copy = self
+            .object
+            .declare_func_in_func(self.union_inject_copy, builder.func);
         let union_tag_test = self
             .object
             .declare_func_in_func(self.union_tag_test, builder.func);
@@ -3443,6 +3465,7 @@ impl<'a> NativeCodegen<'a> {
             string_strip_suffix,
             string_trim,
             string_join,
+            string_text_method,
             stringify_value,
             format_value,
             abs_value,
@@ -3549,6 +3572,7 @@ impl<'a> NativeCodegen<'a> {
             tuple_element,
             tuple_take_element,
             union_inject,
+            union_inject_copy,
             union_tag_test,
             union_tag,
             union_payload_copy,
@@ -4814,6 +4838,7 @@ struct FunctionCompiler<'a> {
     string_strip_suffix: cranelift_codegen::ir::FuncRef,
     string_trim: cranelift_codegen::ir::FuncRef,
     string_join: cranelift_codegen::ir::FuncRef,
+    string_text_method: cranelift_codegen::ir::FuncRef,
     stringify_value: cranelift_codegen::ir::FuncRef,
     format_value: cranelift_codegen::ir::FuncRef,
     abs_value: cranelift_codegen::ir::FuncRef,
@@ -4923,6 +4948,7 @@ struct FunctionCompiler<'a> {
     tuple_element: cranelift_codegen::ir::FuncRef,
     tuple_take_element: cranelift_codegen::ir::FuncRef,
     union_inject: cranelift_codegen::ir::FuncRef,
+    union_inject_copy: cranelift_codegen::ir::FuncRef,
     union_tag_test: cranelift_codegen::ir::FuncRef,
     union_tag: cranelift_codegen::ir::FuncRef,
     union_payload_copy: cranelift_codegen::ir::FuncRef,
@@ -8792,6 +8818,58 @@ impl<'a> FunctionCompiler<'a> {
         Ok(result)
     }
 
+    /// Lowers one `str` text-convenience method to the shared runtime
+    /// dispatcher. The receiver stays shared; a text argument is moved into
+    /// the call and a count travels as a scalar.
+    fn compile_string_text_method(
+        &mut self,
+        receiver: Value,
+        field: &str,
+        args: &[MirArg],
+    ) -> std::result::Result<ValueRef, String> {
+        let opcode = text_method_opcode(field)
+            .expect("only text-convenience methods reach the text dispatcher");
+        let expected: &[&str] = match field {
+            "split_once" | "rsplit_once" => &["separator"],
+            "find" | "count" => &["text"],
+            "repeat" => &["count"],
+            _ => &[],
+        };
+        let ordered = ordered_named_args(expected, args)?;
+        let zero = self.builder.ins().iconst(types::I64, 0);
+        let (argument, count) = match (field, ordered.first()) {
+            ("repeat", Some(argument)) => {
+                let count =
+                    self.load_operand_with_integer_hint(&argument.value, Some(ScalarKind::Int64))?;
+                let count = self.coerce_value(count, &DirectType::Scalar(ScalarKind::Int64))?;
+                (zero, count.values[0])
+            }
+            (_, Some(argument)) => {
+                let loaded = self.load_operand(&argument.value)?;
+                let text = self.ensure_opaque(loaded)?;
+                (text.values[0], zero)
+            }
+            (_, None) => (zero, zero),
+        };
+        let opcode = self.builder.ins().iconst(types::I64, opcode);
+        let inst = self.builder.ins().call(
+            self.string_text_method,
+            &[opcode, receiver, argument, count],
+        );
+        let semantic_type = text_convenience_result_type(field)
+            .expect("text-convenience methods have a result type");
+        let result = self.owned_opaque_result(
+            self.builder.inst_results(inst).to_vec(),
+            semantic_type.clone(),
+        );
+        let target = ensure_direct_type(
+            &semantic_type,
+            &self.classes,
+            &format!("return value of `str.{field}`"),
+        )?;
+        self.coerce_value(result, &target)
+    }
+
     fn compile_host_builtin_named_call(
         &mut self,
         name: &str,
@@ -11603,26 +11681,30 @@ impl<'a> FunctionCompiler<'a> {
         }
         let boxed =
             self.switch_on_union_tag(union, words, &result_ty, |codegen, index, member| {
+                // A handle payload of a borrowed union stays owned by the
+                // union's place, so the injection copies the value behind
+                // the retained handle, as the interpreter copies a place read
+                // into an injection. A moved union's payload or a freshly
+                // boxed member moves into the boxed value.
+                let borrowed_handle = !owned && matches!(member.ty, DirectType::Opaque(_));
                 let payload = codegen.ensure_opaque(member)?;
-                if owned {
-                    // The moved union's handle moves into the boxed value.
-                    codegen.mark_temporary_opaque_owned(&payload);
-                }
-                // A borrowed string payload is immutable, so the boxed union
-                // shares it; any other borrowed payload is copied, as the
-                // interpreter copies a place read into an injection.
-                let immutable_payload =
-                    matches!(&payload.ty, DirectType::Opaque(Type::Named(name, args)) if name == "str" && args.is_empty());
-                let transferred = if immutable_payload {
-                    codegen.transfer_opaque_arg(&payload)
+                let (inject, transferred) = if borrowed_handle {
+                    (
+                        codegen.union_inject_copy,
+                        codegen.retain_opaque_handle(payload.values[0]),
+                    )
                 } else {
-                    codegen.transfer_owned_opaque_value(&payload)
+                    codegen.mark_temporary_opaque_owned(&payload);
+                    (
+                        codegen.union_inject,
+                        codegen.transfer_owned_opaque_value(&payload),
+                    )
                 };
                 let tag = codegen.builder.ins().iconst(types::I64, index as i64);
                 let call = codegen
                     .builder
                     .ins()
-                    .call(codegen.union_inject, &[ptr, len, tag, transferred]);
+                    .call(inject, &[ptr, len, tag, transferred]);
                 Ok(ValueRef {
                     values: codegen.builder.inst_results(call).to_vec(),
                     ty: DirectType::Opaque(union_type.clone()),
@@ -13247,6 +13329,10 @@ impl<'a> FunctionCompiler<'a> {
                             self.builder.inst_results(inst).to_vec(),
                             optional_type(Type::named("str")),
                         ))
+                    }
+                    "trim_start" | "trim_end" | "lines" | "split_whitespace" | "split_once"
+                    | "rsplit_once" | "find" | "count" | "repeat" => {
+                        self.compile_string_text_method(object.values[0], field, args)
                     }
                     "trim" => {
                         if !args.is_empty() {
@@ -19401,6 +19487,12 @@ fn builtin_opaque_member_return_type(
         ("str", "strip_prefix") | ("str", "strip_suffix") => {
             Some(DirectType::Opaque(optional_type(Type::named("str"))))
         }
+        ("str", "count") => Some(DirectType::Scalar(ScalarKind::Int64)),
+        (
+            "str",
+            "trim_start" | "trim_end" | "split_once" | "rsplit_once" | "lines" | "split_whitespace"
+            | "find" | "repeat",
+        ) => text_convenience_result_type(field).map(DirectType::Opaque),
         ("Array", "shape") => Some(DirectType::Opaque(Type::Named(
             "list".to_string(),
             vec![Type::named("int64")],

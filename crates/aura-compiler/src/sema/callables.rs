@@ -2379,15 +2379,6 @@ impl<'a> FunctionChecker<'a> {
                     }
                 }
             };
-            if *passing == ReceiverKind::Borrow && matches!(hinted_expected, Type::Union(_)) {
-                if let Some(argument) = argument {
-                    self.validate_borrowed_union_injection(
-                        &argument.value,
-                        &hinted_expected,
-                        locals,
-                    )?;
-                }
-            }
             let nested_move_span = argument
                 .map(|argument| argument.value.span)
                 .or_else(|| param_decl.default.as_ref().map(|default| default.span))

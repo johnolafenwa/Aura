@@ -143,6 +143,7 @@ seven real loopback requests.
 | `union_narrowing.au` | `is None` and `is not None` tests that narrow a parameter and a class field, an early `return` edge, and an `and` composition | `missing`, `4`, `anonymous or new`, `aura`, `anonymous or new` |
 | `result_match.au` | Enum declarations, owned payload variants, an explicit `own` parameter, and exhaustive consuming `match` | `42`, `bad`, `0` |
 | `result_option.au` | Built-in `Result[T, E]` and optional `T \| None` values with exhaustive `match` | `4`, `division by zero`, `7` |
+| `optional_arguments.au` | A bare `str \| None` parameter that borrows a list element, a field, and a loop binding without copying them | `hello, Lin`, `hello, guest`, `hello, Grace`, `hello, guest`, `hello, Ada`, `hello, Lin`, `[Ada, Lin]` |
 | `explicit_type_args.au` | Explicit type arguments on built-in enum constructors such as `Result[int32, str].Ok(...)` | `7`, `bad` |
 | `constructor_ergonomics.au` | Keyword payload arguments on enum variants, bare `Ok(...)` constructors, and a bare value injected into a `T \| None` binding with expected types | `Status.Count(4)`, `7`, `9` |
 | `match_borrow.au` | `match ...:` with unqualified built-in enum variants such as `case Ok(value):` | `ok` |
@@ -329,6 +330,7 @@ printed-output order unless they coordinate that order explicitly.
 | `string_clone.au` | `str.clone()` on owned strings | `aura` |
 | `string_methods.au` | Single-quoted strings, an owned `str \| None` match helper, and the `str` methods: `int64` Unicode-scalar `len()`, `int64` UTF-8 `byte_len()`, `contains(...)`, `starts_with(...)`, `ends_with(...)`, `split(...)`, `replace(...)`, `to_lower()`, `to_upper()`, `strip_prefix(...)`, `strip_suffix(...)`, `trim()`, and `clone()` | `13`, `true`, `true`, `true`, `aura repo`, `2`, `aura`, `repo`, `aura lang`, `aura repo`, `AURA REPO`, `repo`, `none`, `aura`, `none`, `9` |
 | `string_parsing_and_formatting.au` | Parsing builtins, scalar and boolean `.to_string()`, and `str.join(...)` | `42`, `-9000000000`, `3.5`, `true`, `aura-lang-tests`, `true`, `12`, `4`, `9`, `3.0` |
+| `text_parsing.au` | A small request-log parser that uses `lines()`, `split_whitespace()`, `rsplit_once(...)`, `split_once(...)`, `trim_start()`, `trim_end()`, `find(...)`, `count(...)`, and `repeat(...)`, plus `bytes.starts_with`, `bytes.find`, and `bytes.ends_with` | `Requests`, `--------`, three aligned request rows, `skipped: broken`, `Content-Type = text/plain; charset=utf-8`, `utf-8`, `2`, `68656c6c6f`, `true` |
 | `borrow_str.au` | Borrowed string parameters with `str` | `Hello, Aura` |
 | `f_strings.au` | Interpolated `f"..."` strings that produce owned `str` values | `Hello, Aura 42` |
 | `literal_forms_and_formatting.au` | Exact triple-quoted prompts, raw backslash-heavy paths, and statically checked width, sign-aware zero padding, grouping, and percentage formatting. Shows Unicode-aware formatting through the f-string grammar. | |
@@ -437,6 +439,7 @@ cargo run -p aura -- run examples/strings/string_clone.au
 cargo run -p aura -- run examples/strings/string_methods.au
 cargo run -p aura -- run examples/strings/string_parsing_and_formatting.au
 cargo run -p aura -- run examples/strings/literal_forms_and_formatting.au
+cargo run -p aura -- run examples/strings/text_parsing.au
 ```
 
 ## Build Standalone Artifacts

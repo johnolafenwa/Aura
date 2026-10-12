@@ -1,0 +1,55 @@
+# Parses a small request log with the text and byte convenience methods.
+import bytes
+
+class Request:
+    method: str
+    path: str
+    status: str
+
+def parse_request(line: str) -> Request | None:
+    fields = line.split_whitespace()
+    if len(fields) != 3:
+        return None
+    return Request(method=fields[0].clone(), path=fields[1].clone(), status=fields[2].clone())
+
+def file_extension(path: str) -> str:
+    pair = path.rsplit_once(".")
+    if pair is None:
+        return "(none)"
+    _, extension = pair
+    return extension
+
+def main():
+    log = "GET /index.html 200\u{d}\nPOST /api/items 201\n  broken\nGET /logo.png   404\n"
+    title = "Requests"
+    print(title)
+    print("-".repeat(title.len()))
+    for line in log.lines():
+        match own parse_request(line):
+            case None:
+                print("skipped: " + line.trim_start())
+            case Request as request:
+                print(f"{request.method:<5}{request.path:<14}{request.status} {file_extension(request.path)}")
+
+    header = "Content-Type: text/plain; charset=utf-8"
+    pair = header.split_once(":")
+    if pair is not None:
+        name, value = pair
+        print(name + " =" + value.trim_end())
+        match value.find("charset="):
+            case int64 as at:
+                print(value[at + 8:])
+            case None:
+                print("no charset")
+    print(log.count("GET"))
+
+    payload = "AURA\x00\x01hello".to_bytes()
+    magic = "AURA".to_bytes()
+    if bytes.starts_with(payload, magic):
+        match bytes.find(payload, [0, 1]):
+            case int64 as end:
+                body = payload[end + 2:]
+                print(bytes.hex_encode(body))
+            case None:
+                print("no header terminator")
+    print(bytes.ends_with(payload, "hello".to_bytes()))
