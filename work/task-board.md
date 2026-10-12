@@ -14,8 +14,13 @@ Last updated: 2026-10-11
   the caller's value; reading a list inside its own `for ... in mut` loop
   reports `AU3002` in the checker instead of failing MIR validation.
   Details are in `2026-10-11-batch-2-completion.md`.
-- Remaining: the union borrowing pull request's hosted run and merge, then
-  phase 2b.
+- Union borrowing is PR #37, which also fixes a `match` expression
+  argument that moved its local.
+- Phase 2b done locally: `Span[T]` slice views, returned range views, the
+  dictionary lookup review, span validator tests, editor hover and
+  completion, and documentation.
+- Remaining: hosted runs and merges for PR #37 and the phase 2b pull
+  request.
 
 ## Aura 0.3.6 preview release (complete)
 

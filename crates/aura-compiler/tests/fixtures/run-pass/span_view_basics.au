@@ -1,0 +1,22 @@
+def total(values: Span[int64]) -> int64:
+    mut sum = 0
+    for value in values:
+        sum += value
+    return sum
+
+def main():
+    mut items = [1, 2, 3, 4, 5]
+    view window = items[1:4]
+    print(len(window))
+    print(window.len())
+    print(window[0])
+    print(window[-1])
+    print(total(window))
+    print(total(items))
+    print(total(items[3:]))
+    copied = items[1:4]
+    print(copied)
+    view mut tail = items[3:]
+    tail[0] = 40
+    tail[1] += 1
+    print(items)

@@ -1479,6 +1479,19 @@ cannot be represented or allocated traps with `AU4005`. Malformed data returns
 | `list.reserve` | `reserve(additional: int64) -> None` | Makes room for at least `len() + additional` elements. |
 | `list[T].with_capacity` | `with_capacity(minimum: int64) -> list[T]` | Creates an empty list with at least the requested capacity. |
 
+### Span[T]
+
+| API | Signature | Behavior |
+| --- | --- | --- |
+| `Span.len` | `len() -> int64` | Length of the range. |
+| `Span.index` | `index(value: T) -> int64` | Position of the first equal element in the range. Traps with `AU4008` when none is equal. |
+| `Span.count` | `count(value: T) -> int64` | Number of equal elements in the range. |
+| `Span.reverse` | `reverse() -> None` | Reverses the range in place. Needs a mutable span. |
+| `Span.sort` | `sort(reverse: bool = false) -> None` | Stably sorts the range in place. Needs a mutable span. |
+| `Span.swap` | `swap(first: int64, second: int64) -> None` | Swaps two positions of the range. Needs a mutable span. |
+| `Span.fill` | `fill(value: T) -> None` | Writes `value` to every position. Needs a mutable span and a Copy `T`. |
+| `Span.to_list` | `to_list() -> list[T]` | Owned copy of the range. Requires clone-safe `T`. |
+
 ### dict[K, V]
 
 | API | Signature | Behavior |
@@ -4152,6 +4165,88 @@ The key function runs exactly once per element, from first to last. All keys
 are stored before the list changes. If an argument, key, ordering, or
 allocation fails before that point, the list is unchanged.
 
+## Span[T]
+
+`Span[T]` is a view of a contiguous range of a `list[T]`. It reads and writes
+the list's elements in place and never copies them.
+
+<<< ../../examples/collections/span_views.au{aura}
+
+### Creating A Span
+
+`view part = values[start:end]` lends a range of `values`. `view mut part =
+values[start:end]` lends it for writing and needs a mutable list.
+
+- Endpoints follow the slice rules: `int64` endpoints, an omitted endpoint
+  means the start or end, and a negative endpoint counts from the end once.
+- An invalid or reversed range traps with `AU4003` when the span is created.
+- Slicing a span with `view inner = part[1:]` makes a nested span. Its
+  endpoints are positions in `part`, and it must fit inside `part`.
+
+A parameter of type `Span[T]` or `mut Span[T]` accepts a slice such as
+`total(values[1:3])`, a whole list such as `total(values)`, or an existing
+span. A `mut Span[T]` parameter needs a mutable list or a mutable span.
+
+### Span Operations
+
+Positions in a span count from the start of its range. An invalid position
+traps with `AU4003`.
+
+| Operation | Form | Contract |
+| --- | --- | --- |
+| length | `len(part)`, `part.len()` | Returns the length of the range. |
+| indexing | `part[i]`, `part[i] = value` | Reads or writes one element. Writing needs a mutable span. |
+| iteration | `for x in part:`, `for x in mut part:` | Visits the range in order. `enumerate` and `zip` count from 0. |
+| membership | `value in part` | Tests the range for an equal element. |
+| equality | `part == other` | Compares the range with a list or another span. |
+| `index` | `index(value: T) -> int64` | Returns the position of the first equal element. Traps with `AU4008` when no element is equal. |
+| `count` | `count(value: T) -> int64` | Counts equal elements in the range. |
+| `reverse` | `reverse() -> None` | Reverses the range in place. Needs a mutable span. |
+| `sort` | `sort(reverse: bool = false) -> None` | Stably sorts the range in place. Needs a mutable span. |
+| `swap` | `swap(first: int64, second: int64) -> None` | Swaps two positions. Needs a mutable span. |
+| `fill` | `fill(value: T) -> None` | Writes `value` to every position. Needs a mutable span and a Copy `T`. |
+| `to_list` | `to_list() -> list[T]` | Returns an owned copy of the range. Requires clone-safe `T`. |
+
+A span has a fixed length, so it has no `append`, `pop`, `insert`, or other
+member that changes the list's length. Calling one reports `AU2001`. A value
+slice of a span, such as `copy = part[1:]`, is an owned `list[T]`.
+
+### Returning A Span
+
+A function can return a range of a list parameter. Declare `-> view Span[T]
+from values` and return a slice of `values`, the whole of `values`, a span of
+it, or another call that returns one.
+
+```aura
+def middle(values: list[int64]) -> view Span[int64] from values:
+    return view values[1:-1]
+
+def main():
+    scores = [4, 9, 2, 7]
+    view inner = middle(scores)
+    print(inner.to_list())
+```
+
+Bind the result with `view`, or `view mut` for a `view mut Span[T]` result.
+Using the call in any other position reports `AU3010`. A method cannot return
+a span of its receiver.
+
+### Span Ownership
+
+A span holds a loan of its whole list. While a shared span is live, the list
+can be read but not changed. While a mutable span is live, the list is
+reachable only through that span. A conflicting access reports `AU3002`.
+
+A span is a view, so it cannot be stored or moved:
+
+- It cannot be a field, an owned local, an `own` parameter, an owned result,
+  a type argument, or a tuple element. These report `AU3010`.
+- It cannot be a union member (`AU2010`) or cross a task boundary (`AU3008`).
+- A function with a `Span[T]` parameter or result cannot be used as a function
+  value (`AU3010`). Call it directly.
+- A span has no text form. `print(part)` reports `AU2002`. Print
+  `part.to_list()` instead.
+
 ## dict[K, V]
 
 Dictionaries keep insertion order for iteration and snapshots. Indexing,
@@ -4365,22 +4460,24 @@ lookups and searches leave their inputs in place.
 
 - `append`, `insert`, `extend`, `add`, `update`, indexed assignment, and
   comprehension output move owned values in.
-- Slices and `copy` produce independent storage.
+- Value slices and `copy` produce independent storage. A `Span[T]` view
+  lends the list instead.
 - No collection operation inserts a hidden clone.
 
 ## Diagnostics
 
 | Code | Cause |
 | --- | --- |
-| `AU2001` | Unknown collection type or member. |
+| `AU2001` | Unknown collection type or member, or a length-changing member on a span. |
 | `AU2002` | Type, arity, homogeneity, or callback mismatch. |
 | `AU3001` | Use after move. |
-| `AU3002` | Conflicting access. |
+| `AU3002` | Conflicting access, including use of a list while a span of it is live. |
+| `AU3010` | A span in an owned position, or an unbound call that returns a span. |
 | `AU3003` | Mutation through an immutable place. |
 | `AU3005`, `AU3006`, `AU3007`, `AU3009` | Ownership or clone-safety violation. |
-| `AU4003` | Invalid position, or a missing key in a direct dictionary read. |
+| `AU4003` | Invalid position or span range, or a missing key in a direct dictionary read. |
 | `AU4005` | Allocation or capacity failure. |
-| `AU4008` | Missing value for list `remove` or `index`, or for set `remove`. |
+| `AU4008` | Missing value for list or span `index`, list `remove`, or set `remove`. |
 
 ## Backend Support
 
@@ -4395,7 +4492,8 @@ These are not available:
 - mutable set iteration and direct dictionary iteration
 - set algebra and set relations
 - arbitrary user-defined iterables and generator expressions
-- slice steps, slice assignment, and slice views
+- slice steps and slice assignment
+- spans over `str`, `Array`, or a receiver field returned from a method
 - integer indexing of `str`
 
 Set order is not part of the API contract. Allocation is limited by host
@@ -5902,7 +6000,9 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 ### Views
 
 - Views have identity only for these places: local, parameter, and receiver roots; existing views; class-field paths; fixed tuple positions; list elements; and dictionary entries. Field and tuple projections inside an element are included.
-- Set elements, slices, arbitrary temporaries, and escaping enum-payload views cannot be loaned.
+- Set elements, arbitrary temporaries, and escaping enum-payload views cannot be loaned. A list range is loaned as a `Span[T]` view.
+- `Span[T]` covers `list[T]` only. There are no spans of `str` or `Array`, and a method cannot return a span of its receiver.
+- A call that returns a `Span[T]` must be bound with `view`. A function with a `Span[T]` parameter or result is not a function value, and a lambda cannot capture a span.
 - A returned view of a list element or dictionary entry holds the whole collection at the call site. The caller cannot read a different element while it is live.
 - Beside a live element view of the same list, `set(index, value)` works only for a Copy element type. For other element types it is refused with `AU3011`, because it would move the old element out through the collection.
 - In a top-level script, an immutable binding above the first top-level statement is a module constant and cannot be the source of a view (`AU3004`). Bind it with `mut`, below the first statement, or inside a function.
@@ -5935,11 +6035,11 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 - Comprehension clauses use bare-loop iteration only. There is no comprehension `mut` or `own` source form, no early `break` or `continue`, and no lazy result.
 - Nested clauses are outer-major. A Queue comprehension receives until ordinary Queue iteration ends.
 - Generator expressions are not available. They report `AU2005` and point to an eager comprehension or an explicit loop.
-- List and str slices accept one contiguous half-open range and return fresh owned copies.
+- List and str slices accept one contiguous half-open range. A value slice returns a fresh owned copy. `view part = values[a:b]` lends a list range as a `Span[T]`.
 - Written slice endpoints use `int64`. Negative endpoints normalize once. Invalid or reversed ranges trap with `AU4003`. Endpoints are not clamped.
 - str slice endpoints count Unicode scalar values, and str slicing is O(n).
 - Slice steps and slice assignment are reserved `AU2005` forms.
-- Arbitrary sliceable types, indexed zero-copy views, str integer indexing, grapheme slicing, and Python-style endpoint clamping are not available.
+- Arbitrary sliceable types, str integer indexing, grapheme slicing, and Python-style endpoint clamping are not available.
 - List slicing requires clone-safe, repeatably observable elements.
 
 ### Collections And List Algorithms
@@ -6482,6 +6582,11 @@ Two related cases use other codes:
 - a function type whose `view` result names an origin that is not one of its
   named parameters
 - a function type with a `view mut` result over a non-`mut` origin
+- a `Span[T]` in an owned position, such as a field, an owned local, or an
+  owned result
+- a call that returns a `Span[T]` and is not bound with `view`
+- a function with a `Span[T]` parameter or result used as a function value,
+  or a lambda that captures a span
 
 The diagnostic identifies the declared origin and the incompatible expression
 or destination. Return an owned clone, index, or handle when the access must
@@ -15180,6 +15285,7 @@ Shared-borrow and `own` parameters can have defaults. An omitted shared default 
 - local roots, parameters, receivers, and existing views
 - class-field paths and fixed tuple positions
 - list elements and dictionary entries, including a field or tuple projection inside an element, such as `users[i].name`
+- list ranges, such as `values[1:3]`, which lend a `Span[T]`. See [Collections](/manual/collections#span-t).
 
 Set elements, Queue receives, Range values, and computed temporaries do not have view identity in Aura 0.3.
 
@@ -19045,6 +19151,7 @@ Ordinary absence is the union `T | None`, not a generic wrapper type. The builti
 | `list[T]` | Owned ordered collection. |
 | `dict[K, V]` | Owned key/value dictionary. |
 | `set[T]` | Owned set of unique values. |
+| `Span[T]` | View of a contiguous range of a `list[T]`. It is valid only as a view binding, a parameter, or a `view` result. See [Collections](/manual/collections#span-t). |
 | `Array[T]` | Owned contiguous row-major numeric array. `T` is exactly `int32`, `int64`, `float32`, or `float64`. |
 | `Queue[T]` | Scheduler-aware typed queue handle. |
 | `Task[T]` | Transferable task-result handle. It is Copy only under the conditions in [Provisional Transfer Classification](#provisional-transfer-classification). |
@@ -23487,7 +23594,10 @@ Slices follow strict bounds rules:
 
 Aura does not copy Python's clamping, or its rule that a reversed range is
 empty. Slicing copies Copy elements and clones clone-safe non-Copy elements.
-A clone-safe type is one whose values can be cloned. A slice is never a view.
+A clone-safe type is one whose values can be cloned. A value slice is never a
+view. To work on a range in place, bind it with `view part = values[1:3]`, as
+[Range Views With Span](06-ownership-and-borrowing.md#range-views-with-span)
+shows.
 
 ### Equality
 
@@ -25523,6 +25633,45 @@ def main():
   cannot escape as the result.
 - An ordinary `-> T` return stays owned.
 - The result can select one list element or dictionary entry, as in `return view mut values[0]`. The caller's view then holds the whole collection until it ends.
+
+## Range Views With Span
+
+`view part = values[a:b]` lends a range of a list as a `Span[T]`. The span
+reads and writes the list's elements in place, so nothing is copied:
+
+```aura check-pass
+def total(values: Span[int64]) -> int64:
+    mut sum = 0
+    for value in values:
+        sum += value
+    return sum
+
+def head(values: list[int64], count: int64) -> view Span[int64] from values:
+    return view values[:count]
+
+def main():
+    mut scores = [7, 3, 9, 1]
+    print(total(scores[1:3]))
+
+    view mut tail = scores[2:]
+    tail.sort()
+    print(scores)
+
+    view first = head(scores, 2)
+    print(first.to_list())
+```
+
+- Positions in a span count from the start of its range.
+- A `Span[T]` parameter accepts a slice, a whole list, or another span.
+- A span holds a loan of the whole list. While it is live, the list is reached
+  only through the span, or read if the span is shared.
+- A span has a fixed length. It has `sort`, `reverse`, `swap`, `fill`, and
+  `to_list`, but no `append` or `pop`.
+- A span is a view: it cannot be stored in a field, returned as an owned
+  value, captured by a lambda, or printed. Print `part.to_list()` instead.
+
+See [Collections](../docs/manual/collections.md#span-t) for the full member
+table.
 
 ## Explicit Loan Captures
 

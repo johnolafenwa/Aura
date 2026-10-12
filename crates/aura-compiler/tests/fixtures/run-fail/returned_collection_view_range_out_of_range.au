@@ -1,0 +1,9 @@
+def head(items: list[int64], count: int64) -> view Span[int64] from items:
+    return view items[:count]
+
+def main():
+    items = [1, 2, 3]
+    view first = head(items, 2)
+    print(len(first))
+    view too_many = head(items, 5)
+    print(len(too_many))

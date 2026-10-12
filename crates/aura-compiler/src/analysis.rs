@@ -1435,7 +1435,7 @@ impl<'a> AnalysisBuilder<'a> {
                 Stmt::Assign(assign) => self.bind_assignment(assign, scope),
                 Stmt::View(view) => {
                     let ty = self
-                        .infer_expr_type(&view.source, scope)
+                        .infer_view_source_type(&view.source, scope)
                         .unwrap_or(Type::Unit);
                     self.insert_scope_binding(
                         &view.name,
@@ -2242,7 +2242,7 @@ impl<'a> AnalysisBuilder<'a> {
             Stmt::View(view) => {
                 self.visit_expr(&view.source, scope);
                 let ty = self
-                    .infer_expr_type(&view.source, scope)
+                    .infer_view_source_type(&view.source, scope)
                     .unwrap_or(Type::Unit);
                 self.bind_view_value(view, ty, scope);
             }
@@ -4502,6 +4502,24 @@ impl<'a> AnalysisBuilder<'a> {
         })
     }
 
+    /// The type a `view` binding takes: a slice source lends a `Span[T]`.
+    fn infer_view_source_type(
+        &self,
+        source: &Expr,
+        scope: &BTreeMap<String, BindingInfo>,
+    ) -> Option<Type> {
+        let mut grouped = source;
+        while let ExprKind::Group(inner) = &grouped.kind {
+            grouped = inner;
+        }
+        let ExprKind::Slice { object, .. } = &grouped.kind else {
+            return self.infer_expr_type(source, scope);
+        };
+        let ty = self.infer_expr_type(object, scope)?;
+        matches!(base_type_name(&ty), "list" | "Span")
+            .then(|| Type::Named("Span".to_string(), ty.type_arguments().to_vec()))
+    }
+
     fn infer_expr_type(&self, expr: &Expr, scope: &BTreeMap<String, BindingInfo>) -> Option<Type> {
         match &expr.kind {
             ExprKind::IsNone { .. }
@@ -4701,15 +4719,25 @@ impl<'a> AnalysisBuilder<'a> {
                         },
                         _ => match base_type_name(&ty) {
                             "Array" => ty.type_arguments().first().cloned(),
-                            "list" => ty.type_arguments().first().cloned(),
+                            "list" | "Span" => ty.type_arguments().first().cloned(),
                             "dict" => ty.type_arguments().get(1).cloned(),
                             _ => None,
                         },
                     })
             }
-            ExprKind::Slice { object, .. } => self.infer_expr_type(object, scope).and_then(|ty| {
-                matches!(base_type_name(&ty), "Array" | "list" | "str").then_some(ty)
-            }),
+            // A value slice is an owned copy; a slice of a span copies into
+            // a list.
+            ExprKind::Slice { object, .. } => {
+                self.infer_expr_type(object, scope)
+                    .and_then(|ty| match base_type_name(&ty) {
+                        "Array" | "list" | "str" => Some(ty),
+                        "Span" => Some(Type::Named(
+                            "list".to_string(),
+                            ty.type_arguments().to_vec(),
+                        )),
+                        _ => None,
+                    })
+            }
             ExprKind::Call { callee, args } => self.infer_call_type(callee, args, scope),
             ExprKind::Conditional {
                 then_expr,
@@ -6388,7 +6416,24 @@ fn view_source_root(expr: &Expr) -> Option<&str> {
         ExprKind::Name(name) => Some(name),
         ExprKind::Group(inner)
         | ExprKind::Member { object: inner, .. }
-        | ExprKind::Index { object: inner, .. } => view_source_root(inner),
+        | ExprKind::Index { object: inner, .. }
+        | ExprKind::Slice { object: inner, .. } => view_source_root(inner),
+        _ => None,
+    }
+}
+
+/// A slice endpoint as written, when it is a literal or a name.
+fn render_slice_endpoint(endpoint: Option<&Expr>) -> Option<String> {
+    let Some(endpoint) = endpoint else {
+        return Some(String::new());
+    };
+    match &endpoint.kind {
+        ExprKind::Int(value) => Some(value.to_string()),
+        ExprKind::Name(name) => Some(name.clone()),
+        ExprKind::Unary {
+            op: crate::ast::UnaryOp::Neg,
+            expr,
+        } => render_slice_endpoint(Some(expr)).map(|inner| format!("-{inner}")),
         _ => None,
     }
 }
@@ -6405,6 +6450,18 @@ fn render_view_source(expr: &Expr) -> Option<String> {
                 return None;
             };
             Some(format!("{}[{index}]", render_view_source(object)?))
+        }
+        ExprKind::Slice {
+            object, start, end, ..
+        } => {
+            let object = render_view_source(object)?;
+            match (
+                render_slice_endpoint(start.as_deref()),
+                render_slice_endpoint(end.as_deref()),
+            ) {
+                (Some(start), Some(end)) => Some(format!("{object}[{start}:{end}]")),
+                _ => Some(format!("{object}[..]")),
+            }
         }
         _ => None,
     }
@@ -6895,6 +6952,26 @@ fn builtin_enum_variant_completions(base_name: &str) -> Vec<AnalysisCompletion> 
 fn builtin_member_completions(receiver_type: &Type) -> Vec<AnalysisCompletion> {
     let mut completions = Vec::new();
     match base_type_name(receiver_type) {
+        "Span" => {
+            completions.extend(
+                [
+                    ("len", "len() -> int64"),
+                    ("index", "index(value: T) -> int64"),
+                    ("count", "count(value: T) -> int64"),
+                    ("reverse", "reverse() -> None"),
+                    ("swap", "swap(first: int64, second: int64) -> None"),
+                    ("sort", "sort(reverse: bool = false) -> None"),
+                    ("fill", "fill(value: T) -> None"),
+                    ("to_list", "to_list() -> list[T]"),
+                ]
+                .into_iter()
+                .map(|(name, detail)| AnalysisCompletion {
+                    name: name.to_string(),
+                    kind: "method".to_string(),
+                    detail: detail.to_string(),
+                }),
+            );
+        }
         "list" => {
             completions.extend([
                 AnalysisCompletion {

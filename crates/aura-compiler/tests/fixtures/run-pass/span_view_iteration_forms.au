@@ -1,0 +1,22 @@
+def main():
+    items = [10, 20, 30, 40]
+    view window = items[1:]
+    for i, x in enumerate(window):
+        print(f"{i}:{x}")
+    others = [1, 2]
+    for a, b in zip(window, others):
+        print(a + b)
+    print([x for x in window if x > 20])
+    names = ["a", "bb", "ccc"]
+    view ns = names[1:]
+    print([len(n) for n in ns])
+    print(sum_all(window))
+    print(doubled(items[:2]))
+    for i, n in enumerate(ns):
+        print(n)
+
+def sum_all(values: Span[int64]) -> int64:
+    return len([x for x in values if x > 1])
+
+def doubled(values: Span[int64]) -> list[int64]:
+    return [value * 2 for value in values]

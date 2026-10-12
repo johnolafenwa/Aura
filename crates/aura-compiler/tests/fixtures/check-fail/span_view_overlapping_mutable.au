@@ -1,0 +1,6 @@
+def main():
+    mut items = [1, 2, 3, 4]
+    view mut a = items[0:2]
+    view mut b = items[2:4]
+    a[0] = 1
+    b[0] = 2

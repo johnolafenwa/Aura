@@ -1,0 +1,6 @@
+error[AU4003]: slice end `5` is outside `0..=3`
+ --> crates/aura-compiler/tests/fixtures/run-fail/span_argument_out_of_range.au:6:24
+  |
+6 |     print(total(items[2:5]))
+  |                        ^
+  = note: Aura call chain (innermost first): main at 4:1

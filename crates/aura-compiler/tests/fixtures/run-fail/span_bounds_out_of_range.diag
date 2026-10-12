@@ -1,0 +1,6 @@
+error[AU4003]: slice end `9` is outside `0..=3`
+ --> crates/aura-compiler/tests/fixtures/run-fail/span_bounds_out_of_range.au:3:26
+  |
+3 |     view window = items[1:9]
+  |                          ^
+  = note: Aura call chain (innermost first): main at 1:1

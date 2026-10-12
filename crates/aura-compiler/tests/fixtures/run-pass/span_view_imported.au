@@ -1,0 +1,8 @@
+import span_view_imported_support.counting
+
+def main():
+    items = [1, 5, 9, 2]
+    print(span_view_imported_support.counting.count_big(items[1:], 4))
+    print(span_view_imported_support.counting.count_big(limit=1, values=items))
+    view window = items[2:]
+    print(span_view_imported_support.counting.count_big(window, 0))

@@ -1,0 +1,7 @@
+error[AU3008]: task target `tail` returns a view of its arguments; the child's result must be an owned value
+ --> crates/aura-compiler/tests/fixtures/check-fail/returned_collection_view_task_target.au:7:28
+  |
+7 |         task = group.start(tail, items)
+  |                            ^
+  = related crates/aura-compiler/tests/fixtures/check-fail/returned_collection_view_task_target.au:1:38: task target return type is declared here
+  = help: return an owned value or a clone from the task target

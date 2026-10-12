@@ -787,10 +787,15 @@ impl<'a> FunctionChecker<'a> {
                 let collection = match &object_ty {
                     Type::Named(name, args) if name == "list" && args.len() == 1 => Some(true),
                     Type::Named(name, args) if name == "dict" && args.len() == 2 => Some(false),
+                    // A span position is relative to its range, so its
+                    // element selector is never a literal base position.
+                    Type::Named(name, args) if name == "Span" && args.len() == 1 => Some(true),
                     _ => None,
                 };
+                let span_element = super::types::span_element_type(&object_ty).is_some();
                 if let Some(is_list) = collection {
                     let selector = match &index.kind {
+                        _ if span_element => super::places::PlaceSelector::Dynamic,
                         ExprKind::Int(value) => i128::try_from(*value)
                             .map(super::places::PlaceSelector::Int)
                             .unwrap_or(super::places::PlaceSelector::Dynamic),
@@ -1069,8 +1074,15 @@ impl<'a> FunctionChecker<'a> {
                 }
             }
         }
-        let conservative = self.view_expr_has_conservative_footprint(&argument.value, locals)?;
-        self.view_place(&argument.value, locals)?
+        // A slice supplied for a `Span[T]` origin lends its base list: the
+        // returned range is a loan of the whole base (ADR-0061, B2).
+        let (origin_value, range_origin) = match &super::grouped_expr(&argument.value).kind {
+            ExprKind::Slice { object, .. } => (&**object, true),
+            _ => (&argument.value, false),
+        };
+        let conservative =
+            range_origin || self.view_expr_has_conservative_footprint(origin_value, locals)?;
+        self.view_place(origin_value, locals)?
             .ok_or_else(|| {
                 Diagnostic::coded_at(
                     "AU3010",
