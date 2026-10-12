@@ -1,0 +1,8 @@
+def boxed[T](value: T) -> str:
+    return f"[{value:>6}]"
+
+def main():
+    print(boxed(7))
+    print(boxed("ab"))
+    pair = (1, 2)
+    print(f"[{pair:>8}]")

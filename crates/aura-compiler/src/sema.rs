@@ -20,6 +20,8 @@ pub(crate) use types::closure_call_kind_for;
 mod display;
 pub(crate) use display::{is_prelude_display, DISPLAY_METHOD, DISPLAY_TRAIT};
 mod property_reads;
+#[cfg(test)]
+mod property_reads_tests;
 mod resolve;
 use resolve::{find_namespace_in_modules, reject_reserved_type_name, validate_type_params};
 mod traits;
@@ -7950,7 +7952,11 @@ impl<'a> FunctionChecker<'a> {
                         && !matches!(&receiver.kind, ExprKind::Name(name) if !locals.contains_key(name))
                     {
                         let receiver_ty = self.type_of_member_object_expr(receiver, locals)?;
-                        if self.member_names_receiver_method(&receiver_ty, field) {
+                        // `value.property[i]` indexes the property's result;
+                        // a property never takes type arguments.
+                        if self.member_names_receiver_method(&receiver_ty, field)
+                            && self.property_getter(&receiver_ty, field).is_none()
+                        {
                             let lowered = self.explicit_type_args_from_index(index)?;
                             if let Some(bound) = self.type_of_bound_method(
                                 object,

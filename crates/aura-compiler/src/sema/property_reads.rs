@@ -141,7 +141,10 @@ fn module_may_read_properties(module: &Module, context: &ModuleContext) -> bool 
         })
 }
 
-fn rewrite_module(module: &mut Module, sites: &BTreeSet<PropertySite>) -> BTreeSet<PropertySite> {
+pub(super) fn rewrite_module(
+    module: &mut Module,
+    sites: &BTreeSet<PropertySite>,
+) -> BTreeSet<PropertySite> {
     let mut rewritten = BTreeSet::new();
     let mut rewriter = Rewriter {
         sites,

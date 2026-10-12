@@ -1,0 +1,6 @@
+impl Display for def(int64) -> int64:
+    def display(self) -> str:
+        return "callable"
+
+def main():
+    print(1)

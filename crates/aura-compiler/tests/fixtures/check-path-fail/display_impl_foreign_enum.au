@@ -1,0 +1,8 @@
+from display_support.colors import Color
+
+impl Display for Color:
+    def display(self) -> str:
+        return "color"
+
+def main():
+    print(Color.Red)
