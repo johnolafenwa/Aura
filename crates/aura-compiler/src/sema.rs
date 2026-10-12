@@ -66,7 +66,7 @@ mod type_budget;
 mod type_budget_tests;
 mod types;
 pub(crate) use types::builtin_enum_variants;
-pub(crate) use types::{lookup_type, optional_type, poll_type};
+pub(crate) use types::{lookup_type, optional_type, poll_type, text_convenience_result_type};
 
 /// Whether a type has a `None` member: the unit type itself, a union that
 /// contains it, or a type parameter whose instantiation may.
@@ -11645,7 +11645,47 @@ impl<'a> FunctionChecker<'a> {
                                 BuiltinMember::StringToLower
                                 | BuiltinMember::StringToUpper
                                 | BuiltinMember::StringTrim
+                                | BuiltinMember::StringTrimStart
+                                | BuiltinMember::StringTrimEnd
                                 | BuiltinMember::StringClone => Ok(Type::named("str")),
+                                BuiltinMember::StringLines
+                                | BuiltinMember::StringSplitWhitespace => {
+                                    Ok(Type::Named("list".to_string(), vec![Type::named("str")]))
+                                }
+                                BuiltinMember::StringSplitOnce
+                                | BuiltinMember::StringRsplitOnce
+                                | BuiltinMember::StringFind
+                                | BuiltinMember::StringCount
+                                | BuiltinMember::StringRepeat => {
+                                    let expected = if builtin_member == BuiltinMember::StringRepeat
+                                    {
+                                        Type::named("int64")
+                                    } else {
+                                        Type::named("str")
+                                    };
+                                    let argument = self.bound_argument(
+                                        &ordered_args,
+                                        0,
+                                        span,
+                                        format!("`{field}` requires one argument"),
+                                    )?;
+                                    let actual = self.type_of_expr_hint(
+                                        &argument.value,
+                                        locals,
+                                        Some(&expected),
+                                    )?;
+                                    if actual != expected {
+                                        return Err(Diagnostic::coded_at(
+                                            "AU2002",
+                                            argument.span,
+                                            format!(
+                                                "`{field}` expects `{expected}`, found `{actual}`"
+                                            ),
+                                        ));
+                                    }
+                                    Ok(text_convenience_result_type(field)
+                                        .expect("text convenience methods have a result type"))
+                                }
                                 BuiltinMember::StringJoin => {
                                     let parts_arg = self.bound_argument(
                                         &ordered_args,

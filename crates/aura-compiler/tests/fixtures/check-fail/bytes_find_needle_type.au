@@ -1,0 +1,5 @@
+import bytes
+
+def main():
+    data = "abc".to_bytes()
+    print(bytes.find(data, "b"))

@@ -3805,6 +3805,23 @@ test("compiler bridge includes str and dict builtin members in completions", asy
     assert.ok(textNames.has("strip_suffix"));
     assert.ok(textNames.has("clone"));
     assert.ok(textNames.has("join"));
+    for (const name of [
+      "trim_start",
+      "trim_end",
+      "split_once",
+      "rsplit_once",
+      "lines",
+      "split_whitespace",
+      "find",
+      "count",
+      "repeat",
+    ]) {
+      assert.ok(textNames.has(name), `missing str.${name} completion`);
+    }
+    assert.equal(
+      textCompletions.find((item) => item.name === "split_once")?.detail,
+      "split_once(separator: str) -> (str, str) | None"
+    );
     assert.equal(
       textCompletions.find((item) => item.name === "len")?.detail,
       "len() -> int64"

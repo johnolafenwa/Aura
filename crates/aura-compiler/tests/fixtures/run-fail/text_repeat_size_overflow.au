@@ -1,0 +1,2 @@
+def main():
+    print("ab".repeat(9223372036854775807).byte_len())

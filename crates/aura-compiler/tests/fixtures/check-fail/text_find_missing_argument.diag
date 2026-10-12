@@ -1,0 +1,5 @@
+error[AU2004]: `find` is missing required argument `text`
+ --> crates/aura-compiler/tests/fixtures/check-fail/text_find_missing_argument.au:2:17
+  |
+2 |     print("abc".find())
+  |                 ^
