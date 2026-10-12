@@ -31526,3 +31526,32 @@ fn adr0061_typed_element_and_entry_paths_resolve_values_and_reject_wrong_project
     assert_eq!(error.message, "cannot project an element from `Profile`");
     assert_eq!(error.span, Some(span));
 }
+
+#[test]
+fn binary_operator_symbols_match_source_spelling() {
+    let cases = [
+        (BinaryOp::And, "and"),
+        (BinaryOp::Or, "or"),
+        (BinaryOp::Add, "+"),
+        (BinaryOp::Sub, "-"),
+        (BinaryOp::Mul, "*"),
+        (BinaryOp::Div, "/"),
+        (BinaryOp::FloorDiv, "//"),
+        (BinaryOp::Mod, "%"),
+        (BinaryOp::Pow, "**"),
+        (BinaryOp::BitAnd, "&"),
+        (BinaryOp::BitOr, "|"),
+        (BinaryOp::BitXor, "^"),
+        (BinaryOp::Shl, "<<"),
+        (BinaryOp::Shr, ">>"),
+        (BinaryOp::Eq, "=="),
+        (BinaryOp::NotEq, "!="),
+        (BinaryOp::Less, "<"),
+        (BinaryOp::LessEq, "<="),
+        (BinaryOp::Greater, ">"),
+        (BinaryOp::GreaterEq, ">="),
+    ];
+    for (op, symbol) in cases {
+        assert_eq!(binary_operator_symbol(op), symbol, "{op:?}");
+    }
+}

@@ -15904,3 +15904,46 @@ def main():
     emit_host_object(&module)
         .expect("direct element loads and stores should compile for every selected alternative");
 }
+
+#[test]
+fn type_parameter_collection_walks_callable_and_closure_contracts() {
+    let param = |name: &str, ty: Type| crate::sema::FunctionParamContract {
+        keyword_only: false,
+        name: name.to_string(),
+        ty,
+        passing: crate::ast::ReceiverKind::Borrow,
+        has_default: false,
+    };
+    let closure = Type::Closure {
+        params: Box::new(vec![param("value", Type::TypeParam("A".to_string()))]),
+        return_type: Box::new(Type::Tuple(vec![
+            Type::TypeParam("R".to_string()),
+            Type::named("int64"),
+        ])),
+        captures: Box::new(vec![crate::sema::ClosureCapture {
+            name: "offset".to_string(),
+            ty: Type::Named("list".to_string(), vec![Type::TypeParam("C".to_string())]),
+            mode: crate::sema::ClosureCaptureMode::Copy,
+            span: Span::new(1, 2),
+            mutated: false,
+        }]),
+        call_kind: crate::sema::ClosureCallKind::Repeatable,
+    };
+    let mut collected = BTreeSet::new();
+    collect_type_params_from_type(&closure, &mut collected);
+    assert_eq!(
+        collected,
+        BTreeSet::from(["A".to_string(), "C".to_string(), "R".to_string()])
+    );
+
+    let function = Type::Function {
+        params: vec![param("first", Type::TypeParam("P".to_string()))],
+        return_type: Box::new(Type::TypeParam("Q".to_string())),
+    };
+    let mut collected = BTreeSet::new();
+    collect_type_params_from_type(&function, &mut collected);
+    assert_eq!(
+        collected,
+        BTreeSet::from(["P".to_string(), "Q".to_string()])
+    );
+}
