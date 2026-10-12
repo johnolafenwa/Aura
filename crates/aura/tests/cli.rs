@@ -8980,7 +8980,7 @@ fn check_reports_imported_module_syntax_errors_at_the_imported_file() {
     .expect("failed to write main module");
     fs::write(
         &broken_path,
-        "def broken() -> int32:\n    return @@@ syntax error\n",
+        "def broken() -> int32:\n    return $$$ syntax error\n",
     )
     .expect("failed to write broken module");
 
@@ -9001,7 +9001,7 @@ fn check_reports_imported_module_syntax_errors_at_the_imported_file() {
         stderr
     );
     assert!(
-        stderr.contains("unexpected character `@`"),
+        stderr.contains("unexpected character `$`"),
         "stderr should preserve the imported parser error, stderr was:\n{}",
         stderr
     );
@@ -15545,6 +15545,45 @@ type Unary = def(int32) -> int32
             "task diagnostic leaked a static alternate or placeholder target:\n{stderr}"
         );
     }
+}
+
+#[test]
+fn run_and_direct_build_agree_on_the_display_example() {
+    let expected =
+        "$12.50\n[  $12.50]\npaid $12.50\n[$12.50, $0.05]\nInvoice(status=due, total=$12.50)\n";
+    let output = Command::new(aura_bin())
+        .arg("run")
+        .arg(repo_root().join("examples/traits/display.au"))
+        .output()
+        .expect("failed to run aura run on the display example");
+    assert!(
+        output.status.success(),
+        "run should succeed for the display example, stderr was:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), expected);
+    assert_direct_backend_example_runs("examples/traits/display.au", "display-direct", expected);
+}
+
+#[test]
+fn run_and_direct_build_agree_on_the_properties_example() {
+    let expected = "15\n30 doubled\n[HI, THERE, !]\n[hi, there]\n";
+    let output = Command::new(aura_bin())
+        .arg("run")
+        .arg(repo_root().join("examples/classes/properties.au"))
+        .output()
+        .expect("failed to run aura run on the properties example");
+    assert!(
+        output.status.success(),
+        "run should succeed for the properties example, stderr was:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), expected);
+    assert_direct_backend_example_runs(
+        "examples/classes/properties.au",
+        "properties-direct",
+        expected,
+    );
 }
 
 fn run_fmt_stdin(args: &[&str], input: &str) -> std::process::Output {

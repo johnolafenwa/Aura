@@ -352,6 +352,7 @@ fn function_decl(name: &str, return_type: &str) -> FunctionDecl {
         view_return: None,
         body: Vec::new(),
         span: Span::new(1, 1),
+        property: None,
         doc: None,
     }
 }
@@ -10185,6 +10186,89 @@ fn signature_help_documents_inherent_and_fallback_methods() {
 }
 
 #[test]
+fn properties_hover_complete_and_navigate_as_properties() {
+    let source = [
+        "class Reply:",
+        "    prompt_tokens: int64",
+        "    completion_tokens: int64",
+        "    @property",
+        "    def total_tokens(self) -> int64:",
+        "        return self.prompt_tokens + self.completion_tokens",
+        "    def doubled(self) -> int64:",
+        "        return self.total_tokens * 2",
+        "def main():",
+        "    reply = Reply(prompt_tokens=1, completion_tokens=2)",
+        "    print(reply.total_tokens)",
+        "    print(reply.doubled())",
+        "",
+    ]
+    .join("\n");
+    let analysis = analyze_source(&source);
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "{:?}",
+        analysis.diagnostics
+    );
+    for (line, character) in [(7, 20), (10, 16)] {
+        let occurrence = analysis
+            .occurrences
+            .iter()
+            .find(|occurrence| {
+                occurrence.line == line
+                    && occurrence.start_character <= character
+                    && character < occurrence.end_character
+            })
+            .unwrap_or_else(|| panic!("no occurrence at {line}:{character}"));
+        assert_eq!(
+            occurrence.hover,
+            "```aura\nproperty total_tokens: int64\n```"
+        );
+        let definition = occurrence
+            .definition
+            .as_ref()
+            .expect("a property read navigates to its getter");
+        assert_eq!((definition.line, definition.start_character), (4, 4));
+    }
+
+    let class = analysis
+        .symbols
+        .iter()
+        .find(|symbol| symbol.name == "Reply")
+        .expect("class symbol");
+    let kinds = class
+        .children
+        .iter()
+        .map(|child| {
+            (
+                child.name.as_str(),
+                child.kind.as_str(),
+                child.detail.as_str(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        kinds.contains(&("total_tokens", "property", "int64")),
+        "{kinds:?}"
+    );
+    assert!(kinds.contains(&("doubled", "method", "int64")), "{kinds:?}");
+
+    let completion_source = source.replace("    print(reply.total_tokens)\n", "    reply.\n");
+    let completions =
+        complete_source(&completion_source, 10, 10, Some('.')).expect("member completions");
+    let property = completions
+        .iter()
+        .find(|completion| completion.name == "total_tokens")
+        .expect("property completion");
+    assert_eq!(property.kind, "property");
+    assert_eq!(property.detail, "int64");
+    let method = completions
+        .iter()
+        .find(|completion| completion.name == "doubled")
+        .expect("method completion");
+    assert_eq!(method.kind, "method");
+}
+
+#[test]
 fn span_views_hover_as_spans_and_complete_the_span_members() {
     let source = "def total(values: Span[int64]) -> int64:\n    return len(values)\n\ndef main():\n    mut items = [1, 2, 3, 4]\n    view mut part = items[1:3]\n    view mut tail = part[1:]\n    tail[0] = 9\n    copy = part[:1]\n    first = part[0]\n    print(total(part))\n    print(first)\n    print(copy)\n";
     let analysis = analyze_source(source);
@@ -10241,4 +10325,86 @@ fn span_views_hover_as_spans_and_complete_the_span_members() {
         names,
         ["len", "index", "count", "reverse", "swap", "sort", "fill", "to_list"]
     );
+}
+
+#[test]
+fn property_hover_and_completion_show_the_getter_docstring() {
+    let source = concat!(
+        "class Reply:\n",
+        "    prompt_tokens: int64\n",
+        "    completion_tokens: int64\n",
+        "    @property\n",
+        "    def total_tokens(self) -> int64:\n",
+        "        \"\"\"Tokens across the prompt and the completion.\"\"\"\n",
+        "        return self.prompt_tokens + self.completion_tokens\n",
+        "def main():\n",
+        "    reply = Reply(prompt_tokens=1, completion_tokens=2)\n",
+        "    print(reply.total_tokens)\n",
+    );
+    let analysis = analyze_source(source);
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "{:?}",
+        analysis.diagnostics
+    );
+    let expected =
+        "```aura\nproperty total_tokens: int64\n```\n\nTokens across the prompt and the completion.";
+    let (line, character) = (9, 16);
+    let occurrence = analysis
+        .occurrences
+        .iter()
+        .find(|occurrence| {
+            occurrence.line == line
+                && occurrence.start_character <= character
+                && character < occurrence.end_character
+        })
+        .unwrap_or_else(|| panic!("no occurrence at {line}:{character}"));
+    assert_eq!(occurrence.hover, expected);
+
+    let completion_source = source.replace("    print(reply.total_tokens)\n", "    reply.\n");
+    let completions =
+        complete_source(&completion_source, 9, 10, Some('.')).expect("member completions");
+    let property = completions
+        .iter()
+        .find(|completion| completion.name == "total_tokens")
+        .expect("property completion");
+    assert_eq!(property.kind, "property");
+    assert_eq!(
+        property.documentation.as_deref(),
+        Some("Tokens across the prompt and the completion.")
+    );
+
+    let temp_dir = TempDir::new("aura-analysis-property-docstrings");
+    let library_path = temp_dir.path().join("meters.au");
+    fs::write(
+        &library_path,
+        concat!(
+            "public class Meter:\n",
+            "    public reading: int64\n",
+            "    @property\n",
+            "    public def doubled(self) -> int64:\n",
+            "        \"\"\"Twice the current reading.\"\"\"\n",
+            "        return self.reading * 2\n",
+        ),
+    )
+    .expect("failed to write library module");
+    let main_path = temp_dir.path().join("main.au");
+    let main_source = concat!(
+        "from meters import Meter\n",
+        "def main():\n",
+        "    meter = Meter(reading=4)\n",
+        "    print(meter.doubled)\n",
+    );
+    fs::write(&main_path, main_source).expect("failed to write main module");
+    let imported = analyze_path_source(&main_path, main_source);
+    assert!(
+        imported.diagnostics.is_empty(),
+        "{:?}",
+        imported.diagnostics
+    );
+    assert!(imported
+        .occurrences
+        .iter()
+        .any(|occurrence| occurrence.hover
+            == "```aura\nproperty doubled: int64\n```\n\nTwice the current reading."));
 }

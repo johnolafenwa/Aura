@@ -1,0 +1,13 @@
+trait Sized:
+    def size(self) -> int64
+
+class Grid:
+    width: int64
+
+impl Sized for Grid:
+    @property
+    def size(self) -> int64:
+        return self.width
+
+def main():
+    pass

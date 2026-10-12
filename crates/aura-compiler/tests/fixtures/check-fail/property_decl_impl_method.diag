@@ -1,0 +1,6 @@
+error[AU2044]: `@property` is valid only on a class method, not on a method of an `impl Sized` block
+ --> crates/aura-compiler/tests/fixtures/check-fail/property_decl_impl_method.au:8:5
+  |
+8 |     @property
+  |     ^
+  = help: properties are not trait members; declare the getter in a class body

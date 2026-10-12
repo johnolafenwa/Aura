@@ -1,0 +1,2 @@
+public class Circle:
+    public radius: int64

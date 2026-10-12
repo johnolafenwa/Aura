@@ -1,0 +1,12 @@
+trait Named:
+    def name(self) -> str
+
+class Box[T]:
+    value: T
+
+impl[T: Named] Display for Box[T]:
+    def display(self) -> str:
+        return "named box"
+
+def main():
+    print(1)

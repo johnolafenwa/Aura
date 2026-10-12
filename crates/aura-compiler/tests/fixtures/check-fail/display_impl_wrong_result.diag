@@ -1,0 +1,6 @@
+error[AU2043]: `display` does not match `Display`: it returns `str`
+ --> crates/aura-compiler/tests/fixtures/check-fail/display_impl_wrong_result.au:5:5
+  |
+5 |     def display(self) -> int64:
+  |     ^
+  = help: declare it exactly as `def display(self) -> str:`

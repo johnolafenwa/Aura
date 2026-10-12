@@ -1,0 +1,15 @@
+trait Display:
+    def render(self, width: int64) -> str
+
+class Label:
+    text: str
+
+impl Display for Label:
+    def render(self, width: int64) -> str:
+        return f"{self.text}:{width}"
+
+def main():
+    label = Label(text="ab")
+    print(label.render(2))
+    print(label)
+    print(f"{label}")

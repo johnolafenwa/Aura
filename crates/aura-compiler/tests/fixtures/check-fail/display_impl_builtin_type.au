@@ -1,0 +1,6 @@
+impl Display for int64:
+    def display(self) -> str:
+        return "number"
+
+def main():
+    print(1)

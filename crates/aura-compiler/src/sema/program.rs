@@ -53,6 +53,9 @@ pub struct Program {
     /// progressively scoped iterable inference.
     pub comprehensions: BTreeMap<ComprehensionId, ComprehensionInfo>,
     pub top_level_stmts: Vec<Stmt>,
+    /// Source positions of property reads, each rewritten into a call of
+    /// its getter (line and column of the property name).
+    pub property_reads: BTreeSet<(usize, usize)>,
 }
 
 #[derive(Clone, Debug)]
@@ -301,6 +304,9 @@ pub struct TraitImplInfo {
     pub trait_args: Vec<Type>,
     pub for_type: Type,
     pub methods: BTreeMap<String, TraitImplMethodInfo>,
+    /// Whether this implements the prelude `Display` trait, so rendering
+    /// dispatches to it.
+    pub display: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -396,6 +402,10 @@ pub struct FunctionSignature {
 // crate-private. Public callers must use the source wrappers (which reject
 // unmanifested FFI) or path APIs (which enforce package opt-in and reports).
 pub(crate) fn check_with_context(module: Module, context: ModuleContext) -> Result<Program> {
+    super::property_reads::check_with_property_reads(module, context, check_with_context_once)
+}
+
+fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Program> {
     let module_name = if context.module_name.is_empty() {
         "<main>".to_string()
     } else {
@@ -613,6 +623,10 @@ pub(crate) fn check_with_context(module: Module, context: ModuleContext) -> Resu
                 }
             }
             Item::Function(function_decl) => {
+                super::property_reads::reject_property_outside_class(
+                    function_decl,
+                    "a module-level function",
+                )?;
                 if BuiltinFunction::from_name(&function_decl.name).is_some() {
                     return Err(Diagnostic::coded_at(
                         "AU2007",
@@ -703,6 +717,10 @@ pub(crate) fn check_with_context(module: Module, context: ModuleContext) -> Resu
         )?;
         let mut methods = BTreeMap::new();
         for method in &trait_decl.methods {
+            super::property_reads::reject_property_outside_class(
+                method,
+                &format!("a method of trait `{}`", trait_decl.name),
+            )?;
             validate_type_params(&method.type_params, method.span, "trait method")?;
             validate_params(
                 method.receiver,
@@ -783,6 +801,14 @@ pub(crate) fn check_with_context(module: Module, context: ModuleContext) -> Resu
                 supertraits,
                 methods,
             },
+        );
+    }
+
+    if !traits.contains_key(super::DISPLAY_TRAIT) && !item_names.contains_key(super::DISPLAY_TRAIT)
+    {
+        traits.insert(
+            super::DISPLAY_TRAIT.to_string(),
+            super::display::prelude_display_trait(),
         );
     }
 
@@ -1013,6 +1039,7 @@ pub(crate) fn check_with_context(module: Module, context: ModuleContext) -> Resu
             }
         }
 
+        super::property_reads::validate_class_properties(class_decl, &methods)?;
         classes.insert(
             class_decl.name.clone(),
             ClassInfo {
@@ -1340,6 +1367,12 @@ pub(crate) fn check_with_context(module: Module, context: ModuleContext) -> Resu
             continue;
         };
         validate_type_params(&impl_decl.type_params, impl_decl.span, "impl")?;
+        for method in &impl_decl.methods {
+            super::property_reads::reject_property_outside_class(
+                method,
+                &format!("a method of an `impl {}` block", impl_decl.trait_name),
+            )?;
+        }
         let trait_info = traits.get(&impl_decl.trait_name).ok_or_else(|| {
             Diagnostic::at(
                 impl_decl.span,
@@ -1407,6 +1440,19 @@ pub(crate) fn check_with_context(module: Module, context: ModuleContext) -> Resu
             &canonical_type_names,
             &impl_type_param_scope,
         )?;
+        let display = super::is_prelude_display(trait_info);
+        if display {
+            super::display::validate_display_target(
+                impl_decl,
+                &for_type,
+                &impl_type_params,
+                &module_name,
+                &classes,
+                &enums,
+                &trait_impls,
+            )?;
+            super::display::validate_display_methods(impl_decl)?;
+        }
         // The target must be a named outer type (`Box[T]`): a bare type
         // parameter has no nominal identity, and a bare tuple has no nominal
         // dispatch table on the direct backend.
@@ -1605,6 +1651,7 @@ pub(crate) fn check_with_context(module: Module, context: ModuleContext) -> Resu
             trait_args,
             for_type,
             methods,
+            display,
         });
     }
 
@@ -1789,6 +1836,7 @@ pub(crate) fn check_with_context(module: Module, context: ModuleContext) -> Resu
         closures: BTreeMap::new(),
         comprehensions: field_default_comprehensions.clone(),
         top_level_stmts: module.top_level_stmts.clone(),
+        property_reads: BTreeSet::new(),
     };
 
     let local_main = program

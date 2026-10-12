@@ -1760,12 +1760,7 @@ impl<'a> AnalysisBuilder<'a> {
                 });
             }
             for (name, method) in &class_info.methods {
-                completions.push(AnalysisCompletion {
-                    name: name.clone(),
-                    kind: "method".to_string(),
-                    detail: format_function_detail(&method.decl),
-                    documentation: doc_summary(method.decl.doc.as_ref()),
-                });
+                completions.push(member_completion(name, &method.decl));
             }
         }
 
@@ -5811,7 +5806,7 @@ fn symbols_from_module(module: &Module) -> Vec<AnalysisSymbol> {
                         })
                         .chain(class_decl.methods.iter().map(|method| AnalysisSymbol {
                             name: method.name.clone(),
-                            kind: "method".to_string(),
+                            kind: method_kind(method).to_string(),
                             detail: format_decl_return(method),
                             line: method.span.line.saturating_sub(1),
                             start_character: method.span.column.saturating_sub(1),
@@ -6531,6 +6526,16 @@ fn format_method_hover(method_decl: &FunctionDecl) -> String {
 }
 
 fn format_method_hover_with_doc(method_decl: &FunctionDecl, doc: Option<&DocString>) -> String {
+    if method_decl.property.is_some() {
+        return with_doc(
+            format!(
+                "```aura\nproperty {}: {}\n```",
+                method_decl.name,
+                format_decl_return(method_decl)
+            ),
+            doc,
+        );
+    }
     let params = method_decl
         .receiver
         .map(canonical_receiver_spelling)
@@ -7555,6 +7560,31 @@ fn builtin_function_return_type(name: &str) -> Option<Type> {
             "Result".to_string(),
             vec![Type::named("float64"), Type::named("str")],
         )),
+    }
+}
+
+/// The analysis kind of a class member function: `property` for an
+/// `@property` getter, otherwise `method`.
+fn method_kind(method_decl: &FunctionDecl) -> &'static str {
+    if method_decl.property.is_some() {
+        "property"
+    } else {
+        "method"
+    }
+}
+
+/// A completion for a class method or property. A property completes as its
+/// result type because it is read without parentheses.
+fn member_completion(name: &str, method_decl: &FunctionDecl) -> AnalysisCompletion {
+    AnalysisCompletion {
+        name: name.to_string(),
+        kind: method_kind(method_decl).to_string(),
+        detail: if method_decl.property.is_some() {
+            format_decl_return(method_decl)
+        } else {
+            format_function_detail(method_decl)
+        },
+        documentation: doc_summary(method_decl.doc.as_ref()),
     }
 }
 

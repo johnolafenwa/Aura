@@ -1,0 +1,8 @@
+from display_support.shapes import Circle
+
+impl Display for Circle:
+    def display(self) -> str:
+        return "circle"
+
+def main():
+    print(Circle(radius=1))

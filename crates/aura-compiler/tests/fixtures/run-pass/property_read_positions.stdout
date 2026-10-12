@@ -1,0 +1,36 @@
+[0, 0, 0, 3]
+3 pair
+medium
+matched 3
+a
+b
+c
+d
+3
+3
+3
+1
+3
+-3
+false
+3
+(3, true)
+[3, 3]
+{3}
+{total: 3}
+[3, 3, 3, 3]
+{1}
+{3: 1}
+3
+8
+d
+[b, c]
+3
+no label
+3
+true
+true
+true
+6
+7
+Result.Ok(4)

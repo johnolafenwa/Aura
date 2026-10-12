@@ -17,6 +17,11 @@ pub use callables::{
 };
 pub(crate) use loans::{synthetic_returned_view_decl, SYNTHETIC_CALLABLE_DECL};
 pub(crate) use types::closure_call_kind_for;
+mod display;
+pub(crate) use display::{is_prelude_display, DISPLAY_METHOD, DISPLAY_TRAIT};
+mod property_reads;
+#[cfg(test)]
+mod property_reads_tests;
 mod resolve;
 use resolve::{find_namespace_in_modules, reject_reserved_type_name, validate_type_params};
 mod traits;
@@ -3808,6 +3813,7 @@ impl<'a> FunctionChecker<'a> {
                     let view_source = range_endpoints
                         .map(|(object, _, _)| object)
                         .unwrap_or(&view.source);
+                    self.reject_property_place(view_source, "viewed", locals)?;
                     let syntactic_place = self.borrow_call_place(view_source);
                     let direct_parent = syntactic_place.as_ref().and_then(|place| {
                         locals
@@ -4710,6 +4716,7 @@ impl<'a> FunctionChecker<'a> {
         assign: &AssignStmt,
         locals: &mut HashMap<String, LocalBinding>,
     ) -> Result<()> {
+        self.reject_property_assignment(assign, locals)?;
         if let AssignTarget::Index { object, index } = &assign.target {
             if assign.mutable {
                 return Err(Diagnostic::at(
@@ -6948,6 +6955,14 @@ impl<'a> FunctionChecker<'a> {
                             let parsed = parse_format_spec(spec).map_err(|error| {
                                 Diagnostic::coded_at("AU1101", *spec_span, error.message)
                             })?;
+                            if self.has_custom_display(&value_type) {
+                                display::validate_custom_display_format_spec(
+                                    &parsed,
+                                    &value_type,
+                                    *spec_span,
+                                )?;
+                                continue;
+                            }
                             validate_format_spec_for_type(&parsed, &value_type).map_err(|error| {
                                 Diagnostic::coded_at("AU2002", *spec_span, error.message).with_help(
                                     "supported codes are d, f, e, x, X, b, o, %, and s; omit the code for ordinary rendering",
@@ -8145,6 +8160,9 @@ impl<'a> FunctionChecker<'a> {
                         self.reject_stale_narrowing(&path, expr.span, locals)?;
                     }
                 }
+                if let Some(property) = self.property_read_type(&object_ty, field, expr.span)? {
+                    return Ok(property);
+                }
                 if let Some(bound) = self
                     .type_of_bound_method(expr, object, field, &object_ty, locals, expected, None)?
                 {
@@ -8233,7 +8251,11 @@ impl<'a> FunctionChecker<'a> {
                         && !matches!(&receiver.kind, ExprKind::Name(name) if !locals.contains_key(name))
                     {
                         let receiver_ty = self.type_of_member_object_expr(receiver, locals)?;
-                        if self.member_names_receiver_method(&receiver_ty, field) {
+                        // `value.property[i]` indexes the property's result;
+                        // a property never takes type arguments.
+                        if self.member_names_receiver_method(&receiver_ty, field)
+                            && self.property_getter(&receiver_ty, field).is_none()
+                        {
                             let lowered = self.explicit_type_args_from_index(index)?;
                             if let Some(bound) = self.type_of_bound_method(
                                 object,
@@ -14532,6 +14554,18 @@ impl<'a> FunctionChecker<'a> {
                                     ),
                                 ));
                             }
+                            if method.decl.property.is_some()
+                                && !self.is_rewritten_property_read(span)
+                            {
+                                return Err(Diagnostic::coded_at(
+                                    "AU2045",
+                                    span,
+                                    format!(
+                                        "property `{field}` is a computed value, not a method, and cannot be called"
+                                    ),
+                                )
+                                .with_help(format!("read it without parentheses: `.{field}`")));
+                            }
                             if method.decl.receiver.is_none() {
                                 return Err(Diagnostic::at(
                                     span,
@@ -15172,6 +15206,14 @@ impl<'a> FunctionChecker<'a> {
             return Ok(field_ty.clone());
         }
         if let Some(method) = class_info.methods.get(field) {
+            // A property resolves to its result type. Only a member
+            // expression records the read site (see `type_of_expr`), because
+            // place-path walks pass the span of a larger expression.
+            if method.decl.property.is_some() {
+                if let Some(getter) = self.property_getter(object_ty, field) {
+                    return Ok(getter.result);
+                }
+            }
             if self.is_external_module(&class_info.module_name) && !method.decl.public {
                 return Err(Diagnostic::at(
                     span,
@@ -15460,6 +15502,9 @@ impl<'a> FunctionChecker<'a> {
             }
             ExprKind::Member { object, field } => {
                 let object_ty = self.type_of_member_object_expr(object, locals)?;
+                if let Some(property) = self.property_read_type(&object_ty, field, expr.span)? {
+                    return Ok(property);
+                }
                 self.resolve_member_type(&object_ty, field, expr.span)
             }
             ExprKind::Index { object, index } => {

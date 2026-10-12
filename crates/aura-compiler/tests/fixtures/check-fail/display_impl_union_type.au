@@ -1,0 +1,12 @@
+class Left:
+    value: int64
+
+class Right:
+    value: int64
+
+impl Display for Left | Right:
+    def display(self) -> str:
+        return "side"
+
+def main():
+    print(Left(value=1))

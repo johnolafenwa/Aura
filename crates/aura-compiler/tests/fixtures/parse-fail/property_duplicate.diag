@@ -1,0 +1,5 @@
+error[AU2044]: a method can be marked `@property` only once
+ --> crates/aura-compiler/tests/fixtures/parse-fail/property_duplicate.au:5:5
+  |
+5 |     @property
+  |     ^

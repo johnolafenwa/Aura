@@ -177,6 +177,21 @@ pub const DIAGNOSTIC_CODE_REGISTRY: &[DiagnosticCodeInfo] = &[
         title: "invalid docstring or documentation limit",
     },
     DiagnosticCodeInfo {
+        code: "AU2043",
+        band: "names/types",
+        title: "invalid Display implementation",
+    },
+    DiagnosticCodeInfo {
+        code: "AU2044",
+        band: "names/types",
+        title: "invalid property declaration",
+    },
+    DiagnosticCodeInfo {
+        code: "AU2045",
+        band: "names/types",
+        title: "invalid property use",
+    },
+    DiagnosticCodeInfo {
         code: "AU2999",
         band: "names/types",
         title: "general compile-time rejection",

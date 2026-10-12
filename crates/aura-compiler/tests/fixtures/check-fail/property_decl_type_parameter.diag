@@ -1,0 +1,7 @@
+error[AU2044]: property `same` is invalid: it takes no type parameters
+ --> crates/aura-compiler/tests/fixtures/check-fail/property_decl_type_parameter.au:5:5
+  |
+5 |     def same[T](self) -> int64:
+  |     ^
+  = related crates/aura-compiler/tests/fixtures/check-fail/property_decl_type_parameter.au:4:5: `@property` is declared here
+  = help: declare it as `def same(self) -> Type:`

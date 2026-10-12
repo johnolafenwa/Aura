@@ -1,0 +1,7 @@
+error[AU2044]: property `label` is invalid: it must return an owned value, not a view
+ --> crates/aura-compiler/tests/fixtures/check-fail/property_decl_view_result.au:5:5
+  |
+5 |     def label(self) -> view str from self:
+  |     ^
+  = related crates/aura-compiler/tests/fixtures/check-fail/property_decl_view_result.au:4:5: `@property` is declared here
+  = help: declare it as `def label(self) -> Type:`

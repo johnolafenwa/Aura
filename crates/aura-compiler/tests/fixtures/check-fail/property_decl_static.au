@@ -1,0 +1,9 @@
+class Config:
+    name: str
+
+    @property
+    def default() -> str:
+        return "x"
+
+def main():
+    pass

@@ -1,0 +1,6 @@
+error[AU2043]: a `Display` implementation must define `display`
+ --> crates/aura-compiler/tests/fixtures/check-fail/display_impl_missing_method.au:4:1
+  |
+4 | impl Display for Point:
+  | ^
+  = help: add `def display(self) -> str:`

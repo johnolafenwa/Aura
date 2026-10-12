@@ -1,0 +1,9 @@
+class Box[T]:
+    value: T
+
+impl Display for Box[int64]:
+    def display(self) -> str:
+        return "int box"
+
+def main():
+    print(Box(value=1))

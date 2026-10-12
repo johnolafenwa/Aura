@@ -1,0 +1,6 @@
+error[AU2045]: property `doubled` is a computed value, not a method, and cannot be called
+ --> crates/aura-compiler/tests/fixtures/check-path-fail/property_imported_call_syntax.au:5:17
+  |
+5 |     print(meter.doubled())
+  |                 ^
+  = help: read it without parentheses: `.doubled`

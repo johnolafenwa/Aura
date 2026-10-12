@@ -1,0 +1,10 @@
+class Score:
+    points: int64
+
+impl Display for Score:
+    def display(self) -> str:
+        return f"{self.points} points"
+
+def main():
+    score = Score(points=12)
+    print(f"{score:+10}")

@@ -1,0 +1,7 @@
+error[AU2044]: property `report` is invalid: it must return a value other than `None`
+ --> crates/aura-compiler/tests/fixtures/check-fail/property_decl_no_result.au:5:5
+  |
+5 |     def report(self):
+  |     ^
+  = related crates/aura-compiler/tests/fixtures/check-fail/property_decl_no_result.au:4:5: `@property` is declared here
+  = help: declare it as `def report(self) -> Type:`

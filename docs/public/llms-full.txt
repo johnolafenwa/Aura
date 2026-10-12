@@ -2427,6 +2427,75 @@ A method named without a call is a value:
 
 See [Closures](/manual/closures#bound-methods).
 
+## Properties
+
+A property is a computed value that reads like a field. Mark a shared method with `@property` on the line before it, and read it without parentheses:
+
+```aura
+class Reply:
+    prompt_tokens: int64
+    completion_tokens: int64
+
+    @property
+    def total_tokens(self) -> int64:
+        return self.prompt_tokens + self.completion_tokens
+
+def main():
+    reply = Reply(prompt_tokens=10, completion_tokens=5)
+    print(reply.total_tokens)
+    print(f"{reply.total_tokens} tokens")
+```
+
+`reply.total_tokens` evaluates `reply` once and calls the getter once. The result is a fresh owned value, so a non-Copy result can be moved or bound to a `mut` local without affecting the receiver.
+
+A getter must have this exact shape:
+
+- It is a method in a class body. A module function, a trait method, and an `impl` method cannot be a property.
+- Its receiver is bare shared `self`.
+- It has no parameters and no type parameters.
+- It returns an owned value other than `None`. A view result is rejected.
+- Its name does not collide with a field of the class.
+
+`@property` is the only decorator. It stands alone on the line before `def`, and it takes no arguments. Any other `@name` line is `AU2005`.
+
+A property is read-only. The checker rejects each of these with `AU2045`:
+
+- assignment and compound assignment, such as `reply.total_tokens = 3`
+- assignment through the result, such as `shape.origin.x = 4`
+- a `mut` argument, a `mut self` method call, or a `match mut` scrutinee
+- a `view` or `view mut` of the property
+- call syntax, such as `reply.total_tokens()`
+
+```aura check-fail:AU2045
+class Reply:
+    prompt_tokens: int64
+
+    @property
+    def doubled(self) -> int64:
+        return self.prompt_tokens * 2
+
+def main():
+    mut reply = Reply(prompt_tokens=1)
+    reply.doubled = 4
+```
+
+To change the value, bind it to a local first. The local is an independent copy.
+
+A getter's docstring documents the property. Hover on a read shows the property's type and then the docstring. See [Docstrings And API Docs](/manual/docstrings).
+
+```aura
+class Reply:
+    prompt_tokens: int64
+    completion_tokens: int64
+
+    @property
+    def total_tokens(self) -> int64:
+        """Tokens across the prompt and the completion."""
+        return self.prompt_tokens + self.completion_tokens
+```
+
+A property is not a trait member. An imported class exposes its `public` properties, and a private property is readable only in its own module.
+
 ## Mutation
 
 A field assignment requires a mutable base place:
@@ -2526,7 +2595,7 @@ with resource = Resource(name="db"):
 
 ## Grammar
 
-[Grammar](/manual/grammar#classes) holds the normative productions for `class`, `copy class`, visibility, type parameters, fields, field defaults, `indirect`, methods, receivers, and associated methods. A class suite contains fields, methods, and `pass`. Aura has no separate grammar for constructors, properties, inheritance, or destructors.
+[Grammar](/manual/grammar#classes) holds the normative productions for `class`, `copy class`, visibility, type parameters, fields, field defaults, `indirect`, methods, receivers, and associated methods. A class suite contains fields, methods, `@property` methods, and `pass`. Aura has no separate grammar for constructors, inheritance, or destructors.
 
 ## Typing Rules
 
@@ -2562,6 +2631,10 @@ An instance call invokes the statically selected inherent or trait method. An as
 | `AU2001` | Unresolved class, field type, method, or member. |
 | `AU2002` | Field, default, or constructor type mismatch. Generic arity or bound failure. A non-copy field in a `copy class`. |
 | `AU2004` | Constructor or method argument-binding failure. |
+| `AU2005` | A decorator other than a bare `@property` line. |
+| `AU2043` | An invalid `Display` implementation. See [Generics And Traits](/manual/generics-and-traits#the-display-trait). |
+| `AU2044` | An invalid property declaration. |
+| `AU2045` | Assignment, mutable use, a view, or call syntax on a property. |
 | `AU2999` | Duplicate declaration, invalid visibility, invalid recursive layout, unsupported member use, and other class rejections without a narrower code. |
 | `AU3001` | Use of a moved class or field. |
 | `AU3002` | Overlapping receiver and argument borrows, moving a field through shared access, or an invalid user-resource `close` contract. |
@@ -2584,7 +2657,7 @@ MIR execution and direct native generation both implement nominal classes, gener
 
 ## Limits And Implementation-Defined Behavior
 
-- Aura 0.3 has no class inheritance, overloads, property syntax, custom constructor hook, or general destructor hook.
+- Aura 0.3 has no class inheritance, overloads, property setters, custom constructor hook, or general destructor hook.
 - `with` cannot manage a generic user class directly.
 - A class field default cannot call a user-defined function in the current compiler. Compute the value before construction and pass it as an explicit field argument.
 - `indirect` is only a recursive field-layout marker. Its storage representation is not an observable language contract.
@@ -2604,6 +2677,8 @@ Implemented:
 - non-generic user-resource classes
 - local shared or mutable views of fixed class fields
 - returned-view contracts tied to one receiver or parameter
+- read-only `@property` getters
+- custom rendering through the prelude `Display` trait
 
 Views cannot be stored in class fields or other owned aggregates.
 
@@ -5404,6 +5479,7 @@ Each row names a reference area and the tests, fixtures, and maintained examples
 | Unified `int64` index domain: direct indices, slices, range bounds and yields, enumerate positions, Array coordinates, selection indices, collection lengths/search positions/capacity arguments, scoped lossless widening of fixed-width integer position values, exact `list[int64]` coordinate containers, and target-stable rejection outside that scope | `index_domain_positions_contextually_type_literals_as_int64`, `index_domain_accepts_default_int64_variables`, and focused semantic/MIR/native/runtime/analysis tests; `index_domain_int64_contract`, `index_domain_lossless_widening`, `index_domain_rejects_uint64`, and boundary fixtures; `index_domain_zero_cast_idioms`, which pins `values[values.len() - 1]`, `range(values.len())`, and enumerate-index-back-into-list without casts; `examples/collections/list_polish.au`; and the forced MIR/direct parity matrix |
 | Canonical `list`/`dict`/`set`/`str` surface: homogeneous literals, exact constructors and method signatures, first-match list search, stable natural/key sorting, typed dictionary absence and eager snapshots, loud/silent set removal, capacity control, exact ownership and evaluation order, `AU4008`/`AU4003`/`AU4005` failures, analysis/editor exposure, and backend parity | focused parser, call-surface, semantic, MIR, native, runtime-value, analysis, language-server, and extension tests; `canonical_collection_surface`, collection capacity, obligation, missing-value, and ownership fixture families; `examples/collections/list_basics.au`, `list_polish.au`, `dict_basics.au`, and `set_basics.au`; the clean-surface identity gate; and the forced MIR/direct parity matrix |
 | names, types, calls, traits, patterns, moves, and borrows | `crates/aura-compiler/src/sema_tests.rs`, `tests/fixtures/check-pass`, `tests/fixtures/check-fail` |
+| Prelude `Display` implementation rules, dispatch through `print`, `str`, f-strings, and nested rendering, the custom-Display format subset, trap-before-write `print`, and read-only `@property` declaration, read, and use rules | the `display_*` and `property_*` parse-fail, check-fail, check-path-fail, run-pass, and run-fail fixtures; `properties_hover_complete_and_navigate_as_properties` and `property_hover_and_completion_show_the_getter_docstring`; `examples/traits/display.au` and `examples/classes/properties.au` with their CLI run and direct-build tests; and the MIR/direct parity matrix |
 | integer `/` rejection, floor division/remainder, exact float-context integer literals, `.to_float()`, and shortest-roundtrip float printing | lexer/parser/integer/runtime-value unit tests plus `integer_true_division_*`, `floor_division_and_modulo`, `float_context_integer_literals`, `integer_to_float_rounding`, and `float_shortest_roundtrip_printing` fixtures |
 | Decimal separators and hexadecimal/binary/octal integer literals; exact-width bitwise operators; checked, wrapping, and saturating shifts; exact count typing/ranges; compound-store ordering; and MIR/direct parity | focused lexer/parser/sema/integer/MIR/native/runtime tests; literal and shift failure fixtures; the `bitwise_power` runtime fixture; `examples/numbers/bit_packing.au`; language-server and extension coverage; and the forced MIR/direct parity matrix |
 | [Math Module](/manual/math) scalar constants and functions: exact immutable `float64` constant bits, generic once-initialized module storage, exact function signatures, checked `int64` rounding conversions, IEEE-754 identity and exceptional-value classification, finite overflow and domain diagnostics, left-to-right once-only evaluation, and MIR/direct parity | `math_namespace_exposes_exact_generic_float64_constants`, `math_namespace_exposes_the_exact_float64_function_contract`, `math_host_builtins_follow_the_ratified_finite_contract`, `math_host_builtins_classify_every_exception_family`, `math_analysis_exposes_qualified_and_aliased_constant_details`, `math_analysis_completes_and_hovers_the_exact_public_surface`, and focused semantic tests; the `math_module_constants`, `math_module_functions`, and `math_log_domain` fixtures; `examples/numbers/scalar_math.au`; compiler-bridge coverage; and the forced MIR/direct parity matrix |
@@ -6330,7 +6406,7 @@ String and format-specification diagnostics are described under
 | `AU2002` | type mismatch | A value of the wrong type, a callback with the wrong contract, a type without the ordering an operation needs, or a format specification that does not fit its value. | Make the value's type match the type the position requires. |
 | `AU2003` | unsupported operator | An operator the operand types do not define, including ordering or arithmetic on a union. | Use an operator the operand types define. |
 | `AU2004` | argument binding | Arguments that do not bind to the callee's parameters. | Match the call to the callee's parameter list. |
-| `AU2005` | unsupported syntax or feature | Python-shaped source, a generator expression, a slice step, slice assignment, or a reserved FFI contract. | Use the Aura form the message names. |
+| `AU2005` | unsupported syntax or feature | Python-shaped source, a generator expression, a slice step, slice assignment, a decorator other than `@property`, or a reserved FFI contract. | Use the Aura form the message names. |
 | `AU2006` | builtin method collision | A trait method whose name shadows a builtin member of its target. | Rename the trait method. |
 | `AU2007` | builtin function redefinition | A module-level function named after a builtin function. | Rename the function. |
 | `AU2008` | equality unavailable | `==`, `!=`, or an equality-based collection operation on a type without equality. | Use a type that defines equality, or avoid the equality-based operation. |
@@ -6341,6 +6417,9 @@ String and format-specification diagnostics are described under
 | `AU2014` | invalidated narrowing | A member use after the `None` test that narrowed the place stopped applying. | Test the current value again. |
 | `AU2015` | callable contract mismatch | A callable whose complete contract differs from the one its destination requires. | Match the contract, or restrict it with an explicit adapter or constructor. |
 | `AU2042` | invalid docstring or documentation limit | A triple-quoted string in a class, enum, trait, or `impl` body outside a documentation position, or documentation over a size limit. | Move the string to the first slot or directly after a field, or shorten the documentation. |
+| `AU2043` | invalid Display implementation | A `Display` implementation for a type the module does not declare, a builtin, tuple, or union, a partial or bounded generic target, an overlap, or a mismatched `display` method. | Implement `def display(self) -> str` once, in the module that declares the type, for every specialization. |
+| `AU2044` | invalid property declaration | An `@property` getter outside a class, with a receiver other than `self`, with parameters, type parameters, a `None` or view result, or a name that collides with a field. | Declare `def name(self) -> Type:` in the class body. |
+| `AU2045` | invalid property use | Assignment, compound assignment, a `mut` argument or receiver, `match mut`, a view, or call syntax on a property. | Read the property without parentheses, or bind it to a local and change the local. |
 | `AU2999` | general compile-time rejection | A rejection that has no narrower public category. | Follow the message. |
 
 **`AU2002` type mismatch.** List `map`, `filter`, and keyed `sort` require the
@@ -6455,6 +6534,24 @@ A bare written contract never performs that restriction.
 
 A limit message gives the measured and permitted byte counts. See
 [Docstrings And API Docs](/manual/docstrings) for the documentation positions.
+
+**`AU2043` invalid Display implementation.** The checker rejects an
+`impl Display for T:` block that breaks a rule in
+[The `Display` Trait](/manual/generics-and-traits#the-display-trait). An
+overlap carries a related label at the earlier implementation. The help names
+the accepted form, such as `impl[T] Display for Box[T]:`.
+
+**`AU2044` invalid property declaration.** The message names the getter and
+the rule it breaks, and a related label points at the `@property` line. The
+parser also reports `AU2044` for an `@property` line that is not directly
+before a class method, and for a repeated marker. A decorator other than
+`@property` is `AU2005`.
+
+**`AU2045` invalid property use.** The message names the property and the
+rejected action, such as ``property `total` is read-only and cannot be
+assigned``. A property produces a fresh value on each read, so it has no place
+to write, borrow mutably, or view. Call syntax reports ``property `total` is a
+computed value, not a method, and cannot be called``.
 
 **`AU2999` general compile-time rejection.** This is the maintained catch-all
 for compile-time rejections that do not yet have a narrower public category. It
@@ -8152,6 +8249,10 @@ Tuple `!=` is the logical negation of tuple `==`. Tuple `<`, `<=`, `>`, and `>=`
 | Deterministic random generator | Exactly `<rng>`. Rendering does not expose or advance its state. |
 | Live resource | An opaque label such as `<file>` or `<tcp-stream>`, with no host identifiers. |
 | FFI opaque handle | `<opaque TypeName>`, using its canonical Aura type name. The foreign pointer address is never shown. |
+
+A class or enum with a `Display` implementation renders as the result of its
+`display` method, at the top level and at any nesting depth. See
+[Generics And Traits](/manual/generics-and-traits#the-display-trait).
 
 Nested strings stay unquoted. This display form is for people. It is not a round-trippable serialization format.
 
@@ -11306,6 +11407,71 @@ Some operators never use traits:
 
 An operator that selects a trait method also enforces that method's substituted clone-safety obligations.
 
+## The `Display` Trait
+
+Every module sees a prelude trait that customizes how a value renders. The
+prelude declares it as:
+
+```text
+trait Display:
+    def display(self) -> str
+```
+
+Implement it for a class or enum that the same module declares:
+
+```aura
+copy class Money:
+    cents: int64
+
+impl Display for Money:
+    def display(self) -> str:
+        return f"${self.cents // 100}.{self.cents % 100:02}"
+
+class Invoice:
+    total: Money
+    lines: list[Money]
+
+def main():
+    price = Money(cents=1250)
+    print(price)
+    print(f"due: {price}")
+    print(str(price) == price.display())
+    print(Invoice(total=price, lines=[price, Money(cents=5)]))
+```
+
+The program prints `$12.50`, `due: $12.50`, `true`, and
+`Invoice(lines=[$12.50, $0.05], total=$12.50)`.
+
+`print(value)`, `str(value)`, and an f-string field without a format
+specification all call `display`. So does the rendering of a value nested
+inside a list, tuple, set, dictionary, class field, enum payload, or union. A
+type without an implementation keeps its structural rendering.
+
+An implementation has these rules. `AU2043` reports each violation:
+
+- The target is a class or enum declared in the implementing module. A
+  builtin type, a tuple, a union, a type parameter, and another module's type
+  are rejected.
+- A generic target covers every specialization with distinct type parameters,
+  as in `impl[T] Display for Box[T]:`. A specialized target such as
+  `Box[int64]` and a bounded parameter such as `T: Ord[T]` are rejected,
+  because one type has one rendering.
+- A type has at most one `Display` implementation.
+- The block defines exactly `def display(self) -> str`. It has a shared
+  receiver, no parameters, no type parameters, and an owned `str` result.
+
+A module that declares or imports its own item named `Display` uses that item
+instead. Implementations of a user trait named `Display` do not change
+rendering.
+
+In an f-string, a value with a `Display` implementation accepts the string
+subset of the format grammar: fill, alignment, width, precision, and `s`.
+Precision truncates the rendered text first, then padding applies. A sign,
+zero padding, a thousands separator, or a numeric type code is `AU2002`.
+
+A `print` call renders its whole line before it writes. If a `display` call
+traps, that `print` writes nothing.
+
 ## `From` And `try`
 
 When `try` propagates `Result[T, SourceError]` from a function that returns `Result[U, TargetError]`:
@@ -11383,6 +11549,7 @@ No generic or trait boundary inserts a hidden clone, coercion, or ownership-mode
 | `AU2006` | A trait method name that collides with a builtin member. Rename the trait method. |
 | `AU2010` | A type parameter that a union-member argument cannot determine. Specialize explicitly. |
 | `AU2013` | A type arm over a type parameter. Use `case None` and a catch-all. |
+| `AU2043` | An invalid `Display` implementation: a foreign, builtin, tuple, union, or type-parameter target, a target that does not cover every specialization, a bounded parameter, an overlapping implementation, or a `display` method that does not match the trait. |
 | `AU2999` | Duplicate or invalid implementations, method-conformance or supertrait failure, unsupported implementation targets, and other generic or trait rejections. |
 | `AU3001` | Use after an owned generic value or receiver has moved. |
 | `AU3002` | A borrow conflict, or storing through a bare shared generic parameter. |
@@ -11433,6 +11600,7 @@ Implemented:
 - nominal traits and bounds, supertraits, and default methods
 - generic and specialized implementations with unique-most-specific dispatch
 - operator traits, `Self`, and `From`-based `try` conversion
+- the prelude `Display` trait and its rendering dispatch
 - inferred clone-safety contracts
 - type parameters as union members, renormalizing specialization, remainder inference, and universal generic body checks
 
@@ -11671,9 +11839,10 @@ comma.
 = == != < <= > >=
 + += - -= * *= ** **= / /= // //= % %=
 & &= | |= ^ ^= ~ << <<= >> >>=
-->
+-> @
 ```
 
+`@` appears only in the `@property` marker of a class method.
 There is no semicolon, assignment expression, unary plus, or lambda arrow.
 
 ## Modules And Imports
@@ -11914,7 +12083,8 @@ class-declaration
 class-member
     = "pass", NEWLINE
     | [ "public" ], field-declaration
-    | [ "public" ], method-declaration ;
+    | [ "public" ], method-declaration
+    | "@", "property", NEWLINE, [ "public" ], method-declaration ;
 
 field-declaration
     = identifier, ":", type,
@@ -11927,6 +12097,7 @@ start on the line directly after the field. A class body whose only entry is a
 docstring is an empty class, the same as `pass`.
 
 `copy` is contextual and is recognized only immediately before `class`.
+`property` after `@` is the only accepted marker name.
 Fields and methods may be interleaved. `pass` permits an otherwise empty class
 body. A comment-only body is not a suite.
 
@@ -12636,7 +12807,7 @@ The grammar intentionally excludes:
 - semicolons and multiple statements on one physical line
 - backslash line continuation
 - multiline f-strings
-- local item declarations, decorators, and attributes
+- local item declarations, attributes, and decorators other than `@property`
 - wildcard and relative-dot import syntax
 - collection, range, rest, and class patterns
 - call-site capability annotations
@@ -12748,7 +12919,7 @@ The `io.Error` variants above are the shared typed failure set for `io`, `fs`, a
 
 ## Runtime Semantics
 
-`print` renders its value, writes the text, and appends a newline. A floating-point value renders as the shortest finite decimal that round-trips to the same `float32` or `float64` value. The rendering keeps a decimal marker on integral values and preserves negative zero.
+`print` renders its value and a trailing newline into one string, then writes that string in one write. If rendering traps, for example inside a `Display` implementation, that `print` writes nothing. The text of two concurrent `print` calls never interleaves within a line. A floating-point value renders as the shortest finite decimal that round-trips to the same `float32` or `float64` value. The rendering keeps a decimal marker on integral values and preserves negative zero.
 
 `io.write` adds no newline. `io.flush` asks for buffered standard output to be delivered to the host.
 
@@ -13617,8 +13788,11 @@ Aura 0.3 recognizes these punctuation and operator tokens:
 = == != < <= > >=
 + += - -= * *= ** **= / /= // //= % %=
 & &= | |= ^ ^= ~ << <<= >> >>=
-->
+-> @
 ```
+
+`@` begins the `@property` marker on a class method. See
+[Classes](/manual/classes#properties).
 
 The lexer chooses the longest operator spelling, so `**=`, `<<=`, `>>=`, and
 `//=` are each one token.
@@ -13845,6 +14019,10 @@ The specification grammar is `[[fill]align][sign][width][,][.precision][type]`.
 
 With zero padding and no explicit alignment, the zeros follow the sign. For
 example, `f"{-1.25:09.3f}"` produces `-0001.250`.
+
+A value whose type implements `Display` accepts only fill, alignment, width,
+precision, and `s`. Precision truncates the rendered text, then padding
+applies. See [Generics And Traits](/manual/generics-and-traits#the-display-trait).
 
 Aura parses the complete interpolation expression before it looks for the
 top-level colon. Colons inside nested slices, dictionaries, calls, and
@@ -21186,6 +21364,32 @@ A bare `self` cannot mutate. The compiler tells you to write `mut self`.
 A method named `close` is special. It makes the class a managed resource for
 `with` blocks, so pick another name unless that is what you want.
 
+### `@property` And `__str__`
+
+Aura keeps the two Python habits you reach for most. `@property` before a
+shared method makes a read-only computed value, read without parentheses:
+
+```aura fragment
+    @property
+    def summary(self) -> str:
+        return f"{self.owner}: {self.balance}"
+```
+
+`print(acct.summary)` calls the getter once. A property has no setter, and
+`@property` is the only decorator. See [Classes](/manual/classes#properties).
+
+Where Python uses `__str__`, Aura uses the `Display` trait:
+
+```aura fragment
+impl Display for Account:
+    def display(self) -> str:
+        return f"<account {self.owner}>"
+```
+
+Then `print(acct)`, `str(acct)`, and `f"{acct}"` all use it, including inside
+lists and other classes. See
+[Generics And Traits](/manual/generics-and-traits#the-display-trait).
+
 ### There Is No Inheritance
 
 `class Dog(Animal):` does not parse. Aura uses traits for shared behavior and
@@ -24965,6 +25169,34 @@ counter.reset()
 ```
 
 See [examples/classes/mutating_methods.au](../examples/classes/mutating_methods.au).
+
+## Properties
+
+A property is a value the class computes on each read. Mark a shared method
+with `@property`, then read it like a field, without parentheses:
+
+```aura
+class Reply:
+    prompt_tokens: int64
+    completion_tokens: int64
+
+    @property
+    def total_tokens(self) -> int64:
+        return self.prompt_tokens + self.completion_tokens
+
+def main():
+    reply = Reply(prompt_tokens=10, completion_tokens=5)
+    print(reply.total_tokens)
+```
+
+This prints `15`. The getter takes bare `self`, has no other parameters, and
+returns an owned value. Each read calls it once and gives you a fresh result.
+
+A property is read-only. Assigning to it, passing it as `mut`, taking a view
+of it, or calling it with `()` is an `AU2045` error. To change the value,
+bind it to a local and change the local.
+
+See [examples/classes/properties.au](../examples/classes/properties.au).
 
 ## Current Limits
 
@@ -29630,6 +29862,36 @@ The rule covers every builtin target:
 
 See [examples/traits/builtin_target_traits.au](../examples/traits/builtin_target_traits.au).
 
+## Custom Printing With `Display`
+
+Every module can implement the prelude `Display` trait to choose how its own
+class or enum prints:
+
+```aura
+class Temperature:
+    celsius: int64
+
+impl Display for Temperature:
+    def display(self) -> str:
+        return f"{self.celsius}°C"
+
+def main():
+    today = Temperature(celsius=21)
+    print(today)
+    print(f"now {today}")
+    print(str(today).len())
+```
+
+This prints `21°C`, `now 21°C`, and `4`. `print`, `str`, and f-strings all use
+`display`, and so does a `Temperature` nested inside a list or another class.
+
+Implement `Display` in the module that declares the type, once per type. For a
+generic class, write `impl[T] Display for Box[T]:` so one implementation covers
+every specialization. In an f-string, a `Display` value accepts width,
+alignment, fill, and precision, but no numeric format codes.
+
+See [examples/traits/display.au](../examples/traits/display.au).
+
 ## Current Limits
 
 The trait surface supports:
@@ -29648,6 +29910,7 @@ The trait surface supports:
   collide with a builtin member of that target
 - `Self` in trait and impl method parameter and return positions
 - associated methods without `self`
+- the prelude `Display` trait for custom rendering of your own types
 - operator traits for `+`, `-`, `*`, `/`, `//`, `%`, `<`, `<=`, `>`, `>=`,
   unary `-`, and `not`
 - inferred clone-safety contracts from trait defaults, which explicit impls

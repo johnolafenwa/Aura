@@ -1,0 +1,25 @@
+class Point:
+    x: int64
+
+class Shape:
+    corner: Point
+    tags: list[str]
+
+    @property
+    def area(self) -> int64:
+        return self.corner.x * 2
+
+    @property
+    def origin(self) -> Point:
+        return Point(x=self.corner.x)
+
+    @property
+    def labels(self) -> list[str]:
+        return self.tags[:]
+
+def bump(value: mut int64):
+    value += 1
+
+def main():
+    mut shape = Shape(corner=Point(x=1), tags=["a"])
+    print(shape.area())

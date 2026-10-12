@@ -1,0 +1,15 @@
+from display_imported_support.money import Invoice, Money, Status, Wrapper
+
+class Ledger:
+    entries: list[Money]
+
+def main():
+    price = Money(cents=1250)
+    print(price)
+    print(price.display())
+    print(f"price: {price}")
+    print(str(Status.Paid(Money(cents=99))))
+    print(Invoice(total=Money(cents=500), status=Status.Due))
+    print(Ledger(entries=[Money(cents=1), Money(cents=10000)]))
+    print(Wrapper(inner=Money(cents=305)))
+    print(Wrapper(inner=Wrapper(inner="x")))

@@ -1,0 +1,83 @@
+class Point:
+    x: int64
+    y: int64
+
+class Reply:
+    prompt_tokens: int64
+    completion_tokens: int64
+    words: list[str]
+
+    @property
+    def total_tokens(self) -> int64:
+        return self.prompt_tokens + self.completion_tokens
+
+    @property
+    def summary(self) -> str:
+        return f"{self.total_tokens} tokens"
+
+    @property
+    def upper_words(self) -> list[str]:
+        mut out: list[str] = []
+        for word in self.words:
+            out.append(word.to_upper())
+        return out
+
+    @property
+    def corner(self) -> Point:
+        return Point(x=self.prompt_tokens, y=self.completion_tokens)
+
+    def doubled(self) -> int64:
+        return self.total_tokens * 2
+
+class Pair[T]:
+    left: T
+    right: T
+
+    @property
+    def label(self) -> str:
+        return f"{self.left}/{self.right}"
+
+class Chain:
+    reply: Reply
+
+    @property
+    def inner(self) -> Reply:
+        return Reply(prompt_tokens=self.reply.prompt_tokens + 1, completion_tokens=self.reply.completion_tokens, words=self.reply.words[:])
+
+impl Display for Reply:
+    def display(self) -> str:
+        return f"Reply({self.summary})"
+
+def make() -> Reply:
+    print("make")
+    return Reply(prompt_tokens=3, completion_tokens=4, words=["a", "b"])
+
+def take(words: own list[str]) -> int64:
+    return words.len()
+
+def main():
+    reply = Reply(prompt_tokens=10, completion_tokens=5, words=["x", "y"])
+    print(reply.total_tokens)
+    print(reply.total_tokens * 2 + 1)
+    print(reply.doubled())
+    print(reply.summary)
+    print(f"{reply.summary}!")
+    print(f"[{reply.total_tokens:>5}]")
+    mut words = reply.upper_words
+    words.append("Z")
+    print(words)
+    print(reply.words)
+    print(reply.upper_words.len())
+    print(take(reply.upper_words))
+    print(reply.corner.x + reply.corner.y)
+    print(make().total_tokens)
+    print(reply)
+    pair = Pair(left="a", right="b")
+    print(pair.label)
+    print(Pair(left=1, right=2).label.len())
+    chain = Chain(reply=reply)
+    print(chain.inner.total_tokens)
+    print(chain.inner.summary if chain.inner.total_tokens > 10 else "small")
+    match chain.inner.corner:
+        case Point as point:
+            print(point.x)

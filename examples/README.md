@@ -70,6 +70,7 @@ executable size.
 | `copy_class.au` | `copy class` for explicit copy semantics on fully copyable fields | `1`, `2` |
 | `indirect_recursive.au` | Recursive fields with `indirect Node \| None` and optional children | `2` |
 | `positional_constructors.au` | Positional class constructor arguments with optional trailing named fields | `1`, `2`, `7`, `9` |
+| `properties.au` | Read-only `@property` getters read without parentheses, including a non-Copy result that the caller owns | `15`, `30 doubled`, `[HI, THERE, !]`, `[hi, there]` |
 
 ### `agents/`
 
@@ -183,6 +184,7 @@ seven real loopback requests.
 | `ordering_traits.au` | Ordering traits with shared right-hand operands and an explicitly consuming generic selector | `true`, `true`, `true`, `true`, `2` |
 | `trait_associated_factory.au` | Associated trait methods called through the implementing type name | `7` |
 | `clone_safety_contract.au` | An inferred clone-safety contract from a generic trait default method, kept through a bounded generic call | `[4, 5]` twice |
+| `display.au` | The prelude `Display` trait for a class and an enum, used by `print`, `str`, f-strings with a width, and nested rendering | `$12.50`, `[  $12.50]`, `paid $12.50`, `[$12.50, $0.05]`, `Invoice(status=due, total=$12.50)` |
 
 ### `modules/`
 
@@ -378,6 +380,7 @@ cargo run -p aura -- run examples/collections/set_basics.au
 cargo run -p aura -- run examples/classes/point_distance.au
 cargo run -p aura -- run examples/classes/methods.au
 cargo run -p aura -- run examples/classes/mutating_methods.au
+cargo run -p aura -- run examples/classes/properties.au
 cargo run -p aura -- run examples/control_flow/for_range.au
 cargo run -p aura -- run examples/control_flow/match_literals.au
 cargo run -p aura -- run examples/control_flow/boolean_logic.au
@@ -399,6 +402,7 @@ cargo run -p aura -- run examples/traits/marker_trait.au
 cargo run -p aura -- run examples/traits/specialized_generic_impl.au
 cargo run -p aura -- run examples/traits/clone_safety_contract.au
 cargo run -p aura -- run examples/traits/builtin_target_traits.au
+cargo run -p aura -- run examples/traits/display.au
 cargo run -p aura -- run examples/error_handling/try_result.au
 cargo run -p aura -- run examples/resources/with_resource.au
 cargo run -p aura -- run examples/io/read_text_file.au

@@ -1,0 +1,6 @@
+error[AU2005]: decorator `@staticmethod` is not supported
+ --> crates/aura-compiler/tests/fixtures/parse-fail/property_other_decorator.au:4:5
+  |
+4 |     @staticmethod
+  |     ^
+  = help: Aura has no general decorators; `@property` before a class method declares a read-only property

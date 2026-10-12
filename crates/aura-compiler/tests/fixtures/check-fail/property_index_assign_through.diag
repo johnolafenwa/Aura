@@ -1,0 +1,6 @@
+error[AU2045]: property `labels` is read-only and cannot be assigned through
+ --> crates/aura-compiler/tests/fixtures/check-fail/property_index_assign_through.au:25:5
+   |
+25 |     shape.labels[0] = "z"
+   |     ^
+  = help: a property computes a fresh value on each read; bind it to a local to change the copy

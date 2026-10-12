@@ -210,8 +210,11 @@ Aura 0.3 recognizes these punctuation and operator tokens:
 = == != < <= > >=
 + += - -= * *= ** **= / /= // //= % %=
 & &= | |= ^ ^= ~ << <<= >> >>=
-->
+-> @
 ```
+
+`@` begins the `@property` marker on a class method. See
+[Classes](/manual/classes#properties).
 
 The lexer chooses the longest operator spelling, so `**=`, `<<=`, `>>=`, and
 `//=` are each one token.
@@ -438,6 +441,10 @@ The specification grammar is `[[fill]align][sign][width][,][.precision][type]`.
 
 With zero padding and no explicit alignment, the zeros follow the sign. For
 example, `f"{-1.25:09.3f}"` produces `-0001.250`.
+
+A value whose type implements `Display` accepts only fill, alignment, width,
+precision, and `s`. Precision truncates the rendered text, then padding
+applies. See [Generics And Traits](/manual/generics-and-traits#the-display-trait).
 
 Aura parses the complete interpolation expression before it looks for the
 top-level colon. Colons inside nested slices, dictionaries, calls, and

@@ -1,0 +1,5 @@
+from property_support.meter import Meter
+
+def main():
+    mut meter = Meter(reading=4)
+    meter.doubled = 10

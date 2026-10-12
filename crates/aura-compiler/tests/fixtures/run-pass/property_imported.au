@@ -1,0 +1,16 @@
+from property_imported_support.usage import Usage
+
+class Report:
+    usage: Usage
+
+    @property
+    def headline(self) -> str:
+        return f"used {self.usage.label}"
+
+def main():
+    usage = Usage(prompt_tokens=8, completion_tokens=2)
+    print(usage.total_tokens)
+    print(usage.label)
+    report = Report(usage=usage)
+    print(report.headline)
+    print(report.usage.total_tokens * 3)

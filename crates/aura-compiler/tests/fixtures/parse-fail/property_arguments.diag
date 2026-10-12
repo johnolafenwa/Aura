@@ -1,0 +1,6 @@
+error[AU2005]: `@property` takes no arguments and stands alone on its line
+ --> crates/aura-compiler/tests/fixtures/parse-fail/property_arguments.au:4:14
+  |
+4 |     @property()
+  |              ^
+  = help: Aura has no general decorators; `@property` before a class method declares a read-only property

@@ -1,0 +1,29 @@
+public class Money:
+    public cents: int64
+
+impl Display for Money:
+    def display(self) -> str:
+        return f"${self.cents // 100}.{self.cents % 100:02}"
+
+public enum Status:
+    Paid(Money)
+    Due
+
+impl Display for Status:
+    def display(self) -> str:
+        match self:
+            case Status.Paid(amount):
+                return f"paid {amount}"
+            case Status.Due:
+                return "due"
+
+public class Wrapper[T]:
+    public inner: T
+
+impl[T] Display for Wrapper[T]:
+    def display(self) -> str:
+        return f"[{self.inner}]"
+
+public class Invoice:
+    public total: Money
+    public status: Status
