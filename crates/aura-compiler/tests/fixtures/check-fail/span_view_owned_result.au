@@ -1,0 +1,5 @@
+def window(items: list[int64]) -> Span[int64]:
+    return items
+
+def main():
+    print(1)

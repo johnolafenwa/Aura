@@ -23873,3 +23873,204 @@ fn adr0061_direct_element_paths_keep_collection_field_and_tuple_storage() {
         release_value(root as *mut OpaqueValue);
     }
 }
+
+fn int64_vec(values: &[i64]) -> *mut OpaqueValue {
+    let vec = super::aura_direct_vec_empty();
+    for value in values {
+        super::aura_direct_vec_push_in_place(vec, int_value(*value));
+    }
+    vec
+}
+
+#[test]
+fn direct_span_operations_check_every_range_against_the_base_list() {
+    const START: i64 = 0;
+    const STOP: i64 = 1;
+    const INDEX: i64 = 2;
+    const CONTAINS: i64 = 3;
+    const FIND: i64 = 4;
+    const COUNT: i64 = 5;
+    const EQ: i64 = 6;
+    const EXTRACT: i64 = 7;
+    const RESTORE: i64 = 8;
+    const FILL: i64 = 9;
+    let null = std::ptr::null_mut();
+    let span = |vec, opcode, args: [i64; 8], value| {
+        super::aura_direct_vec_span(
+            vec, opcode, args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7],
+            value,
+        )
+    };
+    let base = int64_vec(&[5, 6, 7, 6, 9]);
+
+    // `items[1:-1]` over the whole list, then `[1:]` nested in that range.
+    assert_eq!(
+        expect_int(span(base, START, [0, 5, 1, 1, -1, 1, 3, 4], null)),
+        1
+    );
+    assert_eq!(
+        expect_int(span(base, STOP, [0, 5, 1, 1, -1, 1, 3, 4], null)),
+        4
+    );
+    assert_eq!(
+        expect_int(span(base, START, [1, 3, 1, 1, 0, 0, 3, 4], null)),
+        2
+    );
+    assert_eq!(
+        expect_int(span(base, STOP, [1, 3, 1, 1, 0, 0, 3, 4], null)),
+        4
+    );
+    assert_eq!(
+        expect_int(span(base, INDEX, [1, 3, -1, 3, 4, 0, 0, 0], null)),
+        3
+    );
+
+    assert!(expect_bool_boxed(span(
+        base,
+        CONTAINS,
+        [1, 3, 0, 0, 0, 0, 0, 0],
+        int_value(6)
+    )));
+    assert!(!expect_bool_boxed(span(
+        base,
+        CONTAINS,
+        [1, 3, 0, 0, 0, 0, 0, 0],
+        int_value(9)
+    )));
+    assert_eq!(
+        expect_int(span(base, FIND, [1, 3, 0, 0, 0, 0, 0, 0], int_value(7))),
+        1
+    );
+    assert_eq!(
+        expect_int(span(base, COUNT, [1, 3, 0, 0, 0, 0, 0, 0], int_value(6))),
+        2
+    );
+
+    let other = int64_vec(&[0, 6, 7, 6]);
+    assert!(expect_bool_boxed(span(
+        base,
+        EQ,
+        [1, 3, 1, 3, 0, 0, 0, 0],
+        other
+    )));
+    let whole = int64_vec(&[6, 7, 6]);
+    assert!(expect_bool_boxed(span(
+        base,
+        EQ,
+        [1, 3, 0, -1, 0, 0, 0, 0],
+        whole
+    )));
+    assert!(!expect_bool_boxed(span(
+        base,
+        EQ,
+        [0, 3, 0, -1, 0, 0, 0, 0],
+        whole
+    )));
+
+    let extracted = span(base, EXTRACT, [1, 3, 0, 0, 0, 0, 0, 0], null);
+    expect_unit(super::aura_direct_vec_reverse_in_place(extracted));
+    expect_unit(span(base, RESTORE, [1, 0, 0, 0, 0, 0, 0, 0], extracted));
+    expect_unit(span(base, FILL, [3, 2, 0, 0, 0, 0, 0, 0], int_value(0)));
+    assert_eq!(
+        expect_vec_ints(super::aura_direct_clone_value(base)),
+        vec![5, 6, 7, 0, 0]
+    );
+
+    let located = capture_direct_boundary_diagnostic(move || {
+        span(
+            int64_vec(&[5, 6, 7, 0, 0]),
+            STOP,
+            [0, 5, 0, 0, 9, 1, 12, 7],
+            std::ptr::null_mut(),
+        );
+    });
+    assert_eq!(located.code, "AU4003");
+    assert_eq!(located.message, "slice end `9` is outside `0..=5`");
+    let at = located.span.expect("located span trap");
+    assert_eq!((at.line, at.column), (12, 7));
+    let index = capture_direct_boundary_diagnostic(move || {
+        span(
+            int64_vec(&[5, 6, 7, 0, 0]),
+            INDEX,
+            [1, 3, 3, 2, 8, 0, 0, 0],
+            std::ptr::null_mut(),
+        );
+    });
+    assert_eq!(index.code, "AU4003");
+    let at = index.span.expect("located index trap");
+    assert_eq!((at.line, at.column), (2, 8));
+    let absent = capture_direct_boundary_diagnostic(move || {
+        span(
+            int64_vec(&[5, 6, 7, 0, 0]),
+            FIND,
+            [1, 3, 0, 0, 0, 0, 0, 0],
+            int_value(42),
+        );
+    });
+    assert_eq!(absent.code, "AU4008");
+    let outside = capture_direct_boundary_diagnostic(move || {
+        span(
+            int64_vec(&[5, 6, 7, 0, 0]),
+            FILL,
+            [4, 3, 0, 0, 0, 0, 0, 0],
+            int_value(1),
+        );
+    });
+    assert_eq!(outside.code, "AU4003");
+    assert_eq!(
+        capture_direct_boundary_error_message(move || {
+            span(
+                int64_vec(&[5, 6, 7, 0, 0]),
+                99,
+                [0; 8],
+                std::ptr::null_mut(),
+            );
+        }),
+        "unknown span operation"
+    );
+    assert_eq!(
+        capture_direct_boundary_error_message(move || {
+            span(int64_vec(&[5, 6, 7, 0, 0]), RESTORE, [0; 8], int_value(1));
+        }),
+        "span restore expects a list operand"
+    );
+}
+
+#[test]
+fn direct_union_injection_copy_keeps_the_retained_payload() {
+    let target = coverage_union(vec![Type::named("int64"), Type::named("str")]);
+    let str_index = coverage_union_member_index(&target, &Type::named("str"));
+    let union_name = super::canonical_runtime_type_name(&Type::Union(Box::new(target.clone())));
+    let scalar_name = super::canonical_runtime_type_name(&Type::named("int64"));
+    let payload = string_value("Ada");
+    unsafe {
+        super::aura_direct_retain_value(payload);
+    }
+    let injected = super::aura_direct_union_inject_copy(
+        union_name.as_ptr(),
+        union_name.len(),
+        str_index,
+        payload,
+    );
+    assert_eq!(expect_string(payload), "Ada");
+    unsafe {
+        release_value(injected);
+    }
+    for (expected, name, index) in [
+        ("invalid union injection type", "bogus".to_string(), 0),
+        ("union injection requires a union type", scalar_name, 0),
+        (
+            "union injection member index is out of range",
+            union_name,
+            9,
+        ),
+    ] {
+        assert_eq!(
+            capture_unscoped_error_message(move || {
+                let payload = int_value(1);
+                super::aura_direct_union_inject_copy(name.as_ptr(), name.len(), index, payload);
+            }),
+            expected
+        );
+    }
+}

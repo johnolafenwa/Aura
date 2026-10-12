@@ -1,0 +1,6 @@
+error[AU3010]: `total` has a `Span[T]` parameter and cannot be used as a function value
+ --> crates/aura-compiler/tests/fixtures/check-fail/span_view_function_value.au:5:9
+  |
+5 |     f = total
+  |         ^
+  = help: call it directly, or wrap the call in a lambda that takes a `list[T]`

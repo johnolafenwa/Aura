@@ -1,0 +1,5 @@
+error[AU3010]: a mutable returned view requires mutable origin parameter `items`
+ --> crates/aura-compiler/tests/fixtures/check-fail/returned_collection_view_mutable_from_shared.au:1:33
+  |
+1 | def tail(items: list[int64]) -> view mut Span[int64] from items:
+  |                                 ^

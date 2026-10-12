@@ -672,6 +672,7 @@ pub(crate) fn check_with_context(module: Module, context: ModuleContext) -> Resu
             &canonical_type_names,
             &type_param_scope(&alias.type_params),
         )?;
+        super::types::reject_span_type(&target, alias.target.span, "a type alias target")?;
         aliases.insert(
             name.clone(),
             AliasInfo {
@@ -731,6 +732,13 @@ pub(crate) fn check_with_context(module: Module, context: ModuleContext) -> Resu
                 &canonical_type_names,
                 &method_type_param_scope,
                 Some(&self_placeholder),
+            )?;
+            reject_signature_span_positions(
+                &method.params,
+                &params,
+                &method.return_type,
+                &return_type,
+                method.view_return.is_some(),
             )?;
             let type_param_bounds = lower_trait_bounds_with_self(
                 &method.type_param_bounds,
@@ -801,13 +809,21 @@ pub(crate) fn check_with_context(module: Module, context: ModuleContext) -> Resu
                 .map(|payload| {
                     Ok(EnumPayloadFieldInfo {
                         name: payload.name.clone(),
-                        ty: lower_type(
-                            &payload.ty,
-                            &type_names,
-                            &type_arities,
-                            &canonical_type_names,
-                            &enum_type_param_scope,
-                        )?,
+                        ty: {
+                            let lowered = lower_type(
+                                &payload.ty,
+                                &type_names,
+                                &type_arities,
+                                &canonical_type_names,
+                                &enum_type_param_scope,
+                            )?;
+                            super::types::reject_span_type(
+                                &lowered,
+                                payload.ty.span,
+                                "an enum payload type",
+                            )?;
+                            lowered
+                        },
                         span: payload.span,
                     })
                 })
@@ -892,6 +908,7 @@ pub(crate) fn check_with_context(module: Module, context: ModuleContext) -> Resu
                 &canonical_type_names,
                 &class_type_param_scope,
             )?;
+            super::types::reject_span_type(&lowered, field.ty.span, "a field type")?;
             if !field.ty.indirect && type_contains_named(&lowered, &class_decl.name) {
                 return Err(Diagnostic::at(
                     field.span,
@@ -961,6 +978,13 @@ pub(crate) fn check_with_context(module: Module, context: ModuleContext) -> Resu
                 &canonical_type_names,
                 &method_type_param_scope,
                 Some(&class_self_type),
+            )?;
+            reject_signature_span_positions(
+                &method.params,
+                &params,
+                &method.return_type,
+                &return_type,
+                method.view_return.is_some(),
             )?;
             if methods
                 .insert(
@@ -1212,6 +1236,13 @@ pub(crate) fn check_with_context(module: Module, context: ModuleContext) -> Resu
             &canonical_type_names,
             &function_type_param_scope,
         )?;
+        reject_signature_span_positions(
+            &function_decl.params,
+            &params,
+            &function_decl.return_type,
+            &return_type,
+            function_decl.view_return.is_some(),
+        )?;
         let param_passings = resolve_param_passings(&function_decl.params);
         functions.insert(
             function_decl.name.clone(),
@@ -1279,6 +1310,13 @@ pub(crate) fn check_with_context(module: Module, context: ModuleContext) -> Resu
             &type_arities,
             &canonical_type_names,
             &BTreeMap::new(),
+        )?;
+        reject_signature_span_positions(
+            &extern_decl.params,
+            &params,
+            &extern_decl.return_type,
+            &return_type,
+            false,
         )?;
         extern_functions.insert(
             extern_decl.name.clone(),
@@ -1450,6 +1488,13 @@ pub(crate) fn check_with_context(module: Module, context: ModuleContext) -> Resu
                 &canonical_type_names,
                 &method_type_param_scope,
                 Some(&for_type),
+            )?;
+            reject_signature_span_positions(
+                &method.params,
+                &params,
+                &method.return_type,
+                &return_type,
+                method.view_return.is_some(),
             )?;
             let param_passings = resolve_param_passings(&method.params);
             let trait_substitutions =
@@ -2430,4 +2475,42 @@ pub(super) fn register_public_namespace_opaque_handles(
     for imported in namespace.imported_modules.values() {
         register_public_namespace_opaque_handles(imported, handles);
     }
+}
+
+/// `Span[T]` may be a bare or `mut` parameter type or the pointee of a
+/// `-> view Span[T] from origin` result, and nothing else (ADR-0061, B1).
+fn reject_signature_span_positions(
+    params: &[crate::ast::Param],
+    param_types: &[Type],
+    return_type_ref: &crate::ast::TypeRef,
+    return_type: &Type,
+    returns_view: bool,
+) -> Result<()> {
+    for (param, ty) in params.iter().zip(param_types) {
+        if !super::types::type_contains_span(ty) {
+            continue;
+        }
+        if param.mode == crate::ast::ParamMode::Own {
+            return Err(super::types::span_position_error(
+                ty,
+                param.ty.span,
+                "an `own` parameter type",
+            ));
+        }
+        if param.default.is_some() {
+            return Err(super::types::span_position_error(
+                ty,
+                param.ty.span,
+                "a parameter with a default",
+            ));
+        }
+    }
+    if super::types::type_contains_span(return_type) && !returns_view {
+        return Err(super::types::span_position_error(
+            return_type,
+            return_type_ref.span,
+            "an owned result type",
+        ));
+    }
+    Ok(())
 }

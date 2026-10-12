@@ -1,0 +1,23 @@
+def describe(scores: dict[str, int64 | None], name: str):
+    match scores.lookup(name):
+        case Lookup.Found(stored):
+            if stored is None:
+                print(f"{name}: present, None")
+            else:
+                print(f"{name}: present, {stored}")
+        case Lookup.Missing:
+            print(f"{name}: missing")
+
+def copied(scores: dict[str, int64 | None], name: str):
+    match scores.get(name):
+        case Lookup.Found(value):
+            print(f"get {name}: found {value is None}")
+        case Lookup.Missing:
+            print(f"get {name}: missing")
+
+def main():
+    scores: dict[str, int64 | None] = {"ada": 3, "bo": None}
+    for name in ["ada", "bo", "cy"]:
+        describe(scores, name)
+        copied(scores, name)
+        print(f"{name} in scores: {name in scores}")

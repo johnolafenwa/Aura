@@ -1,0 +1,5 @@
+error[AU3004]: mutable view source `items` is not mutable
+ --> crates/aura-compiler/tests/fixtures/check-fail/span_view_immutable_base.au:3:23
+  |
+3 |     view mut window = items[0:2]
+  |                       ^

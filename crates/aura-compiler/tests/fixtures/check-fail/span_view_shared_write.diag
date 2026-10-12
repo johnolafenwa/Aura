@@ -1,0 +1,5 @@
+error[AU3003]: cannot assign through immutable place `window[..]`
+ --> crates/aura-compiler/tests/fixtures/check-fail/span_view_shared_write.au:4:5
+  |
+4 |     window[0] = 5
+  |     ^

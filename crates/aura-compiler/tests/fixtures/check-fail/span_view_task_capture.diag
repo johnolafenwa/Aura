@@ -1,0 +1,6 @@
+error[AU3008]: view argument 1 cannot cross a task boundary
+ --> crates/aura-compiler/tests/fixtures/check-fail/span_view_task_capture.au:8:35
+  |
+8 |         task = group.start(total, window)
+  |                                   ^
+  = help: pass an explicit owned copy or clone whose lifetime is independent of the view

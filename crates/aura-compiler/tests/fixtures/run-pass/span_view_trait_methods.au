@@ -1,0 +1,21 @@
+trait Summer:
+    def add_all(self, values: Span[int64]) -> int64
+
+class Base:
+    offset: int64
+
+impl Summer for Base:
+    def add_all(self, values: Span[int64]) -> int64:
+        mut total = self.offset
+        for value in values:
+            total += value
+        return total
+
+def use_summer[S: Summer](summer: S, items: list[int64]) -> int64:
+    return summer.add_all(items[1:])
+
+def main():
+    base = Base(100)
+    items = [1, 2, 3]
+    print(base.add_all(items[:2]))
+    print(use_summer(base, items))

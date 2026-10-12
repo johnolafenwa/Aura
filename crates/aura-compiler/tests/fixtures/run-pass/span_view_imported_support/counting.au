@@ -1,0 +1,6 @@
+public def count_big(values: Span[int64], limit: int64) -> int64:
+    mut count = 0
+    for value in values:
+        if value > limit:
+            count += 1
+    return count

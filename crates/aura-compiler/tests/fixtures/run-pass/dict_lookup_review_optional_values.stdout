@@ -1,0 +1,9 @@
+ada: present, 3
+get ada: found false
+ada in scores: true
+bo: present, None
+get bo: found true
+bo in scores: true
+cy: missing
+get cy: missing
+cy in scores: false

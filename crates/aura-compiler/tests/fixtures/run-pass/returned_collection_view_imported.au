@@ -1,0 +1,24 @@
+import returned_collection_view_imported_support.ranges as ranges
+
+trait Windowed:
+    def window(self, items: list[int64], width: int64) -> view Span[int64] from items
+
+class Leading:
+    skip: int64
+
+impl Windowed for Leading:
+    def window(self, items: list[int64], width: int64) -> view Span[int64] from items:
+        return view items[self.skip:self.skip + width]
+
+def total[W: Windowed](windowed: W, items: list[int64]) -> int64:
+    view part = windowed.window(items, 2)
+    mut sum = 0
+    for value in part:
+        sum += value
+    return sum
+
+def main():
+    items = [5, 6, 7, 8, 9]
+    print(total(Leading(skip=1), items))
+    view h = ranges.head(items, 3)
+    print(h.to_list())

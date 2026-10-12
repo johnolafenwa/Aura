@@ -1,0 +1,6 @@
+error[AU3010]: `Counter.add` has a `Span[T]` parameter and cannot be used as a function value
+ --> crates/aura-compiler/tests/fixtures/check-fail/span_view_bound_method_value.au:10:21
+   |
+10 |     adder = counter.add
+   |                     ^
+  = help: call it directly, or wrap the call in a lambda that takes a `list[T]`

@@ -1,0 +1,6 @@
+error[AU3010]: a lambda cannot capture the `Span[int64]` view `part`
+ --> crates/aura-compiler/tests/fixtures/check-fail/span_view_lambda_capture.au:4:17
+  |
+4 |     f = lambda [part]: len(part)
+  |                 ^
+  = help: call a function that takes a `Span[T]` parameter, or capture an owned copy from `to_list()`

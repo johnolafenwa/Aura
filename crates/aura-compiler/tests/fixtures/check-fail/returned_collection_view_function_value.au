@@ -1,0 +1,6 @@
+def tail(items: list[int64]) -> view Span[int64] from items:
+    return view items[1:]
+
+def main():
+    pick = tail
+    print(1)

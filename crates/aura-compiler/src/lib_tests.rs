@@ -613,6 +613,11 @@ const ADDITIONAL_EXAMPLE_CASES: &[(&str, &str, &str)] = &[
         "[20, 30]\n[10, 20]\n[30, 40]\n[10, 20, 30, 40]\n[10, 20, 30, 40]\n[99, 30]\n🎉\nA🎉\n🎉Z\nA🎉Z\nA🎉Z\n",
     ),
     (
+        "examples/collections/span_views.au",
+        include_str!("../../../examples/collections/span_views.au"),
+        "18\n27\n3\n[1, 5, 7]\n[4, 9, 1, 5, 7]\n[40, 90, 1, 5, 7]\n[90, 1, 5]\ntrue\n",
+    ),
+    (
         "examples/concurrency/queue_iteration.au",
         include_str!("../../../examples/concurrency/queue_iteration.au"),
         "1\n2\n",

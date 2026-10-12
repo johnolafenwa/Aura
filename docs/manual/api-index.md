@@ -239,6 +239,19 @@ cannot be represented or allocated traps with `AU4005`. Malformed data returns
 | `list.reserve` | `reserve(additional: int64) -> None` | Makes room for at least `len() + additional` elements. |
 | `list[T].with_capacity` | `with_capacity(minimum: int64) -> list[T]` | Creates an empty list with at least the requested capacity. |
 
+### Span[T]
+
+| API | Signature | Behavior |
+| --- | --- | --- |
+| `Span.len` | `len() -> int64` | Length of the range. |
+| `Span.index` | `index(value: T) -> int64` | Position of the first equal element in the range. Traps with `AU4008` when none is equal. |
+| `Span.count` | `count(value: T) -> int64` | Number of equal elements in the range. |
+| `Span.reverse` | `reverse() -> None` | Reverses the range in place. Needs a mutable span. |
+| `Span.sort` | `sort(reverse: bool = false) -> None` | Stably sorts the range in place. Needs a mutable span. |
+| `Span.swap` | `swap(first: int64, second: int64) -> None` | Swaps two positions of the range. Needs a mutable span. |
+| `Span.fill` | `fill(value: T) -> None` | Writes `value` to every position. Needs a mutable span and a Copy `T`. |
+| `Span.to_list` | `to_list() -> list[T]` | Owned copy of the range. Requires clone-safe `T`. |
+
 ### dict[K, V]
 
 | API | Signature | Behavior |

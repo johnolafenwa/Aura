@@ -1,0 +1,33 @@
+def normalize(values: mut Span[float64]) -> None:
+    mut total = 0.0
+    for value in values:
+        total += value
+    for value in mut values:
+        value = value / total
+
+def main():
+    mut samples = [1.0, 3.0, 4.0, 2.0]
+    normalize(samples[1:3])
+    print(samples)
+    view mut half = samples[:2]
+    half.sort()
+    print(samples)
+    mut words = ["d", "c", "b", "a"]
+    view mut middle = words[1:3]
+    middle.reverse()
+    print(words)
+    view mut all = words[:]
+    all.swap(0, -1)
+    print(words)
+    mut scores = [5, 3, 9, 1, 7]
+    view mut most = scores[1:]
+    most.sort()
+    print(scores)
+    mut counts = [0, 0, 0, 0]
+    view mut inner = counts[1:3]
+    inner.fill(7)
+    print(counts)
+    mut people = ["cy", "ada", "bob", "dee"]
+    view mut front = people[0:3]
+    front.sort(key=lambda name: len(name), reverse=true)
+    print(people)

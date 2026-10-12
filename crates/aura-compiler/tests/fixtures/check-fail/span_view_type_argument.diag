@@ -1,0 +1,6 @@
+error[AU3010]: view type `Span[int64]` cannot be a type argument or tuple element
+ --> crates/aura-compiler/tests/fixtures/check-fail/span_view_type_argument.au:2:19
+  |
+2 |     windows: list[Span[int64]] = []
+  |                   ^
+  = help: `Span[T]` is the type of a slice view: bind one with `view name = items[a:b]` or take one as a bare or `mut` parameter; use `.to_list()` for an owned copy

@@ -1,0 +1,6 @@
+error[AU2002]: a `Span[int64]` view cannot be rendered as text
+ --> crates/aura-compiler/tests/fixtures/check-fail/span_view_render.au:4:11
+  |
+4 |     print(window)
+  |           ^
+  = help: render an owned copy with `span.to_list()`

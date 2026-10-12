@@ -1,0 +1,5 @@
+def maybe(values: Span[int64] | None) -> int64:
+    return 0
+
+def main():
+    print(1)

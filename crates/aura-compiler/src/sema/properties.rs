@@ -909,6 +909,7 @@ pub(super) fn is_builtin_type(name: &str) -> bool {
             | "SelectOutcome"
             | "TaskGroup"
             | "Duration"
+            | "Span"
     )
 }
 
@@ -974,9 +975,13 @@ pub(super) fn is_array_dtype(ty: &Type) -> bool {
     )
 }
 
+/// The element type of a list, or of a `Span[T]` view, whose elements are
+/// elements of its base list.
 pub(super) fn vec_element_type(ty: &Type) -> Option<&Type> {
     match ty {
-        Type::Named(name, args) if name == "list" && args.len() == 1 => Some(&args[0]),
+        Type::Named(name, args) if (name == "list" || name == "Span") && args.len() == 1 => {
+            Some(&args[0])
+        }
         _ => None,
     }
 }

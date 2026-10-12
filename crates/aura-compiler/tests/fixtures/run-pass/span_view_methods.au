@@ -1,0 +1,12 @@
+class Counter:
+    total: int64
+
+    def add(mut self, values: Span[int64]) -> None:
+        for value in values:
+            self.total += value
+
+def main():
+    mut counter = Counter(0)
+    items = [1, 2, 3, 4]
+    counter.add(items[2:])
+    print(counter.total)

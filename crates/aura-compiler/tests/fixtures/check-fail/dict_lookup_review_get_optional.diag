@@ -1,0 +1,6 @@
+error[AU2001]: `dict[str, int64 | None]` has no member `get_optional`
+ --> crates/aura-compiler/tests/fixtures/check-fail/dict_lookup_review_get_optional.au:3:18
+  |
+3 |     print(scores.get_optional("ada"))
+  |                  ^
+  = help: `get(key)` returns `Lookup.Found(value)` or `Lookup.Missing`, and `key in table` tests presence

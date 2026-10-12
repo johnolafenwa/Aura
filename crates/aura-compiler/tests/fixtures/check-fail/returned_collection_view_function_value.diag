@@ -1,0 +1,6 @@
+error[AU3010]: `tail` returns a `Span[T]` view and cannot be used as a function value
+ --> crates/aura-compiler/tests/fixtures/check-fail/returned_collection_view_function_value.au:5:12
+  |
+5 |     pick = tail
+  |            ^
+  = help: call it directly and bind the result with `view`
