@@ -4486,12 +4486,7 @@ fn render_direct_display(value: &Value) -> String {
     if thunks.is_empty() {
         return value.render();
     }
-    let rendered = value.render_with_display(&mut |node| {
-        let type_name = match node {
-            Value::Instance(instance) => nominal_runtime_base_name(&instance.class_name),
-            Value::EnumVariant(variant) => nominal_runtime_base_name(&variant.enum_name),
-            _ => return None,
-        };
+    let rendered = value.render_with_display(&mut |type_name, node| {
         let thunk = *thunks.get(type_name)?;
         Some(Ok(call_direct_display_thunk(thunk, node)))
     });

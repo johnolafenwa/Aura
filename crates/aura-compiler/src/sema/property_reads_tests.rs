@@ -24,7 +24,25 @@ def main():
         .items
         .iter()
         .any(|item| matches!(item, Item::ExternFunction(_))));
-    let read_site = (11, 17);
+    let read_site = {
+        let Some(Item::Function(main)) = module
+            .items
+            .iter()
+            .find(|item| matches!(item, Item::Function(function) if function.name == "main"))
+        else {
+            panic!("main should be declared");
+        };
+        let Stmt::Expr(print) = &main.body[1] else {
+            panic!("the second statement should be the print call");
+        };
+        let ExprKind::Call { args, .. } = &print.expr.kind else {
+            panic!("print should be a call");
+        };
+        assert!(
+            matches!(&args[0].value.kind, ExprKind::Member { field, .. } if field == "doubled")
+        );
+        (args[0].value.span.line, args[0].value.span.column)
+    };
     let rewritten = rewrite_module(&mut module, &BTreeSet::from([read_site]));
     assert_eq!(rewritten, BTreeSet::from([read_site]));
 

@@ -195,6 +195,10 @@ pub mod native_runtime_coverage {
         aura_direct_websocket_send_bytes, aura_direct_websocket_send_text, aura_direct_yield_now,
         OpaqueValue,
     };
+    pub use super::native_runtime::{
+        aura_direct_format_value, aura_direct_instance_empty, aura_direct_register_display,
+        aura_direct_stringify_value,
+    };
 }
 
 pub fn parse_source(source: &str) -> Result<ast::Module> {

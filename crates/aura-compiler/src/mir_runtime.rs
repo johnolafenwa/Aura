@@ -2709,12 +2709,7 @@ impl MirRuntime {
             return Ok(value.render());
         }
         let display_functions = self.display_functions.clone();
-        value.render_with_display(&mut |node| {
-            let type_name = match node {
-                Value::Instance(instance) => nominal_runtime_base_name(&instance.class_name),
-                Value::EnumVariant(variant) => nominal_runtime_base_name(&variant.enum_name),
-                _ => return None,
-            };
+        value.render_with_display(&mut |type_name, node| {
             let function_name = display_functions.get(type_name)?;
             Some(self.call_display_function(function_name, node))
         })

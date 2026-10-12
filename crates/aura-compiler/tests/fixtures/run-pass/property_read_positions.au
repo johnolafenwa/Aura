@@ -109,6 +109,11 @@ def main():
         case str as text: text.len() + counter.total
         case None: counter.total
     print(sized)
+    match own counter.missing:
+        case str as text:
+            print(text)
+        case None:
+            print("no label")
     guarded: int64 = match counter.total:
         case value if value > counter.step: value
         case _: 0

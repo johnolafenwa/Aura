@@ -33,6 +33,16 @@ f-string format subset, atomic `print`, and read-only `@property` getters, with
   `examples/classes/properties.au` examples, manual, learn, and tutorial pages,
   and the ADR-0055 status.
 
+- Coverage follow-up after hosted CI failed the compiler coverage gate.
+  Fixtures now read properties in every statement and expression position
+  the checker rewrites, and cover the remaining `AU2043` target cases and the
+  thousands-separator `AU2002` case. A native runtime unit test drives the
+  direct `Display` registry, and a rewriter unit test covers modules with
+  extern items. The display hook receives the nominal type name, which
+  removes an unreachable fallback arm from both backends.
+- Fixed indexing a property result, such as `value.tags[0]`. The checker
+  matched the getter as a receiver method and asked for type arguments.
+
 ## Verification
 
 - `cargo test -p aura-compiler --test fixtures`

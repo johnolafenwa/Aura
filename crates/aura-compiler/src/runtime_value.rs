@@ -7109,11 +7109,16 @@ impl Value {
                 }
                 RenderAction::Value(value) => {
                     if let Some(hook) = hook.as_mut() {
-                        if matches!(value, Value::Instance(_) | Value::EnumVariant(_)) {
-                            if let Some(text) = hook(value) {
-                                rendered.push_str(&text?);
-                                continue;
-                            }
+                        let nominal = match value {
+                            Value::Instance(instance) => Some(instance.class_name.as_str()),
+                            Value::EnumVariant(variant) => Some(variant.enum_name.as_str()),
+                            _ => None,
+                        };
+                        if let Some(text) =
+                            nominal.and_then(|name| hook(nominal_runtime_base_name(name), value))
+                        {
+                            rendered.push_str(&text?);
+                            continue;
                         }
                     }
                     match value {
@@ -7265,8 +7270,9 @@ impl Value {
 }
 
 /// A rendering callback for nominal values with a `Display` implementation.
-/// It returns `None` when the value has no implementation.
-pub(crate) type DisplayHook<'a> = dyn FnMut(&Value) -> Option<Result<String>> + 'a;
+/// It receives the value's base nominal type name and the value, and returns
+/// `None` when the type has no implementation.
+pub(crate) type DisplayHook<'a> = dyn FnMut(&str, &Value) -> Option<Result<String>> + 'a;
 
 pub(crate) fn render_float(value: f64) -> String {
     format!("{value:?}")
