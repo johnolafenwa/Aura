@@ -48,17 +48,82 @@ Work completed:
 - Documentation: Types (bare union parameters), Current Limits, tutorial
   10, and the `examples/enums/optional_arguments.au` example in the
   maintained example subset.
+- A defect found in the full test run: a `match` expression passed to a
+  borrowed parameter moved a non-copy arm place, so a later use failed at
+  run time with "unknown MIR place". Match arms now lend their places
+  outside an owned position, as conditional expressions do
+  (`match_expression_borrowed_argument`). The two union security tests that
+  pinned the old rejection now check that the call runs on both backends.
 
 Verification: the fixture suite passes; every new run-pass fixture prints
 identical output on MIR and forced direct execution with a fresh native
-cache.
+cache. `cargo test -p aura-compiler -p aura` passes except
+`package_io_helpers_cover_local_error_paths`, which fails only when the
+tests run as root. Opened as PR #37.
+
+The repository asks for security-sensitive regression tests to go to a
+Daybreak Blue sub-agent. That model was not available in this session, so
+the primary agent wrote the updated union security tests and the span
+validator tests.
 
 ## Phase 2b
 
-Not started.
+Goal: `Span[T]` slice views, returned range views, and the dictionary
+lookup review from section M3.
+
+Design as built. In the checker, `Span[T]` is a builtin view-only type. A
+slice view's loan covers the whole base list. In MIR, a span is a
+whole-list loan, or a list parameter, plus two hidden `int64` locals for
+the absolute start and the length. A `Span[T]` parameter becomes a list
+parameter plus hidden keyword-only start and length parameters. Every span
+operation calls a private `__span_*` list member with absolute positions,
+and both runtimes check each range against the list (`AU4003`). A function
+returning `view Span[T] from p` returns its absolute `(start, len)` range,
+and the caller lends the origin argument's base place with that range. The
+validator treats the mutating span members as mutable borrows.
+
+Work completed:
+
+- `view part = values[a:b]`, nested spans, `Span[T]` and `mut Span[T]`
+  parameters with slice, whole-list, and span arguments, indexing,
+  iteration (`mut`, `enumerate`, `zip`, comprehensions), membership,
+  equality with lists and spans, `len`, `index`, `count`, `reverse`,
+  `sort`, `swap`, `fill`, `to_list`, and value slices of spans.
+- Returned range views from functions, generic functions, methods with a
+  parameter origin, trait methods through a generic bound, imported
+  modules, and forwarding returns.
+- Rejections: owned positions, fields, type arguments, union members,
+  task capture, function values, lambda capture, rendering, structural
+  members, an unbound span-returning call, and a method returning a span of
+  its receiver.
+- `dict` has no `get_optional`; an unknown `dict` member now reports
+  `AU2001` with a pointer to `get` and `in`.
+- Bug fixed on the way: `view mut w = items; w[2] = 9` failed MIR
+  validation. Element assignment through a whole-list view now lowers as an
+  element reborrow.
+- Language analysis: span bindings hover as `Span[T]` with the range
+  source, and member completion offers the span members.
+- Fixtures: run-pass `span_view_*`, `returned_collection_view_ranges`,
+  `returned_collection_view_imported`, and
+  `dict_lookup_review_optional_values`; run-fail `span_bounds_*`,
+  `span_index_out_of_range`, `span_argument_out_of_range`, and
+  `returned_collection_view_range_out_of_range`; check-fail `span_view_*`,
+  `returned_collection_view_*`, and `dict_lookup_review_get_optional`.
+  Rust tests `span_validator` forge MIR for a mutating member through a
+  shared loan, overlapping mutable ranges, and a range used after its loan
+  ends.
+- Documentation: Collections (`Span[T]` section), API Index, Types,
+  Ownership and Borrowing, Diagnostics, Current Limits, tutorials 02 and 06,
+  and `examples/collections/span_views.au` in the maintained example set.
+
+Not built, and listed in Current Limits: spans of `str` or `Array`, a span
+of a receiver field returned from a method, and span-bearing function
+types.
 
 ## Follow-up
 
 - A read of the scrutinee place inside a `match mut` arm also passes the
   checker and fails MIR validation with `AU4001`. It needs the read check
   scoped to the arm bodies; it is not part of this change.
+- A runtime trap inside an imported module function names the entry file
+  with the imported file's line and column. It predates this work.

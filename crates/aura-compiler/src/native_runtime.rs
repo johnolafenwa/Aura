@@ -5451,6 +5451,121 @@ pub extern "C-unwind" fn aura_direct_vec_swap_in_place(
     })
 }
 
+/// The private range operations of `Span[T]` views (ADR-0061, B2), keyed
+/// by `opcode` in `SPAN_OPERATIONS` order. `operands` are the integer
+/// operands of the MIR call in order; `value` is the element, list, or
+/// restored range operand, if the operation takes one. The range is checked
+/// against `vec` before every access.
+#[cfg_attr(not(coverage), no_mangle)]
+#[allow(clippy::too_many_arguments)]
+pub extern "C-unwind" fn aura_direct_vec_span(
+    vec: *mut OpaqueValue,
+    opcode: i64,
+    a0: i64,
+    a1: i64,
+    a2: i64,
+    a3: i64,
+    a4: i64,
+    a5: i64,
+    a6: i64,
+    a7: i64,
+    value: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        use crate::runtime_value::{
+            span_bound, span_elements, span_extract, span_fill, span_index, span_restore,
+            span_search,
+        };
+        let operation = usize::try_from(opcode)
+            .ok()
+            .and_then(|opcode| crate::runtime_value::SPAN_OPERATIONS.get(opcode))
+            .copied()
+            .unwrap_or_else(|| runtime_error("unknown span operation"));
+        let wide = |operand: i64| i128::from(operand);
+        let located = |result: crate::diag::Result<Value>, line: i64, column: i64| match result {
+            Ok(value) => boxed_value(value),
+            Err(mut error) => {
+                error.span = runtime_span(line, column);
+                runtime_diagnostic_error(error)
+            }
+        };
+        let unlocated = |result: crate::diag::Result<Value>| match result {
+            Ok(value) => boxed_value(value),
+            Err(error) => runtime_diagnostic_error(error),
+        };
+        match operation {
+            "__span_start" | "__span_stop" => {
+                let result = with_vector(vec, |vector| {
+                    span_bound(
+                        vector.elements.len(),
+                        wide(a0),
+                        wide(a1),
+                        (a3 != 0).then_some(wide(a2)),
+                        (a5 != 0).then_some(wide(a4)),
+                        operation == "__span_stop",
+                    )
+                });
+                located(
+                    result.map(|bound| Value::Int(IntegerValue::from_signed(bound))),
+                    a6,
+                    a7,
+                )
+            }
+            "__span_index" => {
+                let result = with_vector(vec, |vector| {
+                    span_index(vector.elements.len(), wide(a0), wide(a1), wide(a2))
+                });
+                located(
+                    result.map(|index| Value::Int(IntegerValue::from_signed(index))),
+                    a3,
+                    a4,
+                )
+            }
+            "__span_contains" | "__span_find" | "__span_count" => {
+                let needle = unsafe { take_value(value) };
+                unlocated(with_vector(vec, |vector| {
+                    span_elements(vector, wide(a0), wide(a1))
+                        .and_then(|elements| span_search(elements, &needle, operation))
+                }))
+            }
+            "__span_eq" => {
+                let right = with_vector(value, |other| {
+                    let len = if a3 == -1 {
+                        other.elements.len() as i128
+                    } else {
+                        wide(a3)
+                    };
+                    span_elements(other, wide(a2), len).map(<[Value]>::to_vec)
+                });
+                unlocated(right.and_then(|right| {
+                    with_vector(vec, |vector| {
+                        span_elements(vector, wide(a0), wide(a1))
+                            .map(|left| Value::Bool(left == right.as_slice()))
+                    })
+                }))
+            }
+            "__span_extract" => unlocated(with_vector_mut(vec, |vector| {
+                span_extract(vector, wide(a0), wide(a1)).map(Value::Vec)
+            })),
+            "__span_restore" => {
+                let Value::Vec(restored) = (unsafe { consume_owned_value(value) }) else {
+                    runtime_error("span restore expects a list operand");
+                };
+                unlocated(with_vector_mut(vec, |vector| {
+                    span_restore(vector, wide(a0), restored).map(|()| Value::Unit)
+                }))
+            }
+            _ => {
+                debug_assert_eq!(operation, "__span_fill");
+                let fill = unsafe { take_value(value) };
+                unlocated(with_vector_mut(vec, |vector| {
+                    span_fill(vector, wide(a0), wide(a1), &fill).map(|()| Value::Unit)
+                }))
+            }
+        }
+    })
+}
+
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_vec_contains(
     vec: *mut OpaqueValue,

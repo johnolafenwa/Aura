@@ -55,7 +55,9 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 ### Views
 
 - Views have identity only for these places: local, parameter, and receiver roots; existing views; class-field paths; fixed tuple positions; list elements; and dictionary entries. Field and tuple projections inside an element are included.
-- Set elements, slices, arbitrary temporaries, and escaping enum-payload views cannot be loaned.
+- Set elements, arbitrary temporaries, and escaping enum-payload views cannot be loaned. A list range is loaned as a `Span[T]` view.
+- `Span[T]` covers `list[T]` only. There are no spans of `str` or `Array`, and a method cannot return a span of its receiver.
+- A call that returns a `Span[T]` must be bound with `view`. A function with a `Span[T]` parameter or result is not a function value, and a lambda cannot capture a span.
 - A returned view of a list element or dictionary entry holds the whole collection at the call site. The caller cannot read a different element while it is live.
 - Beside a live element view of the same list, `set(index, value)` works only for a Copy element type. For other element types it is refused with `AU3011`, because it would move the old element out through the collection.
 - In a top-level script, an immutable binding above the first top-level statement is a module constant and cannot be the source of a view (`AU3004`). Bind it with `mut`, below the first statement, or inside a function.
@@ -88,11 +90,11 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 - Comprehension clauses use bare-loop iteration only. There is no comprehension `mut` or `own` source form, no early `break` or `continue`, and no lazy result.
 - Nested clauses are outer-major. A Queue comprehension receives until ordinary Queue iteration ends.
 - Generator expressions are not available. They report `AU2005` and point to an eager comprehension or an explicit loop.
-- List and str slices accept one contiguous half-open range and return fresh owned copies.
+- List and str slices accept one contiguous half-open range. A value slice returns a fresh owned copy. `view part = values[a:b]` lends a list range as a `Span[T]`.
 - Written slice endpoints use `int64`. Negative endpoints normalize once. Invalid or reversed ranges trap with `AU4003`. Endpoints are not clamped.
 - str slice endpoints count Unicode scalar values, and str slicing is O(n).
 - Slice steps and slice assignment are reserved `AU2005` forms.
-- Arbitrary sliceable types, indexed zero-copy views, str integer indexing, grapheme slicing, and Python-style endpoint clamping are not available.
+- Arbitrary sliceable types, str integer indexing, grapheme slicing, and Python-style endpoint clamping are not available.
 - List slicing requires clone-safe, repeatably observable elements.
 
 ### Collections And List Algorithms

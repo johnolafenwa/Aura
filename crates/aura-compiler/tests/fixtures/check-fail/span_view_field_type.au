@@ -1,0 +1,5 @@
+class Holder:
+    window: Span[int64]
+
+def main():
+    print(1)

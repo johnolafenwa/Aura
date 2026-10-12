@@ -1,0 +1,8 @@
+def tail(items: list[int64]) -> view Span[int64] from items:
+    return view items[1:]
+
+def main():
+    mut items = [1, 2, 3]
+    view rest = tail(items)
+    items.append(4)
+    print(len(rest))

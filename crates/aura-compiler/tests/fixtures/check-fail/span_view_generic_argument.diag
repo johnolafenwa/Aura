@@ -1,0 +1,6 @@
+error[AU3010]: type parameter `T` of function `first` cannot be the view type `Span[int64]`
+ --> crates/aura-compiler/tests/fixtures/check-fail/span_view_generic_argument.au:7:11
+  |
+7 |     print(first(window))
+  |           ^
+  = help: declare the parameter as `Span[T]`, or pass an owned copy with `span.to_list()`

@@ -1882,6 +1882,131 @@ pub(crate) fn slice_vec_owned(
     })
 }
 
+/// The private span operations, in the order of the direct backend's
+/// opcodes.
+pub(crate) const SPAN_OPERATIONS: [&str; 10] = [
+    "__span_start",
+    "__span_stop",
+    "__span_index",
+    "__span_contains",
+    "__span_find",
+    "__span_count",
+    "__span_eq",
+    "__span_extract",
+    "__span_restore",
+    "__span_fill",
+];
+
+/// The checked `(start, len)` of a span range over a list of `list_len`
+/// elements. Every span operation validates its range against the list it
+/// runs on, so a range never reaches past its base (ADR-0061, B2).
+fn checked_span_range(list_len: usize, start: i128, len: i128) -> Result<(usize, usize)> {
+    let fits = start >= 0
+        && len >= 0
+        && start
+            .checked_add(len)
+            .is_some_and(|stop| stop <= list_len as i128);
+    if !fits {
+        return Err(Diagnostic::coded(
+            "AU4003",
+            format!("span range starting at `{start}` with length `{len}` is out of bounds for length `{list_len}`"),
+        ));
+    }
+    Ok((start as usize, len as usize))
+}
+
+/// Normalizes slice endpoints inside an outer range and returns the
+/// absolute start (`stop == false`) or the absolute stop of the result.
+pub(crate) fn span_bound(
+    list_len: usize,
+    outer_start: i128,
+    outer_len: i128,
+    start: Option<i128>,
+    end: Option<i128>,
+    stop: bool,
+) -> Result<i128> {
+    let (outer_start, outer_len) = checked_span_range(list_len, outer_start, outer_len)?;
+    let (start, end) = normalize_slice_bounds(start, end, outer_len)?;
+    Ok((outer_start + if stop { end } else { start }) as i128)
+}
+
+/// The absolute position of span element `index`, with one negative
+/// normalization and no clamping.
+pub(crate) fn span_index(list_len: usize, start: i128, len: i128, index: i128) -> Result<i128> {
+    let (start, len) = checked_span_range(list_len, start, len)?;
+    let normalized = if index < 0 {
+        index + len as i128
+    } else {
+        index
+    };
+    if !(0..len as i128).contains(&normalized) {
+        return Err(Diagnostic::coded(
+            "AU4003",
+            format!("span index `{index}` is out of bounds for length `{len}`"),
+        ));
+    }
+    Ok(start as i128 + normalized)
+}
+
+/// The elements a span range covers.
+pub(crate) fn span_elements(vector: &VecValue, start: i128, len: i128) -> Result<&[Value]> {
+    let (start, len) = checked_span_range(vector.elements.len(), start, len)?;
+    Ok(&vector.elements[start..start + len])
+}
+
+/// `value in span`, `span.index(value)`, and `span.count(value)`.
+pub(crate) fn span_search(elements: &[Value], needle: &Value, field: &str) -> Result<Value> {
+    match field {
+        "__span_contains" => Ok(Value::Bool(
+            elements.iter().any(|candidate| candidate == needle),
+        )),
+        "__span_count" => Ok(Value::Int(IntegerValue::from_literal(
+            elements
+                .iter()
+                .filter(|candidate| *candidate == needle)
+                .count() as u128,
+        ))),
+        _ => elements
+            .iter()
+            .position(|candidate| candidate == needle)
+            .map(|index| Value::Int(IntegerValue::from_literal(index as u128)))
+            .ok_or_else(|| {
+                Diagnostic::coded("AU4008", "collection value was not found")
+                    .with_help("check `value in values` before searching when absence is expected")
+            }),
+    }
+}
+
+/// Takes a span range out of its base for a length-preserving list
+/// operation; `span_restore` puts it back.
+pub(crate) fn span_extract(vector: &mut VecValue, start: i128, len: i128) -> Result<VecValue> {
+    let (start, len) = checked_span_range(vector.elements.len(), start, len)?;
+    Ok(VecValue {
+        element_type: vector.element_type.clone(),
+        elements: vector.elements.drain(start..start + len).collect(),
+    })
+}
+
+pub(crate) fn span_restore(vector: &mut VecValue, start: i128, values: VecValue) -> Result<()> {
+    checked_span_range(vector.elements.len(), start, 0)?;
+    let start = start as usize;
+    vector.elements.splice(start..start, values.elements);
+    Ok(())
+}
+
+pub(crate) fn span_fill(
+    vector: &mut VecValue,
+    start: i128,
+    len: i128,
+    value: &Value,
+) -> Result<()> {
+    let (start, len) = checked_span_range(vector.elements.len(), start, len)?;
+    for element in &mut vector.elements[start..start + len] {
+        *element = value.clone();
+    }
+    Ok(())
+}
+
 pub(crate) fn slice_string_owned(
     text: &str,
     start: Option<i128>,

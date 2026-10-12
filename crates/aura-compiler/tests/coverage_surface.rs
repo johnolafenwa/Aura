@@ -1132,6 +1132,7 @@ fn maintained_example_subset_runs_via_public_entrypoints_and_direct_codegen() {
     let root = repo_root();
     let examples = [
         "examples/collections/slices.au",
+        "examples/collections/span_views.au",
         "examples/collections/list_polish.au",
         "examples/collections/dict_basics.au",
         "examples/collections/lookup_in_place.au",

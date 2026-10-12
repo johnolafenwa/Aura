@@ -1,0 +1,6 @@
+def total(values: Span[int64]) -> int64:
+    return len(values)
+
+def main():
+    items = [1, 2, 3]
+    print(total(items[2:5]))

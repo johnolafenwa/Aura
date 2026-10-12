@@ -644,6 +644,7 @@ struct NativeCodegen<'a> {
     vec_index: FuncId,
     vec_slice: FuncId,
     vec_index_option: FuncId,
+    vec_span: FuncId,
     vec_take_index_in_place: FuncId,
     vec_set_index_in_place: FuncId,
     element_path_load: FuncId,
@@ -1190,6 +1191,7 @@ impl<'a> NativeCodegen<'a> {
             vec_index => ("aura_direct_vec_index", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             vec_slice => ("aura_direct_vec_slice", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             vec_index_option => ("aura_direct_vec_index_option", [types::I64, types::I64], Some(types::I64)),
+            vec_span => ("aura_direct_vec_span", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             vec_take_index_in_place => ("aura_direct_vec_take_index_in_place", [types::I64, types::I64], Some(types::I64)),
             vec_set_index_in_place => ("aura_direct_vec_set_index_in_place", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             element_path_load => ("aura_direct_element_path_load", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
@@ -1689,6 +1691,7 @@ impl<'a> NativeCodegen<'a> {
             vec_index,
             vec_slice,
             vec_index_option,
+            vec_span,
             vec_take_index_in_place,
             vec_set_index_in_place,
             element_path_load,
@@ -2607,6 +2610,9 @@ impl<'a> NativeCodegen<'a> {
         let vec_index_option = self
             .object
             .declare_func_in_func(self.vec_index_option, builder.func);
+        let vec_span = self
+            .object
+            .declare_func_in_func(self.vec_span, builder.func);
         let vec_take_index_in_place = self
             .object
             .declare_func_in_func(self.vec_take_index_in_place, builder.func);
@@ -3505,6 +3511,7 @@ impl<'a> NativeCodegen<'a> {
             vec_index,
             vec_slice,
             vec_index_option,
+            vec_span,
             vec_take_index_in_place,
             vec_set_index_in_place,
             element_path_load,
@@ -4852,6 +4859,7 @@ struct FunctionCompiler<'a> {
     vec_index: cranelift_codegen::ir::FuncRef,
     vec_slice: cranelift_codegen::ir::FuncRef,
     vec_index_option: cranelift_codegen::ir::FuncRef,
+    vec_span: cranelift_codegen::ir::FuncRef,
     vec_take_index_in_place: cranelift_codegen::ir::FuncRef,
     vec_set_index_in_place: cranelift_codegen::ir::FuncRef,
     element_path_load: cranelift_codegen::ir::FuncRef,
@@ -11633,6 +11641,99 @@ impl<'a> FunctionCompiler<'a> {
         Ok(merged)
     }
 
+    /// A private `Span[T]` range operation on a list (ADR-0061, B2): one
+    /// runtime entry point keyed by opcode, with the integer operands in
+    /// order and at most one value operand.
+    fn emit_vec_span_operation(
+        &mut self,
+        object: &ValueRef,
+        field: &str,
+        args: &[MirArg],
+        receiver_place: Option<&str>,
+        element_ty: &Type,
+        element_direct_ty: &DirectType,
+    ) -> std::result::Result<ValueRef, String> {
+        let opcode = crate::runtime_value::SPAN_OPERATIONS
+            .iter()
+            .position(|operation| *operation == field)
+            .ok_or_else(|| format!("direct backend does not know span operation `{field}`"))?;
+        let value_position = match field {
+            "__span_contains" | "__span_find" | "__span_count" | "__span_eq" | "__span_fill" => {
+                Some(2)
+            }
+            "__span_restore" => Some(1),
+            _ => None,
+        };
+        let mut operands = Vec::new();
+        let mut value_operand = None;
+        for (position, argument) in args.iter().enumerate() {
+            if value_position == Some(position) {
+                let handle = match field {
+                    "__span_eq" => {
+                        let loaded = self.load_operand(&argument.value)?;
+                        self.ensure_opaque(loaded)?.values[0]
+                    }
+                    "__span_restore" => {
+                        let loaded = self.load_operand(&argument.value)?;
+                        let loaded = self.ensure_opaque(loaded)?;
+                        self.transfer_owned_opaque_value(&loaded)
+                    }
+                    _ => {
+                        self.load_operand_as_opaque_direct(&argument.value, element_direct_ty)?
+                            .values[0]
+                    }
+                };
+                value_operand = Some(handle);
+                continue;
+            }
+            let loaded =
+                self.load_operand_with_integer_hint(&argument.value, Some(ScalarKind::Int64))?;
+            let operand = self.coerce_value(loaded, &DirectType::Scalar(ScalarKind::Int64))?;
+            operands.push(operand.values[0]);
+        }
+        if operands.len() > 8 {
+            return Err(format!(
+                "direct backend span operation `{field}` has too many operands"
+            ));
+        }
+        let mut call_args = vec![
+            object.values[0],
+            self.builder.ins().iconst(types::I64, opcode as i64),
+        ];
+        call_args.extend(operands.iter().copied());
+        while call_args.len() < 10 {
+            call_args.push(self.builder.ins().iconst(types::I64, 0));
+        }
+        let value_operand =
+            value_operand.unwrap_or_else(|| self.builder.ins().iconst(types::I64, 0));
+        call_args.push(value_operand);
+        let inst = self.builder.ins().call(self.vec_span, &call_args);
+        let result = self.builder.inst_results(inst).to_vec();
+        if crate::mir::span_member_mutates_receiver(field) {
+            if let Some(place) = receiver_place {
+                self.store_place(place, object.clone())?;
+            }
+        }
+        match field {
+            "__span_extract" => Ok(self.owned_opaque_result(
+                result,
+                Type::Named("list".to_string(), vec![element_ty.clone()]),
+            )),
+            "__span_restore" | "__span_fill" => {
+                self.release_opaque_handle(result[0]);
+                Ok(unit_value(&mut self.builder))
+            }
+            "__span_contains" | "__span_eq" => {
+                let boxed = self.owned_opaque_result(result, Type::named("bool"));
+                self.coerce_value(boxed, &DirectType::Scalar(ScalarKind::Bool))
+            }
+            _ => {
+                let boxed = self.owned_opaque_result(result, Type::named("int64"));
+                self.coerce_value(boxed, &DirectType::Scalar(ScalarKind::Int64))
+            }
+        }
+    }
+
     /// Boxes an inline union into the runtime's `Value::Union` for a
     /// container, task, queue, or helper boundary.
     fn box_inline_union(
@@ -13691,6 +13792,16 @@ impl<'a> FunctionCompiler<'a> {
                     .unwrap_or(Type::named("Unknown"));
                 let element_direct_ty =
                     ensure_direct_type(&element_ty, &self.classes, "Vec element")?;
+                if field.starts_with("__span_") {
+                    return self.emit_vec_span_operation(
+                        &object,
+                        field,
+                        args,
+                        receiver_place,
+                        &element_ty,
+                        &element_direct_ty,
+                    );
+                }
                 return match field {
                     "__slice" => {
                         let [start_arg, has_start_arg, end_arg, has_end_arg, line_arg, column_arg] =
@@ -19515,6 +19626,21 @@ fn builtin_opaque_member_return_type(
         | ("list", "reserve")
         | ("list", "__set_index") => Some(DirectType::Scalar(ScalarKind::Unit)),
         ("list", "contains") => Some(DirectType::Scalar(ScalarKind::Bool)),
+        ("list", "__span_start")
+        | ("list", "__span_stop")
+        | ("list", "__span_index")
+        | ("list", "__span_find")
+        | ("list", "__span_count") => direct_type(&Type::named("int64"), classes),
+        ("list", "__span_contains") | ("list", "__span_eq") => {
+            Some(DirectType::Scalar(ScalarKind::Bool))
+        }
+        ("list", "__span_extract") => Some(DirectType::Opaque(Type::Named(
+            "list".to_string(),
+            args.clone(),
+        ))),
+        ("list", "__span_restore") | ("list", "__span_fill") => {
+            Some(DirectType::Scalar(ScalarKind::Unit))
+        }
         ("list", "get") | ("list", "__index_option") | ("list", "__take_index_option") => {
             direct_type(
                 &lookup_type(args.first().cloned().unwrap_or(Type::named("Unknown"))),

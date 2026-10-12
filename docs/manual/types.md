@@ -248,6 +248,7 @@ Ordinary absence is the union `T | None`, not a generic wrapper type. The builti
 | `list[T]` | Owned ordered collection. |
 | `dict[K, V]` | Owned key/value dictionary. |
 | `set[T]` | Owned set of unique values. |
+| `Span[T]` | View of a contiguous range of a `list[T]`. It is valid only as a view binding, a parameter, or a `view` result. See [Collections](/manual/collections#span-t). |
 | `Array[T]` | Owned contiguous row-major numeric array. `T` is exactly `int32`, `int64`, `float32`, or `float64`. |
 | `Queue[T]` | Scheduler-aware typed queue handle. |
 | `Task[T]` | Transferable task-result handle. It is Copy only under the conditions in [Provisional Transfer Classification](#provisional-transfer-classification). |

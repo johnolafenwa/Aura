@@ -1,0 +1,4 @@
+def main():
+    items = [1, 2, 3]
+    window: Span[int64] = items
+    print(len(window))

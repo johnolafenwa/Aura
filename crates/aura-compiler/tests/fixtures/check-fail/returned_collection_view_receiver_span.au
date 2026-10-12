@@ -1,0 +1,6 @@
+class B:
+    items: list[int64]
+    def t(self) -> view Span[int64] from self:
+        return view self.items[1:]
+def main():
+    pass
