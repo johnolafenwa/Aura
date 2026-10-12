@@ -140,7 +140,7 @@ fn consuming_an_argument_while_its_field_is_borrowed_by_another_argument_is_reje
 #[test]
 fn union_values_compare_and_flow_through_generic_choices() {
     check_source(
-        "def choose[T](first: own T, second: own T, flag: bool) -> T:\n    return first if flag else second\ndef main():\n    tagged: int64 | str = 1\n    other: int64 | str = 1\n    print(tagged == other)\n    print([tagged] == [other])\n    match choose(tagged, other, true):\n        case int64 as number:\n            print(number)\n        case str as text:\n            print(text)\n",
+        "def choose[T](first: own T, second: own T, flag: bool) -> T:\n    return first if flag else second\ndef main():\n    tagged: int64 | str = 1\n    other: int64 | str = 1\n    print(tagged == other)\n    left: int64 | str = 1\n    right: int64 | str = 1\n    print([left] == [right])\n    match choose(tagged, other, true):\n        case int64 as number:\n            print(number)\n        case str as text:\n            print(text)\n",
     )
     .expect("union operands compare and specialize generic choices");
 }

@@ -5,6 +5,7 @@ pub(crate) mod bytes_codec;
 pub mod call;
 pub mod diag;
 pub mod ffi;
+pub mod format;
 pub mod integer;
 pub(crate) mod json_codec;
 pub mod lexer;
