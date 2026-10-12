@@ -15,6 +15,10 @@ pub enum TokenKind {
     FloatLiteral(f64),
     BoolLiteral(bool),
     StringLiteral(String),
+    /// A plain triple-quoted string. It is an ordinary string expression
+    /// except in a declaration's first statement slot, where the parser
+    /// records it as documentation.
+    TripleStringLiteral(String),
     FStringLiteral(String),
     Newline,
     Indent,
@@ -660,7 +664,7 @@ fn tokenize_line(
             pending.raw_content.push_str(&content[..close]);
             let value = decode_triple_string(&pending.raw_content, pending.span)?;
             tokens.push(Token {
-                kind: TokenKind::StringLiteral(value),
+                kind: TokenKind::TripleStringLiteral(value),
                 span: pending.span,
             });
             index = chars
@@ -1126,7 +1130,7 @@ fn tokenize_line(
                     if let Some(relative_close) = find_triple_terminator(rest, quote) {
                         let value = decode_triple_string(&rest[..relative_close], start_span)?;
                         tokens.push(Token {
-                            kind: TokenKind::StringLiteral(value),
+                            kind: TokenKind::TripleStringLiteral(value),
                             span: start_span,
                         });
                         let close_offset = rest_offset + relative_close;

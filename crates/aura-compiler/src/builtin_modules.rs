@@ -272,6 +272,7 @@ fn function_info(
             body: Vec::new(),
             span: builtin_span(),
             property: None,
+            doc: None,
         },
         signature: FunctionSignature {
             params: lowered_params,
@@ -318,6 +319,7 @@ fn generic_function_info(
             body: Vec::new(),
             span: builtin_span(),
             property: None,
+            doc: None,
         },
         signature: FunctionSignature {
             params: lowered_params,
@@ -390,6 +392,7 @@ fn class_info(module_name: &str, name: &str) -> ClassInfo {
             fields: Vec::new(),
             methods: Vec::new(),
             span: builtin_span(),
+            doc: None,
         },
         type_param_bounds: BTreeMap::new(),
         fields: BTreeMap::new(),
@@ -444,6 +447,7 @@ fn error_enum_info() -> EnumInfo {
                 })
                 .collect(),
             span: builtin_span(),
+            doc: None,
         },
         type_param_bounds: BTreeMap::new(),
         variants: variants
@@ -548,6 +552,7 @@ fn process_error_enum_info() -> EnumInfo {
                 })
                 .collect(),
             span: builtin_span(),
+            doc: None,
         },
         type_param_bounds: BTreeMap::new(),
         variants: variants
@@ -596,6 +601,7 @@ fn process_stdio_enum_info() -> EnumInfo {
                 })
                 .collect(),
             span: builtin_span(),
+            doc: None,
         },
         type_param_bounds: BTreeMap::new(),
         variants: variants
@@ -650,6 +656,7 @@ fn process_exit_status_enum_info() -> EnumInfo {
                 })
                 .collect(),
             span: builtin_span(),
+            doc: None,
         },
         type_param_bounds: BTreeMap::new(),
         variants: variants
@@ -713,6 +720,7 @@ fn process_wait_enum_info() -> EnumInfo {
                 })
                 .collect(),
             span: builtin_span(),
+            doc: None,
         },
         type_param_bounds: BTreeMap::new(),
         variants: variants
@@ -761,6 +769,7 @@ fn process_restart_policy_enum_info() -> EnumInfo {
                 })
                 .collect(),
             span: builtin_span(),
+            doc: None,
         },
         type_param_bounds: BTreeMap::new(),
         variants: variants
@@ -859,6 +868,7 @@ fn process_supervisor_event_enum_info() -> EnumInfo {
                 })
                 .collect(),
             span: builtin_span(),
+            doc: None,
         },
         type_param_bounds: BTreeMap::new(),
         variants: variants
@@ -914,6 +924,7 @@ fn process_supervisor_wait_enum_info() -> EnumInfo {
                 })
                 .collect(),
             span: builtin_span(),
+            doc: None,
         },
         type_param_bounds: BTreeMap::new(),
         variants: variants
@@ -1861,6 +1872,7 @@ fn builtin_enum_info(
                 })
                 .collect(),
             span: builtin_span(),
+            doc: None,
         },
         type_param_bounds: BTreeMap::new(),
         variants: variants

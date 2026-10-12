@@ -130,6 +130,48 @@
           ]
         },
         {
+          "name": "string.quoted.docstring.triple.double.aura",
+          "begin": "^\\s*(\"\"\")",
+          "beginCaptures": {
+            "1": {
+              "name": "punctuation.definition.string.begin.aura"
+            }
+          },
+          "end": "\"\"\"",
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.end.aura"
+            }
+          },
+          "patterns": [
+            {
+              "name": "constant.character.escape.aura",
+              "match": "\\\\."
+            }
+          ]
+        },
+        {
+          "name": "string.quoted.docstring.triple.single.aura",
+          "begin": "^\\s*(''')",
+          "beginCaptures": {
+            "1": {
+              "name": "punctuation.definition.string.begin.aura"
+            }
+          },
+          "end": "'''",
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.end.aura"
+            }
+          },
+          "patterns": [
+            {
+              "name": "constant.character.escape.aura",
+              "match": "\\\\."
+            }
+          ]
+        },
+        {
           "name": "string.quoted.triple.double.aura",
           "begin": "\"\"\"",
           "beginCaptures": {

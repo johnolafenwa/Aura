@@ -1,0 +1,5 @@
+error[AU2042]: misplaced docstring: an implementation block has no documentation; document its methods instead
+ --> crates/aura-compiler/tests/fixtures/parse-fail/docstring_misplaced_impl_body.au:5:5
+  |
+5 |     """Implementation blocks have no documentation."""
+  |     ^

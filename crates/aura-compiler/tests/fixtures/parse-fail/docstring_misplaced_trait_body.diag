@@ -1,0 +1,5 @@
+error[AU2042]: misplaced docstring: a string in a trait body must be the trait docstring or a method's first statement
+ --> crates/aura-compiler/tests/fixtures/parse-fail/docstring_misplaced_trait_body.au:3:5
+  |
+3 |     """A trait body string after a method."""
+  |     ^

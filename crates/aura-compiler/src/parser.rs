@@ -1,18 +1,18 @@
 use crate::ast::{
     Argument, AssertStmt, AssignStmt, AssignTarget, BinaryOp, BindingPattern, BindingTarget,
     BreakStmt, ClassDecl, CompareLink, CompareOp, ComprehensionClause, ComprehensionOutput,
-    ConstantDecl, ContinueStmt, DestructureStmt, EnumDecl, EnumPayloadFieldDecl, EnumVariantDecl,
-    Expr, ExprKind, ExprStmt, ExternFunctionDecl, ExternOpaqueClassDecl, FieldDecl, ForStmt,
-    FormatPart, FunctionDecl, FunctionTypeParam, IfBranch, IfStmt, ImplDecl, ImportDecl,
-    ImportKind, ImportName, Item, LambdaCapture, LambdaParam, LiteralPattern, LiteralPatternKind,
-    MapEntryExpr, MatchArm, MatchExprArm, MatchStmt, Module, Param, ParamMode, Pattern,
-    ReceiverKind, ReturnStmt, Stmt, TraitDecl, TuplePattern, TypeAliasDecl, TypeRef, TypeRefKind,
-    UnaryOp, VariantPattern, ViewKind, ViewReturn, ViewStmt, WhileStmt, WithStmt,
+    ConstantDecl, ContinueStmt, DestructureStmt, DocString, EnumDecl, EnumPayloadFieldDecl,
+    EnumVariantDecl, Expr, ExprKind, ExprStmt, ExternFunctionDecl, ExternOpaqueClassDecl,
+    FieldDecl, ForStmt, FormatPart, FunctionDecl, FunctionTypeParam, IfBranch, IfStmt, ImplDecl,
+    ImportDecl, ImportKind, ImportName, Item, LambdaCapture, LambdaParam, LiteralPattern,
+    LiteralPatternKind, MapEntryExpr, MatchArm, MatchExprArm, MatchStmt, Module, Param, ParamMode,
+    Pattern, ReceiverKind, ReturnStmt, Stmt, TraitDecl, TuplePattern, TypeAliasDecl, TypeRef,
+    TypeRefKind, UnaryOp, VariantPattern, ViewKind, ViewReturn, ViewStmt, WhileStmt, WithStmt,
 };
 use crate::diag::{Diagnostic, Result, Span};
 use crate::integer::IntegerValue;
 use crate::lexer::{lex, Token, TokenKind};
-use crate::limits::RECURSION_LIMIT;
+use crate::limits::{MAX_DOCSTRING_BYTES, MAX_MODULE_DOCUMENTATION_BYTES, RECURSION_LIMIT};
 
 type TypeParamBounds = std::collections::BTreeMap<String, Vec<TypeRef>>;
 type ParsedTypeParams = (Vec<String>, TypeParamBounds);
@@ -48,7 +48,65 @@ fn pattern_span(pattern: &Pattern) -> Span {
 
 pub fn parse(source: &str) -> Result<Module> {
     let tokens = lex(source)?;
-    Parser::new(tokens).parse_module()
+    let module = Parser::new(tokens).parse_module()?;
+    check_module_documentation_limit(&module)?;
+    Ok(module)
+}
+
+/// Docstrings that belong to the module's public interface, in source order.
+pub(crate) fn public_docstrings(module: &Module) -> Vec<&DocString> {
+    let mut docs = Vec::new();
+    docs.extend(module.doc.as_ref());
+    for item in &module.items {
+        match item {
+            Item::Class(class_decl) if class_decl.public => {
+                docs.extend(class_decl.doc.as_ref());
+                for field in class_decl.fields.iter().filter(|field| field.public) {
+                    docs.extend(field.doc.as_ref());
+                }
+                for method in class_decl.methods.iter().filter(|method| method.public) {
+                    docs.extend(method.doc.as_ref());
+                }
+            }
+            Item::Enum(enum_decl) if enum_decl.public => docs.extend(enum_decl.doc.as_ref()),
+            Item::Function(function_decl) if function_decl.public => {
+                docs.extend(function_decl.doc.as_ref());
+            }
+            Item::Trait(trait_decl) if trait_decl.public => {
+                docs.extend(trait_decl.doc.as_ref());
+                for method in &trait_decl.methods {
+                    docs.extend(method.doc.as_ref());
+                }
+            }
+            Item::Impl(impl_decl) => {
+                for method in &impl_decl.methods {
+                    docs.extend(method.doc.as_ref());
+                }
+            }
+            _ => {}
+        }
+    }
+    docs.sort_by_key(|doc| (doc.span.line, doc.span.column));
+    docs
+}
+
+fn check_module_documentation_limit(module: &Module) -> Result<()> {
+    let docs = public_docstrings(module);
+    let total = docs.iter().map(|doc| doc.text.len()).sum::<usize>();
+    let mut running = 0usize;
+    for doc in docs {
+        running += doc.text.len();
+        if running > MAX_MODULE_DOCUMENTATION_BYTES {
+            return Err(Diagnostic::coded_at(
+                "AU2042",
+                doc.span,
+                format!(
+                    "public documentation of this module is {total} bytes; the limit is {MAX_MODULE_DOCUMENTATION_BYTES} bytes"
+                ),
+            ));
+        }
+    }
+    Ok(())
 }
 
 pub fn parse_expression(source: &str) -> Result<Expr> {
@@ -124,6 +182,8 @@ impl Parser {
         // immutable script local, so a script reads top to bottom.
         let mut seen_statement = false;
         self.skip_newlines();
+        let doc = self.take_docstring()?;
+        self.skip_newlines();
 
         while !self.at_eof() {
             if self.at_keyword_import() || self.at_from_import_start() {
@@ -161,6 +221,7 @@ impl Parser {
         }
 
         Ok(Module {
+            doc,
             imports,
             constants,
             items,
@@ -280,7 +341,7 @@ impl Parser {
         let abi_token = self.bump();
         let abi = match abi_token.kind {
             TokenKind::StringLiteral(abi) if abi == "C" => abi,
-            TokenKind::StringLiteral(_) => {
+            TokenKind::StringLiteral(_) | TokenKind::TripleStringLiteral(_) => {
                 return Err(parse_error(
                     abi_token.span,
                     "FFI v0 supports only `extern \"C\"` declarations",
@@ -505,9 +566,22 @@ impl Parser {
         self.expect_newline()?;
         self.expect_simple(TokenKind::Indent)?;
 
-        let mut fields = Vec::new();
+        self.skip_newlines();
+        let doc = self.take_docstring()?;
+        let mut fields: Vec<FieldDecl> = Vec::new();
         let mut methods = Vec::new();
         while !self.at_simple(&TokenKind::Dedent) && !self.at_eof() {
+            if self.at_field_docstring(fields.last()) {
+                let field_doc = self.take_docstring()?;
+                fields
+                    .last_mut()
+                    .expect("a field docstring follows a field")
+                    .doc = field_doc;
+                continue;
+            }
+            self.reject_misplaced_docstring(
+                "a string in a class body must be the class docstring or directly follow a field",
+            )?;
             if self.at_type_alias_start() {
                 return Err(parse_error(
                     self.current_span(),
@@ -551,6 +625,7 @@ impl Parser {
             fields,
             methods,
             span,
+            doc,
         })
     }
 
@@ -562,15 +637,23 @@ impl Parser {
         self.expect_newline()?;
         self.expect_simple(TokenKind::Indent)?;
 
+        self.skip_newlines();
+        let doc = self.take_docstring()?;
         let mut variants = Vec::new();
         while !self.at_simple(&TokenKind::Dedent) && !self.at_eof() {
             if self.at_simple(&TokenKind::Newline) {
                 self.bump();
                 continue;
             }
+            self.reject_misplaced_docstring(
+                "a string in an enum body must be the enum docstring; enum variants have no documentation",
+            )?;
             variants.push(self.parse_enum_variant()?);
         }
 
+        if variants.is_empty() {
+            return Err(self.error_here("an enum must declare at least one variant"));
+        }
         self.expect_simple(TokenKind::Dedent)?;
 
         Ok(EnumDecl {
@@ -580,6 +663,7 @@ impl Parser {
             type_param_bounds,
             variants,
             span,
+            doc,
         })
     }
 
@@ -654,6 +738,7 @@ impl Parser {
             ty,
             default,
             span,
+            doc: None,
         })
     }
 
@@ -731,9 +816,13 @@ impl Parser {
         self.expect_newline()?;
         let previous_view_return = self.current_function_returns_view;
         self.current_function_returns_view = view_return.is_some();
-        let body = self.parse_block();
+        let body = self.parse_block_with_docstring();
         self.current_function_returns_view = previous_view_return;
-        let body = body?;
+        let (doc, mut body) = body?;
+        if let (Some(doc), true) = (&doc, body.is_empty()) {
+            // A docstring-only body is a body with no statements.
+            body.push(Stmt::Pass(crate::ast::PassStmt { span: doc.span }));
+        }
 
         Ok(FunctionDecl {
             public,
@@ -747,6 +836,7 @@ impl Parser {
             body,
             span,
             property: None,
+            doc,
         })
     }
 
@@ -768,6 +858,8 @@ impl Parser {
         self.expect_newline()?;
         self.expect_simple(TokenKind::Indent)?;
 
+        self.skip_newlines();
+        let doc = self.take_docstring()?;
         let mut methods = Vec::new();
         while !self.at_simple(&TokenKind::Dedent) && !self.at_eof() {
             if self.at_simple(&TokenKind::Newline) {
@@ -778,6 +870,9 @@ impl Parser {
                 self.parse_pass_stmt()?;
                 continue;
             }
+            self.reject_misplaced_docstring(
+                "a string in a trait body must be the trait docstring or a method's first statement",
+            )?;
             if self.at_simple(&TokenKind::At) {
                 let property = self.parse_property_marker()?;
                 if !self.at_keyword_def() {
@@ -799,6 +894,7 @@ impl Parser {
             supertraits,
             methods,
             span,
+            doc,
         })
     }
 
@@ -832,6 +928,9 @@ impl Parser {
                 self.parse_pass_stmt()?;
                 continue;
             }
+            self.reject_misplaced_docstring(
+                "an implementation block has no documentation; document its methods instead",
+            )?;
             if self.at_simple(&TokenKind::At) {
                 let property = self.parse_property_marker()?;
                 methods.push(self.parse_marked_function(property, true, false)?);
@@ -860,16 +959,17 @@ impl Parser {
         let (receiver, params) = self.parse_params(true)?;
         self.expect_simple(TokenKind::RParen)?;
         let (return_type, view_return) = self.parse_return_annotation(span)?;
-        let body = if self.eat_simple(&TokenKind::Colon).is_some() {
+        // A docstring-only body leaves the method signature-only.
+        let (doc, body) = if self.eat_simple(&TokenKind::Colon).is_some() {
             self.expect_newline()?;
             let previous_view_return = self.current_function_returns_view;
             self.current_function_returns_view = view_return.is_some();
-            let body = self.parse_block();
+            let body = self.parse_block_with_docstring();
             self.current_function_returns_view = previous_view_return;
             body?
         } else {
             self.expect_newline()?;
-            Vec::new()
+            (None, Vec::new())
         };
         Ok(FunctionDecl {
             public: false,
@@ -883,6 +983,7 @@ impl Parser {
             body,
             span,
             property: None,
+            doc,
         })
     }
 
@@ -1582,7 +1683,7 @@ impl Parser {
                     span,
                 }));
             }
-            TokenKind::StringLiteral(value) => {
+            TokenKind::StringLiteral(value) | TokenKind::TripleStringLiteral(value) => {
                 self.bump();
                 return Ok(Pattern::Literal(LiteralPattern {
                     kind: LiteralPatternKind::String(value),
@@ -1735,6 +1836,85 @@ impl Parser {
         let expr = self.parse_expr()?;
         self.expect_statement_terminator()?;
         Ok(Stmt::Expr(ExprStmt { expr, span }))
+    }
+
+    /// Parses an indented body whose first statement slot may hold a
+    /// docstring. The docstring is returned separately and produces no
+    /// statement.
+    fn parse_block_with_docstring(&mut self) -> Result<(Option<DocString>, Vec<Stmt>)> {
+        self.expect_simple(TokenKind::Indent)?;
+        self.skip_newlines();
+        let doc = self.take_docstring()?;
+
+        let mut body = Vec::new();
+        while !self.at_simple(&TokenKind::Dedent) && !self.at_eof() {
+            if self.at_simple(&TokenKind::Newline) {
+                self.bump();
+                continue;
+            }
+            body.push(self.parse_stmt()?);
+        }
+
+        self.expect_simple(TokenKind::Dedent)?;
+        Ok((doc, body))
+    }
+
+    /// True when the current token is a plain triple-quoted string that is a
+    /// complete statement.
+    fn at_docstring(&self) -> bool {
+        matches!(self.current_kind(), TokenKind::TripleStringLiteral(_))
+            && self.statement_ends_after_current()
+    }
+
+    fn statement_ends_after_current(&self) -> bool {
+        matches!(
+            self.peek_kind(1),
+            Some(TokenKind::Newline | TokenKind::Dedent | TokenKind::Eof)
+        )
+    }
+
+    /// A field docstring is on the line directly after the field it follows.
+    fn at_field_docstring(&self, field: Option<&FieldDecl>) -> bool {
+        if field.is_none() || !self.at_docstring() {
+            return false;
+        }
+        matches!(
+            self.tokens.get(self.index.wrapping_sub(1)),
+            Some(Token { kind: TokenKind::Newline, span }) if span.line + 1 == self.current_span().line
+        )
+    }
+
+    fn take_docstring(&mut self) -> Result<Option<DocString>> {
+        let text = match self.current_kind() {
+            TokenKind::TripleStringLiteral(text) if self.statement_ends_after_current() => {
+                text.clone()
+            }
+            _ => return Ok(None),
+        };
+        let span = self.bump().span;
+        if text.len() > MAX_DOCSTRING_BYTES {
+            return Err(Diagnostic::coded_at(
+                "AU2042",
+                span,
+                format!(
+                    "docstring is {} bytes; the limit is {MAX_DOCSTRING_BYTES} bytes",
+                    text.len()
+                ),
+            ));
+        }
+        self.eat_simple(&TokenKind::Newline);
+        Ok(Some(DocString { text, span }))
+    }
+
+    fn reject_misplaced_docstring(&self, message: &str) -> Result<()> {
+        if matches!(self.current_kind(), TokenKind::TripleStringLiteral(_)) {
+            return Err(Diagnostic::coded_at(
+                "AU2042",
+                self.current_span(),
+                format!("misplaced docstring: {message}"),
+            ));
+        }
+        Ok(())
     }
 
     fn parse_block(&mut self) -> Result<Vec<Stmt>> {
@@ -2750,7 +2930,7 @@ impl Parser {
                 kind: ExprKind::Bool(value),
                 span: token.span,
             }),
-            TokenKind::StringLiteral(value) => Ok(Expr {
+            TokenKind::StringLiteral(value) | TokenKind::TripleStringLiteral(value) => Ok(Expr {
                 kind: ExprKind::String(value),
                 span: token.span,
             }),

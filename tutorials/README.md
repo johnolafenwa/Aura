@@ -178,6 +178,8 @@ The tutorial set covers the topics below.
 - CLI inspection commands such as `check`, `ast`, `ast-json`, `analyze`,
   `complete`, and `mir`
 - compiler-backed VS Code diagnostics, navigation, and completions
+- docstrings on modules, classes, fields, enums, traits, and functions, shown
+  in editor hover and generated into API pages by `aura doc`
 
 ## Maintenance Rule
 

@@ -281,6 +281,7 @@ These figures come from the clean Mac14,9 measurement at `181204b`.
 - Parameterized registration returns labeled capture-free `def() -> None` values in `list[(str, def() -> None)]`. Registration runs before `-k` filtering.
 - Test discovery is based on the name prefix. Test annotations are not implemented.
 - A timed-out `aura test` stops waiting but cannot terminate its worker thread. The timed-out program may continue host side effects until the process exits.
+- One docstring is limited to 65,536 UTF-8 bytes, and one module's public documentation to 4,194,304 bytes. Exceeding either is `AU2042`. Enum variants, `impl` blocks, and local bindings have no documentation. `aura doc` writes Markdown or JSON, not HTML.
 - Recursive `aura fmt` and `aura test` traversal follows directory symlinks without cycle detection in 0.3.
 
 ### Native Artifact Profile

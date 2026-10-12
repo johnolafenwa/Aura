@@ -85,6 +85,7 @@ String and format-specification diagnostics are described under
 | `AU2013` | union pattern coverage | Missing, duplicate, unreachable, or nonmember union type arms. | Add the missing arms and remove the others. |
 | `AU2014` | invalidated narrowing | A member use after the `None` test that narrowed the place stopped applying. | Test the current value again. |
 | `AU2015` | callable contract mismatch | A callable whose complete contract differs from the one its destination requires. | Match the contract, or restrict it with an explicit adapter or constructor. |
+| `AU2042` | invalid docstring or documentation limit | A triple-quoted string in a class, enum, trait, or `impl` body outside a documentation position, or documentation over a size limit. | Move the string to the first slot or directly after a field, or shorten the documentation. |
 | `AU2043` | invalid Display implementation | A `Display` implementation for a type the module does not declare, a builtin, tuple, or union, a partial or bounded generic target, an overlap, or a mismatched `display` method. | Implement `def display(self) -> str` once, in the module that declares the type, for every specialization. |
 | `AU2044` | invalid property declaration | An `@property` getter outside a class, with a receiver other than `self`, with parameters, type parameters, a `None` or view result, or a name that collides with a field. | Declare `def name(self) -> Type:` in the class body. |
 | `AU2045` | invalid property use | Assignment, compound assignment, a `mut` argument or receiver, `match mut`, a view, or call syntax on a property. | Read the property without parentheses, or bind it to a local and change the local. |
@@ -188,6 +189,20 @@ one required, in these cases:
 The message names the difference. A safe restriction requires an explicit
 `Unary(function)` adapter or a `Callable[...]`/`TaskCallable[...]` constructor.
 A bare written contract never performs that restriction.
+
+**`AU2042` invalid docstring or documentation limit.** The parser reports
+`AU2042` in these cases:
+
+- a triple-quoted string in a class body that is not the class docstring and
+  not on the line directly after a field
+- a triple-quoted string in an enum body after the enum docstring, or in a
+  trait body after the trait docstring
+- a triple-quoted string in an `impl` body
+- one docstring over 65,536 UTF-8 bytes
+- a module's public documentation over 4,194,304 UTF-8 bytes in total
+
+A limit message gives the measured and permitted byte counts. See
+[Docstrings And API Docs](/manual/docstrings) for the documentation positions.
 
 **`AU2043` invalid Display implementation.** The checker rejects an
 `impl Display for T:` block that breaks a rule in

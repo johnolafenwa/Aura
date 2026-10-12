@@ -186,6 +186,32 @@ external contract.
 Keep helper functions private unless another module needs them. A smaller
 public surface is easier to keep stable.
 
+## Documenting A Module
+
+Write a docstring at the top of the module and as the first statement of each
+public declaration. Importers see it on hover, and `aura doc` builds a page
+from it:
+
+```aura
+"""A counter that only moves forward."""
+
+public class Counter:
+    """Counts events. The count never decreases."""
+
+    value: int32 = 0
+
+    public def inc(mut self):
+        """Add one to the count."""
+        self.value += 1
+```
+
+```bash
+aura doc src --out api
+```
+
+The page lists public declarations only, so the private `value` field stays
+out of it. [Docstrings And API Docs](/manual/docstrings) has the rules.
+
 ## Notes On Editor Tooling
 
 `aura analyze` and `aura complete` can read an editor buffer through

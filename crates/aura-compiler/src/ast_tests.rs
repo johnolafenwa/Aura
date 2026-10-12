@@ -24,6 +24,7 @@ fn dummy_function(name: &str) -> FunctionDecl {
         body: vec![],
         span: Span::new(1, 1),
         property: None,
+        doc: None,
     }
 }
 
@@ -41,9 +42,11 @@ fn item_name_matches_decl_name() {
             ty: dummy_type("int32"),
             default: None,
             span: Span::new(1, 1),
+            doc: None,
         }],
         methods: vec![],
         span: Span::new(1, 1),
+        doc: None,
     });
     let enum_item = Item::Enum(EnumDecl {
         public: true,
@@ -52,6 +55,7 @@ fn item_name_matches_decl_name() {
         type_param_bounds: BTreeMap::new(),
         variants: vec![],
         span: Span::new(1, 1),
+        doc: None,
     });
     let function_item = Item::Function(dummy_function("main"));
     let extern_function_item = Item::ExternFunction(ExternFunctionDecl {
@@ -77,6 +81,7 @@ fn item_name_matches_decl_name() {
         supertraits: vec![],
         methods: vec![dummy_function("show")],
         span: Span::new(1, 1),
+        doc: None,
     });
     let impl_item = Item::Impl(ImplDecl {
         type_params: vec![],
@@ -667,4 +672,92 @@ fn type_alias_items_report_their_alias_name() {
         span: Span::new(1, 1),
     });
     assert_eq!(alias.name(), "Pair");
+}
+
+#[test]
+fn docstring_normalization_removes_incidental_indentation_only() {
+    use crate::ast::{docstring_summary, normalize_docstring};
+    assert_eq!(normalize_docstring(""), "");
+    assert_eq!(normalize_docstring("\n   \n"), "");
+    assert_eq!(normalize_docstring("One line."), "One line.");
+    assert_eq!(
+        normalize_docstring("\n    Summary.  \n\n    Args:\n        name: The name.\n    "),
+        "Summary.\n\nArgs:\n    name: The name."
+    );
+    assert_eq!(
+        normalize_docstring("  First keeps its text.\n      deeper\n    shallow\n"),
+        "First keeps its text.\n  deeper\nshallow"
+    );
+    // Tabs are content and do not count as indentation.
+    assert_eq!(
+        normalize_docstring("Tabs.\n    \tcode\n    text"),
+        "Tabs.\n\tcode\ntext"
+    );
+    assert_eq!(
+        normalize_docstring("Tab line.\n\tx\n  y"),
+        "Tab line.\n\tx\n  y"
+    );
+
+    assert_eq!(docstring_summary("\n\n  ", 160), None);
+    assert_eq!(
+        docstring_summary("\n    Summary line.\n    More.", 160).as_deref(),
+        Some("Summary line.")
+    );
+    let long = "é".repeat(161);
+    let summary = docstring_summary(&long, 160).expect("summary");
+    assert_eq!(summary.chars().count(), 161);
+    assert!(summary.ends_with('\u{2026}'));
+    assert_eq!(
+        docstring_summary(&"x".repeat(160), 160).as_deref(),
+        Some("x".repeat(160).as_str())
+    );
+}
+
+#[test]
+fn docstring_args_section_is_presentation_data() {
+    use crate::ast::docstring_args;
+    assert!(docstring_args("No sections.").is_empty());
+    assert!(docstring_args("Summary.\n\nArgs:\nnot indented: x").is_empty());
+    let entries = docstring_args(concat!(
+        "Summary.\n",
+        "\n",
+        "    Args:\n",
+        "        orphan continuation is ignored\n",
+        "        first: The first value.\n",
+        "            Continues here.\n",
+        "\n",
+        "        second (int64): Not an entry name, so it continues `first`.\n",
+        "        third:\n",
+        "            Description on the next line.\n",
+        "    Returns:\n",
+        "        later: not part of Args\n",
+    ));
+    assert_eq!(
+        entries,
+        vec![
+            (
+                "first".to_string(),
+                "The first value.\nContinues here.\nsecond (int64): Not an entry name, so it continues `first`."
+                    .to_string()
+            ),
+            ("third".to_string(), "Description on the next line.".to_string()),
+        ]
+    );
+}
+
+#[test]
+fn docstring_without_args_keeps_other_sections() {
+    use crate::ast::docstring_without_args;
+    assert_eq!(docstring_without_args("No args."), "No args.");
+    assert_eq!(
+        docstring_without_args(
+            "Summary.\n\nArgs:\n    a: One.\n\n    b: Two.\nReturns:\n    The sum."
+        ),
+        "Summary.\n\nReturns:\n    The sum."
+    );
+    assert_eq!(
+        docstring_without_args("Summary.\n\nArgs:\n    a: One.\n"),
+        "Summary."
+    );
+    assert_eq!(docstring_without_args("Args:\n    a: One."), "");
 }

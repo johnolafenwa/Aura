@@ -6,8 +6,8 @@
 - Ratified direction: 2026-09-06, user approval of the priority roadmap
 - Date: 2026-08-02
 - Version target: Aura 0.4
-- Implementation: Display and read-only properties implemented in Batch 4;
-  property docstrings follow the ADR-0056 docstring work
+- Implementation: Display and read-only properties implemented in Batch 4,
+  including getter docstrings in property hover and completion
 - Roadmap decision: Batch S1, design-only checkpoint; Batch 4 section E
 - Parser coordination: ADR-0053; ordinary decorator execution is not a prerequisite
 - Related: ADR-0004, ADR-0013, ADR-0015, ADR-0016, ADR-0022,

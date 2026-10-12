@@ -40,6 +40,9 @@ f-string format subset, atomic `print`, and read-only `@property` getters, with
   direct `Display` registry, and a rewriter unit test covers modules with
   extern items. The display hook receives the nominal type name, which
   removes an unreachable fallback arm from both backends.
+- After section D merged, property hover shows the getter's docstring after
+  the `property name: Type` signature, and member completion carries its
+  first line.
 - Fixed indexing a property result, such as `value.tags[0]`. The checker
   matched the getter as a receiver method and asked for type arguments.
 
@@ -66,6 +69,4 @@ f-string format subset, atomic `print`, and read-only `@property` getters, with
 
 ## Follow-Up
 
-- Property hover shows the getter docstring once section D attaches
-  docstrings to methods.
 - The backend-parity matrix runs in hosted CI.

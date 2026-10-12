@@ -14,6 +14,8 @@ class Point:
 
 A class body contains one or more fields, methods, or `pass` entries, in any order. Field names must be unique among fields. Method names must be unique among methods.
 
+A class body may also hold a class docstring as its first entry and a field docstring directly after each field. See [Docstrings And API Docs](/manual/docstrings).
+
 Every field has an explicit type. A field may have a default expression of exactly that type:
 
 ```aura
@@ -192,6 +194,19 @@ def main():
 ```
 
 To change the value, bind it to a local first. The local is an independent copy.
+
+A getter's docstring documents the property. Hover on a read shows the property's type and then the docstring. See [Docstrings And API Docs](/manual/docstrings).
+
+```aura
+class Reply:
+    prompt_tokens: int64
+    completion_tokens: int64
+
+    @property
+    def total_tokens(self) -> int64:
+        """Tokens across the prompt and the completion."""
+        return self.prompt_tokens + self.completion_tokens
+```
 
 A property is not a trait member. An imported class exposes its `public` properties, and a private property is readable only in its own module.
 

@@ -320,6 +320,31 @@ are omitted. The command does not run code inside documentation.
 for hover. The documentation is kept in the analysis data that the language
 server reads; it is not part of executable MIR or native cache keys.
 
+**Implementation notes.** The implementation narrows or settles these points:
+
+- A plain triple-quoted string in a class, enum, trait, or `impl` body that
+  is not in a documentation position is `AU2042`. Those bodies never accepted
+  a string statement, so no program changes meaning. An `impl` block has no
+  docstring of its own.
+- Public documentation for the module limit counts the module docstring,
+  public classes with their public fields and methods, public enums, public
+  traits with all their methods, public functions, and every `impl` method,
+  because implementations are exported with the module.
+- Completion items keep the signature in `detail` and carry the summary line
+  as the item's Markdown `documentation`, so the signature stays visible.
+- Raw HTML is escaped by writing `<` and `&` as entities outside code spans
+  and fenced blocks. Control characters render as `\u{...}`.
+- Signature help shows documentation for functions and methods. Class
+  constructor calls have no signature help today.
+- Hover on an imported module reads that module's docstring from its source.
+  Declaration docstrings travel with the checked declarations.
+- `aura doc` writes pages to standard output unless `--out DIR` is given. A
+  module page name is the file stem, or the dotted path below a directory
+  argument. The Markdown page replaces a documented `Args:` section with a
+  parameter list. The JSON form keeps the full normalized text.
+- A docstring edit leaves MIR byte-identical, so the semantic interface
+  schema version is unchanged.
+
 ## E. Display and read-only properties
 
 ADR-0055 is implemented with these settled details.
@@ -397,8 +422,9 @@ and properties, and MIR/direct parity.
   class method, including at statement level, and for a repeated marker.
 - `str(value)` already rendered any value before this batch. The batch routes
   it through `display`.
-- The hover text of a property read is `property name: Type`. Hover shows a
-  getter docstring once section D attaches docstrings to methods.
+- The hover text of a property read is `property name: Type`, followed by
+  the getter's docstring when it has one. Member completion carries the
+  docstring's first line.
 
 ## F. Syntax-reflowing formatter
 

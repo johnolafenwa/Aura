@@ -116,10 +116,10 @@ fn lexes_exact_triple_quoted_and_raw_string_values() {
         "raw_single = r'\\d+\\.\\d+'\n",
         "raw_quote = r\"keep \\\" both\"\n",
     ));
-    assert!(tokens.contains(&TokenKind::StringLiteral(
+    assert!(tokens.contains(&TokenKind::TripleStringLiteral(
         "\n  first\n\n\tsecond \"\" pair\n  ".to_string()
     )));
-    assert!(tokens.contains(&TokenKind::StringLiteral(
+    assert!(tokens.contains(&TokenKind::TripleStringLiteral(
         "alpha ' and '' remain\nomega".to_string()
     )));
     assert!(tokens.contains(&TokenKind::StringLiteral("C:\\agents\\run".to_string())));
@@ -158,7 +158,7 @@ fn physical_tabs_are_content_only_inside_triple_quoted_strings() {
     let triple = lex("value = \"\"\"first\n\tsecond\n\"\"\"\n")
         .expect("a physical tab inside a triple string is exact content");
     assert!(triple.iter().any(|token| {
-        matches!(&token.kind, TokenKind::StringLiteral(value) if value == "first\n\tsecond\n")
+        matches!(&token.kind, TokenKind::TripleStringLiteral(value) if value == "first\n\tsecond\n")
     }));
 }
 
