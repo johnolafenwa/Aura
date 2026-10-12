@@ -1,0 +1,75 @@
+# A comment before the module docstring is trivia.
+
+"""Docstrings on every declaration kind.
+
+The documentation is metadata. It produces no output.
+"""
+
+import math
+
+public class Counter:
+    """A counter with a label."""
+
+    label: str
+    """The name printed with the count."""
+    count: int64 = 0
+    """How many times `bump` ran."""
+
+    public def bump(mut self):
+        """Add one to the count."""
+        self.count += 1
+
+    public def describe(self) -> str:
+        '''Return the label and the count.'''
+        return f"{self.label}: {self.count}"
+
+public enum Shape:
+    """A plane figure."""
+    Circle(radius: float64)
+    Square(side: float64)
+
+public trait Named:
+    """Something with a display name."""
+
+    def name(self) -> str:
+        """Return the display name."""
+
+    def greeting(self) -> str:
+        """Return a greeting that uses `name`."""
+        return "hello " + self.name()
+
+impl Named for Counter:
+    def name(self) -> str:
+        """The counter's label is its name."""
+        return self.label.clone()
+
+def documented_only():
+    """A function whose body is only a docstring."""
+
+def area(shape: Shape) -> float64:
+    """Return the area of a shape.
+
+    Args:
+        shape: The figure to measure.
+    """
+    match shape:
+        case Shape.Circle(radius):
+            return math.pi * radius * radius
+        case Shape.Square(side):
+            return side * side
+
+def later_string_is_ordinary() -> int64:
+    value = 7
+    """A later triple-quoted string is an ordinary expression statement."""
+    return value
+
+def main():
+    """Run the docstring tour."""
+    mut counter = Counter(label="ticks")
+    counter.bump()
+    counter.bump()
+    print(counter.describe())
+    print(counter.greeting())
+    documented_only()
+    print(area(Shape.Square(side=3.0)))
+    print(later_string_is_ordinary())

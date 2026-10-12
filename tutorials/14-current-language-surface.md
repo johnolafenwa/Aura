@@ -288,6 +288,10 @@ The compiler supports these statements:
   F-strings stay double-quoted as `f"..."`, but an interpolation may contain
   either quote form. Write strings as quoted literals. `str(...)` is not a
   constructor.
+- **Docstrings:** a triple-quoted string as the first statement of a module,
+  class, enum, trait, or function documents it, and one on the line after a
+  field documents the field. Docstrings do not run. See
+  [08-tooling.md](08-tooling.md#documenting-code).
 - **Tuples:** parenthesized values such as `(name, count)` and the singleton
   `(value,)`.
 - **Collections:** list literals such as `[1, 2, 3]`, dictionary literals

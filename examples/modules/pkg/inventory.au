@@ -1,0 +1,49 @@
+"""Stock records for a small shop.
+
+Hover a name from this module in an editor to read its documentation.
+"""
+
+public class Item:
+    """One product line in stock."""
+
+    public name: str
+    """The product name shown on receipts."""
+    public count: int64
+    """How many units are on the shelf."""
+
+    public def restock(mut self, amount: int64):
+        """Add units to the shelf.
+
+        Args:
+            amount: The number of units that arrived.
+        """
+        self.count += amount
+
+public enum Level:
+    """How full a shelf is."""
+    Empty
+    Low
+    Full
+
+public trait Labeled:
+    """Something that prints as a short label."""
+
+    def label(self) -> str:
+        """Return a one-line label."""
+
+impl Labeled for Item:
+    def label(self) -> str:
+        return f"{self.name} x{self.count}"
+
+public def level(item: Item, low: int64 = 5) -> Level:
+    """Classify the shelf for one item.
+
+    Args:
+        item: The product line to check.
+        low: The count at or below which the shelf is low.
+    """
+    if item.count == 0:
+        return Level.Empty
+    if item.count <= low:
+        return Level.Low
+    return Level.Full

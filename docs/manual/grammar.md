@@ -231,7 +231,9 @@ There is no semicolon, assignment expression, unary plus, or lambda arrow.
 ## Modules And Imports
 
 ```ebnf
-module = { module-element }, EOF ;
+module = [ docstring ], { module-element }, EOF ;
+
+docstring = TRIPLE_STRING, NEWLINE ;
 
 module-element = import-declaration | module-constant | item | statement ;
 
@@ -457,7 +459,8 @@ class-declaration
     = [ "copy" ], "class", identifier,
       [ bounded-type-parameters ],
       ":", NEWLINE, INDENT,
-      class-member, { class-member },
+      ( docstring, { class-member }
+      | class-member, { class-member } ),
       DEDENT ;
 
 class-member
@@ -467,8 +470,13 @@ class-member
 
 field-declaration
     = identifier, ":", type,
-      [ "=", expression ], NEWLINE ;
+      [ "=", expression ], NEWLINE,
+      [ docstring ] ;
 ```
+
+`TRIPLE_STRING` is a plain triple-quoted string token. A field docstring must
+start on the line directly after the field. A class body whose only entry is a
+docstring is an empty class, the same as `pass`.
 
 `copy` is contextual and is recognized only immediately before `class`.
 A method named `__init__` is the class's initializer. It uses the ordinary
@@ -481,6 +489,7 @@ body. A comment-only body is not a suite.
 enum-declaration
     = "enum", identifier, [ bounded-type-parameters ],
       ":", NEWLINE, INDENT,
+      [ docstring ],
       enum-variant, { enum-variant },
       DEDENT ;
 
@@ -573,7 +582,8 @@ trait-declaration
     = "trait", identifier, [ plain-type-parameters ], ":",
       [ type, { ",", type }, ":" ],
       NEWLINE, INDENT,
-      trait-member, { trait-member },
+      ( docstring, { trait-member }
+      | trait-member, { trait-member } ),
       DEDENT ;
 
 trait-member
@@ -584,7 +594,9 @@ trait-method
     = "def", identifier, [ bounded-type-parameters ],
       "(", [ method-parameter-list ], ")",
       [ return-annotation ],
-      ( NEWLINE | ":", NEWLINE, suite ) ;
+      ( NEWLINE | ":", NEWLINE, docstring-suite | ":", NEWLINE, suite ) ;
+
+docstring-suite = INDENT, docstring, DEDENT ;
 
 impl-declaration
     = "impl", [ bounded-type-parameters ],
@@ -604,15 +616,22 @@ expressed through supertraits or method constraints, not inline in the trait
 parameter list.
 
 A trait method is either signature-only, with a newline immediately after the
-return annotation, or provides one default body after `:`.
+return annotation or a docstring-only body, or provides one default body after
+`:`.
 
 The second colon in a trait header separates an optional comma-separated
 supertrait list from the body, for example `trait Child: Parent, Named:`.
 
 ## Suites And Statements
 
+A docstring in a suite is metadata only on a function or method body. In other
+suites, a triple-quoted string is an ordinary expression statement.
+[Docstrings And API Docs](/manual/docstrings) has the documentation rules.
+
 ```ebnf
-suite = INDENT, statement, { statement }, DEDENT ;
+suite
+    = INDENT, statement, { statement }, DEDENT
+    | INDENT, docstring, { statement }, DEDENT ;
 
 statement
     = assignment-statement

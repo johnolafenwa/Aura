@@ -197,6 +197,7 @@ seven real loopback requests.
 | `function_values.au` | Stores a namespace-qualified imported function, then calls it directly and through a `def(int32) -> int32` parameter. Also specializes an imported zero-argument generic function from context and uses the result as a `TaskGroup.start` target. | `10`, `12`, `none` |
 | `namespace_import_types.au` | Namespace-qualified class construction, enum variants, and qualified `match` arms through `import ...` | `4`, `true`, `1` |
 | `trait_impl_imports.au` | Trait impls imported across package modules, including bounded generic calls and direct trait-method use | `Ada`, `Ada` |
+| `documented_api.au` | Module, class, field, method, enum, trait, and function docstrings with an `Args:` section in `pkg/inventory.au`. Run `aura doc examples/modules/pkg/inventory.au` to see the generated page. | `empty`, `low`, `full`, `tea x13` |
 
 The helper modules under `modules/pkg/` support these examples. They are not
 standalone entrypoints.

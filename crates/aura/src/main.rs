@@ -58,6 +58,7 @@ fn main() {
         "new" => handle_new_command(args.collect()),
         "upgrade" => handle_upgrade_command(args.collect()),
         "fmt" => handle_fmt_command(args.collect()),
+        "doc" => handle_doc_command(args.collect()),
         "test" => handle_test_command(args.collect()),
         "deps" => {
             let remaining = args.collect::<Vec<_>>();
@@ -639,6 +640,100 @@ fn handle_fmt_command(args: Vec<String>) {
         }
         process::exit(1);
     }
+}
+
+/// `aura doc`: checks each source and writes one API page per module.
+fn handle_doc_command(args: Vec<String>) {
+    let mut json = false;
+    let mut out_dir = None;
+    let mut inputs = Vec::new();
+    let mut args = args.into_iter();
+    while let Some(argument) = args.next() {
+        if argument == "--json" {
+            json = true;
+        } else if argument == "--out" {
+            let Some(dir) = args.next() else {
+                eprintln!("aura doc --out requires a directory");
+                process::exit(2);
+            };
+            out_dir = Some(PathBuf::from(dir));
+        } else if argument.starts_with('-') {
+            eprintln!("unknown aura doc option `{argument}`");
+            process::exit(2);
+        } else {
+            inputs.push(PathBuf::from(argument));
+        }
+    }
+    if inputs.is_empty() {
+        inputs.push(PathBuf::from("."));
+    }
+    let mut pages: Vec<(String, String)> = Vec::new();
+    for input in &inputs {
+        let paths =
+            collect_aura_source_paths(std::slice::from_ref(input)).unwrap_or_else(|error| {
+                eprintln!("{error}");
+                process::exit(1);
+            });
+        for path in paths {
+            let name = doc_module_name(input, &path);
+            let program = check_path(&path).unwrap_or_else(|error| {
+                let display = path.display().to_string();
+                let source = fs::read_to_string(&path).unwrap_or_default();
+                emit_diagnostic(DiagnosticFormat::Human, &display, &source, &error);
+                process::exit(1);
+            });
+            if pages.iter().any(|(existing, _)| *existing == name) {
+                eprintln!("aura doc found two modules named `{name}`; document them separately");
+                process::exit(1);
+            }
+            let module = aura_compiler::analysis::api_module_from_program(&name, &program);
+            let page = if json {
+                serde_json::to_string(&module).expect("API documentation serializes") + "\n"
+            } else {
+                aura_compiler::analysis::render_api_markdown(&module)
+            };
+            pages.push((name, page));
+        }
+    }
+    let Some(out_dir) = out_dir else {
+        let separator = if json { "" } else { "\n" };
+        let text = pages
+            .into_iter()
+            .map(|(_, page)| page)
+            .collect::<Vec<_>>()
+            .join(separator);
+        write_stdout(&text);
+        return;
+    };
+    fs::create_dir_all(&out_dir).unwrap_or_else(|error| {
+        eprintln!("failed to create `{}`: {error}", out_dir.display());
+        process::exit(1);
+    });
+    for (name, page) in pages {
+        let path = out_dir.join(format!("{name}.{}", if json { "json" } else { "md" }));
+        fs::write(&path, page).unwrap_or_else(|error| {
+            eprintln!("failed to write `{}`: {error}", path.display());
+            process::exit(1);
+        });
+        write_stdout(&format!("wrote {}\n", path.display()));
+    }
+}
+
+/// A module's documentation name: the file stem for a file argument, or the
+/// dotted path below a directory argument.
+fn doc_module_name(input: &Path, path: &Path) -> String {
+    let relative = path.strip_prefix(input).unwrap_or(path);
+    let relative = if relative.as_os_str().is_empty() {
+        Path::new(path.file_name().unwrap_or_default())
+    } else {
+        relative
+    };
+    relative
+        .with_extension("")
+        .components()
+        .map(|component| component.as_os_str().to_string_lossy().into_owned())
+        .collect::<Vec<_>>()
+        .join(".")
 }
 
 fn format_or_exit(label: &str, source: &str) -> String {
@@ -4815,6 +4910,7 @@ fn usage_text() -> &'static str {
        or: aura lsp\n\
        or: aura new <project-path>\n\
        or: aura fmt [--check] [path ...]\n\
+       or: aura doc [--out <dir>] [--json] [path ...]\n\
        or: aura test [-k <substring>] [--format json] [--timeout-ms <n>] [path ...]\n\
        or: aura deps update [package]\n\
        or: aura upgrade\n\

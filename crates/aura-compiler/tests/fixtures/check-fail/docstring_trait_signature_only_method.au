@@ -1,0 +1,13 @@
+trait Shape:
+    """A shape."""
+    def area(self) -> float64:
+        """Return the area. The docstring-only body keeps this signature-only."""
+
+class Square:
+    side: float64
+
+impl Shape for Square:
+    pass
+
+def main():
+    pass

@@ -1,4 +1,9 @@
+mod api_docs;
 mod requests;
+pub use api_docs::{
+    api_module_from_program, render_api_markdown, ApiDeclaration, ApiMember, ApiModule,
+    API_DOCS_SCHEMA_VERSION,
+};
 pub use requests::{
     prepare_rename_path_source, references_path_source, rename_path_source,
     signature_help_path_source, AnalysisRename, AnalysisSignatureHelp,
@@ -10,9 +15,9 @@ use std::path::Path;
 use serde::Serialize;
 
 use crate::ast::{
-    AssignStmt, AssignTarget, BinaryOp, ComprehensionOutput, Expr, ExprKind, FunctionDecl,
-    ImportKind, Item, LambdaParam, MatchArm, Module, Param, ParamMode, Pattern, ReceiverKind, Stmt,
-    TypeRef, VariantPattern, ViewStmt,
+    AssignStmt, AssignTarget, BinaryOp, ComprehensionOutput, DocString, Expr, ExprKind,
+    FunctionDecl, ImportKind, Item, LambdaParam, MatchArm, Module, Param, ParamMode, Pattern,
+    ReceiverKind, Stmt, TypeRef, VariantPattern, ViewStmt,
 };
 use crate::call::{
     bind_call_arguments, callable_params_from_decl, BuiltinAssociatedFunction,
@@ -124,6 +129,9 @@ pub struct AnalysisCompletion {
     pub name: String,
     pub kind: String,
     pub detail: String,
+    /// The first non-empty line of the declaration's docstring.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub documentation: Option<String>,
 }
 
 #[derive(Clone)]
@@ -257,6 +265,8 @@ struct AnalysisBuilder<'a> {
     program: &'a Program,
     output: AnalysisOutput,
     type_parameters: BTreeSet<String>,
+    /// Module docstrings read from imported source files, by source path.
+    module_docs: std::cell::RefCell<BTreeMap<String, Option<DocString>>>,
 }
 
 impl<'a> AnalysisBuilder<'a> {
@@ -265,6 +275,7 @@ impl<'a> AnalysisBuilder<'a> {
             source_lines: source.lines().collect(),
             program,
             type_parameters: BTreeSet::new(),
+            module_docs: Default::default(),
             output: AnalysisOutput {
                 diagnostics: Vec::new(),
                 symbols,
@@ -488,11 +499,9 @@ impl<'a> AnalysisBuilder<'a> {
                     };
                     let target = path.join(".");
                     let definition = self.find_imported_module_range(&target);
-                    self.push_occurrence(
-                        range,
-                        format!("```aura\nmodule {alias} = {target}\n```"),
-                        definition,
-                    );
+                    let hover = self
+                        .module_hover(format!("```aura\nmodule {alias} = {target}\n```"), &target);
+                    self.push_occurrence(range, hover, definition);
                 }
                 ImportKind::From { names, .. } => {
                     for imported_name in names {
@@ -618,6 +627,7 @@ impl<'a> AnalysisBuilder<'a> {
                     name,
                     kind: "variable".to_string(),
                     detail: binding.ty.to_string(),
+                    documentation: None,
                 });
             }
         }
@@ -1567,6 +1577,7 @@ impl<'a> AnalysisBuilder<'a> {
                 name: keyword.to_string(),
                 kind: "keyword".to_string(),
                 detail: "Aura keyword".to_string(),
+                documentation: None,
             });
         }
         for (visible_name, class_info) in &self.program.classes {
@@ -1574,20 +1585,23 @@ impl<'a> AnalysisBuilder<'a> {
                 name: visible_name.clone(),
                 kind: "class".to_string(),
                 detail: format_class_detail(class_info),
+                documentation: doc_summary(class_info.decl.doc.as_ref()),
             });
         }
-        for visible_name in self.program.enums.keys() {
+        for (visible_name, enum_info) in &self.program.enums {
             completions.push(AnalysisCompletion {
                 name: visible_name.clone(),
                 kind: "enum".to_string(),
                 detail: "Aura enum".to_string(),
+                documentation: doc_summary(enum_info.decl.doc.as_ref()),
             });
         }
-        for visible_name in self.program.traits.keys() {
+        for (visible_name, trait_info) in &self.program.traits {
             completions.push(AnalysisCompletion {
                 name: visible_name.clone(),
                 kind: "trait".to_string(),
                 detail: "Aura trait".to_string(),
+                documentation: doc_summary(trait_info.decl.doc.as_ref()),
             });
         }
         for (visible_name, alias) in &self.program.aliases {
@@ -1595,6 +1609,7 @@ impl<'a> AnalysisBuilder<'a> {
                 name: visible_name.clone(),
                 kind: "type".to_string(),
                 detail: format_alias_detail(alias),
+                documentation: None,
             });
         }
         for builtin_enum in BUILTIN_ENUM_COMPLETIONS {
@@ -1602,18 +1617,21 @@ impl<'a> AnalysisBuilder<'a> {
                 name: builtin_enum.name.to_string(),
                 kind: "enum".to_string(),
                 detail: builtin_enum.detail.to_string(),
+                documentation: None,
             });
         }
         completions.push(AnalysisCompletion {
             name: "Array".to_string(),
             kind: "class".to_string(),
             detail: "Array[T] numeric multidimensional array".to_string(),
+            documentation: None,
         });
         for (visible_name, function_info) in &self.program.functions {
             completions.push(AnalysisCompletion {
                 name: visible_name.clone(),
                 kind: "function".to_string(),
                 detail: format_function_detail(&function_info.decl),
+                documentation: doc_summary(function_info.decl.doc.as_ref()),
             });
         }
         for (visible_name, constant) in &self.program.constants {
@@ -1621,6 +1639,7 @@ impl<'a> AnalysisBuilder<'a> {
                 name: visible_name.clone(),
                 kind: "constant".to_string(),
                 detail: constant.ty.to_string(),
+                documentation: None,
             });
         }
         for (visible_name, function_info) in &self.program.extern_functions {
@@ -1628,6 +1647,7 @@ impl<'a> AnalysisBuilder<'a> {
                 name: visible_name.clone(),
                 kind: "function".to_string(),
                 detail: format_extern_function_detail(&function_info.decl),
+                documentation: None,
             });
         }
         for (visible_name, handle_info) in &self.program.opaque_handles {
@@ -1635,6 +1655,7 @@ impl<'a> AnalysisBuilder<'a> {
                 name: visible_name.clone(),
                 kind: "class".to_string(),
                 detail: format_extern_opaque_detail(&handle_info.decl),
+                documentation: None,
             });
         }
         for builtin in ALL_BUILTIN_FUNCTIONS {
@@ -1642,6 +1663,7 @@ impl<'a> AnalysisBuilder<'a> {
                 name: builtin.name().to_string(),
                 kind: "function".to_string(),
                 detail: builtin.detail().to_string(),
+                documentation: None,
             });
         }
         for (visible_name, namespace) in &self.program.imported_modules {
@@ -1649,6 +1671,7 @@ impl<'a> AnalysisBuilder<'a> {
                 name: visible_name.clone(),
                 kind: "module".to_string(),
                 detail: format!("module {}", namespace.path),
+                documentation: doc_summary(self.module_doc(&namespace.path).as_ref()),
             });
         }
         completions
@@ -1663,6 +1686,7 @@ impl<'a> AnalysisBuilder<'a> {
                         name: child.name.clone(),
                         kind: "module".to_string(),
                         detail: format!("module {}", child.path),
+                        documentation: doc_summary(self.module_doc(&child.path).as_ref()),
                     });
                 }
                 for function in namespace.functions.values() {
@@ -1670,6 +1694,7 @@ impl<'a> AnalysisBuilder<'a> {
                         name: function.decl.name.clone(),
                         kind: "function".to_string(),
                         detail: format_function_detail(&function.decl),
+                        documentation: doc_summary(function.decl.doc.as_ref()),
                     });
                 }
                 for constant in namespace.constants.values() {
@@ -1677,6 +1702,7 @@ impl<'a> AnalysisBuilder<'a> {
                         name: constant.decl.name.clone(),
                         kind: "constant".to_string(),
                         detail: constant.ty.to_string(),
+                        documentation: None,
                     });
                 }
                 for function in namespace.extern_functions.values() {
@@ -1684,6 +1710,7 @@ impl<'a> AnalysisBuilder<'a> {
                         name: function.decl.name.clone(),
                         kind: "function".to_string(),
                         detail: format_extern_function_detail(&function.decl),
+                        documentation: None,
                     });
                 }
                 for handle in namespace.opaque_handles.values() {
@@ -1691,6 +1718,7 @@ impl<'a> AnalysisBuilder<'a> {
                         name: handle.decl.name.clone(),
                         kind: "class".to_string(),
                         detail: format_extern_opaque_detail(&handle.decl),
+                        documentation: None,
                     });
                 }
                 for class_info in namespace.classes.values() {
@@ -1698,6 +1726,7 @@ impl<'a> AnalysisBuilder<'a> {
                         name: class_info.decl.name.clone(),
                         kind: "class".to_string(),
                         detail: format_class_detail(class_info),
+                        documentation: doc_summary(class_info.decl.doc.as_ref()),
                     });
                 }
                 for enum_info in namespace.enums.values() {
@@ -1705,6 +1734,7 @@ impl<'a> AnalysisBuilder<'a> {
                         name: enum_info.decl.name.clone(),
                         kind: "enum".to_string(),
                         detail: "Aura enum".to_string(),
+                        documentation: doc_summary(enum_info.decl.doc.as_ref()),
                     });
                 }
                 for trait_info in namespace.traits.values() {
@@ -1712,6 +1742,7 @@ impl<'a> AnalysisBuilder<'a> {
                         name: trait_info.decl.name.clone(),
                         kind: "trait".to_string(),
                         detail: "Aura trait".to_string(),
+                        documentation: doc_summary(trait_info.decl.doc.as_ref()),
                     });
                 }
             }
@@ -1725,6 +1756,7 @@ impl<'a> AnalysisBuilder<'a> {
                     name: name.clone(),
                     kind: "field".to_string(),
                     detail: field.ty.to_string(),
+                    documentation: doc_summary(field_doc(class_info, name)),
                 });
             }
             for (name, method) in &class_info.methods {
@@ -1736,6 +1768,7 @@ impl<'a> AnalysisBuilder<'a> {
                     name: name.clone(),
                     kind: "method".to_string(),
                     detail: format_function_detail(&method.decl),
+                    documentation: doc_summary(method.decl.doc.as_ref()),
                 });
             }
         }
@@ -1753,6 +1786,9 @@ impl<'a> AnalysisBuilder<'a> {
                         name: name.clone(),
                         kind: "method".to_string(),
                         detail: format_function_detail(&method.decl),
+                        documentation: doc_summary(
+                            self.implementation_method_doc(trait_impl, &method.decl),
+                        ),
                     });
                 }
             }
@@ -1779,6 +1815,7 @@ impl<'a> AnalysisBuilder<'a> {
                             enum_name
                         )
                     },
+                    documentation: None,
                 });
             }
         }
@@ -2014,6 +2051,56 @@ impl<'a> AnalysisBuilder<'a> {
         self.definition_range(&alias.module_name, alias.decl.span, alias.decl.name.len())
     }
 
+    /// An implementation method's docstring, falling back to the trait
+    /// method's docstring when the implementation has no visible text.
+    fn implementation_method_doc<'b>(
+        &'b self,
+        trait_impl: &'b crate::sema::TraitImplInfo,
+        method: &'b FunctionDecl,
+    ) -> Option<&'b DocString> {
+        if method
+            .doc
+            .as_ref()
+            .is_some_and(|doc| presentation_docstring(&doc.text).is_some())
+        {
+            return method.doc.as_ref();
+        }
+        let local = trait_impl
+            .trait_name
+            .rsplit('.')
+            .next()
+            .unwrap_or(&trait_impl.trait_name);
+        self.program
+            .traits
+            .get(&trait_impl.trait_name)
+            .or_else(|| {
+                self.module_namespace(&trait_impl.module_name)
+                    .and_then(|namespace| namespace.all_traits.get(local))
+            })
+            .and_then(|trait_info| trait_info.methods.get(&method.name))
+            .and_then(|trait_method| trait_method.decl.doc.as_ref())
+    }
+
+    /// The docstring of the module at `path`, read from its source file.
+    fn module_doc(&self, path: &str) -> Option<DocString> {
+        let source_path = self.module_namespace(path)?.source_path.clone()?;
+        if let Some(cached) = self.module_docs.borrow().get(&source_path) {
+            return cached.clone();
+        }
+        let doc = std::fs::read_to_string(&source_path)
+            .ok()
+            .and_then(|source| parser::parse(&source).ok())
+            .and_then(|module| module.doc);
+        self.module_docs
+            .borrow_mut()
+            .insert(source_path, doc.clone());
+        doc
+    }
+
+    fn module_hover(&self, signature: String, path: &str) -> String {
+        with_doc(signature, self.module_doc(path).as_ref())
+    }
+
     fn trait_definition(&self, trait_info: &crate::sema::TraitInfo) -> AnalysisRange {
         self.definition_range(
             &trait_info.module_name,
@@ -2131,6 +2218,7 @@ impl<'a> AnalysisBuilder<'a> {
                 .map(|enum_info| ResolvedSymbol {
                     hover: format_enum_hover_named(
                         &self.canonical_enum_identity(enum_name, enum_info),
+                        enum_info.decl.doc.as_ref(),
                     ),
                     definition: Some(self.enum_definition(enum_info)),
                 }),
@@ -2228,6 +2316,7 @@ impl<'a> AnalysisBuilder<'a> {
                     name: method.decl.name.clone(),
                     kind: "method".to_string(),
                     detail: format_function_detail(&method.decl),
+                    documentation: doc_summary(method.decl.doc.as_ref()),
                 });
             }
         }
@@ -3133,7 +3222,10 @@ impl<'a> AnalysisBuilder<'a> {
         if let Some(enum_info) = self.program.enums.get(name) {
             return Some(ResolvedSymbol {
                 hover: append_alias_target(
-                    format_enum_hover_named(&self.canonical_enum_identity(name, enum_info)),
+                    format_enum_hover_named(
+                        &self.canonical_enum_identity(name, enum_info),
+                        enum_info.decl.doc.as_ref(),
+                    ),
                     name,
                     &enum_info.module_name,
                     &enum_info.decl.name,
@@ -3145,7 +3237,7 @@ impl<'a> AnalysisBuilder<'a> {
         if let Some(trait_info) = self.program.traits.get(name) {
             return Some(ResolvedSymbol {
                 hover: append_alias_target(
-                    format!("```aura\ntrait {}\n```", trait_info.decl.name),
+                    format_trait_hover(trait_info),
                     name,
                     &trait_info.module_name,
                     &trait_info.decl.name,
@@ -3175,11 +3267,14 @@ impl<'a> AnalysisBuilder<'a> {
 
         if let Some(namespace) = self.program.imported_modules.get(name) {
             return Some(ResolvedSymbol {
-                hover: if namespace.path == name {
-                    format!("```aura\nmodule {}\n```", namespace.path)
-                } else {
-                    format!("```aura\nmodule {name} = {}\n```", namespace.path)
-                },
+                hover: self.module_hover(
+                    if namespace.path == name {
+                        format!("```aura\nmodule {}\n```", namespace.path)
+                    } else {
+                        format!("```aura\nmodule {name} = {}\n```", namespace.path)
+                    },
+                    &namespace.path,
+                ),
                 definition: self.find_imported_module_range(&namespace.path),
             });
         }
@@ -3351,7 +3446,8 @@ impl<'a> AnalysisBuilder<'a> {
             let namespace = self.module_namespace(path)?;
             if let Some(child) = namespace.modules.get(field) {
                 return Some(ResolvedMember {
-                    hover: format!("```aura\nmodule {}\n```", child.path),
+                    hover: self
+                        .module_hover(format!("```aura\nmodule {}\n```", child.path), &child.path),
                     definition: self.find_imported_module_range(&child.path),
                     ty: Some(Type::Module(child.path.clone())),
                 });
@@ -3440,14 +3536,14 @@ impl<'a> AnalysisBuilder<'a> {
             if let Some(enum_info) = namespace.enums.get(field) {
                 let enum_name = format!("{}.{}", namespace.path, enum_info.decl.name);
                 return Some(ResolvedMember {
-                    hover: format_enum_hover_named(&enum_name),
+                    hover: format_enum_hover_named(&enum_name, enum_info.decl.doc.as_ref()),
                     definition: Some(self.enum_definition(enum_info)),
                     ty: Some(Type::named(enum_name)),
                 });
             }
             if let Some(trait_info) = namespace.traits.get(field) {
                 return Some(ResolvedMember {
-                    hover: format!("```aura\ntrait {}\n```", trait_info.decl.name),
+                    hover: format_trait_hover(trait_info),
                     definition: Some(self.trait_definition(trait_info)),
                     ty: None,
                 });
@@ -3468,10 +3564,13 @@ impl<'a> AnalysisBuilder<'a> {
             };
             if let Some(field_info) = class_info.fields.get(field) {
                 return Some(ResolvedMember {
-                    hover: format_value_hover(
-                        "field",
-                        field,
-                        &crate::sema::substitute_type(&field_info.ty, &class_substitutions),
+                    hover: with_doc(
+                        format_value_hover(
+                            "field",
+                            field,
+                            &crate::sema::substitute_type(&field_info.ty, &class_substitutions),
+                        ),
+                        field_doc(class_info, field),
                     ),
                     definition: Some(self.definition_range(
                         &class_info.module_name,
@@ -3504,7 +3603,10 @@ impl<'a> AnalysisBuilder<'a> {
             self.trait_method_for_receiver(receiver_type, field)
         {
             return Some(ResolvedMember {
-                hover: format_method_hover(&trait_method.decl),
+                hover: format_method_hover_with_doc(
+                    &trait_method.decl,
+                    self.implementation_method_doc(trait_impl, &trait_method.decl),
+                ),
                 definition: Some(self.definition_range(
                     &trait_impl.module_name,
                     trait_method.decl.span,
@@ -6394,11 +6496,14 @@ fn format_function_hover(function_decl: &FunctionDecl) -> String {
         .map(format_param_decl)
         .collect::<Vec<_>>()
         .join(", ");
-    format!(
-        "```aura\nfunction {}({}) -> {}\n```",
-        function_decl.name,
-        params,
-        format_decl_return(function_decl)
+    with_doc(
+        format!(
+            "```aura\nfunction {}({}) -> {}\n```",
+            function_decl.name,
+            params,
+            format_decl_return(function_decl)
+        ),
+        function_decl.doc.as_ref(),
     )
 }
 
@@ -6426,6 +6531,10 @@ fn format_extern_opaque_hover(handle_decl: &crate::ast::ExternOpaqueClassDecl) -
 }
 
 fn format_method_hover(method_decl: &FunctionDecl) -> String {
+    format_method_hover_with_doc(method_decl, method_decl.doc.as_ref())
+}
+
+fn format_method_hover_with_doc(method_decl: &FunctionDecl, doc: Option<&DocString>) -> String {
     let params = method_decl
         .receiver
         .map(canonical_receiver_spelling)
@@ -6434,11 +6543,14 @@ fn format_method_hover(method_decl: &FunctionDecl) -> String {
         .chain(method_decl.params.iter().map(format_param_decl))
         .collect::<Vec<_>>()
         .join(", ");
-    format!(
-        "```aura\nmethod {}({}) -> {}\n```",
-        method_decl.name,
-        params,
-        format_decl_return(method_decl)
+    with_doc(
+        format!(
+            "```aura\nmethod {}({}) -> {}\n```",
+            method_decl.name,
+            params,
+            format_decl_return(method_decl)
+        ),
+        doc,
     )
 }
 
@@ -6497,7 +6609,7 @@ fn format_class_hover(class_info: &ClassInfo) -> String {
         let receiver = if params.is_empty() { "self" } else { "self, " };
         fields.push(format!("def __init__({receiver}{params})"));
     }
-    if fields.is_empty() {
+    let signature = if fields.is_empty() {
         format!("```aura\nclass {}\n```", class_info.decl.name)
     } else {
         format!(
@@ -6505,7 +6617,8 @@ fn format_class_hover(class_info: &ClassInfo) -> String {
             class_info.decl.name,
             fields.join("\n")
         )
-    }
+    };
+    with_doc(signature, class_info.decl.doc.as_ref())
 }
 
 /// The parameter list a class call takes from `__init__`, spelled as a
@@ -6572,8 +6685,120 @@ fn format_class_detail(class_info: &ClassInfo) -> String {
     format!("{}({})", class_info.decl.name, fields)
 }
 
-fn format_enum_hover_named(enum_name: &str) -> String {
-    format!("```aura\nenum {enum_name}\n```")
+fn format_enum_hover_named(enum_name: &str, doc: Option<&DocString>) -> String {
+    with_doc(format!("```aura\nenum {enum_name}\n```"), doc)
+}
+
+fn field_doc<'b>(class_info: &'b ClassInfo, field: &str) -> Option<&'b DocString> {
+    class_info
+        .decl
+        .fields
+        .iter()
+        .find(|declaration| declaration.name == field)
+        .and_then(|declaration| declaration.doc.as_ref())
+}
+
+fn format_trait_hover(trait_info: &crate::sema::TraitInfo) -> String {
+    with_doc(
+        format!("```aura\ntrait {}\n```", trait_info.decl.name),
+        trait_info.decl.doc.as_ref(),
+    )
+}
+
+/// Appends a declaration's presentation docstring after its signature.
+fn with_doc(hover: String, doc: Option<&DocString>) -> String {
+    match doc.and_then(|doc| presentation_docstring(&doc.text)) {
+        Some(text) => format!("{hover}\n\n{text}"),
+        None => hover,
+    }
+}
+
+/// The normalized, sanitized Markdown of a docstring, or `None` when it has
+/// no visible text.
+pub(crate) fn presentation_docstring(text: &str) -> Option<String> {
+    let normalized = crate::ast::normalize_docstring(text);
+    if normalized.trim().is_empty() {
+        return None;
+    }
+    Some(sanitize_doc_markdown(&normalized))
+}
+
+/// The completion summary of a docstring: its first non-empty line, truncated
+/// at 160 Unicode scalar values.
+fn doc_summary(doc: Option<&DocString>) -> Option<String> {
+    doc.and_then(|doc| crate::ast::docstring_summary(&doc.text, 160))
+        .map(|summary| sanitize_doc_markdown(&summary))
+}
+
+/// Escapes control characters other than tab and newline, and escapes `<`
+/// and `&` outside code so raw HTML is shown as text. Fenced code blocks and
+/// inline code spans are kept byte for byte.
+pub(crate) fn sanitize_doc_markdown(text: &str) -> String {
+    let mut output = String::with_capacity(text.len());
+    let mut fence: Option<String> = None;
+    for (index, line) in text.split('\n').enumerate() {
+        if index > 0 {
+            output.push('\n');
+        }
+        let trimmed = line.trim_start_matches(' ');
+        let marker = trimmed
+            .chars()
+            .take_while(|ch| *ch == '`' || *ch == '~')
+            .collect::<String>();
+        let is_fence_marker = marker.len() >= 3
+            && marker
+                .chars()
+                .all(|ch| ch == marker.chars().next().unwrap_or('`'));
+        if let Some(open) = &fence {
+            if is_fence_marker && marker.starts_with(open.as_str()) {
+                fence = None;
+            }
+            push_escaped_controls(&mut output, line);
+            continue;
+        }
+        if is_fence_marker {
+            fence = Some(marker);
+            push_escaped_controls(&mut output, line);
+            continue;
+        }
+        let mut code_ticks = 0usize;
+        let chars = line.chars().collect::<Vec<_>>();
+        let mut position = 0;
+        while position < chars.len() {
+            let ch = chars[position];
+            if ch == '`' {
+                let run = chars[position..]
+                    .iter()
+                    .take_while(|next| **next == '`')
+                    .count();
+                if code_ticks == 0 {
+                    code_ticks = run;
+                } else if code_ticks == run {
+                    code_ticks = 0;
+                }
+                output.extend(std::iter::repeat_n('`', run));
+                position += run;
+                continue;
+            }
+            match ch {
+                '<' if code_ticks == 0 => output.push_str("&lt;"),
+                '&' if code_ticks == 0 => output.push_str("&amp;"),
+                _ => push_escaped_controls(&mut output, &ch.to_string()),
+            }
+            position += 1;
+        }
+    }
+    output
+}
+
+fn push_escaped_controls(output: &mut String, text: &str) {
+    for ch in text.chars() {
+        if ch.is_control() && ch != '\t' {
+            output.push_str(&format!("\\u{{{:x}}}", ch as u32));
+        } else {
+            output.push(ch);
+        }
+    }
 }
 
 fn builtin_enum_hover(detail: &str, docs: &str) -> String {
@@ -6678,11 +6903,13 @@ fn builtin_enum_variant_completions(base_name: &str) -> Vec<AnalysisCompletion> 
                 name: "Found".to_string(),
                 kind: "variant".to_string(),
                 detail: "Found(own T) -> Lookup".to_string(),
+                documentation: None,
             },
             AnalysisCompletion {
                 name: "Missing".to_string(),
                 kind: "variant".to_string(),
                 detail: "Missing -> Lookup".to_string(),
+                documentation: None,
             },
         ],
         "Poll" => vec![
@@ -6690,11 +6917,13 @@ fn builtin_enum_variant_completions(base_name: &str) -> Vec<AnalysisCompletion> 
                 name: "Ready".to_string(),
                 kind: "variant".to_string(),
                 detail: "Ready(own T) -> Poll".to_string(),
+                documentation: None,
             },
             AnalysisCompletion {
                 name: "Unavailable".to_string(),
                 kind: "variant".to_string(),
                 detail: "Unavailable -> Poll".to_string(),
+                documentation: None,
             },
         ],
         "Result" => vec![
@@ -6702,11 +6931,13 @@ fn builtin_enum_variant_completions(base_name: &str) -> Vec<AnalysisCompletion> 
                 name: "Ok".to_string(),
                 kind: "variant".to_string(),
                 detail: "Ok(own T) -> Result".to_string(),
+                documentation: None,
             },
             AnalysisCompletion {
                 name: "Err".to_string(),
                 kind: "variant".to_string(),
                 detail: "Err(own E) -> Result".to_string(),
+                documentation: None,
             },
         ],
         "SendError" => vec![
@@ -6714,21 +6945,25 @@ fn builtin_enum_variant_completions(base_name: &str) -> Vec<AnalysisCompletion> 
                 name: "Closed".to_string(),
                 kind: "variant".to_string(),
                 detail: "Closed(own T) -> SendError".to_string(),
+                documentation: None,
             },
             AnalysisCompletion {
                 name: "Cancelled".to_string(),
                 kind: "variant".to_string(),
                 detail: "Cancelled(own T) -> SendError".to_string(),
+                documentation: None,
             },
             AnalysisCompletion {
                 name: "TimedOut".to_string(),
                 kind: "variant".to_string(),
                 detail: "TimedOut(own T) -> SendError".to_string(),
+                documentation: None,
             },
             AnalysisCompletion {
                 name: "Full".to_string(),
                 kind: "variant".to_string(),
                 detail: "Full(own T) -> SendError".to_string(),
+                documentation: None,
             },
         ],
         "QueueReceive" => vec![
@@ -6736,21 +6971,25 @@ fn builtin_enum_variant_completions(base_name: &str) -> Vec<AnalysisCompletion> 
                 name: "Item".to_string(),
                 kind: "variant".to_string(),
                 detail: "Item(own T) -> QueueReceive".to_string(),
+                documentation: None,
             },
             AnalysisCompletion {
                 name: "Closed".to_string(),
                 kind: "variant".to_string(),
                 detail: "Closed -> QueueReceive".to_string(),
+                documentation: None,
             },
             AnalysisCompletion {
                 name: "TimedOut".to_string(),
                 kind: "variant".to_string(),
                 detail: "TimedOut -> QueueReceive".to_string(),
+                documentation: None,
             },
             AnalysisCompletion {
                 name: "Cancelled".to_string(),
                 kind: "variant".to_string(),
                 detail: "Cancelled -> QueueReceive".to_string(),
+                documentation: None,
             },
         ],
         "TaskResult" => vec![
@@ -6758,21 +6997,25 @@ fn builtin_enum_variant_completions(base_name: &str) -> Vec<AnalysisCompletion> 
                 name: "Ready".to_string(),
                 kind: "variant".to_string(),
                 detail: "Ready(own T) -> TaskResult".to_string(),
+                documentation: None,
             },
             AnalysisCompletion {
                 name: "Error".to_string(),
                 kind: "variant".to_string(),
                 detail: "Error(own str) -> TaskResult".to_string(),
+                documentation: None,
             },
             AnalysisCompletion {
                 name: "TimedOut".to_string(),
                 kind: "variant".to_string(),
                 detail: "TimedOut -> TaskResult".to_string(),
+                documentation: None,
             },
             AnalysisCompletion {
                 name: "Cancelled".to_string(),
                 kind: "variant".to_string(),
                 detail: "Cancelled -> TaskResult".to_string(),
+                documentation: None,
             },
         ],
         "WaitAny" => vec![
@@ -6780,21 +7023,25 @@ fn builtin_enum_variant_completions(base_name: &str) -> Vec<AnalysisCompletion> 
                 name: "Ready".to_string(),
                 kind: "variant".to_string(),
                 detail: "Ready(own int64, own T) -> WaitAny".to_string(),
+                documentation: None,
             },
             AnalysisCompletion {
                 name: "Error".to_string(),
                 kind: "variant".to_string(),
                 detail: "Error(own int64, own str) -> WaitAny".to_string(),
+                documentation: None,
             },
             AnalysisCompletion {
                 name: "TimedOut".to_string(),
                 kind: "variant".to_string(),
                 detail: "TimedOut -> WaitAny".to_string(),
+                documentation: None,
             },
             AnalysisCompletion {
                 name: "Cancelled".to_string(),
                 kind: "variant".to_string(),
                 detail: "Cancelled -> WaitAny".to_string(),
+                documentation: None,
             },
         ],
         "WaitAll" => vec![
@@ -6802,21 +7049,25 @@ fn builtin_enum_variant_completions(base_name: &str) -> Vec<AnalysisCompletion> 
                 name: "Ready".to_string(),
                 kind: "variant".to_string(),
                 detail: "Ready(own list[T]) -> WaitAll".to_string(),
+                documentation: None,
             },
             AnalysisCompletion {
                 name: "Error".to_string(),
                 kind: "variant".to_string(),
                 detail: "Error(own int64, own str) -> WaitAll".to_string(),
+                documentation: None,
             },
             AnalysisCompletion {
                 name: "TimedOut".to_string(),
                 kind: "variant".to_string(),
                 detail: "TimedOut -> WaitAll".to_string(),
+                documentation: None,
             },
             AnalysisCompletion {
                 name: "Cancelled".to_string(),
                 kind: "variant".to_string(),
                 detail: "Cancelled -> WaitAll".to_string(),
+                documentation: None,
             },
         ],
         "SelectOutcome" => vec![
@@ -6824,21 +7075,25 @@ fn builtin_enum_variant_completions(base_name: &str) -> Vec<AnalysisCompletion> 
                 name: "Queue".to_string(),
                 kind: "variant".to_string(),
                 detail: "Queue(own int64, own QueueReceive[Q]) -> SelectOutcome".to_string(),
+                documentation: None,
             },
             AnalysisCompletion {
                 name: "Task".to_string(),
                 kind: "variant".to_string(),
                 detail: "Task(own int64, own TaskResult[T]) -> SelectOutcome".to_string(),
+                documentation: None,
             },
             AnalysisCompletion {
                 name: "Deadline".to_string(),
                 kind: "variant".to_string(),
                 detail: "Deadline(own int64) -> SelectOutcome".to_string(),
+                documentation: None,
             },
             AnalysisCompletion {
                 name: "Cancelled".to_string(),
                 kind: "variant".to_string(),
                 detail: "Cancelled -> SelectOutcome".to_string(),
+                documentation: None,
             },
         ],
         _ => Vec::new(),
@@ -6865,6 +7120,7 @@ fn builtin_member_completions(receiver_type: &Type) -> Vec<AnalysisCompletion> {
                     name: name.to_string(),
                     kind: "method".to_string(),
                     detail: detail.to_string(),
+                    documentation: None,
                 }),
             );
         }
@@ -6874,87 +7130,104 @@ fn builtin_member_completions(receiver_type: &Type) -> Vec<AnalysisCompletion> {
                     name: "len".to_string(),
                     kind: "method".to_string(),
                     detail: "len() -> int64".to_string(),
+                    documentation: None,
                 },
                 AnalysisCompletion {
                     name: "is_empty".to_string(),
                     kind: "method".to_string(),
                     detail: "is_empty() -> bool".to_string(),
+                    documentation: None,
                 },
                 AnalysisCompletion {
                     name: "copy".to_string(),
                     kind: "method".to_string(),
                     detail: "copy() -> list[T]".to_string(),
+                    documentation: None,
                 },
                 AnalysisCompletion {
                     name: "append".to_string(),
                     kind: "method".to_string(),
                     detail: BuiltinMember::VecPush.detail().to_string(),
+                    documentation: None,
                 },
                 AnalysisCompletion {
                     name: "pop".to_string(),
                     kind: "method".to_string(),
                     detail: "pop(index: int64 = -1) -> T".to_string(),
+                    documentation: None,
                 },
                 AnalysisCompletion {
                     name: "get".to_string(),
                     kind: "method".to_string(),
                     detail: BuiltinMember::VecGet.detail().to_string(),
+                    documentation: None,
                 },
                 AnalysisCompletion {
                     name: "lookup".to_string(),
                     kind: "method".to_string(),
                     detail: "lookup(index: int64) -> Lookup[view T] (match subject only)"
                         .to_string(),
+                    documentation: None,
                 },
                 AnalysisCompletion {
                     name: "set".to_string(),
                     kind: "method".to_string(),
                     detail: BuiltinMember::VecSet.detail().to_string(),
+                    documentation: None,
                 },
                 AnalysisCompletion {
                     name: "remove".to_string(),
                     kind: "method".to_string(),
                     detail: "remove(value: T) -> None".to_string(),
+                    documentation: None,
                 },
                 AnalysisCompletion {
                     name: "swap".to_string(),
                     kind: "method".to_string(),
                     detail: "swap(first: int64, second: int64) -> None".to_string(),
+                    documentation: None,
                 },
                 AnalysisCompletion {
                     name: "insert".to_string(),
                     kind: "method".to_string(),
                     detail: BuiltinMember::VecInsert.detail().to_string(),
+                    documentation: None,
                 },
                 AnalysisCompletion {
                     name: "clear".to_string(),
                     kind: "method".to_string(),
                     detail: "clear() -> None".to_string(),
+                    documentation: None,
                 },
                 AnalysisCompletion {
                     name: "reverse".to_string(),
                     kind: "method".to_string(),
                     detail: "reverse() -> None".to_string(),
+                    documentation: None,
                 },
                 AnalysisCompletion {
                     name: "extend".to_string(),
                     kind: "method".to_string(),
                     detail: BuiltinMember::VecExtend.detail().to_string(),
+                    documentation: None,
                 },
                 AnalysisCompletion {
                     name: "sort".to_string(),
                     kind: "method".to_string(),
                     detail: BuiltinMember::VecSort.detail().to_string(),
+                    documentation: None,
                 },
                 AnalysisCompletion {
                     name: "map".to_string(),
                     kind: "method".to_string(),
                     detail: BuiltinMember::VecMap.detail().to_string(),
+                    documentation: None,
                 },
                 AnalysisCompletion {
                     name: "filter".to_string(),
                     kind: "method".to_string(),
                     detail: BuiltinMember::VecFilter.detail().to_string(),
+                    documentation: None,
                 },
             ]);
         }
@@ -6964,21 +7237,25 @@ fn builtin_member_completions(receiver_type: &Type) -> Vec<AnalysisCompletion> {
                     name: "items".to_string(),
                     kind: "method".to_string(),
                     detail: "items() -> list[(K, V)]".to_string(),
+                    documentation: None,
                 },
                 AnalysisCompletion {
                     name: "lookup".to_string(),
                     kind: "method".to_string(),
                     detail: "lookup(key: K) -> Lookup[view V] (match subject only)".to_string(),
+                    documentation: None,
                 },
                 AnalysisCompletion {
                     name: "clear".to_string(),
                     kind: "method".to_string(),
                     detail: "clear() -> None".to_string(),
+                    documentation: None,
                 },
                 AnalysisCompletion {
                     name: "update".to_string(),
                     kind: "method".to_string(),
                     detail: BuiltinMember::MapExtend.detail().to_string(),
+                    documentation: None,
                 },
             ]);
         }
@@ -6988,21 +7265,25 @@ fn builtin_member_completions(receiver_type: &Type) -> Vec<AnalysisCompletion> {
                     name: "is_empty".to_string(),
                     kind: "method".to_string(),
                     detail: "is_empty() -> bool".to_string(),
+                    documentation: None,
                 },
                 AnalysisCompletion {
                     name: "copy".to_string(),
                     kind: "method".to_string(),
                     detail: "copy() -> set[T]".to_string(),
+                    documentation: None,
                 },
                 AnalysisCompletion {
                     name: "add".to_string(),
                     kind: "method".to_string(),
                     detail: BuiltinMember::SetInsert.detail().to_string(),
+                    documentation: None,
                 },
                 AnalysisCompletion {
                     name: "remove".to_string(),
                     kind: "method".to_string(),
                     detail: "remove(value: T) -> None".to_string(),
+                    documentation: None,
                 },
             ]);
         }
@@ -7230,6 +7511,7 @@ fn builtin_member_completions(receiver_type: &Type) -> Vec<AnalysisCompletion> {
                 name: builtin.name().to_string(),
                 kind: "method".to_string(),
                 detail: builtin.detail().to_string(),
+                documentation: None,
             });
         }
     }
@@ -7260,6 +7542,7 @@ fn builtin_associated_function_completions(type_name: &str) -> Vec<AnalysisCompl
             name: function.name().to_string(),
             kind: "function".to_string(),
             detail: function.detail().to_string(),
+            documentation: None,
         })
         .collect()
 }

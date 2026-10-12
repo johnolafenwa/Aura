@@ -34,6 +34,46 @@ The [CLI manual](../docs/manual/cli-and-tooling.md#formatting) lists every forma
 
 [01-running-programs.md](01-running-programs.md) walks through each command. [crates/aura/README.md](../crates/aura/README.md) is the CLI reference.
 
+## Documenting Code
+
+A docstring is a triple-quoted string as the first statement of a module,
+class, enum, trait, or function. A field docstring goes on the line directly
+after the field. Document parameters under an `Args:` heading:
+
+```aura
+"""Temperature helpers."""
+
+public class Reading:
+    """One sensor sample."""
+
+    public celsius: float64
+    """The temperature in degrees Celsius."""
+
+public def to_fahrenheit(reading: Reading) -> float64:
+    """Convert a reading to degrees Fahrenheit.
+
+    Args:
+        reading: The sample to convert.
+    """
+    return reading.celsius * 9.0 / 5.0 + 32.0
+
+def main():
+    print(to_fahrenheit(Reading(celsius=100.0)))
+```
+
+Docstrings do not run. Editors show them on hover, in completions, and in
+signature help. `aura doc` turns them into one Markdown page per module:
+
+```bash
+cargo run -p aura -- doc examples/modules/pkg/inventory.au
+cargo run -p aura -- doc src --out api        # one file per module
+cargo run -p aura -- doc --json src --out api # JSON instead of Markdown
+```
+
+`examples/modules/documented_api.au` uses the documented module
+`examples/modules/pkg/inventory.au`. [Docstrings And API Docs](../docs/manual/docstrings.md)
+has the full rules.
+
 ## Examples
 
 The `examples/` directory holds runnable programs, sorted by category. Compiler tests run them, so they stay valid as the language changes. Read them alongside these tutorials to see working code for each feature.
@@ -49,7 +89,8 @@ The repository includes two editor packages:
 
 - **Syntax highlighting** for `.au` files.
 - **Completions**, including member completion after `.`.
-- **Hover** that shows types and signatures.
+- **Hover** that shows types, signatures, and docstrings.
+- **Signature help** that shows the docstring and each parameter's `Args:` entry.
 - **Go-to-definition**, including definitions of imported symbols in other files.
 - **Diagnostics** from the compiler's type checker.
 - **Document symbols** for navigation.

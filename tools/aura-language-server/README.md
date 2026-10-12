@@ -32,6 +32,10 @@ Compiler-backed analysis supplies all of these. It also covers:
   shape diagnostics
 - extern C and opaque-handle symbols, hover, definitions, completions, and
   package-authorization diagnostics
+- declaration docstrings: hover shows the normalized docstring after the
+  signature, completion items carry the first docstring line as Markdown
+  documentation, and signature help shows the docstring and each parameter's
+  `Args:` entry
 
 ## Compiler Service
 

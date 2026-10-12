@@ -5,6 +5,12 @@ pub struct AnalysisSignatureHelp {
     pub label: String,
     pub parameters: Vec<String>,
     pub active_parameter: usize,
+    /// The callee's normalized docstring as sanitized Markdown.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub documentation: Option<String>,
+    /// Descriptions from the docstring's `Args:` section, one per parameter.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub parameter_documentation: Vec<Option<String>>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -407,6 +413,34 @@ fn active_call(source: &str, cursor: usize) -> Option<(usize, usize, usize)> {
         .map(|(_, open, count, start)| (open, count, start))
 }
 
+/// The docstring of the declaration a call site invokes. An implementation
+/// method without visible text falls back to its trait method.
+fn callee_doc(
+    builder: &AnalysisBuilder<'_>,
+    callee: &Expr,
+    scope: &BTreeMap<String, BindingInfo>,
+) -> Option<crate::ast::DocString> {
+    if let ExprKind::Member { object, field } = &callee.kind {
+        let receiver = builder.infer_expr_type(object, scope)?;
+        let inherent = matches!(&receiver, Type::Named(name, _)
+            if builder
+                .class_info_for_type_name(name)
+                .is_some_and(|class| class.methods.contains_key(field)));
+        if !inherent {
+            if let Some((trait_impl, method, _)) =
+                builder.trait_method_for_receiver(&receiver, field)
+            {
+                return builder
+                    .implementation_method_doc(trait_impl, &method.decl)
+                    .cloned();
+            }
+        }
+    }
+    builder
+        .returned_view_callee_decl(callee, scope)
+        .and_then(|(declaration, _)| declaration.doc)
+}
+
 fn call_site_contract(
     builder: &AnalysisBuilder<'_>,
     callee: &Expr,
@@ -661,6 +695,26 @@ pub fn signature_help_path_source(
                 .to_owned()
         })
         .collect();
+    let doc = callee_doc(&builder, &callee, &scope);
+    let documentation = doc
+        .as_ref()
+        .and_then(|doc| super::presentation_docstring(&doc.text));
+    let args = doc
+        .as_ref()
+        .map(|doc| crate::ast::docstring_args(&doc.text))
+        .unwrap_or_default();
+    let parameter_documentation = if args.is_empty() {
+        Vec::new()
+    } else {
+        params
+            .iter()
+            .map(|param| {
+                args.iter()
+                    .find(|(name, _)| *name == param.name)
+                    .map(|(_, description)| super::sanitize_doc_markdown(description))
+            })
+            .collect()
+    };
     Some(AnalysisSignatureHelp {
         label: Type::Function {
             params: params.to_vec(),
@@ -669,6 +723,8 @@ pub fn signature_help_path_source(
         .to_string(),
         parameters,
         active_parameter,
+        documentation,
+        parameter_documentation,
     })
 }
 
