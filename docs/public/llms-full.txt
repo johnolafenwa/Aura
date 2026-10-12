@@ -1321,6 +1321,15 @@ safety boundary, diagnostics, and backend rules.
 | `str.strip_prefix` | `strip_prefix(text: str) -> str \| None` | Returns the rest of the string when the prefix matches, or `None` when it does not. An empty rest is a present `""`. |
 | `str.strip_suffix` | `strip_suffix(text: str) -> str \| None` | Returns the rest of the string when the suffix matches, or `None` when it does not. An empty rest is a present `""`. |
 | `str.trim` | `trim() -> str` | Removes leading and trailing Unicode whitespace. |
+| `str.trim_start` | `trim_start() -> str` | Removes leading Unicode whitespace. |
+| `str.trim_end` | `trim_end() -> str` | Removes trailing Unicode whitespace. |
+| `str.split_once` | `split_once(separator: str) -> (str, str) \| None` | Splits at the first occurrence of `separator`. Returns `None` when it is absent. An empty `separator` traps with `AU4003`. |
+| `str.rsplit_once` | `rsplit_once(separator: str) -> (str, str) \| None` | Splits at the last occurrence of `separator`. Returns `None` when it is absent. An empty `separator` traps with `AU4003`. |
+| `str.lines` | `lines() -> list[str]` | Splits at each `\n` and removes one `\r` before each `\n`. A final line terminator adds no empty line. An empty string has no lines. |
+| `str.split_whitespace` | `split_whitespace() -> list[str]` | Splits on runs of Unicode whitespace and drops empty parts. |
+| `str.find` | `find(text: str) -> int64 \| None` | Index of the first occurrence of `text`, counted in Unicode scalar values. O(n). Returns `None` when it is absent. An empty `text` returns `0`. |
+| `str.count` | `count(text: str) -> int64` | Number of non-overlapping occurrences of `text`. An empty `text` traps with `AU4003`. |
+| `str.repeat` | `repeat(count: int64) -> str` | Concatenates `count` copies. A negative `count` traps with `AU4003`. A result above the 64 MiB string limit traps with `AU4005` before it allocates. |
 | `str.join` | `join(parts: list[str]) -> str` | Joins `parts` with the receiver as the separator. |
 | `str.clone` | `clone() -> str` | Returns a new owned string. |
 
@@ -1429,6 +1438,9 @@ up-front output size checks, and the cryptographic scope of SHA-256.
 | `bytes.base64_decode` | `base64_decode(text: str) -> Result[list[uint8], bytes.Error]` | Strict decode of canonical standard-alphabet input. |
 | `bytes.sha256` | `sha256(value: list[uint8]) -> list[uint8]` | Fresh raw 32-byte FIPS 180-4 digest. |
 | `bytes.sha256_string` | `sha256_string(text: str) -> list[uint8]` | SHA-256 of the text's exact UTF-8 bytes. |
+| `bytes.starts_with` | `starts_with(value: list[uint8], prefix: list[uint8]) -> bool` | Tests for a byte prefix. An empty `prefix` matches. |
+| `bytes.ends_with` | `ends_with(value: list[uint8], suffix: list[uint8]) -> bool` | Tests for a byte suffix. An empty `suffix` matches. |
+| `bytes.find` | `find(value: list[uint8], needle: list[uint8]) -> int64 \| None` | Byte index of the first occurrence of `needle`. Returns `None` when it is absent. An empty `needle` returns `0`. |
 
 Every input above uses shared access and stays usable after the call. An
 `encoding` argument is reserved but not implemented. Expanded output that
@@ -1937,13 +1949,13 @@ Design record: `architecture_docs/decisions/0024-assertion-evaluation-and-diagno
 
 # Bytes, Text Codecs, And SHA-256
 
-This page covers byte data, UTF-8 conversion, hexadecimal and base64 codecs,
-and SHA-256 hashing.
+This page covers byte data, UTF-8 conversion, byte search, hexadecimal and
+base64 codecs, and SHA-256 hashing.
 
 Aura represents an owned sequence of bytes as `list[uint8]`. There is no
 separate `Bytes` type and no implicit conversion between text and bytes.
-UTF-8 conversion is a pair of `str` methods. Hexadecimal, base64, and SHA-256
-live in the built-in `bytes` module.
+UTF-8 conversion is a pair of `str` methods. Byte search, hexadecimal, base64,
+and SHA-256 live in the built-in `bytes` module.
 
 ## Public API
 
@@ -1957,6 +1969,9 @@ live in the built-in `bytes` module.
 | `bytes.base64_decode` | `base64_decode(text: str) -> Result[list[uint8], bytes.Error]` | Strict canonical RFC 4648 decoding. |
 | `bytes.sha256` | `sha256(value: list[uint8]) -> list[uint8]` | The raw 32-byte SHA-256 digest of `value`. |
 | `bytes.sha256_string` | `sha256_string(text: str) -> list[uint8]` | The raw SHA-256 digest of the exact UTF-8 bytes of the text. |
+| `bytes.starts_with` | `starts_with(value: list[uint8], prefix: list[uint8]) -> bool` | `true` when `value` begins with `prefix`. |
+| `bytes.ends_with` | `ends_with(value: list[uint8], suffix: list[uint8]) -> bool` | `true` when `value` ends with `suffix`. |
+| `bytes.find` | `find(value: list[uint8], needle: list[uint8]) -> int64 \| None` | The byte index of the first occurrence of `needle`, or `None`. |
 
 The parameter names shown are part of each signature, so you can pass them as
 named arguments. Bare `str` and `list[uint8]` parameters are shared borrows,
@@ -2042,6 +2057,36 @@ a valid prefix while discarding a malformed suffix. On success it keeps the
 byte sequence exactly, including embedded NUL and a leading UTF-8 U+FEFF. So
 when you match `str.from_bytes(text.to_bytes())`, the
 `case Result.Ok(decoded):` branch always has `decoded == text`.
+
+## Byte Search
+
+`bytes.starts_with`, `bytes.ends_with`, and `bytes.find` compare raw bytes.
+They need no UTF-8 and do no normalization:
+
+```aura
+import bytes
+
+def main():
+    packet = "AURA\x00\x01payload".to_bytes()
+    print(bytes.starts_with(packet, "AURA".to_bytes()))
+    print(bytes.ends_with(packet, "load".to_bytes()))
+    match bytes.find(packet, [0, 1]):
+        case None:
+            print("no header end")
+        case int64 as at:
+            print(at)
+```
+
+The program prints `true`, `true`, and `4`.
+
+- An empty `prefix` or `suffix` always matches.
+- `bytes.find` returns the index of the first matching byte, counted in bytes.
+  An empty `needle` is found at index `0`. A `needle` longer than `value`
+  returns `None`.
+- The search runs in time linear in the two lengths.
+- Both arguments are shared borrows. The same list may be passed twice.
+- The text methods `str.starts_with`, `str.ends_with`, and `str.find` do the
+  same jobs for `str`. `str.find` counts Unicode scalar values, not bytes.
 
 ## Hexadecimal
 
@@ -2175,8 +2220,8 @@ Static misuse reports the ordinary name, type, and argument codes, including
 
 ## Backend Support
 
-The MIR and direct backends implement the same UTF-8, hex, base64, and SHA-256
-contract with the same strict codec policy. They must return identical bytes,
+The MIR and direct backends implement the same UTF-8, byte search, hex,
+base64, and SHA-256 contract with the same strict codec policy. They must return identical bytes,
 text, variants, offsets, and runtime diagnostics. The backend-parity fixture
 matrix covers both valid and malformed inputs.
 
@@ -5787,7 +5832,7 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 - Raw strings are single-line. Raw triple strings, raw f-strings, and byte-string literals are not implemented.
 - F-strings use static format specifications. Dynamic width, nested fields, conversion flags, locale formatting, and the `g`, `G`, `n`, `c`, `#`, `0`, and `=` forms are not implemented.
 - `str` has scalar-count `len()`, UTF-8 `byte_len()`, and owned Unicode-scalar slicing. It has no integer indexing, `chars()`, `ord()`, or `chr()`.
-- One concatenated or formatted `str` result is limited to 64 MiB. Aura checks each append before it happens and reports `AU4005` without committing an oversized partial result.
+- One concatenated, formatted, or repeated `str` result is limited to 64 MiB. Aura checks each append before it happens and reports `AU4005` without committing an oversized partial result.
 - `list[uint8]` is the bytes type, and UTF-8 conversion is explicit. The reserved `encoding` argument, non-UTF-8 text codecs, byte-string literals, URL-safe or unpadded base64, streaming codecs, incremental hashes, and HMAC are not implemented.
 
 ### Tuples
@@ -6711,7 +6756,8 @@ proves the error.
 | `AU1002` | A raw or triple-quoted f-string prefix. The guidance names the supported form. |
 | `AU1101` | Malformed static format grammar, nested fields, unsupported codes, or a width or precision above `1_000_000`. |
 | `AU2002` | A valid specification that does not fit the interpolation's static type. |
-| `AU4005` | Constructed string output above the 64 MiB limit. The trap happens before the oversized append changes the partial result. |
+| `AU4003` | An empty separator in `str.split_once` or `str.rsplit_once`, an empty text in `str.count`, or a negative `str.repeat` count. |
+| `AU4005` | Constructed string output above the 64 MiB limit. The trap happens before the oversized append changes the partial result. `str.repeat` checks the full size before it allocates. |
 
 Python allows decimal grouping without an explicit type code, as in
 `f"{n:,}"`. Aura requires the numeric code: use `f"{n:,d}"`, `f"{n:,f}"`, or
@@ -21081,6 +21127,19 @@ Unicode scalar values, and `len()` counts those. A slice such as `s[1:4]`
 gives you an owned copy. Use slices, or operations in the style of
 `s.split("")`, instead of indexing single characters.
 
+**Some string methods have other names.** Aura keeps one naming scheme
+around `trim`, `strip_prefix`, and `starts_with`:
+
+| Python | Aura |
+| --- | --- |
+| `s.lstrip()`, `s.rstrip()` | `s.trim_start()`, `s.trim_end()` |
+| `s.partition(sep)` | `s.split_once(sep)`, which returns `(str, str) \| None` |
+| `s.rpartition(sep)` | `s.rsplit_once(sep)` |
+| `s.splitlines()` | `s.lines()`, which splits at `\n` and `\r\n` only |
+| `s.split()` | `s.split_whitespace()` |
+| `s.find(sub)` | `s.find(sub)`, which returns `int64 \| None` instead of `-1` |
+| `s * n` | `s.repeat(n)` |
+
 **`is` only tests for `None`.** `value is None` and `value is not None` check
 an optional `T | None` and narrow it. There is no identity comparison between
 arbitrary values.
@@ -26292,6 +26351,53 @@ parts = ["aura", "lang", "tests"]
 print("-".join(parts))    # "aura-lang-tests"
 ```
 
+### Splitting, Searching, And Repeating
+
+These methods cover most line-oriented parsing. Each one reads the receiver
+and returns fresh values:
+
+```aura check-pass
+config = "name = aura\nmode = fast\n"
+for line in config.lines():
+    pair = line.split_once("=")
+    if pair is not None:
+        key, value = pair
+        print(key.trim_end() + ":" + value.trim_start())
+```
+
+This prints `name:aura` and `mode:fast`.
+
+- `lines()` splits at `\n` and removes one `\r` before each `\n`. A final
+  line terminator adds no empty line.
+- `split_once(separator)` splits at the first occurrence and returns
+  `(str, str) | None`. `rsplit_once(separator)` splits at the last one.
+- `trim_start()` and `trim_end()` remove Unicode whitespace from one side.
+- `split_whitespace()` splits on runs of whitespace and drops empty parts.
+
+`find(text)` returns the position of the first match, counted in Unicode
+scalar values like `len()` and slices. It returns `None` when there is no
+match. `count(text)` counts non-overlapping matches, and `repeat(count)`
+concatenates copies:
+
+```aura check-pass
+sentence = "the quick brown fox"
+print(sentence.count("o"))    # 2
+print("=".repeat(5))          # =====
+match sentence.find("fox"):
+    case int64 as at:
+        print(sentence[at:])  # fox
+    case None:
+        print("missing")
+```
+
+An empty separator in `split_once` or `rsplit_once`, an empty text in
+`count`, and a negative `repeat` count trap with `AU4003`. A `repeat` result
+above the 64 MiB string limit traps with `AU4005`.
+
+See [examples/strings/text_parsing.au](../examples/strings/text_parsing.au).
+
+### Copying Strings
+
 `clone()` creates an independent copy of a string.
 [06-ownership-and-borrowing.md](06-ownership-and-borrowing.md) explains why
 this matters.
@@ -30642,6 +30748,24 @@ bytes.sha256("café".to_bytes())
 SHA-256 is a digest. It is not encryption, a password hash, a signature, a
 message-authentication code, or random data. When you need one of those
 properties, use a cryptographic construction built for it.
+
+## Search Raw Bytes
+
+`bytes.starts_with`, `bytes.ends_with`, and `bytes.find` work on any
+`list[uint8]`, whether or not it holds UTF-8:
+
+```aura check-pass
+import bytes
+
+packet: list[uint8] = [65, 85, 82, 65, 0, 1, 7]
+print(bytes.starts_with(packet, "AURA".to_bytes()))
+print(bytes.ends_with(packet, [1, 7]))
+print(bytes.find(packet, [0, 1]) == 4)
+```
+
+This prints `true` three times. `bytes.find` returns `int64 | None`: the byte
+index of the first match, or `None` when the needle does not occur. An empty
+needle is found at index `0`.
 
 ## Typed Data Errors And Runtime Failures
 
