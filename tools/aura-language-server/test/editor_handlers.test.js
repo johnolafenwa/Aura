@@ -8,7 +8,7 @@ function harness(response) {
   const calls = [];
   const document = { version: 1, getText: () => "source" };
   const documents = new Map([["file:///tmp/main.au", document]]);
-  const connection = Object.fromEntries(["onSignatureHelp", "onReferences", "onPrepareRename", "onRenameRequest"].map(name => [name, handler => { handlers[name] = handler; }]));
+  const connection = Object.fromEntries(["onSignatureHelp", "onReferences", "onPrepareRename", "onRenameRequest", "onDocumentFormatting"].map(name => [name, handler => { handlers[name] = handler; }]));
   registerEditorHandlers(connection, documents, async (...args) => { calls.push(args); return typeof response === "function" ? response() : response; });
   return { handlers, calls, document, documents };
 }
@@ -17,7 +17,7 @@ const range = { line: 2, start_character: 3, end_character: 8 };
 const lspRange = { start: { line: 2, character: 3 }, end: { line: 2, character: 8 } };
 
 test("compiler-owned editor capabilities and signature conversion", async () => {
-  assert.deepEqual(editorCapabilities, { signatureHelpProvider: { triggerCharacters: ["(", ",", "="] }, referencesProvider: true, renameProvider: { prepareProvider: true } });
+  assert.deepEqual(editorCapabilities, { signatureHelpProvider: { triggerCharacters: ["(", ",", "="] }, referencesProvider: true, renameProvider: { prepareProvider: true }, documentFormattingProvider: true });
   const h = harness({ label: "def(value: int64) -> int64", parameters: ["value: int64"], active_parameter: 0 });
   assert.deepEqual(await h.handlers.onSignatureHelp(params), { signatures: [{ label: "def(value: int64) -> int64", parameters: [{ label: "value: int64" }] }], activeSignature: 0, activeParameter: 0 });
   assert.equal(h.calls[0][0], "signature-help");
@@ -52,4 +52,38 @@ test("each handler discards missing, cancelled, stale, closed, and refused reque
     h = harness(() => { h.documents.clear(); return {}; });
     assert.deepEqual(await h.handlers[name](params), empty);
   }
+});
+
+test("whole-document formatting replaces the full text with compiler output", async () => {
+  let h = harness({ formatted: "def main() -> None:\n    pass\n" });
+  h.document.getText = () => "def main() -> None:\n  pass\n";
+  assert.deepEqual(await h.handlers.onDocumentFormatting({ textDocument: params.textDocument }), [{
+    range: { start: { line: 0, character: 0 }, end: { line: 2, character: 0 } },
+    newText: "def main() -> None:\n    pass\n"
+  }]);
+  assert.equal(h.calls[0][0], "format");
+  assert.deepEqual(h.calls[0][3], {});
+  h = harness({ formatted: "x = 1\n" });
+  h.document.getText = () => "x  =  1";
+  assert.deepEqual((await h.handlers.onDocumentFormatting({ textDocument: params.textDocument }))[0].range.end, { line: 0, character: 7 });
+});
+
+test("formatting returns no edits for unchanged, refused, stale, or cancelled requests", async () => {
+  const request = { textDocument: params.textDocument };
+  let h = harness({ formatted: "source" });
+  assert.deepEqual(await h.handlers.onDocumentFormatting(request), []);
+  h = harness({ formatted: null, error: "syntax error" });
+  assert.deepEqual(await h.handlers.onDocumentFormatting(request), []);
+  h = harness(null);
+  assert.deepEqual(await h.handlers.onDocumentFormatting(request), []);
+  h.documents.clear();
+  assert.deepEqual(await h.handlers.onDocumentFormatting(request), []);
+  h = harness({ formatted: "other" });
+  assert.deepEqual(await h.handlers.onDocumentFormatting(request, { isCancellationRequested: true }), []);
+  assert.equal(h.calls.length, 0);
+  const token = { isCancellationRequested: false };
+  h = harness(() => { token.isCancellationRequested = true; return { formatted: "other" }; });
+  assert.deepEqual(await h.handlers.onDocumentFormatting(request, token), []);
+  h = harness(() => { h.document.version += 1; return { formatted: "other" }; });
+  assert.deepEqual(await h.handlers.onDocumentFormatting(request), []);
 });

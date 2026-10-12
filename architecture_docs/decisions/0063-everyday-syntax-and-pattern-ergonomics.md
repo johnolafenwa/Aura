@@ -2,8 +2,10 @@
 
 - Status: Accepted; detailed design ratified in the [Batch 4 design checkpoint](../18-batch-4-design-checkpoint.md)
 - Date: 2026-09-06
-- Implementation: Trailing commas and parenthesized imports implemented; unpacking, patterns, and text/byte conveniences in progress
+- Implementation: Trailing commas, parenthesized imports, and text and byte
+  conveniences implemented; unpacking and patterns in progress
 - Roadmap: Batch 4
+- Formatter: Implemented as specified in [checkpoint section F](../18-batch-4-design-checkpoint.md#f-syntax-reflowing-formatter)
 - Extends: ADR-0025, ADR-0026, ADR-0049, and ADR-0051
 - Related: ADR-0044, ADR-0046, ADR-0052, ADR-0059, and ADR-0061
 

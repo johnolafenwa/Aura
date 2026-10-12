@@ -8854,6 +8854,27 @@ fn build_with_direct_backend_supports_string_methods_example() {
 }
 
 #[test]
+fn run_and_direct_backend_agree_on_text_parsing_example() {
+    let expected = "Requests\n--------\nGET  /index.html   200 html\nPOST /api/items    201 (none)\nskipped: broken\nGET  /logo.png     404 png\nContent-Type = text/plain; charset=utf-8\nutf-8\n2\n68656c6c6f\ntrue\n";
+    let run = Command::new(aura_bin())
+        .args(["run", "--backend", "mir"])
+        .arg(repo_root().join("examples/strings/text_parsing.au"))
+        .output()
+        .expect("failed to run aura run --backend mir on the text parsing example");
+    assert!(
+        run.status.success(),
+        "MIR run of the text parsing example failed:\n{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&run.stdout), expected);
+    assert_direct_backend_example_runs(
+        "examples/strings/text_parsing.au",
+        "text-parsing-direct",
+        expected,
+    );
+}
+
+#[test]
 fn build_with_auto_backend_falls_back_for_rich_match_example() {
     let fixture = repo_root().join("examples/enums/rich_match.au");
     let output_dir = TempDir::new("aura-build-auto-rich-match");
@@ -15579,4 +15600,160 @@ fn failed_factories_release_builtin_file_handles_on_both_backends() {
         String::from_utf8_lossy(&native.stderr)
     );
     assert_eq!(String::from_utf8_lossy(&native.stdout), "300\n");
+}
+
+fn run_fmt_stdin(args: &[&str], input: &str) -> std::process::Output {
+    let mut child = Command::new(aura_bin())
+        .arg("fmt")
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to start aura fmt");
+    // A rejected invocation may exit before it reads its input.
+    let _ = child
+        .stdin
+        .take()
+        .expect("fmt stdin should be piped")
+        .write_all(input.as_bytes());
+    child.wait_with_output().expect("aura fmt should exit")
+}
+
+#[test]
+fn fmt_stdin_writes_formatted_source_to_stdout() {
+    let output = run_fmt_stdin(
+        &["--stdin"],
+        "def scale(value:int32,factor:int32=2)->int32:\n  return value*factor\ndef main()->None:\n  print(scale(\n      4,\n      factor = 3))\n",
+    );
+    assert!(
+        output.status.success(),
+        "aura fmt --stdin should succeed, stderr was:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        "def scale(value: int32, factor: int32 = 2) -> int32:\n    return value * factor\n\n\ndef main() -> None:\n    print(scale(4, factor=3))\n"
+    );
+
+    let unchanged = run_fmt_stdin(&["--stdin", "--check"], "print(1)\n");
+    assert!(unchanged.status.success());
+    assert!(unchanged.stdout.is_empty());
+    let changed = run_fmt_stdin(&["--check", "--stdin"], "print( 1 )\n");
+    assert!(!changed.status.success());
+    assert!(changed.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&changed.stderr).contains("would format `<stdin>`"));
+}
+
+#[test]
+fn fmt_rejects_invalid_source_and_stdin_paths_without_writing() {
+    let invalid = run_fmt_stdin(&["--stdin"], "def main(:\n");
+    assert_eq!(invalid.status.code(), Some(1));
+    assert!(invalid.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&invalid.stderr).contains("<stdin>"));
+
+    let with_path = run_fmt_stdin(&["--stdin", "main.au"], "print(1)\n");
+    assert_eq!(with_path.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&with_path.stderr).contains("does not take source paths"));
+
+    let temp = TempDir::new("aura-fmt-invalid");
+    let path = temp.path().join("broken.au");
+    let source = "def main(:\n    print( 1 )\n";
+    fs::write(&path, source).expect("invalid source should write");
+    let output = Command::new(aura_bin())
+        .args([
+            "fmt",
+            path.to_str().expect("temporary path should be UTF-8"),
+        ])
+        .output()
+        .expect("failed to run aura fmt");
+    assert_eq!(output.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("broken.au"));
+    assert_eq!(fs::read_to_string(&path).unwrap(), source);
+}
+
+#[test]
+fn fmt_reflows_long_calls_in_files() {
+    let temp = TempDir::new("aura-fmt-reflow");
+    let path = temp.path().join("reflow.au");
+    fs::write(
+        &path,
+        "def main() -> None:\n    print(\"the first argument value\", \"the second argument value\", \"the third argument value here\")\n",
+    )
+    .expect("source should write");
+    let output = Command::new(aura_bin())
+        .args([
+            "fmt",
+            path.to_str().expect("temporary path should be UTF-8"),
+        ])
+        .output()
+        .expect("failed to run aura fmt");
+    assert!(output.status.success());
+    assert_eq!(
+        fs::read_to_string(&path).unwrap(),
+        "def main() -> None:\n    print(\n        \"the first argument value\",\n        \"the second argument value\",\n        \"the third argument value here\",\n    )\n"
+    );
+    let check = Command::new(aura_bin())
+        .args(["fmt", "--check", path.to_str().unwrap()])
+        .output()
+        .expect("failed to run aura fmt --check");
+    assert!(
+        check.status.success(),
+        "formatted output should pass --check"
+    );
+}
+
+#[test]
+fn lsp_service_formats_whole_documents() {
+    let mut child = Command::new(aura_bin())
+        .arg("lsp")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to start aura lsp service");
+    let input = [
+        serde_json::json!({
+            "id": 1,
+            "semantic_interface_version": aura_compiler::SEMANTIC_INTERFACE_SCHEMA_VERSION,
+            "method": "format",
+            "path": "/virtual/main.au",
+            "source": "def main()->None:\n  print( 1 )\n"
+        }),
+        serde_json::json!({
+            "id": 2,
+            "semantic_interface_version": aura_compiler::SEMANTIC_INTERFACE_SCHEMA_VERSION,
+            "method": "format",
+            "path": "/virtual/main.au",
+            "source": "def main(:\n"
+        }),
+    ]
+    .into_iter()
+    .map(|request| request.to_string())
+    .collect::<Vec<_>>()
+    .join("\n");
+    child
+        .stdin
+        .take()
+        .expect("lsp stdin should be piped")
+        .write_all(format!("{input}\n").as_bytes())
+        .expect("lsp requests should write");
+    let output = child
+        .wait_with_output()
+        .expect("lsp service should exit after stdin closes");
+    assert!(output.status.success());
+    let responses = String::from_utf8(output.stdout)
+        .expect("lsp responses should be utf-8")
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).expect("valid response JSON"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        responses[0]["result"]["formatted"],
+        "def main() -> None:\n    print(1)\n"
+    );
+    assert!(responses[1]["result"]["formatted"].is_null());
+    assert!(responses[1]["result"]["error"]
+        .as_str()
+        .expect("syntax errors are reported as text")
+        .contains("/virtual/main.au"));
 }

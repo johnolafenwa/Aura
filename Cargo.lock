@@ -45,6 +45,7 @@ dependencies = [
  "httparse",
  "libc",
  "libffi",
+ "memchr",
  "mio",
  "rcgen",
  "rustls",

@@ -33,7 +33,8 @@ aura check app.au
 | `aura complete --line N --character C --trigger . file.au` | Emit completion items. |
 | `aura deps update [name]` | Refresh all git dependencies or one named dependency. |
 | `aura new path` | Create `Aura.toml` and `src/main.au` without overwriting an existing path. |
-| `aura fmt [--check] [paths...]` | Normalize Aura source whitespace or verify formatting. |
+| `aura fmt [--check] [paths...]` | Format Aura source files in place, or report files that would change. |
+| `aura fmt --stdin [--check]` | Format standard input to standard output. |
 | `aura test [-k substring] [--format json] [--timeout-ms N] [paths...]` | Discover package-aware `.au` tests, select canonical case names, and report one result per case. Defaults to `tests/` and a 30-second per-case timeout. |
 | `aura upgrade` | Download and run the verified installer to replace the compiler and bundled runtime with the latest published release. |
 | `aura lsp` | Run the persistent JSON-lines compiler service used by the language server. |
@@ -297,6 +298,65 @@ A broken stdout pipe is a deliberate clean termination and exits `0`. This
 lets commands feed consumers such as `head` without printing a secondary
 failure.
 
+## Formatting
+
+`aura fmt` rewrites each `.au` file in the given paths into one canonical
+layout. With no path it formats the current directory. `--check` writes
+nothing and lists each file that would change. `--stdin` formats standard
+input and writes the result to standard output.
+
+```bash
+aura fmt src
+aura fmt --check .
+aura fmt --stdin < src/main.au
+```
+
+The formatter works on tokens. It applies these rules:
+
+| Rule | Behavior |
+| --- | --- |
+| Indentation | Four spaces per block level. |
+| Spacing | One space around binary operators, after a comma, and after a colon in annotations, dictionary entries, and block headers. No space inside brackets, before a comma, before a call or index bracket, or in a slice. |
+| Defaults and keywords | No space around `=` in a keyword argument. A parameter default after a type annotation keeps one space on each side. |
+| Blank lines | At most two blank lines at module level and one inside a body. Two blank lines separate top-level declarations. No blank line starts a body or ends the file. |
+| Reflow | A statement that fits in 88 columns goes on one line. A longer statement breaks its outermost bracket first and puts each element on its own line, indented one level. A list of two or more elements then ends with a trailing comma. A comprehension stays one element. Breaking repeats inward until each line fits. A signature breaks its parameter list before its result type. |
+| Magic trailing comma | A bracketed list written with a trailing comma stays one element per line, even when it would fit. A one-element tuple such as `(x,)` is not affected. |
+| Comments | A comment stays on the line it started on. A comment inside a bracketed list keeps that list one element per line. |
+| Literals | String, f-string, raw string, triple-quoted, and number literals keep their exact source text, including docstrings. |
+
+This input:
+
+```aura
+def scale(value:int32,factor:int32=2)->int32:
+  return value*factor
+def main()->None:
+  print(scale(
+      4,
+      factor = 3))
+```
+
+formats to:
+
+```aura
+def scale(value: int32, factor: int32 = 2) -> int32:
+    return value * factor
+
+
+def main() -> None:
+    print(scale(4, factor=3))
+```
+
+A statement without brackets cannot break, so it stays long. A `match`
+expression written in block form inside brackets keeps its original lines,
+shifted to the new indentation. Line endings become `\n`, and the file ends
+with one newline.
+
+The formatter accepts only source that parses. A syntax error is reported
+with its usual diagnostic, and the file is left unchanged. After formatting,
+the formatter lexes and parses its own output. The result must have the same
+tokens as the input, ignoring layout. If it does not, the command reports an
+internal formatter error and writes nothing.
+
 ## Testing
 
 `aura test` finds test cases, runs each one, and reports one result per case.
@@ -418,8 +478,8 @@ assertions.
 ## VS Code And LSP
 
 The VS Code extension keeps one persistent `aura lsp` process. It provides
-diagnostics, symbols, hover, go-to-definition, and completions through the
-Language Server Protocol (LSP). Requests are debounced, cancellable,
+diagnostics, symbols, hover, go-to-definition, completions, and whole-document
+formatting through the Language Server Protocol (LSP). Requests are debounced, cancellable,
 version-guarded, and invalidated by dependency.
 
 If the compiler process cannot start, a small lexical recovery layer provides
@@ -437,6 +497,10 @@ Ordinary parameter signatures keep their bare, `own`, and `mut` spelling.
 Built-in hover and completion detail shows retained-value contracts such as
 `list.append(value: own T)`. Class field and enum payload completion detail
 renders their implicit constructor ownership as `own`.
+
+Formatting uses the same rules as [`aura fmt`](#formatting). Run the editor's
+Format Document command, or set `"editor.formatOnSave": true` for Aura files
+to format on save. A buffer with a syntax error is left unchanged.
 
 Useful repository commands:
 
@@ -798,8 +862,7 @@ MIR-specific frame-note masking.
   runtime layout described above.
 - `ast`, `ast-json`, and `mir` are inspection formats, not stable
   serialization APIs.
-- The formatter normalizes the maintained whitespace surface. It is not a
-  configurable style engine.
+- The formatter has one fixed style and no configuration.
 - `aura test` discovers tests by the `test_` name prefix, not by annotation.
 - A timed-out test worker cannot be forcibly stopped inside the CLI process.
 

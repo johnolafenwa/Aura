@@ -1,12 +1,12 @@
 # Bytes, Text Codecs, And SHA-256
 
-This page covers byte data, UTF-8 conversion, hexadecimal and base64 codecs,
-and SHA-256 hashing.
+This page covers byte data, UTF-8 conversion, byte search, hexadecimal and
+base64 codecs, and SHA-256 hashing.
 
 Aura represents an owned sequence of bytes as `list[uint8]`. There is no
 separate `Bytes` type and no implicit conversion between text and bytes.
-UTF-8 conversion is a pair of `str` methods. Hexadecimal, base64, and SHA-256
-live in the built-in `bytes` module.
+UTF-8 conversion is a pair of `str` methods. Byte search, hexadecimal, base64,
+and SHA-256 live in the built-in `bytes` module.
 
 ## Public API
 
@@ -20,6 +20,9 @@ live in the built-in `bytes` module.
 | `bytes.base64_decode` | `base64_decode(text: str) -> Result[list[uint8], bytes.Error]` | Strict canonical RFC 4648 decoding. |
 | `bytes.sha256` | `sha256(value: list[uint8]) -> list[uint8]` | The raw 32-byte SHA-256 digest of `value`. |
 | `bytes.sha256_string` | `sha256_string(text: str) -> list[uint8]` | The raw SHA-256 digest of the exact UTF-8 bytes of the text. |
+| `bytes.starts_with` | `starts_with(value: list[uint8], prefix: list[uint8]) -> bool` | `true` when `value` begins with `prefix`. |
+| `bytes.ends_with` | `ends_with(value: list[uint8], suffix: list[uint8]) -> bool` | `true` when `value` ends with `suffix`. |
+| `bytes.find` | `find(value: list[uint8], needle: list[uint8]) -> int64 \| None` | The byte index of the first occurrence of `needle`, or `None`. |
 
 The parameter names shown are part of each signature, so you can pass them as
 named arguments. Bare `str` and `list[uint8]` parameters are shared borrows,
@@ -105,6 +108,36 @@ a valid prefix while discarding a malformed suffix. On success it keeps the
 byte sequence exactly, including embedded NUL and a leading UTF-8 U+FEFF. So
 when you match `str.from_bytes(text.to_bytes())`, the
 `case Result.Ok(decoded):` branch always has `decoded == text`.
+
+## Byte Search
+
+`bytes.starts_with`, `bytes.ends_with`, and `bytes.find` compare raw bytes.
+They need no UTF-8 and do no normalization:
+
+```aura
+import bytes
+
+def main():
+    packet = "AURA\x00\x01payload".to_bytes()
+    print(bytes.starts_with(packet, "AURA".to_bytes()))
+    print(bytes.ends_with(packet, "load".to_bytes()))
+    match bytes.find(packet, [0, 1]):
+        case None:
+            print("no header end")
+        case int64 as at:
+            print(at)
+```
+
+The program prints `true`, `true`, and `4`.
+
+- An empty `prefix` or `suffix` always matches.
+- `bytes.find` returns the index of the first matching byte, counted in bytes.
+  An empty `needle` is found at index `0`. A `needle` longer than `value`
+  returns `None`.
+- The search runs in time linear in the two lengths.
+- Both arguments are shared borrows. The same list may be passed twice.
+- The text methods `str.starts_with`, `str.ends_with`, and `str.find` do the
+  same jobs for `str`. `str.find` counts Unicode scalar values, not bytes.
 
 ## Hexadecimal
 
@@ -238,8 +271,8 @@ Static misuse reports the ordinary name, type, and argument codes, including
 
 ## Backend Support
 
-The MIR and direct backends implement the same UTF-8, hex, base64, and SHA-256
-contract with the same strict codec policy. They must return identical bytes,
+The MIR and direct backends implement the same UTF-8, byte search, hex,
+base64, and SHA-256 contract with the same strict codec policy. They must return identical bytes,
 text, variants, offsets, and runtime diagnostics. The backend-parity fixture
 matrix covers both valid and malformed inputs.
 

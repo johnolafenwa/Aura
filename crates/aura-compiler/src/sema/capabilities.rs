@@ -493,6 +493,23 @@ impl<'a> FunctionChecker<'a> {
         Ok(())
     }
 
+    /// A tuple, list, set, or dict literal always builds a fresh owned
+    /// aggregate, so evaluating it moves each element into that aggregate.
+    /// The move happens when the literal is evaluated, whatever the context
+    /// then does with the aggregate. A literal passed to a shared position
+    /// such as `print((pair, 2))`, `len([text])`, an f-string, or an
+    /// equality operand still consumes `pair` and `text`, exactly as both
+    /// backends lower it. Consuming here, in evaluation order, keeps the
+    /// checker in agreement with them. An owned context later replays the
+    /// literal from its pre-evaluation state, which repeats the same moves.
+    pub(super) fn consume_aggregate_literal_element(
+        &self,
+        element: &Expr,
+        locals: &mut HashMap<String, LocalBinding>,
+    ) -> Result<()> {
+        self.consume_value_expr(element, locals)
+    }
+
     /// Consumes an ordinary value produced in a read-only context without
     /// mistaking a direct view read for ownership transfer of its descriptor.
     /// Capability validation runs before this helper; mutable returned

@@ -1,0 +1,5 @@
+error[AU2002]: `repeat` expects `int64`, found `str`
+ --> crates/aura-compiler/tests/fixtures/check-fail/text_repeat_count_type.au:2:23
+  |
+2 |     print("ab".repeat("3"))
+  |                       ^

@@ -5,6 +5,7 @@ pub(crate) mod bytes_codec;
 pub mod call;
 pub mod diag;
 pub mod ffi;
+pub mod format;
 pub mod integer;
 pub(crate) mod json_codec;
 pub mod lexer;
@@ -20,6 +21,7 @@ pub(crate) mod runtime_config;
 mod runtime_reactor;
 pub mod runtime_value;
 pub mod sema;
+pub(crate) mod text_methods;
 pub mod union_layout;
 pub(crate) mod union_runtime;
 

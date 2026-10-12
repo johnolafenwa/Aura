@@ -69,12 +69,21 @@ A non-copy value is consumed when it is used in an owned position. Owned positio
 - assignment into a new owned binding
 - an `own` function parameter or an `own self` method receiver
 - a by-value return
-- a class or enum payload, collection literal, mutating collection method, or
-  simple dict indexed assignment that stores the value
+- a class or enum payload, tuple or collection literal, mutating collection
+  method, or simple dict indexed assignment that stores the value
 - by-value enum matching
 - `own` iteration over `list[T]` or `set[T]`
 - the resource expression of `with`
 - a task-start argument copied or moved into task-owned capture storage
+
+A tuple or collection literal builds a new owned value, so it moves its non-copy elements wherever it appears. This holds when the literal itself goes to a shared position, such as a `print` or `len` argument, an f-string, an equality operand, or a bare parameter. Clone the element when the original must stay usable.
+
+```aura check-fail:AU3001
+def main():
+    pair = (1, "x")
+    print((pair, 2))
+    print(pair)
+```
 
 Aura evaluates an expression before it records the move at that boundary. It rejects an expression that tries to borrow and move overlapping places in incompatible subexpressions.
 

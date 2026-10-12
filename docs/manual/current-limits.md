@@ -43,7 +43,7 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 - Raw strings are single-line. Raw triple strings, raw f-strings, and byte-string literals are not implemented.
 - F-strings use static format specifications. Dynamic width, nested fields, conversion flags, locale formatting, and the `g`, `G`, `n`, `c`, `#`, `0`, and `=` forms are not implemented.
 - `str` has scalar-count `len()`, UTF-8 `byte_len()`, and owned Unicode-scalar slicing. It has no integer indexing, `chars()`, `ord()`, or `chr()`.
-- One concatenated or formatted `str` result is limited to 64 MiB. Aura checks each append before it happens and reports `AU4005` without committing an oversized partial result.
+- One concatenated, formatted, or repeated `str` result is limited to 64 MiB. Aura checks each append before it happens and reports `AU4005` without committing an oversized partial result.
 - `list[uint8]` is the bytes type, and UTF-8 conversion is explicit. The reserved `encoding` argument, non-UTF-8 text codecs, byte-string literals, URL-safe or unpadded base64, streaming codecs, incremental hashes, and HMAC are not implemented.
 
 ### Tuples
@@ -274,7 +274,7 @@ These figures come from the clean Mac14,9 measurement at `181204b`.
 - The direct backend is the maintained native backend for the implemented language surface.
 - The default `--backend auto` first tries direct emission. It may package an embedded-MIR launcher when direct emission is unavailable. Use `--backend direct` when fallback is unacceptable.
 - Editor tooling uses a persistent compiler service. If that process is unavailable, recovery is lexical only, with no semantic diagnostics or member inference.
-- `aura fmt` normalizes line endings, trailing whitespace, and final newlines. It is not a syntax-reflowing formatter.
+- `aura fmt` has one fixed style with an 88-column width and no configuration. A statement without brackets cannot break, so it may stay longer than 88 columns.
 - `aura test` discovers each parameterless `def test_*()` function as a separate result. A file with no such function still runs as one file-level test.
 - Optional `setup()` and `teardown()` run for each selected case. Teardown runs even after a setup or body failure.
 - Parameterized registration returns labeled capture-free `def() -> None` values in `list[(str, def() -> None)]`. Registration runs before `-k` filtering.

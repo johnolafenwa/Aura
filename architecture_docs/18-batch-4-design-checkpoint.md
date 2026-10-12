@@ -238,8 +238,13 @@ method reads a shared receiver and returns fresh owned values.
 | `bytes.find` | `find(value: list[uint8], needle: list[uint8]) -> int64 \| None` | Byte index of the first occurrence. |
 
 - An empty `separator` in `split_once` and `rsplit_once` traps with
-  `AU4003`, the same as `split("")`. An empty `text` in `count` traps with
-  `AU4003`. An empty `text` in `find` returns `0`.
+  `AU4003`. An empty `text` in `count` traps with `AU4003`. An empty `text`
+  in `find` returns `0`. Implementation note: the ratified text said this
+  matches `split("")`, but the existing `split("")` does not trap; it returns
+  the empty pieces around every scalar. `split` is left unchanged, and the
+  new empty-separator traps stand on their own.
+- `bytes.find` with an empty `needle` returns `0`. An empty `prefix` or
+  `suffix` always matches. The byte search is linear in the two lengths.
 - `repeat` with a negative count traps with `AU4003`. A result above the
   64 MiB string limit traps with `AU4005` before allocating.
 - Indexes are `int64`. `str.find` is O(n) in scalar values, matching
@@ -402,6 +407,32 @@ and properties, and MIR/direct parity.
 formats standard input to standard output. The language server provides
 whole-document formatting by calling `aura fmt --stdin`, and the VS Code
 extension enables format-on-save through the standard editor setting.
+
+**Implementation notes.** The implementation settles these details:
+
+- A parameter default after a type annotation keeps one space on each side
+  of `=`, as in `factor: int32 = 2`. Every maintained example and manual page
+  uses that spelling. A keyword argument and an unannotated default use no
+  spaces.
+- When no bracket must break, reflow picks the rightmost bracket whose
+  opening and closing lines both fit. A bracket after `->` is tried last, so
+  a signature breaks its parameter list before its result type.
+- A block-form `match` expression inside brackets keeps its original lines,
+  shifted to the new indentation, because its indentation is significant.
+  A comment that cannot stay at the end of its line in the new layout also
+  keeps the statement's original lines.
+- An exploded list with two or more elements ends with a trailing comma. A
+  comprehension lays out as one element and never gains one, because its
+  commas separate loop targets. A one-element tuple `(x,)` is not a magic
+  trailing comma.
+- Trailing spaces and tabs outside multi-line strings are removed before the
+  input is lexed, so a stray trailing tab is fixed rather than rejected.
+- The safety check compares every token, including `Newline`, `Indent`, and
+  `Dedent`, and ignores spans. A comma directly before a closing bracket is
+  ignored unless it makes a one-element tuple.
+- The language server asks the persistent `aura lsp` compiler service with a
+  `format` method instead of starting `aura fmt --stdin`. Both run the same
+  formatter.
 
 **Alternatives.** An AST pretty-printer was rejected because the AST drops
 comments and the exact spelling of literals. A width of 100 was considered;

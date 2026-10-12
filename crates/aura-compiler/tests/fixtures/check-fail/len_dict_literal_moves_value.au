@@ -1,0 +1,5 @@
+def main():
+    name = "aura"
+    count = len({1: name})
+    print(count)
+    print(name)

@@ -876,3 +876,60 @@ test("bundled language server preserves numeric Array hover completion and diagn
     "numeric Array editor requests must not crash the bundled server"
   );
 });
+
+test(
+  "bundled language server formats a whole document through the compiler",
+  { skip: process.platform === "win32" },
+  async (t) => {
+    const serverPath = process.env.AURA_EXTENSION_SERVER_PATH
+      ? path.resolve(process.env.AURA_EXTENSION_SERVER_PATH)
+      : path.resolve(__dirname, "..", "dist", "server.js");
+    assert.equal(fs.existsSync(serverPath), true, `language server bundle not found: ${serverPath}`);
+
+    const temp = fs.mkdtempSync(path.join(require("node:os").tmpdir(), "aura-lsp-format-"));
+    t.after(() => fs.rmSync(temp, { recursive: true, force: true }));
+    const fakeAura = path.join(temp, "aura");
+    fs.writeFileSync(
+      fakeAura,
+      `#!${process.execPath}\n` +
+        `"use strict";\n` +
+        `const readline = require("node:readline");\n` +
+        `readline.createInterface({ input: process.stdin }).on("line", (line) => {\n` +
+        `  const request = JSON.parse(line);\n` +
+        `  const result = request.method === "format"\n` +
+        `    ? { formatted: request.source.replace("x=1", "x = 1") }\n` +
+        `    : request.method === "analyze" ? { diagnostics: [], symbols: [], occurrences: [] } : [];\n` +
+        `  process.stdout.write(JSON.stringify({ id: request.id, semantic_interface_version: 17, result }) + "\\n");\n` +
+        `});\n`
+    );
+    fs.chmodSync(fakeAura, 0o755);
+
+    const client = startLanguageServer(serverPath, { AURA_LSP_AURA_PATH: fakeAura });
+    t.after(() => client.dispose());
+    const initialize = await client.request("initialize", {
+      processId: null,
+      rootUri: null,
+      capabilities: {},
+      workspaceFolders: null
+    });
+    assert.equal(initialize.error, undefined, JSON.stringify(initialize.error));
+    assert.equal(initialize.result.capabilities.documentFormattingProvider, true);
+    client.notify("initialized", {});
+
+    const uri = "file:///format-me.au";
+    client.notify("textDocument/didOpen", {
+      textDocument: { uri, languageId: "aura", version: 1, text: "x=1\nprint(x)\n" }
+    });
+    const formatting = await client.request("textDocument/formatting", {
+      textDocument: { uri },
+      options: { tabSize: 4, insertSpaces: true }
+    });
+    assert.equal(formatting.error, undefined, JSON.stringify(formatting.error));
+    assert.deepEqual(formatting.result, [
+      {
+        range: { start: { line: 0, character: 0 }, end: { line: 2, character: 0 } },
+        newText: "x = 1\nprint(x)\n"
+      }
+    ]);
+  }
+);

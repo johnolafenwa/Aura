@@ -330,6 +330,7 @@ printed-output order unless they coordinate that order explicitly.
 | `string_clone.au` | `str.clone()` on owned strings | `aura` |
 | `string_methods.au` | Single-quoted strings, an owned `str \| None` match helper, and the `str` methods: `int64` Unicode-scalar `len()`, `int64` UTF-8 `byte_len()`, `contains(...)`, `starts_with(...)`, `ends_with(...)`, `split(...)`, `replace(...)`, `to_lower()`, `to_upper()`, `strip_prefix(...)`, `strip_suffix(...)`, `trim()`, and `clone()` | `13`, `true`, `true`, `true`, `aura repo`, `2`, `aura`, `repo`, `aura lang`, `aura repo`, `AURA REPO`, `repo`, `none`, `aura`, `none`, `9` |
 | `string_parsing_and_formatting.au` | Parsing builtins, scalar and boolean `.to_string()`, and `str.join(...)` | `42`, `-9000000000`, `3.5`, `true`, `aura-lang-tests`, `true`, `12`, `4`, `9`, `3.0` |
+| `text_parsing.au` | A small request-log parser that uses `lines()`, `split_whitespace()`, `rsplit_once(...)`, `split_once(...)`, `trim_start()`, `trim_end()`, `find(...)`, `count(...)`, and `repeat(...)`, plus `bytes.starts_with`, `bytes.find`, and `bytes.ends_with` | `Requests`, `--------`, three aligned request rows, `skipped: broken`, `Content-Type = text/plain; charset=utf-8`, `utf-8`, `2`, `68656c6c6f`, `true` |
 | `borrow_str.au` | Borrowed string parameters with `str` | `Hello, Aura` |
 | `f_strings.au` | Interpolated `f"..."` strings that produce owned `str` values | `Hello, Aura 42` |
 | `literal_forms_and_formatting.au` | Exact triple-quoted prompts, raw backslash-heavy paths, and statically checked width, sign-aware zero padding, grouping, and percentage formatting. Shows Unicode-aware formatting through the f-string grammar. | |
@@ -436,6 +437,7 @@ cargo run -p aura -- run examples/strings/string_clone.au
 cargo run -p aura -- run examples/strings/string_methods.au
 cargo run -p aura -- run examples/strings/string_parsing_and_formatting.au
 cargo run -p aura -- run examples/strings/literal_forms_and_formatting.au
+cargo run -p aura -- run examples/strings/text_parsing.au
 ```
 
 ## Build Standalone Artifacts

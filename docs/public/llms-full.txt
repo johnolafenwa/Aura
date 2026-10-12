@@ -1321,6 +1321,15 @@ safety boundary, diagnostics, and backend rules.
 | `str.strip_prefix` | `strip_prefix(text: str) -> str \| None` | Returns the rest of the string when the prefix matches, or `None` when it does not. An empty rest is a present `""`. |
 | `str.strip_suffix` | `strip_suffix(text: str) -> str \| None` | Returns the rest of the string when the suffix matches, or `None` when it does not. An empty rest is a present `""`. |
 | `str.trim` | `trim() -> str` | Removes leading and trailing Unicode whitespace. |
+| `str.trim_start` | `trim_start() -> str` | Removes leading Unicode whitespace. |
+| `str.trim_end` | `trim_end() -> str` | Removes trailing Unicode whitespace. |
+| `str.split_once` | `split_once(separator: str) -> (str, str) \| None` | Splits at the first occurrence of `separator`. Returns `None` when it is absent. An empty `separator` traps with `AU4003`. |
+| `str.rsplit_once` | `rsplit_once(separator: str) -> (str, str) \| None` | Splits at the last occurrence of `separator`. Returns `None` when it is absent. An empty `separator` traps with `AU4003`. |
+| `str.lines` | `lines() -> list[str]` | Splits at each `\n` and removes one `\r` before each `\n`. A final line terminator adds no empty line. An empty string has no lines. |
+| `str.split_whitespace` | `split_whitespace() -> list[str]` | Splits on runs of Unicode whitespace and drops empty parts. |
+| `str.find` | `find(text: str) -> int64 \| None` | Index of the first occurrence of `text`, counted in Unicode scalar values. O(n). Returns `None` when it is absent. An empty `text` returns `0`. |
+| `str.count` | `count(text: str) -> int64` | Number of non-overlapping occurrences of `text`. An empty `text` traps with `AU4003`. |
+| `str.repeat` | `repeat(count: int64) -> str` | Concatenates `count` copies. A negative `count` traps with `AU4003`. A result above the 64 MiB string limit traps with `AU4005` before it allocates. |
 | `str.join` | `join(parts: list[str]) -> str` | Joins `parts` with the receiver as the separator. |
 | `str.clone` | `clone() -> str` | Returns a new owned string. |
 
@@ -1429,6 +1438,9 @@ up-front output size checks, and the cryptographic scope of SHA-256.
 | `bytes.base64_decode` | `base64_decode(text: str) -> Result[list[uint8], bytes.Error]` | Strict decode of canonical standard-alphabet input. |
 | `bytes.sha256` | `sha256(value: list[uint8]) -> list[uint8]` | Fresh raw 32-byte FIPS 180-4 digest. |
 | `bytes.sha256_string` | `sha256_string(text: str) -> list[uint8]` | SHA-256 of the text's exact UTF-8 bytes. |
+| `bytes.starts_with` | `starts_with(value: list[uint8], prefix: list[uint8]) -> bool` | Tests for a byte prefix. An empty `prefix` matches. |
+| `bytes.ends_with` | `ends_with(value: list[uint8], suffix: list[uint8]) -> bool` | Tests for a byte suffix. An empty `suffix` matches. |
+| `bytes.find` | `find(value: list[uint8], needle: list[uint8]) -> int64 \| None` | Byte index of the first occurrence of `needle`. Returns `None` when it is absent. An empty `needle` returns `0`. |
 
 Every input above uses shared access and stays usable after the call. An
 `encoding` argument is reserved but not implemented. Expanded output that
@@ -1937,13 +1949,13 @@ Design record: `architecture_docs/decisions/0024-assertion-evaluation-and-diagno
 
 # Bytes, Text Codecs, And SHA-256
 
-This page covers byte data, UTF-8 conversion, hexadecimal and base64 codecs,
-and SHA-256 hashing.
+This page covers byte data, UTF-8 conversion, byte search, hexadecimal and
+base64 codecs, and SHA-256 hashing.
 
 Aura represents an owned sequence of bytes as `list[uint8]`. There is no
 separate `Bytes` type and no implicit conversion between text and bytes.
-UTF-8 conversion is a pair of `str` methods. Hexadecimal, base64, and SHA-256
-live in the built-in `bytes` module.
+UTF-8 conversion is a pair of `str` methods. Byte search, hexadecimal, base64,
+and SHA-256 live in the built-in `bytes` module.
 
 ## Public API
 
@@ -1957,6 +1969,9 @@ live in the built-in `bytes` module.
 | `bytes.base64_decode` | `base64_decode(text: str) -> Result[list[uint8], bytes.Error]` | Strict canonical RFC 4648 decoding. |
 | `bytes.sha256` | `sha256(value: list[uint8]) -> list[uint8]` | The raw 32-byte SHA-256 digest of `value`. |
 | `bytes.sha256_string` | `sha256_string(text: str) -> list[uint8]` | The raw SHA-256 digest of the exact UTF-8 bytes of the text. |
+| `bytes.starts_with` | `starts_with(value: list[uint8], prefix: list[uint8]) -> bool` | `true` when `value` begins with `prefix`. |
+| `bytes.ends_with` | `ends_with(value: list[uint8], suffix: list[uint8]) -> bool` | `true` when `value` ends with `suffix`. |
+| `bytes.find` | `find(value: list[uint8], needle: list[uint8]) -> int64 \| None` | The byte index of the first occurrence of `needle`, or `None`. |
 
 The parameter names shown are part of each signature, so you can pass them as
 named arguments. Bare `str` and `list[uint8]` parameters are shared borrows,
@@ -2042,6 +2057,36 @@ a valid prefix while discarding a malformed suffix. On success it keeps the
 byte sequence exactly, including embedded NUL and a leading UTF-8 U+FEFF. So
 when you match `str.from_bytes(text.to_bytes())`, the
 `case Result.Ok(decoded):` branch always has `decoded == text`.
+
+## Byte Search
+
+`bytes.starts_with`, `bytes.ends_with`, and `bytes.find` compare raw bytes.
+They need no UTF-8 and do no normalization:
+
+```aura
+import bytes
+
+def main():
+    packet = "AURA\x00\x01payload".to_bytes()
+    print(bytes.starts_with(packet, "AURA".to_bytes()))
+    print(bytes.ends_with(packet, "load".to_bytes()))
+    match bytes.find(packet, [0, 1]):
+        case None:
+            print("no header end")
+        case int64 as at:
+            print(at)
+```
+
+The program prints `true`, `true`, and `4`.
+
+- An empty `prefix` or `suffix` always matches.
+- `bytes.find` returns the index of the first matching byte, counted in bytes.
+  An empty `needle` is found at index `0`. A `needle` longer than `value`
+  returns `None`.
+- The search runs in time linear in the two lengths.
+- Both arguments are shared borrows. The same list may be passed twice.
+- The text methods `str.starts_with`, `str.ends_with`, and `str.find` do the
+  same jobs for `str`. `str.find` counts Unicode scalar values, not bytes.
 
 ## Hexadecimal
 
@@ -2175,8 +2220,8 @@ Static misuse reports the ordinary name, type, and argument codes, including
 
 ## Backend Support
 
-The MIR and direct backends implement the same UTF-8, hex, base64, and SHA-256
-contract with the same strict codec policy. They must return identical bytes,
+The MIR and direct backends implement the same UTF-8, byte search, hex,
+base64, and SHA-256 contract with the same strict codec policy. They must return identical bytes,
 text, variants, offsets, and runtime diagnostics. The backend-parity fixture
 matrix covers both valid and malformed inputs.
 
@@ -2694,7 +2739,8 @@ aura check app.au
 | `aura complete --line N --character C --trigger . file.au` | Emit completion items. |
 | `aura deps update [name]` | Refresh all git dependencies or one named dependency. |
 | `aura new path` | Create `Aura.toml` and `src/main.au` without overwriting an existing path. |
-| `aura fmt [--check] [paths...]` | Normalize Aura source whitespace or verify formatting. |
+| `aura fmt [--check] [paths...]` | Format Aura source files in place, or report files that would change. |
+| `aura fmt --stdin [--check]` | Format standard input to standard output. |
 | `aura test [-k substring] [--format json] [--timeout-ms N] [paths...]` | Discover package-aware `.au` tests, select canonical case names, and report one result per case. Defaults to `tests/` and a 30-second per-case timeout. |
 | `aura upgrade` | Download and run the verified installer to replace the compiler and bundled runtime with the latest published release. |
 | `aura lsp` | Run the persistent JSON-lines compiler service used by the language server. |
@@ -2958,6 +3004,64 @@ A broken stdout pipe is a deliberate clean termination and exits `0`. This
 lets commands feed consumers such as `head` without printing a secondary
 failure.
 
+## Formatting
+
+`aura fmt` rewrites each `.au` file in the given paths into one canonical
+layout. With no path it formats the current directory. `--check` writes
+nothing and lists each file that would change. `--stdin` formats standard
+input and writes the result to standard output.
+
+```bash
+aura fmt src
+aura fmt --check .
+aura fmt --stdin < src/main.au
+```
+
+The formatter works on tokens. It applies these rules:
+
+| Rule | Behavior |
+| --- | --- |
+| Indentation | Four spaces per block level. |
+| Spacing | One space around binary operators, after a comma, and after a colon in annotations, dictionary entries, and block headers. No space inside brackets, before a comma, before a call or index bracket, or in a slice. |
+| Defaults and keywords | No space around `=` in a keyword argument. A parameter default after a type annotation keeps one space on each side. |
+| Blank lines | At most two blank lines at module level and one inside a body. Two blank lines separate top-level declarations. No blank line starts a body or ends the file. |
+| Reflow | A statement that fits in 88 columns goes on one line. A longer statement breaks its outermost bracket first and puts each element on its own line, indented one level. A list of two or more elements then ends with a trailing comma. A comprehension stays one element. Breaking repeats inward until each line fits. A signature breaks its parameter list before its result type. |
+| Magic trailing comma | A bracketed list written with a trailing comma stays one element per line, even when it would fit. A one-element tuple such as `(x,)` is not affected. |
+| Comments | A comment stays on the line it started on. A comment inside a bracketed list keeps that list one element per line. |
+| Literals | String, f-string, raw string, triple-quoted, and number literals keep their exact source text, including docstrings. |
+
+This input:
+
+```aura
+def scale(value:int32,factor:int32=2)->int32:
+  return value*factor
+def main()->None:
+  print(scale(
+      4,
+      factor = 3))
+```
+
+formats to:
+
+```aura
+def scale(value: int32, factor: int32 = 2) -> int32:
+    return value * factor
+
+def main() -> None:
+    print(scale(4, factor=3))
+```
+
+A statement without brackets cannot break, so it stays long. A `match`
+expression written in block form inside brackets keeps its original lines,
+shifted to the new indentation. Line endings become `\n`, and the file ends
+with one newline.
+
+The formatter accepts only source that parses. A syntax error is reported
+with its usual diagnostic, and the file is left unchanged. After formatting,
+the formatter lexes and parses its own output. The result must have the same
+tokens as the input, ignoring layout. If it does not, the command reports an
+internal formatter error and writes nothing.
+
 ## Testing
 
 `aura test` finds test cases, runs each one, and reports one result per case.
@@ -3079,8 +3183,8 @@ assertions.
 ## VS Code And LSP
 
 The VS Code extension keeps one persistent `aura lsp` process. It provides
-diagnostics, symbols, hover, go-to-definition, and completions through the
-Language Server Protocol (LSP). Requests are debounced, cancellable,
+diagnostics, symbols, hover, go-to-definition, completions, and whole-document
+formatting through the Language Server Protocol (LSP). Requests are debounced, cancellable,
 version-guarded, and invalidated by dependency.
 
 If the compiler process cannot start, a small lexical recovery layer provides
@@ -3098,6 +3202,10 @@ Ordinary parameter signatures keep their bare, `own`, and `mut` spelling.
 Built-in hover and completion detail shows retained-value contracts such as
 `list.append(value: own T)`. Class field and enum payload completion detail
 renders their implicit constructor ownership as `own`.
+
+Formatting uses the same rules as [`aura fmt`](#formatting). Run the editor's
+Format Document command, or set `"editor.formatOnSave": true` for Aura files
+to format on save. A buffer with a syntax error is left unchanged.
 
 Useful repository commands:
 
@@ -3459,8 +3567,7 @@ MIR-specific frame-note masking.
   runtime layout described above.
 - `ast`, `ast-json`, and `mir` are inspection formats, not stable
   serialization APIs.
-- The formatter normalizes the maintained whitespace surface. It is not a
-  configurable style engine.
+- The formatter has one fixed style and no configuration.
 - `aura test` discovers tests by the `test_` name prefix, not by annotation.
 - A timed-out test worker cannot be forcibly stopped inside the CLI process.
 
@@ -5887,7 +5994,7 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 - Raw strings are single-line. Raw triple strings, raw f-strings, and byte-string literals are not implemented.
 - F-strings use static format specifications. Dynamic width, nested fields, conversion flags, locale formatting, and the `g`, `G`, `n`, `c`, `#`, `0`, and `=` forms are not implemented.
 - `str` has scalar-count `len()`, UTF-8 `byte_len()`, and owned Unicode-scalar slicing. It has no integer indexing, `chars()`, `ord()`, or `chr()`.
-- One concatenated or formatted `str` result is limited to 64 MiB. Aura checks each append before it happens and reports `AU4005` without committing an oversized partial result.
+- One concatenated, formatted, or repeated `str` result is limited to 64 MiB. Aura checks each append before it happens and reports `AU4005` without committing an oversized partial result.
 - `list[uint8]` is the bytes type, and UTF-8 conversion is explicit. The reserved `encoding` argument, non-UTF-8 text codecs, byte-string literals, URL-safe or unpadded base64, streaming codecs, incremental hashes, and HMAC are not implemented.
 
 ### Tuples
@@ -6118,7 +6225,7 @@ These figures come from the clean Mac14,9 measurement at `181204b`.
 - The direct backend is the maintained native backend for the implemented language surface.
 - The default `--backend auto` first tries direct emission. It may package an embedded-MIR launcher when direct emission is unavailable. Use `--backend direct` when fallback is unacceptable.
 - Editor tooling uses a persistent compiler service. If that process is unavailable, recovery is lexical only, with no semantic diagnostics or member inference.
-- `aura fmt` normalizes line endings, trailing whitespace, and final newlines. It is not a syntax-reflowing formatter.
+- `aura fmt` has one fixed style with an 88-column width and no configuration. A statement without brackets cannot break, so it may stay longer than 88 columns.
 - `aura test` discovers each parameterless `def test_*()` function as a separate result. A file with no such function still runs as one file-level test.
 - Optional `setup()` and `teardown()` run for each selected case. Teardown runs even after a setup or body failure.
 - Parameterized registration returns labeled capture-free `def() -> None` values in `list[(str, def() -> None)]`. Registration runs before `-k` filtering.
@@ -6797,7 +6904,8 @@ proves the error.
 | `AU1002` | A raw or triple-quoted f-string prefix. The guidance names the supported form. |
 | `AU1101` | Malformed static format grammar, nested fields, unsupported codes, or a width or precision above `1_000_000`. |
 | `AU2002` | A valid specification that does not fit the interpolation's static type. |
-| `AU4005` | Constructed string output above the 64 MiB limit. The trap happens before the oversized append changes the partial result. |
+| `AU4003` | An empty separator in `str.split_once` or `str.rsplit_once`, an empty text in `str.count`, or a negative `str.repeat` count. |
+| `AU4005` | Constructed string output above the 64 MiB limit. The trap happens before the oversized append changes the partial result. `str.repeat` checks the full size before it allocates. |
 
 Python allows decimal grouping without an explicit type code, as in
 `f"{n:,}"`. Aura requires the numeric code: use `f"{n:,d}"`, `f"{n:,f}"`, or
@@ -14973,12 +15081,21 @@ A non-copy value is consumed when it is used in an owned position. Owned positio
 - assignment into a new owned binding
 - an `own` function parameter or an `own self` method receiver
 - a by-value return
-- a class or enum payload, collection literal, mutating collection method, or
-  simple dict indexed assignment that stores the value
+- a class or enum payload, tuple or collection literal, mutating collection
+  method, or simple dict indexed assignment that stores the value
 - by-value enum matching
 - `own` iteration over `list[T]` or `set[T]`
 - the resource expression of `with`
 - a task-start argument copied or moved into task-owned capture storage
+
+A tuple or collection literal builds a new owned value, so it moves its non-copy elements wherever it appears. This holds when the literal itself goes to a shared position, such as a `print` or `len` argument, an f-string, an equality operand, or a bare parameter. Clone the element when the original must stay usable.
+
+```aura check-fail:AU3001
+def main():
+    pair = (1, "x")
+    print((pair, 2))
+    print(pair)
+```
 
 Aura evaluates an expression before it records the move at that boundary. It rejects an expression that tries to borrow and move overlapping places in incompatible subexpressions.
 
@@ -18564,6 +18681,8 @@ true
 
 A tuple is copyable if and only if every element type is copyable. Assignment, owned argument passing, returns, and pattern flow then follow the ordinary copy or move rule for the tuple as a whole.
 
+**Construction.** A tuple literal moves each non-copy element into the new tuple, even when the tuple goes to a shared position such as a `print` argument. See [Operations That Move](/manual/ownership-and-borrowing#operations-that-move).
+
 **Unpacking.** Unpacking a copy tuple copies its elements and leaves the source usable. Unpacking a non-copy tuple consumes the whole source exactly once and gives owned leaf bindings. Aura does not turn positional fields into independently reusable partial-move places. Any later use of the source is diagnosed as use after move.
 
 **Equality.** Tuple `==` and `!=` are shared reads. They do not unpack or transfer ownership. Both operands stay usable, including a non-copy tuple such as `(str, int64)`.
@@ -20938,6 +21057,19 @@ or call `.to_float()` on both operands for true division
 Unicode scalar values, and `len()` counts those. A slice such as `s[1:4]`
 gives you an owned copy. Use slices, or operations in the style of
 `s.split("")`, instead of indexing single characters.
+
+**Some string methods have other names.** Aura keeps one naming scheme
+around `trim`, `strip_prefix`, and `starts_with`:
+
+| Python | Aura |
+| --- | --- |
+| `s.lstrip()`, `s.rstrip()` | `s.trim_start()`, `s.trim_end()` |
+| `s.partition(sep)` | `s.split_once(sep)`, which returns `(str, str) \| None` |
+| `s.rpartition(sep)` | `s.rsplit_once(sep)` |
+| `s.splitlines()` | `s.lines()`, which splits at `\n` and `\r\n` only |
+| `s.split()` | `s.split_whitespace()` |
+| `s.find(sub)` | `s.find(sub)`, which returns `int64 \| None` instead of `-1` |
+| `s * n` | `s.repeat(n)` |
 
 **`is` only tests for `None`.** `value is None` and `value is not None` check
 an optional `T | None` and narrow it. There is no identity comparison between
@@ -26164,6 +26296,53 @@ parts = ["aura", "lang", "tests"]
 print("-".join(parts))    # "aura-lang-tests"
 ```
 
+### Splitting, Searching, And Repeating
+
+These methods cover most line-oriented parsing. Each one reads the receiver
+and returns fresh values:
+
+```aura check-pass
+config = "name = aura\nmode = fast\n"
+for line in config.lines():
+    pair = line.split_once("=")
+    if pair is not None:
+        key, value = pair
+        print(key.trim_end() + ":" + value.trim_start())
+```
+
+This prints `name:aura` and `mode:fast`.
+
+- `lines()` splits at `\n` and removes one `\r` before each `\n`. A final
+  line terminator adds no empty line.
+- `split_once(separator)` splits at the first occurrence and returns
+  `(str, str) | None`. `rsplit_once(separator)` splits at the last one.
+- `trim_start()` and `trim_end()` remove Unicode whitespace from one side.
+- `split_whitespace()` splits on runs of whitespace and drops empty parts.
+
+`find(text)` returns the position of the first match, counted in Unicode
+scalar values like `len()` and slices. It returns `None` when there is no
+match. `count(text)` counts non-overlapping matches, and `repeat(count)`
+concatenates copies:
+
+```aura check-pass
+sentence = "the quick brown fox"
+print(sentence.count("o"))    # 2
+print("=".repeat(5))          # =====
+match sentence.find("fox"):
+    case int64 as at:
+        print(sentence[at:])  # fox
+    case None:
+        print("missing")
+```
+
+An empty separator in `split_once` or `rsplit_once`, an empty text in
+`count`, and a negative `repeat` count trap with `AU4003`. A `repeat` result
+above the 64 MiB string limit traps with `AU4005`.
+
+See [examples/strings/text_parsing.au](../examples/strings/text_parsing.au).
+
+### Copying Strings
+
 `clone()` creates an independent copy of a string.
 [06-ownership-and-borrowing.md](06-ownership-and-borrowing.md) explains why
 this matters.
@@ -26295,6 +26474,16 @@ cargo run -p aura -- analyze myfile.au   # diagnostics, symbols, hover info
 cargo run -p aura -- complete --line 5 --character 11 --trigger . myfile.au
 ```
 
+`aura fmt` formats source files in one fixed style. It sets four-space indentation, normalizes spacing and blank lines, and reflows bracketed lists at 88 columns. Comments and string literals keep their text:
+
+```bash
+cargo run -p aura -- fmt src             # format every .au file under src
+cargo run -p aura -- fmt --check .       # list files that would change
+cargo run -p aura -- fmt --stdin < myfile.au  # format stdin to stdout
+```
+
+The [CLI manual](../docs/manual/cli-and-tooling.md#formatting) lists every formatting rule.
+
 [01-running-programs.md](01-running-programs.md) walks through each command. [crates/aura/README.md](../crates/aura/README.md) is the CLI reference.
 
 ## Examples
@@ -26316,6 +26505,7 @@ The repository includes two editor packages:
 - **Go-to-definition**, including definitions of imported symbols in other files.
 - **Diagnostics** from the compiler's type checker.
 - **Document symbols** for navigation.
+- **Formatting** with the same rules as `aura fmt`. Set `editor.formatOnSave` to format on save.
 
 The editor gets its analysis from `aura analyze` and `aura complete`, so the editor and the CLI use the same type checker. A local JavaScript analysis layer runs only as a fallback when the compiler cannot analyze the current buffer.
 
@@ -30474,6 +30664,24 @@ bytes.sha256("café".to_bytes())
 SHA-256 is a digest. It is not encryption, a password hash, a signature, a
 message-authentication code, or random data. When you need one of those
 properties, use a cryptographic construction built for it.
+
+## Search Raw Bytes
+
+`bytes.starts_with`, `bytes.ends_with`, and `bytes.find` work on any
+`list[uint8]`, whether or not it holds UTF-8:
+
+```aura check-pass
+import bytes
+
+packet: list[uint8] = [65, 85, 82, 65, 0, 1, 7]
+print(bytes.starts_with(packet, "AURA".to_bytes()))
+print(bytes.ends_with(packet, [1, 7]))
+print(bytes.find(packet, [0, 1]) == 4)
+```
+
+This prints `true` three times. `bytes.find` returns `int64 | None`: the byte
+index of the first match, or `None` when the needle does not occur. An empty
+needle is found at index `0`.
 
 ## Typed Data Errors And Runtime Failures
 
