@@ -1,0 +1,6 @@
+error[AU2002]: `Score` renders through `Display`, so its format specification cannot use zero padding
+ --> crates/aura-compiler/tests/fixtures/check-fail/display_format_zero_padding.au:10:19
+   |
+10 |     print(f"{score:08}")
+   |                   ^
+  = help: a `Display` value accepts fill, alignment, width, precision, and `s`

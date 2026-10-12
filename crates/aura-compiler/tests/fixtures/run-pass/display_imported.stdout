@@ -1,0 +1,8 @@
+$12.50
+$12.50
+price: $12.50
+paid $0.99
+display_imported_support.money.Invoice(status=due, total=$5.00)
+Ledger(entries=[$0.01, $100.00])
+[$3.05]
+[[x]]

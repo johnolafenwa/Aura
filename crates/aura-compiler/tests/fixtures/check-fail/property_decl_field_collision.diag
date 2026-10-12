@@ -1,0 +1,6 @@
+error[AU2044]: property `width` collides with the field of the same name on `Grid`
+ --> crates/aura-compiler/tests/fixtures/check-fail/property_decl_field_collision.au:5:5
+  |
+5 |     def width(self) -> int64:
+  |     ^
+  = related crates/aura-compiler/tests/fixtures/check-fail/property_decl_field_collision.au:2:5: the field is declared here

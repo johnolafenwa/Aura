@@ -336,6 +336,36 @@ The rule covers every builtin target:
 
 See [examples/traits/builtin_target_traits.au](../examples/traits/builtin_target_traits.au).
 
+## Custom Printing With `Display`
+
+Every module can implement the prelude `Display` trait to choose how its own
+class or enum prints:
+
+```aura
+class Temperature:
+    celsius: int64
+
+impl Display for Temperature:
+    def display(self) -> str:
+        return f"{self.celsius}°C"
+
+def main():
+    today = Temperature(celsius=21)
+    print(today)
+    print(f"now {today}")
+    print(str(today).len())
+```
+
+This prints `21°C`, `now 21°C`, and `4`. `print`, `str`, and f-strings all use
+`display`, and so does a `Temperature` nested inside a list or another class.
+
+Implement `Display` in the module that declares the type, once per type. For a
+generic class, write `impl[T] Display for Box[T]:` so one implementation covers
+every specialization. In an f-string, a `Display` value accepts width,
+alignment, fill, and precision, but no numeric format codes.
+
+See [examples/traits/display.au](../examples/traits/display.au).
+
 ## Current Limits
 
 The trait surface supports:
@@ -354,6 +384,7 @@ The trait surface supports:
   collide with a builtin member of that target
 - `Self` in trait and impl method parameter and return positions
 - associated methods without `self`
+- the prelude `Display` trait for custom rendering of your own types
 - operator traits for `+`, `-`, `*`, `/`, `//`, `%`, `<`, `<=`, `>`, `>=`,
   unary `-`, and `not`
 - inferred clone-safety contracts from trait defaults, which explicit impls

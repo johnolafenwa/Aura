@@ -1,0 +1,9 @@
+class Grid:
+    width: int64
+
+    @property
+    def report(self) -> None:
+        print(self.width)
+
+def main():
+    pass

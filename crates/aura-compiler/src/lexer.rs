@@ -67,6 +67,8 @@ pub enum TokenKind {
     ShiftRight,
     ShiftRightEqual,
     Arrow,
+    /// `@`, which begins the `@property` marker on a class method.
+    At,
     KwClass,
     KwEnum,
     KwDef,
@@ -892,6 +894,10 @@ fn tokenize_line(
             }
             '~' => {
                 tokens.push(simple(TokenKind::Tilde, line_no, column));
+                index += 1;
+            }
+            '@' => {
+                tokens.push(simple(TokenKind::At, line_no, column));
                 index += 1;
             }
             '-' => {

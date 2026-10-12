@@ -1,0 +1,6 @@
+error[AU2043]: `Display` for `Box[T]` cannot constrain its type parameters
+ --> crates/aura-compiler/tests/fixtures/check-fail/display_impl_bounded_generic.au:7:1
+  |
+7 | impl[T: Named] Display for Box[T]:
+  | ^
+  = help: every specialization must be displayable; render a type parameter with `str(value)` or an f-string

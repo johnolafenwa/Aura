@@ -7597,6 +7597,7 @@ fn function_decl(name: &str) -> FunctionDecl {
         view_return: None,
         body: Vec::new(),
         span: Span::new(1, 1),
+        property: None,
         doc: None,
     }
 }
@@ -8254,6 +8255,7 @@ fn checker_expression_helper_paths_cover_collection_specialization_and_control_e
                     type_param_bounds: BTreeMap::new(),
                 },
             )]),
+            display: false,
         },
         TraitImplInfo {
             module_name: program.module_name.clone(),
@@ -8279,6 +8281,7 @@ fn checker_expression_helper_paths_cover_collection_specialization_and_control_e
                     type_param_bounds: BTreeMap::new(),
                 },
             )]),
+            display: false,
         },
     ];
     let mut checker = FunctionChecker::new(

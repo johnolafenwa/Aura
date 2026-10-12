@@ -1,0 +1,6 @@
+error[AU4003]: list index `3` is out of bounds for length `2`
+ --> crates/aura-compiler/tests/fixtures/run-fail/display_trap_prints_nothing.au:6:40
+  |
+6 |         return f"latest {self.readings[3]}"
+  |                                        ^
+  = note: Aura call chain (innermost first): Display for Gauge.display at 5:5 -> render Gauge at 5:5 -> main at 8:1

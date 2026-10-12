@@ -1,0 +1,6 @@
+class Grid:
+    width: int64
+
+    @staticmethod
+    def make() -> int64:
+        return 1

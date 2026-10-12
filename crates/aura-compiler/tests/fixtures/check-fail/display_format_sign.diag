@@ -1,0 +1,6 @@
+error[AU2002]: `Score` renders through `Display`, so its format specification cannot use a sign
+ --> crates/aura-compiler/tests/fixtures/check-fail/display_format_sign.au:10:19
+   |
+10 |     print(f"{score:+10}")
+   |                   ^
+  = help: a `Display` value accepts fill, alignment, width, precision, and `s`

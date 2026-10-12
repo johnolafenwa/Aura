@@ -1,0 +1,10 @@
+class Counter:
+    count: int64
+
+    @property
+    def next(mut self) -> int64:
+        self.count += 1
+        return self.count
+
+def main():
+    pass

@@ -1,0 +1,5 @@
+error[AU2999]: property `hidden` is private on `Meter`
+ --> crates/aura-compiler/tests/fixtures/check-path-fail/property_private_import.au:5:17
+  |
+5 |     print(meter.hidden)
+  |                 ^

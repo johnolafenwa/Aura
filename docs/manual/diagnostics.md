@@ -75,7 +75,7 @@ String and format-specification diagnostics are described under
 | `AU2002` | type mismatch | A value of the wrong type, a callback with the wrong contract, a type without the ordering an operation needs, or a format specification that does not fit its value. | Make the value's type match the type the position requires. |
 | `AU2003` | unsupported operator | An operator the operand types do not define, including ordering or arithmetic on a union. | Use an operator the operand types define. |
 | `AU2004` | argument binding | Arguments that do not bind to the callee's parameters. | Match the call to the callee's parameter list. |
-| `AU2005` | unsupported syntax or feature | Python-shaped source, a generator expression, a slice step, slice assignment, or a reserved FFI contract. | Use the Aura form the message names. |
+| `AU2005` | unsupported syntax or feature | Python-shaped source, a generator expression, a slice step, slice assignment, a decorator other than `@property`, or a reserved FFI contract. | Use the Aura form the message names. |
 | `AU2006` | builtin method collision | A trait method whose name shadows a builtin member of its target. | Rename the trait method. |
 | `AU2007` | builtin function redefinition | A module-level function named after a builtin function. | Rename the function. |
 | `AU2008` | equality unavailable | `==`, `!=`, or an equality-based collection operation on a type without equality. | Use a type that defines equality, or avoid the equality-based operation. |
@@ -88,6 +88,9 @@ String and format-specification diagnostics are described under
 | `AU2040` | invalid class pattern | A class pattern with a positional, unknown, private, repeated, or method field, a class that does not match the scrutinee, or a `match mut` class pattern. | Name stored fields visible here, once each, as `field=pattern`. |
 | `AU2041` | invalid rest pattern or target | A `*` rest element outside a tuple or sequence, a second rest element, too few positions for the fixed elements, a `*name` that covers no positions, or a sequence pattern in `match mut` or `match own`. | Keep one rest element per tuple or sequence, and use `*_` when it may cover nothing. |
 | `AU2042` | invalid docstring or documentation limit | A triple-quoted string in a class, enum, trait, or `impl` body outside a documentation position, or documentation over a size limit. | Move the string to the first slot or directly after a field, or shorten the documentation. |
+| `AU2043` | invalid Display implementation | A `Display` implementation for a type the module does not declare, a builtin, tuple, or union, a partial or bounded generic target, an overlap, or a mismatched `display` method. | Implement `def display(self) -> str` once, in the module that declares the type, for every specialization. |
+| `AU2044` | invalid property declaration | An `@property` getter outside a class, with a receiver other than `self`, with parameters, type parameters, a `None` or view result, or a name that collides with a field. | Declare `def name(self) -> Type:` in the class body. |
+| `AU2045` | invalid property use | Assignment, compound assignment, a `mut` argument or receiver, `match mut`, a view, or call syntax on a property. | Read the property without parentheses, or bind it to a local and change the local. |
 | `AU2999` | general compile-time rejection | A rejection that has no narrower public category. | Follow the message. |
 
 **`AU2002` type mismatch.** List `map`, `filter`, and keyed `sort` require the
@@ -202,6 +205,24 @@ A bare written contract never performs that restriction.
 
 A limit message gives the measured and permitted byte counts. See
 [Docstrings And API Docs](/manual/docstrings) for the documentation positions.
+
+**`AU2043` invalid Display implementation.** The checker rejects an
+`impl Display for T:` block that breaks a rule in
+[The `Display` Trait](/manual/generics-and-traits#the-display-trait). An
+overlap carries a related label at the earlier implementation. The help names
+the accepted form, such as `impl[T] Display for Box[T]:`.
+
+**`AU2044` invalid property declaration.** The message names the getter and
+the rule it breaks, and a related label points at the `@property` line. The
+parser also reports `AU2044` for an `@property` line that is not directly
+before a class method, and for a repeated marker. A decorator other than
+`@property` is `AU2005`.
+
+**`AU2045` invalid property use.** The message names the property and the
+rejected action, such as ``property `total` is read-only and cannot be
+assigned``. A property produces a fresh value on each read, so it has no place
+to write, borrow mutably, or view. Call syntax reports ``property `total` is a
+computed value, not a method, and cannot be called``.
 
 **`AU2999` general compile-time rejection.** This is the maintained catch-all
 for compile-time rejections that do not yet have a narrower public category. It

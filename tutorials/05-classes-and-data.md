@@ -248,6 +248,34 @@ counter.reset()
 
 See [examples/classes/mutating_methods.au](../examples/classes/mutating_methods.au).
 
+## Properties
+
+A property is a value the class computes on each read. Mark a shared method
+with `@property`, then read it like a field, without parentheses:
+
+```aura
+class Reply:
+    prompt_tokens: int64
+    completion_tokens: int64
+
+    @property
+    def total_tokens(self) -> int64:
+        return self.prompt_tokens + self.completion_tokens
+
+def main():
+    reply = Reply(prompt_tokens=10, completion_tokens=5)
+    print(reply.total_tokens)
+```
+
+This prints `15`. The getter takes bare `self`, has no other parameters, and
+returns an owned value. Each read calls it once and gives you a fresh result.
+
+A property is read-only. Assigning to it, passing it as `mut`, taking a view
+of it, or calling it with `()` is an `AU2045` error. To change the value,
+bind it to a local and change the local.
+
+See [examples/classes/properties.au](../examples/classes/properties.au).
+
 ## Current Limits
 
 Separate `impl` blocks are not implemented. Declare every method inside the

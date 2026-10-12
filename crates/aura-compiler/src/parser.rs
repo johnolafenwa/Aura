@@ -22,6 +22,19 @@ fn parse_error(span: Span, message: impl Into<String>) -> Diagnostic {
     Diagnostic::coded_at("AU1101", span, message)
 }
 
+fn unsupported_decorator_error(span: Span, message: impl Into<String>) -> Diagnostic {
+    Diagnostic::coded_at("AU2005", span, message)
+        .with_help("Aura has no general decorators; `@property` before a class method declares a read-only property")
+}
+
+fn property_target_error(span: Span) -> Diagnostic {
+    Diagnostic::coded_at(
+        "AU2044",
+        span,
+        "`@property` must come directly before a method in a class body",
+    )
+}
+
 fn pattern_span(pattern: &Pattern) -> Span {
     pattern.span()
 }
@@ -260,6 +273,7 @@ impl Parser {
                     "a public module constant must come before the first top-level statement",
                 ));
             } else if self.at_simple(&TokenKind::KwPublic)
+                || self.at_simple(&TokenKind::At)
                 || self.at_copy_class_start()
                 || self.at_keyword_class()
                 || self.at_keyword_enum()
@@ -317,6 +331,13 @@ impl Parser {
     }
 
     fn parse_item(&mut self) -> Result<Item> {
+        if self.at_simple(&TokenKind::At) {
+            let property = self.parse_property_marker()?;
+            let public = self.eat_simple(&TokenKind::KwPublic).is_some();
+            let mut function = self.parse_marked_function(property, false, public)?;
+            function.property = Some(property);
+            return Ok(Item::Function(function));
+        }
         let public = self.eat_simple(&TokenKind::KwPublic).is_some();
         if self.at_type_alias_start() {
             Ok(Item::TypeAlias(self.parse_type_alias(public)?))
@@ -646,6 +667,12 @@ impl Parser {
                 self.parse_pass_stmt()?;
                 continue;
             }
+            if self.at_simple(&TokenKind::At) {
+                let property = self.parse_property_marker()?;
+                let method_public = self.eat_simple(&TokenKind::KwPublic).is_some();
+                methods.push(self.parse_marked_function(property, true, method_public)?);
+                continue;
+            }
             let method_public = self.at_simple(&TokenKind::KwPublic)
                 && matches!(self.peek_kind_at(self.index + 1), Some(TokenKind::KwDef));
             if method_public {
@@ -786,6 +813,60 @@ impl Parser {
         })
     }
 
+    /// Parses one `@property` line. `@property` is the only marker Aura
+    /// accepts: a general decorator is not part of the language.
+    fn parse_property_marker(&mut self) -> Result<Span> {
+        let span = self.expect_simple(TokenKind::At)?.span;
+        let name = match self.current_kind() {
+            TokenKind::Identifier(name) => name.clone(),
+            _ => {
+                return Err(unsupported_decorator_error(
+                    span,
+                    "a decorator must name `property`",
+                ))
+            }
+        };
+        self.bump();
+        if name != "property" {
+            return Err(unsupported_decorator_error(
+                span,
+                format!("decorator `@{name}` is not supported"),
+            ));
+        }
+        if !self.at_simple(&TokenKind::Newline) {
+            return Err(unsupported_decorator_error(
+                self.current_span(),
+                "`@property` takes no arguments and stands alone on its line",
+            ));
+        }
+        self.expect_newline()?;
+        self.skip_newlines();
+        if self.at_simple(&TokenKind::At) {
+            let second = self.parse_property_marker()?;
+            return Err(Diagnostic::coded_at(
+                "AU2044",
+                second,
+                "a method can be marked `@property` only once",
+            ));
+        }
+        Ok(span)
+    }
+
+    /// Parses the method or function that follows an `@property` line.
+    fn parse_marked_function(
+        &mut self,
+        property: Span,
+        allow_receiver: bool,
+        public: bool,
+    ) -> Result<FunctionDecl> {
+        if !self.at_keyword_def() {
+            return Err(property_target_error(property));
+        }
+        let mut function = self.parse_function_with_receiver(allow_receiver, public)?;
+        function.property = Some(property);
+        Ok(function)
+    }
+
     fn parse_function(&mut self, public: bool) -> Result<FunctionDecl> {
         self.parse_function_with_receiver(false, public)
     }
@@ -825,6 +906,7 @@ impl Parser {
             view_return,
             body,
             span,
+            property: None,
             doc,
         })
     }
@@ -862,6 +944,16 @@ impl Parser {
             self.reject_misplaced_docstring(
                 "a string in a trait body must be the trait docstring or a method's first statement",
             )?;
+            if self.at_simple(&TokenKind::At) {
+                let property = self.parse_property_marker()?;
+                if !self.at_keyword_def() {
+                    return Err(property_target_error(property));
+                }
+                let mut method = self.parse_trait_method()?;
+                method.property = Some(property);
+                methods.push(method);
+                continue;
+            }
             methods.push(self.parse_trait_method()?);
         }
 
@@ -910,6 +1002,11 @@ impl Parser {
             self.reject_misplaced_docstring(
                 "an implementation block has no documentation; document its methods instead",
             )?;
+            if self.at_simple(&TokenKind::At) {
+                let property = self.parse_property_marker()?;
+                methods.push(self.parse_marked_function(property, true, false)?);
+                continue;
+            }
             methods.push(self.parse_function_with_receiver(true, false)?);
         }
 
@@ -956,6 +1053,7 @@ impl Parser {
             view_return,
             body,
             span,
+            property: None,
             doc,
         })
     }
@@ -1205,6 +1303,10 @@ impl Parser {
     }
 
     fn parse_stmt_inner(&mut self) -> Result<Stmt> {
+        if self.at_simple(&TokenKind::At) {
+            let property = self.parse_property_marker()?;
+            return Err(property_target_error(property));
+        }
         if self.at_type_alias_start() {
             return Err(parse_error(
                 self.current_span(),

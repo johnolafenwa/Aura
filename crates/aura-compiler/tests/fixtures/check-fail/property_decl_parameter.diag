@@ -1,0 +1,7 @@
+error[AU2044]: property `scaled` is invalid: it takes no parameters
+ --> crates/aura-compiler/tests/fixtures/check-fail/property_decl_parameter.au:5:5
+  |
+5 |     def scaled(self, factor: int64) -> int64:
+  |     ^
+  = related crates/aura-compiler/tests/fixtures/check-fail/property_decl_parameter.au:4:5: `@property` is declared here
+  = help: declare it as `def scaled(self) -> Type:`

@@ -1,0 +1,6 @@
+error[AU2043]: `display` does not match `Display`: it takes no type parameters
+ --> crates/aura-compiler/tests/fixtures/check-fail/display_impl_type_parameter.au:5:5
+  |
+5 |     def display[T](self) -> str:
+  |     ^
+  = help: declare it exactly as `def display(self) -> str:`

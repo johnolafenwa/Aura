@@ -1,0 +1,126 @@
+LIMIT: int64 = 3
+
+trait Sized:
+    def size(self) -> int64
+
+class Counter:
+    start: int64
+    step: int64 = 1
+    names: list[str]
+
+    @property
+    def total(self) -> int64:
+        return self.start + self.step
+
+    @property
+    def flag(self) -> bool:
+        return self.start > 0
+
+    @property
+    def pair(self) -> (int64, str):
+        return (self.total, "pair")
+
+    @property
+    def missing(self) -> str | None:
+        return None
+
+    @property
+    def parsed(self) -> Result[int64, str]:
+        return Ok(self.total)
+
+    @property
+    def tags(self) -> list[str]:
+        return self.names[:]
+
+impl Sized for Counter:
+    def size(self) -> int64:
+        return self.total + self.names.len()
+
+def scaled(counter: Counter, factor: int64 = 2) -> int64:
+    return counter.total * factor
+
+def checked(counter: Counter) -> Result[int64, str]:
+    value = try counter.parsed
+    return Ok(value + 1)
+
+def pick[T](value: own T) -> T:
+    return value
+
+def produce(events: Queue[int64], amount: int64) -> None:
+    events.put(amount)
+
+def main():
+    counter = Counter(start=2, names=["a", "b", "c", "d"])
+    mut slots: list[int64] = [0, 0, 0, 0]
+    slots[counter.total] = counter.total
+    print(slots)
+    first, label = counter.pair
+    print(f"{first} {label}")
+    assert counter.total > 0, f"total {counter.total}"
+    if counter.total > 10:
+        print("big")
+    elif counter.total > 2:
+        print("medium")
+    else:
+        print("small")
+    match counter.total:
+        case value if value == counter.total:
+            print(f"matched {value}")
+        case _:
+            print("other")
+    for tag in counter.tags:
+        print(tag)
+    mut index = 0
+    while index < counter.total:
+        index += 1
+        if index == 1:
+            continue
+        if index > LIMIT:
+            break
+        pass
+    print(index)
+    view snapshot = slots
+    print(snapshot[counter.total])
+    print(pick[int64](counter.total))
+    chosen = pick[int64]
+    print(chosen(counter.step))
+    events = Queue[int64]()
+    with TaskGroup() as group:
+        group.start(produce, events, counter.total)
+        for event in events:
+            print(event)
+    print(-counter.total)
+    print(not counter.flag)
+    print((counter.total))
+    print((counter.total, counter.flag))
+    print([counter.total, LIMIT])
+    print({counter.total})
+    print({"total": counter.total})
+    print([counter.total for tag in counter.tags if counter.tags[0] != "z"])
+    print({counter.step for tag in counter.tags})
+    print({counter.total: counter.step for tag in counter.tags})
+    print(counter.total if counter.flag else 0)
+    captured = Counter(start=1, names=[])
+    double: def(int64) -> int64 = lambda value: value * captured.total
+    print(double(4))
+    print(counter.tags[counter.total])
+    print(counter.tags[counter.step:counter.total])
+    sized: int64 = match counter.missing:
+        case str as text: text.len() + counter.total
+        case None: counter.total
+    print(sized)
+    match own counter.missing:
+        case str as text:
+            print(text)
+        case None:
+            print("no label")
+    guarded: int64 = match counter.total:
+        case value if value > counter.step: value
+        case _: 0
+    print(guarded)
+    print("a" in counter.tags)
+    print(0 < counter.total <= LIMIT)
+    print(counter.missing is None)
+    print(scaled(counter))
+    print(counter.size())
+    print(checked(counter))

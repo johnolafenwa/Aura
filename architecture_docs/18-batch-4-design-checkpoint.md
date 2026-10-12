@@ -429,6 +429,29 @@ implementation with no partial output, property reads in chains and
 expressions, Copy and non-Copy property results, imported Display dispatch
 and properties, and MIR/direct parity.
 
+**Implementation notes.** The implementation settles these details:
+
+- A `Display` implementation for a generic type must cover every
+  specialization with distinct type parameters, as in
+  `impl[T] Display for Box[T]:`. `AU2043` rejects a specialized target such as
+  `Box[int64]` and a bounded parameter. Both backends dispatch by the value's
+  runtime nominal name, so one type has exactly one rendering.
+- The prelude `Display` is visible only where the module neither declares nor
+  imports an item named `Display`. Implementations of such a user trait do
+  not affect rendering.
+- `AU2045` rejects `mut` binding of a property: a `mut` argument, a
+  `mut self` call, and `match mut`. It also rejects assignment and views
+  through a property path, such as `shape.origin.x = 4`. An `own` argument and
+  `match own` accept a property read, because ADR-0055 makes the owned result
+  a fresh value that may be moved without moving from the receiver.
+- The parser reports `AU2044` for `@property` that is not directly before a
+  class method, including at statement level, and for a repeated marker.
+- `str(value)` already rendered any value before this batch. The batch routes
+  it through `display`.
+- The hover text of a property read is `property name: Type`, followed by
+  the getter's docstring when it has one. Member completion carries the
+  docstring's first line.
+
 ## F. Syntax-reflowing formatter
 
 `aura fmt` becomes a token-based formatter with these rules:

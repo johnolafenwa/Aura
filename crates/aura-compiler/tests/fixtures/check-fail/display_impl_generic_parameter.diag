@@ -1,0 +1,6 @@
+error[AU2043]: `Display` cannot be implemented for the type parameter `T`
+ --> crates/aura-compiler/tests/fixtures/check-fail/display_impl_generic_parameter.au:4:1
+  |
+4 | impl[T] Display for T:
+  | ^
+  = help: blanket `Display` implementations are not supported

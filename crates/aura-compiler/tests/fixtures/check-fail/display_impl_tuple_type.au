@@ -1,0 +1,6 @@
+impl Display for (int64, str):
+    def display(self) -> str:
+        return "pair"
+
+def main():
+    print((1, "a"))

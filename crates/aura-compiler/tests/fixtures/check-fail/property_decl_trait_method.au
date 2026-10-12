@@ -1,0 +1,6 @@
+trait Sized:
+    @property
+    def size(self) -> int64
+
+def main():
+    pass

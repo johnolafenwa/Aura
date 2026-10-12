@@ -1,0 +1,6 @@
+class Grid:
+    width: int64
+
+    @3
+    def area(self) -> int64:
+        return self.width

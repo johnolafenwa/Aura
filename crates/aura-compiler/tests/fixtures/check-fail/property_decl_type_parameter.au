@@ -1,0 +1,9 @@
+class Grid:
+    width: int64
+
+    @property
+    def same[T](self) -> int64:
+        return self.width
+
+def main():
+    pass

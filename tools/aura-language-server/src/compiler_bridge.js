@@ -414,6 +414,8 @@ function symbolKind(kind) {
       return 12;
     case "method":
       return 6;
+    case "property":
+      return 7;
     case "field":
       return 8;
     case "enum":

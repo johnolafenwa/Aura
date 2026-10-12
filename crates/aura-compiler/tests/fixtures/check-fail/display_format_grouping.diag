@@ -1,0 +1,6 @@
+error[AU2002]: `Money` renders through `Display`, so its format specification cannot use a thousands separator
+ --> crates/aura-compiler/tests/fixtures/check-fail/display_format_grouping.au:10:19
+   |
+10 |     print(f"{money:,}")
+   |                   ^
+  = help: a `Display` value accepts fill, alignment, width, precision, and `s`

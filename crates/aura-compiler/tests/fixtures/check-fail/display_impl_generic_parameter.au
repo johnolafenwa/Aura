@@ -1,0 +1,9 @@
+class Point:
+    x: int64
+
+impl[T] Display for T:
+    def display(self) -> str:
+        return "value"
+
+def main():
+    print(Point(x=1))
