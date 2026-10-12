@@ -92,3 +92,8 @@ is integrated separately.
 
 - Run `npm run coverage:compiler:check` and `npm run coverage:lsp:check`
   after integration with phase 3a.
+- One full parity run printed `2 3 7` instead of `1 2 3 7` for
+  `task_nested_queue_capture_lifecycle` on the MIR backend. 240 repeat runs
+  under parallel load never reproduced it. Phase 3b changes only the return
+  type of TaskGroup close, so this looks like a scheduling flake that was
+  already there. It needs its own investigation.
