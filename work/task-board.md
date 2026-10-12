@@ -1,6 +1,28 @@
 # Task Board
 
-Last updated: 2026-10-11
+Last updated: 2026-10-12
+
+## Batch 4: everyday syntax and API usability (complete)
+
+- Target: implement the ratified
+  [Batch 4 design checkpoint](../architecture_docs/18-batch-4-design-checkpoint.md)
+  and leave `main` ready for a release. No version bump or tag in this work.
+- Done, each merged after a green hosted run:
+  - trailing commas and parenthesized imports (PR #33);
+  - the syntax-reflowing `aura fmt`, `aura fmt --stdin`, and LSP
+    formatting (PR #34);
+  - text and byte conveniences (PR #36);
+  - the prelude `Display` trait and read-only `@property` getters
+    (PR #38);
+  - tuple rest elements, list sequence patterns, and keyword class
+    patterns (PR #39);
+  - docstrings, editor documentation, and `aura doc` (PR #40);
+  - two ownership fixes found during the work (PR #41).
+- Diagnostics `AU2040` through `AU2045` cover the new rules. ADR-0055,
+  ADR-0056, and ADR-0063 record the implementation.
+- Known defects left for follow-up are listed in
+  `2026-10-12-batch-4-completion.md`.
+- Details per family are in the `2026-10-11-batch-4-*.md` notes.
 
 ## Batch 2 completion: union borrowing and phase 2b (in progress)
 
