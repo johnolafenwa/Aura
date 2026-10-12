@@ -51,6 +51,15 @@ f-string format subset, atomic `print`, and read-only `@property` getters, with
   broken-module diagnostic
 - direct `aura build --backend direct` runs of every new run-pass fixture,
   compared byte for byte with the MIR output
+- Full `cargo llvm-cov --workspace` on the merged tree, measured locally:
+  95.35% regions, 97.36% functions, 96.50% lines. Running as root fails
+  `package_io_helpers_cover_local_error_paths` locally. That costs 27 lines
+  and 6 functions of `package.rs` that hosted CI covers.
+- Forced MIR and direct runs of `property_read_positions`,
+  `display_format_structural_values`, `property_reads`, and
+  `display_format_subset` match the expected stdout.
+- `cargo test -p aura-compiler --lib format` and the fixtures test on the
+  merged tree.
 - `cargo fmt --all --check`, `npm run check:clippy`,
   `npm run check:doc-examples`, `npm run check:hygiene`, and
   `npm run coverage:lsp:check`
@@ -59,4 +68,4 @@ f-string format subset, atomic `print`, and read-only `@property` getters, with
 
 - Property hover shows the getter docstring once section D attaches
   docstrings to methods.
-- The full coverage gate and backend-parity matrix run in hosted CI.
+- The backend-parity matrix runs in hosted CI.
