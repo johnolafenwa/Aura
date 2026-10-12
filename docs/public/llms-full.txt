@@ -2637,7 +2637,8 @@ aura check app.au
 | `aura complete --line N --character C --trigger . file.au` | Emit completion items. |
 | `aura deps update [name]` | Refresh all git dependencies or one named dependency. |
 | `aura new path` | Create `Aura.toml` and `src/main.au` without overwriting an existing path. |
-| `aura fmt [--check] [paths...]` | Normalize Aura source whitespace or verify formatting. |
+| `aura fmt [--check] [paths...]` | Format Aura source files in place, or report files that would change. |
+| `aura fmt --stdin [--check]` | Format standard input to standard output. |
 | `aura doc [--out DIR] [--json] [paths...]` | Check each source and write one API page per module, in Markdown or JSON. See [Docstrings And API Docs](/manual/docstrings#generated-api-docs). |
 | `aura test [-k substring] [--format json] [--timeout-ms N] [paths...]` | Discover package-aware `.au` tests, select canonical case names, and report one result per case. Defaults to `tests/` and a 30-second per-case timeout. |
 | `aura upgrade` | Download and run the verified installer to replace the compiler and bundled runtime with the latest published release. |
@@ -2902,6 +2903,64 @@ A broken stdout pipe is a deliberate clean termination and exits `0`. This
 lets commands feed consumers such as `head` without printing a secondary
 failure.
 
+## Formatting
+
+`aura fmt` rewrites each `.au` file in the given paths into one canonical
+layout. With no path it formats the current directory. `--check` writes
+nothing and lists each file that would change. `--stdin` formats standard
+input and writes the result to standard output.
+
+```bash
+aura fmt src
+aura fmt --check .
+aura fmt --stdin < src/main.au
+```
+
+The formatter works on tokens. It applies these rules:
+
+| Rule | Behavior |
+| --- | --- |
+| Indentation | Four spaces per block level. |
+| Spacing | One space around binary operators, after a comma, and after a colon in annotations, dictionary entries, and block headers. No space inside brackets, before a comma, before a call or index bracket, or in a slice. |
+| Defaults and keywords | No space around `=` in a keyword argument. A parameter default after a type annotation keeps one space on each side. |
+| Blank lines | At most two blank lines at module level and one inside a body. Two blank lines separate top-level declarations. No blank line starts a body or ends the file. |
+| Reflow | A statement that fits in 88 columns goes on one line. A longer statement breaks its outermost bracket first and puts each element on its own line, indented one level. A list of two or more elements then ends with a trailing comma. A comprehension stays one element. Breaking repeats inward until each line fits. A signature breaks its parameter list before its result type. |
+| Magic trailing comma | A bracketed list written with a trailing comma stays one element per line, even when it would fit. A one-element tuple such as `(x,)` is not affected. |
+| Comments | A comment stays on the line it started on. A comment inside a bracketed list keeps that list one element per line. |
+| Literals | String, f-string, raw string, triple-quoted, and number literals keep their exact source text, including docstrings. |
+
+This input:
+
+```aura
+def scale(value:int32,factor:int32=2)->int32:
+  return value*factor
+def main()->None:
+  print(scale(
+      4,
+      factor = 3))
+```
+
+formats to:
+
+```aura
+def scale(value: int32, factor: int32 = 2) -> int32:
+    return value * factor
+
+def main() -> None:
+    print(scale(4, factor=3))
+```
+
+A statement without brackets cannot break, so it stays long. A `match`
+expression written in block form inside brackets keeps its original lines,
+shifted to the new indentation. Line endings become `\n`, and the file ends
+with one newline.
+
+The formatter accepts only source that parses. A syntax error is reported
+with its usual diagnostic, and the file is left unchanged. After formatting,
+the formatter lexes and parses its own output. The result must have the same
+tokens as the input, ignoring layout. If it does not, the command reports an
+internal formatter error and writes nothing.
+
 ## Testing
 
 `aura test` finds test cases, runs each one, and reports one result per case.
@@ -3023,10 +3082,10 @@ assertions.
 ## VS Code And LSP
 
 The VS Code extension keeps one persistent `aura lsp` process. It provides
-diagnostics, symbols, hover, go-to-definition, and completions through the
-Language Server Protocol (LSP). Hover, completion, and signature help show
-declaration docstrings, as [Docstrings And API Docs](/manual/docstrings)
-describes. Requests are debounced, cancellable,
+diagnostics, symbols, hover, go-to-definition, completions, and whole-document
+formatting through the Language Server Protocol (LSP). Hover, completion, and
+signature help show declaration docstrings, as
+[Docstrings And API Docs](/manual/docstrings) describes. Requests are debounced, cancellable,
 version-guarded, and invalidated by dependency.
 
 If the compiler process cannot start, a small lexical recovery layer provides
@@ -3044,6 +3103,10 @@ Ordinary parameter signatures keep their bare, `own`, and `mut` spelling.
 Built-in hover and completion detail shows retained-value contracts such as
 `list.append(value: own T)`. Class field and enum payload completion detail
 renders their implicit constructor ownership as `own`.
+
+Formatting uses the same rules as [`aura fmt`](#formatting). Run the editor's
+Format Document command, or set `"editor.formatOnSave": true` for Aura files
+to format on save. A buffer with a syntax error is left unchanged.
 
 Useful repository commands:
 
@@ -3405,8 +3468,7 @@ MIR-specific frame-note masking.
   runtime layout described above.
 - `ast`, `ast-json`, and `mir` are inspection formats, not stable
   serialization APIs.
-- The formatter normalizes the maintained whitespace surface. It is not a
-  configurable style engine.
+- The formatter has one fixed style and no configuration.
 - `aura test` discovers tests by the `test_` name prefix, not by annotation.
 - A timed-out test worker cannot be forcibly stopped inside the CLI process.
 
@@ -6063,7 +6125,7 @@ These figures come from the clean Mac14,9 measurement at `181204b`.
 - The direct backend is the maintained native backend for the implemented language surface.
 - The default `--backend auto` first tries direct emission. It may package an embedded-MIR launcher when direct emission is unavailable. Use `--backend direct` when fallback is unacceptable.
 - Editor tooling uses a persistent compiler service. If that process is unavailable, recovery is lexical only, with no semantic diagnostics or member inference.
-- `aura fmt` normalizes line endings, trailing whitespace, and final newlines. It is not a syntax-reflowing formatter.
+- `aura fmt` has one fixed style with an 88-column width and no configuration. A statement without brackets cannot break, so it may stay longer than 88 columns.
 - `aura test` discovers each parameterless `def test_*()` function as a separate result. A file with no such function still runs as one file-level test.
 - Optional `setup()` and `teardown()` run for each selected case. Teardown runs even after a setup or body failure.
 - Parameterized registration returns labeled capture-free `def() -> None` values in `list[(str, def() -> None)]`. Registration runs before `-k` filtering.
@@ -15183,12 +15245,21 @@ A non-copy value is consumed when it is used in an owned position. Owned positio
 - assignment into a new owned binding
 - an `own` function parameter or an `own self` method receiver
 - a by-value return
-- a class or enum payload, collection literal, mutating collection method, or
-  simple dict indexed assignment that stores the value
+- a class or enum payload, tuple or collection literal, mutating collection
+  method, or simple dict indexed assignment that stores the value
 - by-value enum matching
 - `own` iteration over `list[T]` or `set[T]`
 - the resource expression of `with`
 - a task-start argument copied or moved into task-owned capture storage
+
+A tuple or collection literal builds a new owned value, so it moves its non-copy elements wherever it appears. This holds when the literal itself goes to a shared position, such as a `print` or `len` argument, an f-string, an equality operand, or a bare parameter. Clone the element when the original must stay usable.
+
+```aura check-fail:AU3001
+def main():
+    pair = (1, "x")
+    print((pair, 2))
+    print(pair)
+```
 
 Aura evaluates an expression before it records the move at that boundary. It rejects an expression that tries to borrow and move overlapping places in incompatible subexpressions.
 
@@ -18771,6 +18842,8 @@ true
 ## Ownership And Evaluation Order
 
 A tuple is copyable if and only if every element type is copyable. Assignment, owned argument passing, returns, and pattern flow then follow the ordinary copy or move rule for the tuple as a whole.
+
+**Construction.** A tuple literal moves each non-copy element into the new tuple, even when the tuple goes to a shared position such as a `print` argument. See [Operations That Move](/manual/ownership-and-borrowing#operations-that-move).
 
 **Unpacking.** Unpacking a copy tuple copies its elements and leaves the source usable. Unpacking a non-copy tuple consumes the whole source exactly once and gives owned leaf bindings. Aura does not turn positional fields into independently reusable partial-move places. Any later use of the source is diagnosed as use after move.
 
@@ -26529,6 +26602,16 @@ cargo run -p aura -- analyze myfile.au   # diagnostics, symbols, hover info
 cargo run -p aura -- complete --line 5 --character 11 --trigger . myfile.au
 ```
 
+`aura fmt` formats source files in one fixed style. It sets four-space indentation, normalizes spacing and blank lines, and reflows bracketed lists at 88 columns. Comments and string literals keep their text:
+
+```bash
+cargo run -p aura -- fmt src             # format every .au file under src
+cargo run -p aura -- fmt --check .       # list files that would change
+cargo run -p aura -- fmt --stdin < myfile.au  # format stdin to stdout
+```
+
+The [CLI manual](../docs/manual/cli-and-tooling.md#formatting) lists every formatting rule.
+
 [01-running-programs.md](01-running-programs.md) walks through each command. [crates/aura/README.md](../crates/aura/README.md) is the CLI reference.
 
 ## Documenting Code
@@ -26591,6 +26674,7 @@ The repository includes two editor packages:
 - **Go-to-definition**, including definitions of imported symbols in other files.
 - **Diagnostics** from the compiler's type checker.
 - **Document symbols** for navigation.
+- **Formatting** with the same rules as `aura fmt`. Set `editor.formatOnSave` to format on save.
 
 The editor gets its analysis from `aura analyze` and `aura complete`, so the editor and the CLI use the same type checker. A local JavaScript analysis layer runs only as a fallback when the compiler cannot analyze the current buffer.
 

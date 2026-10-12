@@ -273,7 +273,7 @@ These figures come from the clean Mac14,9 measurement at `181204b`.
 - The direct backend is the maintained native backend for the implemented language surface.
 - The default `--backend auto` first tries direct emission. It may package an embedded-MIR launcher when direct emission is unavailable. Use `--backend direct` when fallback is unacceptable.
 - Editor tooling uses a persistent compiler service. If that process is unavailable, recovery is lexical only, with no semantic diagnostics or member inference.
-- `aura fmt` normalizes line endings, trailing whitespace, and final newlines. It is not a syntax-reflowing formatter.
+- `aura fmt` has one fixed style with an 88-column width and no configuration. A statement without brackets cannot break, so it may stay longer than 88 columns.
 - `aura test` discovers each parameterless `def test_*()` function as a separate result. A file with no such function still runs as one file-level test.
 - Optional `setup()` and `teardown()` run for each selected case. Teardown runs even after a setup or body failure.
 - Parameterized registration returns labeled capture-free `def() -> None` values in `list[(str, def() -> None)]`. Registration runs before `-k` filtering.

@@ -6712,11 +6712,13 @@ impl<'a> FunctionChecker<'a> {
                     .iter()
                     .enumerate()
                     .map(|(index, element)| {
-                        self.type_of_expr_hint(
+                        let ty = self.type_of_expr_hint(
                             element,
                             locals,
                             expected_elements.and_then(|types| types.get(index)),
-                        )
+                        )?;
+                        self.consume_aggregate_literal_element(element, locals)?;
+                        Ok(ty)
                     })
                     .collect::<Result<Vec<_>>>()?;
                 Ok(Type::Tuple(element_types))
@@ -6763,6 +6765,7 @@ impl<'a> FunctionChecker<'a> {
                     } else {
                         element_ty = Some(actual);
                     }
+                    self.consume_aggregate_literal_element(element, locals)?;
                 }
                 let Some(element_ty) = element_ty else {
                     return Err(Diagnostic::at(
@@ -6811,6 +6814,7 @@ impl<'a> FunctionChecker<'a> {
                     } else {
                         element_ty = Some(actual);
                     }
+                    self.consume_aggregate_literal_element(element, locals)?;
                 }
                 let Some(element_ty) = element_ty else {
                     return Err(Diagnostic::at(
@@ -6881,6 +6885,7 @@ impl<'a> FunctionChecker<'a> {
                     } else {
                         key_ty = Some(actual_key);
                     }
+                    self.consume_aggregate_literal_element(&entry.key, locals)?;
 
                     let has_contextual_value_type = value_ty.is_some();
                     let actual_value = if let Some(expected_value_ty) = value_ty.as_ref() {
@@ -6918,6 +6923,7 @@ impl<'a> FunctionChecker<'a> {
                     } else {
                         value_ty = Some(actual_value);
                     }
+                    self.consume_aggregate_literal_element(&entry.value, locals)?;
                 }
                 let (Some(key_ty), Some(value_ty)) = (key_ty, value_ty) else {
                     return Err(Diagnostic::at(

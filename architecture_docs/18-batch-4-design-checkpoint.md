@@ -433,6 +433,32 @@ formats standard input to standard output. The language server provides
 whole-document formatting by calling `aura fmt --stdin`, and the VS Code
 extension enables format-on-save through the standard editor setting.
 
+**Implementation notes.** The implementation settles these details:
+
+- A parameter default after a type annotation keeps one space on each side
+  of `=`, as in `factor: int32 = 2`. Every maintained example and manual page
+  uses that spelling. A keyword argument and an unannotated default use no
+  spaces.
+- When no bracket must break, reflow picks the rightmost bracket whose
+  opening and closing lines both fit. A bracket after `->` is tried last, so
+  a signature breaks its parameter list before its result type.
+- A block-form `match` expression inside brackets keeps its original lines,
+  shifted to the new indentation, because its indentation is significant.
+  A comment that cannot stay at the end of its line in the new layout also
+  keeps the statement's original lines.
+- An exploded list with two or more elements ends with a trailing comma. A
+  comprehension lays out as one element and never gains one, because its
+  commas separate loop targets. A one-element tuple `(x,)` is not a magic
+  trailing comma.
+- Trailing spaces and tabs outside multi-line strings are removed before the
+  input is lexed, so a stray trailing tab is fixed rather than rejected.
+- The safety check compares every token, including `Newline`, `Indent`, and
+  `Dedent`, and ignores spans. A comma directly before a closing bracket is
+  ignored unless it makes a one-element tuple.
+- The language server asks the persistent `aura lsp` compiler service with a
+  `format` method instead of starting `aura fmt --stdin`. Both run the same
+  formatter.
+
 **Alternatives.** An AST pretty-printer was rejected because the AST drops
 comments and the exact spelling of literals. A width of 100 was considered;
 88 matches the widest lines in the maintained examples.

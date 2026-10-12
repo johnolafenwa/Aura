@@ -22,6 +22,16 @@ cargo run -p aura -- analyze myfile.au   # diagnostics, symbols, hover info
 cargo run -p aura -- complete --line 5 --character 11 --trigger . myfile.au
 ```
 
+`aura fmt` formats source files in one fixed style. It sets four-space indentation, normalizes spacing and blank lines, and reflows bracketed lists at 88 columns. Comments and string literals keep their text:
+
+```bash
+cargo run -p aura -- fmt src             # format every .au file under src
+cargo run -p aura -- fmt --check .       # list files that would change
+cargo run -p aura -- fmt --stdin < myfile.au  # format stdin to stdout
+```
+
+The [CLI manual](../docs/manual/cli-and-tooling.md#formatting) lists every formatting rule.
+
 [01-running-programs.md](01-running-programs.md) walks through each command. [crates/aura/README.md](../crates/aura/README.md) is the CLI reference.
 
 ## Documenting Code
@@ -84,6 +94,7 @@ The repository includes two editor packages:
 - **Go-to-definition**, including definitions of imported symbols in other files.
 - **Diagnostics** from the compiler's type checker.
 - **Document symbols** for navigation.
+- **Formatting** with the same rules as `aura fmt`. Set `editor.formatOnSave` to format on save.
 
 The editor gets its analysis from `aura analyze` and `aura complete`, so the editor and the CLI use the same type checker. A local JavaScript analysis layer runs only as a fallback when the compiler cannot analyze the current buffer.
 

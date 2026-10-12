@@ -66,6 +66,15 @@ That includes classes, enums, traits, generics, modules, `Result`, optional
 owned slices, and numeric arrays. It keeps giving useful help while the
 current buffer is incomplete.
 
+Format Document uses the compiler's formatter, the same one `aura fmt` runs.
+To format on save, add this to your settings:
+
+```json
+"[aura]": {
+  "editor.formatOnSave": true
+}
+```
+
 The extension stays thin on purpose. Syntax assets and snippets live here. The
 Aura compiler owns semantic rules and diagnostics.
 

@@ -839,12 +839,15 @@ impl NativeCodegen<'_> {
         let env_base = environment_base(&mut builder, callable_ptr, shape.inline());
         let captures = load_captures(&mut builder, env_base, &shape.capture_types);
 
-        // The environment keeps its captures across calls, so a capture the
-        // function takes by value (and releases at its exit) is retained
-        // first; a borrowed or mutable capture is passed as it is.
+        // The environment keeps its captures across calls. A direct function
+        // releases every by-value and shared parameter at its exit, the same
+        // way a direct call hands it a retained argument, so those captures
+        // are retained first. A mutable capture is passed as it is: the
+        // function returns its updated value, which replaces the environment
+        // word below.
         let mut lowered_args = Vec::new();
         for (index, (values, ty)) in captures.iter().zip(&shape.capture_types).enumerate() {
-            if function.params[index].passing == MirReceiverKind::Value {
+            if function.params[index].passing != MirReceiverKind::BorrowMut {
                 retain_direct_values(self, &mut builder, values, ty)?;
             }
             lowered_args.extend(values.iter().copied());

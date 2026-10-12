@@ -1,0 +1,8 @@
+def show(entry: (str, int64)):
+    print(entry)
+
+def wrap(name: str):
+    show((name, 1))
+
+def main():
+    wrap("aura")

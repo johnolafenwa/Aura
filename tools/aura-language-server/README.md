@@ -12,6 +12,7 @@ The server provides:
 - go-to-definition
 - document diagnostics
 - signature help, references, and rename
+- whole-document formatting
 
 Compiler-backed analysis supplies all of these. It also covers:
 
@@ -175,3 +176,13 @@ Each command reads source from stdin and returns JSON.
 A refused signature-help or rename query returns `null`. These commands also
 accept a source file in place of `--stdin <virtual-path>`. They never change
 source files or package lockfiles.
+
+## Formatting
+
+The server advertises whole-document formatting. It sends the buffer to the
+compiler service with the `format` method. The response is
+`{"formatted": text}`, or `{"formatted": null, "error": message}` when the
+source does not parse. The server replaces the whole document with the
+formatted text. It returns no edits when the text is unchanged, the source
+has a syntax error, or the request is cancelled or stale. The rules are those
+of `aura fmt`.
