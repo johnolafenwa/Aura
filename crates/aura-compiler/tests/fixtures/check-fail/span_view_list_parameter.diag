@@ -1,0 +1,6 @@
+error[AU2002]: argument type mismatch for function `total`: expected `list[int64]`, found `Span[int64]`
+ --> crates/aura-compiler/tests/fixtures/check-fail/span_view_list_parameter.au:7:17
+  |
+7 |     print(total(window))
+  |                 ^
+  = help: a `list[T]` parameter needs an owned list; pass `span.to_list()`, or declare the parameter as `Span[T]`

@@ -1,0 +1,42 @@
+trait Windowed:
+    def window(self, items: list[int64], width: int64) -> view Span[int64] from items
+
+class Leading:
+    skip: int64
+
+    def after(self, items: list[int64]) -> view Span[int64] from items:
+        return view items[self.skip:]
+
+impl Windowed for Leading:
+    def window(self, items: list[int64], width: int64) -> view Span[int64] from items:
+        return view items[self.skip:self.skip + width]
+
+def tail[T](items: list[T]) -> view Span[T] from items:
+    return view items[1:]
+
+def forward(items: list[int64]) -> view Span[int64] from items:
+    return view tail(items)
+
+def whole(items: mut list[int64]) -> view mut Span[int64] from items:
+    return view mut items
+
+def show(part: Span[int64]):
+    print(part.to_list())
+
+def main():
+    mut items = [5, 6, 7, 8, 9]
+    leading = Leading(skip=2)
+    view a = leading.after(items)
+    show(a)
+    view w = leading.window(items, 2)
+    show(w)
+    letters = ["x", "y", "z"]
+    view names = tail(letters)
+    print(len(names))
+    view f = forward(items=items)
+    show(f)
+    view mut all = whole(items)
+    all.fill(0)
+    print(items)
+    view inner = tail(items[2:])
+    print(len(inner))

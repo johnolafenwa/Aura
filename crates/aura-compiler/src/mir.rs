@@ -2721,6 +2721,9 @@ impl<'a> MirLoanValidationContext<'a> {
                 if let Some(member) = BuiltinMember::resolve(name, field) {
                     return Ok(Some(lower_receiver_kind(member.receiver_passing())));
                 }
+                if name == "list" && spans::span_member_mutates_receiver(field) {
+                    return Ok(Some(MirReceiverKind::BorrowMut));
+                }
             }
         }
         let mut passings = Vec::new();
@@ -5282,6 +5285,7 @@ fn container_mutation_callables(
         }
         "pop" | "popitem" | "remove" | "discard" | "clear" | "reverse" | "sort" | "swap"
         | "shuffle" | "truncate" | "retain" | "drain" => None,
+        _ if spans::span_member_mutates_receiver(field) => None,
         _ => return Ok(None),
     };
     let inserts_operand = matches!(
@@ -9635,6 +9639,8 @@ fn lower_function(
     return_type: &Type,
     type_param_bounds: BTreeMap<String, Vec<crate::sema::TraitBound>>,
 ) -> Vec<MirFunction> {
+    let returns_span_range = spans::span_type_element(return_type).is_some();
+    let return_type = &spans::span_return_as_range(return_type);
     let params = function
         .params
         .iter()
@@ -9644,7 +9650,7 @@ fn lower_function(
         .map(|(index, ((param, ty), passing))| MirParam {
             name: param.name.clone(),
             passing: lower_receiver_kind(passing),
-            ty: ty.clone(),
+            ty: spans::span_type_as_list(ty),
             default_function: param
                 .default
                 .as_ref()
@@ -9652,6 +9658,27 @@ fn lower_function(
             keyword_only: param.keyword_only,
         })
         .collect::<Vec<_>>();
+    // A `Span[T]` parameter is a list parameter plus its hidden range.
+    let span_params = function
+        .params
+        .iter()
+        .zip(param_types.iter())
+        .filter(|(_, ty)| spans::span_type_element(ty).is_some())
+        .map(|(param, _)| param.name.clone())
+        .collect::<Vec<_>>();
+    let mut params = params;
+    for param in &span_params {
+        let (start, len) = spans::span_param_range_names(param);
+        for hidden in [start, len] {
+            params.push(MirParam {
+                name: hidden,
+                passing: MirReceiverKind::Value,
+                ty: Type::named("int64"),
+                default_function: None,
+                keyword_only: true,
+            });
+        }
+    }
 
     let default_functions = function
         .params
@@ -9685,8 +9712,10 @@ fn lower_function(
         function
             .view_return
             .as_ref()
+            .filter(|_| !returns_span_range)
             .map(|contract| contract.origin.clone()),
     );
+    lowerer.returns_span_range = returns_span_range;
     if let Some(receiver_type) = receiver_type {
         lowerer
             .local_types
@@ -9701,10 +9730,24 @@ fn lower_function(
         .zip(param_types.iter())
         .zip(param_passings.iter())
     {
-        lowerer.local_types.insert(param.name.clone(), ty.clone());
+        lowerer
+            .local_types
+            .insert(param.name.clone(), spans::span_type_as_list(ty));
         if *passing != ReceiverKind::Value {
             lowerer.non_owning_roots.insert(param.name.clone());
         }
+    }
+    for param in &span_params {
+        let (start, len) = spans::span_param_range_names(param);
+        lowerer
+            .local_types
+            .insert(start.clone(), Type::named("int64"));
+        lowerer
+            .local_types
+            .insert(len.clone(), Type::named("int64"));
+        lowerer
+            .span_ranges
+            .insert(param.clone(), spans::SpanRange { start, len });
     }
     if function.body.is_empty() && name == "control::retry" {
         // `control.retry[T, E]` is a concrete first-class function value after
@@ -9876,6 +9919,10 @@ struct Lowerer<'a> {
     scoped_names: Vec<std::collections::HashMap<String, String>>,
     generated_functions: Vec<MirFunction>,
     view_sources: BTreeMap<String, String>,
+    /// The hidden ranges of `Span[T]` views and parameters, by base place.
+    span_ranges: BTreeMap<String, spans::SpanRange>,
+    /// The function returns `view Span[T]`, lowered as its `(start, len)`.
+    returns_span_range: bool,
     returned_view_descriptors: BTreeSet<String>,
     lowered_returned_view_origins: BTreeMap<(usize, usize), String>,
     loan_source_names: BTreeMap<String, String>,
@@ -10064,6 +10111,8 @@ impl<'a> Lowerer<'a> {
             scoped_names: Vec::new(),
             generated_functions: Vec::new(),
             view_sources: BTreeMap::new(),
+            span_ranges: BTreeMap::new(),
+            returns_span_range: false,
             returned_view_descriptors: BTreeSet::new(),
             lowered_returned_view_origins: BTreeMap::new(),
             loan_source_names: BTreeMap::new(),
@@ -11554,6 +11603,14 @@ impl<'a> Lowerer<'a> {
                 true
             }
             Stmt::View(view) => {
+                // A slice view is a loan of the sliced base plus a range.
+                let span_view = self
+                    .begin_span_view(view)
+                    .or_else(|| self.begin_returned_span_view(view));
+                let (view, pending_span) = match &span_view {
+                    Some((base_view, _)) => (base_view, true),
+                    None => (view, false),
+                };
                 let ty = self.infer_expr_type(&view.source).or_else(|| {
                     let ExprKind::Call { callee, .. } = &grouped_mir_expr(&view.source).kind else {
                         return None;
@@ -11675,6 +11732,10 @@ impl<'a> Lowerer<'a> {
                 self.view_sources.insert(loan_name.clone(), source);
                 self.loan_source_names
                     .insert(loan_name.clone(), view.name.clone());
+                if pending_span {
+                    let (_, pending) = span_view.expect("checked pending span view");
+                    self.finish_span_view(&loan_name, pending);
+                }
                 if let Some(scope) = self.loan_scopes.last_mut() {
                     scope.push(loan_name);
                 }
@@ -11697,7 +11758,13 @@ impl<'a> Lowerer<'a> {
             }
             Stmt::Return(return_stmt) => {
                 let mut returned_call_loan = None;
-                let value = if let Some(value) = &return_stmt.value {
+                // A span-returning function returns its range, not a loan.
+                let returns_range = return_stmt.view.is_some() && self.returns_span_range;
+                let value = if let Some(value) =
+                    return_stmt.value.as_ref().filter(|_| returns_range)
+                {
+                    self.lower_returned_span_range(value)
+                } else if let Some(value) = &return_stmt.value {
                     let return_type = self.return_type.clone();
                     if return_stmt.view.is_some() && self.returned_view_source(value).is_some() {
                         // Consume the callee's handoff before an ordinary
@@ -11736,7 +11803,7 @@ impl<'a> Lowerer<'a> {
                 };
                 self.emit_active_match_writebacks();
                 let mut returned_loan = None;
-                if return_stmt.view.is_some() {
+                if return_stmt.view.is_some() && !returns_range {
                     if let Some(value) = &return_stmt.value {
                         if let Some(loan) = returned_call_loan {
                             self.emit(Instruction::ReturnLoan {
@@ -12245,6 +12312,34 @@ impl<'a> Lowerer<'a> {
             return;
         }
 
+        // `view[i] = value` through a list view or a span writes the element
+        // in place through an element reborrow of the view. A member call on
+        // a read of the loan could not write back through it.
+        if let AssignTarget::Index { object, index } = &assign.target {
+            if self.index_target_is_list_view(object) {
+                let target_expr = Expr {
+                    kind: ExprKind::Index {
+                        object: object.clone(),
+                        index: index.clone(),
+                    },
+                    span: assign.span,
+                };
+                if let Some((collection, selector, projection, span)) =
+                    self.element_loan_source(&target_expr, true)
+                {
+                    self.lower_element_place_assign(
+                        assign,
+                        collection,
+                        selector,
+                        projection,
+                        span,
+                        &target_expr,
+                    );
+                    return;
+                }
+            }
+        }
+
         if let AssignTarget::Index { object, index } = &assign.target {
             let lowered_object = self.lower_expr(object);
             let object_ty = self.infer_expr_type(object);
@@ -12276,7 +12371,8 @@ impl<'a> Lowerer<'a> {
             };
             let lowered_index = match object_ty.as_ref() {
                 Some(Type::Named(name, args)) if name == "list" && args.len() == 1 => {
-                    self.lower_index_domain_expr(index)
+                    let relative = self.lower_index_domain_expr(index);
+                    self.span_absolute_index(object, relative, index.span)
                 }
                 Some(Type::Named(name, args)) if name == "Array" && args.len() == 1 => {
                     self.lower_array_coordinate_expr(index)
@@ -12466,6 +12562,18 @@ impl<'a> Lowerer<'a> {
     /// when the target is not such a place (a plain index assignment
     /// replaces or inserts the element and stays a member call; tuple
     /// positions are not assignable).
+    fn index_target_is_list_view(&self, object: &Expr) -> bool {
+        let ExprKind::Name(name) = &grouped_mir_expr(object).kind else {
+            return false;
+        };
+        let place = self.render_local_name(name);
+        (self.view_sources.contains_key(&place) || self.span_ranges.contains_key(&place))
+            && matches!(
+                self.infer_expr_type(object),
+                Some(Type::Named(ref collection, ref args)) if collection == "list" && args.len() == 1
+            )
+    }
+
     fn element_assign_target(
         &mut self,
         target: &AssignTarget,
@@ -14858,7 +14966,8 @@ impl<'a> Lowerer<'a> {
                     Operand::Place(place) | Operand::MovePlace(place) => Some(place.clone()),
                     _ => self.render_place_expr_option(iterable),
                 };
-                (object, receiver_place, element_ty)
+                let span_range = self.span_range_of(iterable).map(|(_, range)| range);
+                (object, receiver_place, element_ty, span_range)
             })
             .collect::<Vec<_>>();
 
@@ -14882,7 +14991,34 @@ impl<'a> Lowerer<'a> {
             element_types.push(Type::named("int64"));
         }
 
-        for (position, (object, receiver_place, element_ty)) in sources.iter().enumerate() {
+        for (position, (object, receiver_place, element_ty, span_range)) in
+            sources.iter().enumerate()
+        {
+            // A span reads its base at `start + index` while `index < len`.
+            let selector = match span_range {
+                Some(range) => {
+                    let fetch_block = self.new_block("for_lockstep_span");
+                    self.emit_span_iteration_bound(
+                        &range.len,
+                        &index,
+                        fetch_block,
+                        after_block,
+                        for_stmt.span,
+                    );
+                    let absolute = self.new_typed_temp(Type::named("int64"));
+                    self.emit(Instruction::Assign {
+                        target: absolute.clone(),
+                        value: Rvalue::Binary {
+                            op: BinaryOp::Add,
+                            left: Operand::Place(range.start.clone()),
+                            right: Operand::Place(index.clone()),
+                            span: for_stmt.span,
+                        },
+                    });
+                    absolute
+                }
+                None => index.clone(),
+            };
             let next_value = self.new_typed_temp(lookup_type(element_ty.clone()));
             self.emit(Instruction::Assign {
                 target: next_value.clone(),
@@ -14894,7 +15030,7 @@ impl<'a> Lowerer<'a> {
                     },
                     args: vec![MirArg {
                         name: None,
-                        value: Operand::Place(index.clone()),
+                        value: Operand::Place(selector),
                         writeback_place: None,
                     }],
                 },
@@ -15191,12 +15327,31 @@ impl<'a> Lowerer<'a> {
                 };
                 let next_value = self.new_typed_temp(lookup_type(element_ty.clone()));
                 let index = self.new_typed_temp(Type::named("int64"));
+                // A span iterates its base from `start` to `start + len`.
+                let span_bounds = if takes_owned {
+                    None
+                } else {
+                    self.span_iteration_bounds(&for_stmt.iterable)
+                };
                 self.emit(Instruction::Assign {
                     target: index.clone(),
-                    value: Rvalue::Use(Operand::Int(0)),
+                    value: Rvalue::Use(match &span_bounds {
+                        Some((start, _)) => Operand::Place(start.clone()),
+                        None => Operand::Int(0),
+                    }),
                 });
                 self.terminate(Terminator::Goto(self.label(dispatch_block)));
                 self.switch_to(dispatch_block);
+                if let Some((_, stop)) = &span_bounds {
+                    let fetch_block = self.new_block("for_span_fetch");
+                    self.emit_span_iteration_bound(
+                        stop,
+                        &index,
+                        fetch_block,
+                        after_block,
+                        for_stmt.span,
+                    );
+                }
                 let (iteration_object, iteration_field, iteration_receiver_place) =
                     if let Some(place) = owned_iterable_place.as_ref() {
                         (
@@ -16373,6 +16528,9 @@ impl<'a> Lowerer<'a> {
                 if matches!(op, BinaryOp::And | BinaryOp::Or) {
                     return self.lower_logical_expr(*op, left, right);
                 }
+                if let Some(equal) = self.lower_span_equality(*op, left, right, expr.span) {
+                    return equal;
+                }
                 if let Some((trait_name, field)) =
                     self.operator_trait_member_for_binary(*op, left, right)
                 {
@@ -16562,7 +16720,8 @@ impl<'a> Lowerer<'a> {
                 let lowered_object = self.lower_expr_at_sequence_point(object, None);
                 let lowered_index = match object_type.as_ref() {
                     Some(Type::Named(name, args)) if name == "list" && args.len() == 1 => {
-                        self.lower_index_domain_expr(index)
+                        let relative = self.lower_index_domain_expr(index);
+                        self.span_absolute_index(object, relative, index.span)
                     }
                     Some(Type::Named(name, args)) if name == "Array" && args.len() == 1 => {
                         self.lower_array_coordinate_expr(index)
@@ -16614,6 +16773,16 @@ impl<'a> Lowerer<'a> {
                 end,
                 colon_span,
             } => {
+                if let Some(copy) = self.lower_span_value_slice(
+                    object,
+                    start.as_deref(),
+                    end.as_deref(),
+                    *colon_span,
+                    self.infer_expr_type(expr)
+                        .unwrap_or_else(|| Type::named("Unknown")),
+                ) {
+                    return copy;
+                }
                 let temp = self.new_temp_for_expr(expr);
                 let lowered_object = self.lower_expr_at_sequence_point(object, None);
                 let lowered_start = start
@@ -17668,6 +17837,10 @@ impl<'a> Lowerer<'a> {
         negated: bool,
         operator_span: crate::diag::Span,
     ) -> Operand {
+        if let Some(contains) = self.lower_span_membership(value, container, negated, operator_span)
+        {
+            return contains;
+        }
         let container_ty = self
             .infer_expr_type(container)
             .unwrap_or_else(|| Type::named("Unknown"));
@@ -19157,6 +19330,19 @@ impl<'a> Lowerer<'a> {
         args: &[Argument],
         expected: Option<&Type>,
     ) -> Operand {
+        match &callee.kind {
+            ExprKind::Name(name) if name == "len" && args.len() == 1 => {
+                if let Some(len) = self.lower_span_len(&args[0].value) {
+                    return len;
+                }
+            }
+            ExprKind::Member { object, field } => {
+                if let Some(value) = self.lower_span_member_call(expr, object, field, args) {
+                    return value;
+                }
+            }
+            _ => {}
+        }
         if let Some(alias_ty) = self.thin_callable_alias_target(callee) {
             let [argument] = args else {
                 unreachable!("checked thin alias adapters take one callable value")
@@ -20831,6 +21017,7 @@ impl<'a> Lowerer<'a> {
         let mut lowered_by_param = (0..params.len())
             .map(|_| None)
             .collect::<Vec<Option<MirArg>>>();
+        let mut span_range_args = Vec::new();
 
         // Supplied expressions retain call-site order even when named
         // arguments bind to declaration slots in another order.
@@ -20847,6 +21034,17 @@ impl<'a> Lowerer<'a> {
             let passing = param_passings
                 .and_then(|passings| passings.get(index))
                 .copied();
+            if spans::span_type_element(&expected).is_some() {
+                let (value, range_args, writeback_place) =
+                    self.lower_span_argument(&param.name, &argument.value, &expected, passing);
+                span_range_args.extend(range_args);
+                lowered_by_param[index] = Some(MirArg {
+                    name: None,
+                    value,
+                    writeback_place,
+                });
+                continue;
+            }
             let value = if let Some(passing) = passing {
                 self.lower_expr_for_passing(&argument.value, Some(&expected), passing)
             } else if is_float_type(&expected) {
@@ -20902,6 +21100,7 @@ impl<'a> Lowerer<'a> {
         lowered_by_param
             .into_iter()
             .map(|argument| argument.expect("every parameter should have a lowered argument"))
+            .chain(span_range_args)
             .collect()
     }
 
@@ -21533,6 +21732,8 @@ impl<'a> Lowerer<'a> {
                 Operand::Place(temp)
             }
         };
+        // A span element is the base element at `start + i`.
+        let selector = self.span_absolute_index(object, selector, span);
         // ReborrowElement selects inside its parent's value. Preserve a
         // collection field/tuple projection through a view as a separate
         // parent loan before applying the element selector.
@@ -23959,6 +24160,11 @@ fn mir_class_type_name(
             }
         })
 }
+
+#[path = "mir_spans.rs"]
+mod spans;
+
+pub(crate) use spans::span_member_mutates_receiver;
 
 #[cfg(test)]
 #[path = "mir_tests.rs"]

@@ -50,6 +50,7 @@ executable size.
 | --- | --- | --- |
 | `comprehensions.au` | Eager owned list, set, and dictionary comprehensions with filters, nested outer-major clauses, target-local scope, and ordinary bare-loop ownership | `[1, 4, 9, 16]`, `[4, 16]`, `{3: 30, 4: 40}`, `[11, 12, 21, 22]` |
 | `slices.au` | Owned list slices and Unicode-scalar `str` slices with every omitted-endpoint form, negative endpoints, and source/result independence | `[20, 30]`, `[10, 20]`, `[30, 40]`, `[10, 20, 30, 40]`, `[10, 20, 30, 40]`, `[99, 30]`, `🎉`, `A🎉`, `🎉Z`, `A🎉Z`, `A🎉Z` |
+| `span_views.au` | `Span[T]` slice views: a range passed to a `Span[T]` parameter, a whole list coerced to a span, a mutable span sorted and written in place, a `mut Span[T]` parameter, a returned range view, and membership | `18`, `27`, `3`, `[1, 5, 7]`, `[4, 9, 1, 5, 7]`, `[40, 90, 1, 5, 7]`, `[90, 1, 5]`, `true` |
 | `list_basics.au` | List literals, indexed reads, `list[T]` methods, and indexed mutation through `set(...)` | `3`, `1`, `2`, `2`, `20`, `1`, `99`, `false` |
 | `list_iteration.au` | Empty-list construction with `list[T]()`, `extend(...)`, explicit `list[T]` annotations, bare shared iteration, and consuming `own` iteration | `Ada`, `Grace`, `2`, `9` |
 | `list_polish.au` | Negative direct and method indexes, cloned reads of non-copy values, `mut` iteration, cast-free `list.len()` with `range(...)`, `insert(...)`, `swap(...)`, `reverse()`, `extend(...)`, `clear()`, and list equality | `Ada`, `Grace`, `true`, `4`, `1`, `14`, `13`, `12`, `11`, `true`, `100`, `true`, `true` |
@@ -369,6 +370,7 @@ cargo run -p aura -- run examples/collections/list_basics.au
 cargo run -p aura -- run examples/collections/list_iteration.au
 cargo run -p aura -- run examples/collections/list_polish.au
 cargo run -p aura -- run examples/collections/slices.au
+cargo run -p aura -- run examples/collections/span_views.au
 cargo run -p aura -- run examples/collections/dict_basics.au
 cargo run -p aura -- run examples/collections/lookup_in_place.au
 cargo run -p aura -- run examples/collections/set_basics.au

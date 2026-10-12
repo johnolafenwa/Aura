@@ -1,0 +1,5 @@
+def keep(values: own Span[int64]) -> None:
+    return None
+
+def main():
+    print(1)

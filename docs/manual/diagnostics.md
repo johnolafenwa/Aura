@@ -330,6 +330,11 @@ Two related cases use other codes:
 - a function type whose `view` result names an origin that is not one of its
   named parameters
 - a function type with a `view mut` result over a non-`mut` origin
+- a `Span[T]` in an owned position, such as a field, an owned local, or an
+  owned result
+- a call that returns a `Span[T]` and is not bound with `view`
+- a function with a `Span[T]` parameter or result used as a function value,
+  or a lambda that captures a span
 
 The diagnostic identifies the declared origin and the incompatible expression
 or destination. Return an owned clone, index, or handle when the access must

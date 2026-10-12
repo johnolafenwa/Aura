@@ -1,0 +1,6 @@
+error[AU4003]: slice end `5` is outside `0..=3`
+ --> crates/aura-compiler/tests/fixtures/run-fail/returned_collection_view_range_out_of_range.au:2:23
+  |
+2 |     return view items[:count]
+  |                       ^
+  = note: Aura call chain (innermost first): head at 1:1 -> main at 4:1

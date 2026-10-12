@@ -1,0 +1,4 @@
+def main():
+    mut items = [3, 2, 1]
+    view window = items[0:2]
+    window.sort()

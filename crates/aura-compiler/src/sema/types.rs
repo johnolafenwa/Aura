@@ -934,6 +934,86 @@ impl fmt::Display for Type {
     }
 }
 
+/// `Span[T]` is the view-only pointee of a slice view (ADR-0061, B1). It
+/// names what a view points at and has no owned representation.
+pub(crate) fn span_element_type(ty: &Type) -> Option<&Type> {
+    match ty {
+        Type::Named(name, args) if name == "Span" && args.len() == 1 => Some(&args[0]),
+        _ => None,
+    }
+}
+
+pub(crate) fn type_contains_span(ty: &Type) -> bool {
+    if span_element_type(ty).is_some() {
+        return true;
+    }
+    match ty {
+        Type::Named(_, args) | Type::Tuple(args) => args.iter().any(type_contains_span),
+        Type::Union(union) => union.members.iter().any(type_contains_span),
+        Type::Function {
+            params,
+            return_type,
+        } => {
+            params.iter().any(|param| type_contains_span(&param.ty))
+                || type_contains_span(return_type)
+        }
+        Type::Closure {
+            params,
+            return_type,
+            ..
+        } => {
+            params.iter().any(|param| type_contains_span(&param.ty))
+                || type_contains_span(return_type)
+        }
+        Type::Callable(callable) => {
+            callable
+                .params
+                .iter()
+                .any(|param| type_contains_span(&param.ty))
+                || type_contains_span(&callable.return_type)
+        }
+        Type::ReturnedView(view) => type_contains_span(&view.pointee),
+        Type::TypeParam(_) | Type::Module(_) | Type::Unit => false,
+    }
+}
+
+/// The diagnostic for a `Span[T]` written where an owned value lives.
+pub(crate) fn span_position_error(
+    ty: &Type,
+    span: crate::diag::Span,
+    position: &str,
+) -> Diagnostic {
+    Diagnostic::coded_at(
+        "AU3010",
+        span,
+        format!("view type `{ty}` cannot be {position}"),
+    )
+    .with_help("`Span[T]` is the type of a slice view: bind one with `view name = items[a:b]` or take one as a bare or `mut` parameter; use `.to_list()` for an owned copy")
+}
+
+pub(crate) fn reject_span_type(ty: &Type, span: crate::diag::Span, position: &str) -> Result<()> {
+    if type_contains_span(ty) {
+        return Err(span_position_error(ty, span, position));
+    }
+    Ok(())
+}
+
+fn reject_nested_span_type(ty: &Type, span: crate::diag::Span) -> Result<()> {
+    reject_span_type(ty, span, "a type argument or tuple element")
+}
+
+fn reject_function_type_span(ty: &Type, span: crate::diag::Span) -> Result<()> {
+    if type_contains_span(ty) {
+        return Err(Diagnostic::coded_at(
+            "AU3010",
+            span,
+            format!("view type `{ty}` cannot appear in a function type"),
+        )
+        .with_help("a stored callable cannot take or return a span; call a named function with the span directly"));
+    }
+    Ok(())
+}
+
 pub(super) fn lower_type(
     type_ref: &TypeRef,
     type_names: &TypeDefinitions,
@@ -982,7 +1062,7 @@ pub(super) fn lower_type_with_self(
                             return Err(invalid());
                         }
                     }
-                    lower_type_with_self(
+                    let lowered = lower_type_with_self(
                         member,
                         type_names,
                         type_arities,
@@ -996,7 +1076,18 @@ pub(super) fn lower_type_with_self(
                         } else {
                             error
                         }
-                    })
+                    })?;
+                    if span_element_type(&lowered).is_some() {
+                        return Err(Diagnostic::coded_at(
+                            "AU2010",
+                            member.span,
+                            format!("view type `{lowered}` cannot be a union member"),
+                        )
+                        .with_help(
+                            "a union member is an owned value; pass the span as its own parameter",
+                        ));
+                    }
+                    Ok(lowered)
                 })
                 .collect::<Result<Vec<_>>>()?;
             return Type::normalize_union_with_budget(
@@ -1048,14 +1139,16 @@ pub(super) fn lower_type_with_self(
             return elements
                 .iter()
                 .map(|element| {
-                    lower_type_with_self(
+                    let lowered = lower_type_with_self(
                         element,
                         type_names,
                         type_arities,
                         canonical_type_names,
                         type_params,
                         self_type,
-                    )
+                    )?;
+                    reject_nested_span_type(&lowered, element.span)?;
+                    Ok(lowered)
                 })
                 .collect::<Result<Vec<_>>>()
                 .map(Type::Tuple);
@@ -1111,6 +1204,7 @@ pub(super) fn lower_type_with_self(
                         type_params,
                         self_type,
                     )?;
+                    reject_function_type_span(&ty, param.ty.span)?;
                     Ok(FunctionParamContract {
                         keyword_only: param.keyword_only,
                         name: param.name.clone().unwrap_or_default(),
@@ -1120,6 +1214,7 @@ pub(super) fn lower_type_with_self(
                     })
                 })
                 .collect::<Result<Vec<_>>>()?;
+            let return_type_span = return_type.span;
             let return_type = lower_type_with_self(
                 return_type,
                 type_names,
@@ -1128,6 +1223,7 @@ pub(super) fn lower_type_with_self(
                 type_params,
                 self_type,
             )?;
+            reject_function_type_span(&return_type, return_type_span)?;
             let return_type = wrap_returned_view(&params, return_type, view_return.as_ref());
             return Ok(Type::Function {
                 params,
@@ -1184,16 +1280,28 @@ pub(super) fn lower_type_with_self(
     let args = type_args
         .iter()
         .map(|arg| {
-            lower_type_with_self(
+            let lowered = lower_type_with_self(
                 arg,
                 type_names,
                 type_arities,
                 canonical_type_names,
                 type_params,
                 self_type,
-            )
+            )?;
+            reject_nested_span_type(&lowered, arg.span)?;
+            Ok(lowered)
         })
         .collect::<Result<Vec<_>>>()?;
+
+    if type_name == "Span" {
+        if args.len() != 1 {
+            return Err(Diagnostic::at(
+                type_ref.span,
+                "`Span` expects exactly one type argument",
+            ));
+        }
+        return Ok(Type::Named(type_name.to_string(), args));
+    }
 
     if let Some(alias) = type_names.imported_aliases.get(type_name) {
         if args.len() != alias.decl.type_params.len() {

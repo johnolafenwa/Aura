@@ -1,0 +1,6 @@
+error[AU3010]: a method cannot return a `Span[T]` view of its receiver
+ --> crates/aura-compiler/tests/fixtures/check-fail/returned_collection_view_receiver_span.au:4:26
+  |
+4 |         return view self.items[1:]
+  |                          ^
+  = help: take the list as a parameter and return `view items[a:b]` from it

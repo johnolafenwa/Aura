@@ -1,0 +1,32 @@
+def total(values: Span[int64]) -> int64:
+    mut sum = 0
+    for value in values:
+        sum += value
+    return sum
+
+def scale(values: mut Span[int64], factor: int64):
+    for value in mut values:
+        value *= factor
+
+def middle(values: list[int64]) -> view Span[int64] from values:
+    return view values[1:-1]
+
+def main():
+    mut scores = [4, 9, 2, 7, 5]
+
+    print(total(scores[1:4]))
+    print(total(scores))
+
+    view mut tail = scores[2:]
+    tail.sort()
+    tail[0] = 1
+    print(len(tail))
+    print(tail.to_list())
+    print(scores)
+
+    scale(scores[:2], 10)
+    print(scores)
+
+    view inner = middle(scores)
+    print(inner.to_list())
+    print(90 in inner)

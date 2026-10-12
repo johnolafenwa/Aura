@@ -1,0 +1,8 @@
+def total(values: Span[int64]) -> int64:
+    return len(values)
+
+def main():
+    items = [1, 2, 3]
+    view window = items[0:2]
+    with TaskGroup() as group:
+        task = group.start(total, window)

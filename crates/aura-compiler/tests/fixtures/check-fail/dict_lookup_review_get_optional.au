@@ -1,0 +1,3 @@
+def main():
+    scores: dict[str, int64 | None] = {"ada": 3}
+    print(scores.get_optional("ada"))

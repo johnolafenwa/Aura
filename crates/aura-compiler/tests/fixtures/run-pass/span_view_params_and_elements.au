@@ -1,0 +1,68 @@
+class Point:
+    x: int64
+    name: str
+
+class Bag:
+    items: list[int64]
+
+    def middle_total(self) -> int64:
+        view inner = self.items[1:-1]
+        return total(inner)
+
+def total(values: Span[int64]) -> int64:
+    mut sum = 0
+    for value in values:
+        sum += value
+    return sum
+
+def tail_total(values: Span[int64]) -> int64:
+    return total(values[1:])
+
+def sort_tail(values: mut Span[int64]) -> None:
+    view mut rest = values[1:]
+    rest.sort()
+    values.swap(0, -1)
+
+def first_of[T](values: Span[T]) -> int64:
+    return len(values)
+
+def main():
+    mut items = [5, 4, 3, 2, 1]
+    print(tail_total(items[1:]))
+    sort_tail(items[0:4])
+    print(items)
+    print(first_of(items[2:]))
+    bag = Bag([1, 2, 3, 4])
+    print(bag.middle_total())
+    mut points = [Point(1, "a"), Point(2, "b"), Point(3, "c")]
+    view mut some = points[1:]
+    some[0].x = 20
+    some[1].name = "z"
+    view mut last = some[-1]
+    last.x = 30
+    print(points[1].x)
+    print(points[2].name)
+    print(points[2].x)
+    names = ["x", "yy", "zzz"]
+    view tailnames = names[1:]
+    view second = tailnames[1]
+    print(len(second))
+    mut words = ["a", "b", "c"]
+    view mut ws = words[1:]
+    for w in mut ws:
+        w = w + "!"
+    print(words)
+    for value in items[1:3]:
+        print(value)
+    view window = items[1:4]
+    for value in window:
+        if value == 2:
+            break
+        print(value)
+    left = [1, 2, 3]
+    right = [0, 1, 2, 3]
+    view a = left[:]
+    view b = right[1:]
+    print(a == b)
+    print(a != b)
+    print(b == [1, 2, 3])
