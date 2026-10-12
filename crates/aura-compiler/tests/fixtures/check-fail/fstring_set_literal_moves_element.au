@@ -1,0 +1,5 @@
+def main():
+    name = "aura"
+    text = f"{ {name} }"
+    print(text)
+    print(name)

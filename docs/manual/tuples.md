@@ -156,6 +156,8 @@ true
 
 A tuple is copyable if and only if every element type is copyable. Assignment, owned argument passing, returns, and pattern flow then follow the ordinary copy or move rule for the tuple as a whole.
 
+**Construction.** A tuple literal moves each non-copy element into the new tuple, even when the tuple goes to a shared position such as a `print` argument. See [Operations That Move](/manual/ownership-and-borrowing#operations-that-move).
+
 **Unpacking.** Unpacking a copy tuple copies its elements and leaves the source usable. Unpacking a non-copy tuple consumes the whole source exactly once and gives owned leaf bindings. Aura does not turn positional fields into independently reusable partial-move places. Any later use of the source is diagnosed as use after move.
 
 **Equality.** Tuple `==` and `!=` are shared reads. They do not unpack or transfer ownership. Both operands stay usable, including a non-copy tuple such as `(str, int64)`.

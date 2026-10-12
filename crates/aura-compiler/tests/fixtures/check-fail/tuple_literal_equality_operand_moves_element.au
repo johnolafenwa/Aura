@@ -1,0 +1,5 @@
+def main():
+    name = "aura"
+    same = (name, 1) == ("aura", 1)
+    print(same)
+    print(name)

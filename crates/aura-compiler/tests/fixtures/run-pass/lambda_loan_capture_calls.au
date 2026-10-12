@@ -1,0 +1,27 @@
+class Counter:
+    total: int64
+
+    def add(mut self, amount: int64):
+        self.total = self.total + amount
+
+def main():
+    values = [1, 2, 3]
+    label = "aura"
+    size = lambda [values]: len(values)
+    print(size())
+    print(size())
+    print(values)
+    describe = lambda [label, values]: f"{label}:{len(values)}"
+    print(describe())
+    print(describe())
+    print(label)
+    mut counter = Counter(total=1)
+    mut bump: def(int64) -> None = lambda [mut counter] amount: counter.add(amount)
+    bump(2)
+    bump(3)
+    print(counter.total)
+    owned = [4, 5]
+    take = lambda [own owned]: len(owned)
+    print(take())
+    print(take())
+    print(values)
