@@ -6720,6 +6720,9 @@ impl MirRuntime {
         args: &[MirArg],
         env: &mut Env,
     ) -> Result<Value> {
+        if field.starts_with("__span_") {
+            return self.evaluate_span_method(vector, field, receiver_place, args, env);
+        }
         match field {
             "len" => {
                 if !args.is_empty() {
@@ -7672,6 +7675,107 @@ impl MirRuntime {
             _ => Err(Diagnostic::new(format!(
                 "unsupported set method `{}`",
                 field
+            ))),
+        }
+    }
+
+    /// The private range operations of `Span[T]` views (ADR-0061, B2).
+    fn evaluate_span_method(
+        &mut self,
+        mut vector: VecValue,
+        field: &str,
+        receiver_place: Option<&str>,
+        args: &[MirArg],
+        env: &mut Env,
+    ) -> Result<Value> {
+        let values = evaluate_named_args(args, env)?
+            .into_iter()
+            .map(|argument| argument.value)
+            .collect::<Vec<_>>();
+        let int = |index: usize| -> Result<i128> {
+            match values.get(index) {
+                Some(Value::Int(value)) => value
+                    .as_i128()
+                    .ok_or_else(|| Diagnostic::new("span operand is outside the signed range")),
+                _ => Err(Diagnostic::new(format!(
+                    "internal span operation `{field}` expects an integer operand {index}"
+                ))),
+            }
+        };
+        let flag = |index: usize| int(index).is_ok_and(|value| value != 0);
+        let located = |result: Result<Value>, line: usize, column: usize| {
+            result.map_err(|mut error| {
+                error.span = Some(Span::new(line, column));
+                error
+            })
+        };
+        let list_len = vector.elements.len();
+        let write_back = |env: &mut Env, vector: VecValue| -> Result<()> {
+            let Some(place) = receiver_place else {
+                return Err(Diagnostic::new(format!(
+                    "`{field}` requires a mutable list place"
+                )));
+            };
+            env.write_place(place, Value::Vec(vector))
+        };
+        match field {
+            "__span_start" | "__span_stop" => {
+                let line = self.mir_index_from_value(values[6].clone())?;
+                let column = self.mir_index_from_value(values[7].clone())?;
+                let bound = crate::runtime_value::span_bound(
+                    list_len,
+                    int(0)?,
+                    int(1)?,
+                    flag(3).then(|| int(2)).transpose()?,
+                    flag(5).then(|| int(4)).transpose()?,
+                    field == "__span_stop",
+                )
+                .map(|bound| Value::Int(IntegerValue::from_signed(bound)));
+                located(bound, line, column)
+            }
+            "__span_index" => {
+                let line = self.mir_index_from_value(values[3].clone())?;
+                let column = self.mir_index_from_value(values[4].clone())?;
+                let index = crate::runtime_value::span_index(list_len, int(0)?, int(1)?, int(2)?)
+                    .map(|index| Value::Int(IntegerValue::from_signed(index)));
+                located(index, line, column)
+            }
+            "__span_contains" | "__span_find" | "__span_count" => {
+                let elements = crate::runtime_value::span_elements(&vector, int(0)?, int(1)?)?;
+                crate::runtime_value::span_search(elements, &values[2], field)
+            }
+            "__span_eq" => {
+                let left = crate::runtime_value::span_elements(&vector, int(0)?, int(1)?)?;
+                let Value::Vec(other) = &values[2] else {
+                    return Err(Diagnostic::new("span equality expects a list operand"));
+                };
+                let other_len = match int(4)? {
+                    -1 => other.elements.len() as i128,
+                    len => len,
+                };
+                let right = crate::runtime_value::span_elements(other, int(3)?, other_len)?;
+                Ok(Value::Bool(left == right))
+            }
+            "__span_extract" => {
+                let taken = crate::runtime_value::span_extract(&mut vector, int(0)?, int(1)?)?;
+                write_back(env, vector)?;
+                Ok(Value::Vec(taken))
+            }
+            "__span_restore" => {
+                let Value::Vec(restored) = values[1].clone() else {
+                    return Err(Diagnostic::new("span restore expects a list operand"));
+                };
+                crate::runtime_value::span_restore(&mut vector, int(0)?, restored)?;
+                write_back(env, vector)?;
+                Ok(Value::Unit)
+            }
+            "__span_fill" => {
+                crate::runtime_value::span_fill(&mut vector, int(0)?, int(1)?, &values[2])?;
+                write_back(env, vector)?;
+                Ok(Value::Unit)
+            }
+            _ => Err(Diagnostic::new(format!(
+                "unknown internal span operation `{field}`"
             ))),
         }
     }

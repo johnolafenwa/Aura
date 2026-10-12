@@ -294,7 +294,9 @@ impl<'a> FunctionChecker<'a> {
                     // a list or dictionary it is the element or entry
                     // projection of `view_place`.
                     match &ty {
-                        Type::Named(name, args) if name == "list" && args.len() == 1 => {
+                        Type::Named(name, args)
+                            if (name == "list" || name == "Span") && args.len() == 1 =>
+                        {
                             ty = args[0].clone();
                             continue;
                         }
@@ -324,7 +326,9 @@ impl<'a> FunctionChecker<'a> {
                 // value, whichever the collection is.
                 PlaceProjection::Element(_) | PlaceProjection::Entry(_) => {
                     let selected = match &ty {
-                        Type::Named(name, args) if name == "list" && args.len() == 1 => {
+                        Type::Named(name, args)
+                            if (name == "list" || name == "Span") && args.len() == 1 =>
+                        {
                             Some(args[0].clone())
                         }
                         Type::Named(name, args) if name == "dict" && args.len() == 2 => {

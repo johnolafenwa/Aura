@@ -256,7 +256,10 @@ Slices follow strict bounds rules:
 
 Aura does not copy Python's clamping, or its rule that a reversed range is
 empty. Slicing copies Copy elements and clones clone-safe non-Copy elements.
-A clone-safe type is one whose values can be cloned. A slice is never a view.
+A clone-safe type is one whose values can be cloned. A value slice is never a
+view. To work on a range in place, bind it with `view part = values[1:3]`, as
+[Range Views With Span](06-ownership-and-borrowing.md#range-views-with-span)
+shows.
 
 ### Equality
 

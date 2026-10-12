@@ -1,0 +1,7 @@
+error[AU3002]: cannot mutate `items` while shared view `rest` remains live
+ --> crates/aura-compiler/tests/fixtures/check-fail/returned_collection_view_base_mutation.au:7:11
+  |
+7 |     items.append(4)
+  |           ^
+  = related crates/aura-compiler/tests/fixtures/check-fail/returned_collection_view_base_mutation.au:6:5: view `rest` starts here
+  = related crates/aura-compiler/tests/fixtures/check-fail/returned_collection_view_base_mutation.au:8:15: last use of view `rest` keeps this loan live

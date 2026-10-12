@@ -11,6 +11,33 @@ use super::{
     Serialize, TraitBound, Type, TypeRef,
 };
 
+/// A `Span[T]` parameter carries a hidden range at each direct call, so a
+/// callable with one is called directly and never becomes a value.
+fn reject_span_parameter_value(
+    params: &[Type],
+    return_type: &Type,
+    name: &str,
+    span: crate::diag::Span,
+) -> Result<()> {
+    if super::types::type_contains_span(return_type) {
+        return Err(Diagnostic::coded_at(
+            "AU3010",
+            span,
+            format!("`{name}` returns a `Span[T]` view and cannot be used as a function value"),
+        )
+        .with_help("call it directly and bind the result with `view`"));
+    }
+    if !params.iter().any(super::types::type_contains_span) {
+        return Ok(());
+    }
+    Err(Diagnostic::coded_at(
+        "AU3010",
+        span,
+        format!("`{name}` has a `Span[T]` parameter and cannot be used as a function value"),
+    )
+    .with_help("call it directly, or wrap the call in a lambda that takes a `list[T]`"))
+}
+
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(super) enum ClosureArgumentPolicy {
     Reject,
@@ -1373,6 +1400,16 @@ impl<'a> FunctionChecker<'a> {
                     format!("cannot capture partially moved value `{name}`"),
                 ));
             }
+            if super::types::type_contains_span(&binding.ty) {
+                // A span's range lives beside its loan, not in the captured
+                // place, so a closure cannot carry it (ADR-0061, B2).
+                return Err(Diagnostic::coded_at(
+                    "AU3010",
+                    capture_span,
+                    format!("a lambda cannot capture the `{}` view `{name}`", binding.ty),
+                )
+                .with_help("call a function that takes a `Span[T]` parameter, or capture an owned copy from `to_list()`"));
+            }
             if type_contains_loan_closure(&binding.ty) {
                 return Err(Diagnostic::coded_at(
                     "AU3010",
@@ -1635,6 +1672,12 @@ impl<'a> FunctionChecker<'a> {
         span: crate::diag::Span,
         display_name: &str,
     ) -> Result<Type> {
+        reject_span_parameter_value(
+            &function.signature.params,
+            &function.signature.return_type,
+            &function.decl.name,
+            span,
+        )?;
         // A parameter-origin view result is part of the complete contract
         // (C9, Q22 A); only a receiver origin has no place in a value type.
         if function
@@ -2280,6 +2323,62 @@ impl<'a> FunctionChecker<'a> {
         )
     }
 
+    /// A slice expression bound to a `Span[T]` parameter is a call-duration
+    /// range loan of the sliced place, not an owned copy (ADR-0061, B2). The
+    /// endpoints are checked here, and the argument is then checked as the
+    /// sliced place itself, so every borrow rule sees the base collection.
+    fn span_range_arguments(
+        &self,
+        callee_name: &str,
+        param_decls: &[Param],
+        param_types: &[Type],
+        args: &[Argument],
+        span: crate::diag::Span,
+        locals: &mut HashMap<String, LocalBinding>,
+    ) -> Result<Option<Vec<Argument>>> {
+        if !param_types
+            .iter()
+            .any(|ty| super::types::span_element_type(ty).is_some())
+        {
+            return Ok(None);
+        }
+        let Ok(ordered) = bind_call_arguments(
+            callee_name,
+            &callable_params_from_decl(param_decls),
+            args,
+            span,
+            CallConvention::PositionalOrNamed,
+        ) else {
+            return Ok(None);
+        };
+        let mut rewritten = args.to_vec();
+        let mut changed = false;
+        for (argument, param_ty) in ordered.iter().zip(param_types) {
+            let Some(argument) = argument else {
+                continue;
+            };
+            if super::types::span_element_type(param_ty).is_none() {
+                continue;
+            }
+            let ExprKind::Slice {
+                object, start, end, ..
+            } = &super::grouped_expr(&argument.value).kind
+            else {
+                continue;
+            };
+            for endpoint in [start, end].into_iter().flatten() {
+                self.check_slice_endpoint_type(endpoint, locals)?;
+            }
+            let index = args
+                .iter()
+                .position(|candidate| std::ptr::eq(candidate, *argument))
+                .expect("bound arguments come from the call's argument list");
+            rewritten[index].value = (**object).clone();
+            changed = true;
+        }
+        Ok(changed.then_some(rewritten))
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(super) fn type_check_callable_args_seeded(
         &self,
@@ -2300,6 +2399,9 @@ impl<'a> FunctionChecker<'a> {
         seeded_borrowed_places: Vec<BorrowedCallPlace>,
         closure_argument_policy: ClosureArgumentPolicy,
     ) -> Result<CheckedCallableTypes> {
+        let span_args =
+            self.span_range_arguments(callee_name, param_decls, param_types, args, span, locals)?;
+        let args = span_args.as_deref().unwrap_or(args);
         let ordered_args = bind_call_arguments(
             callee_name,
             &callable_params_from_decl(param_decls),
@@ -2348,6 +2450,15 @@ impl<'a> FunctionChecker<'a> {
             }
             let actual = if let Some(argument) = argument {
                 match self.type_of_expr_hint(&argument.value, locals, Some(&hinted_expected)) {
+                    // A whole list place supplies a `Span[T]` parameter by a
+                    // call-duration whole-range loan (ADR-0061, B1).
+                    Ok(Type::Named(name, element))
+                        if name == "list"
+                            && element.len() == 1
+                            && super::types::span_element_type(&hinted_expected).is_some() =>
+                    {
+                        Type::Named("Span".to_string(), element)
+                    }
                     Ok(actual) => actual,
                     Err(error) if has_unresolved_type_params(&hinted_expected) => {
                         match self.type_of_expr(&argument.value, locals) {
@@ -2415,10 +2526,16 @@ impl<'a> FunctionChecker<'a> {
                     .written_alias_type(&param_decl.ty, &hinted_expected)
                     .map(|expected| format!("expected {expected}, found {actual}"))
                     .unwrap_or(error.message);
-                return Err(Diagnostic::at(
+                let mismatch = Diagnostic::at(
                     span,
                     format!("argument type mismatch for {}: {}", callee_name, detail),
-                ));
+                );
+                if super::types::span_element_type(&actual).is_some() {
+                    return Err(mismatch.with_help(
+                        "a `list[T]` parameter needs an owned list; pass `span.to_list()`, or declare the parameter as `Span[T]`",
+                    ));
+                }
+                return Err(mismatch);
             }
             resolved_args.push((
                 argument,
@@ -2429,6 +2546,18 @@ impl<'a> FunctionChecker<'a> {
         }
 
         for type_param in callee_type_params {
+            if let Some(resolved) = substitutions.get(type_param) {
+                if super::types::type_contains_span(resolved) {
+                    return Err(Diagnostic::coded_at(
+                        "AU3010",
+                        span,
+                        format!(
+                            "type parameter `{type_param}` of {callee_name} cannot be the view type `{resolved}`"
+                        ),
+                    )
+                    .with_help("declare the parameter as `Span[T]`, or pass an owned copy with `span.to_list()`"));
+                }
+            }
             let unresolved = match substitutions.get(type_param) {
                 None => true,
                 Some(resolved) => matches!(
@@ -2698,13 +2827,19 @@ impl<'a> FunctionChecker<'a> {
                 let span = argument
                     .map(|argument| argument.span)
                     .unwrap_or(param_decl.span);
-                return Err(Diagnostic::at(
+                let mismatch = Diagnostic::at(
                     span,
                     format!(
                         "argument type mismatch for {}: expected `{}`, found `{}`",
                         callee_name, expected, actual
                     ),
-                ));
+                );
+                if super::types::span_element_type(&actual).is_some() {
+                    return Err(mismatch.with_help(
+                        "a `list[T]` parameter needs an owned list; pass `span.to_list()`, or declare the parameter as `Span[T]`",
+                    ));
+                }
+                return Err(mismatch);
             }
             if let Some(argument) = argument {
                 if param_passing == ReceiverKind::Value {
@@ -3040,6 +3175,12 @@ impl FunctionChecker<'_> {
         // A generic method's type arguments must be concrete from explicit
         // specialization or the expected contract (C6); a bare reference has
         // no concrete callable type.
+        reject_span_parameter_value(
+            &target.signature.params,
+            &target.signature.return_type,
+            &target.display,
+            span,
+        )?;
         let substitutions =
             self.bound_method_substitutions(&target, field, expected, explicit_type_args, span)?;
         // A view of another explicit parameter stays in the bound contract

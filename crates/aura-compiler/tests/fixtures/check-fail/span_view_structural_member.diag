@@ -1,0 +1,6 @@
+error[AU2001]: `Span[int64]` has no member `append`
+ --> crates/aura-compiler/tests/fixtures/check-fail/span_view_structural_member.au:4:12
+  |
+4 |     window.append(4)
+  |            ^
+  = help: a span covers a fixed range: `len`, `index`, `count`, `reverse`, `swap`, `sort`, `fill`, and `to_list` are its members; call `append` on the base list after the view ends

@@ -1,0 +1,6 @@
+error[AU3010]: returned view derives from `other`, but the declaration names origin `items`
+ --> crates/aura-compiler/tests/fixtures/check-fail/returned_collection_view_different_root.au:2:17
+  |
+2 |     return view other[1:]
+  |                 ^
+  = related crates/aura-compiler/tests/fixtures/check-fail/returned_collection_view_different_root.au:1:59: returned-view origin is declared here

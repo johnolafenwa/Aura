@@ -1,0 +1,5 @@
+def main():
+    items = [1, 2, 3, 4, 5]
+    view window = items[1:3]
+    view inner = window[0:3]
+    print(len(inner))

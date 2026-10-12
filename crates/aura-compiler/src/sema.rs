@@ -549,6 +549,30 @@ pub(crate) fn expr_references_name(expr: &Expr, name: &str) -> bool {
     default_argument_references_param(expr, &[name.to_string()]).is_some()
 }
 
+/// Element access through a `Span[T]` view checks as access to an element
+/// of the base `list[T]`; the range offset is applied at run time.
+fn span_as_list_type(ty: Type) -> Type {
+    match ty {
+        Type::Named(name, mut args) if name == "Span" && args.len() == 1 => {
+            Type::Named("list".to_string(), vec![args.remove(0)])
+        }
+        other => other,
+    }
+}
+
+/// A span has no text form of its own; rendering one names the copy.
+fn reject_rendered_span(ty: &Type, span: crate::diag::Span) -> Result<()> {
+    if types::span_element_type(ty).is_none() {
+        return Ok(());
+    }
+    Err(Diagnostic::coded_at(
+        "AU2002",
+        span,
+        format!("a `{ty}` view cannot be rendered as text"),
+    )
+    .with_help("render an owned copy with `span.to_list()`"))
+}
+
 fn grouped_expr(expr: &Expr) -> &Expr {
     match &expr.kind {
         ExprKind::Group(inner) => grouped_expr(inner),
@@ -705,7 +729,9 @@ fn recursive_field_message(class_name: &str, field_name: &str, field_type: &Type
 /// The element, key, or substring type an `in` container compares against.
 pub(crate) fn membership_needle_type(container_ty: &Type) -> Option<Type> {
     match container_ty {
-        Type::Named(name, args) if (name == "list" || name == "set") && args.len() == 1 => {
+        Type::Named(name, args)
+            if (name == "list" || name == "set" || name == "Span") && args.len() == 1 =>
+        {
             Some(args[0].clone())
         }
         Type::Named(name, args) if name == "dict" && args.len() == 2 => Some(args[0].clone()),
@@ -899,7 +925,9 @@ struct LoopForm<'a> {
 /// The element type an index-addressable collection yields in a lockstep loop.
 pub(crate) fn lockstep_element_type(iterable_ty: &Type) -> Option<Type> {
     match iterable_ty {
-        Type::Named(name, args) if (name == "list" || name == "set") && args.len() == 1 => {
+        Type::Named(name, args)
+            if (name == "list" || name == "set" || name == "Span") && args.len() == 1 =>
+        {
             Some(args[0].clone())
         }
         _ => None,
@@ -985,6 +1013,9 @@ struct FunctionChecker<'a> {
     /// element is a place read through a contextual element loan (ADR-0061,
     /// 2026-09-21 section, A1).
     index_owned_read: Rc<std::cell::Cell<Option<crate::diag::Span>>>,
+    /// Calls that return a `Span[T]` view in a position that binds the
+    /// view: `view part = f(...)` and `return view f(...)`.
+    bound_span_calls: Rc<RefCell<Vec<crate::diag::Span>>>,
     rng_clone_obligations: Rc<RefCell<BTreeSet<String>>>,
     array_equality_obligations: Rc<RefCell<BTreeSet<String>>>,
     expr_result_entries: Rc<RefCell<HashMap<usize, ExprResultEntry>>>,
@@ -1065,6 +1096,150 @@ impl<'a> FunctionChecker<'a> {
         };
         for coordinate in coordinates {
             self.check_index_domain_type(coordinate, coordinate.span, "Array indices", locals)?;
+        }
+        Ok(())
+    }
+
+    /// The closed member set of a `Span[T]` view (ADR-0061, B2). The
+    /// length-preserving list members check as members of the base list;
+    /// this returns their absence. `fill` and `to_list` are span members
+    /// only, and every structural list member is unknown.
+    fn type_of_span_only_member(
+        &self,
+        object: &Expr,
+        field: &str,
+        element: &Type,
+        args: &[crate::ast::Argument],
+        span: crate::diag::Span,
+        locals: &mut HashMap<String, LocalBinding>,
+    ) -> Result<Option<Type>> {
+        match field {
+            "len" | "index" | "count" | "reverse" | "swap" | "sort" => Ok(None),
+            "to_list" => {
+                if !args.is_empty() {
+                    return Err(Diagnostic::coded_at(
+                        "AU2004",
+                        span,
+                        "`Span.to_list()` takes no arguments",
+                    ));
+                }
+                self.reject_rng_duplication("span copy", element, span)?;
+                if !self.element_read_is_clone_safe(element) {
+                    return Err(Diagnostic::coded_at(
+                        "AU3005",
+                        span,
+                        format!("`to_list()` cannot copy elements of type `{element}`"),
+                    ));
+                }
+                Ok(Some(Type::Named("list".to_string(), vec![element.clone()])))
+            }
+            "fill" => {
+                let [argument] = args else {
+                    return Err(Diagnostic::coded_at(
+                        "AU2004",
+                        span,
+                        "`Span.fill(value)` takes one value argument",
+                    ));
+                };
+                if argument.name.as_deref().is_some_and(|name| name != "value") {
+                    return Err(Diagnostic::coded_at(
+                        "AU2004",
+                        argument.span,
+                        format!(
+                            "`Span.fill` has no parameter named `{}`",
+                            argument.name.as_deref().unwrap_or_default()
+                        ),
+                    ));
+                }
+                if !self.is_copy_type(element) {
+                    return Err(Diagnostic::coded_at(
+                        "AU3005",
+                        span,
+                        format!("`fill` requires a Copy element type, found `{element}`"),
+                    )
+                    .with_help("assign each element instead, for example in a `for item in mut span:` loop"));
+                }
+                self.require_span_receiver_mutable(object, "fill", span, locals)?;
+                let actual = self.type_of_expr_hint(&argument.value, locals, Some(element))?;
+                if actual != *element {
+                    return Err(Diagnostic::coded_at(
+                        "AU2002",
+                        argument.value.span,
+                        format!("`fill` expects `{element}`, found `{actual}`"),
+                    ));
+                }
+                Ok(Some(Type::Unit))
+            }
+            _ => Err(Diagnostic::coded_at(
+                "AU2001",
+                span,
+                format!("`Span[{element}]` has no member `{field}`"),
+            )
+            .with_help(format!(
+                "a span covers a fixed range: `len`, `index`, `count`, `reverse`, `swap`, `sort`, `fill`, and `to_list` are its members; call `{field}` on the base list after the view ends"
+            ))),
+        }
+    }
+
+    /// `-> view Span[T] from p` returns a range of the list or span `p`.
+    /// The returned value is a slice of `p` or an existing span view, and a
+    /// receiver origin is refused: the caller locks the origin place, and a
+    /// span of a receiver field has no such place (ADR-0061, B2).
+    fn check_returned_span(
+        &self,
+        value: &Expr,
+        contract: &crate::ast::ViewReturn,
+        locals: &mut HashMap<String, LocalBinding>,
+    ) -> Result<()> {
+        if contract.origin == "self" {
+            return Err(Diagnostic::coded_at(
+                "AU3010",
+                value.span,
+                "a method cannot return a `Span[T]` view of its receiver",
+            )
+            .with_help("take the list as a parameter and return `view items[a:b]` from it"));
+        }
+        let ExprKind::Slice {
+            object, start, end, ..
+        } = &grouped_expr(value).kind
+        else {
+            return Ok(());
+        };
+        let object_ty = self.type_of_expr_without_move_state(object, locals, None)?;
+        if vec_element_type(&object_ty).is_none() && types::span_element_type(&object_ty).is_none()
+        {
+            return Err(Diagnostic::coded_at(
+                "AU2003",
+                object.span,
+                format!("a returned slice view needs a `list[T]` or `Span[T]` source, found `{object_ty}`"),
+            ));
+        }
+        for endpoint in [start, end].into_iter().flatten() {
+            self.check_slice_endpoint_type(endpoint, locals)?;
+        }
+        if contract.mutable && !self.is_mutable_place(object, locals)? {
+            return Err(Diagnostic::coded_at(
+                "AU3010",
+                object.span,
+                "a mutable returned span needs a mutable origin",
+            ));
+        }
+        Ok(())
+    }
+
+    fn require_span_receiver_mutable(
+        &self,
+        object: &Expr,
+        operation: &str,
+        span: crate::diag::Span,
+        locals: &mut HashMap<String, LocalBinding>,
+    ) -> Result<()> {
+        if !self.is_mutable_place(object, locals)? {
+            return Err(Diagnostic::coded_at(
+                "AU3003",
+                span,
+                format!("`{operation}` needs a mutable span; bind it with `view mut`"),
+            ));
         }
         Ok(())
     }
@@ -1832,6 +2007,7 @@ impl<'a> FunctionChecker<'a> {
             mutated_captures: Rc::new(RefCell::new(BTreeSet::new())),
             index_place_read: Rc::new(std::cell::Cell::new(None)),
             index_owned_read: Rc::new(std::cell::Cell::new(None)),
+            bound_span_calls: Rc::new(RefCell::new(Vec::new())),
             rng_clone_obligations: Rc::new(RefCell::new(BTreeSet::new())),
             array_equality_obligations: Rc::new(RefCell::new(BTreeSet::new())),
             expr_result_entries: Rc::new(RefCell::new(HashMap::new())),
@@ -1888,6 +2064,7 @@ impl<'a> FunctionChecker<'a> {
             mutated_captures: self.mutated_captures.clone(),
             index_place_read: self.index_place_read.clone(),
             index_owned_read: self.index_owned_read.clone(),
+            bound_span_calls: self.bound_span_calls.clone(),
         }
     }
 
@@ -1930,6 +2107,7 @@ impl<'a> FunctionChecker<'a> {
             mutated_captures: self.mutated_captures.clone(),
             index_place_read: self.index_place_read.clone(),
             index_owned_read: self.index_owned_read.clone(),
+            bound_span_calls: self.bound_span_calls.clone(),
         }
     }
 
@@ -1968,6 +2146,7 @@ impl<'a> FunctionChecker<'a> {
             mutated_captures: self.mutated_captures.clone(),
             index_place_read: self.index_place_read.clone(),
             index_owned_read: self.index_owned_read.clone(),
+            bound_span_calls: self.bound_span_calls.clone(),
         }
     }
 
@@ -2006,6 +2185,7 @@ impl<'a> FunctionChecker<'a> {
             mutated_captures: self.mutated_captures.clone(),
             index_place_read: self.index_place_read.clone(),
             index_owned_read: self.index_owned_read.clone(),
+            bound_span_calls: self.bound_span_calls.clone(),
         }
     }
 
@@ -2069,13 +2249,15 @@ impl<'a> FunctionChecker<'a> {
         type_args
             .iter()
             .map(|type_arg| {
-                lower_type(
+                let lowered = lower_type(
                     type_arg,
                     self.type_names,
                     self.type_arities,
                     self.canonical_type_names,
                     &self.type_params,
-                )
+                )?;
+                types::reject_span_type(&lowered, type_arg.span, "a type argument")?;
+                Ok(lowered)
             })
             .collect()
     }
@@ -3108,7 +3290,7 @@ impl<'a> FunctionChecker<'a> {
                 form.iterables,
             )
         } else {
-            let iterable_ty = self.type_of_expr(&clause.iterable, locals)?;
+            let iterable_ty = span_as_list_type(self.type_of_expr(&clause.iterable, locals)?);
             let (binding_type, binding_passing, receive_owned) = match &iterable_ty {
                     Type::Named(name, _) if name == "Range" => {
                         (Type::named("int64"), ReceiverKind::Value, false)
@@ -3607,6 +3789,11 @@ impl<'a> FunctionChecker<'a> {
                     }
                 }
                 Stmt::View(view) => {
+                    if let ExprKind::Call { .. } = grouped_expr(&view.source).kind {
+                        self.bound_span_calls
+                            .borrow_mut()
+                            .push(grouped_expr(&view.source).span);
+                    }
                     if locals.contains_key(&view.name) {
                         return Err(Diagnostic::coded_at(
                             "AU3004",
@@ -3614,18 +3801,30 @@ impl<'a> FunctionChecker<'a> {
                             format!("view binding `{}` would shadow an existing name", view.name),
                         ));
                     }
-                    self.reject_property_place(&view.source, "viewed", locals)?;
-                    let syntactic_place = self.borrow_call_place(&view.source);
+                    // `view name = items[a:b]` is a range loan of `items`:
+                    // the view's source is the sliced place and its pointee
+                    // is `Span[T]` (ADR-0061, B1).
+                    let range_endpoints = match &grouped_expr(&view.source).kind {
+                        ExprKind::Slice {
+                            object, start, end, ..
+                        } => Some((&**object, start.as_deref(), end.as_deref())),
+                        _ => None,
+                    };
+                    let view_source = range_endpoints
+                        .map(|(object, _, _)| object)
+                        .unwrap_or(&view.source);
+                    self.reject_property_place(view_source, "viewed", locals)?;
+                    let syntactic_place = self.borrow_call_place(view_source);
                     let direct_parent = syntactic_place.as_ref().and_then(|place| {
                         locals
                             .get(&place.root)
                             .is_some_and(|binding| binding.view.is_some())
                             .then(|| place.root.clone())
                     });
-                    let source_place = self.view_place(&view.source, locals)?.ok_or_else(|| {
+                    let source_place = self.view_place(view_source, locals)?.ok_or_else(|| {
                         Diagnostic::coded_at(
                             "AU3004",
-                            view.source.span,
+                            view_source.span,
                             "a view source must be an addressable local, parameter, receiver, fixed field, tuple position, or existing view",
                         )
                     })?;
@@ -3639,7 +3838,7 @@ impl<'a> FunctionChecker<'a> {
                     }) {
                         return Err(Diagnostic::coded_at(
                             "AU3004",
-                            view.source.span,
+                            view_source.span,
                             format!(
                                 "module constant `{}` cannot be the source of a view; bind it with `mut` or inside a function",
                                 source_place.root
@@ -3647,14 +3846,21 @@ impl<'a> FunctionChecker<'a> {
                         ));
                     }
                     let parent = direct_parent
-                        .or_else(|| self.returned_view_call_parent(&view.source, locals));
+                        .or_else(|| self.returned_view_call_parent(view_source, locals));
                     let parent_kind = parent.as_deref().and_then(|name| {
                         locals
                             .get(name)
                             .and_then(|binding| binding.view.as_ref())
                             .map(|view| view.kind)
                     });
-                    let returned_kind = self.returned_view_call_kind(&view.source, locals)?;
+                    let returned_kind = self.returned_view_call_kind(view_source, locals)?;
+                    if range_endpoints.is_some() && returned_kind.is_some() {
+                        return Err(Diagnostic::coded_at(
+                            "AU3004",
+                            view_source.span,
+                            "bind the returned view with `view` before taking a slice view of it",
+                        ));
+                    }
                     if let Some(returned_kind) = returned_kind {
                         let requested = if view.mutable {
                             crate::ast::ViewKind::Mutable
@@ -3672,33 +3878,53 @@ impl<'a> FunctionChecker<'a> {
                     if view.mutable && parent_kind == Some(crate::ast::ViewKind::Shared) {
                         return Err(Diagnostic::coded_at(
                             "AU3004",
-                            view.source.span,
+                            view_source.span,
                             "a shared view cannot be escalated to a mutable view",
                         ));
                     }
                     if view.mutable
                         && parent_kind != Some(crate::ast::ViewKind::Mutable)
                         && returned_kind != Some(crate::ast::ViewKind::Mutable)
-                        && !self.is_mutable_place(&view.source, locals)?
+                        && !self.is_mutable_place(view_source, locals)?
                     {
                         return Err(Diagnostic::coded_at(
                             "AU3004",
-                            view.source.span,
+                            view_source.span,
                             format!("mutable view source `{source_place}` is not mutable"),
                         ));
                     }
                     let ty = if returned_kind.is_some() {
-                        self.type_of_expr(&view.source, locals)?
+                        self.type_of_expr(view_source, locals)?
                     } else {
                         let type_place = syntactic_place.as_ref().unwrap_or(&source_place);
-                        self.place_path_type(type_place, locals, view.source.span)?
+                        self.place_path_type(type_place, locals, view_source.span)?
                             .ok_or_else(|| {
                                 Diagnostic::coded_at(
                                     "AU3004",
-                                    view.source.span,
+                                    view_source.span,
                                     "a view source must have a known stable place type",
                                 )
                             })?
+                    };
+                    let ty = match range_endpoints {
+                        None => ty,
+                        Some((_, start, end)) => {
+                            let element = vec_element_type(&ty)
+                                .or_else(|| types::span_element_type(&ty))
+                                .cloned()
+                                .ok_or_else(|| {
+                                    Diagnostic::coded_at(
+                                        "AU2003",
+                                        view_source.span,
+                                        format!("a slice view needs a `list[T]` or `Span[T]` source, found `{ty}`"),
+                                    )
+                                    .with_help("slice views cover lists; slicing a `str` or an `Array` in value position makes an owned copy")
+                                })?;
+                            for endpoint in [start, end].into_iter().flatten() {
+                                self.check_slice_endpoint_type(endpoint, locals)?;
+                            }
+                            Type::Named("Span".to_string(), vec![element])
+                        }
                     };
                     let kind = if view.mutable {
                         crate::ast::ViewKind::Mutable
@@ -3808,6 +4034,13 @@ impl<'a> FunctionChecker<'a> {
                         ));
                     }
                     let view_contract = self.current_view_return();
+                    if let (Some(_), Some(value)) = (return_stmt.view, &return_stmt.value) {
+                        if let ExprKind::Call { .. } = grouped_expr(value).kind {
+                            self.bound_span_calls
+                                .borrow_mut()
+                                .push(grouped_expr(value).span);
+                        }
+                    }
                     if let Some(contract) = view_contract {
                         let expected_kind = if contract.mutable {
                             crate::ast::ViewKind::Mutable
@@ -3836,6 +4069,14 @@ impl<'a> FunctionChecker<'a> {
                                 "a view return requires an addressable source place",
                             )
                         })?;
+                        if types::span_element_type(return_type).is_some() {
+                            self.check_returned_span(value, contract, locals)?;
+                        }
+                        // `return view items[a:b]` lends the range of `items`.
+                        let value = match &grouped_expr(value).kind {
+                            ExprKind::Slice { object, .. } => &**object,
+                            _ => value,
+                        };
                         let returned = self.view_place(value, locals)?.ok_or_else(|| {
                             Diagnostic::coded_at(
                                 "AU3010",
@@ -3913,7 +4154,20 @@ impl<'a> FunctionChecker<'a> {
                         }
                         _ => None,
                     };
-                    let ty = if let Some(place_ty) = place_ty {
+                    let returned_range = return_stmt.view.is_some()
+                        && return_stmt.value.as_ref().is_some_and(|value| {
+                            matches!(grouped_expr(value).kind, ExprKind::Slice { .. })
+                        });
+                    let returned_whole_list = return_stmt.view.is_some()
+                        && types::span_element_type(return_type).is_some()
+                        && return_stmt.value.as_ref().is_some_and(|value| {
+                            self.type_of_expr_without_move_state(value, locals, None)
+                                .is_ok_and(|ty| ty == span_as_list_type(return_type.clone()))
+                        });
+                    let ty = if returned_range || returned_whole_list {
+                        // A slice or a whole list returned as a range.
+                        return_type.clone()
+                    } else if let Some(place_ty) = place_ty {
                         place_ty
                     } else if let Some(value) = &return_stmt.value {
                         self.type_of_expr_hint(value, locals, Some(return_type))?
@@ -4117,7 +4371,9 @@ impl<'a> FunctionChecker<'a> {
                         )?;
                         continue;
                     }
-                    let iterable_ty = self.type_of_expr(&for_stmt.iterable, locals)?;
+                    // A span iterates its range as the base list's elements.
+                    let iterable_ty =
+                        span_as_list_type(self.type_of_expr(&for_stmt.iterable, locals)?);
                     if matches!(&iterable_ty, Type::Named(name, _) if name == "Range")
                         && for_stmt.borrow_mode.is_some()
                     {
@@ -4486,7 +4742,7 @@ impl<'a> FunctionChecker<'a> {
                 // indexed assignment may insert, so it is structural
                 // (ADR-0061 A3).
                 let is_list = matches!(
-                    self.type_of_member_object_expr(object, locals)?,
+                    span_as_list_type(self.type_of_member_object_expr(object, locals)?),
                     Type::Named(ref name, ref args) if name == "list" && args.len() == 1
                 );
                 let target = Expr {
@@ -4528,7 +4784,7 @@ impl<'a> FunctionChecker<'a> {
                 ));
             }
 
-            let object_ty = self.type_of_expr(object, locals)?;
+            let object_ty = span_as_list_type(self.type_of_expr(object, locals)?);
             let locals_before_index = locals.clone();
             self.reject_mutable_returned_view_value(index, locals, false)?;
             let target_ty = if let Some(target_ty) = array_element_type(&object_ty).cloned() {
@@ -4840,13 +5096,15 @@ impl<'a> FunctionChecker<'a> {
             .annotation
             .as_ref()
             .map(|annotation| {
-                lower_type(
+                let lowered = lower_type(
                     annotation,
                     self.type_names,
                     self.type_arities,
                     self.canonical_type_names,
                     &self.type_params,
-                )
+                )?;
+                types::reject_span_type(&lowered, annotation.span, "an owned local type")?;
+                Ok(lowered)
             })
             .transpose()?;
         let existing_binding = locals.get(binding_name).cloned();
@@ -6684,7 +6942,8 @@ impl<'a> FunctionChecker<'a> {
                 for part in parts {
                     match part {
                         crate::ast::FormatPart::Expr(expr) => {
-                            self.type_of_expr(expr, locals)?;
+                            let value_type = self.type_of_expr(expr, locals)?;
+                            reject_rendered_span(&value_type, expr.span)?;
                         }
                         crate::ast::FormatPart::Formatted {
                             expr,
@@ -6692,6 +6951,7 @@ impl<'a> FunctionChecker<'a> {
                             spec_span,
                         } => {
                             let value_type = self.type_of_expr(expr, locals)?;
+                            reject_rendered_span(&value_type, expr.span)?;
                             let parsed = parse_format_spec(spec).map_err(|error| {
                                 Diagnostic::coded_at("AU1101", *spec_span, error.message)
                             })?;
@@ -7539,10 +7799,19 @@ impl<'a> FunctionChecker<'a> {
                     locals,
                     contextual_left_expected.as_ref().or(operand_expected),
                 )?;
+                // `span == other` compares the range element-wise against a
+                // span or a list of equal length (ADR-0061, B2).
+                let span_equality = matches!(op, BinaryOp::Eq | BinaryOp::NotEq);
+                if span_equality {
+                    left_ty = span_as_list_type(left_ty);
+                }
                 let locals_after_left = locals.clone();
                 let right_hint = array_element_type(&left_ty).unwrap_or(&left_ty);
                 let mut right_ty =
                     self.type_equality_operand(*op, right, locals, Some(right_hint))?;
+                if span_equality {
+                    right_ty = span_as_list_type(right_ty);
+                }
                 if let Some(right_element) = array_element_type(&right_ty) {
                     if Self::is_numeric_literal_expr(left) {
                         left_ty = self.type_of_expr_hint(left, locals, Some(right_element))?;
@@ -8012,6 +8281,8 @@ impl<'a> FunctionChecker<'a> {
                     Some(_) => self.type_of_member_object_expr(object, locals)?,
                     None => self.type_of_expr(object, locals)?,
                 };
+                // A span element is an element of the base list.
+                let object_ty = span_as_list_type(object_ty);
                 if let Some(path) = &element_path {
                     if vec_element_type(&object_ty).is_some()
                         || map_key_value_types(&object_ty).is_some()
@@ -8207,6 +8478,8 @@ impl<'a> FunctionChecker<'a> {
                         || **ty == Type::named("str")
                 });
                 let object_ty = self.type_of_expr_hint(object, locals, object_expected)?;
+                // A slice of a span in value position is an owned list copy.
+                let object_ty = span_as_list_type(object_ty);
                 let vec_element = vec_element_type(&object_ty).cloned();
                 let is_array = array_element_type(&object_ty).is_some();
                 let is_string = object_ty == Type::named("str");
@@ -8247,7 +8520,18 @@ impl<'a> FunctionChecker<'a> {
                 Ok(object_ty)
             }
             ExprKind::Call { callee, args } => {
-                self.type_of_call(callee, args, expr.span, locals, expected)
+                let ty = self.type_of_call(callee, args, expr.span, locals, expected)?;
+                if types::span_element_type(&ty).is_some()
+                    && !self.bound_span_calls.borrow().contains(&expr.span)
+                {
+                    return Err(Diagnostic::coded_at(
+                        "AU3010",
+                        expr.span,
+                        format!("a call that returns `{ty}` must be bound with `view`"),
+                    )
+                    .with_help("write `view part = f(...)` and use `part`"));
+                }
+                Ok(ty)
             }
         }
     }
@@ -9705,7 +9989,8 @@ impl<'a> FunctionChecker<'a> {
                             span,
                             "internal error: `print` should bind exactly one argument",
                         )?;
-                        self.type_of_expr(&value_arg.value, locals)?;
+                        let value_ty = self.type_of_expr(&value_arg.value, locals)?;
+                        reject_rendered_span(&value_ty, value_arg.value.span)?;
                         Ok(Type::Unit)
                     }
                     BuiltinFunction::Range => {
@@ -9983,7 +10268,8 @@ impl<'a> FunctionChecker<'a> {
                             span,
                             "internal error: `len` should bind exactly one argument",
                         )?;
-                        let value_ty = self.type_of_expr(&value_arg.value, locals)?;
+                        let value_ty =
+                            span_as_list_type(self.type_of_expr(&value_arg.value, locals)?);
                         let Type::Named(receiver_name, _) = &value_ty else {
                             return Err(Diagnostic::coded_at(
                                 "AU2002",
@@ -10010,7 +10296,8 @@ impl<'a> FunctionChecker<'a> {
                             span,
                             "internal error: `str` should bind exactly one argument",
                         )?;
-                        self.type_of_expr(&value_arg.value, locals)?;
+                        let value_ty = self.type_of_expr(&value_arg.value, locals)?;
+                        reject_rendered_span(&value_ty, value_arg.value.span)?;
                         Ok(Type::named("str"))
                     }
                     BuiltinFunction::Abs => {
@@ -10712,6 +10999,17 @@ impl<'a> FunctionChecker<'a> {
                     self.type_of_member_object_expr(object, locals)?
                 } else {
                     self.type_of_expr(object, locals)?
+                };
+                let receiver_ty = match types::span_element_type(&receiver_ty).cloned() {
+                    Some(element) => {
+                        if let Some(result) = self
+                            .type_of_span_only_member(object, field, &element, args, span, locals)?
+                        {
+                            return Ok(result);
+                        }
+                        Type::Named("list".to_string(), vec![element])
+                    }
+                    None => receiver_ty,
                 };
                 if matches!(receiver_ty, Type::Union(_)) {
                     if let Some(path) = self.member_access_path(object) {
@@ -14586,6 +14884,16 @@ impl<'a> FunctionChecker<'a> {
                     {
                         Err(lookup::lookup_outside_match(span))
                     }
+                    // `get` already separates a present `None` value from a
+                    // missing key, so a dictionary has no optional getter.
+                    (Type::Named(name, _), _) if name == "dict" => Err(Diagnostic::coded_at(
+                        "AU2001",
+                        span,
+                        format!("`{receiver_ty}` has no member `{field}`"),
+                    )
+                    .with_help(
+                        "`get(key)` returns `Lookup.Found(value)` or `Lookup.Missing`, and `key in table` tests presence",
+                    )),
                     _ => Err(Diagnostic::at(
                         span,
                         format!("unsupported method call `{}` on `{}`", field, receiver_ty),
@@ -15136,7 +15444,9 @@ impl<'a> FunctionChecker<'a> {
             ty
         };
         matches!(&ty, Type::Named(collection, args)
-            if (collection == "list" && args.len() == 1
+            if (collection == "Span" && args.len() == 1
+                && matches!(method, "reverse" | "sort" | "swap" | "fill"))
+            || (collection == "list" && args.len() == 1
                 && matches!(method, "append" | "insert" | "extend" | "pop"
                     | "remove" | "clear" | "reverse" | "sort" | "set" | "swap"
                     | "reserve"))

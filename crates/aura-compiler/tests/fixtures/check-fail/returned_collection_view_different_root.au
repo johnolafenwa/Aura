@@ -1,0 +1,5 @@
+def other_tail(items: list[int64], other: list[int64]) -> view Span[int64] from items:
+    return view other[1:]
+
+def main():
+    pass

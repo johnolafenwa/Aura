@@ -784,6 +784,45 @@ def main():
 - An ordinary `-> T` return stays owned.
 - The result can select one list element or dictionary entry, as in `return view mut values[0]`. The caller's view then holds the whole collection until it ends.
 
+## Range Views With Span
+
+`view part = values[a:b]` lends a range of a list as a `Span[T]`. The span
+reads and writes the list's elements in place, so nothing is copied:
+
+```aura check-pass
+def total(values: Span[int64]) -> int64:
+    mut sum = 0
+    for value in values:
+        sum += value
+    return sum
+
+def head(values: list[int64], count: int64) -> view Span[int64] from values:
+    return view values[:count]
+
+def main():
+    mut scores = [7, 3, 9, 1]
+    print(total(scores[1:3]))
+
+    view mut tail = scores[2:]
+    tail.sort()
+    print(scores)
+
+    view first = head(scores, 2)
+    print(first.to_list())
+```
+
+- Positions in a span count from the start of its range.
+- A `Span[T]` parameter accepts a slice, a whole list, or another span.
+- A span holds a loan of the whole list. While it is live, the list is reached
+  only through the span, or read if the span is shared.
+- A span has a fixed length. It has `sort`, `reverse`, `swap`, `fill`, and
+  `to_list`, but no `append` or `pop`.
+- A span is a view: it cannot be stored in a field, returned as an owned
+  value, captured by a lambda, or printed. Print `part.to_list()` instead.
+
+See [Collections](../docs/manual/collections.md#span-t) for the full member
+table.
+
 ## Explicit Loan Captures
 
 A capture list is exhaustive. It names every captured value, which makes live

@@ -1,0 +1,6 @@
+error[AU2010]: view type `Span[int64]` cannot be a union member
+ --> crates/aura-compiler/tests/fixtures/check-fail/span_view_union_member.au:1:19
+  |
+1 | def maybe(values: Span[int64] | None) -> int64:
+  |                   ^
+  = help: a union member is an owned value; pass the span as its own parameter

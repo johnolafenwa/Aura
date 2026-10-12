@@ -1,0 +1,6 @@
+error[AU2045]: property `labels` is read-only and cannot be viewed
+ --> crates/aura-compiler/tests/fixtures/check-fail/property_view_slice.au:25:23
+   |
+25 |     view part = shape.labels[0:1]
+   |                       ^
+  = help: a property computes a fresh value on each read; bind it to a local to change the copy

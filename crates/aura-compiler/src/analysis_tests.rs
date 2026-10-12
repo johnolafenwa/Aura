@@ -10011,3 +10011,62 @@ fn properties_hover_complete_and_navigate_as_properties() {
         .expect("method completion");
     assert_eq!(method.kind, "method");
 }
+
+#[test]
+fn span_views_hover_as_spans_and_complete_the_span_members() {
+    let source = "def total(values: Span[int64]) -> int64:\n    return len(values)\n\ndef main():\n    mut items = [1, 2, 3, 4]\n    view mut part = items[1:3]\n    view mut tail = part[1:]\n    tail[0] = 9\n    copy = part[:1]\n    first = part[0]\n    print(total(part))\n    print(first)\n    print(copy)\n";
+    let analysis = analyze_source(source);
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "unexpected diagnostics: {:?}",
+        analysis.diagnostics
+    );
+    for expected_hover in [
+        "view mut part: Span[int64] from items[1:3]",
+        "view mut tail: Span[int64] from part[1:]",
+        "binding copy: list[int64]",
+        "binding first: int64",
+    ] {
+        assert!(
+            analysis
+                .occurrences
+                .iter()
+                .any(|occurrence| occurrence.hover.contains(expected_hover)),
+            "missing span hover `{expected_hover}` in {:?}",
+            analysis
+                .occurrences
+                .iter()
+                .map(|occurrence| &occurrence.hover)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    let endpoints = analyze_source(
+        "def main():\n    items = [1, 2, 3]\n    view last = items[-1:]\n    view rest = items[len(items) - 2:]\n    print(len(last))\n    print(len(rest))\n",
+    );
+    for expected_hover in [
+        "view last: Span[int64] from items[-1:]",
+        "view rest: Span[int64] from items[..]",
+    ] {
+        assert!(
+            endpoints
+                .occurrences
+                .iter()
+                .any(|occurrence| occurrence.hover.contains(expected_hover)),
+            "missing span hover `{expected_hover}`"
+        );
+    }
+
+    let member_source =
+        "def main():\n    items = [1, 2, 3]\n    view part = items[0:2]\n    part.\n";
+    let members = complete_source(member_source, 3, 9, Some('.'))
+        .expect("span member completion should recover");
+    let names = members
+        .iter()
+        .map(|member| member.name.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        names,
+        ["len", "index", "count", "reverse", "swap", "sort", "fill", "to_list"]
+    );
+}

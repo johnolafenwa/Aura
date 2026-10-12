@@ -1,0 +1,7 @@
+def tail(items: list[int64]) -> view Span[int64] from items:
+    return view items[1:]
+
+def main():
+    items = [1, 2, 3]
+    with TaskGroup() as group:
+        task = group.start(tail, items)

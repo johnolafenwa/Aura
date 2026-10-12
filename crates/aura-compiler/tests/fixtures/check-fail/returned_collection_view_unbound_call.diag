@@ -1,0 +1,6 @@
+error[AU3010]: a call that returns `Span[int64]` must be bound with `view`
+ --> crates/aura-compiler/tests/fixtures/check-fail/returned_collection_view_unbound_call.au:6:15
+  |
+6 |     print(len(tail(items)))
+  |               ^
+  = help: write `view part = f(...)` and use `part`
