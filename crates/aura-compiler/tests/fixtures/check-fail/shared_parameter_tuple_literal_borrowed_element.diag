@@ -1,0 +1,8 @@
+error[AU3002]: parameter `name` is borrowed; declare it as `own str` to take ownership, or clone the value before consuming it
+ --> crates/aura-compiler/tests/fixtures/check-fail/shared_parameter_tuple_literal_borrowed_element.au:5:11
+  |
+5 |     show((name, 1))
+  |           ^
+  = related crates/aura-compiler/tests/fixtures/check-fail/shared_parameter_tuple_literal_borrowed_element.au:4:10: parameter `name` is borrowed here
+  = help: declare the parameter as `own str` when the function should consume it, or call `.clone()` to consume an independent copy
+  = fix: replace crates/aura-compiler/tests/fixtures/check-fail/shared_parameter_tuple_literal_borrowed_element.au:5:15-5:15 with `.clone()`

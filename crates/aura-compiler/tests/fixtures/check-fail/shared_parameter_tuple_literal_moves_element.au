@@ -1,0 +1,7 @@
+def show(entry: (str, int64)):
+    print(entry)
+
+def main():
+    name = "aura"
+    show((name, 1))
+    print(name)

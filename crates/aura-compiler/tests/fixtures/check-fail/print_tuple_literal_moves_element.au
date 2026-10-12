@@ -1,0 +1,4 @@
+def main():
+    pair = (1, "x")
+    print((pair, 2))
+    print(pair)
