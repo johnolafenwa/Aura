@@ -141,6 +141,24 @@ SHA-256 is a digest. It is not encryption, a password hash, a signature, a
 message-authentication code, or random data. When you need one of those
 properties, use a cryptographic construction built for it.
 
+## Search Raw Bytes
+
+`bytes.starts_with`, `bytes.ends_with`, and `bytes.find` work on any
+`list[uint8]`, whether or not it holds UTF-8:
+
+```aura check-pass
+import bytes
+
+packet: list[uint8] = [65, 85, 82, 65, 0, 1, 7]
+print(bytes.starts_with(packet, "AURA".to_bytes()))
+print(bytes.ends_with(packet, [1, 7]))
+print(bytes.find(packet, [0, 1]) == 4)
+```
+
+This prints `true` three times. `bytes.find` returns `int64 | None`: the byte
+index of the first match, or `None` when the needle does not occur. An empty
+needle is found at index `0`.
+
 ## Typed Data Errors And Runtime Failures
 
 Malformed UTF-8, hex, and base64 are expected data problems. They return a

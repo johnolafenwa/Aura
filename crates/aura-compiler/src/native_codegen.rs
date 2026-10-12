@@ -26,7 +26,7 @@ use crate::mir::{
 use crate::native_runtime::{
     encode_direct_ffi_call_spec, DirectFfiCallSpec, DirectFfiParam, DirectFfiType,
 };
-use crate::sema::{lookup_type, optional_type};
+use crate::sema::{lookup_type, optional_type, text_convenience_result_type};
 use crate::sema::{substitute_type, FunctionParamContract, Type};
 
 use callables::{CallableShape, CallableShapeKey};
@@ -601,6 +601,7 @@ struct NativeCodegen<'a> {
     string_strip_suffix: FuncId,
     string_trim: FuncId,
     string_join: FuncId,
+    string_text_method: FuncId,
     stringify_value: FuncId,
     format_value: FuncId,
     abs_value: FuncId,
@@ -931,6 +932,16 @@ fn split_field_path_segments<'a>(
     }
 }
 
+/// The opcode the direct runtime's text dispatcher expects for one
+/// `str` text-convenience method. It must match
+/// `native_runtime::aura_direct_string_text_method`.
+pub(crate) fn text_method_opcode(field: &str) -> Option<i64> {
+    crate::text_methods::TEXT_METHOD_NAMES
+        .iter()
+        .position(|name| *name == field)
+        .map(|index| index as i64)
+}
+
 fn ordered_named_args<'a>(
     expected_names: &[&str],
     args: &'a [MirArg],
@@ -1136,6 +1147,7 @@ impl<'a> NativeCodegen<'a> {
             string_strip_suffix => ("aura_direct_string_strip_suffix", [types::I64, types::I64], Some(types::I64)),
             string_trim => ("aura_direct_string_trim", [types::I64], Some(types::I64)),
             string_join => ("aura_direct_string_join", [types::I64, types::I64], Some(types::I64)),
+            string_text_method => ("aura_direct_string_text_method", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             stringify_value => ("aura_direct_stringify_value", [types::I64], Some(types::I64)),
             format_value => ("aura_direct_format_value", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             abs_value => ("aura_direct_abs", [types::I64], Some(types::I64)),
@@ -1634,6 +1646,7 @@ impl<'a> NativeCodegen<'a> {
             string_strip_suffix,
             string_trim,
             string_join,
+            string_text_method,
             stringify_value,
             format_value,
             abs_value,
@@ -2471,6 +2484,9 @@ impl<'a> NativeCodegen<'a> {
         let string_join = self
             .object
             .declare_func_in_func(self.string_join, builder.func);
+        let string_text_method = self
+            .object
+            .declare_func_in_func(self.string_text_method, builder.func);
         let stringify_value = self
             .object
             .declare_func_in_func(self.stringify_value, builder.func);
@@ -3446,6 +3462,7 @@ impl<'a> NativeCodegen<'a> {
             string_strip_suffix,
             string_trim,
             string_join,
+            string_text_method,
             stringify_value,
             format_value,
             abs_value,
@@ -4790,6 +4807,7 @@ struct FunctionCompiler<'a> {
     string_strip_suffix: cranelift_codegen::ir::FuncRef,
     string_trim: cranelift_codegen::ir::FuncRef,
     string_join: cranelift_codegen::ir::FuncRef,
+    string_text_method: cranelift_codegen::ir::FuncRef,
     stringify_value: cranelift_codegen::ir::FuncRef,
     format_value: cranelift_codegen::ir::FuncRef,
     abs_value: cranelift_codegen::ir::FuncRef,
@@ -8767,6 +8785,58 @@ impl<'a> FunctionCompiler<'a> {
         let (result, writebacks) = self.split_call_results(name, results)?;
         self.apply_writeback_places(&writeback_places, writebacks)?;
         Ok(result)
+    }
+
+    /// Lowers one `str` text-convenience method to the shared runtime
+    /// dispatcher. The receiver stays shared; a text argument is moved into
+    /// the call and a count travels as a scalar.
+    fn compile_string_text_method(
+        &mut self,
+        receiver: Value,
+        field: &str,
+        args: &[MirArg],
+    ) -> std::result::Result<ValueRef, String> {
+        let opcode = text_method_opcode(field)
+            .expect("only text-convenience methods reach the text dispatcher");
+        let expected: &[&str] = match field {
+            "split_once" | "rsplit_once" => &["separator"],
+            "find" | "count" => &["text"],
+            "repeat" => &["count"],
+            _ => &[],
+        };
+        let ordered = ordered_named_args(expected, args)?;
+        let zero = self.builder.ins().iconst(types::I64, 0);
+        let (argument, count) = match (field, ordered.first()) {
+            ("repeat", Some(argument)) => {
+                let count =
+                    self.load_operand_with_integer_hint(&argument.value, Some(ScalarKind::Int64))?;
+                let count = self.coerce_value(count, &DirectType::Scalar(ScalarKind::Int64))?;
+                (zero, count.values[0])
+            }
+            (_, Some(argument)) => {
+                let loaded = self.load_operand(&argument.value)?;
+                let text = self.ensure_opaque(loaded)?;
+                (text.values[0], zero)
+            }
+            (_, None) => (zero, zero),
+        };
+        let opcode = self.builder.ins().iconst(types::I64, opcode);
+        let inst = self.builder.ins().call(
+            self.string_text_method,
+            &[opcode, receiver, argument, count],
+        );
+        let semantic_type = text_convenience_result_type(field)
+            .expect("text-convenience methods have a result type");
+        let result = self.owned_opaque_result(
+            self.builder.inst_results(inst).to_vec(),
+            semantic_type.clone(),
+        );
+        let target = ensure_direct_type(
+            &semantic_type,
+            &self.classes,
+            &format!("return value of `str.{field}`"),
+        )?;
+        self.coerce_value(result, &target)
     }
 
     fn compile_host_builtin_named_call(
@@ -13228,6 +13298,10 @@ impl<'a> FunctionCompiler<'a> {
                             self.builder.inst_results(inst).to_vec(),
                             optional_type(Type::named("str")),
                         ))
+                    }
+                    "trim_start" | "trim_end" | "lines" | "split_whitespace" | "split_once"
+                    | "rsplit_once" | "find" | "count" | "repeat" => {
+                        self.compile_string_text_method(object.values[0], field, args)
                     }
                     "trim" => {
                         if !args.is_empty() {
@@ -19382,6 +19456,12 @@ fn builtin_opaque_member_return_type(
         ("str", "strip_prefix") | ("str", "strip_suffix") => {
             Some(DirectType::Opaque(optional_type(Type::named("str"))))
         }
+        ("str", "count") => Some(DirectType::Scalar(ScalarKind::Int64)),
+        (
+            "str",
+            "trim_start" | "trim_end" | "split_once" | "rsplit_once" | "lines" | "split_whitespace"
+            | "find" | "repeat",
+        ) => text_convenience_result_type(field).map(DirectType::Opaque),
         ("Array", "shape") => Some(DirectType::Opaque(Type::Named(
             "list".to_string(),
             vec![Type::named("int64")],

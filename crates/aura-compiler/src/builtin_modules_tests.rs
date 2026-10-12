@@ -403,17 +403,27 @@ fn bytes_namespace_exposes_shared_byte_vector_codecs_and_typed_errors() {
         vec![
             "base64_decode",
             "base64_encode",
+            "ends_with",
+            "find",
             "hex_decode",
             "hex_encode",
             "sha256",
             "sha256_string",
+            "starts_with",
         ]
     );
     for function in namespace.functions.values() {
-        assert_eq!(function.decl.params[0].mode, ParamMode::Default);
-        assert_eq!(
-            function.signature.param_passings,
-            vec![ReceiverKind::Borrow],
+        assert!(function
+            .decl
+            .params
+            .iter()
+            .all(|param| param.mode == ParamMode::Default));
+        assert!(
+            function
+                .signature
+                .param_passings
+                .iter()
+                .all(|passing| *passing == ReceiverKind::Borrow),
             "{} should retain its input",
             function.decl.name
         );
@@ -447,6 +457,19 @@ fn bytes_namespace_exposes_shared_byte_vector_codecs_and_typed_errors() {
             ("index", Type::named("int32")),
             ("byte", Type::named("uint8")),
         ]
+    );
+
+    let find = host_builtin_metadata("bytes::find").expect("byte search metadata");
+    assert_eq!(
+        find.params
+            .iter()
+            .map(|param| param.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["value", "needle"]
+    );
+    assert_eq!(
+        find.return_type,
+        crate::sema::optional_type(Type::named("int64"))
     );
 
     let from_bytes = host_builtin_metadata("str.from_bytes").expect("associated metadata");

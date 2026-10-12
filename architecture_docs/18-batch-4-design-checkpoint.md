@@ -264,8 +264,13 @@ method reads a shared receiver and returns fresh owned values.
 | `bytes.find` | `find(value: list[uint8], needle: list[uint8]) -> int64 \| None` | Byte index of the first occurrence. |
 
 - An empty `separator` in `split_once` and `rsplit_once` traps with
-  `AU4003`, the same as `split("")`. An empty `text` in `count` traps with
-  `AU4003`. An empty `text` in `find` returns `0`.
+  `AU4003`. An empty `text` in `count` traps with `AU4003`. An empty `text`
+  in `find` returns `0`. Implementation note: the ratified text said this
+  matches `split("")`, but the existing `split("")` does not trap; it returns
+  the empty pieces around every scalar. `split` is left unchanged, and the
+  new empty-separator traps stand on their own.
+- `bytes.find` with an empty `needle` returns `0`. An empty `prefix` or
+  `suffix` always matches. The byte search is linear in the two lengths.
 - `repeat` with a negative count traps with `AU4003`. A result above the
   64 MiB string limit traps with `AU4005` before allocating.
 - Indexes are `int64`. `str.find` is O(n) in scalar values, matching

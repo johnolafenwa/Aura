@@ -2,7 +2,9 @@
 
 - Status: Accepted; detailed design ratified in the [Batch 4 design checkpoint](../18-batch-4-design-checkpoint.md)
 - Date: 2026-09-06
-- Implementation: Trailing commas, parenthesized imports, tuple rest elements, list sequence patterns, and keyword class patterns implemented; text/byte conveniences in progress
+- Implementation: Trailing commas, parenthesized imports, text and byte
+  conveniences, tuple rest elements, list sequence patterns, and keyword
+  class patterns implemented
 - Roadmap: Batch 4
 - Extends: ADR-0025, ADR-0026, ADR-0049, and ADR-0051
 - Related: ADR-0044, ADR-0046, ADR-0052, ADR-0059, and ADR-0061

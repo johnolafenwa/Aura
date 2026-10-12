@@ -2290,6 +2290,20 @@ pub(crate) fn optional_type(member: Type) -> Type {
         .expect("builtin optional unions normalize")
 }
 
+/// The result type of a `str` text-convenience method (Batch 4 section C),
+/// keyed by method name. Every backend and the analysis surface share it.
+pub(crate) fn text_convenience_result_type(method: &str) -> Option<Type> {
+    let text = || Type::named("str");
+    match method {
+        "trim_start" | "trim_end" | "repeat" => Some(text()),
+        "split_once" | "rsplit_once" => Some(optional_type(Type::Tuple(vec![text(), text()]))),
+        "lines" | "split_whitespace" => Some(Type::Named("list".to_string(), vec![text()])),
+        "find" => Some(optional_type(Type::named("int64"))),
+        "count" => Some(Type::named("int64")),
+        _ => None,
+    }
+}
+
 /// The compiler-provided lookup outcome `Lookup[payload]` (Q23 A).
 pub(crate) fn lookup_type(payload: Type) -> Type {
     Type::Named("Lookup".to_string(), vec![payload])

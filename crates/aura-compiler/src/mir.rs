@@ -16,7 +16,7 @@ use crate::sema::{
     ClosureCallKind, ClosureCaptureMode, ClosureInfo, ClosureOwner, ComprehensionClauseInfo,
     ComprehensionInfo, FunctionParamContract, ModuleNamespace, Program, TraitBound, Type,
 };
-use crate::sema::{lookup_type, optional_type, poll_type};
+use crate::sema::{lookup_type, optional_type, poll_type, text_convenience_result_type};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -23737,6 +23737,11 @@ impl<'a> Lowerer<'a> {
             ("str", "strip_prefix") | ("str", "strip_suffix") => {
                 Some(optional_type(Type::named("str")))
             }
+            (
+                "str",
+                "trim_start" | "trim_end" | "split_once" | "rsplit_once" | "lines"
+                | "split_whitespace" | "find" | "count" | "repeat",
+            ) => text_convenience_result_type(field),
             ("list", "len") => Some(Type::named("int64")),
             ("list", "is_empty") => Some(Type::named("bool")),
             ("list", "copy") => Some(Type::Named("list".to_string(), args.clone())),

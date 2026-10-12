@@ -362,6 +362,10 @@ const VEC_CALLBACK_PARAMS: [BuiltinParam; 1] =
     [builtin_param!(required, "f", ReceiverKind::Borrow)];
 const STRING_TEXT_PARAMS: [BuiltinParam; 1] =
     [builtin_param!(required, "text", ReceiverKind::Borrow)];
+const STRING_SEPARATOR_PARAMS: [BuiltinParam; 1] =
+    [builtin_param!(required, "separator", ReceiverKind::Borrow)];
+const STRING_REPEAT_PARAMS: [BuiltinParam; 1] =
+    [builtin_param!(required, "count", ReceiverKind::Borrow)];
 const STRING_REPLACE_PARAMS: [BuiltinParam; 2] = [
     builtin_param!(required, "from", ReceiverKind::Borrow),
     builtin_param!(required, "to", ReceiverKind::Borrow),
@@ -970,6 +974,15 @@ pub enum BuiltinMember {
     StringStripPrefix,
     StringStripSuffix,
     StringTrim,
+    StringTrimStart,
+    StringTrimEnd,
+    StringSplitOnce,
+    StringRsplitOnce,
+    StringLines,
+    StringSplitWhitespace,
+    StringFind,
+    StringCount,
+    StringRepeat,
     StringJoin,
     StringToBytes,
     ScalarToString,
@@ -1365,6 +1378,15 @@ impl BuiltinMember {
             ("str", "strip_prefix") => Some(Self::StringStripPrefix),
             ("str", "strip_suffix") => Some(Self::StringStripSuffix),
             ("str", "trim") => Some(Self::StringTrim),
+            ("str", "trim_start") => Some(Self::StringTrimStart),
+            ("str", "trim_end") => Some(Self::StringTrimEnd),
+            ("str", "split_once") => Some(Self::StringSplitOnce),
+            ("str", "rsplit_once") => Some(Self::StringRsplitOnce),
+            ("str", "lines") => Some(Self::StringLines),
+            ("str", "split_whitespace") => Some(Self::StringSplitWhitespace),
+            ("str", "find") => Some(Self::StringFind),
+            ("str", "count") => Some(Self::StringCount),
+            ("str", "repeat") => Some(Self::StringRepeat),
             ("str", "join") => Some(Self::StringJoin),
             ("str", "to_bytes") => Some(Self::StringToBytes),
             ("str", "clone") => Some(Self::StringClone),
@@ -1514,6 +1536,15 @@ impl BuiltinMember {
             Self::StringStripPrefix => "strip_prefix",
             Self::StringStripSuffix => "strip_suffix",
             Self::StringTrim => "trim",
+            Self::StringTrimStart => "trim_start",
+            Self::StringTrimEnd => "trim_end",
+            Self::StringSplitOnce => "split_once",
+            Self::StringRsplitOnce => "rsplit_once",
+            Self::StringLines => "lines",
+            Self::StringSplitWhitespace => "split_whitespace",
+            Self::StringFind => "find",
+            Self::StringCount => "count",
+            Self::StringRepeat => "repeat",
             Self::StringJoin => "join",
             Self::StringToBytes => "to_bytes",
             Self::ArrayShape => "shape",
@@ -1714,6 +1745,15 @@ impl BuiltinMember {
             Self::StringStripPrefix => "strip_prefix(text: str) -> str | None",
             Self::StringStripSuffix => "strip_suffix(text: str) -> str | None",
             Self::StringTrim => "trim() -> str",
+            Self::StringTrimStart => "trim_start() -> str",
+            Self::StringTrimEnd => "trim_end() -> str",
+            Self::StringSplitOnce => "split_once(separator: str) -> (str, str) | None",
+            Self::StringRsplitOnce => "rsplit_once(separator: str) -> (str, str) | None",
+            Self::StringLines => "lines() -> list[str]",
+            Self::StringSplitWhitespace => "split_whitespace() -> list[str]",
+            Self::StringFind => "find(text: str) -> int64 | None",
+            Self::StringCount => "count(text: str) -> int64",
+            Self::StringRepeat => "repeat(count: int64) -> str",
             Self::StringJoin => "join(parts: list[str]) -> str",
             Self::StringToBytes => "to_bytes() -> list[uint8]",
             Self::ArrayShape => "shape() -> list[int64]",
@@ -1993,6 +2033,33 @@ impl BuiltinMember {
             Self::StringTrim => {
                 "Returns a new `str` with surrounding Unicode whitespace removed."
             }
+            Self::StringTrimStart => {
+                "Returns a new `str` with leading Unicode whitespace removed."
+            }
+            Self::StringTrimEnd => {
+                "Returns a new `str` with trailing Unicode whitespace removed."
+            }
+            Self::StringSplitOnce => {
+                "Splits at the first occurrence of `separator` and returns the text before and after it, or `None` when it is absent. An empty `separator` traps with `AU4003`."
+            }
+            Self::StringRsplitOnce => {
+                "Splits at the last occurrence of `separator` and returns the text before and after it, or `None` when it is absent. An empty `separator` traps with `AU4003`."
+            }
+            Self::StringLines => {
+                "Splits the string at each `\\n`, removing one `\\r` before each `\\n`. A final line terminator adds no empty line."
+            }
+            Self::StringSplitWhitespace => {
+                "Splits the string on runs of Unicode whitespace and drops empty parts."
+            }
+            Self::StringFind => {
+                "Returns the index of the first occurrence of `text`, counted in Unicode scalar values, or `None` when it is absent. An empty `text` returns `0`."
+            }
+            Self::StringCount => {
+                "Returns the number of non-overlapping occurrences of `text`. An empty `text` traps with `AU4003`."
+            }
+            Self::StringRepeat => {
+                "Returns `count` concatenated copies of the string. A negative `count` traps with `AU4003`, and a result above the 64 MiB string limit traps with `AU4005`."
+            }
             Self::StringJoin => {
                 "Joins the `list[str]` parts using the receiver string as the separator."
             }
@@ -2259,6 +2326,10 @@ impl BuiltinMember {
             | Self::StringToLower
             | Self::StringToUpper
             | Self::StringTrim
+            | Self::StringTrimStart
+            | Self::StringTrimEnd
+            | Self::StringLines
+            | Self::StringSplitWhitespace
             | Self::StringToBytes
             | Self::ArrayShape
             | Self::ArrayLen
@@ -2450,8 +2521,16 @@ impl BuiltinMember {
             | Self::StringEndsWith
             | Self::StringSplit
             | Self::StringStripPrefix
-            | Self::StringStripSuffix => {
+            | Self::StringStripSuffix
+            | Self::StringFind
+            | Self::StringCount => {
                 BuiltinCallShape::fixed(&STRING_TEXT_PARAMS, CallConvention::PositionalOrNamed)
+            }
+            Self::StringSplitOnce | Self::StringRsplitOnce => {
+                BuiltinCallShape::fixed(&STRING_SEPARATOR_PARAMS, CallConvention::PositionalOrNamed)
+            }
+            Self::StringRepeat => {
+                BuiltinCallShape::fixed(&STRING_REPEAT_PARAMS, CallConvention::PositionalOrNamed)
             }
             Self::StringReplace => {
                 BuiltinCallShape::fixed(&STRING_REPLACE_PARAMS, CallConvention::PositionalOrNamed)

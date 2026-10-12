@@ -1,0 +1,3 @@
+def main():
+    line = "key value"
+    print(line.split_once(""))

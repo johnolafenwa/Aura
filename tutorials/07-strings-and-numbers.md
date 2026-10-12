@@ -530,6 +530,53 @@ parts = ["aura", "lang", "tests"]
 print("-".join(parts))    # "aura-lang-tests"
 ```
 
+### Splitting, Searching, And Repeating
+
+These methods cover most line-oriented parsing. Each one reads the receiver
+and returns fresh values:
+
+```aura check-pass
+config = "name = aura\nmode = fast\n"
+for line in config.lines():
+    pair = line.split_once("=")
+    if pair is not None:
+        key, value = pair
+        print(key.trim_end() + ":" + value.trim_start())
+```
+
+This prints `name:aura` and `mode:fast`.
+
+- `lines()` splits at `\n` and removes one `\r` before each `\n`. A final
+  line terminator adds no empty line.
+- `split_once(separator)` splits at the first occurrence and returns
+  `(str, str) | None`. `rsplit_once(separator)` splits at the last one.
+- `trim_start()` and `trim_end()` remove Unicode whitespace from one side.
+- `split_whitespace()` splits on runs of whitespace and drops empty parts.
+
+`find(text)` returns the position of the first match, counted in Unicode
+scalar values like `len()` and slices. It returns `None` when there is no
+match. `count(text)` counts non-overlapping matches, and `repeat(count)`
+concatenates copies:
+
+```aura check-pass
+sentence = "the quick brown fox"
+print(sentence.count("o"))    # 2
+print("=".repeat(5))          # =====
+match sentence.find("fox"):
+    case int64 as at:
+        print(sentence[at:])  # fox
+    case None:
+        print("missing")
+```
+
+An empty separator in `split_once` or `rsplit_once`, an empty text in
+`count`, and a negative `repeat` count trap with `AU4003`. A `repeat` result
+above the 64 MiB string limit traps with `AU4005`.
+
+See [examples/strings/text_parsing.au](../examples/strings/text_parsing.au).
+
+### Copying Strings
+
 `clone()` creates an independent copy of a string.
 [06-ownership-and-borrowing.md](06-ownership-and-borrowing.md) explains why
 this matters.

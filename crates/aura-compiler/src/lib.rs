@@ -20,6 +20,7 @@ pub(crate) mod runtime_config;
 mod runtime_reactor;
 pub mod runtime_value;
 pub mod sema;
+pub(crate) mod text_methods;
 pub mod union_layout;
 pub(crate) mod union_runtime;
 
