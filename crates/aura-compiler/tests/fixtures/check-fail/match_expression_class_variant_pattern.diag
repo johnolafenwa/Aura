@@ -1,0 +1,5 @@
+error[AU2040]: a match over class `Box` takes keyword class patterns such as `Name(field=pattern)`, `_`, or a name, not enum variant or type patterns
+ --> crates/aura-compiler/tests/fixtures/check-fail/match_expression_class_variant_pattern.au:6:14
+  |
+6 |         case Ready: 1
+  |              ^

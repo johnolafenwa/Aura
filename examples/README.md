@@ -151,6 +151,7 @@ seven real loopback requests.
 | `match_borrow_mut_fields.au` | Mutable matching through a field place while a proven-disjoint sibling field changes | `9`, `11` |
 | `rich_match.au` | Multi-payload enum variants, nested patterns, named payload fields, and expression-form `match` | `7`, `30`, `0` |
 | `match_expression_positions.au` | Expression-form `match` in binding and argument positions, including nested block-form arm values | `1`, `10`, `3`, `20` |
+| `structural_patterns.au` | Tuple rest targets, list sequence patterns with `*rest`, and keyword class patterns | `1`, `(two, 3.0)`, `empty`, `one: 7`, `from 1 to 4`, `10 then [20, 30]`, `origin`, `on the y axis at 5`, `elsewhere` |
 | `match_guards_and_or_patterns.au` | Exact-Boolean guards, binding-compatible enum or-patterns, and top-level complete-value bindings | `positive`, `non-positive`, `missing`, `4` |
 | `wildcard_match.au` | Wildcard `case _:` arms in statement-form `match` | `2` |
 

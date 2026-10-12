@@ -12838,11 +12838,39 @@ impl<'a> Lowerer<'a> {
                     value: Rvalue::Use(source),
                 });
             }
+            BindingTarget::Rest { .. } => {
+                unreachable!("checked rest targets appear only inside tuple targets")
+            }
             BindingTarget::Tuple { elements, .. } => {
                 if let Type::Tuple(element_types) = source_ty {
-                    for (index, (element, element_ty)) in
-                        elements.iter().zip(element_types).enumerate()
-                    {
+                    let ranges = tuple_target_ranges(elements, element_types.len());
+                    for (element, range) in elements.iter().zip(ranges) {
+                        let (element, index) = match element {
+                            BindingTarget::Rest { name, .. } if name == "_" => continue,
+                            BindingTarget::Rest { name, span } => {
+                                let take_place = consume_non_copy.then_some(source_place);
+                                let rest_ty = Type::Tuple(element_types[range.clone()].to_vec());
+                                let rest = self.lower_tuple_rest_value(
+                                    Operand::Place(source_place.to_string()),
+                                    element_types,
+                                    range,
+                                    take_place,
+                                );
+                                self.lower_binding_target_from_place_with_scope(
+                                    &BindingTarget::Name {
+                                        name: name.clone(),
+                                        span: *span,
+                                    },
+                                    &rest,
+                                    &rest_ty,
+                                    consume_non_copy,
+                                    use_scoped_targets,
+                                );
+                                continue;
+                            }
+                            element => (element, range.start),
+                        };
+                        let element_ty = &element_types[index];
                         let captured = self.new_typed_temp(element_ty.clone());
                         let value = if consume_non_copy
                             && !type_is_copy_in_program(element_ty, self.program)
@@ -12897,10 +12925,24 @@ impl<'a> Lowerer<'a> {
                 let slot = self.new_typed_temp(target_ty.clone());
                 slots.insert(name.clone(), slot);
             }
+            BindingTarget::Rest { .. } => {}
             BindingTarget::Tuple { elements, .. } => {
                 if let Type::Tuple(element_types) = target_ty {
-                    for (element, element_ty) in elements.iter().zip(element_types) {
-                        self.register_scoped_binding_target(element, element_ty, slots);
+                    let ranges = tuple_target_ranges(elements, element_types.len());
+                    for (element, range) in elements.iter().zip(ranges) {
+                        match element {
+                            BindingTarget::Rest { name, .. } if name == "_" => {}
+                            BindingTarget::Rest { name, .. } => {
+                                let slot =
+                                    self.new_typed_temp(Type::Tuple(element_types[range].to_vec()));
+                                slots.insert(name.clone(), slot);
+                            }
+                            element => self.register_scoped_binding_target(
+                                element,
+                                &element_types[range.start],
+                                slots,
+                            ),
+                        }
                     }
                 }
             }
@@ -14541,19 +14583,65 @@ impl<'a> Lowerer<'a> {
                 let Some(Type::Tuple(element_types)) = scrutinee_ty else {
                     unreachable!("checked tuple patterns always have tuple scrutinees");
                 };
-                debug_assert_eq!(element_types.len(), pattern.elements.len());
                 debug_assert!(!pattern.elements.is_empty());
+                let ranges = tuple_pattern_ranges(pattern, element_types.len());
 
                 let mut next_element_block = self.current_block;
-                for (index, (element_pattern, element_ty)) in
-                    pattern.elements.iter().zip(element_types).enumerate()
+                for (position, (element_pattern, range)) in
+                    pattern.elements.iter().zip(ranges).enumerate()
                 {
                     self.switch_to(next_element_block);
-                    let element_success = if index + 1 == pattern.elements.len() {
+                    let element_success = if position + 1 == pattern.elements.len() {
                         success_block
                     } else {
                         self.new_block("match_tuple_element")
                     };
+                    let index = range.start;
+                    if let Pattern::Rest(rest) = element_pattern {
+                        let rest_ty = Type::Tuple(element_types[range.clone()].to_vec());
+                        match rest.name.as_ref() {
+                            Some(name) if !options.consume_payloads => {
+                                let rest_tuple = self.lower_tuple_rest_value(
+                                    scrutinee.clone(),
+                                    element_types,
+                                    range,
+                                    None,
+                                );
+                                let child_failure =
+                                    self.pattern_failure_cleanup(failure_block, first_loan);
+                                self.lower_pattern(
+                                    &Pattern::Binding(crate::ast::BindingPattern {
+                                        name: name.clone(),
+                                        span: rest.span,
+                                    }),
+                                    Operand::Place(rest_tuple),
+                                    Some(&rest_ty),
+                                    element_success,
+                                    child_failure,
+                                    PatternLoweringOptions {
+                                        collect_writeback: false,
+                                        ..options
+                                    },
+                                );
+                            }
+                            Some(name) => {
+                                self.register_consuming_pattern_bindings(
+                                    &Pattern::Binding(crate::ast::BindingPattern {
+                                        name: name.clone(),
+                                        span: rest.span,
+                                    }),
+                                    &rest_ty,
+                                );
+                                self.terminate(Terminator::Goto(self.label(element_success)));
+                            }
+                            None => {
+                                self.terminate(Terminator::Goto(self.label(element_success)));
+                            }
+                        }
+                        next_element_block = element_success;
+                        continue;
+                    }
+                    let element_ty = &element_types[index];
                     if options.consume_payloads && !pattern_requires_runtime_test(element_pattern) {
                         self.register_consuming_pattern_bindings(element_pattern, element_ty);
                         self.terminate(Terminator::Goto(self.label(element_success)));
@@ -14583,6 +14671,31 @@ impl<'a> Lowerer<'a> {
                     }
                     next_element_block = element_success;
                 }
+                None
+            }
+            Pattern::Rest(_) => {
+                unreachable!("checked rest patterns appear only inside tuple and sequence patterns")
+            }
+            Pattern::Sequence(pattern) => {
+                self.lower_sequence_pattern(
+                    pattern,
+                    scrutinee,
+                    scrutinee_ty,
+                    success_block,
+                    failure_block,
+                    options,
+                );
+                None
+            }
+            Pattern::Class(pattern) => {
+                self.lower_class_pattern(
+                    pattern,
+                    scrutinee,
+                    scrutinee_ty,
+                    success_block,
+                    failure_block,
+                    options,
+                );
                 None
             }
             Pattern::Variant(pattern) => {
@@ -14688,6 +14801,392 @@ impl<'a> Lowerer<'a> {
         }
     }
 
+    /// Builds the tuple a `*rest` element binds from the positions it
+    /// covers. With `take_place`, non-Copy positions move out of that
+    /// private captured tuple; otherwise each position is read.
+    fn lower_tuple_rest_value(
+        &mut self,
+        tuple: Operand,
+        element_types: &[Type],
+        range: std::ops::Range<usize>,
+        take_place: Option<&str>,
+    ) -> String {
+        let rest_types = element_types[range.clone()].to_vec();
+        let mut elements = Vec::with_capacity(rest_types.len());
+        for index in range {
+            let element_ty = element_types[index].clone();
+            let element = self.new_typed_temp(element_ty.clone());
+            let value = match take_place {
+                Some(place) if !type_is_copy_in_program(&element_ty, self.program) => {
+                    Rvalue::TupleTakeElement {
+                        place: place.to_string(),
+                        index,
+                        element_type: element_ty,
+                    }
+                }
+                _ => Rvalue::TupleElement {
+                    tuple: tuple.clone(),
+                    index,
+                    element_type: element_ty,
+                },
+            };
+            self.emit(Instruction::Assign {
+                target: element.clone(),
+                value,
+            });
+            elements.push(Operand::MovePlace(element));
+        }
+        let rest = self.new_typed_temp(Type::Tuple(rest_types.clone()));
+        self.emit(Instruction::Assign {
+            target: rest.clone(),
+            value: Rvalue::TupleLiteral {
+                elements,
+                element_types: rest_types,
+            },
+        });
+        rest
+    }
+
+    /// The member a class pattern tests and its stored field types,
+    /// specialized by the scrutinee. For a union scrutinee the member index
+    /// is the union's own.
+    /// Resolves a class name as a pattern or a checked type spells it,
+    /// including a module-alias spelling such as `geometry.Point`.
+    fn resolve_pattern_class_info(&self, name: &str) -> Option<&crate::sema::ClassInfo> {
+        self.resolve_class_info(name).or_else(|| {
+            self.program
+                .canonical_type_names
+                .get(name)
+                .and_then(|canonical| self.resolve_class_info(canonical))
+        })
+    }
+
+    fn class_pattern_layout(
+        &self,
+        pattern: &crate::ast::ClassPattern,
+        scrutinee_ty: Option<&Type>,
+    ) -> (Option<usize>, Type, Vec<(String, Type)>) {
+        let (member_index, member) = match scrutinee_ty {
+            Some(Type::Union(union)) => {
+                // The checker proved the pattern names exactly one class
+                // member, possibly through a module alias.
+                let named = self
+                    .resolve_pattern_class_info(&pattern.class_name)
+                    .map(|info| (&info.module_name, &info.decl.name));
+                let (index, member) = union
+                    .members
+                    .iter()
+                    .enumerate()
+                    .find(|(_, member)| {
+                        matches!(member, Type::Named(name, _) if self
+                            .resolve_pattern_class_info(name)
+                            .map(|info| (&info.module_name, &info.decl.name))
+                            == named)
+                    })
+                    .expect("checked class pattern names a union member");
+                (Some(index), member.clone())
+            }
+            ty => (
+                None,
+                ty.cloned()
+                    .expect("checked class patterns have a typed scrutinee"),
+            ),
+        };
+        let Type::Named(name, args) = &member else {
+            unreachable!("a checked class pattern member is a named class type");
+        };
+        let class_info = self
+            .resolve_pattern_class_info(name)
+            .expect("checked class pattern member is a class");
+        let substitutions = substitutions_from_decl_type_args(&class_info.decl.type_params, args);
+        let fields = class_info
+            .decl
+            .fields
+            .iter()
+            .filter_map(|decl| {
+                class_info
+                    .fields
+                    .get(&decl.name)
+                    .map(|info| (decl.name.clone(), substitute_type(&info.ty, &substitutions)))
+            })
+            .collect();
+        (member_index, member, fields)
+    }
+
+    /// Tests a class pattern: the union member when the scrutinee is a
+    /// union, then each written field subpattern in source order.
+    fn lower_class_pattern(
+        &mut self,
+        pattern: &crate::ast::ClassPattern,
+        scrutinee: Operand,
+        scrutinee_ty: Option<&Type>,
+        success_block: usize,
+        failure_block: usize,
+        options: PatternLoweringOptions,
+    ) {
+        let first_loan = self.loan_scopes.last().map_or(0, Vec::len);
+        let (member_index, member, fields) = self.class_pattern_layout(pattern, scrutinee_ty);
+        let object = match (member_index, scrutinee_ty) {
+            (Some(_), Some(union_ty)) => {
+                // Read the selected member through a shared payload view,
+                // as a type arm does; the arm's loan cleanup ends it.
+                let payload =
+                    self.lower_type_pattern_test(scrutinee, union_ty, &member, failure_block);
+                let view = self.new_typed_temp(member.clone());
+                self.begin_pattern_view(&view, &payload, false);
+                Operand::Place(view)
+            }
+            _ => scrutinee,
+        };
+        let options = PatternLoweringOptions {
+            collect_writeback: false,
+            ..options
+        };
+        for field in &pattern.fields {
+            if matches!(field.pattern, Pattern::Wildcard(_)) {
+                continue;
+            }
+            let field_ty = fields
+                .iter()
+                .find(|(name, _)| name == &field.name)
+                .map(|(_, ty)| ty.clone())
+                .expect("checked class pattern field");
+            if options.consume_payloads && !pattern_requires_runtime_test(&field.pattern) {
+                self.register_consuming_pattern_bindings(&field.pattern, &field_ty);
+                continue;
+            }
+            let value = self.new_typed_temp(field_ty.clone());
+            let read = match &object {
+                // A payload view reads its field through the view's place,
+                // as `view.field` does in source.
+                Operand::Place(view) if member_index.is_some() => {
+                    Rvalue::Use(Operand::Place(format!("{view}.{}", field.name)))
+                }
+                object => Rvalue::Member {
+                    object: object.clone(),
+                    field: field.name.clone(),
+                },
+            };
+            self.emit(Instruction::Assign {
+                target: value.clone(),
+                value: read,
+            });
+            let next = self.new_block("match_class_field");
+            let child_failure = self.pattern_failure_cleanup(failure_block, first_loan);
+            self.lower_pattern(
+                &field.pattern,
+                Operand::Place(value),
+                Some(&field_ty),
+                next,
+                child_failure,
+                options,
+            );
+            self.switch_to(next);
+        }
+        self.terminate(Terminator::Goto(self.label(success_block)));
+    }
+
+    /// Tests a list sequence pattern in a bare `match`: the length once,
+    /// then each fixed element left to right. `*rest` binds a fresh list
+    /// slice of the covered elements.
+    fn lower_sequence_pattern(
+        &mut self,
+        pattern: &crate::ast::SequencePattern,
+        scrutinee: Operand,
+        scrutinee_ty: Option<&Type>,
+        success_block: usize,
+        failure_block: usize,
+        options: PatternLoweringOptions,
+    ) {
+        let first_loan = self.loan_scopes.last().map_or(0, Vec::len);
+        let list_ty = scrutinee_ty
+            .cloned()
+            .expect("checked sequence patterns have a list scrutinee");
+        let Type::Named(_, list_args) = &list_ty else {
+            unreachable!("checked sequence patterns have a list scrutinee")
+        };
+        let element_ty = list_args[0].clone();
+        let int64 = Type::named("int64");
+        let rest_index = pattern.elements.iter().position(Pattern::is_rest);
+        let fixed = pattern.elements.len() - usize::from(rest_index.is_some());
+        let receiver_place = match &scrutinee {
+            Operand::Place(place) | Operand::MovePlace(place) => Some(place.clone()),
+            _ => None,
+        };
+        let length = self.new_typed_temp(int64.clone());
+        self.emit(Instruction::Assign {
+            target: length.clone(),
+            value: Rvalue::Call {
+                callee: CallTarget::Member {
+                    object: scrutinee.clone(),
+                    field: "len".to_string(),
+                    receiver_place: receiver_place.clone(),
+                },
+                args: Vec::new(),
+            },
+        });
+        let length_matches = self.new_typed_temp(Type::named("bool"));
+        self.emit(Instruction::Assign {
+            target: length_matches.clone(),
+            value: Rvalue::Binary {
+                op: if rest_index.is_some() {
+                    BinaryOp::GreaterEq
+                } else {
+                    BinaryOp::Eq
+                },
+                left: Operand::Place(length.clone()),
+                right: Operand::Int(fixed as u128),
+                span: pattern.span,
+            },
+        });
+        let elements_block = self.new_block("match_sequence_elements");
+        self.terminate(Terminator::Branch {
+            condition: Operand::Place(length_matches),
+            then_label: self.label(elements_block),
+            else_label: self.label(failure_block),
+        });
+        self.switch_to(elements_block);
+        let options = PatternLoweringOptions {
+            collect_writeback: false,
+            ..options
+        };
+        // A position after the rest element counts back from the end.
+        let from_end = |position: usize| fixed + usize::from(rest_index.is_some()) - position;
+        let line_and_column = |span: Span| {
+            [
+                MirArg {
+                    name: None,
+                    value: Operand::Int(span.line as u128),
+                    writeback_place: None,
+                },
+                MirArg {
+                    name: None,
+                    value: Operand::Int(span.column as u128),
+                    writeback_place: None,
+                },
+            ]
+        };
+        for (position, element) in pattern.elements.iter().enumerate() {
+            let element_span = element.span();
+            let (value, value_ty) = match element {
+                Pattern::Wildcard(_)
+                | Pattern::Rest(crate::ast::RestPattern { name: None, .. }) => continue,
+                Pattern::Rest(_) => {
+                    let suffix = fixed - position;
+                    let end = self.new_typed_temp(int64.clone());
+                    self.emit(Instruction::Assign {
+                        target: end.clone(),
+                        value: Rvalue::Binary {
+                            op: BinaryOp::Sub,
+                            left: Operand::Place(length.clone()),
+                            right: Operand::Int(suffix as u128),
+                            span: element_span,
+                        },
+                    });
+                    let slice = self.new_typed_temp(list_ty.clone());
+                    let mut args = vec![
+                        MirArg {
+                            name: None,
+                            value: Operand::Int(position as u128),
+                            writeback_place: None,
+                        },
+                        MirArg {
+                            name: None,
+                            value: Operand::Bool(true),
+                            writeback_place: None,
+                        },
+                        MirArg {
+                            name: None,
+                            value: Operand::Place(end),
+                            writeback_place: None,
+                        },
+                        MirArg {
+                            name: None,
+                            value: Operand::Bool(true),
+                            writeback_place: None,
+                        },
+                    ];
+                    args.extend(line_and_column(element_span));
+                    self.emit(Instruction::Assign {
+                        target: slice.clone(),
+                        value: Rvalue::Call {
+                            callee: CallTarget::Member {
+                                object: scrutinee.clone(),
+                                field: INTERNAL_SLICE_FIELD.to_string(),
+                                receiver_place: receiver_place.clone(),
+                            },
+                            args,
+                        },
+                    });
+                    (slice, list_ty.clone())
+                }
+                _ => {
+                    let index = match rest_index {
+                        Some(rest) if position > rest => {
+                            let index = self.new_typed_temp(int64.clone());
+                            self.emit(Instruction::Assign {
+                                target: index.clone(),
+                                value: Rvalue::Binary {
+                                    op: BinaryOp::Sub,
+                                    left: Operand::Place(length.clone()),
+                                    right: Operand::Int(from_end(position) as u128),
+                                    span: element_span,
+                                },
+                            });
+                            Operand::Place(index)
+                        }
+                        _ => Operand::Int(position as u128),
+                    };
+                    let value = self.new_typed_temp(element_ty.clone());
+                    let mut args = vec![MirArg {
+                        name: None,
+                        value: index,
+                        writeback_place: None,
+                    }];
+                    args.extend(line_and_column(element_span));
+                    self.emit(Instruction::Assign {
+                        target: value.clone(),
+                        value: Rvalue::Call {
+                            callee: CallTarget::Member {
+                                object: scrutinee.clone(),
+                                field: INTERNAL_VEC_INDEX_FIELD.to_string(),
+                                receiver_place: receiver_place.clone(),
+                            },
+                            args,
+                        },
+                    });
+                    (value, element_ty.clone())
+                }
+            };
+            let binding;
+            let element_pattern = match element {
+                Pattern::Rest(crate::ast::RestPattern {
+                    name: Some(name),
+                    span,
+                }) => {
+                    binding = Pattern::Binding(crate::ast::BindingPattern {
+                        name: name.clone(),
+                        span: *span,
+                    });
+                    &binding
+                }
+                element => element,
+            };
+            let next = self.new_block("match_sequence_element");
+            let child_failure = self.pattern_failure_cleanup(failure_block, first_loan);
+            self.lower_pattern(
+                element_pattern,
+                Operand::Place(value),
+                Some(&value_ty),
+                next,
+                child_failure,
+                options,
+            );
+            self.switch_to(next);
+        }
+        self.terminate(Terminator::Goto(self.label(success_block)));
+    }
+
     fn register_consuming_pattern_bindings(&mut self, pattern: &Pattern, pattern_ty: &Type) {
         match pattern {
             Pattern::Type(pattern) => {
@@ -14719,11 +15218,40 @@ impl<'a> Lowerer<'a> {
                 let Type::Tuple(element_types) = pattern_ty else {
                     return;
                 };
-                for (element_pattern, element_ty) in pattern.elements.iter().zip(element_types) {
-                    self.register_consuming_pattern_bindings(element_pattern, element_ty);
+                let ranges = tuple_pattern_ranges(pattern, element_types.len());
+                for (element_pattern, range) in pattern.elements.iter().zip(ranges) {
+                    match element_pattern {
+                        Pattern::Rest(crate::ast::RestPattern {
+                            name: Some(name),
+                            span,
+                        }) => self.register_consuming_pattern_bindings(
+                            &Pattern::Binding(crate::ast::BindingPattern {
+                                name: name.clone(),
+                                span: *span,
+                            }),
+                            &Type::Tuple(element_types[range].to_vec()),
+                        ),
+                        element_pattern => self.register_consuming_pattern_bindings(
+                            element_pattern,
+                            &element_types[range.start],
+                        ),
+                    }
                 }
             }
-            Pattern::Variant(_) | Pattern::Wildcard(_) | Pattern::Literal(_) => {}
+            Pattern::Class(pattern) => {
+                let (_, _, fields) = self.class_pattern_layout(pattern, Some(pattern_ty));
+                for field in &pattern.fields {
+                    if let Some((_, field_ty)) = fields.iter().find(|(name, _)| name == &field.name)
+                    {
+                        self.register_consuming_pattern_bindings(&field.pattern, field_ty);
+                    }
+                }
+            }
+            Pattern::Variant(_)
+            | Pattern::Wildcard(_)
+            | Pattern::Literal(_)
+            | Pattern::Rest(_)
+            | Pattern::Sequence(_) => {}
         }
     }
 
@@ -14833,7 +15361,13 @@ impl<'a> Lowerer<'a> {
                 }
                 self.switch_to(done);
             }
-            Pattern::Wildcard(_) | Pattern::Literal(_) => {}
+            Pattern::Wildcard(_)
+            | Pattern::Literal(_)
+            | Pattern::Rest(_)
+            | Pattern::Sequence(_) => {}
+            Pattern::Class(pattern) => {
+                self.lower_consuming_class_pattern_bindings(pattern, scrutinee, scrutinee_ty)
+            }
             Pattern::Binding(binding) => {
                 let previous_target = self.render_local_name(&binding.name);
                 let target = if self.loan_source_names.contains_key(&previous_target) {
@@ -14901,12 +15435,38 @@ impl<'a> Lowerer<'a> {
                 let Some(Type::Tuple(element_types)) = scrutinee_ty else {
                     return;
                 };
-                for (index, (element_pattern, element_ty)) in
-                    pattern.elements.iter().zip(element_types).enumerate()
-                {
+                let ranges = tuple_pattern_ranges(pattern, element_types.len());
+                for (element_pattern, range) in pattern.elements.iter().zip(ranges) {
                     if !pattern_contains_binding(element_pattern) {
                         continue;
                     }
+                    if let Pattern::Rest(crate::ast::RestPattern {
+                        name: Some(name),
+                        span,
+                    }) = element_pattern
+                    {
+                        let take_place = match &scrutinee {
+                            Operand::Place(place) => Some(place.as_str()),
+                            _ => None,
+                        };
+                        let rest = self.lower_tuple_rest_value(
+                            scrutinee.clone(),
+                            element_types,
+                            range.clone(),
+                            take_place,
+                        );
+                        self.lower_consuming_pattern_bindings(
+                            &Pattern::Binding(crate::ast::BindingPattern {
+                                name: name.clone(),
+                                span: *span,
+                            }),
+                            Operand::Place(rest),
+                            Some(&Type::Tuple(element_types[range].to_vec())),
+                        );
+                        continue;
+                    }
+                    let index = range.start;
+                    let element_ty = &element_types[index];
                     let element_target = self.new_typed_temp(element_ty.clone());
                     let value = match &scrutinee {
                         Operand::Place(place)
@@ -14935,6 +15495,87 @@ impl<'a> Lowerer<'a> {
                     );
                 }
             }
+        }
+    }
+
+    /// Moves the fields a selected `match own` class pattern binds out of
+    /// the private captured object.
+    fn lower_consuming_class_pattern_bindings(
+        &mut self,
+        pattern: &crate::ast::ClassPattern,
+        scrutinee: Operand,
+        scrutinee_ty: Option<&Type>,
+    ) {
+        let (member_index, member, fields) = self.class_pattern_layout(pattern, scrutinee_ty);
+        let place = match scrutinee {
+            Operand::Place(place) | Operand::MovePlace(place) => place,
+            value => {
+                let place = self.new_typed_temp(member.clone());
+                self.emit(Instruction::Assign {
+                    target: place.clone(),
+                    value: Rvalue::Use(value),
+                });
+                place
+            }
+        };
+        let object = match (member_index, scrutinee_ty) {
+            (Some(index), Some(union_ty)) => {
+                let rejected = self.new_block("match_commit_invalid_tag");
+                let current = self.current_block;
+                self.switch_to(rejected);
+                self.terminate(Terminator::AssertFail {
+                    message: Some(Operand::String(
+                        "owned pattern payload changed after selection".to_string(),
+                    )),
+                    captures: Vec::new(),
+                    span: pattern.span,
+                });
+                self.switch_to(current);
+                self.lower_type_pattern_test(
+                    Operand::Place(place.clone()),
+                    union_ty,
+                    &member,
+                    rejected,
+                );
+                let object = self.new_typed_temp(member.clone());
+                self.emit(Instruction::Assign {
+                    target: object.clone(),
+                    value: Rvalue::UnionTakePayload {
+                        place,
+                        union_type: union_ty.clone(),
+                        member_type: member,
+                        member_index: index,
+                    },
+                });
+                object
+            }
+            _ => place,
+        };
+        for field in &pattern.fields {
+            if !pattern_contains_binding(&field.pattern) {
+                continue;
+            }
+            let field_ty = fields
+                .iter()
+                .find(|(name, _)| name == &field.name)
+                .map(|(_, ty)| ty.clone())
+                .expect("checked class pattern field");
+            let field_place = format!("{object}.{}", field.name);
+            let value = if type_is_copy_in_program(&field_ty, self.program) {
+                Operand::Place(field_place)
+            } else {
+                Operand::MovePlace(field_place)
+            };
+            let target = self.new_typed_temp(field_ty.clone());
+            self.emit(Instruction::Assign {
+                target: target.clone(),
+                value: Rvalue::Use(value),
+            });
+            self.lower_consuming_pattern_bindings(
+                &field.pattern,
+                Operand::Place(target),
+                Some(&field_ty),
+            );
         }
     }
 
@@ -15285,7 +15926,7 @@ impl<'a> Lowerer<'a> {
                     .expect("simple loop target should have a scoped slot")
                     .clone(),
             ),
-            BindingTarget::Tuple { .. } => None,
+            BindingTarget::Tuple { .. } | BindingTarget::Rest { .. } => None,
         };
         if mutable_list_iteration {
             let binding = simple_binding.expect("sema refuses `mut` tuple loop targets");
@@ -15783,7 +16424,7 @@ impl<'a> Lowerer<'a> {
         self.view_sources.insert(binding.clone(), collection);
         let target_name = match &for_stmt.target {
             BindingTarget::Name { name, .. } => name.clone(),
-            BindingTarget::Tuple { .. } => binding.clone(),
+            BindingTarget::Tuple { .. } | BindingTarget::Rest { .. } => binding.clone(),
         };
         self.loan_source_names.insert(binding.clone(), target_name);
         if let Some(scope) = self.loan_scopes.last_mut() {
@@ -24187,6 +24828,12 @@ fn pattern_contains_binding(pattern: &Pattern) -> bool {
         Pattern::Binding(_) => true,
         Pattern::Variant(pattern) => pattern.subpatterns.iter().any(pattern_contains_binding),
         Pattern::Tuple(pattern) => pattern.elements.iter().any(pattern_contains_binding),
+        Pattern::Sequence(pattern) => pattern.elements.iter().any(pattern_contains_binding),
+        Pattern::Class(pattern) => pattern
+            .fields
+            .iter()
+            .any(|field| pattern_contains_binding(&field.pattern)),
+        Pattern::Rest(pattern) => pattern.name.is_some(),
         Pattern::Wildcard(_) | Pattern::Literal(_) => false,
     }
 }
@@ -24197,6 +24844,11 @@ fn pattern_contains_type_arm(pattern: &Pattern) -> bool {
         Pattern::Or(pattern) => pattern.alternatives.iter().any(pattern_contains_type_arm),
         Pattern::Variant(pattern) => pattern.subpatterns.iter().any(pattern_contains_type_arm),
         Pattern::Tuple(pattern) => pattern.elements.iter().any(pattern_contains_type_arm),
+        Pattern::Sequence(pattern) => pattern.elements.iter().any(pattern_contains_type_arm),
+        Pattern::Class(pattern) => pattern
+            .fields
+            .iter()
+            .any(|field| pattern_contains_type_arm(&field.pattern)),
         _ => false,
     }
 }
@@ -24222,10 +24874,35 @@ fn pattern_requires_runtime_test(pattern: &Pattern) -> bool {
             .alternatives
             .iter()
             .any(pattern_requires_runtime_test),
-        Pattern::Literal(_) | Pattern::Variant(_) => true,
+        Pattern::Literal(_) | Pattern::Variant(_) | Pattern::Sequence(_) | Pattern::Class(_) => {
+            true
+        }
         Pattern::Tuple(pattern) => pattern.elements.iter().any(pattern_requires_runtime_test),
-        Pattern::Binding(_) | Pattern::Wildcard(_) => false,
+        Pattern::Binding(_) | Pattern::Wildcard(_) | Pattern::Rest(_) => false,
     }
+}
+
+/// The positions each element of a tuple pattern covers.
+fn tuple_pattern_ranges(
+    pattern: &crate::ast::TuplePattern,
+    arity: usize,
+) -> Vec<std::ops::Range<usize>> {
+    let is_rest = pattern
+        .elements
+        .iter()
+        .map(Pattern::is_rest)
+        .collect::<Vec<_>>();
+    crate::ast::rest_element_ranges(&is_rest, arity)
+        .expect("checked tuple patterns fit their scrutinee")
+}
+
+/// The positions each element of a tuple target covers.
+fn tuple_target_ranges(elements: &[BindingTarget], arity: usize) -> Vec<std::ops::Range<usize>> {
+    let is_rest = elements
+        .iter()
+        .map(BindingTarget::is_rest)
+        .collect::<Vec<_>>();
+    crate::ast::rest_element_ranges(&is_rest, arity).expect("checked tuple targets fit their value")
 }
 
 fn is_builtin_class(class: &crate::sema::ClassInfo) -> bool {

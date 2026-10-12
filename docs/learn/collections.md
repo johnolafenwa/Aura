@@ -147,6 +147,26 @@ values.reserve(500)
 Capacity calls do not change the list's contents. A negative request traps
 with `AU4003`. An allocation failure traps with `AU4005`.
 
+### Matching On Shape
+
+A `match` can test a list's length and bind its elements. `*rest` collects
+the elements the other positions leave over into a new list:
+
+```aura
+def summarize(values: list[int64]) -> str:
+    return match values:
+        case []: "nothing"
+        case [only]: f"just {only}"
+        case [first, *rest]: f"{first} and {len(rest)} more"
+
+def main():
+    print(summarize([4, 5, 6]))
+```
+
+This prints `4 and 2 more`. Sequence patterns work only in a bare `match`.
+See [Sequence Patterns](/manual/enums-and-match#sequence-patterns) for the
+full rules.
+
 ## Dictionaries
 
 A dictionary keeps its keys in insertion order:

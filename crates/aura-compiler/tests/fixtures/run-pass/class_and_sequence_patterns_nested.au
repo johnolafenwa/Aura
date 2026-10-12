@@ -1,0 +1,65 @@
+class Tag:
+    label: str
+    weight: int64
+
+enum Kind:
+    Small
+    Large(int64)
+
+class Shape:
+    kind: Kind
+    tag: Tag
+
+def take(value: own Tag | str) -> str:
+    match own value:
+        case Tag(label=label, weight=0):
+            return f"light {label}"
+        case Tag(label=label, weight=w) if w > 5:
+            return f"heavy {label} {w}"
+        case Tag(label=label):
+            return f"tag {label}"
+        case str as text:
+            return text
+
+def kind_of(shape: Shape) -> str:
+    return match shape:
+        case Shape(kind=Kind.Small): "small"
+        case Shape(kind=Kind.Large(size), tag=Tag(label=label)) if size > 10: f"big {label}"
+        case Shape(kind=Kind.Large(size)): f"large {size}"
+
+def main():
+    print(take(Tag(label="a", weight=0)))
+    print(take(Tag(label="b", weight=9)))
+    print(take(Tag(label="c", weight=2)))
+    print(take("plain"))
+    print(kind_of(Shape(kind=Kind.Small, tag=Tag(label="s", weight=1))))
+    print(kind_of(Shape(kind=Kind.Large(20), tag=Tag(label="L", weight=1))))
+    print(kind_of(Shape(kind=Kind.Large(3), tag=Tag(label="m", weight=1))))
+    owned = (Tag(label="x", weight=1), Tag(label="y", weight=2), Tag(label="z", weight=3))
+    match own owned:
+        case (Tag(weight=1), *rest):
+            second, third = rest
+            print(second.label)
+            print(third.label)
+        case _:
+            print("none")
+    names = ["a", "b", "c", "d"]
+    match names:
+        case [first, *middle, last] if len(middle) == 2:
+            print(f"{first} {middle} {last}")
+        case _:
+            print("other")
+    nested = [[1, 2], [3]]
+    match nested:
+        case [[a, b], [c]]:
+            print(a + b + c)
+        case _:
+            print("no")
+    for i in range(4):
+        match [i, i + 1, i + 2][:i]:
+            case []:
+                print("len0")
+            case [x]:
+                print(f"len1 {x}")
+            case [x, *rest]:
+                print(f"len{1 + len(rest)} {x}")

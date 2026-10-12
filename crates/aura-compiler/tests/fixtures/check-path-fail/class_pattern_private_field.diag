@@ -1,0 +1,5 @@
+error[AU2040]: field `secret` is private on `Point`; a class pattern can name it only inside the declaring module
+ --> crates/aura-compiler/tests/fixtures/check-path-fail/class_pattern_private_field.au:5:20
+  |
+5 |         case Point(secret=0):
+  |                    ^

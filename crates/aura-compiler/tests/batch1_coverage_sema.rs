@@ -646,13 +646,13 @@ fn class_scrutinees_reject_variant_shaped_or_and_tuple_patterns() {
     let prelude = "enum Shape:\n    Circle\n    Square\nclass Box:\n    value: int64\ndef main():\n    box = Box(value=1)\n    match box:\n";
     rejects_with_code(
         &format!("{prelude}        case Shape.Circle | Shape.Square:\n            print(1)\n        case _:\n            print(0)\n"),
-        "AU2999",
-        "class patterns are not supported",
+        "AU2040",
+        "takes keyword class patterns",
     );
     rejects_with_code(
         &format!("{prelude}        case (int64 as number, _):\n            print(number)\n        case _:\n            print(0)\n"),
-        "AU2999",
-        "class patterns are not supported",
+        "AU2040",
+        "takes keyword class patterns",
     );
 }
 

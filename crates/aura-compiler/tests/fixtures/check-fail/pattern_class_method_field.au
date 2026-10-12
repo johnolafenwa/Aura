@@ -1,0 +1,12 @@
+class Point:
+    x: int64
+
+    def norm(self) -> int64:
+        return self.x
+
+def main():
+    match Point(x=1):
+        case Point(norm=0):
+            print(0)
+        case _:
+            pass

@@ -47,8 +47,8 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 
 ### Tuples
 
-- Tuples have fixed structural types, recursive unpack targets and patterns, copy-only constant indexing, and non-consuming recursive `==` and `!=` for operands of the same static tuple type.
-- There is no empty tuple, tuple iteration, tuple method, tuple ordering, named or rest unpacking, mutable tuple-target writeback, dynamic or negative tuple indexing, or tuple-to-collection conversion.
+- Tuples have fixed structural types, recursive unpack targets and patterns with one optional rest element, copy-only constant indexing, and non-consuming recursive `==` and `!=` for operands of the same static tuple type.
+- There is no empty tuple, tuple iteration, tuple method, tuple ordering, named unpacking, mutable tuple-target writeback, dynamic or negative tuple indexing, or tuple-to-collection conversion.
 - To take ownership of a non-Copy element, unpack the tuple.
 
 ### Views

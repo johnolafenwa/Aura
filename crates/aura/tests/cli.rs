@@ -167,7 +167,7 @@ fn all_benchmark_inputs_pass_checking() {
 #[test]
 fn check_reports_match_expression_and_literal_pattern_diagnostics() {
     let fixture = repo_root().join(
-        "crates/aura-compiler/tests/fixtures/check-fail/match_expression_class_pattern_deferred.au",
+        "crates/aura-compiler/tests/fixtures/check-fail/match_expression_class_variant_pattern.au",
     );
     let output = Command::new(aura_bin())
         .arg("check")
@@ -177,13 +177,13 @@ fn check_reports_match_expression_and_literal_pattern_diagnostics() {
 
     assert!(
         !output.status.success(),
-        "class patterns must remain rejected"
+        "variant patterns over a class must be rejected"
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("error[AU2999]"), "stderr was:\n{stderr}");
+    assert!(stderr.contains("error[AU2040]"), "stderr was:\n{stderr}");
     assert!(
         stderr.contains(
-            "class patterns are not supported; match an explicit enum/tag representation or use a wildcard and ordinary code"
+            "a match over class `Box` takes keyword class patterns such as `Name(field=pattern)`, `_`, or a name, not enum variant or type patterns"
         ),
         "stderr was:\n{stderr}"
     );
@@ -15548,40 +15548,16 @@ type Unary = def(int32) -> int32
 }
 
 #[test]
-fn run_and_direct_build_agree_on_the_display_example() {
-    let expected =
-        "$12.50\n[  $12.50]\npaid $12.50\n[$12.50, $0.05]\nInvoice(status=due, total=$12.50)\n";
-    let output = Command::new(aura_bin())
-        .arg("run")
-        .arg(repo_root().join("examples/traits/display.au"))
-        .output()
-        .expect("failed to run aura run on the display example");
-    assert!(
-        output.status.success(),
-        "run should succeed for the display example, stderr was:\n{}",
-        String::from_utf8_lossy(&output.stderr)
+fn structural_patterns_example_runs_on_both_backends() {
+    let expected = "1\n(two, 3.0)\nempty\none: 7\nfrom 1 to 4\n10 then [20, 30]\norigin\non the y axis at 5\nelsewhere\n";
+    assert_default_backend_example_runs(
+        "examples/enums/structural_patterns.au",
+        "structural-patterns-default",
+        expected,
     );
-    assert_eq!(String::from_utf8_lossy(&output.stdout), expected);
-    assert_direct_backend_example_runs("examples/traits/display.au", "display-direct", expected);
-}
-
-#[test]
-fn run_and_direct_build_agree_on_the_properties_example() {
-    let expected = "15\n30 doubled\n[HI, THERE, !]\n[hi, there]\n";
-    let output = Command::new(aura_bin())
-        .arg("run")
-        .arg(repo_root().join("examples/classes/properties.au"))
-        .output()
-        .expect("failed to run aura run on the properties example");
-    assert!(
-        output.status.success(),
-        "run should succeed for the properties example, stderr was:\n{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert_eq!(String::from_utf8_lossy(&output.stdout), expected);
     assert_direct_backend_example_runs(
-        "examples/classes/properties.au",
-        "properties-direct",
+        "examples/enums/structural_patterns.au",
+        "structural-patterns-direct",
         expected,
     );
 }
@@ -15740,4 +15716,43 @@ fn lsp_service_formats_whole_documents() {
         .as_str()
         .expect("syntax errors are reported as text")
         .contains("/virtual/main.au"));
+}
+
+#[test]
+fn run_and_direct_build_agree_on_the_display_example() {
+    let expected =
+        "$12.50\n[  $12.50]\npaid $12.50\n[$12.50, $0.05]\nInvoice(status=due, total=$12.50)\n";
+    let output = Command::new(aura_bin())
+        .arg("run")
+        .arg(repo_root().join("examples/traits/display.au"))
+        .output()
+        .expect("failed to run aura run on the display example");
+    assert!(
+        output.status.success(),
+        "run should succeed for the display example, stderr was:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), expected);
+    assert_direct_backend_example_runs("examples/traits/display.au", "display-direct", expected);
+}
+
+#[test]
+fn run_and_direct_build_agree_on_the_properties_example() {
+    let expected = "15\n30 doubled\n[HI, THERE, !]\n[hi, there]\n";
+    let output = Command::new(aura_bin())
+        .arg("run")
+        .arg(repo_root().join("examples/classes/properties.au"))
+        .output()
+        .expect("failed to run aura run on the properties example");
+    assert!(
+        output.status.success(),
+        "run should succeed for the properties example, stderr was:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), expected);
+    assert_direct_backend_example_runs(
+        "examples/classes/properties.au",
+        "properties-direct",
+        expected,
+    );
 }

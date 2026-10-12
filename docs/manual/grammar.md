@@ -679,6 +679,7 @@ binding-target-list
 
 binding-target
     = identifier
+    | "*", identifier
     | "(", binding-target-list, ")" ;
 
 assignment-operator
@@ -788,8 +789,10 @@ closed-pattern
     | INTEGER
     | "-", (INTEGER | FLOAT)
     | tuple-pattern
+    | sequence-pattern
     | type-pattern
     | binding-pattern
+    | class-pattern
     | variant-pattern ;
 
 binding-pattern = IDENT ;
@@ -802,9 +805,20 @@ variant-pattern
 
 tuple-pattern
     = "(", pattern, ")"
-    | "(", pattern, ",", ")"
-    | "(", pattern, ",", pattern,
-      { ",", pattern }, ")" ;
+    | "(", element-pattern, ",", ")"
+    | "(", element-pattern, ",", element-pattern,
+      { ",", element-pattern }, ")" ;
+
+sequence-pattern
+    = "[", [ element-pattern, { ",", element-pattern } ], "]" ;
+
+element-pattern = pattern | rest-pattern ;
+
+rest-pattern = "*", ( IDENT | "_" ) ;
+
+class-pattern
+    = identifier-path, "(",
+      [ IDENT, "=", pattern, { ",", IDENT, "=", pattern } ], ")" ;
 ```
 
 Pattern parsing uses these contextual rules:
@@ -815,7 +829,11 @@ Pattern parsing uses these contextual rules:
 - One unparenthesized, unqualified name that begins with lowercase ASCII or
   `_` is a binding.
 - A dotted name, a capitalized name, or any name followed by parentheses is a
-  variant pattern.
+  variant pattern, except as the next rule says.
+- A name followed by `()`, or by `(` and `IDENT =`, is a class pattern. Every
+  class-pattern field is keyword-labeled.
+- `*name` and `*_` are rest elements. They may appear once, directly inside a
+  tuple or sequence pattern.
 - Payload patterns are positional, even when the variant declaration used
   named payload fields.
 - A parenthesized comma form is a fixed-arity recursive tuple pattern.
@@ -831,11 +849,12 @@ bindings are in scope.
 An unguarded top-level binding is an irrefutable catch-all and must be the
 final arm. A guarded top-level binding does not contribute to exhaustiveness.
 
-There are no range, collection destructuring, rest, named-payload, duration,
-or f-string patterns.
+There are no range, `dict`, `set`, named-payload, duration, or f-string
+patterns.
 
-`match mut` rejects a tuple pattern, because mutable tuple reconstruction and
-writeback are not part of the minimal surface. Statement match arms always
+`match mut` rejects tuple, sequence, and class patterns, because mutable
+reconstruction and writeback are not part of the minimal surface. `match own`
+rejects sequence patterns. Statement match arms always
 contain suites. `case pattern: statement` is not valid.
 
 ## Expressions And Precedence
@@ -1193,7 +1212,7 @@ The grammar intentionally excludes:
 - multiline f-strings
 - local item declarations, attributes, and decorators other than `@property`
 - wildcard and relative-dot import syntax
-- collection, range, rest, and class patterns
+- `dict`, `set`, and range patterns
 - call-site capability annotations
 - exception statements, `raise`, and `yield`
 - generator expressions and generator functions

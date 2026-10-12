@@ -1,0 +1,6 @@
+error[AU3007]: cannot use `a sequence rest pattern` because `random.Rng` contains non-cloneable `random.Rng` state
+ --> crates/aura-compiler/tests/fixtures/check-fail/pattern_sequence_rest_rng.au:6:18
+  |
+6 |         case [_, *rest]:
+  |                  ^
+  = help: move or remove the value so it has one owner, or construct an independent generator with an explicit seed

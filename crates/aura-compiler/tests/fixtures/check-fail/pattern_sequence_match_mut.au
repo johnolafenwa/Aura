@@ -1,0 +1,7 @@
+def main():
+    mut values = [1, 2]
+    match mut values:
+        case [a, *_]:
+            print(a)
+        case _:
+            pass

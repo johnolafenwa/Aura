@@ -1,0 +1,5 @@
+error[AU2040]: class pattern `Point` takes only keyword field subpatterns; write `field=pattern`
+ --> crates/aura-compiler/tests/fixtures/parse-fail/pattern_class_positional.au:6:25
+  |
+6 |         case Point(x=0, 1):
+  |                         ^

@@ -1,0 +1,10 @@
+enum Color:
+    Red
+    Green
+
+def main():
+    match Color.Red:
+        case Red():
+            print(0)
+        case _:
+            pass

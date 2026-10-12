@@ -965,7 +965,7 @@ fn tuple_parsing_keeps_container_commas_and_rejects_unsupported_forms() {
         ),
         (
             "left, 1 = pair\n",
-            "binding targets must be names or recursively nested tuple targets",
+            "binding targets must be names, `*name` rest targets, or recursively nested tuple targets",
         ),
     ] {
         let error = parse_stmt_from(source)
@@ -3984,11 +3984,11 @@ fn parser_internal_helpers_cover_member_names_patterns_and_match_terminators() {
         Pattern::Variant(VariantPattern { subpatterns, .. }) if subpatterns.len() == 2
     ));
 
-    let empty_variant_pattern =
-        parse_pattern_from("Result.Ok()").expect("empty variant subpatterns should parse");
+    let empty_class_pattern =
+        parse_pattern_from("Result.Ok()").expect("empty parentheses parse as a class pattern");
     assert!(matches!(
-        empty_variant_pattern,
-        Pattern::Variant(VariantPattern { subpatterns, .. }) if subpatterns.is_empty()
+        empty_class_pattern,
+        Pattern::Class(ClassPattern { fields, .. }) if fields.is_empty()
     ));
 
     let span = Span::new(1, 1);
@@ -4736,6 +4736,81 @@ fn module_documentation_limit_counts_public_documentation_only() {
 }
 
 #[test]
+fn structural_patterns_parse_rest_sequence_and_class_forms() {
+    let tuple = parse_pattern_from("(first, *rest)").expect("tuple rest pattern should parse");
+    let Pattern::Tuple(tuple) = tuple else {
+        panic!("expected a tuple pattern");
+    };
+    assert!(matches!(
+        &tuple.elements[1],
+        Pattern::Rest(RestPattern { name: Some(name), .. }) if name == "rest"
+    ));
+
+    let sequence = parse_pattern_from("[head, *_, last,]").expect("sequence pattern should parse");
+    let Pattern::Sequence(sequence) = sequence else {
+        panic!("expected a sequence pattern");
+    };
+    assert_eq!(sequence.elements.len(), 3);
+    assert!(matches!(
+        &sequence.elements[1],
+        Pattern::Rest(RestPattern { name: None, .. })
+    ));
+    assert!(matches!(
+        parse_pattern_from("[]").expect("empty sequence pattern should parse"),
+        Pattern::Sequence(SequencePattern { elements, .. }) if elements.is_empty()
+    ));
+
+    let class = parse_pattern_from("geometry.Point(x=0, y=[_, *_])")
+        .expect("keyword class pattern should parse");
+    let Pattern::Class(class) = class else {
+        panic!("expected a class pattern");
+    };
+    assert_eq!(class.class_name, "geometry.Point");
+    assert_eq!(
+        class
+            .fields
+            .iter()
+            .map(|field| field.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["x", "y"]
+    );
+    assert!(matches!(class.fields[1].pattern, Pattern::Sequence(_)));
+
+    let positional = parse_pattern_from("Point(x=0, 1)").expect_err("positional field");
+    assert_eq!(positional.code, "AU2040");
+
+    let target = parse_stmt_from("first, *rest = values\n").expect("rest target should parse");
+    let Stmt::Destructure(destructure) = target else {
+        panic!("expected a destructuring statement, got {target:?}");
+    };
+    let BindingTarget::Tuple { elements, .. } = &destructure.target else {
+        panic!("expected a tuple target");
+    };
+    assert!(matches!(&elements[1], BindingTarget::Rest { name, .. } if name == "rest"));
+    assert!(elements[1].is_rest());
+
+    let twice = parse_stmt_from("*a, *b = values\n").expect_err("two rest targets");
+    assert_eq!(twice.code, "AU2041");
+}
+
+#[test]
+fn rest_element_ranges_split_fixed_positions_around_the_rest() {
+    assert_eq!(
+        crate::ast::rest_element_ranges(&[false, true, false], 5),
+        Some(vec![0..1, 1..4, 4..5])
+    );
+    assert_eq!(
+        crate::ast::rest_element_ranges(&[false, false], 2),
+        Some(vec![0..1, 1..2])
+    );
+    assert_eq!(crate::ast::rest_element_ranges(&[false, false], 3), None);
+    assert_eq!(
+        crate::ast::rest_element_ranges(&[false, true, false], 1),
+        None
+    );
+}
+
+#[test]
 fn batch4_trailing_commas_parse_like_the_list_without_them() {
     let pairs = [
         (
@@ -4871,6 +4946,52 @@ fn batch4_trailing_commas_reject_empty_slots_and_open_lists() {
             error.message
         );
     }
+}
+
+#[test]
+fn batch4_structural_patterns_accept_one_trailing_comma() {
+    for (with_comma, without) in [
+        ("[a, *rest,]", "[a, *rest]"),
+        ("[only,]", "[only]"),
+        ("(a, *_,)", "(a, *_)"),
+        ("Point(x=1, y=_,)", "Point(x=1, y=_)"),
+        ("geometry.Point(x=[a, *_,],)", "geometry.Point(x=[a, *_])"),
+    ] {
+        let left = parse_pattern_from(with_comma).expect(with_comma);
+        let right = parse_pattern_from(without).expect(without);
+        assert_eq!(
+            format!("{:?}", strip_spans(&left)),
+            format!("{:?}", strip_spans(&right)),
+            "{with_comma}"
+        );
+    }
+    let target = parse_stmt_from("(head, *tail,) = values\n").expect("rest target trailing comma");
+    let Stmt::Destructure(destructure) = target else {
+        panic!("expected a destructuring statement");
+    };
+    assert!(matches!(
+        destructure.target,
+        BindingTarget::Tuple { ref elements, .. } if elements.len() == 2 && elements[1].is_rest()
+    ));
+    for source in ["[,]", "[a,,]", "Point(x=1,,)", "Point(,)", "(a, *_,,)"] {
+        assert!(
+            parse_pattern_from(source).is_err(),
+            "{source} must be rejected"
+        );
+    }
+}
+
+fn strip_spans(pattern: &Pattern) -> String {
+    let rendered = format!("{pattern:?}");
+    let mut out = String::new();
+    let mut rest = rendered.as_str();
+    while let Some(start) = rest.find("Span {") {
+        out.push_str(&rest[..start]);
+        let end = rest[start..].find('}').expect("span closes") + start + 1;
+        rest = &rest[end..];
+    }
+    out.push_str(rest);
+    out
 }
 
 #[test]

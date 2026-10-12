@@ -1,0 +1,7 @@
+def main():
+    values = [1, 2]
+    match values:
+        case []:
+            print(0)
+        case [a, b]:
+            print(a + b)

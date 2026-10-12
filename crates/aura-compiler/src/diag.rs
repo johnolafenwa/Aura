@@ -172,6 +172,16 @@ pub const DIAGNOSTIC_CODE_REGISTRY: &[DiagnosticCodeInfo] = &[
         title: "callable contract mismatch",
     },
     DiagnosticCodeInfo {
+        code: "AU2040",
+        band: "names/types",
+        title: "invalid class pattern",
+    },
+    DiagnosticCodeInfo {
+        code: "AU2041",
+        band: "names/types",
+        title: "invalid rest pattern or target",
+    },
+    DiagnosticCodeInfo {
         code: "AU2042",
         band: "names/types",
         title: "invalid docstring or documentation limit",

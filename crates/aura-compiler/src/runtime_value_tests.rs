@@ -18372,3 +18372,58 @@ fn representation_stats_count_report_and_parse_round_trip() {
             || std::env::var_os(representation_stats::ENV_VAR).is_some()
     );
 }
+
+#[test]
+fn format_width_padding_stays_within_the_string_allocation_limit() {
+    use super::{apply_format_width, FormatAlignment, ParsedFormatSpec, MAX_STRING_BYTES};
+    let spec =
+        |width: usize, zero_pad: bool, alignment: Option<FormatAlignment>| ParsedFormatSpec {
+            fill: ' ',
+            alignment,
+            sign: None,
+            width: Some(width),
+            zero_pad,
+            grouping: false,
+            precision: None,
+            ty: None,
+        };
+    let limit =
+        format!("string output exceeds the maintained {MAX_STRING_BYTES}-byte allocation limit");
+
+    assert_eq!(
+        apply_format_width("-7".to_string(), &spec(4, true, None), true).unwrap(),
+        "-007"
+    );
+    assert_eq!(
+        apply_format_width(
+            "ab".to_string(),
+            &spec(5, false, Some(FormatAlignment::Center)),
+            false
+        )
+        .unwrap(),
+        " ab  "
+    );
+
+    let error = apply_format_width("é".to_string(), &spec(usize::MAX, true, None), true)
+        .expect_err("zero padding past usize must not wrap");
+    assert_eq!(error.code, "AU4005");
+    assert_eq!(error.message, "string allocation size overflow");
+
+    let error = apply_format_width(
+        "7".to_string(),
+        &spec(MAX_STRING_BYTES + 1, true, None),
+        true,
+    )
+    .expect_err("zero padding past the string limit must fail");
+    assert_eq!(error.code, "AU4005");
+    assert_eq!(error.message, limit);
+
+    let error = apply_format_width(
+        "x".to_string(),
+        &spec(MAX_STRING_BYTES + 1, false, Some(FormatAlignment::Left)),
+        false,
+    )
+    .expect_err("fill padding past the string limit must fail");
+    assert_eq!(error.code, "AU4005");
+    assert_eq!(error.message, limit);
+}

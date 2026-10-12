@@ -62,6 +62,7 @@ pub use program::{
 mod aliases;
 pub(crate) use aliases::expand_alias_callee;
 mod patterns;
+mod structural_patterns;
 mod unions;
 #[cfg(test)]
 mod unions_security_tests;
@@ -129,10 +130,10 @@ use std::rc::Rc;
 use serde::{Deserialize, Serialize};
 
 use crate::ast::{
-    Argument, AssignStmt, AssignTarget, BinaryOp, ClassDecl, CompareLink, ComprehensionClause,
-    ComprehensionOutput, EnumDecl, Expr, ExprKind, FunctionDecl, ImplDecl, Item, LambdaParam,
-    LiteralPattern, LiteralPatternKind, MatchExprArm, MatchStmt, Module, Param, ParamMode, Pattern,
-    ReceiverKind, Stmt, TraitDecl, TypeRef, UnaryOp, VariantPattern, WithStmt,
+    Argument, AssignStmt, AssignTarget, BinaryOp, BindingTarget, ClassDecl, CompareLink,
+    ComprehensionClause, ComprehensionOutput, EnumDecl, Expr, ExprKind, FunctionDecl, ImplDecl,
+    Item, LambdaParam, LiteralPattern, LiteralPatternKind, MatchExprArm, MatchStmt, Module, Param,
+    ParamMode, Pattern, ReceiverKind, Stmt, TraitDecl, TypeRef, UnaryOp, VariantPattern, WithStmt,
 };
 use crate::call::{
     bind_call_arguments, callable_params_from_decl, BuiltinAssociatedFunction,
@@ -706,7 +707,9 @@ fn statement_span(stmt: &Stmt) -> crate::diag::Span {
 
 fn collect_binding_target_names(target: &crate::ast::BindingTarget, names: &mut BTreeSet<String>) {
     match target {
-        crate::ast::BindingTarget::Name { name, .. } => {
+        // A `*_` rest target inserts `_`, which never names a local.
+        crate::ast::BindingTarget::Name { name, .. }
+        | crate::ast::BindingTarget::Rest { name, .. } => {
             names.insert(name.clone());
         }
         crate::ast::BindingTarget::Tuple { elements, .. } => {
@@ -810,6 +813,18 @@ fn render_literal_pattern_key(key: &LiteralPatternKey) -> String {
     }
 }
 
+/// `AU2041` for a named rest element that covers no positions: Aura has no
+/// empty tuple, so `*name` must bind at least one position.
+pub(crate) fn rest_covers_no_positions(span: crate::diag::Span, name: &str) -> Diagnostic {
+    Diagnostic::coded_at(
+        "AU2041",
+        span,
+        format!(
+            "rest `*{name}` covers no positions; Aura has no empty tuple, so use `*_` or remove it"
+        ),
+    )
+}
+
 fn pattern_contains_variant_shape(pattern: &Pattern) -> bool {
     match pattern {
         Pattern::Type(_) => true,
@@ -818,8 +833,13 @@ fn pattern_contains_variant_shape(pattern: &Pattern) -> bool {
             .iter()
             .any(pattern_contains_variant_shape),
         Pattern::Tuple(pattern) => pattern.elements.iter().any(pattern_contains_variant_shape),
+        Pattern::Sequence(pattern) => pattern.elements.iter().any(pattern_contains_variant_shape),
         Pattern::Variant(_) => true,
-        Pattern::Binding(_) | Pattern::Literal(_) | Pattern::Wildcard(_) => false,
+        Pattern::Class(_)
+        | Pattern::Rest(_)
+        | Pattern::Binding(_)
+        | Pattern::Literal(_)
+        | Pattern::Wildcard(_) => false,
     }
 }
 
@@ -3625,7 +3645,25 @@ impl<'a> FunctionChecker<'a> {
                         format!("tuple binding requires a tuple value, found `{}`", ty),
                     ));
                 };
-                if elements.len() != element_types.len() {
+                let is_rest = elements
+                    .iter()
+                    .map(BindingTarget::is_rest)
+                    .collect::<Vec<_>>();
+                let Some(ranges) = crate::ast::rest_element_ranges(&is_rest, element_types.len())
+                else {
+                    if is_rest.contains(&true) {
+                        return Err(Diagnostic::coded_at(
+                            "AU2041",
+                            *span,
+                            format!(
+                                "tuple binding has {} element{} besides its rest target but the value has only {} position{}",
+                                elements.len() - 1,
+                                if elements.len() == 2 { "" } else { "s" },
+                                element_types.len(),
+                                if element_types.len() == 1 { "" } else { "s" },
+                            ),
+                        ));
+                    }
                     return Err(Diagnostic::at(
                         *span,
                         format!(
@@ -3634,12 +3672,40 @@ impl<'a> FunctionChecker<'a> {
                             element_types.len()
                         ),
                     ));
-                }
-                for (element, element_ty) in elements.iter().zip(element_types) {
-                    self.bind_target(element, element_ty, passing, mutable_place, locals, context)?;
+                };
+                for (element, range) in elements.iter().zip(ranges) {
+                    match element {
+                        BindingTarget::Rest { name, .. } if name == "_" => {}
+                        BindingTarget::Rest { name, span } => {
+                            if range.is_empty() {
+                                return Err(rest_covers_no_positions(*span, name));
+                            }
+                            let rest_ty = Type::Tuple(element_types[range].to_vec());
+                            self.bind_target(
+                                &BindingTarget::Name {
+                                    name: name.clone(),
+                                    span: *span,
+                                },
+                                &rest_ty,
+                                passing,
+                                mutable_place,
+                                locals,
+                                context,
+                            )?;
+                        }
+                        _ => self.bind_target(
+                            element,
+                            &element_types[range.start],
+                            passing,
+                            mutable_place,
+                            locals,
+                            context,
+                        )?,
+                    }
                 }
                 Ok(())
             }
+            BindingTarget::Rest { .. } => unreachable!("the parser rejects a lone rest target"),
         }
     }
 
@@ -5985,6 +6051,21 @@ impl<'a> FunctionChecker<'a> {
             Pattern::Variant(variant) => {
                 for subpattern in &variant.subpatterns {
                     Self::collect_pattern_binding_names(subpattern, names);
+                }
+            }
+            Pattern::Sequence(sequence) => {
+                for element in &sequence.elements {
+                    Self::collect_pattern_binding_names(element, names);
+                }
+            }
+            Pattern::Class(class) => {
+                for field in &class.fields {
+                    Self::collect_pattern_binding_names(&field.pattern, names);
+                }
+            }
+            Pattern::Rest(rest) => {
+                if let Some(name) = &rest.name {
+                    names.insert(name.clone());
                 }
             }
             Pattern::Literal(_) | Pattern::Wildcard(_) => {}

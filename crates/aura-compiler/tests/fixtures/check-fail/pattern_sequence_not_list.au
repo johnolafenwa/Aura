@@ -1,0 +1,6 @@
+def main():
+    match "text":
+        case [a]:
+            print(a)
+        case _:
+            pass

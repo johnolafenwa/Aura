@@ -1,0 +1,14 @@
+import class_pattern_support.geometry as geometry
+from class_pattern_support.geometry import Point
+
+def main():
+    match geometry.origin():
+        case geometry.Point(x=0, y=y):
+            print(f"imported origin y={y}")
+        case _:
+            print("elsewhere")
+    match Point(x=3, y=4):
+        case Point(x=x, y=y):
+            print(x * y)
+    print(geometry.classify(Point(x=1, y=2)))
+    print(geometry.classify(geometry.origin()))

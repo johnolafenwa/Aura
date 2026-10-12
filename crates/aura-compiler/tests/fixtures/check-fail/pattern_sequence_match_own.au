@@ -1,0 +1,7 @@
+def main():
+    values = [1, 2]
+    match own values:
+        case [a, *_]:
+            print(a)
+        case _:
+            pass

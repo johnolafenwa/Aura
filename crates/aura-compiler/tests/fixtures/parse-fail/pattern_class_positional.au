@@ -1,0 +1,9 @@
+class Point:
+    x: int64
+
+def main():
+    match Point(x=1):
+        case Point(x=0, 1):
+            print(0)
+        case _:
+            pass

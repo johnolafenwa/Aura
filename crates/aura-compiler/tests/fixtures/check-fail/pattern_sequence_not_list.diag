@@ -1,0 +1,5 @@
+error[AU2999]: sequence pattern requires a `list[T]` scrutinee, found `str`
+ --> crates/aura-compiler/tests/fixtures/check-fail/pattern_sequence_not_list.au:3:14
+  |
+3 |         case [a]:
+  |              ^

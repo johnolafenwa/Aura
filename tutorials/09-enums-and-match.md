@@ -263,6 +263,46 @@ Guards do not count toward coverage. Include an unguarded arm for every member, 
 
 Aura has no builtin `Option` type and no `T?` suffix. `T | None` is the only way to write an optional value. See [union_type_patterns.au](../examples/enums/union_type_patterns.au).
 
+## Matching Lists And Classes
+
+A sequence pattern matches a `list` by its length. A `*name` element collects
+the remaining elements into a new list. Sequence patterns work in a bare
+`match`:
+
+```aura check-pass
+def describe(values: list[int64]) -> str:
+    return match values:
+        case []: "empty"
+        case [only]: f"one: {only}"
+        case [first, *_, last]: f"from {first} to {last}"
+
+print(describe([1, 2, 3, 4]))
+```
+
+This prints `from 1 to 4`. The three arms cover every length, so no `_` arm
+is needed.
+
+A class pattern matches a class value by naming fields with `field=pattern`.
+Fields you leave out are not tested:
+
+```aura check-pass
+class Point:
+    x: int64
+    y: int64
+
+def locate(point: Point) -> str:
+    return match point:
+        case Point(x=0, y=0): "origin"
+        case Point(x=0, y=y): f"on the y axis at {y}"
+        case _: "elsewhere"
+
+print(locate(Point(x=0, y=5)))
+```
+
+This prints `on the y axis at 5`. A class pattern also selects a class member
+of a union, as in `case Point(x=x):` over `Point | None`. See
+[structural_patterns.au](../examples/enums/structural_patterns.au).
+
 ## Testing For `None`
 
 To ask whether a `T | None` value is present, you do not need a `match`. `is None` and `is not None` narrow the tested place in the branch they select:

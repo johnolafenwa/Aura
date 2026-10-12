@@ -1,0 +1,42 @@
+class Item:
+    name: str
+
+def describe(values: list[int64]) -> str:
+    match values:
+        case []:
+            return "empty"
+        case [only]:
+            return f"one: {only}"
+        case [first, *_, last]:
+            return f"from {first} to {last}"
+
+def shape(values: list[int64]) -> str:
+    return match values:
+        case [0, *rest]: f"zero then {rest}"
+        case [a, b]: f"pair {a} {b}"
+        case [*init, 9]: f"ends in nine after {init}"
+        case _: "other"
+
+def main():
+    print(describe([]))
+    print(describe([4]))
+    print(describe([1, 2]))
+    print(describe([1, 2, 3]))
+    print(shape([0, 1, 2]))
+    print(shape([0]))
+    print(shape([5, 6]))
+    print(shape([7, 8, 9]))
+    print(shape([7, 8, 1]))
+    items = [Item(name="a"), Item(name="b"), Item(name="c")]
+    match items:
+        case [first, *others] if len(others) > 1:
+            print(first.name)
+            print(len(others))
+        case _:
+            print("short")
+    words = ["x", "y"]
+    match words:
+        case ["x", second]:
+            print(second)
+        case _:
+            print("no")

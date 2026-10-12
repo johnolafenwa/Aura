@@ -1,0 +1,5 @@
+error[AU2041]: `match own` does not support sequence patterns; use a bare `match`
+ --> crates/aura-compiler/tests/fixtures/check-fail/pattern_sequence_match_own.au:4:14
+  |
+4 |         case [a, *_]:
+  |              ^

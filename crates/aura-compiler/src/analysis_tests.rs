@@ -10186,21 +10186,102 @@ fn signature_help_documents_inherent_and_fallback_methods() {
 }
 
 #[test]
-fn properties_hover_complete_and_navigate_as_properties() {
+fn analysis_records_rest_sequence_and_class_pattern_bindings() {
     let source = [
-        "class Reply:",
-        "    prompt_tokens: int64",
-        "    completion_tokens: int64",
-        "    @property",
-        "    def total_tokens(self) -> int64:",
-        "        return self.prompt_tokens + self.completion_tokens",
-        "    def doubled(self) -> int64:",
-        "        return self.total_tokens * 2",
-        "def main():",
-        "    reply = Reply(prompt_tokens=1, completion_tokens=2)",
-        "    print(reply.total_tokens)",
-        "    print(reply.doubled())",
+        "class Point:",
+        "    x: int64",
+        "    y: int64",
         "",
+        "def inspect(point: Point, values: list[int64], triple: (int64, str, bool)):",
+        "    head, *tail = (1, \"two\", true)",
+        "    print(tail)",
+        "    match triple:",
+        "        case (first, *others):",
+        "            print(others)",
+        "    match values:",
+        "        case [one, *more]:",
+        "            print(more)",
+        "        case _:",
+        "            pass",
+        "    match point:",
+        "        case Point(x=0, y=row):",
+        "            print(row)",
+        "        case _:",
+        "            pass",
+        "    print(head)",
+    ]
+    .join("\n");
+
+    let analysis = analyze_source(&source);
+
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "{:?}",
+        analysis.diagnostics
+    );
+    for (name, ty, definition_line, use_line) in [
+        ("tail", "(str, bool)", 5, 6),
+        ("others", "(str, bool)", 8, 9),
+        ("more", "list[int64]", 11, 12),
+        ("row", "int64", 16, 17),
+    ] {
+        let hover = format!(" {name}: {ty}\n");
+        let definition = analysis
+            .occurrences
+            .iter()
+            .find(|occurrence| {
+                occurrence.line == definition_line && occurrence.hover.contains(&hover)
+            })
+            .unwrap_or_else(|| {
+                panic!(
+                    "missing pattern definition occurrence for `{name}`: {:#?}",
+                    analysis.occurrences
+                )
+            });
+        assert_eq!(
+            definition.definition.as_ref().map(|range| range.line),
+            Some(definition_line)
+        );
+        let use_occurrence = analysis
+            .occurrences
+            .iter()
+            .find(|occurrence| occurrence.line == use_line && occurrence.hover.contains(&hover))
+            .unwrap_or_else(|| panic!("missing pattern use occurrence for `{name}`"));
+        assert_eq!(
+            use_occurrence.definition.as_ref().map(|range| range.line),
+            Some(definition_line)
+        );
+    }
+    let class_occurrence = analysis
+        .occurrences
+        .iter()
+        .find(|occurrence| occurrence.line == 16 && occurrence.hover.contains("class Point"))
+        .expect("class pattern name should hover as the class");
+    assert_eq!(
+        class_occurrence.definition.as_ref().map(|range| range.line),
+        Some(0)
+    );
+    let field_occurrence = analysis
+        .occurrences
+        .iter()
+        .find(|occurrence| occurrence.line == 16 && occurrence.hover.contains("field y: int64"))
+        .expect("class pattern field should hover as the field");
+    assert_eq!(
+        field_occurrence.definition.as_ref().map(|range| range.line),
+        Some(2)
+    );
+}
+
+#[test]
+fn analysis_resolves_class_patterns_over_union_members() {
+    let source = [
+        "class Point:",
+        "    x: int64",
+        "",
+        "def inspect(value: Point | None) -> int64:",
+        "    return match value:",
+        "        case Point(x=x): x",
+        "        case None: 0",
     ]
     .join("\n");
     let analysis = analyze_source(&source);
@@ -10209,63 +10290,12 @@ fn properties_hover_complete_and_navigate_as_properties() {
         "{:?}",
         analysis.diagnostics
     );
-    for (line, character) in [(7, 20), (10, 16)] {
-        let occurrence = analysis
-            .occurrences
-            .iter()
-            .find(|occurrence| {
-                occurrence.line == line
-                    && occurrence.start_character <= character
-                    && character < occurrence.end_character
-            })
-            .unwrap_or_else(|| panic!("no occurrence at {line}:{character}"));
-        assert_eq!(
-            occurrence.hover,
-            "```aura\nproperty total_tokens: int64\n```"
-        );
-        let definition = occurrence
-            .definition
-            .as_ref()
-            .expect("a property read navigates to its getter");
-        assert_eq!((definition.line, definition.start_character), (4, 4));
-    }
-
-    let class = analysis
-        .symbols
+    let field = analysis
+        .occurrences
         .iter()
-        .find(|symbol| symbol.name == "Reply")
-        .expect("class symbol");
-    let kinds = class
-        .children
-        .iter()
-        .map(|child| {
-            (
-                child.name.as_str(),
-                child.kind.as_str(),
-                child.detail.as_str(),
-            )
-        })
-        .collect::<Vec<_>>();
-    assert!(
-        kinds.contains(&("total_tokens", "property", "int64")),
-        "{kinds:?}"
-    );
-    assert!(kinds.contains(&("doubled", "method", "int64")), "{kinds:?}");
-
-    let completion_source = source.replace("    print(reply.total_tokens)\n", "    reply.\n");
-    let completions =
-        complete_source(&completion_source, 10, 10, Some('.')).expect("member completions");
-    let property = completions
-        .iter()
-        .find(|completion| completion.name == "total_tokens")
-        .expect("property completion");
-    assert_eq!(property.kind, "property");
-    assert_eq!(property.detail, "int64");
-    let method = completions
-        .iter()
-        .find(|completion| completion.name == "doubled")
-        .expect("method completion");
-    assert_eq!(method.kind, "method");
+        .find(|occurrence| occurrence.line == 5 && occurrence.hover.contains("field x: int64"))
+        .expect("union member class pattern field should hover");
+    assert_eq!(field.definition.as_ref().map(|range| range.line), Some(1));
 }
 
 #[test]
@@ -10407,4 +10437,87 @@ fn property_hover_and_completion_show_the_getter_docstring() {
         .iter()
         .any(|occurrence| occurrence.hover
             == "```aura\nproperty doubled: int64\n```\n\nTwice the current reading."));
+}
+
+#[test]
+fn properties_hover_complete_and_navigate_as_properties() {
+    let source = [
+        "class Reply:",
+        "    prompt_tokens: int64",
+        "    completion_tokens: int64",
+        "    @property",
+        "    def total_tokens(self) -> int64:",
+        "        return self.prompt_tokens + self.completion_tokens",
+        "    def doubled(self) -> int64:",
+        "        return self.total_tokens * 2",
+        "def main():",
+        "    reply = Reply(prompt_tokens=1, completion_tokens=2)",
+        "    print(reply.total_tokens)",
+        "    print(reply.doubled())",
+        "",
+    ]
+    .join("\n");
+    let analysis = analyze_source(&source);
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "{:?}",
+        analysis.diagnostics
+    );
+    for (line, character) in [(7, 20), (10, 16)] {
+        let occurrence = analysis
+            .occurrences
+            .iter()
+            .find(|occurrence| {
+                occurrence.line == line
+                    && occurrence.start_character <= character
+                    && character < occurrence.end_character
+            })
+            .unwrap_or_else(|| panic!("no occurrence at {line}:{character}"));
+        assert_eq!(
+            occurrence.hover,
+            "```aura\nproperty total_tokens: int64\n```"
+        );
+        let definition = occurrence
+            .definition
+            .as_ref()
+            .expect("a property read navigates to its getter");
+        assert_eq!((definition.line, definition.start_character), (4, 4));
+    }
+
+    let class = analysis
+        .symbols
+        .iter()
+        .find(|symbol| symbol.name == "Reply")
+        .expect("class symbol");
+    let kinds = class
+        .children
+        .iter()
+        .map(|child| {
+            (
+                child.name.as_str(),
+                child.kind.as_str(),
+                child.detail.as_str(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        kinds.contains(&("total_tokens", "property", "int64")),
+        "{kinds:?}"
+    );
+    assert!(kinds.contains(&("doubled", "method", "int64")), "{kinds:?}");
+
+    let completion_source = source.replace("    print(reply.total_tokens)\n", "    reply.\n");
+    let completions =
+        complete_source(&completion_source, 10, 10, Some('.')).expect("member completions");
+    let property = completions
+        .iter()
+        .find(|completion| completion.name == "total_tokens")
+        .expect("property completion");
+    assert_eq!(property.kind, "property");
+    assert_eq!(property.detail, "int64");
+    let method = completions
+        .iter()
+        .find(|completion| completion.name == "doubled")
+        .expect("method completion");
+    assert_eq!(method.kind, "method");
 }
