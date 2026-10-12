@@ -1,0 +1,7 @@
+def both(values: mut list[str], extra: list[str] | None) -> None:
+    values.append("x")
+
+def main():
+    mut words = ["a"]
+    both(words, words)
+    print(words)

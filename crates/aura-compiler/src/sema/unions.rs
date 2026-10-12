@@ -83,55 +83,6 @@ impl Program {
 }
 
 impl FunctionChecker<'_> {
-    /// A borrowed call may borrow a freshly constructed union or a Copy
-    /// snapshot. It cannot clone a non-Copy member place to build that union.
-    pub(super) fn validate_borrowed_union_injection(
-        &self,
-        expr: &Expr,
-        expected: &Type,
-        locals: &mut HashMap<String, LocalBinding>,
-    ) -> Result<()> {
-        match &expr.kind {
-            ExprKind::Group(inner) => {
-                return self.validate_borrowed_union_injection(inner, expected, locals);
-            }
-            ExprKind::Conditional {
-                then_expr,
-                else_expr,
-                ..
-            } => {
-                self.validate_borrowed_union_injection(then_expr, expected, locals)?;
-                return self.validate_borrowed_union_injection(else_expr, expected, locals);
-            }
-            ExprKind::Match { arms, .. } => {
-                for arm in arms {
-                    self.validate_borrowed_union_injection(&arm.value, expected, locals)?;
-                }
-                return Ok(());
-            }
-            _ => {}
-        }
-        let id = UnionInjectionId {
-            module_name: self.module_name.to_owned(),
-            line: expr.span.line,
-            column: expr.span.column,
-            expected_key: expected.canonical_key(self.module_name, self.canonical_type_names),
-        };
-        let injection = self.union_injections.borrow().get(&id).cloned();
-        if let Some(injection) = injection {
-            if !self.is_copy_type(&injection.member_type)
-                && self.borrowed_iterable_place(expr, locals)?.is_some()
-            {
-                return Err(Diagnostic::coded_at(
-                    "AU2010",
-                    expr.span,
-                    format!("borrowed union argument cannot implicitly clone member place of type '{}' into '{expected}'", injection.member_type),
-                ).with_help("construct an owned union local first, moving or explicitly cloning the member, then borrow that union"));
-            }
-        }
-        Ok(())
-    }
-
     /// Candidate checks cannot commit moves, loans, obligations, or nested
     /// expression metadata. Alias expansion still charges the compilation budget.
     fn probe_union_member(
@@ -153,6 +104,8 @@ impl FunctionChecker<'_> {
         probe.active_match_borrow_places = Rc::new(RefCell::new(
             self.active_match_borrow_places.borrow().clone(),
         ));
+        probe.mutable_iteration_places =
+            Rc::new(RefCell::new(self.mutable_iteration_places.borrow().clone()));
         probe.rng_clone_obligations =
             Rc::new(RefCell::new(self.rng_clone_obligations.borrow().clone()));
         probe.array_equality_obligations = Rc::new(RefCell::new(
