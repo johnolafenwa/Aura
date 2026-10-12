@@ -3572,6 +3572,17 @@ impl<'a> AnalysisBuilder<'a> {
                 BuiltinMember::StringStripPrefix | BuiltinMember::StringStripSuffix => {
                     Some(optional_type(Type::named("str")))
                 }
+                BuiltinMember::StringTrimStart
+                | BuiltinMember::StringTrimEnd
+                | BuiltinMember::StringSplitOnce
+                | BuiltinMember::StringRsplitOnce
+                | BuiltinMember::StringLines
+                | BuiltinMember::StringSplitWhitespace
+                | BuiltinMember::StringFind
+                | BuiltinMember::StringCount
+                | BuiltinMember::StringRepeat => {
+                    crate::sema::text_convenience_result_type(builtin_member.name())
+                }
                 BuiltinMember::ArrayShape => {
                     Some(Type::Named("list".to_string(), vec![Type::named("int64")]))
                 }
@@ -7012,6 +7023,15 @@ fn builtin_member_completions(receiver_type: &Type) -> Vec<AnalysisCompletion> {
         BuiltinMember::StringStripPrefix,
         BuiltinMember::StringStripSuffix,
         BuiltinMember::StringTrim,
+        BuiltinMember::StringTrimStart,
+        BuiltinMember::StringTrimEnd,
+        BuiltinMember::StringSplitOnce,
+        BuiltinMember::StringRsplitOnce,
+        BuiltinMember::StringLines,
+        BuiltinMember::StringSplitWhitespace,
+        BuiltinMember::StringFind,
+        BuiltinMember::StringCount,
+        BuiltinMember::StringRepeat,
         BuiltinMember::StringToBytes,
         BuiltinMember::StringClone,
         BuiltinMember::ScalarToString,

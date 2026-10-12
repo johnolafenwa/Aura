@@ -1,0 +1,5 @@
+error[AU2002]: `split_once` expects `str`, found `int64`
+ --> crates/aura-compiler/tests/fixtures/check-fail/text_split_once_separator_type.au:3:27
+  |
+3 |     print(line.split_once(1))
+  |                           ^

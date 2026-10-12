@@ -2157,6 +2157,33 @@ fn bytes_namespace() -> ModuleNamespace {
             vec![value_param("text", type_ref("str", Vec::new()))],
             bytes_vec_type_ref(),
         ),
+        function_info(
+            "bytes",
+            "starts_with",
+            vec![
+                value_param("value", bytes_vec_type_ref()),
+                value_param("prefix", bytes_vec_type_ref()),
+            ],
+            type_ref("bool", Vec::new()),
+        ),
+        function_info(
+            "bytes",
+            "ends_with",
+            vec![
+                value_param("value", bytes_vec_type_ref()),
+                value_param("suffix", bytes_vec_type_ref()),
+            ],
+            type_ref("bool", Vec::new()),
+        ),
+        function_info(
+            "bytes",
+            "find",
+            vec![
+                value_param("value", bytes_vec_type_ref()),
+                value_param("needle", bytes_vec_type_ref()),
+            ],
+            optional_type_ref(type_ref("int64", Vec::new())),
+        ),
     ]
     .into_iter()
     .map(|function| (function.decl.name.clone(), function))

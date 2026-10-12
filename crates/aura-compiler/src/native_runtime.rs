@@ -69,6 +69,7 @@ use crate::runtime_value::{
     DIRECT_RUNTIME_TYPE_SEPARATOR,
 };
 use crate::sema::Type;
+use crate::text_methods;
 
 const DIRECT_FFI_SPEC_MAGIC: &[u8; 4] = b"AUFI";
 #[doc(hidden)]
@@ -1963,7 +1964,7 @@ fn is_dynamic_bytes_host_builtin(name: &str) -> bool {
             | "bytes::sha256_string"
             | "str.to_bytes"
             | "str.from_bytes"
-    )
+    ) || text_methods::is_bytes_search_builtin(name)
 }
 
 fn evaluate_direct_bytes_host_builtin(
@@ -1972,6 +1973,15 @@ fn evaluate_direct_bytes_host_builtin(
 ) -> std::result::Result<Value, Diagnostic> {
     debug_assert!(is_dynamic_bytes_host_builtin(name));
     args.validate(name)?;
+    if text_methods::is_bytes_search_builtin(name) {
+        let value = args.with_borrow(name, 0, |value| {
+            text_methods::bytes_search_operand(name, value)
+        })?;
+        let pattern = args.with_borrow(name, 1, |pattern| {
+            text_methods::bytes_search_operand(name, pattern)
+        })?;
+        return Ok(text_methods::evaluate_bytes_search(name, &value, &pattern));
+    }
     args.with_borrow(name, 0, |value| {
         evaluate_bytes_host_builtin_ref(name, value)
             .expect("classified byte host builtins are registered with the shared adapter")
@@ -4758,6 +4768,47 @@ pub extern "C-unwind" fn aura_direct_string_trim(value: *mut OpaqueValue) -> *mu
             "expected `str`, found `{}`",
             value_type_name(other)
         )),
+    })
+}
+
+/// Dispatches one `str` text-convenience method. `opcode` indexes
+/// `text_methods::TEXT_METHOD_NAMES`. `argument` is an owned `str` handle or
+/// null; `count` is the scalar argument of `repeat`.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_string_text_method(
+    opcode: i64,
+    value: *mut OpaqueValue,
+    argument: *mut OpaqueValue,
+    count: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let method = usize::try_from(opcode)
+            .ok()
+            .and_then(|index| text_methods::TEXT_METHOD_NAMES.get(index))
+            .unwrap_or_else(|| runtime_error("unknown direct text method opcode"));
+        let argument = if argument.is_null() {
+            None
+        } else {
+            let Value::String(argument) = (unsafe { take_value(argument) }) else {
+                runtime_error(format!("`{method}` requires a `str` argument"));
+            };
+            Some(argument)
+        };
+        let result = unsafe {
+            with_value(value, |value| match value {
+                Value::String(text) => {
+                    text_methods::evaluate_text_method(method, text, argument.as_deref(), count)
+                }
+                other => Err(Diagnostic::new(format!(
+                    "expected `str`, found `{}`",
+                    value_type_name(other)
+                ))),
+            })
+        };
+        match result {
+            Ok(value) => boxed_value(value),
+            Err(error) => runtime_diagnostic_error(error),
+        }
     })
 }
 

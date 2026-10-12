@@ -1,0 +1,88 @@
+import bytes
+
+def show_pair(result: own (str, str) | None) -> str:
+    if result is None:
+        return "none"
+    left, right = result
+    return f"[{left}|{right}]"
+
+def show_index(result: int64 | None) -> str:
+    match result:
+        case None:
+            return "none"
+        case int64 as index:
+            return f"{index}"
+
+def show_parts(parts: list[str]) -> str:
+    mut rendered = ""
+    for part in parts:
+        rendered = rendered + "<" + part + ">"
+    return f"{len(parts)}:{rendered}"
+
+def main():
+    padded = " \t aura agents \n"
+    print("[" + padded.trim_start().replace("\n", "N") + "]")
+    print("[" + padded.trim_end().replace("\t", "T") + "]")
+    print("[" + "\u{3000}wide\u{3000}".trim_start() + "]")
+    print("[" + "".trim_end() + "]")
+
+    print(show_pair("key=value=more".split_once("=")))
+    print(show_pair("key=value=more".rsplit_once("=")))
+    print(show_pair("no separator".split_once("=")))
+    print(show_pair("no separator".rsplit_once("=")))
+    print(show_pair("=edge=".split_once("=")))
+    print(show_pair("=edge=".rsplit_once("=")))
+    print(show_pair("été→ciel→mer".split_once("→")))
+    print(show_pair("été→ciel→mer".rsplit_once("→")))
+    print(show_pair("".split_once(":")))
+    print(show_pair("a::b::c".split_once(separator="::")))
+
+    print(show_parts("one\ntwo\u{d}\nthree".lines()))
+    print(show_parts("one\ntwo\n".lines()))
+    print(show_parts("one\u{d}\n\u{d}\n".lines()))
+    print(show_parts("".lines()))
+    print(show_parts("\n".lines()))
+    print("tail\u{d}".lines()[0].len())
+    kept = "a\u{d}\u{d}\nb".lines()
+    print(f"{len(kept)} {kept[0].len()} {kept[1]}")
+
+    print(show_parts("  alpha  beta\tgamma\n".split_whitespace()))
+    print(show_parts("".split_whitespace()))
+    print(show_parts(" \t\n ".split_whitespace()))
+    print(show_parts("é\u{2003}ü".split_whitespace()))
+
+    print(show_index("hello world".find("o")))
+    print(show_index("hello world".find("xyz")))
+    print(show_index("hello".find("")))
+    print(show_index("".find("")))
+    print(show_index("".find("a")))
+    print(show_index("日本語のテキスト".find("テ")))
+    print(show_index("🙂a🙂b".find(text="b")))
+
+    print("banana".count("an"))
+    print("aaaa".count("aa"))
+    print("banana".count("x"))
+    print("".count("a"))
+    print("🙂🙂x🙂".count("🙂"))
+
+    print("[" + "ab".repeat(3) + "]")
+    print("[" + "ab".repeat(0) + "]")
+    print("[" + "".repeat(1000000) + "]")
+    print("[" + "é-".repeat(count=2) + "]")
+
+    data = "GET /index.html".to_bytes()
+    print(bytes.starts_with(data, "GET ".to_bytes()))
+    print(bytes.starts_with(data, "POST".to_bytes()))
+    print(bytes.starts_with(data, []))
+    print(bytes.ends_with(data, ".html".to_bytes()))
+    print(bytes.ends_with(data, "GET /index.html!".to_bytes()))
+    print(bytes.ends_with(value=data, suffix=[]))
+    print(show_index(bytes.find(data, "/".to_bytes())))
+    print(show_index(bytes.find(data, "zz".to_bytes())))
+    print(show_index(bytes.find(data, [])))
+    print(show_index(bytes.find("é/é".to_bytes(), "/".to_bytes())))
+    print(show_index(bytes.find(value=[], needle=[1])))
+    raw: list[uint8] = [0, 255, 0, 255, 7]
+    print(show_index(bytes.find(raw, [255, 7])))
+    print(bytes.starts_with([], []))
+    print(len(data))

@@ -3666,6 +3666,164 @@ fn direct_bytes_host_ffi_dispatches_without_consuming_borrowed_input() {
     }
 }
 
+fn direct_text_method(method: &str, text: &str, argument: Option<&str>, count: i64) -> Value {
+    let opcode = crate::native_codegen::text_method_opcode(method).expect("known text method");
+    let receiver = string_value(text);
+    let argument = argument.map_or(std::ptr::null_mut(), string_value);
+    let result = super::aura_direct_string_text_method(opcode, receiver, argument, count);
+    unsafe { release_value(receiver) };
+    unsafe { take_value(result) }
+}
+
+fn direct_text_method_trap(
+    opcode: i64,
+    receiver: Value,
+    argument: Option<Value>,
+    count: i64,
+) -> Diagnostic {
+    run_lightweight_root_task(move || {
+        super::with_task_runtime_error_capture(|| {
+            let receiver = boxed_value(receiver);
+            let argument = argument.map_or(std::ptr::null_mut(), boxed_value);
+            let _ = super::aura_direct_string_text_method(opcode, receiver, argument, count);
+            Ok(Value::Unit)
+        })
+    })
+    .expect_err("the direct text method should trap")
+}
+
+fn direct_text_list(value: Value) -> Vec<String> {
+    match value {
+        Value::Vec(list) => list
+            .elements
+            .into_iter()
+            .map(|element| string_payload(element, "list[str]"))
+            .collect(),
+        other => panic!("expected list[str], found {other:?}"),
+    }
+}
+
+#[test]
+fn direct_text_methods_dispatch_every_opcode_with_mir_semantics() {
+    assert_eq!(
+        direct_text_method("trim_start", " \tA b ", None, 0),
+        Value::String("A b ".to_string())
+    );
+    assert_eq!(
+        direct_text_method("trim_end", " A b\n", None, 0),
+        Value::String(" A b".to_string())
+    );
+    let pair = expect_optional_payload(direct_text_method("split_once", "a=b=c", Some("="), 0));
+    assert_eq!(pair.render(), "(a, b=c)");
+    let pair = expect_optional_payload(direct_text_method("rsplit_once", "a=b=c", Some("="), 0));
+    assert_eq!(pair.render(), "(a=b, c)");
+    expect_optional_absent_value(direct_text_method("split_once", "abc", Some("="), 0));
+    assert_eq!(
+        direct_text_list(direct_text_method("lines", "a\r\nb\n\nc\r", None, 0)),
+        vec!["a", "b", "", "c\r"]
+    );
+    assert_eq!(
+        direct_text_list(direct_text_method(
+            "split_whitespace",
+            " a\u{3000}b  ",
+            None,
+            0
+        )),
+        vec!["a", "b"]
+    );
+    let index = expect_optional_payload(direct_text_method("find", "日本語", Some("語"), 0));
+    assert_eq!(index.render(), "2");
+    expect_optional_absent_value(direct_text_method("find", "abc", Some("z"), 0));
+    assert_eq!(
+        direct_text_method("count", "aaaa", Some("aa"), 0).render(),
+        "2"
+    );
+    assert_eq!(
+        direct_text_method("repeat", "ab", None, 3),
+        Value::String("ababab".to_string())
+    );
+
+    let split = crate::native_codegen::text_method_opcode("split_once").unwrap();
+    let error = direct_text_method_trap(
+        split,
+        Value::String("a".into()),
+        Some(Value::String(String::new())),
+        0,
+    );
+    assert_eq!(error.code, "AU4003");
+    assert_eq!(error.message, "`split_once` separator cannot be empty");
+    let count = crate::native_codegen::text_method_opcode("count").unwrap();
+    let error = direct_text_method_trap(
+        count,
+        Value::String("a".into()),
+        Some(Value::String(String::new())),
+        0,
+    );
+    assert_eq!(error.code, "AU4003");
+    let repeat = crate::native_codegen::text_method_opcode("repeat").unwrap();
+    let error = direct_text_method_trap(repeat, Value::String("a".into()), None, -1);
+    assert_eq!(error.message, "`repeat` count cannot be negative, found -1");
+    let error = direct_text_method_trap(repeat, Value::String("ab".into()), None, i64::MAX);
+    assert_eq!(error.code, "AU4005");
+    let error = direct_text_method_trap(split, Value::String("a".into()), None, 0);
+    assert_eq!(error.message, "`split_once` requires a `str` argument");
+    let error =
+        direct_text_method_trap(split, Value::String("a".into()), Some(Value::Bool(true)), 0);
+    assert!(
+        error.message.contains("requires a `str` argument"),
+        "{error:?}"
+    );
+    let error = direct_text_method_trap(repeat, Value::Bool(true), None, 1);
+    assert_eq!(error.message, "expected `str`, found `bool`");
+    let error = direct_text_method_trap(99, Value::String("a".into()), None, 0);
+    assert!(
+        error.message.contains("unknown direct text method opcode"),
+        "{error:?}"
+    );
+}
+
+fn direct_byte_list(bytes: &[u8]) -> *mut OpaqueValue {
+    boxed_value(Value::Vec(VecValue {
+        element_type: Type::named("uint8"),
+        elements: bytes
+            .iter()
+            .map(|byte| {
+                Value::Int(
+                    IntegerValue::from_typed_unsigned(u128::from(*byte), IntegerKind::Uint8)
+                        .expect("every test byte fits uint8"),
+                )
+            })
+            .collect(),
+    }))
+}
+
+#[test]
+fn direct_byte_search_builtins_borrow_both_lists() {
+    let starts = direct_host_builtin_call(
+        "bytes::starts_with",
+        &[direct_byte_list(&[1, 2, 3]), direct_byte_list(&[1, 2])],
+    );
+    assert_eq!(unsafe { take_value(starts) }, Value::Bool(true));
+    let ends = direct_host_builtin_call(
+        "bytes::ends_with",
+        &[direct_byte_list(&[1, 2, 3]), direct_byte_list(&[1, 2])],
+    );
+    assert_eq!(unsafe { take_value(ends) }, Value::Bool(false));
+    let found = direct_host_builtin_call(
+        "bytes::find",
+        &[
+            direct_byte_list(&[0, 255, 0, 255, 7]),
+            direct_byte_list(&[255, 7]),
+        ],
+    );
+    assert_eq!(expect_optional_present(found).render(), "3");
+    let missing = direct_host_builtin_call(
+        "bytes::find",
+        &[direct_byte_list(&[1]), direct_byte_list(&[1, 1])],
+    );
+    expect_optional_absent(missing);
+}
+
 #[test]
 fn direct_json_dump_trap_preserves_borrowed_value_and_copy_indent() {
     let source = direct_json_value(crate::json_codec::JsonValue::Null);

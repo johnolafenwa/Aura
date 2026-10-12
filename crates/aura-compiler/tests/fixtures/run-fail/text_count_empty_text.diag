@@ -1,0 +1,3 @@
+error[AU4003]: `count` text cannot be empty
+ --> crates/aura-compiler/tests/fixtures/run-fail/text_count_empty_text.au
+  = note: Aura call chain (innermost first): main at 1:1

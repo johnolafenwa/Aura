@@ -8854,6 +8854,27 @@ fn build_with_direct_backend_supports_string_methods_example() {
 }
 
 #[test]
+fn run_and_direct_backend_agree_on_text_parsing_example() {
+    let expected = "Requests\n--------\nGET  /index.html   200 html\nPOST /api/items    201 (none)\nskipped: broken\nGET  /logo.png     404 png\nContent-Type = text/plain; charset=utf-8\nutf-8\n2\n68656c6c6f\ntrue\n";
+    let run = Command::new(aura_bin())
+        .args(["run", "--backend", "mir"])
+        .arg(repo_root().join("examples/strings/text_parsing.au"))
+        .output()
+        .expect("failed to run aura run --backend mir on the text parsing example");
+    assert!(
+        run.status.success(),
+        "MIR run of the text parsing example failed:\n{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&run.stdout), expected);
+    assert_direct_backend_example_runs(
+        "examples/strings/text_parsing.au",
+        "text-parsing-direct",
+        expected,
+    );
+}
+
+#[test]
 fn build_with_auto_backend_falls_back_for_rich_match_example() {
     let fixture = repo_root().join("examples/enums/rich_match.au");
     let output_dir = TempDir::new("aura-build-auto-rich-match");
