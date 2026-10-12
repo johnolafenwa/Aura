@@ -140,31 +140,28 @@ fn function_declaration(kind: &str, function: &FunctionDecl) -> ApiDeclaration {
 pub fn api_module_from_program(module_name: &str, program: &Program) -> ApiModule {
     let module = &program.module;
     let mut declarations = Vec::new();
+    // A checked program records every declared constant and alias.
     for constant in module.constants.iter().filter(|constant| constant.public) {
-        let ty = program
-            .constants
-            .get(&constant.name)
-            .map(|info| info.ty.to_string())
-            .unwrap_or_else(|| "Unknown".to_string());
         declarations.push(declaration(
             "constant",
             &constant.name,
-            format!("{}: {ty}", constant.name),
+            format!(
+                "{}: {}",
+                constant.name, program.constants[&constant.name].ty
+            ),
             None,
         ));
     }
     for item in &module.items {
         match item {
             Item::TypeAlias(alias) if alias.public => {
-                let signature = program
-                    .aliases
-                    .get(&alias.name)
-                    .map(format_alias_signature)
-                    .unwrap_or_else(|| alias.name.clone());
                 declarations.push(declaration(
                     "type",
                     &alias.name,
-                    format!("type {signature}"),
+                    format!(
+                        "type {}",
+                        format_alias_signature(&program.aliases[&alias.name])
+                    ),
                     None,
                 ));
             }

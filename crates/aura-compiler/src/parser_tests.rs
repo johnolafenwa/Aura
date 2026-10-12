@@ -4872,3 +4872,37 @@ fn batch4_trailing_commas_reject_empty_slots_and_open_lists() {
         );
     }
 }
+
+#[test]
+fn triple_strings_outside_documentation_slots_are_ordinary_literals() {
+    let error = parse("extern \"\"\"C\"\"\" def f() -> int32\n")
+        .expect_err("a triple-quoted ABI string is not `\"C\"`");
+    assert!(
+        error.message.contains("supports only `extern \"C\"`"),
+        "{}",
+        error.message
+    );
+
+    let module = parse(concat!(
+        "def kind(name: str) -> int64:\n",
+        "    match name:\n",
+        "        case \"\"\"aura\"\"\":\n",
+        "            return 1\n",
+        "        case _:\n",
+        "            return 0\n",
+    ))
+    .expect("a triple-quoted string is a literal pattern");
+    let Item::Function(function_decl) = &module.items[0] else {
+        panic!("expected a function");
+    };
+    let Stmt::Match(match_stmt) = &function_decl.body[0] else {
+        panic!("expected a match statement");
+    };
+    assert!(matches!(
+        &match_stmt.arms[0].pattern,
+        Pattern::Literal(LiteralPattern {
+            kind: LiteralPatternKind::String(text),
+            ..
+        }) if text == "aura"
+    ));
+}

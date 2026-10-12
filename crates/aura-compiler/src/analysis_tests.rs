@@ -10027,3 +10027,58 @@ fn docstring_presentation_escapes_html_and_controls_outside_code() {
         "~~~\n<raw>\\u{1b}\n~~~\n&lt;after>\n````\n```\n<inner>\n````"
     );
 }
+
+#[test]
+fn signature_help_documents_inherent_and_fallback_methods() {
+    let temp_dir = TempDir::new("aura-analysis-docstring-methods");
+    let path = temp_dir.path().join("main.au");
+    let source = concat!(
+        "class Box:\n",
+        "    \"\"\"A box.\"\"\"\n",
+        "    size: int64\n",
+        "    def grow(self, by: int64, times: int64) -> int64:\n",
+        "        \"\"\"Grow the box.\n",
+        "\n",
+        "        Args:\n",
+        "            by: The step.\n",
+        "        \"\"\"\n",
+        "        return self.size + by * times\n",
+        "    def plain(self) -> int64:\n",
+        "        return self.size\n",
+        "trait Named:\n",
+        "    def name(self) -> str:\n",
+        "        \"\"\"Trait docs.\"\"\"\n",
+        "impl Named for Box:\n",
+        "    def name(self) -> str:\n",
+        "        \"\"\"   \"\"\"\n",
+        "        return \"box\"\n",
+        "def main():\n",
+        "    b = Box(size=1)\n",
+        "    print(b.grow(1, 2))\n",
+        "    print(b.name())\n",
+        "    print(b.plain())\n",
+    );
+    fs::write(&path, source).expect("source should be written");
+
+    let grow = crate::analysis::signature_help_path_source(&path, source, 21, 17)
+        .expect("inherent method signature help");
+    assert_eq!(
+        grow.documentation.as_deref(),
+        Some("Grow the box.\n\nArgs:\n    by: The step.")
+    );
+    assert_eq!(
+        grow.parameter_documentation,
+        vec![Some("The step.".to_string()), None]
+    );
+
+    // A whitespace-only implementation docstring falls back to the trait.
+    let name = crate::analysis::signature_help_path_source(&path, source, 22, 17)
+        .expect("trait method signature help");
+    assert_eq!(name.documentation.as_deref(), Some("Trait docs."));
+    assert!(name.parameter_documentation.is_empty());
+
+    let plain = crate::analysis::signature_help_path_source(&path, source, 23, 18)
+        .expect("undocumented method signature help");
+    assert_eq!(plain.documentation, None);
+    assert!(plain.parameter_documentation.is_empty());
+}
