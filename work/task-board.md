@@ -2,6 +2,21 @@
 
 Last updated: 2026-10-11
 
+## Batch 2 completion: union borrowing and phase 2b (in progress)
+
+- Target: borrowing non-copy values into union parameters (`AU2010`),
+  then phase 2b (slice views and `Span[T]`, returned range views, and the
+  dictionary lookup review), each merged after one green hosted run. No
+  version bump or release in this work.
+- Done: a bare union parameter borrows a member place (local, field,
+  element, entry, loop binding, view, or returned view) for the call with
+  no copy; the native boxing of a borrowed `str | None` no longer empties
+  the caller's value; reading a list inside its own `for ... in mut` loop
+  reports `AU3002` in the checker instead of failing MIR validation.
+  Details are in `2026-10-11-batch-2-completion.md`.
+- Remaining: the union borrowing pull request's hosted run and merge, then
+  phase 2b.
+
 ## Aura 0.3.6 preview release (complete)
 
 - Released 2026-10-11 from `main` at `5652e469` (PR #31) as

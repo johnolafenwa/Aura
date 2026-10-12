@@ -33,19 +33,18 @@ fn assert_rejected_on_both_boundaries(encoded: Value, expected: &str) -> String 
 }
 
 #[test]
-fn shared_member_view_cannot_be_passed_as_a_borrowed_union() {
+fn shared_member_view_is_injected_into_a_fresh_union_for_a_borrowed_union() {
+    // A member view passed to a bare union parameter is read into a fresh
+    // union wrapper for the call. The view's storage is never relabeled as
+    // union storage, so the profile still owns its name afterwards.
     let source = format!(
-        "{VIEW_HELPER}def accept(value: str | None) -> int64:\n    return 42\ndef main():\n    profile = Profile(name=\"Ada\")\n    view name = profile_name(profile)\n    print(accept(value=name))\n"
+        "{VIEW_HELPER}def accept(value: str | None) -> int64:\n    return 42\ndef main():\n    profile = Profile(name=\"Ada\")\n    view name = profile_name(profile)\n    print(accept(value=name))\n    print(name)\n    print(profile.name)\n"
     );
-
-    let error = match check_source(&source) {
-        Err(error) => error,
-        Ok(_) => panic!("a member view cannot be relabeled with a union descriptor"),
-    };
-    assert!(
-        matches!(error.code.as_str(), "AU2010" | "AU3003"),
-        "{error}"
-    );
+    check_source(&source).expect("a member view may be lent to a bare union parameter");
+    let mir = lower_source_to_mir(&source).expect("the borrowed injection must lower");
+    let output = run_mir(&mir).expect("the borrowed injection must pass validation");
+    assert_eq!(output.stdout, "42\nAda\nAda\n");
+    emit_host_native_object(&mir).expect("the direct backend accepts the same injection");
 }
 
 #[test]
@@ -89,16 +88,14 @@ fn forged_mir_cannot_pass_a_member_view_place_as_union_storage() {
 }
 
 #[test]
-fn ordinary_noncopy_member_local_is_not_cloned_into_a_borrowed_union() {
-    let source = "def accept(value: str | None) -> int64:\n    return 42\ndef main():\n    name = \"Ada\"\n    print(accept(value=name))\n";
-    let error = match check_source(source) {
-        Err(error) => error,
-        Ok(_) => panic!("borrowing a union must not implicitly clone a non-Copy member local"),
-    };
-    assert!(
-        matches!(error.code.as_str(), "AU2010" | "AU3003"),
-        "{error}"
-    );
+fn ordinary_noncopy_member_local_is_lent_to_a_borrowed_union() {
+    // The non-Copy local is lent for the call and stays usable afterwards.
+    let source = "def accept(value: str | None) -> int64:\n    match value:\n        case str as text:\n            return len(text)\n        case None:\n            return 0\ndef main():\n    name = \"Ada\"\n    print(accept(value=name))\n    print(name)\n";
+    check_source(source).expect("a non-Copy member local may be lent to a bare union");
+    let mir = lower_source_to_mir(source).expect("the borrowed injection must lower");
+    let output = run_mir(&mir).expect("the borrowed injection must pass validation");
+    assert_eq!(output.stdout, "3\nAda\n");
+    emit_host_native_object(&mir).expect("the direct backend accepts the same injection");
 }
 
 #[test]

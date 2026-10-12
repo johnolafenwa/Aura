@@ -1,0 +1,20 @@
+def show(value: str):
+    print(value)
+
+def show_either(value: int64 | str):
+    print(value)
+
+def main():
+    text = "aura"
+    flag = true
+    show(match flag:
+        case true: text
+        case false: "other")
+    show_either(match flag:
+        case true: text
+        case false: 1)
+    print(text)
+    owned = match flag:
+        case true: "fresh"
+        case false: text
+    print(owned)

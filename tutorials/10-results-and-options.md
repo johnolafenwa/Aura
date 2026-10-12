@@ -74,6 +74,34 @@ def describe(name: str | None):
             print("not found")
 ```
 
+A bare `T | None` parameter borrows a plain value for the call, as a bare `T` parameter does. Pass a local, a field, a list element, or a loop binding. Nothing is copied, and the caller keeps its value:
+
+```aura check-pass
+class Account:
+    owner: str
+    nickname: str | None
+
+def greeting(name: str | None) -> str:
+    match name:
+        case str as text:
+            return f"hello, {text}"
+        case None:
+            return "hello, guest"
+
+def main():
+    names = ["Ada", "Lin"]
+    print(greeting(names[1]))
+    print(greeting(None))
+    account = Account(owner="Grace", nickname=None)
+    print(greeting(account.owner))
+    print(greeting(account.nickname))
+    for name in names:
+        print(greeting(name))
+    print(names)
+```
+
+The program is `examples/enums/optional_arguments.au`.
+
 These library functions return optional unions:
 
 - `str.strip_prefix()`
