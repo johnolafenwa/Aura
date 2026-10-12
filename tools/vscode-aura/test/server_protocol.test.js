@@ -899,7 +899,7 @@ test(
         `  const result = request.method === "format"\n` +
         `    ? { formatted: request.source.replace("x=1", "x = 1") }\n` +
         `    : request.method === "analyze" ? { diagnostics: [], symbols: [], occurrences: [] } : [];\n` +
-        `  process.stdout.write(JSON.stringify({ id: request.id, semantic_interface_version: 17, result }) + "\\n");\n` +
+        `  process.stdout.write(JSON.stringify({ id: request.id, semantic_interface_version: ${SUPPORTED_SEMANTIC_INTERFACE_SCHEMA_VERSION}, result }) + "\\n");\n` +
         `});\n`
     );
     fs.chmodSync(fakeAura, 0o755);
