@@ -231,6 +231,9 @@ trait Greeter:
     def greet(self) -> str
 ```
 
+A trait method whose body is only a docstring is still signature-only. See
+[Docstrings And API Docs](/manual/docstrings#trait-methods).
+
 A trait method is either signature-only, ending at the newline, or has a default body after `:`:
 
 ```aura

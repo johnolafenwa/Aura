@@ -1,0 +1,26 @@
+"""Use a documented module.
+
+Docstrings are metadata for editors and `aura doc`. They do not run.
+"""
+
+import pkg.inventory
+from pkg.inventory import Labeled
+
+def describe(level: pkg.inventory.Level) -> str:
+    """Return a word for a shelf level."""
+    match level:
+        case pkg.inventory.Level.Empty:
+            return "empty"
+        case pkg.inventory.Level.Low:
+            return "low"
+        case pkg.inventory.Level.Full:
+            return "full"
+
+def main():
+    mut tea = pkg.inventory.Item(name="tea", count=0)
+    print(describe(pkg.inventory.level(tea)))
+    tea.restock(3)
+    print(describe(pkg.inventory.level(tea)))
+    tea.restock(10)
+    print(describe(pkg.inventory.level(tea, low=5)))
+    print(tea.label())

@@ -1,0 +1,4 @@
+class Point:
+    x: int64
+
+    """Separated from the field by a blank line."""

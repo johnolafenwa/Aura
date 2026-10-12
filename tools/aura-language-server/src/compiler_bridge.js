@@ -281,6 +281,18 @@ function findOccurrence(analysis, line, character) {
   );
 }
 
+function compilerCompletionToLsp(item, kind) {
+  const result = {
+    label: item.name,
+    kind,
+    detail: item.detail || ""
+  };
+  if (item.documentation) {
+    result.documentation = { kind: "markdown", value: item.documentation };
+  }
+  return result;
+}
+
 function compilerDiagnosticsToLsp(analysis, documentUri) {
   return (analysis.diagnostics || []).map((diagnostic) => {
     const result = {
@@ -487,6 +499,7 @@ module.exports = {
   binaryName,
   CompilerService,
   completeWithCompiler,
+  compilerCompletionToLsp,
   compilerDefinitionAtPosition,
   compilerDefinitionToLspLocation,
   compilerDiagnosticsToLsp,

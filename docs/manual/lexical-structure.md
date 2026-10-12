@@ -323,6 +323,10 @@ typed forms, and no `?` type suffix.
 
 ## str Literals
 
+A plain triple-quoted string in the first statement slot of a module, class,
+enum, trait, or function is a docstring rather than a value. See
+[Docstrings And API Docs](/manual/docstrings).
+
 Ordinary string literals are single-line and use matching single or double
 quotes:
 
