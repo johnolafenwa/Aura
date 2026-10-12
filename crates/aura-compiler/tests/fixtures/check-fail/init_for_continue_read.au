@@ -1,0 +1,13 @@
+class Tally:
+    last: int64
+    total: int64
+
+    def __init__(self, values: list[int64]):
+        for value in values:
+            if value < 0:
+                continue
+            self.last = value
+        self.total = self.last
+
+def main():
+    print(Tally([1]).total)

@@ -1,0 +1,6 @@
+error[AU3012]: field `value` may already be initialized; assignment needs a known state
+ --> crates/aura-compiler/tests/fixtures/check-fail/init_while_break_early.au:10:13
+   |
+10 |             self.value = count
+   |             ^
+  = help: initialize `self.value` exactly once on every path, or assign it on every path before this point

@@ -49,7 +49,7 @@ contract". This reproduces on `main` without initializers. The
 
 ## Verification
 
-- Fixtures: 16 run-pass (`init_*`, `factory_result_init`), 24 check-fail,
+- Fixtures: 19 run-pass (`init_*`, `factory_result_init`), 33 check-fail,
   2 check-path-fail, and 1 run-fail. Every run-pass fixture matches on the
   forced MIR and direct backends.
 - `crates/aura-compiler/tests/batch3_initializer_validator.rs`: 12

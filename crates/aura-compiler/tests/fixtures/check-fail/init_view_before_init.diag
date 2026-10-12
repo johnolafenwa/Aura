@@ -1,0 +1,6 @@
+error[AU3012]: field `items` is used before it is initialized
+ --> crates/aura-compiler/tests/fixtures/check-fail/init_view_before_init.au:5:27
+  |
+5 |         view first = self.items
+  |                           ^
+  = help: assign `self.items` before this use

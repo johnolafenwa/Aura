@@ -1,0 +1,13 @@
+class Probe:
+    value: int64
+
+    def __init__(self, limit: int64):
+        mut count = 0
+        while true:
+            count += 1
+            if count > limit:
+                break
+            self.value = count
+
+def main():
+    print(Probe(2).value)

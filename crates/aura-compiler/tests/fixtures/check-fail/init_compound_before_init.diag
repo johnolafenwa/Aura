@@ -1,0 +1,6 @@
+error[AU3012]: field `count` is used before it is initialized
+ --> crates/aura-compiler/tests/fixtures/check-fail/init_compound_before_init.au:5:9
+  |
+5 |         self.count += start
+  |         ^
+  = help: assign `self.count` before this use

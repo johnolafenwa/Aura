@@ -1,0 +1,6 @@
+error[AU3012]: field `cells` is used before it is initialized
+ --> crates/aura-compiler/tests/fixtures/check-fail/init_index_write_before_init.au:5:9
+  |
+5 |         self.cells[0] = value
+  |         ^
+  = help: assign `self.cells` before this use

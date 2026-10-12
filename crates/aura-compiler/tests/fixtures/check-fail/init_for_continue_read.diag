@@ -1,0 +1,6 @@
+error[AU3012]: field `last` may already be initialized; assignment needs a known state
+ --> crates/aura-compiler/tests/fixtures/check-fail/init_for_continue_read.au:9:13
+  |
+9 |             self.last = value
+  |             ^
+  = help: initialize `self.last` exactly once on every path, or assign it on every path before this point
