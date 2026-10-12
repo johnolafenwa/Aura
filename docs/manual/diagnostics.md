@@ -87,6 +87,7 @@ String and format-specification diagnostics are described under
 | `AU2015` | callable contract mismatch | A callable whose complete contract differs from the one its destination requires. | Match the contract, or restrict it with an explicit adapter or constructor. |
 | `AU2040` | invalid class pattern | A class pattern with a positional, unknown, private, repeated, or method field, a class that does not match the scrutinee, or a `match mut` class pattern. | Name stored fields visible here, once each, as `field=pattern`. |
 | `AU2041` | invalid rest pattern or target | A `*` rest element outside a tuple or sequence, a second rest element, too few positions for the fixed elements, a `*name` that covers no positions, or a sequence pattern in `match mut` or `match own`. | Keep one rest element per tuple or sequence, and use `*_` when it may cover nothing. |
+| `AU2042` | invalid docstring or documentation limit | A triple-quoted string in a class, enum, trait, or `impl` body outside a documentation position, or documentation over a size limit. | Move the string to the first slot or directly after a field, or shorten the documentation. |
 | `AU2999` | general compile-time rejection | A rejection that has no narrower public category. | Follow the message. |
 
 **`AU2002` type mismatch.** List `map`, `filter`, and keyed `sort` require the
@@ -187,6 +188,20 @@ one required, in these cases:
 The message names the difference. A safe restriction requires an explicit
 `Unary(function)` adapter or a `Callable[...]`/`TaskCallable[...]` constructor.
 A bare written contract never performs that restriction.
+
+**`AU2042` invalid docstring or documentation limit.** The parser reports
+`AU2042` in these cases:
+
+- a triple-quoted string in a class body that is not the class docstring and
+  not on the line directly after a field
+- a triple-quoted string in an enum body after the enum docstring, or in a
+  trait body after the trait docstring
+- a triple-quoted string in an `impl` body
+- one docstring over 65,536 UTF-8 bytes
+- a module's public documentation over 4,194,304 UTF-8 bytes in total
+
+A limit message gives the measured and permitted byte counts. See
+[Docstrings And API Docs](/manual/docstrings) for the documentation positions.
 
 **`AU2999` general compile-time rejection.** This is the maintained catch-all
 for compile-time rejections that do not yet have a narrower public category. It

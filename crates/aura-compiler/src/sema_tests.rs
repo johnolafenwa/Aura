@@ -7597,6 +7597,7 @@ fn function_decl(name: &str) -> FunctionDecl {
         view_return: None,
         body: Vec::new(),
         span: Span::new(1, 1),
+        doc: None,
     }
 }
 
@@ -7621,6 +7622,7 @@ fn trait_decl(name: &str, type_params: Vec<&str>) -> TraitDecl {
         supertraits: Vec::new(),
         methods: Vec::new(),
         span: Span::new(1, 1),
+        doc: None,
     }
 }
 
@@ -7654,6 +7656,7 @@ fn class_decl(name: &str, copy: bool, fields: Vec<FieldDecl>) -> ClassDecl {
         fields,
         methods: Vec::new(),
         span: Span::new(1, 1),
+        doc: None,
     }
 }
 
@@ -7664,6 +7667,7 @@ fn field_decl(name: &str, ty: TypeRef, indirect: bool) -> FieldDecl {
         ty: TypeRef { indirect, ..ty },
         default: None,
         span: Span::new(1, 1),
+        doc: None,
     }
 }
 
@@ -7727,6 +7731,7 @@ fn enum_info(name: &str, payload: Option<Type>) -> EnumInfo {
                 span: Span::new(1, 1),
             }],
             span: Span::new(1, 1),
+            doc: None,
         },
         type_param_bounds: BTreeMap::new(),
         variants: BTreeMap::from([(
@@ -19955,6 +19960,7 @@ fn check_with_context_covers_imported_binding_registration_and_duplicate_item_pa
             imports: Vec::new(),
             items: vec![Item::Function(function_decl("main"))],
             top_level_stmts: Vec::new(),
+            doc: None,
         },
         context,
     )
@@ -19969,6 +19975,7 @@ fn check_with_context_covers_imported_binding_registration_and_duplicate_item_pa
             imports: Vec::new(),
             items: vec![Item::Class(class_decl("RemoteBox", false, Vec::new()))],
             top_level_stmts: Vec::new(),
+            doc: None,
         },
         ModuleContext {
             module_name: "<main>".to_string(),
@@ -19996,8 +20003,10 @@ fn check_with_context_covers_imported_binding_registration_and_duplicate_item_pa
                 type_param_bounds: BTreeMap::new(),
                 variants: Vec::new(),
                 span,
+                doc: None,
             })],
             top_level_stmts: Vec::new(),
+            doc: None,
         },
         ModuleContext {
             module_name: "<main>".to_string(),
@@ -20020,6 +20029,7 @@ fn check_with_context_covers_imported_binding_registration_and_duplicate_item_pa
             imports: Vec::new(),
             items: vec![Item::Function(function_decl("remote_fn"))],
             top_level_stmts: Vec::new(),
+            doc: None,
         },
         ModuleContext {
             module_name: "<main>".to_string(),

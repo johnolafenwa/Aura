@@ -23,6 +23,11 @@ function range(item) {
   };
 }
 
+// Docstring text from the compiler is normalized and sanitized Markdown.
+function markdownDocumentation(value) {
+  return value ? { documentation: { kind: "markdown", value } } : {};
+}
+
 function registerEditorHandlers(connection, documents, request) {
   function register(handler, method, empty, convert) {
     connection[handler](async (params, cancellationToken) => {
@@ -41,7 +46,14 @@ function registerEditorHandlers(connection, documents, request) {
     });
   }
   register("onSignatureHelp", "signature-help", null, result => ({
-    signatures: [{ label: result.label, parameters: result.parameters.map(label => ({ label })) }],
+    signatures: [{
+      label: result.label,
+      ...markdownDocumentation(result.documentation),
+      parameters: result.parameters.map((label, index) => ({
+        label,
+        ...markdownDocumentation((result.parameter_documentation || [])[index])
+      }))
+    }],
     activeSignature: 0,
     activeParameter: result.active_parameter
   }));
@@ -75,4 +87,4 @@ function registerEditorHandlers(connection, documents, request) {
   });
 }
 
-module.exports = { registerEditorHandlers, editorCapabilities };
+module.exports = { registerEditorHandlers, editorCapabilities, markdownDocumentation };

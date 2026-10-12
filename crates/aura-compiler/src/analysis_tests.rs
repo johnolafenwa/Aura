@@ -352,6 +352,7 @@ fn function_decl(name: &str, return_type: &str) -> FunctionDecl {
         view_return: None,
         body: Vec::new(),
         span: Span::new(1, 1),
+        doc: None,
     }
 }
 
@@ -5981,6 +5982,7 @@ fn analysis_helper_functions_cover_formatting_ranges_and_builtin_surface() {
             fields: Vec::new(),
             methods: Vec::new(),
             span: Span::new(1, 1),
+            doc: None,
         },
         type_param_bounds: Default::default(),
         fields: std::collections::BTreeMap::from([(
@@ -6002,6 +6004,7 @@ fn analysis_helper_functions_cover_formatting_ranges_and_builtin_surface() {
             type_param_bounds: Default::default(),
             variants: Vec::new(),
             span: Span::new(1, 1),
+            doc: None,
         },
         type_param_bounds: Default::default(),
         variants: std::collections::BTreeMap::from([(
@@ -6014,7 +6017,7 @@ fn analysis_helper_functions_cover_formatting_ranges_and_builtin_surface() {
         )]),
     };
     assert!(format_class_hover(&class_info).contains("value: int32"));
-    assert!(format_enum_hover_named(&enum_info.decl.name).contains("enum Status"));
+    assert!(format_enum_hover_named(&enum_info.decl.name, None).contains("enum Status"));
     assert!(builtin_enum_hover("Lookup[T]", "docs").contains("docs"));
     assert!(builtin_function_hover("print(value)", "docs").contains("print(value)"));
     assert!(
@@ -9926,6 +9929,259 @@ fn poll_outcomes_resolve_like_the_other_builtin_enums_in_analysis() {
         infer_builtin_variant_call("Poll", "Unavailable", &[], |_| None),
         Some(Type::Named("Poll".to_string(), vec![Type::Unit]))
     );
+}
+
+fn docstring_hover_containing<'b>(
+    analysis: &'b crate::analysis::AnalysisOutput,
+    needle: &str,
+) -> &'b str {
+    analysis
+        .occurrences
+        .iter()
+        .map(|occurrence| occurrence.hover.as_str())
+        .find(|hover| hover.contains(needle))
+        .unwrap_or_else(|| panic!("no hover contains {needle:?}"))
+}
+
+#[test]
+fn docstrings_reach_local_and_imported_hover_completion_and_signature_help() {
+    let temp_dir = TempDir::new("aura-analysis-docstrings");
+    let library_path = temp_dir.path().join("shapes.au");
+    fs::write(
+        &library_path,
+        concat!(
+            "\"\"\"Plane shapes and their measurements.\"\"\"\n",
+            "public class Square:\n",
+            "    \"\"\"A square with equal sides.\"\"\"\n",
+            "    public side: float64\n",
+            "    \"\"\"Length of one side.\"\"\"\n",
+            "    public def area(self) -> float64:\n",
+            "        \"\"\"Return the area.\"\"\"\n",
+            "        return self.side * self.side\n",
+            "public enum Unit:\n",
+            "    \"\"\"A unit of length.\"\"\"\n",
+            "    Meter\n",
+            "public trait Named:\n",
+            "    \"\"\"Something with a name.\"\"\"\n",
+            "    def name(self) -> str:\n",
+            "        \"\"\"Return the display name.\"\"\"\n",
+            "    def label(self) -> str:\n",
+            "        \"\"\"Return a label.\"\"\"\n",
+            "impl Named for Square:\n",
+            "    def name(self) -> str:\n",
+            "        return \"square\"\n",
+            "    def label(self) -> str:\n",
+            "        \"\"\"Return the square's own label.\"\"\"\n",
+            "        return \"label\"\n",
+            "public def scale(shape: Square, factor: float64) -> Square:\n",
+            "    \"\"\"Return a scaled copy.\n",
+            "\n",
+            "    Args:\n",
+            "        shape: The square to scale.\n",
+            "        factor: The multiplier for each side.\n",
+            "            Must be positive.\n",
+            "    \"\"\"\n",
+            "    return Square(side=shape.side * factor)\n",
+        ),
+    )
+    .expect("library should be written");
+    let main_path = temp_dir.path().join("main.au");
+    let source = concat!(
+        "import shapes\n",
+        "from shapes import Named as Nameable\n",
+        "def main():\n",
+        "    \"\"\"Run the <b>demo</b> & print\u{1}.\n",
+        "\n",
+        "    ```aura\n",
+        "    x = 1 < 2\n",
+        "    ```\n",
+        "    \"\"\"\n",
+        "    square = shapes.Square(side=2.0)\n",
+        "    bigger = shapes.scale(square, 2.0)\n",
+        "    print(bigger.area())\n",
+        "    print(bigger.side)\n",
+        "    print(bigger.name())\n",
+        "    print(bigger.label())\n",
+        "    unit = shapes.Unit.Meter\n",
+        "    print(unit)\n",
+        "    main()\n",
+    );
+    fs::write(&main_path, source).expect("main should be written");
+
+    let analysis = analyze_path_source(&main_path, source);
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "{:?}",
+        analysis.diagnostics
+    );
+    assert_eq!(
+        docstring_hover_containing(&analysis, "module shapes"),
+        "```aura\nmodule shapes\n```\n\nPlane shapes and their measurements."
+    );
+    assert!(docstring_hover_containing(&analysis, "class Square")
+        .ends_with("\n\nA square with equal sides."));
+    assert_eq!(
+        docstring_hover_containing(&analysis, "field side"),
+        "```aura\nfield side: float64\n```\n\nLength of one side."
+    );
+    assert!(docstring_hover_containing(&analysis, "method area").ends_with("\n\nReturn the area."));
+    assert!(docstring_hover_containing(&analysis, "function scale")
+        .contains("\n\nReturn a scaled copy.\n\nArgs:\n    shape: The square to scale."));
+    // An implementation method without docs falls back to the trait method.
+    assert!(docstring_hover_containing(&analysis, "method name")
+        .ends_with("\n\nReturn the display name."));
+    assert!(docstring_hover_containing(&analysis, "method label")
+        .ends_with("\n\nReturn the square's own label."));
+    assert!(docstring_hover_containing(&analysis, "enum shapes.Unit")
+        .ends_with("\n\nA unit of length."));
+    // The docstring comes before existing notes such as the alias target.
+    assert_eq!(
+        docstring_hover_containing(&analysis, "trait Named"),
+        "```aura\ntrait Named\n```\n\nSomething with a name.\n\nAlias `Nameable` for `shapes.Named`."
+    );
+    assert_eq!(
+        docstring_hover_containing(&analysis, "function main"),
+        "```aura\nfunction main() -> None\n```\n\nRun the &lt;b>demo&lt;/b> &amp; print\\u{1}.\n\n```aura\nx = 1 < 2\n```"
+    );
+
+    let completion_source = source.replace("    print(bigger.side)\n", "    bigger.\n");
+    let completions = complete_path_source(&main_path, &completion_source, 12, 11, Some('.'))
+        .expect("member completions");
+    let documentation = |name: &str| {
+        completions
+            .iter()
+            .find(|completion| completion.name == name)
+            .and_then(|completion| completion.documentation.clone())
+    };
+    assert_eq!(
+        documentation("side").as_deref(),
+        Some("Length of one side.")
+    );
+    assert_eq!(documentation("area").as_deref(), Some("Return the area."));
+    assert_eq!(
+        documentation("name").as_deref(),
+        Some("Return the display name.")
+    );
+    let module_source = source.replace("    print(bigger.side)\n", "    shapes.\n");
+    let completions = complete_path_source(&main_path, &module_source, 12, 11, Some('.'))
+        .expect("module completions");
+    for (name, summary) in [
+        ("Square", "A square with equal sides."),
+        ("scale", "Return a scaled copy."),
+        ("Unit", "A unit of length."),
+        ("Named", "Something with a name."),
+    ] {
+        assert_eq!(
+            completions
+                .iter()
+                .find(|completion| completion.name == name)
+                .and_then(|completion| completion.documentation.as_deref()),
+            Some(summary),
+            "{name}"
+        );
+    }
+    let top_level = complete_path_source(&main_path, source, 17, 4, None).expect("names");
+    assert!(top_level
+        .iter()
+        .any(|completion| completion.name == "shapes"
+            && completion.documentation.as_deref()
+                == Some("Plane shapes and their measurements.")));
+    assert!(top_level
+        .iter()
+        .any(|completion| completion.name == "Nameable"
+            && completion.documentation.as_deref() == Some("Something with a name.")));
+    assert!(top_level.iter().any(|completion| completion.name == "main"
+        && completion.documentation.as_deref()
+            == Some("Run the &lt;b>demo&lt;/b> &amp; print\\u{1}.")));
+
+    let help = crate::analysis::signature_help_path_source(&main_path, source, 10, 33)
+        .expect("signature help");
+    assert!(help
+        .documentation
+        .as_deref()
+        .is_some_and(|text| text.starts_with("Return a scaled copy.")));
+    assert_eq!(
+        help.parameter_documentation,
+        vec![
+            Some("The square to scale.".to_string()),
+            Some("The multiplier for each side.\nMust be positive.".to_string()),
+        ]
+    );
+    let method = crate::analysis::signature_help_path_source(&main_path, source, 14, 23)
+        .expect("trait method signature help");
+    assert_eq!(
+        method.documentation.as_deref(),
+        Some("Return the square's own label.")
+    );
+}
+
+#[test]
+fn docstring_presentation_escapes_html_and_controls_outside_code() {
+    use crate::analysis::{presentation_docstring, sanitize_doc_markdown};
+    assert_eq!(presentation_docstring("   \n  "), None);
+    assert_eq!(
+        sanitize_doc_markdown("a <i> & `<code> & ``x`<y`` ` b\u{7f}\tc"),
+        "a &lt;i> &amp; `<code> & ``x`&lt;y`` ` b\\u{7f}\tc"
+    );
+    assert_eq!(
+        sanitize_doc_markdown("~~~\n<raw>\u{1b}\n~~~\n<after>\n````\n```\n<inner>\n````"),
+        "~~~\n<raw>\\u{1b}\n~~~\n&lt;after>\n````\n```\n<inner>\n````"
+    );
+}
+
+#[test]
+fn signature_help_documents_inherent_and_fallback_methods() {
+    let temp_dir = TempDir::new("aura-analysis-docstring-methods");
+    let path = temp_dir.path().join("main.au");
+    let source = concat!(
+        "class Box:\n",
+        "    \"\"\"A box.\"\"\"\n",
+        "    size: int64\n",
+        "    def grow(self, by: int64, times: int64) -> int64:\n",
+        "        \"\"\"Grow the box.\n",
+        "\n",
+        "        Args:\n",
+        "            by: The step.\n",
+        "        \"\"\"\n",
+        "        return self.size + by * times\n",
+        "    def plain(self) -> int64:\n",
+        "        return self.size\n",
+        "trait Named:\n",
+        "    def name(self) -> str:\n",
+        "        \"\"\"Trait docs.\"\"\"\n",
+        "impl Named for Box:\n",
+        "    def name(self) -> str:\n",
+        "        \"\"\"   \"\"\"\n",
+        "        return \"box\"\n",
+        "def main():\n",
+        "    b = Box(size=1)\n",
+        "    print(b.grow(1, 2))\n",
+        "    print(b.name())\n",
+        "    print(b.plain())\n",
+    );
+    fs::write(&path, source).expect("source should be written");
+
+    let grow = crate::analysis::signature_help_path_source(&path, source, 21, 17)
+        .expect("inherent method signature help");
+    assert_eq!(
+        grow.documentation.as_deref(),
+        Some("Grow the box.\n\nArgs:\n    by: The step.")
+    );
+    assert_eq!(
+        grow.parameter_documentation,
+        vec![Some("The step.".to_string()), None]
+    );
+
+    // A whitespace-only implementation docstring falls back to the trait.
+    let name = crate::analysis::signature_help_path_source(&path, source, 22, 17)
+        .expect("trait method signature help");
+    assert_eq!(name.documentation.as_deref(), Some("Trait docs."));
+    assert!(name.parameter_documentation.is_empty());
+
+    let plain = crate::analysis::signature_help_path_source(&path, source, 23, 18)
+        .expect("undocumented method signature help");
+    assert_eq!(plain.documentation, None);
+    assert!(plain.parameter_documentation.is_empty());
 }
 
 #[test]

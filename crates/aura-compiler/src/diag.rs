@@ -182,6 +182,11 @@ pub const DIAGNOSTIC_CODE_REGISTRY: &[DiagnosticCodeInfo] = &[
         title: "invalid rest pattern or target",
     },
     DiagnosticCodeInfo {
+        code: "AU2042",
+        band: "names/types",
+        title: "invalid docstring or documentation limit",
+    },
+    DiagnosticCodeInfo {
         code: "AU2999",
         band: "names/types",
         title: "general compile-time rejection",

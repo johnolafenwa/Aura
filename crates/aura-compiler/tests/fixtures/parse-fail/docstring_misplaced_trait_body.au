@@ -1,0 +1,3 @@
+trait Shape:
+    def area(self) -> float64
+    """A trait body string after a method."""

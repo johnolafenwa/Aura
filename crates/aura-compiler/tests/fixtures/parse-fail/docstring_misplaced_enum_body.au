@@ -1,0 +1,4 @@
+enum Color:
+    Red
+    """Enum variants have no documentation."""
+    Green

@@ -1,0 +1,5 @@
+error[AU2042]: misplaced docstring: a string in an enum body must be the enum docstring; enum variants have no documentation
+ --> crates/aura-compiler/tests/fixtures/parse-fail/docstring_misplaced_enum_body.au:3:5
+  |
+3 |     """Enum variants have no documentation."""
+  |     ^
