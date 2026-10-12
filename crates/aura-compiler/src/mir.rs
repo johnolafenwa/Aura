@@ -17296,7 +17296,7 @@ impl<'a> Lowerer<'a> {
                 scrutinee,
                 capability,
                 arms,
-            } => self.lower_match_expr(expr, scrutinee, *capability, arms, None),
+            } => self.lower_match_expr(expr, scrutinee, *capability, arms, None, false),
             ExprKind::Membership {
                 value,
                 container,
@@ -18495,7 +18495,7 @@ impl<'a> Lowerer<'a> {
         }
         match &expr.kind {
             ExprKind::Group(inner) => self.lower_expr_with_expected(inner, expected),
-            ExprKind::Match { scrutinee, capability, arms } => self.lower_match_expr(expr, scrutinee, *capability, arms, expected),
+            ExprKind::Match { scrutinee, capability, arms } => self.lower_match_expr(expr, scrutinee, *capability, arms, expected, false),
             ExprKind::Tuple(elements) => match expected {
                 Some(Type::Tuple(element_types)) if element_types.len() == elements.len() => {
                     self.lower_tuple_literal(elements, Some(element_types))
@@ -18651,6 +18651,15 @@ impl<'a> Lowerer<'a> {
                 return value;
             }
         }
+        if passing == ReceiverKind::Borrow {
+            // A member place passed to a shared union parameter is lent for
+            // the call: the injected union reads the member through the
+            // same element, entry, view, or returned-view loan a member
+            // parameter would take, so no member value is copied.
+            if let Some(value) = self.lower_borrowed_union_injection(expr, expected) {
+                return value;
+            }
+        }
         if passing == ReceiverKind::Borrow
             && self
                 .infer_expr_type(expr)
@@ -18713,6 +18722,14 @@ impl<'a> Lowerer<'a> {
     fn lower_expr_for_owned_value(&mut self, expr: &Expr, expected: Option<&Type>) -> Operand {
         if let Some(value) = self.lower_union_injection(expr, expected, true) {
             return value;
+        }
+        if let ExprKind::Match {
+            scrutinee,
+            capability,
+            arms,
+        } = &expr.kind
+        {
+            return self.lower_match_expr(expr, scrutinee, *capability, arms, expected, true);
         }
         if let ExprKind::Conditional {
             then_expr,
@@ -18834,6 +18851,33 @@ impl<'a> Lowerer<'a> {
         })
     }
 
+    fn lower_borrowed_union_injection(
+        &mut self,
+        expr: &Expr,
+        expected: Option<&Type>,
+    ) -> Option<Operand> {
+        let expected = expected.filter(|expected| matches!(expected, Type::Union(_)))?;
+        if let ExprKind::Group(inner) = &expr.kind {
+            return self.lower_borrowed_union_injection(inner, Some(expected));
+        }
+        let injection = self
+            .program
+            .union_injection(self.module_name, expr.span, expected)?;
+        let value =
+            self.lower_expr_for_passing(expr, Some(&injection.member_type), ReceiverKind::Borrow);
+        let target = self.new_typed_temp(injection.union_type.clone());
+        self.emit(Instruction::Assign {
+            target: target.clone(),
+            value: Rvalue::UnionInject {
+                value,
+                union_type: injection.union_type,
+                member_type: injection.member_type,
+                member_index: injection.member_index,
+            },
+        });
+        Some(Operand::Place(target))
+    }
+
     fn is_contextual_none_expr(expr: &Expr) -> bool {
         match &expr.kind {
             ExprKind::Name(name) => name == "None",
@@ -18849,6 +18893,7 @@ impl<'a> Lowerer<'a> {
         borrow_mode: ReceiverKind,
         arms: &[crate::ast::MatchExprArm],
         expected: Option<&Type>,
+        arms_owned: bool,
     ) -> Operand {
         let scrutinee_ty = self.infer_expr_type(scrutinee_expr);
         let consumes_scrutinee = borrow_mode == ReceiverKind::Value
@@ -18985,7 +19030,14 @@ impl<'a> Lowerer<'a> {
                 let arm_type = expected
                     .cloned()
                     .or_else(|| self.infer_expr_type(&arm.value));
-                let value = self.lower_expr_for_owned_value(&arm.value, arm_type.as_ref());
+                // A match read in a borrowed position lends its arm places,
+                // as a conditional expression does; only an owned result
+                // moves a non-copy arm place.
+                let value = if arms_owned {
+                    self.lower_expr_for_owned_value(&arm.value, arm_type.as_ref())
+                } else {
+                    self.lower_expr_with_expected(&arm.value, arm_type.as_ref())
+                };
                 self.emit(Instruction::Assign {
                     target: result.clone(),
                     value: Rvalue::Use(value),

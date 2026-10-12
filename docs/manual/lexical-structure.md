@@ -175,9 +175,9 @@ def main():
     print(result)
 ```
 
-This program prints `42`. It has no trailing comma after `right`, `22`, or
-`values[1]`, because newline continuation does not change the grammar of
-comma-separated lists.
+This program prints `42`. Newline continuation does not change the grammar of
+comma-separated lists. A trailing comma after `right`, `22`, or `values[1]`
+is optional, as in any bracketed list.
 
 Leading spaces on a continuation line are formatting, not block indentation:
 
@@ -223,11 +223,16 @@ Aura has none of these:
 - assignment expressions
 - a lambda arrow, because lambdas use `lambda parameters: expression`
 
-Comma-separated lists do not accept a trailing comma. This applies to
-arguments, parameters, imports, type arguments, generic parameters, enum
-payloads, collection elements, and trait lists. Tuples are the one exception.
-The singleton tuple value, type, target, and pattern forms require one comma.
-Multi-element tuples reject a trailing comma.
+A comma-separated list closed by `)`, `]`, or `}` accepts one trailing comma
+before the closing delimiter. This applies to arguments, parameters,
+parenthesized imports, type arguments, generic parameters, enum payloads,
+collection elements, tuples, patterns, and capture lists. A trailing comma
+never changes meaning. The one special case is `(value,)`, which is a
+singleton tuple, while `(value)` is grouping.
+
+A list without a closing delimiter rejects a trailing comma. This covers an
+unparenthesized tuple target such as `left, right, = pair` and an
+unparenthesized import list. Two commas in a row are always rejected.
 
 ## Integer Literals
 
@@ -532,7 +537,7 @@ These lexical limits apply:
 - Source is UTF-8.
 - Physical tabs are rejected outside triple-quoted string content.
 - Continuation requires an unmatched source delimiter.
-- Ordinary lists reject trailing commas.
+- Trailing commas need a closing delimiter.
 - Backslash continuation and multiline f-strings are unavailable.
 - This chapter and [Current Limits](/manual/current-limits) fix the literal
   magnitude and parser-complexity caps.
@@ -554,7 +559,6 @@ These forms are unavailable:
 - single-quoted f-strings
 - block comments
 - semicolons
-- ordinary trailing commas, other than the required singleton-tuple comma
 - backslash continuation
 - multiline f-string literals
 

@@ -707,6 +707,7 @@ struct NativeCodegen<'a> {
     tuple_element: FuncId,
     tuple_take_element: FuncId,
     union_inject: FuncId,
+    union_inject_copy: FuncId,
     union_tag_test: FuncId,
     union_tag: FuncId,
     union_payload_copy: FuncId,
@@ -1241,6 +1242,7 @@ impl<'a> NativeCodegen<'a> {
             tuple_element => ("aura_direct_tuple_element", [types::I64, types::I64], Some(types::I64)),
             tuple_take_element => ("aura_direct_tuple_take_element", [types::I64, types::I64], Some(types::I64)),
             union_inject => ("aura_direct_union_inject", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
+            union_inject_copy => ("aura_direct_union_inject_copy", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             union_tag_test => ("aura_direct_union_tag_test", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             union_tag => ("aura_direct_union_tag", [types::I64], Some(types::I64)),
             union_payload_copy => ("aura_direct_union_payload_copy", [types::I64, types::I64], Some(types::I64)),
@@ -1738,6 +1740,7 @@ impl<'a> NativeCodegen<'a> {
             tuple_element,
             tuple_take_element,
             union_inject,
+            union_inject_copy,
             union_tag_test,
             union_tag,
             union_payload_copy,
@@ -2774,6 +2777,9 @@ impl<'a> NativeCodegen<'a> {
         let union_inject = self
             .object
             .declare_func_in_func(self.union_inject, builder.func);
+        let union_inject_copy = self
+            .object
+            .declare_func_in_func(self.union_inject_copy, builder.func);
         let union_tag_test = self
             .object
             .declare_func_in_func(self.union_tag_test, builder.func);
@@ -3546,6 +3552,7 @@ impl<'a> NativeCodegen<'a> {
             tuple_element,
             tuple_take_element,
             union_inject,
+            union_inject_copy,
             union_tag_test,
             union_tag,
             union_payload_copy,
@@ -4892,6 +4899,7 @@ struct FunctionCompiler<'a> {
     tuple_element: cranelift_codegen::ir::FuncRef,
     tuple_take_element: cranelift_codegen::ir::FuncRef,
     union_inject: cranelift_codegen::ir::FuncRef,
+    union_inject_copy: cranelift_codegen::ir::FuncRef,
     union_tag_test: cranelift_codegen::ir::FuncRef,
     union_tag: cranelift_codegen::ir::FuncRef,
     union_payload_copy: cranelift_codegen::ir::FuncRef,
@@ -11576,26 +11584,30 @@ impl<'a> FunctionCompiler<'a> {
         }
         let boxed =
             self.switch_on_union_tag(union, words, &result_ty, |codegen, index, member| {
+                // A handle payload of a borrowed union stays owned by the
+                // union's place, so the injection copies the value behind
+                // the retained handle, as the interpreter copies a place read
+                // into an injection. A moved union's payload or a freshly
+                // boxed member moves into the boxed value.
+                let borrowed_handle = !owned && matches!(member.ty, DirectType::Opaque(_));
                 let payload = codegen.ensure_opaque(member)?;
-                if owned {
-                    // The moved union's handle moves into the boxed value.
-                    codegen.mark_temporary_opaque_owned(&payload);
-                }
-                // A borrowed string payload is immutable, so the boxed union
-                // shares it; any other borrowed payload is copied, as the
-                // interpreter copies a place read into an injection.
-                let immutable_payload =
-                    matches!(&payload.ty, DirectType::Opaque(Type::Named(name, args)) if name == "str" && args.is_empty());
-                let transferred = if immutable_payload {
-                    codegen.transfer_opaque_arg(&payload)
+                let (inject, transferred) = if borrowed_handle {
+                    (
+                        codegen.union_inject_copy,
+                        codegen.retain_opaque_handle(payload.values[0]),
+                    )
                 } else {
-                    codegen.transfer_owned_opaque_value(&payload)
+                    codegen.mark_temporary_opaque_owned(&payload);
+                    (
+                        codegen.union_inject,
+                        codegen.transfer_owned_opaque_value(&payload),
+                    )
                 };
                 let tag = codegen.builder.ins().iconst(types::I64, index as i64);
                 let call = codegen
                     .builder
                     .ins()
-                    .call(codegen.union_inject, &[ptr, len, tag, transferred]);
+                    .call(inject, &[ptr, len, tag, transferred]);
                 Ok(ValueRef {
                     values: codegen.builder.inst_results(call).to_vec(),
                     ty: DirectType::Opaque(union_type.clone()),

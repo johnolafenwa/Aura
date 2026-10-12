@@ -1,0 +1,45 @@
+class Greeter:
+    prefix: str
+
+    def greet(self, who: str | None) -> str:
+        match who:
+            case None:
+                return f"{self.prefix} stranger"
+            case str as text:
+                return f"{self.prefix} {text}"
+
+def describe(value: str | None) -> str:
+    match value:
+        case None:
+            return "none"
+        case str as text:
+            return f"name {text}"
+
+def present[T](value: T | None) -> bool:
+    return value is not None
+
+def label(value: str | None, *, suffix: str = "") -> str:
+    match value:
+        case None:
+            return f"none{suffix}"
+        case str as text:
+            return f"{text}{suffix}"
+
+def main():
+    other = "Bo"
+    words = ["a", "b"]
+    print(present(other))
+    print(present(words))
+    print(present[str](other))
+    stored: str | None = "Cy"
+    print(present(stored))
+    print(stored)
+    greeter = Greeter(prefix="hi")
+    print(greeter.greet(other))
+    print(greeter.greet(who=words[0]))
+    callback: def(value: str | None) -> str = describe
+    print(callback(other))
+    print(callback(words[1]))
+    print(label(other, suffix="?"))
+    print(other)
+    print(words)

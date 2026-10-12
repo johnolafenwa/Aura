@@ -11,7 +11,7 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 - Physical newlines continue a logical line only while `(`, `[`, or `{` remains open. Continuation indentation is visual, and delimiter kinds must match.
 - Backslash continuation is not implemented.
 - Ordinary, raw, and f-strings are single-line. Triple-quoted ordinary strings may span physical lines.
-- Source lists do not accept trailing commas. The one exception is the required comma in singleton tuple values, types, targets, and patterns. Multi-element tuples reject a trailing comma.
+- A trailing comma needs a closing `)`, `]`, or `}`. Unparenthesized unpack targets, unparenthesized import lists, and lambda parameter lists reject it.
 - The parser's nesting, postfix-chain, and binary-chain guards allow 128 operations. Deeper input is rejected with a diagnostic.
 - Statement match arms cannot be inline. An expression match arm may put its expression on the same line after `case pattern:` or use an indented expression body.
 - A `for` loop binding cannot shadow a name already visible in the same scope.
@@ -49,7 +49,7 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 ### Tuples
 
 - Tuples have fixed structural types, recursive unpack targets and patterns, copy-only constant indexing, and non-consuming recursive `==` and `!=` for operands of the same static tuple type.
-- There is no empty tuple, multi-element trailing tuple comma, tuple iteration, tuple method, tuple ordering, named or rest unpacking, mutable tuple-target writeback, dynamic or negative tuple indexing, or tuple-to-collection conversion.
+- There is no empty tuple, tuple iteration, tuple method, tuple ordering, named or rest unpacking, mutable tuple-target writeback, dynamic or negative tuple indexing, or tuple-to-collection conversion.
 - To take ownership of a non-Copy element, unpack the tuple.
 
 ### Views
@@ -57,7 +57,6 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 - Views have identity only for these places: local, parameter, and receiver roots; existing views; class-field paths; fixed tuple positions; list elements; and dictionary entries. Field and tuple projections inside an element are included.
 - Set elements, slices, arbitrary temporaries, and escaping enum-payload views cannot be loaned.
 - A returned view of a list element or dictionary entry holds the whole collection at the call site. The caller cannot read a different element while it is live.
-- A non-copy value, including a list element, cannot be borrowed into a `T | None` or other union parameter (`AU2010`). Pass a clone, or change the parameter to the member type.
 - Beside a live element view of the same list, `set(index, value)` works only for a Copy element type. For other element types it is refused with `AU3011`, because it would move the old element out through the collection.
 - In a top-level script, an immutable binding above the first top-level statement is a module constant and cannot be the source of a view (`AU3004`). Bind it with `mut`, below the first statement, or inside a function.
 - View-bearing aggregates, module storage, multi-origin results, returned loan closures, and lifetime-parameterized structural callable types are not available.

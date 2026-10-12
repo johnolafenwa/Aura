@@ -1,0 +1,5 @@
+error[AU1101]: an unparenthesized import list cannot end with a comma; wrap the names in parentheses
+ --> crates/aura-compiler/tests/fixtures/parse-fail/import_unparenthesized_trailing_comma.au:1:21
+  |
+1 | from app import one,
+  |                     ^

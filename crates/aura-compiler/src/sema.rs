@@ -987,6 +987,9 @@ struct FunctionChecker<'a> {
     type_param_bounds: BTreeMap<String, Vec<TraitBound>>,
     implicit_borrowed_params: BTreeMap<String, Type>,
     active_match_borrow_places: Rc<RefCell<Vec<ActiveMatchBorrow>>>,
+    /// Collection places a `for ... in mut` loop holds exclusively while its
+    /// body is checked, with the iterable's span.
+    mutable_iteration_places: Rc<RefCell<Vec<(PlacePath, crate::diag::Span)>>>,
     /// Set while an argument bound to a `mut` union parameter is typed: the
     /// declared union is exposed whole, so refinements do not apply.
     suppress_narrowing: Rc<std::cell::Cell<bool>>,
@@ -1843,6 +1846,7 @@ impl<'a> FunctionChecker<'a> {
             type_param_bounds: BTreeMap::new(),
             implicit_borrowed_params: BTreeMap::new(),
             active_match_borrow_places: Rc::new(RefCell::new(Vec::new())),
+            mutable_iteration_places: Rc::new(RefCell::new(Vec::new())),
             suppress_narrowing: Rc::new(std::cell::Cell::new(false)),
             mutated_captures: Rc::new(RefCell::new(BTreeSet::new())),
             index_place_read: Rc::new(std::cell::Cell::new(None)),
@@ -1890,6 +1894,7 @@ impl<'a> FunctionChecker<'a> {
             type_param_bounds: self.type_param_bounds.clone(),
             implicit_borrowed_params: self.implicit_borrowed_params.clone(),
             active_match_borrow_places: self.active_match_borrow_places.clone(),
+            mutable_iteration_places: self.mutable_iteration_places.clone(),
             rng_clone_obligations: self.rng_clone_obligations.clone(),
             array_equality_obligations: self.array_equality_obligations.clone(),
             expr_result_entries: self.expr_result_entries.clone(),
@@ -1931,6 +1936,7 @@ impl<'a> FunctionChecker<'a> {
             type_param_bounds,
             implicit_borrowed_params: self.implicit_borrowed_params.clone(),
             active_match_borrow_places: self.active_match_borrow_places.clone(),
+            mutable_iteration_places: self.mutable_iteration_places.clone(),
             rng_clone_obligations: self.rng_clone_obligations.clone(),
             array_equality_obligations: self.array_equality_obligations.clone(),
             expr_result_entries: self.expr_result_entries.clone(),
@@ -1968,6 +1974,7 @@ impl<'a> FunctionChecker<'a> {
             type_param_bounds: self.type_param_bounds.clone(),
             implicit_borrowed_params: self.implicit_borrowed_params.clone(),
             active_match_borrow_places: self.active_match_borrow_places.clone(),
+            mutable_iteration_places: self.mutable_iteration_places.clone(),
             rng_clone_obligations: self.rng_clone_obligations.clone(),
             array_equality_obligations: self.array_equality_obligations.clone(),
             expr_result_entries: self.expr_result_entries.clone(),
@@ -2005,6 +2012,7 @@ impl<'a> FunctionChecker<'a> {
             type_param_bounds: self.type_param_bounds.clone(),
             implicit_borrowed_params: self.implicit_borrowed_params.clone(),
             active_match_borrow_places: self.active_match_borrow_places.clone(),
+            mutable_iteration_places: self.mutable_iteration_places.clone(),
             rng_clone_obligations: sink,
             array_equality_obligations: self.array_equality_obligations.clone(),
             expr_result_entries: self.expr_result_entries.clone(),
@@ -4302,13 +4310,29 @@ impl<'a> FunctionChecker<'a> {
                             &mut body_locals,
                             "loop",
                         )?;
-                        self.check_block(
+                        let mutable_iteration =
+                            if effective_borrow_mode == Some(ReceiverKind::BorrowMut) {
+                                self.borrowed_iterable_place(&for_stmt.iterable, locals)?
+                                    .map(|place| self.canonicalize_view_place(place, locals))
+                            } else {
+                                None
+                            };
+                        if let Some(place) = &mutable_iteration {
+                            self.mutable_iteration_places
+                                .borrow_mut()
+                                .push((place.clone(), for_stmt.iterable.span));
+                        }
+                        let checked = self.check_block(
                             &for_stmt.body,
                             &mut body_locals,
                             return_type,
                             loop_depth + 1,
                             allow_return,
-                        )?;
+                        );
+                        if mutable_iteration.is_some() {
+                            self.mutable_iteration_places.borrow_mut().pop();
+                        }
+                        checked?;
                         let killed = Self::narrowing_killed_by_body(locals, &body_locals);
                         if killed.is_empty() {
                             break body_locals;

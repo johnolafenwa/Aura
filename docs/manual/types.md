@@ -329,6 +329,24 @@ failure: Result[int32, str] = Result.Err("bad number")
 
 Bare `None` on its own is the unit value and renders as `None`. It becomes an optional only where a `T | None` annotation, parameter, result, or other expected type applies. An unannotated `count = 5` is a plain `int64`. To keep the optional type, write `count: int64 | None = 5`. A function declared `-> T | None` returns absence with an explicit `return None`.
 
+A bare union parameter borrows a member argument for the call. The argument can be any place a bare member parameter accepts: a local, a field, a list element, a dictionary entry, a loop binding, or a view. The callee reads the caller's value through the union, so nothing is copied or moved:
+
+```aura
+def describe(value: str | None) -> str:
+    match value:
+        case str as text:
+            return f"name {text}"
+        case None:
+            return "none"
+
+def main():
+    names = ["Ada", "Lin"]
+    print(describe(names[1]))
+    print(names)
+```
+
+A `mut` union parameter still needs an argument of the exact union type, because the callee may store any member there (`AU2010`). An `own` union parameter moves its member argument.
+
 Test presence with `is None` and `is not None`. These [narrow](/manual/enums-and-match#conditional-narrowing) a stable place to its remaining members for the selected branch. Or select a member with a [type pattern](/manual/enums-and-match#union-type-patterns):
 
 ```aura

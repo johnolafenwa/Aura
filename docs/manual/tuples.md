@@ -35,7 +35,7 @@ Tuple values are always parenthesized:
 - `(value)` is grouping.
 - `(value,)` is a singleton tuple.
 - `()` is not a tuple value.
-- A multi-element tuple has no trailing comma.
+- A multi-element tuple may end with a trailing comma: `(1, 2,)` is `(1, 2)`.
 
 ```aura
 def main():
@@ -186,7 +186,6 @@ Maintained parity fixtures require both backends to produce the same output and 
 Aura 0.3 does not have these tuple features:
 
 - an empty tuple
-- a trailing comma on a multi-element tuple
 - tuple iteration
 - tuple methods
 - tuple ordering

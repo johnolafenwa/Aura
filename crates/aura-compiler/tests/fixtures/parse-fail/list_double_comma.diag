@@ -1,0 +1,5 @@
+error[AU1101]: unexpected token in expression: Comma
+ --> crates/aura-compiler/tests/fixtures/parse-fail/list_double_comma.au:2:17
+  |
+2 |     values = [1,,]
+  |                 ^
