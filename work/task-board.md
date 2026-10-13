@@ -24,7 +24,7 @@ Last updated: 2026-10-12
   `2026-10-12-batch-4-completion.md`.
 - Details per family are in the `2026-10-11-batch-4-*.md` notes.
 
-## Batch 3 phase 3a (initialization; in progress)
+## Batch 3 phase 3a (initialization; complete)
 
 - Target: `__init__(self, ...)`, field defaults before the body, definite
   initialization, initializer visibility, named fallible factories, and
@@ -38,11 +38,8 @@ Last updated: 2026-10-12
   semantic interface 18, manual, tutorial chapter 5, and two examples.
   The slot representation replaces G1's `DropInitialized` action; the
   deviation is recorded in ADR-0059.
-- Verification: compiler, CLI, fixture, LSP (116/116), clippy, format,
-  hygiene, documentation example (740), and llms checks pass locally.
-  Compiler coverage is measured by hosted CI; the local disk allowance
-  could not hold the instrumented build.
-- Remaining: hosted CI and merge.
+- Verification: merged in PR #35 after a green hosted run, including the
+  coverage floors.
 
 ## Batch 3 phase 3b (context managers; in progress)
 
@@ -55,7 +52,7 @@ Last updated: 2026-10-12
   docs, and `examples/resources/context_managers.au`. `AU2017` joins the
   registry. Semantic interface 19.
 - Verification: full forced backend parity passes on 3a and 3b combined.
-- Remaining: the pull request after phase 3a merges, and hosted CI.
+- Remaining: hosted CI and merge.
 
 ## Batch 2 completion: union borrowing and phase 2b (complete)
 
