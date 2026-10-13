@@ -5666,24 +5666,6 @@ impl<'a> FunctionChecker<'a> {
                 stale_narrowing: BTreeMap::new(),
             },
         );
-        if let Some(previous) = existing_binding {
-            // A rebinding replaces the value: every earlier refinement of
-            // this local is stale from here on, and earlier stale records
-            // keep their spans for AU2014.
-            if let Some(binding) = locals.get_mut(binding_name) {
-                binding.stale_narrowing = previous.stale_narrowing;
-                for (projection, fact) in previous.narrowed {
-                    binding.stale_narrowing.insert(
-                        projection,
-                        StaleNarrowing {
-                            tested_at: fact.tested_at,
-                            invalidated_at: assign.span,
-                            operation: "assignment",
-                        },
-                    );
-                }
-            }
-        }
         Ok(())
     }
 
@@ -5765,16 +5747,6 @@ impl<'a> FunctionChecker<'a> {
                 for element in elements {
                     let actual =
                         self.type_expr_consuming_result(element, locals, element_ty.as_ref())?;
-                    if type_contains_loan_closure(&actual) {
-                        return Err(Diagnostic::coded_at(
-                            "AU3010",
-                            element.span,
-                            "a closure containing a live view cannot be stored in a collection",
-                        )
-                        .with_help(
-                            "keep the loan closure in its matching inferred local and call it directly",
-                        ));
-                    }
                     element_ty.get_or_insert(actual);
                 }
                 Ok(Type::Named(
@@ -5787,13 +5759,6 @@ impl<'a> FunctionChecker<'a> {
                 for element in elements {
                     let actual =
                         self.type_expr_consuming_result(element, locals, element_ty.as_ref())?;
-                    if type_contains_loan_closure(&actual) {
-                        return Err(Diagnostic::coded_at(
-                            "AU3010",
-                            element.span,
-                            "a closure containing a live view cannot be stored in a collection",
-                        ));
-                    }
                     element_ty.get_or_insert(actual);
                 }
                 Ok(Type::Named(
@@ -5818,23 +5783,9 @@ impl<'a> FunctionChecker<'a> {
                 for entry in entries {
                     let actual_key =
                         self.type_expr_consuming_result(&entry.key, locals, key_ty.as_ref())?;
-                    if type_contains_loan_closure(&actual_key) {
-                        return Err(Diagnostic::coded_at(
-                            "AU3010",
-                            entry.key.span,
-                            "a closure containing a live view cannot be stored in a collection",
-                        ));
-                    }
                     key_ty.get_or_insert(actual_key);
                     let actual_value =
                         self.type_expr_consuming_result(&entry.value, locals, value_ty.as_ref())?;
-                    if type_contains_loan_closure(&actual_value) {
-                        return Err(Diagnostic::coded_at(
-                            "AU3010",
-                            entry.value.span,
-                            "a closure containing a live view cannot be stored in a collection",
-                        ));
-                    }
                     value_ty.get_or_insert(actual_value);
                 }
                 Ok(Type::Named(
@@ -8930,26 +8881,6 @@ impl<'a> FunctionChecker<'a> {
                 )
                 .with_help(
                     "compare a stable scalar or str ordering key exposed by the binding instead of a foreign address",
-                ));
-            }
-        }
-        if matches!(op, BinaryOp::Eq | BinaryOp::NotEq) {
-            let handle_comparison = if let Some(handle_ty) = self.opaque_handle_in_type(&left_ty) {
-                Some((&left_ty, handle_ty))
-            } else {
-                self.opaque_handle_in_type(&right_ty)
-                    .map(|handle_ty| (&right_ty, handle_ty))
-            };
-            if let Some((compared_ty, handle_ty)) = handle_comparison {
-                return Err(Diagnostic::coded_at(
-                    "AU2003",
-                    span,
-                    format!(
-                        "cannot compare `{compared_ty}` because it contains opaque FFI handle `{handle_ty}` and FFI v0 does not define equality for foreign identity"
-                    ),
-                )
-                .with_help(
-                    "compare a stable scalar or str identifier exposed by the binding instead of a foreign address",
                 ));
             }
         }
@@ -12279,10 +12210,7 @@ impl<'a> FunctionChecker<'a> {
                             let ordered_args = builtin_member.bind_args(args, span)?;
                             if matches!(
                                 builtin_member,
-                                BuiltinMember::MapGet
-                                    | BuiltinMember::MapSet
-                                    | BuiltinMember::MapRemove
-                                    | BuiltinMember::MapContainsKey
+                                BuiltinMember::MapGet | BuiltinMember::MapRemove
                             ) {
                                 self.require_array_equality_eligible(
                                     &receiver_args[0],
@@ -12328,62 +12256,6 @@ impl<'a> FunctionChecker<'a> {
                                     )?;
                                     Ok(lookup_type(receiver_args[1].clone()))
                                 }
-                                BuiltinMember::MapSet => {
-                                    self.require_mutable_receiver(object, field, span, locals)?;
-                                    let key_arg = self.bound_argument(
-                                        &ordered_args,
-                                        0,
-                                        span,
-                                        "`set` requires a `key` argument",
-                                    )?;
-                                    let key_actual = self.type_of_expr_hint(
-                                        &key_arg.value,
-                                        locals,
-                                        Some(&receiver_args[0]),
-                                    )?;
-                                    if key_actual != receiver_args[0] {
-                                        return Err(Diagnostic::at(
-                                            key_arg.span,
-                                            format!(
-                                                "`set` expects key type `{}`, found `{}`",
-                                                receiver_args[0], key_actual
-                                            ),
-                                        ));
-                                    }
-                                    let value_arg = self.bound_argument(
-                                        &ordered_args,
-                                        1,
-                                        span,
-                                        "`set` requires a `value` argument",
-                                    )?;
-                                    let value_actual = self.type_of_expr_hint(
-                                        &value_arg.value,
-                                        locals,
-                                        Some(&receiver_args[1]),
-                                    )?;
-                                    if value_actual != receiver_args[1] {
-                                        return Err(Diagnostic::at(
-                                            value_arg.span,
-                                            format!(
-                                                "`set` expects value type `{}`, found `{}`",
-                                                receiver_args[1], value_actual
-                                            ),
-                                        ));
-                                    }
-                                    self.apply_builtin_argument_passing(
-                                        builtin_member,
-                                        0,
-                                        key_arg,
-                                        locals,
-                                    )?;
-                                    self.apply_builtin_argument_passing(
-                                        builtin_member,
-                                        1,
-                                        value_arg,
-                                        locals,
-                                    )?;
-                                    Ok(lookup_type(receiver_args[1].clone()))
-                                }
                                 BuiltinMember::MapRemove => {
                                     self.require_mutable_receiver(object, field, span, locals)?;
                                     let key_arg = self.bound_argument(
@@ -12407,29 +12279,6 @@ impl<'a> FunctionChecker<'a> {
                                         ));
                                     }
                                     Ok(lookup_type(receiver_args[1].clone()))
-                                }
-                                BuiltinMember::MapContainsKey => {
-                                    let key_arg = self.bound_argument(
-                                        &ordered_args,
-                                        0,
-                                        span,
-                                        "`contains` requires exactly one key argument",
-                                    )?;
-                                    let actual = self.type_of_expr_hint(
-                                        &key_arg.value,
-                                        locals,
-                                        Some(&receiver_args[0]),
-                                    )?;
-                                    if actual != receiver_args[0] {
-                                        return Err(Diagnostic::at(
-                                            key_arg.span,
-                                            format!(
-                                                "`contains` expects `{}`, found `{}`",
-                                                receiver_args[0], actual
-                                            ),
-                                        ));
-                                    }
-                                    Ok(Type::named("bool"))
                                 }
                                 BuiltinMember::MapKeys => {
                                     self.reject_rng_duplication(
@@ -12527,8 +12376,7 @@ impl<'a> FunctionChecker<'a> {
                             let ordered_args = builtin_member.bind_args(args, span)?;
                             if matches!(
                                 builtin_member,
-                                BuiltinMember::SetContains
-                                    | BuiltinMember::SetInsert
+                                BuiltinMember::SetInsert
                                     | BuiltinMember::SetRemove
                                     | BuiltinMember::SetDiscard
                             ) {
@@ -12544,29 +12392,6 @@ impl<'a> FunctionChecker<'a> {
                                 BuiltinMember::SetClone => {
                                     self.reject_rng_duplication("set.copy", &receiver_ty, span)?;
                                     Ok(receiver_ty.clone())
-                                }
-                                BuiltinMember::SetContains => {
-                                    let value_arg = self.bound_argument(
-                                        &ordered_args,
-                                        0,
-                                        span,
-                                        "`contains` requires a `value` argument",
-                                    )?;
-                                    let actual = self.type_of_expr_hint(
-                                        &value_arg.value,
-                                        locals,
-                                        Some(&receiver_args[0]),
-                                    )?;
-                                    if actual != receiver_args[0] {
-                                        return Err(Diagnostic::at(
-                                            value_arg.span,
-                                            format!(
-                                                "`contains` expects `{}`, found `{}`",
-                                                receiver_args[0], actual
-                                            ),
-                                        ));
-                                    }
-                                    Ok(Type::named("bool"))
                                 }
                                 BuiltinMember::SetInsert
                                 | BuiltinMember::SetRemove
