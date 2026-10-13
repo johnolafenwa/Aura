@@ -90,8 +90,8 @@ is integrated separately.
 
 ## Follow-Up
 
-- Run `npm run coverage:compiler:check` and `npm run coverage:lsp:check`
-  after integration with phase 3a.
+- Phase 3a merged in PR #35 and phase 3b in PR #45. Hosted CI passed the
+  coverage floors on both.
 - One full parity run printed `2 3 7` instead of `1 2 3 7` for
   `task_nested_queue_capture_lifecycle` on the MIR backend. 240 repeat runs
   under parallel load never reproduced it. Phase 3b changes only the return
