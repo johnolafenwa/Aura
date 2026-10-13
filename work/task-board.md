@@ -24,25 +24,20 @@ Last updated: 2026-10-12
   `2026-10-12-batch-4-completion.md`.
 - Details per family are in the `2026-10-11-batch-4-*.md` notes.
 
-## Batch 2 completion: union borrowing and phase 2b (in progress)
+## Batch 2 completion: union borrowing and phase 2b (complete)
 
 - Target: borrowing non-copy values into union parameters (`AU2010`),
   then phase 2b (slice views and `Span[T]`, returned range views, and the
   dictionary lookup review), each merged after one green hosted run. No
   version bump or release in this work.
-- Done: a bare union parameter borrows a member place (local, field,
-  element, entry, loop binding, view, or returned view) for the call with
-  no copy; the native boxing of a borrowed `str | None` no longer empties
-  the caller's value; reading a list inside its own `for ... in mut` loop
-  reports `AU3002` in the checker instead of failing MIR validation.
-  Details are in `2026-10-11-batch-2-completion.md`.
-- Union borrowing is PR #37, which also fixes a `match` expression
-  argument that moved its local.
-- Phase 2b done locally: `Span[T]` slice views, returned range views, the
-  dictionary lookup review, span validator tests, editor hover and
-  completion, and documentation.
-- Remaining: hosted runs and merges for PR #37 and the phase 2b pull
-  request.
+- Union borrowing merged as PR #37 (`68b6080`). A bare union parameter
+  borrows a member place for the call with no copy, and a `match`
+  expression argument no longer moves its local.
+- Phase 2b merged as PR #42 (`40ff76e`): `Span[T]` slice views, returned
+  range views, the dictionary lookup review, span validator tests, editor
+  hover and completion, and documentation. Hosted verify passed on Ubuntu
+  and macOS at `541af66`, including the compiler coverage floors.
+- Details are in `2026-10-11-batch-2-completion.md`.
 
 ## Aura 0.3.6 preview release (complete)
 
