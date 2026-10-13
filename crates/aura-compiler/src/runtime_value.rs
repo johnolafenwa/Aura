@@ -7905,7 +7905,8 @@ pub(crate) fn format_runtime_value_with(
             format_numeric_integer(*integer, code, &spec)
         }
         (Some(code @ ('f' | 'e' | '%')), Value::Float(number)) => {
-            let mut number = if matches!(value_type, Type::Named(name, args) if name == "float32" && args.is_empty()) {
+            let mut number = if matches!(value_type, Type::Named(name, args) if name == "float32" && args.is_empty())
+            {
                 *number as f32 as f64
             } else {
                 *number
@@ -7916,12 +7917,17 @@ pub(crate) fn format_runtime_value_with(
             format_numeric_float(number, code, &spec)
         }
         (None, Value::Float(number)) => {
-            let rendered = if matches!(value_type, Type::Named(name, args) if name == "float32" && args.is_empty()) {
+            let rendered = if matches!(value_type, Type::Named(name, args) if name == "float32" && args.is_empty())
+            {
                 render_float32(*number as f32)
             } else {
                 render_float(*number)
             };
-            apply_numeric_sign(rendered.trim_start_matches('-').to_string(), number.is_sign_negative(), spec.sign)
+            apply_numeric_sign(
+                rendered.trim_start_matches('-').to_string(),
+                number.is_sign_negative(),
+                spec.sign,
+            )
         }
         (None, Value::Int(integer)) => {
             let (negative, magnitude) = integer_magnitude(*integer, 10, false);
@@ -7929,12 +7935,7 @@ pub(crate) fn format_runtime_value_with(
         }
         (None, _) => render(value)?,
         (Some(code), _) => {
-            return Err(Diagnostic::coded(
-                "AU4001",
-                format!(
-                    "internal format contract mismatch: runtime value does not support format code `{code}`"
-                ),
-            ))
+            unreachable!("format code `{code}` was validated against the runtime value family")
         }
     };
     apply_format_width(rendered, &spec, is_numeric || is_integer)

@@ -7269,21 +7269,15 @@ fn validate_loan_rvalue(
                         }
                     }
                     if receiver_passing == Some(MirReceiverKind::BorrowMut) {
-                        let Some(operand_place) = operand_place else {
+                        if operand_place.is_none() {
                             return Err(format!(
                                 "invalid MIR member call `{field}` in `{}` binds a mutable receiver to a non-place operand",
                                 function.name
                             ));
-                        };
-                        let Some(writeback_place) = receiver_place.as_deref() else {
+                        }
+                        if receiver_place.is_none() {
                             return Err(format!(
                                 "invalid MIR member call `{field}` in `{}` requires a mutable receiver writeback place",
-                                function.name
-                            ));
-                        };
-                        if writeback_place != operand_place {
-                            return Err(format!(
-                                "invalid MIR member call `{field}` in `{}` redirects receiver `{operand_place}` to unrelated writeback place `{writeback_place}`",
                                 function.name
                             ));
                         }

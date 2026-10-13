@@ -53,8 +53,9 @@ Defects found during the work and not fixed in this batch:
   value" or "unknown name".
 - `dict.set` type-checks, but MIR lowering reports "unsupported method
   call".
-- About 100 lines of unreachable checker code remain. Removing them needs
-  an owner decision.
+- About 100 lines of unreachable checker code were removed on 2026-10-13
+  with the owner's approval. A similar repeated redirect check remains in
+  the member-call candidate loop in `mir.rs`.
 - The MIR validator may not check enum payload arity.
 - `native_runtime_direct_cancellation_releases_frame_owned_argument_references`
   may be flaky.
