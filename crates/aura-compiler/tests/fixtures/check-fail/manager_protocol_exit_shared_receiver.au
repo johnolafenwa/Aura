@@ -1,0 +1,9 @@
+class Guard:
+    name: str
+
+    def __exit__(self) -> None:
+        print(self.name)
+
+def main():
+    with guard = Guard(name="g"):
+        print(guard.name)

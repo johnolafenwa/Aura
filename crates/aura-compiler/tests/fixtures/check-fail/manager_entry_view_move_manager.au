@@ -1,0 +1,15 @@
+class Guard:
+    values: list[int64]
+
+    def __enter__(mut self) -> view mut Guard from self:
+        return view mut self
+
+    def __exit__(mut self) -> None:
+        pass
+
+def consume(guard: own Guard) -> int64:
+    return len(guard.values)
+
+def main():
+    with Guard(values=[1]) as guard:
+        print(consume(guard))

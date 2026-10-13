@@ -1,0 +1,41 @@
+class Guard:
+    values: list[int64]
+
+    def __enter__(mut self) -> view mut list[int64] from self:
+        print("lock")
+        return view mut self.values
+
+    def __exit__(mut self) -> None:
+        print("unlock with " + str(len(self.values)) + " values")
+
+class Reader:
+    text: str
+
+    def __enter__(mut self) -> view str from self:
+        print("open reader")
+        return view self.text
+
+    def __exit__(mut self) -> None:
+        print("close reader")
+
+def guarded_sum(start: own list[int64]) -> int64:
+    with Guard(values=start) as values:
+        values.append(10)
+        mut total = 0
+        for value in values:
+            total += value
+        return total
+    return 0
+
+def main():
+    with Guard(values=[1, 2]) as values:
+        values.append(3)
+        print(len(values))
+        print("last use done")
+    with text = Reader(text="hello"):
+        print(text)
+        print(len(text))
+    with Guard(values=[]) as first, Reader(text="pair") as second:
+        first.append(len(second))
+        print(first[0])
+    print(guarded_sum([5, 6]))

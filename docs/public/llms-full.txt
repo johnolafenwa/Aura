@@ -2670,26 +2670,29 @@ The `indirect` marker stores the whole field indirectly. `|` binds more loosely 
 
 `indirect` applies to the complete type reference that follows it. It is a field-layout marker. It is not a pointer expression and not a runtime operation. At least one field on every recursive layout cycle must be `indirect`.
 
-## User Resource Classes
+## Context Manager Classes
 
-`with` can manage a non-generic user class that declares this exact instance method:
+A class is a context manager when it declares `__exit__(mut self)`. `with` calls its optional `__enter__` before the body and its `__exit__` when control leaves the body:
 
 ```aura
-class Resource:
+class Session:
     name: str
 
-    def close(mut self) -> None:
-        print("closing " + self.name)
+    def __enter__(mut self) -> None:
+        print("open " + self.name)
+
+    def __exit__(mut self) -> None:
+        print("close " + self.name)
 ```
 
-The method must be named `close`, use `mut self`, take no ordinary parameters, and return `None`. In Aura 0.3, `with` does not support generic user resource classes.
+`__exit__` must take `mut self`, take no other parameters, and return `None` or `Result[None, E]`. `__enter__` must take `mut self`, take no other parameters, and return `None` or a view of `self` declared as `view [mut] T from self`. A class without `__exit__` that declares `close(mut self) -> None` is a context manager whose exit is `close`. Generic classes qualify under the same rules. Any other shape is rejected with `AU2017`.
 
 ```aura fragment
-with resource = Resource(name="db"):
-    print("using resource")
+with session = Session(name="db"):
+    print("using session")
 ```
 
-`with` consumes the resource expression into a fresh mutable managed binding. The binding cannot be moved out while cleanup is active. Cleanup runs exactly once per registration, on normal exits and on maintained abnormal exits, in reverse nesting order. See [Execution Model](/manual/execution-model#resource-lifetime-and-cleanup).
+`with` consumes the item expression into a fresh mutable managed binding. The binding cannot be moved out while its exit is registered. The exit runs exactly once per registration, on normal exits and on maintained abnormal exits, in reverse nesting order. [Statements](/manual/statements#with-and-context-managers) defines entry views, multi-item headers, and exits that return `Result`.
 
 ## Grammar
 
@@ -2705,13 +2708,13 @@ with resource = Resource(name="db"):
 - The receiver mode controls which field accesses are legal.
 - A `copy class` requires every field to be statically copyable.
 - Every direct recursive layout cycle requires `indirect`.
-- The checker checks cross-module visibility and the exact user-resource shape `close(mut self) -> None` before lowering.
+- The checker checks cross-module visibility and the context manager shapes of `__enter__`, `__exit__`, and `close` before lowering.
 
 ## Runtime Semantics
 
 Construction creates one fresh nominal value. For a class with `__init__`, Aura binds the call's arguments, evaluates the field defaults in declaration order, and runs the initializer body on the new object. Otherwise Aura evaluates the supplied field expressions in call-site source order. Each result is copied or moved into its owned field slot before any later field expression runs. Aura then evaluates each omitted field's default in field declaration order, afresh each time. Binding values to field slots does not reorder evaluation, and a supplied field's default is never evaluated.
 
-An instance call invokes the statically selected inherent or trait method. An associated method receives no implicit instance. Class equality compares the nominal class identity and the represented field values. A managed user-resource class is closed exactly once by its active `with` registration, under the cleanup rules in [Execution Model](/manual/execution-model).
+An instance call invokes the statically selected inherent or trait method. An associated method receives no implicit instance. Class equality compares the nominal class identity and the represented field values. A context manager class exits exactly once through its active `with` registration, under the cleanup rules in [Execution Model](/manual/execution-model).
 
 ## Ownership And Evaluation Order
 
@@ -2732,12 +2735,13 @@ An instance call invokes the statically selected inherent or trait method. An as
 | `AU2004` | Constructor or method argument-binding failure. |
 | `AU2005` | `__init__` called as a method or used as a value, or a decorator other than a bare `@property` line. |
 | `AU2016` | Invalid `__init__` declaration: a receiver other than bare `self`, its own type parameters, a result other than `None`, `return value`, or a trait member named `__init__`. |
+| `AU2017` | A `with` item whose class has no valid `__exit__` or `close`, or whose `__enter__` has the wrong shape. |
 | `AU2043` | An invalid `Display` implementation. See [Generics And Traits](/manual/generics-and-traits#the-display-trait). |
 | `AU2044` | An invalid property declaration. |
 | `AU2045` | Assignment, mutable use, a view, or call syntax on a property. |
 | `AU2999` | Duplicate declaration, invalid visibility, invalid recursive layout, unsupported member use, and other class rejections without a narrower code. |
 | `AU3001` | Use of a moved class or field. |
-| `AU3002` | Overlapping receiver and argument borrows, moving a field through shared access, or an invalid user-resource `close` contract. |
+| `AU3002` | Overlapping receiver and argument borrows, or moving a field through shared access. |
 | `AU3003` | Mutation through an immutable class place, including a shared `self` receiver. |
 | `AU3004` | Invalid ownership or receiver mode, including moving `self` out of `__init__`. |
 | `AU3012` | A field of `self` used before it is initialized, an assignment to a field that may already be initialized, or `self` escaping or returning before every field is set. |
@@ -2754,13 +2758,12 @@ A trap inside a field default, method, or cleanup body keeps the code for the op
 
 ## Backend Support
 
-MIR execution and direct native generation both implement nominal classes, generic specialization, fields and defaults, all maintained receiver modes, partial moves, structural equality, `copy class`, `indirect`, visibility, and user-resource cleanup. Both backends receive the same checked class and method metadata. Compiler analysis and the language server use that metadata for member resolution and signatures.
+MIR execution and direct native generation both implement nominal classes, generic specialization, fields and defaults, all maintained receiver modes, partial moves, structural equality, `copy class`, `indirect`, visibility, and context manager entry and exit. Both backends receive the same checked class and method metadata. Compiler analysis and the language server use that metadata for member resolution and signatures.
 
 ## Limits And Implementation-Defined Behavior
 
 - Aura 0.3 has no class inheritance, overloads, property setters, or general destructor hook. A class has at most one initializer.
 - An initializer cannot move a field out of `self` or return a `Result`.
-- `with` cannot manage a generic user class directly.
 - A class field default cannot call a user-defined function in the current compiler. Compute the value before construction and pass it as an explicit field argument.
 - `indirect` is only a recursive field-layout marker. Its storage representation is not an observable language contract.
 - The physical order and padding of fields are not observable language contracts.
@@ -2777,7 +2780,7 @@ Implemented:
 - inherent and associated methods, with all maintained receiver modes
 - partial-field moves
 - recursive `indirect` fields
-- non-generic user-resource classes
+- context manager classes, including generic ones
 - local shared or mutable views of fixed class fields
 - returned-view contracts tied to one receiver or parameter
 - read-only `@property` getters
@@ -2785,7 +2788,7 @@ Implemented:
 
 Views cannot be stored in class fields or other owned aggregates.
 
-Not implemented: inheritance, properties, custom constructor or destructor hooks, and generic `with` resources. Do not infer them from accepted class syntax.
+Not implemented: inheritance, properties, and destructor hooks. Do not infer them from accepted class syntax.
 
 The fixture `crates/aura-compiler/tests/fixtures/run-pass/explicit_and_default_argument_order.au` pins the constructor evaluation order on both backends.
 
@@ -3452,6 +3455,7 @@ code's precise rules.
 | `AU2013` | union pattern coverage failure |
 | `AU2014` | invalidated narrowing |
 | `AU2015` | callable contract mismatch |
+| `AU2017` | context manager protocol |
 | `AU2999` | general compile-time rejection without a narrower code |
 | `AU3001` | use of a moved value |
 | `AU3002` | borrow violation |
@@ -6522,6 +6526,7 @@ String and format-specification diagnostics are described under
 | `AU2014` | invalidated narrowing | A member use after the `None` test that narrowed the place stopped applying. | Test the current value again. |
 | `AU2015` | callable contract mismatch | A callable whose complete contract differs from the one its destination requires. | Match the contract, or restrict it with an explicit adapter or constructor. |
 | `AU2016` | initializer declaration | An `__init__` without a bare `self` receiver, with its own type parameters, with a result other than `None`, with `return value`, or declared in a trait. | Write `def __init__(self, ...)` with no result, and move fallible construction into a named factory. |
+| `AU2017` | context manager protocol | A `with` item that is not a context manager, a manager method of the wrong shape, or an exit `Result` the enclosing function cannot return. | Declare `__exit__(mut self)` with a valid result, or return a compatible `Result` from the enclosing function. |
 | `AU2040` | invalid class pattern | A class pattern with a positional, unknown, private, repeated, or method field, a class that does not match the scrutinee, or a `match mut` class pattern. | Name stored fields visible here, once each, as `field=pattern`. |
 | `AU2041` | invalid rest pattern or target | A `*` rest element outside a tuple or sequence, a second rest element, too few positions for the fixed elements, a `*name` that covers no positions, or a sequence pattern in `match mut` or `match own`. | Keep one rest element per tuple or sequence, and use `*_` when it may cover nothing. |
 | `AU2042` | invalid docstring or documentation limit | A triple-quoted string in a class, enum, trait, or `impl` body outside a documentation position, or documentation over a size limit. | Move the string to the first slot or directly after a field, or shorten the documentation. |
@@ -6628,6 +6633,30 @@ one required, in these cases:
 The message names the difference. A safe restriction requires an explicit
 `Unary(function)` adapter or a `Callable[...]`/`TaskCallable[...]` constructor.
 A bare written contract never performs that restriction.
+
+**`AU2017` context manager protocol.** A `with` item must be a builtin
+resource or a class with a valid `__exit__(mut self)` or `close(mut self)`.
+`AU2017` reports these cases:
+
+- an item whose type is not a class, such as `int64`
+- a class with no `__exit__`, or an `__exit__` that does not take `mut self`
+  alone or does not return `None` or `Result[None, E]`
+- an `__enter__` that does not take `mut self` alone, or that returns
+  something other than `None` or a view of `self`
+- an exit that returns `Result[None, E]` inside a function that does not
+  return `Result[_, F]` with `F` equal to `E` or convertible from it
+
+```aura check-fail:AU2017
+class Plain:
+    value: int64
+
+def main():
+    with item = Plain(value=1):
+        pass
+```
+
+Add `def __exit__(mut self) -> None` to the class, or move the item out of
+the `with` header.
 
 **`AU2042` invalid docstring or documentation limit.** The parser reports
 `AU2042` in these cases:
@@ -8572,23 +8601,26 @@ When the enclosing function uses a different error type, the applicable `From` t
 
 ## Resource Lifetime And Cleanup
 
-`with` creates an active cleanup registration after its resource expression succeeds. Leaving the body invokes `close(mut self) -> None` exactly once through that registration.
+`with` creates an active exit registration after an item's expression and its `__enter__` succeed. Leaving the body runs that item's exit exactly once: `__exit__`, a user `close`, or the builtin resource's cleanup.
 
-Cleanup runs on:
+Exits run on:
 
 - normal fallthrough
 - `return`
 - `break` or `continue` that exits the scope
 - `try` error propagation
 - a maintained Aura runtime failure
+- task cancellation
 
-Nested active cleanups run in reverse registration order. If the body is already failing and cleanup also fails, the original body diagnostic stays primary. Each resource's API chapter defines its `close()` behavior.
+Nested active exits run in reverse registration order. Under cancellation, exits run while the cancellation is still pending, so a cancellable wait inside an exit reports cancellation.
+
+An exit that returns `Result[None, E]` propagates its `Err` like `try` only on the normal paths: fallthrough, `return`, and loop control. When the body is already leaving through `try` propagation or cancellation, the exit's `Err` is dropped. When the body traps, the trap stays primary and each failing exit adds a note to it. If an exit itself traps while the body is already failing, the original body diagnostic stays primary. Each resource's API chapter defines its `close()` behavior.
 
 Closing a resource explicitly before scope exit is permitted only where the resource contract makes a repeated close harmless. Otherwise, let the lexical owner perform cleanup.
 
 These rules apply when Aura control flow or a maintained runtime failure exits the task through the language cleanup machinery. Internal scheduler abandonment is different. It is a last-resort containment path, used when the whole scheduler stops while a child is still suspended, such as after root completion or a fatal reactor failure.
 
-Scheduler abandonment marks the remaining task cancelled and releases scheduler-owned and direct-runtime host state. It does not invoke arbitrary Aura cleanup thunks. A direct generated stack may be reset on this path, because it cannot be safely Rust-unwound across Cranelift frames. Use structured `TaskGroup` scopes. Do not depend on scheduler abandonment as a cleanup mechanism.
+Scheduler abandonment marks the remaining task cancelled and releases scheduler-owned and direct-runtime host state. It does not invoke arbitrary Aura cleanup thunks, so no `__exit__` or `close` runs. A direct generated stack may be reset on this path, because it cannot be safely Rust-unwound across Cranelift frames. Use structured `TaskGroup` scopes. Do not depend on scheduler abandonment as a cleanup mechanism.
 
 ## Tasks And Scheduler
 
@@ -11699,7 +11731,6 @@ The checker enforces the selected `From.from` method's clone-safety obligations 
 - Generic arguments are invariant, and there is no general subtyping.
 - Type inference is local and contextual, not whole-program.
 - Trait and implementation methods cannot give ordinary parameters defaults.
-- Generic user classes cannot serve as `with` resources.
 - Generic task targets are permitted when their callable type arguments can be resolved. Bare shared and `own` targets use task-owned captures. `mut` targets are rejected.
 - Equal-specificity overlapping implementations are an error at the use site.
 - Clone-safety obligations are inferred, not written. An explicit implementation cannot strengthen the contract inferred by its trait method.
@@ -11794,7 +11825,7 @@ Aura 0.3 has none of the following:
 - general subtyping
 - a separate orphan-rule restriction
 
-A bare target parameter in `impl[T] Trait for T` is unsupported. Equal-specificity overlaps are errors. Ordinary trait and implementation parameters cannot add defaults. Generic user classes cannot be `with` resources.
+A bare target parameter in `impl[T] Trait for T` is unsupported. Equal-specificity overlaps are errors. Ordinary trait and implementation parameters cannot add defaults.
 
 The rules above define inference and dispatch. Source order and backend implementation choices do not.
 
@@ -12579,14 +12610,18 @@ the bare-loop shared default.
 
 ```ebnf
 with-statement
-    = "with", identifier, "=", expression,
-      ":", NEWLINE, suite
-    | "with", expression, "as", identifier,
+    = "with", with-item, { ",", with-item },
       ":", NEWLINE, suite ;
+
+with-item
+    = identifier, "=", expression
+    | expression, "as", identifier ;
 ```
 
-The two forms are equivalent. Static semantics requires a supported resource
-and a fresh binding.
+The two item forms are equivalent. A header with several items behaves as
+nested `with` statements, one per item, in source order. A trailing comma is
+rejected. Static semantics requires each item to be a context manager and to
+bind a fresh name.
 
 ## Patterns And Statement Matches
 
@@ -15758,7 +15793,7 @@ A non-copy value is consumed when it is used in an owned position. Owned positio
   method, or simple dict indexed assignment that stores the value
 - by-value enum matching
 - `own` iteration over `list[T]` or `set[T]`
-- the resource expression of `with`
+- each item expression of `with`
 - a task-start argument copied or moved into task-owned capture storage
 
 A tuple or collection literal builds a new owned value, so it moves its non-copy elements wherever it appears. This holds when the literal itself goes to a shared position, such as a `print` or `len` argument, an f-string, an equality operand, or a bare parameter. Clone the element when the original must stay usable.
@@ -16211,9 +16246,11 @@ def show_file() -> Result[None, io.Error]:
     return Result.Ok(None)
 ```
 
-`with` consumes the resource expression and creates a fresh mutable managed binding. A managed resource or its non-copy fields cannot be moved out in a way that would prevent cleanup. The registered `close` runs on normal fallthrough, `return`, escaping loop control, `try` propagation, and maintained runtime failure. Nested cleanups run in reverse order.
+`with` consumes each item expression and creates a fresh mutable managed binding. A managed value or its non-copy fields cannot be moved out in a way that would prevent its exit. The registered exit runs on normal fallthrough, `return`, escaping loop control, `try` propagation, maintained runtime failure, and cancellation. Nested exits run in reverse order.
 
-Each builtin resource's module chapter defines its behavior. A user class resource must be non-generic and define `close(mut self) -> None` with no ordinary parameters. [Execution Model](/manual/execution-model#resource-lifetime-and-cleanup) specifies full cleanup ordering and failure precedence.
+A manager whose `__enter__` returns `view [mut] T from self` lends that view to the body. The item name binds the view, and the manager itself stays in a binding the body cannot name. The view follows the ordinary view rules: it cannot be returned or stored, which reports `AU3010`, and it ends before the exit runs.
+
+Each builtin resource's module chapter defines its behavior. [Statements](/manual/statements#with-and-context-managers) defines the user manager protocol. [Execution Model](/manual/execution-model#resource-lifetime-and-cleanup) specifies full cleanup ordering and failure precedence.
 
 ## Grammar
 
@@ -16254,7 +16291,7 @@ Mutable borrowed calls and `mut` list iteration write through the original place
 
 Simple dict indexed assignment accepts and owns any value type. Direct compound indexed assignment requires a copy `list` element or `dict` value.
 
-Task start first transfers captures into child-owned storage. `with` owns one cleanup registration and runs it exactly once on every maintained scope exit, under the documented failure-precedence rules.
+Task start first transfers captures into child-owned storage. `with` owns one exit registration per item and runs each exactly once on every maintained scope exit, under the documented failure-precedence rules.
 
 ## Ownership And Evaluation Order
 
@@ -18280,9 +18317,48 @@ The scrutinee's ownership depends on the form:
 
 See [Enums And Pattern Matching](/manual/enums-and-match) for pattern forms.
 
-## `with` And Scoped Cleanup
+## `with` And Context Managers
 
-Aura accepts two equivalent binding forms, `with name = expression:` and `with expression as name:`:
+`with` runs a body while one or more context managers are active, and runs each manager's exit exactly once when control leaves the body. A context manager is a value whose type defines how to enter and leave a scope.
+
+```aura
+class Tracer:
+    name: str
+
+    def __enter__(mut self) -> None:
+        print("enter " + self.name)
+
+    def __exit__(mut self) -> None:
+        print("exit " + self.name)
+
+def main():
+    with Tracer(name="outer") as outer, inner = Tracer(name="inner"):
+        print("body")
+```
+
+This program prints `enter outer`, `enter inner`, `body`, `exit inner`, and `exit outer`.
+
+### Items
+
+Each item has one of two equivalent forms, `name = expression` or `expression as name`. Both forms evaluate and consume the expression, then bind `name` in the body.
+
+A header may list several items separated by commas. Items enter left to right, and each later item can use the bindings of earlier items. Exits run in reverse order. A header with a trailing comma, a missing `as name`, or a missing item is rejected with `AU1101`.
+
+A failure while an item is constructed or entered runs the exits of the items already entered. The failing item's own exit does not run, because it is not yet registered.
+
+### The Manager Protocol
+
+A user class is a context manager when it declares the following methods:
+
+| Method | Accepted signatures | Role |
+| --- | --- | --- |
+| `__enter__` | `def __enter__(mut self) -> None` or `def __enter__(mut self) -> view [mut] T from self` | Optional. Runs after the item expression succeeds and before the body. |
+| `__exit__` | `def __exit__(mut self) -> None` or `def __exit__(mut self) -> Result[None, E]` | Runs once when control leaves the body. |
+| `close` | `def close(mut self) -> None` | The exit of a class that has no `__exit__`. |
+
+A class with `__exit__` uses it and ignores any `close` method. Generic classes follow the same rules after their type arguments are applied. Any other shape is rejected with `AU2017`.
+
+Builtin resources define their own cleanup and have no entry. These include `fs.File`, the `net` socket, listener, and HTTP types, `process.Child`, `process.Pipe`, `process.Supervisor`, and `TaskGroup`:
 
 ```aura fragment
 with file = try fs.open("data.txt"):
@@ -18290,26 +18366,78 @@ with file = try fs.open("data.txt"):
     print(text)
 ```
 
-```aura fragment
-with TaskGroup() as group:
-    group.start_soon(worker)
+### Entry Views
+
+When `__enter__` returns a view, the item name binds that view, not the manager. The manager stays in a hidden binding that the body cannot name. The view is shared or mutable as `__enter__` declares:
+
+```aura
+class Lock:
+    values: list[int64]
+
+    def __enter__(mut self) -> view mut list[int64] from self:
+        return view mut self.values
+
+    def __exit__(mut self) -> None:
+        print(len(self.values))
+
+def main():
+    with Lock(values=[]) as values:
+        values.append(1)
+        values.append(2)
 ```
 
-Both forms evaluate and consume the resource expression, then create a fresh mutable managed binding. Cleanup is registered after the resource is created successfully.
+The view ends before the exit runs. A view cannot escape the body. Returning it or storing it is rejected with `AU3010`. A manager without an entry view is an ordinary named binding in the body. Mutating it while a view into it is live is rejected with `AU3002`.
 
-Supported builtin resources define their own cleanup. A user class can be a resource when it is non-generic and declares exactly `close(mut self) -> None`. The managed value cannot be moved out in a way that prevents cleanup.
+### Exits That Return `Result`
 
-The registered `close` operation runs exactly once when control leaves the body by:
+An `__exit__` that returns `Result[None, E]` acts like `try` on the normal paths out of the body: fallthrough, `return`, `break`, and `continue`. `Ok` continues. `Err` returns from the enclosing function with the error, after the outer managers exit. The enclosing function must return `Result[_, F]`, where `F` is `E` or has a `From` conversion from `E`. Otherwise the checker reports `AU2017`.
+
+```aura
+class Flush:
+    pending: int64
+
+    def __exit__(mut self) -> Result[None, str]:
+        if self.pending > 0:
+            return Result.Err("unflushed writes")
+        return Result.Ok(None)
+
+def save() -> Result[int64, str]:
+    with sink = Flush(pending=1):
+        print("writing")
+    return Result.Ok(1)
+
+def main():
+    match save():
+        case Result.Ok(count):
+            print(count)
+        case Result.Err(error):
+            print(error)
+```
+
+When the body is already leaving with an error, the exit's error does not replace it:
+
+- Under `try` propagation, the body's error is returned and the exit's `Err` is dropped.
+- Under a trap, the trap stays primary. The exit's `Err` is added to the trap diagnostic as a note.
+- Under cancellation, the exit's `Err` is dropped and the task ends cancelled.
+
+### When Exits Run
+
+Each registered exit runs exactly once when control leaves the body by:
 
 - normal fallthrough
 - `return`
 - `break` or `continue` that exits the scope
 - `try` error propagation
 - a maintained Aura runtime failure
+- task cancellation
 
-Nested cleanups run in reverse registration order. If the body is already failing and cleanup also fails, the body's diagnostic stays primary.
+An exit runs while cancellation is still pending, so a cancellable wait inside an exit observes it. Nested exits run in reverse registration order. If the body is already failing and an exit traps, the body's diagnostic stays primary.
 
-`aura run` and native builds share this contract. `aura run` executes the compiler's mid-level intermediate representation (MIR) through the maintained MIR runtime. Native builds use the maintained native execution paths. Backend parity tests enforce the common contract. See [Execution Model](/manual/execution-model#resource-lifetime-and-cleanup).
+Scheduler abandonment runs no `__exit__` or `close`. See [Execution Model](/manual/execution-model#resource-lifetime-and-cleanup).
+
+`aura run` and native builds share this contract. `aura run` executes the compiler's mid-level intermediate representation (MIR) through the maintained MIR runtime. Native builds use the maintained native execution paths. Backend parity tests enforce the common contract.
+
+See [examples/resources/context_managers.au](https://github.com/johnolafenwa/Aura/blob/main/examples/resources/context_managers.au) for a runnable program.
 
 ## `assert`
 
@@ -18406,7 +18534,7 @@ A statement that parses is not legal in every context:
 - Conditions require `bool`, not truthiness.
 - Assertion conditions require `bool`, and assertion messages require `str`.
 - Match arms must satisfy the compatibility, reachability, and exhaustiveness rules.
-- `with` requires a supported resource and keeps its cleanup capability intact.
+- `with` requires a context manager and keeps its exit capability intact.
 - Items cannot appear inside suites.
 - Module constants are immutable and cannot use `mut` or reassignment.
 - Module constants are the bindings above the first top-level statement. They cannot read top-level script locals, which initialize later.
@@ -18425,7 +18553,7 @@ The complete checker rules are normative in [Static Semantics](/manual/static-se
 - Return values match the enclosing signature.
 - The iterable determines the loop binding contract.
 - Match patterns must be compatible, reachable, and exhaustive where required.
-- `with` accepts only the maintained cleanup contract.
+- `with` accepts only a context manager. An exit that returns `Result[None, E]` requires a compatible `Result` return type in the enclosing function.
 - Assertion conditions have exactly type `bool`, and assertion messages have exactly type `str`. An assertion does not refine later control flow.
 - `is None` and `is not None` conditions refine a stable union place on the paths they select, as described in [Static Semantics](/manual/static-semantics#conditions).
 - Contextual legality is checked after parsing.
@@ -18440,7 +18568,7 @@ The complete checker rules are normative in [Static Semantics](/manual/static-se
 - A conditional runs at most one branch.
 - A loop tests its condition, or receives a value, before each body.
 - A match evaluates its scrutinee once.
-- `with` registers cleanup only after resource construction succeeds.
+- `with` registers an exit only after the item expression and its `__enter__` succeed. Items enter left to right and exit right to left.
 - An assertion evaluates its condition once. It skips the message on success and evaluates the message once before failing.
 - A control transfer runs every exited cleanup in reverse registration order.
 
@@ -18469,6 +18597,7 @@ Compile-time diagnostics:
 | `AU2005` | Unsupported syntax or feature for a Python-shaped statement. |
 | `AU2013` | A union match is missing a type arm, duplicates one, or cannot reach one. |
 | `AU2014` | A member use through a place whose `None`-test narrowing was ended by an assignment, a mutable match, or a call with mutable access. |
+| `AU2017` | A `with` item is not a context manager, or its exit `Result` does not fit the enclosing function. |
 | `AU2999` | An exhaustiveness, contextual-legality, or unsupported-statement rejection with no narrower code. |
 | `AU3001` | Use of a moved place. |
 | `AU3002` | Borrow conflict. This includes a later access that mutably borrows or consumes an overlapping, retained non-copy target of a compound or indexed assignment. |
@@ -18930,11 +19059,21 @@ A comprehension is expression control flow, not a statement loop:
 
 An `if`, statement match, match expression, or conditional expression checks its branches independently. It merges move and partial-move state conservatively across reachable paths. A non-`None` function is rejected when any reachable path can fall through without returning.
 
-## `with` Resources
+## `with` Context Managers
 
-`with` consumes its resource expression and creates a mutable managed binding for the body. Supported builtin resources have runtime-defined cleanup. A non-generic user class may be used only when it declares exactly a `close(mut self) -> None` instance method.
+`with` consumes each item expression and creates a mutable managed binding for the body. Each item must be a context manager:
 
-The managed binding cannot be moved out in a way that would prevent required cleanup. Cleanup runs when the scope ends normally, by return, by loop control, or through a runtime failure. [Execution Model](/manual/execution-model) describes the cleanup behavior.
+- A builtin resource has runtime-defined cleanup and no entry.
+- A user class, generic or not, is a manager when it declares `__exit__(mut self)` returning `None` or `Result[None, E]`. Its optional `__enter__(mut self)` returns `None` or `view [mut] T from self`.
+- A user class with no `__exit__` is a manager when it declares `close(mut self) -> None`.
+
+Any other item type, or a method of the wrong shape, is rejected with `AU2017`. Methods are checked after type arguments are substituted.
+
+When `__enter__` returns a view, the item name binds that view and the manager moves to a hidden managed binding. The view is a body-local view of the manager. It cannot be returned or stored, which reports `AU3010`, and it ends before the exit runs.
+
+An exit that returns `Result[None, E]` is checked like `try` at the end of the body. The enclosing function must return `Result[_, F]`, where `F` is `E` or has a `From` conversion from `E`. Otherwise the item reports `AU2017`.
+
+The managed binding cannot be moved out in a way that would prevent the exit. Exits run when the scope ends normally, by return, by loop control, through `try` propagation, through a runtime failure, or under cancellation. [Execution Model](/manual/execution-model) describes the cleanup behavior.
 
 ## Tasks And Static Safety
 
@@ -21667,8 +21806,11 @@ final = acct.into_balance()   # acct is gone after this
 
 A bare `self` cannot mutate. The compiler tells you to write `mut self`.
 
-A method named `close` is special. It makes the class a managed resource for
-`with` blocks, so pick another name unless that is what you want.
+Context managers use Python's names. A class with `__exit__(mut self)`, and
+optionally `__enter__(mut self)`, works in a `with` block. A class with only
+`close(mut self)` works too, so pick another name for an unrelated method.
+`__exit__` takes no exception arguments. It returns `None`, or a `Result` that
+the enclosing function propagates like `try`.
 
 ### `@property` And `__str__`
 
@@ -28024,7 +28166,7 @@ See [examples/enums/result_option.au](../examples/enums/result_option.au).
 
 # Resource Management
 
-A `with` statement closes a resource when its block exits. Use it for files, network connections, and task groups. Cleanup runs whether the block finishes normally or leaves early with `return`. It works like Python's `with` statement and context managers.
+A `with` statement runs a block with one or more context managers and exits each one when the block ends. Use it for files, network connections, task groups, and your own classes. The exit runs whether the block finishes normally or leaves early. It works like Python's `with` statement and context managers.
 
 ## `with` Binds A Scoped Resource
 
@@ -28046,22 +28188,79 @@ Inside the block, `file` is a mutable local binding. When the block exits, Aura 
 
 See [examples/resources/with_resource.au](../examples/resources/with_resource.au).
 
-## The Resource Protocol
+## Builtin Resources
 
-A `with` resource can be any of these:
+These builtin types work in `with` and close themselves:
 
-- a user-defined class with a `close` method:
+- `fs.File`
+- the `net` stream, listener, socket, and HTTP types
+- `process.Child`, `process.Pipe`, and `process.Supervisor`
+- `TaskGroup`
+
+## Writing A Context Manager
+
+A class becomes a context manager when it declares `__exit__(mut self)`. An optional `__enter__(mut self)` runs before the body:
+
+```aura
+class Timer:
+    label: str
+
+    def __enter__(mut self) -> None:
+        print("start " + self.label)
+
+    def __exit__(mut self) -> None:
+        print("stop " + self.label)
+
+def main():
+    with timer = Timer(label="load"):
+        print("loading")
+```
+
+This prints `start load`, `loading`, and `stop load`.
+
+A class with only `close(mut self) -> None` also works. Its `close` is the exit:
 
 ```aura fragment
 def close(mut self):
 ```
 
-- a builtin `fs.File`
-- a builtin `net.TcpStream`
-- a builtin `net.TcpListener`
-- a `TaskGroup`
+Both methods take `mut self` and no other parameters. The checker reports `AU2017` for any other shape.
 
-A user-defined `close` must take `mut self`, take no other parameters, and return `None`.
+## Entering With A View
+
+`__enter__` can return a view of the manager. The `with` name then binds the view, and the manager stays out of reach until the exit:
+
+```aura
+class Lock:
+    values: list[int64]
+
+    def __enter__(mut self) -> view mut list[int64] from self:
+        return view mut self.values
+
+    def __exit__(mut self) -> None:
+        print("unlocked with " + str(len(self.values)) + " values")
+
+def main():
+    with Lock(values=[]) as values:
+        values.append(1)
+```
+
+The view cannot leave the block. Returning or storing it reports `AU3010`.
+
+## Exits That Can Fail
+
+`__exit__` may return `Result[None, E]`. On a normal exit, an `Err` returns from the enclosing function like `try`, so that function must return a compatible `Result`. If the block is already failing, the block's own error wins.
+
+## Several Managers In One Header
+
+List several items separated by commas. They enter left to right and exit right to left. A later item can use an earlier binding:
+
+```aura fragment
+with input = try fs.open(source), output = try fs.create(target):
+    try output.write_all(try input.read_all())
+```
+
+See [examples/resources/context_managers.au](../examples/resources/context_managers.au) for all of these together.
 
 ## `with ... as ...` For Task Groups
 
@@ -28086,9 +28285,9 @@ See [examples/concurrency/task_group_queue_sum.au](../examples/concurrency/task_
 
 ## Current Limits
 
-- Builtin resources are limited to the file, TCP, and task-group types above. There is no general enter/exit protocol.
-- A user-defined resource must have `close(mut self)` with no other parameters.
-- A `with` binding cannot borrow its resource.
+- `__exit__` receives no exception information. It cannot inspect or suppress the failure that ended the block.
+- `__enter__` returns `None` or a view of the manager. It cannot return an owned value or a `Result`.
+- If the whole scheduler stops while a task is suspended, that task's exits do not run. Use `TaskGroup` scopes so tasks finish inside their block.
 
 ## Source: tutorials/12-error-propagation.md
 
@@ -32504,7 +32703,8 @@ The tutorial set covers the topics below.
 ### Errors And Resources
 
 - `try expr`
-- `with` using `close(mut self)`, and `with TaskGroup() as group:`
+- `with` context managers using `__enter__`, `__exit__`, or `close(mut self)`,
+  several items in one header, and `with TaskGroup() as group:`
 - `assert condition` and `assert condition, message`, with lazy messages,
   source-located `AU4001` failures, and file-level `aura test` behavior
 

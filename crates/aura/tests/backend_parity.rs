@@ -320,6 +320,17 @@ fn forced_mir_and_direct_backends_match_every_runtime_fixture() {
             "forced MIR diagnostic and fixture oracle diverged for {}",
             relative.display()
         );
+        // Output printed before the failure is pinned when the fixture keeps
+        // a `.stdout` oracle, so cleanup traces agree across backends too.
+        let expected_stdout = fs::read(fixture.with_extension("stdout")).ok();
+        if let Some(expected_stdout) = &expected_stdout {
+            assert_eq!(
+                normalize(&mir.stdout),
+                normalize(expected_stdout),
+                "forced MIR stdout and run-fail oracle diverged for {}",
+                relative.display()
+            );
+        }
 
         let output_path = temp.path.join(format!("run-fail-{index}"));
         let mut build = Command::new(&aura);
@@ -351,5 +362,13 @@ fn forced_mir_and_direct_backends_match_every_runtime_fixture() {
             "forced MIR/direct diagnostic diverged for {}",
             relative.display()
         );
+        if let Some(expected_stdout) = &expected_stdout {
+            assert_eq!(
+                normalize(&direct.stdout),
+                normalize(expected_stdout),
+                "forced MIR/direct run-fail stdout diverged for {}",
+                relative.display()
+            );
+        }
     }
 }

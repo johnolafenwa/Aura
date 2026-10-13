@@ -137,7 +137,8 @@ The tutorial set covers the topics below.
 ### Errors And Resources
 
 - `try expr`
-- `with` using `close(mut self)`, and `with TaskGroup() as group:`
+- `with` context managers using `__enter__`, `__exit__`, or `close(mut self)`,
+  several items in one header, and `with TaskGroup() as group:`
 - `assert condition` and `assert condition, message`, with lazy messages,
   source-located `AU4001` failures, and file-level `aura test` behavior
 

@@ -453,6 +453,9 @@ struct DirectTaskRuntimeState {
     next_cleanup_id: i64,
     cleanup_draining: bool,
     primary_runtime_diagnostic: Option<Diagnostic>,
+    /// Rendered `Result.Err` values of manager exits that ran while a trap
+    /// was unwinding, waiting to be attached to that trap as notes.
+    manager_exit_failures: Vec<String>,
     call_depth: usize,
     call_frames: DirectCallFrameStorage,
     task_ancestry: DirectTaskAncestry,
@@ -504,6 +507,7 @@ impl Default for DirectTaskRuntimeState {
             next_cleanup_id: 1,
             cleanup_draining: false,
             primary_runtime_diagnostic: None,
+            manager_exit_failures: Vec::new(),
             call_depth: 0,
             call_frames: DirectCallFrameStorage::Empty,
             task_ancestry: DirectTaskAncestry::default(),
@@ -3129,6 +3133,15 @@ fn drain_direct_cleanup_stack() {
     }
 }
 
+/// Attaches the manager exit failures recorded while a trap was unwinding
+/// to that trap, in the order the exits ran (checkpoint F5).
+fn attach_direct_manager_exit_failures(mut diagnostic: Diagnostic) -> Diagnostic {
+    let failures =
+        with_direct_task_runtime_state(|state| std::mem::take(&mut state.manager_exit_failures));
+    diagnostic.notes.extend(failures);
+    diagnostic
+}
+
 fn emit_runtime_diagnostic_error(diagnostic: Diagnostic) -> ! {
     if direct_runtime_error_capture_enabled() {
         std::panic::panic_any(LightweightTaskFailureSignal(diagnostic));
@@ -3213,11 +3226,13 @@ fn runtime_diagnostic_error(diagnostic: Diagnostic) -> ! {
     let mut diagnostic = diagnostic.into_runtime_trap();
     capture_direct_runtime_frames_once(&mut diagnostic);
     if direct_cleanup_is_draining() {
-        emit_runtime_diagnostic_error(direct_primary_runtime_diagnostic().unwrap_or(diagnostic));
+        emit_runtime_diagnostic_error(attach_direct_manager_exit_failures(
+            direct_primary_runtime_diagnostic().unwrap_or(diagnostic),
+        ));
     }
     let _primary_guard = DirectPrimaryDiagnosticGuard::install(diagnostic.clone());
     drain_direct_cleanup_stack();
-    emit_runtime_diagnostic_error(diagnostic);
+    emit_runtime_diagnostic_error(attach_direct_manager_exit_failures(diagnostic));
 }
 
 fn runtime_error(message: impl AsRef<str>) -> ! {
@@ -3265,6 +3280,9 @@ fn task_runtime_boundary<T>(f: impl FnOnce() -> T) -> T {
             if direct_runtime_error_capture_enabled() {
                 drain_direct_cleanup_stack();
             }
+            // No diagnostic is primary under cancellation, so a failing
+            // manager exit has nothing to attach to.
+            with_direct_task_runtime_state(|state| state.manager_exit_failures.clear());
             cancel_current_lightweight_task_boundary()
         }
         Err(payload) => match payload.downcast::<LightweightTaskFailureSignal>() {
@@ -3277,7 +3295,7 @@ fn task_runtime_boundary<T>(f: impl FnOnce() -> T) -> T {
                 if direct_runtime_error_capture_enabled() {
                     drain_direct_cleanup_stack();
                 }
-                fail_current_lightweight_task(diagnostic)
+                fail_current_lightweight_task(attach_direct_manager_exit_failures(diagnostic))
             }
             Err(payload) => std::panic::resume_unwind(payload),
         },
@@ -13655,6 +13673,35 @@ pub extern "C-unwind" fn aura_direct_assert_fail_detailed(
             .with_assertion_operand(left_label, left_type, left_value)
             .with_assertion_operand(right_label, right_type, right_value);
         runtime_diagnostic_error(diagnostic)
+    })
+}
+
+/// Records a manager exit's result while a trap unwinds its frame. A
+/// `Result.Err` is rendered for the trap's notes; the caller keeps ownership
+/// of `result`.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_record_manager_exit_failure(
+    result: *mut OpaqueValue,
+    class_ptr: *const u8,
+    class_len: usize,
+) {
+    task_runtime_boundary(|| {
+        let failure = unsafe {
+            with_value(result, |value| match value {
+                Value::EnumVariant(variant)
+                    if nominal_runtime_base_name(&variant.enum_name) == "Result"
+                        && variant.variant_name == "Err" =>
+                {
+                    Some(variant.clone())
+                }
+                _ => None,
+            })
+        };
+        if let Some(failure) = failure {
+            let class_name = decode_bytes(class_ptr, class_len);
+            let note = crate::runtime_value::manager_exit_failure_note(&class_name, &failure);
+            with_direct_task_runtime_state(|state| state.manager_exit_failures.push(note));
+        }
     })
 }
 

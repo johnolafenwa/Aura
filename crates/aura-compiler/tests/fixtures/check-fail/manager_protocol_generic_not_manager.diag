@@ -1,0 +1,5 @@
+error[AU2017]: class `Box[int64]` is not a context manager: `__exit__(mut self)` is missing or has the wrong shape
+ --> crates/aura-compiler/tests/fixtures/check-fail/manager_protocol_generic_not_manager.au:5:5
+  |
+5 |     with item = Box[int64](value=1):
+  |     ^

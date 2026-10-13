@@ -1,0 +1,16 @@
+class Guard:
+    values: list[int64]
+
+    def __enter__(mut self) -> view mut list[int64] from self:
+        return view mut self.values
+
+    def __exit__(mut self) -> None:
+        pass
+
+def leak(items: list[int64]) -> view list[int64] from items:
+    with Guard(values=[1]) as values:
+        return view values
+    return view items
+
+def main():
+    print(len(leak([2])))

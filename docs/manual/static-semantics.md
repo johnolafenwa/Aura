@@ -414,11 +414,21 @@ A comprehension is expression control flow, not a statement loop:
 
 An `if`, statement match, match expression, or conditional expression checks its branches independently. It merges move and partial-move state conservatively across reachable paths. A non-`None` function is rejected when any reachable path can fall through without returning.
 
-## `with` Resources
+## `with` Context Managers
 
-`with` consumes its resource expression and creates a mutable managed binding for the body. Supported builtin resources have runtime-defined cleanup. A non-generic user class may be used only when it declares exactly a `close(mut self) -> None` instance method.
+`with` consumes each item expression and creates a mutable managed binding for the body. Each item must be a context manager:
 
-The managed binding cannot be moved out in a way that would prevent required cleanup. Cleanup runs when the scope ends normally, by return, by loop control, or through a runtime failure. [Execution Model](/manual/execution-model) describes the cleanup behavior.
+- A builtin resource has runtime-defined cleanup and no entry.
+- A user class, generic or not, is a manager when it declares `__exit__(mut self)` returning `None` or `Result[None, E]`. Its optional `__enter__(mut self)` returns `None` or `view [mut] T from self`.
+- A user class with no `__exit__` is a manager when it declares `close(mut self) -> None`.
+
+Any other item type, or a method of the wrong shape, is rejected with `AU2017`. Methods are checked after type arguments are substituted.
+
+When `__enter__` returns a view, the item name binds that view and the manager moves to a hidden managed binding. The view is a body-local view of the manager. It cannot be returned or stored, which reports `AU3010`, and it ends before the exit runs.
+
+An exit that returns `Result[None, E]` is checked like `try` at the end of the body. The enclosing function must return `Result[_, F]`, where `F` is `E` or has a `From` conversion from `E`. Otherwise the item reports `AU2017`.
+
+The managed binding cannot be moved out in a way that would prevent the exit. Exits run when the scope ends normally, by return, by loop control, through `try` propagation, through a runtime failure, or under cancellation. [Execution Model](/manual/execution-model) describes the cleanup behavior.
 
 ## Tasks And Static Safety
 

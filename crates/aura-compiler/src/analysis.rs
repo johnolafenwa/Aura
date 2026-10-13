@@ -17,7 +17,7 @@ use serde::Serialize;
 use crate::ast::{
     AssignStmt, AssignTarget, BinaryOp, ComprehensionOutput, DocString, Expr, ExprKind,
     FunctionDecl, ImportKind, Item, LambdaParam, MatchArm, Module, Param, ParamMode, Pattern,
-    ReceiverKind, Stmt, TypeRef, VariantPattern, ViewStmt,
+    ReceiverKind, Stmt, TypeRef, VariantPattern, ViewStmt, WithStmt,
 };
 use crate::call::{
     bind_call_arguments, callable_params_from_decl, BuiltinAssociatedFunction,
@@ -1509,15 +1509,17 @@ impl<'a> AnalysisBuilder<'a> {
                 }
                 Stmt::With(with_stmt) => {
                     if block_contains_line(&with_stmt.body, target_line) {
-                        let binding_ty = self
-                            .infer_expr_type(&with_stmt.value, scope)
-                            .unwrap_or(Type::Unit);
-                        self.insert_scope_binding(
-                            &with_stmt.binding,
-                            binding_ty,
-                            with_stmt.span.line,
-                            "local",
-                            scope,
+                        let (binding_ty, kind) = self.with_item_binding(with_stmt, scope);
+                        let definition = self.with_binding_range(with_stmt);
+                        let hover = format_value_hover(kind, &with_stmt.binding, &binding_ty);
+                        scope.insert(
+                            with_stmt.binding.clone(),
+                            BindingInfo {
+                                ty: binding_ty,
+                                trait_bounds: Vec::new(),
+                                definition,
+                                hover,
+                            },
                         );
                         self.accumulate_scope_from_stmts(&with_stmt.body, target_line, scope);
                         return;
@@ -2400,16 +2402,19 @@ impl<'a> AnalysisBuilder<'a> {
             Stmt::With(with_stmt) => {
                 self.visit_expr(&with_stmt.value, scope);
                 let mut body_scope = scope.clone();
-                let binding_ty = self
-                    .infer_expr_type(&with_stmt.value, scope)
-                    .unwrap_or(Type::Unit);
-                self.bind_named_value(
-                    &with_stmt.binding,
-                    binding_ty,
-                    with_stmt.span.line,
-                    "local",
-                    &mut body_scope,
+                let (binding_ty, kind) = self.with_item_binding(with_stmt, scope);
+                let definition = self.with_binding_range(with_stmt);
+                let hover = format_value_hover(kind, &with_stmt.binding, &binding_ty);
+                body_scope.insert(
+                    with_stmt.binding.clone(),
+                    BindingInfo {
+                        ty: binding_ty,
+                        trait_bounds: Vec::new(),
+                        definition: definition.clone(),
+                        hover: hover.clone(),
+                    },
                 );
+                self.push_occurrence(definition.clone(), hover, Some(definition));
                 self.visit_stmts(&with_stmt.body, &mut body_scope);
             }
             Stmt::While(while_stmt) => {
@@ -2752,6 +2757,58 @@ impl<'a> AnalysisBuilder<'a> {
             },
         );
         self.push_occurrence(definition.clone(), hover, Some(definition));
+    }
+
+    /// The type and hover kind of a `with` item's name. A manager whose
+    /// `__enter__` returns a view binds that view; any other item binds the
+    /// manager itself.
+    fn with_item_binding(
+        &self,
+        with_stmt: &WithStmt,
+        scope: &BTreeMap<String, BindingInfo>,
+    ) -> (Type, &'static str) {
+        let manager_ty = self
+            .infer_expr_type(&with_stmt.value, scope)
+            .unwrap_or(Type::Unit);
+        let class_info = self.class_info_for_type_name(base_type_name(&manager_ty));
+        if let Ok(crate::sema::ManagerShape {
+            entry: crate::sema::ManagerEntry::View { mutable },
+            ..
+        }) = crate::sema::classify_manager(&manager_ty, class_info)
+        {
+            if let Some(view_ty) = self
+                .resolve_member_type(&manager_ty, "__enter__")
+                .and_then(|member| member.ty)
+            {
+                return (view_ty, if mutable { "mutable view" } else { "view" });
+            }
+        }
+        (manager_ty, "local")
+    }
+
+    /// Where a `with` item declares its name: after `as` in the
+    /// `expression as name` form, otherwise at the start of the item. A
+    /// header can hold several items, so the search starts at this item.
+    fn with_binding_range(&self, with_stmt: &WithStmt) -> AnalysisRange {
+        let line_index = with_stmt.span.line.saturating_sub(1);
+        let fallback = self
+            .find_identifier_range(with_stmt.span.line, &with_stmt.binding)
+            .unwrap_or_else(|| range_from_span(with_stmt.span, with_stmt.binding.len()));
+        let Some(text) = self.source_lines.get(line_index).copied() else {
+            return fallback;
+        };
+        let item_start = with_stmt.span.column.saturating_sub(1).min(text.len());
+        let Some(item) = text.get(item_start..) else {
+            return fallback;
+        };
+        find_with_item_binding(item, &with_stmt.binding)
+            .map(|(start, end)| AnalysisRange {
+                file_path: self.current_source_path(),
+                line: line_index,
+                start_character: item_start + start,
+                end_character: item_start + end,
+            })
+            .unwrap_or(fallback)
     }
 
     fn bind_view_value(
@@ -6151,6 +6208,28 @@ fn range_from_span_with_path(span: Span, len: usize, file_path: Option<String>) 
         start_character: span.column.saturating_sub(1),
         end_character: span.column.saturating_sub(1) + len,
     }
+}
+
+/// Finds `name` as the binding of the `with` item that starts `item`: the
+/// identifier after `as`, or a leading `name =`.
+fn find_with_item_binding(item: &str, name: &str) -> Option<(usize, usize)> {
+    let head = item.strip_prefix("with").unwrap_or(item);
+    let leading = item.len() - head.trim_start().len();
+    if head.trim_start().starts_with(name) {
+        let rest = head.trim_start()[name.len()..].trim_start();
+        if rest.starts_with('=') && !rest.starts_with("==") {
+            return Some((leading, leading + name.len()));
+        }
+    }
+    let mut search_from = 0;
+    while let Some((start, end)) = find_identifier_in_line(&item[search_from..], name) {
+        let (start, end) = (search_from + start, search_from + end);
+        if item[..start].trim_end().ends_with(" as") {
+            return Some((start, end));
+        }
+        search_from = end;
+    }
+    None
 }
 
 fn find_identifier_in_line(line: &str, name: &str) -> Option<(usize, usize)> {

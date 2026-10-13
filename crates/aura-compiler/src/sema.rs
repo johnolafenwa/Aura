@@ -63,6 +63,11 @@ pub use program::{
 };
 mod aliases;
 pub(crate) use aliases::expand_alias_callee;
+mod managers;
+pub(crate) use managers::{
+    classify_manager, hidden_manager_binding, manager_method_call, ManagerEntry, ManagerExit,
+    ManagerShape,
+};
 mod patterns;
 mod structural_patterns;
 mod unions;
@@ -4778,12 +4783,35 @@ impl<'a> FunctionChecker<'a> {
         let value_ty = self.type_of_expr(&with_stmt.value, locals)?;
         self.reject_mutable_returned_view_value(&with_stmt.value, locals, false)?;
         self.reject_owned_view_value(&with_stmt.value, locals, "a managed `with` resource")?;
-        self.require_with_resource(&value_ty, with_stmt.span)?;
+        let shape = self.require_with_manager(&value_ty, with_stmt.span)?;
         self.consume_value_expr(&with_stmt.value, locals)?;
+
+        // A view-returning `__enter__` binds the item name to the entry view.
+        // The manager then lives in a hidden managed binding that is the
+        // view's origin (checkpoint F4), and the body is checked as if it
+        // began with `view [mut] name = <hidden>.__enter__()`.
+        let entry_view = match shape.entry {
+            ManagerEntry::View { mutable } => Some(crate::ast::ViewStmt {
+                name: with_stmt.binding.clone(),
+                mutable,
+                source: manager_method_call(
+                    &hidden_manager_binding(with_stmt.span),
+                    "__enter__",
+                    with_stmt.span,
+                ),
+                span: with_stmt.span,
+            }),
+            _ => None,
+        };
+        let manager_binding = if entry_view.is_some() {
+            hidden_manager_binding(with_stmt.span)
+        } else {
+            with_stmt.binding.clone()
+        };
 
         let mut body_locals = locals.clone();
         body_locals.insert(
-            with_stmt.binding.clone(),
+            manager_binding,
             LocalBinding {
                 ty: value_ty,
                 assignable: true,
@@ -4807,13 +4835,23 @@ impl<'a> FunctionChecker<'a> {
                 stale_narrowing: BTreeMap::new(),
             },
         );
+        let entered_body;
+        let body = if let Some(entry_view) = entry_view {
+            entered_body = std::iter::once(Stmt::View(entry_view))
+                .chain(with_stmt.body.iter().cloned())
+                .collect::<Vec<_>>();
+            &entered_body
+        } else {
+            &with_stmt.body
+        };
         self.check_block(
-            &with_stmt.body,
+            body,
             &mut body_locals,
             return_type,
             loop_depth,
             allow_return,
         )
+        .map_err(|error| managers::describe_hidden_manager(error, with_stmt.span))
         .inspect(|&flow| {
             if flow != BlockFlow::AlwaysReturns {
                 self.merge_control_flow_moves(locals, &[&body_locals]);
@@ -15979,60 +16017,6 @@ impl<'a> FunctionChecker<'a> {
             }
         }
         Ok(enum_ty.clone())
-    }
-
-    fn require_with_resource(&self, value_ty: &Type, span: crate::diag::Span) -> Result<()> {
-        let Type::Named(name, args) = value_ty else {
-            return Err(Diagnostic::at(
-                span,
-                format!("`with` requires a class resource, found `{}`", value_ty),
-            ));
-        };
-        if is_builtin_io_resource_type(name, args) {
-            return Ok(());
-        }
-        if !args.is_empty() {
-            return Err(Diagnostic::at(
-                span,
-                format!(
-                    "`with` does not yet support generic resource types in the bootstrap compiler, found `{}`",
-                    value_ty
-                ),
-            ));
-        }
-
-        let Some(class_info) = self.classes.get(name) else {
-            return Err(Diagnostic::at(
-                span,
-                format!("`with` requires a class resource, found `{}`", value_ty),
-            ));
-        };
-
-        let Some(method) = class_info.methods.get("close") else {
-            return Err(Diagnostic::coded_at(
-                "AU3002",
-                span,
-                format!(
-                    "class `{}` cannot be used with `with` because it does not define `close(mut self)`",
-                    name
-                ),
-            ));
-        };
-
-        if method.decl.receiver != Some(ReceiverKind::BorrowMut)
-            || !method.signature.params.is_empty()
-            || method.signature.return_type != Type::Unit
-        {
-            return Err(Diagnostic::at(
-                method.decl.span,
-                format!(
-                    "`with` resources must define `close(mut self)` returning `None`; `{}` does not",
-                    name
-                ),
-            ));
-        }
-
-        Ok(())
     }
 
     fn variant_payload_argument<'b>(

@@ -1,0 +1,6 @@
+error[AU3010]: a view cannot be stored as owned parameter `guard`
+ --> crates/aura-compiler/tests/fixtures/check-fail/manager_entry_view_move_manager.au:15:23
+   |
+15 |         print(consume(guard))
+   |                       ^
+  = help: keep it in a matching `view` binding, or produce an explicit owned value

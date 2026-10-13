@@ -1,0 +1,12 @@
+class Guard:
+    count: int64
+
+    def __enter__(mut self) -> int64:
+        return self.count
+
+    def __exit__(mut self) -> None:
+        pass
+
+def main():
+    with Guard(count=1) as count:
+        print(count)

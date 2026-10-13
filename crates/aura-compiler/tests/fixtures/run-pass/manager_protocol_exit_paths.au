@@ -1,0 +1,86 @@
+class Tracer:
+    name: str
+
+    def __enter__(mut self) -> None:
+        print("enter " + self.name)
+
+    def __exit__(mut self) -> None:
+        print("exit " + self.name)
+
+class Closer:
+    name: str
+
+    def close(mut self):
+        print("close " + self.name)
+
+class Both:
+    name: str
+
+    def __exit__(mut self) -> None:
+        print("exit wins " + self.name)
+
+    def close(mut self):
+        print("close is ordinary " + self.name)
+
+class Slot[T]:
+    value: T
+
+    def __enter__(mut self) -> None:
+        print("enter slot")
+
+    def __exit__(mut self) -> None:
+        print("exit slot")
+
+def fallthrough():
+    with t = Tracer(name="fallthrough"):
+        print("body")
+    print("after")
+
+def early_return() -> int64:
+    with Tracer(name="return") as t:
+        print("body " + t.name)
+        return 7
+    return 0
+
+def loop_paths():
+    for index in range(3):
+        with t = Tracer(name=f"loop {index}"):
+            if index == 0:
+                continue
+            if index == 1:
+                print("still looping")
+                continue
+            break
+    print("loop done")
+
+def failing(flag: bool) -> Result[int64, str]:
+    if flag:
+        return Result.Err("body failed")
+    return Result.Ok(1)
+
+def propagate() -> Result[int64, str]:
+    with t = Tracer(name="try"):
+        value = try failing(true)
+        print("unreachable " + str(value))
+    return Result.Ok(0)
+
+def main():
+    fallthrough()
+    print(early_return())
+    loop_paths()
+    match propagate():
+        case Result.Ok(value):
+            print(value)
+        case Result.Err(message):
+            print(message)
+    with c = Closer(name="legacy"):
+        print("close-only body")
+    with b = Both(name="both"):
+        b.close()
+    with Slot[int64](value=3) as slot:
+        print(slot.value)
+    with s = Slot[str](value="text"):
+        print(s.value)
+    mut explicit = Tracer(name="explicit")
+    explicit.__enter__()
+    explicit.__exit__()

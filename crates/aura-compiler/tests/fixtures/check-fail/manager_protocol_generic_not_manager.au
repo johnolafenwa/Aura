@@ -1,0 +1,6 @@
+class Box[T]:
+    value: T
+
+def main():
+    with item = Box[int64](value=1):
+        print(item.value)

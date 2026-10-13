@@ -24074,3 +24074,64 @@ fn direct_union_injection_copy_keeps_the_retained_payload() {
         );
     }
 }
+
+static ABANDONED_MANAGER_EXIT_RAN: AtomicBool = AtomicBool::new(false);
+
+unsafe extern "C-unwind" fn abandoned_manager_exit_thunk(
+    _args: *const i64,
+    _arg_count: usize,
+) -> *mut OpaqueValue {
+    ABANDONED_MANAGER_EXIT_RAN.store(true, Ordering::SeqCst);
+    std::ptr::null_mut()
+}
+
+#[test]
+fn native_runtime_scheduler_abandonment_runs_no_registered_manager_exit() {
+    ABANDONED_MANAGER_EXIT_RAN.store(false, Ordering::SeqCst);
+    super::with_direct_task_runtime_scope(|| {
+        let thunk = abandoned_manager_exit_thunk as *const () as usize as i64;
+        let id = super::aura_direct_register_cleanup(thunk, std::ptr::null_mut(), 0);
+        assert!(id > 0);
+        // Scheduler abandonment discards the task's runtime state without
+        // draining its cleanup stack.
+        super::discard_current_direct_task_runtime_state();
+    });
+    assert!(
+        !ABANDONED_MANAGER_EXIT_RAN.load(Ordering::SeqCst),
+        "abandonment must not invoke an Aura manager exit"
+    );
+}
+
+#[test]
+fn native_runtime_records_only_failing_manager_exits_for_the_trap() {
+    let class = "Flush";
+    super::with_direct_task_runtime_scope(|| {
+        let ok = boxed_value(Value::EnumVariant(EnumVariantValue {
+            enum_name: "Result".to_string(),
+            variant_name: "Ok".to_string(),
+            payloads: vec![Value::Unit],
+        }));
+        super::aura_direct_record_manager_exit_failure(ok, class.as_ptr(), class.len());
+        let err = boxed_value(Value::EnumVariant(EnumVariantValue {
+            enum_name: "Result".to_string(),
+            variant_name: "Err".to_string(),
+            payloads: vec![Value::String("flush failed".to_string())],
+        }));
+        super::aura_direct_record_manager_exit_failure(err, class.as_ptr(), class.len());
+        let unit = boxed_value(Value::Unit);
+        super::aura_direct_record_manager_exit_failure(unit, class.as_ptr(), class.len());
+
+        let diagnostic = super::attach_direct_manager_exit_failures(Diagnostic::new("trap"));
+        assert_eq!(
+            diagnostic.notes,
+            vec!["`Flush.__exit__` also failed during cleanup: flush failed".to_string()]
+        );
+        let again = super::attach_direct_manager_exit_failures(Diagnostic::new("trap"));
+        assert!(again.notes.is_empty(), "recorded failures attach once");
+        unsafe {
+            release_value(ok);
+            release_value(err);
+            release_value(unit);
+        }
+    });
+}

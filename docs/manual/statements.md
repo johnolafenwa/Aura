@@ -352,9 +352,48 @@ The scrutinee's ownership depends on the form:
 
 See [Enums And Pattern Matching](/manual/enums-and-match) for pattern forms.
 
-## `with` And Scoped Cleanup
+## `with` And Context Managers
 
-Aura accepts two equivalent binding forms, `with name = expression:` and `with expression as name:`:
+`with` runs a body while one or more context managers are active, and runs each manager's exit exactly once when control leaves the body. A context manager is a value whose type defines how to enter and leave a scope.
+
+```aura
+class Tracer:
+    name: str
+
+    def __enter__(mut self) -> None:
+        print("enter " + self.name)
+
+    def __exit__(mut self) -> None:
+        print("exit " + self.name)
+
+def main():
+    with Tracer(name="outer") as outer, inner = Tracer(name="inner"):
+        print("body")
+```
+
+This program prints `enter outer`, `enter inner`, `body`, `exit inner`, and `exit outer`.
+
+### Items
+
+Each item has one of two equivalent forms, `name = expression` or `expression as name`. Both forms evaluate and consume the expression, then bind `name` in the body.
+
+A header may list several items separated by commas. Items enter left to right, and each later item can use the bindings of earlier items. Exits run in reverse order. A header with a trailing comma, a missing `as name`, or a missing item is rejected with `AU1101`.
+
+A failure while an item is constructed or entered runs the exits of the items already entered. The failing item's own exit does not run, because it is not yet registered.
+
+### The Manager Protocol
+
+A user class is a context manager when it declares the following methods:
+
+| Method | Accepted signatures | Role |
+| --- | --- | --- |
+| `__enter__` | `def __enter__(mut self) -> None` or `def __enter__(mut self) -> view [mut] T from self` | Optional. Runs after the item expression succeeds and before the body. |
+| `__exit__` | `def __exit__(mut self) -> None` or `def __exit__(mut self) -> Result[None, E]` | Runs once when control leaves the body. |
+| `close` | `def close(mut self) -> None` | The exit of a class that has no `__exit__`. |
+
+A class with `__exit__` uses it and ignores any `close` method. Generic classes follow the same rules after their type arguments are applied. Any other shape is rejected with `AU2017`.
+
+Builtin resources define their own cleanup and have no entry. These include `fs.File`, the `net` socket, listener, and HTTP types, `process.Child`, `process.Pipe`, `process.Supervisor`, and `TaskGroup`:
 
 ```aura fragment
 with file = try fs.open("data.txt"):
@@ -362,26 +401,78 @@ with file = try fs.open("data.txt"):
     print(text)
 ```
 
-```aura fragment
-with TaskGroup() as group:
-    group.start_soon(worker)
+### Entry Views
+
+When `__enter__` returns a view, the item name binds that view, not the manager. The manager stays in a hidden binding that the body cannot name. The view is shared or mutable as `__enter__` declares:
+
+```aura
+class Lock:
+    values: list[int64]
+
+    def __enter__(mut self) -> view mut list[int64] from self:
+        return view mut self.values
+
+    def __exit__(mut self) -> None:
+        print(len(self.values))
+
+def main():
+    with Lock(values=[]) as values:
+        values.append(1)
+        values.append(2)
 ```
 
-Both forms evaluate and consume the resource expression, then create a fresh mutable managed binding. Cleanup is registered after the resource is created successfully.
+The view ends before the exit runs. A view cannot escape the body. Returning it or storing it is rejected with `AU3010`. A manager without an entry view is an ordinary named binding in the body. Mutating it while a view into it is live is rejected with `AU3002`.
 
-Supported builtin resources define their own cleanup. A user class can be a resource when it is non-generic and declares exactly `close(mut self) -> None`. The managed value cannot be moved out in a way that prevents cleanup.
+### Exits That Return `Result`
 
-The registered `close` operation runs exactly once when control leaves the body by:
+An `__exit__` that returns `Result[None, E]` acts like `try` on the normal paths out of the body: fallthrough, `return`, `break`, and `continue`. `Ok` continues. `Err` returns from the enclosing function with the error, after the outer managers exit. The enclosing function must return `Result[_, F]`, where `F` is `E` or has a `From` conversion from `E`. Otherwise the checker reports `AU2017`.
+
+```aura
+class Flush:
+    pending: int64
+
+    def __exit__(mut self) -> Result[None, str]:
+        if self.pending > 0:
+            return Result.Err("unflushed writes")
+        return Result.Ok(None)
+
+def save() -> Result[int64, str]:
+    with sink = Flush(pending=1):
+        print("writing")
+    return Result.Ok(1)
+
+def main():
+    match save():
+        case Result.Ok(count):
+            print(count)
+        case Result.Err(error):
+            print(error)
+```
+
+When the body is already leaving with an error, the exit's error does not replace it:
+
+- Under `try` propagation, the body's error is returned and the exit's `Err` is dropped.
+- Under a trap, the trap stays primary. The exit's `Err` is added to the trap diagnostic as a note.
+- Under cancellation, the exit's `Err` is dropped and the task ends cancelled.
+
+### When Exits Run
+
+Each registered exit runs exactly once when control leaves the body by:
 
 - normal fallthrough
 - `return`
 - `break` or `continue` that exits the scope
 - `try` error propagation
 - a maintained Aura runtime failure
+- task cancellation
 
-Nested cleanups run in reverse registration order. If the body is already failing and cleanup also fails, the body's diagnostic stays primary.
+An exit runs while cancellation is still pending, so a cancellable wait inside an exit observes it. Nested exits run in reverse registration order. If the body is already failing and an exit traps, the body's diagnostic stays primary.
 
-`aura run` and native builds share this contract. `aura run` executes the compiler's mid-level intermediate representation (MIR) through the maintained MIR runtime. Native builds use the maintained native execution paths. Backend parity tests enforce the common contract. See [Execution Model](/manual/execution-model#resource-lifetime-and-cleanup).
+Scheduler abandonment runs no `__exit__` or `close`. See [Execution Model](/manual/execution-model#resource-lifetime-and-cleanup).
+
+`aura run` and native builds share this contract. `aura run` executes the compiler's mid-level intermediate representation (MIR) through the maintained MIR runtime. Native builds use the maintained native execution paths. Backend parity tests enforce the common contract.
+
+See [examples/resources/context_managers.au](https://github.com/johnolafenwa/Aura/blob/main/examples/resources/context_managers.au) for a runnable program.
 
 ## `assert`
 
@@ -478,7 +569,7 @@ A statement that parses is not legal in every context:
 - Conditions require `bool`, not truthiness.
 - Assertion conditions require `bool`, and assertion messages require `str`.
 - Match arms must satisfy the compatibility, reachability, and exhaustiveness rules.
-- `with` requires a supported resource and keeps its cleanup capability intact.
+- `with` requires a context manager and keeps its exit capability intact.
 - Items cannot appear inside suites.
 - Module constants are immutable and cannot use `mut` or reassignment.
 - Module constants are the bindings above the first top-level statement. They cannot read top-level script locals, which initialize later.
@@ -497,7 +588,7 @@ The complete checker rules are normative in [Static Semantics](/manual/static-se
 - Return values match the enclosing signature.
 - The iterable determines the loop binding contract.
 - Match patterns must be compatible, reachable, and exhaustive where required.
-- `with` accepts only the maintained cleanup contract.
+- `with` accepts only a context manager. An exit that returns `Result[None, E]` requires a compatible `Result` return type in the enclosing function.
 - Assertion conditions have exactly type `bool`, and assertion messages have exactly type `str`. An assertion does not refine later control flow.
 - `is None` and `is not None` conditions refine a stable union place on the paths they select, as described in [Static Semantics](/manual/static-semantics#conditions).
 - Contextual legality is checked after parsing.
@@ -512,7 +603,7 @@ The complete checker rules are normative in [Static Semantics](/manual/static-se
 - A conditional runs at most one branch.
 - A loop tests its condition, or receives a value, before each body.
 - A match evaluates its scrutinee once.
-- `with` registers cleanup only after resource construction succeeds.
+- `with` registers an exit only after the item expression and its `__enter__` succeed. Items enter left to right and exit right to left.
 - An assertion evaluates its condition once. It skips the message on success and evaluates the message once before failing.
 - A control transfer runs every exited cleanup in reverse registration order.
 
@@ -541,6 +632,7 @@ Compile-time diagnostics:
 | `AU2005` | Unsupported syntax or feature for a Python-shaped statement. |
 | `AU2013` | A union match is missing a type arm, duplicates one, or cannot reach one. |
 | `AU2014` | A member use through a place whose `None`-test narrowing was ended by an assignment, a mutable match, or a call with mutable access. |
+| `AU2017` | A `with` item is not a context manager, or its exit `Result` does not fit the enclosing function. |
 | `AU2999` | An exhaustiveness, contextual-legality, or unsupported-statement rejection with no narrower code. |
 | `AU3001` | Use of a moved place. |
 | `AU3002` | Borrow conflict. This includes a later access that mutably borrows or consumes an overlapping, retained non-copy target of a compound or indexed assignment. |

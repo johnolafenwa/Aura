@@ -1,0 +1,9 @@
+class Tracer:
+    name: str
+
+    def __exit__(mut self) -> None:
+        pass
+
+def main():
+    with Tracer(name="a") as a, Tracer(name="b"):
+        pass

@@ -1,0 +1,21 @@
+enter first
+enter first+second
+body first first+second third
+close third
+exit first+second
+exit first
+after
+enter first
+acquire failed second
+exit first
+cannot acquire second
+enter outer
+enter inner
+nested body
+exit inner
+exit outer
+enter a
+enter b
+exit b
+exit a
+ab

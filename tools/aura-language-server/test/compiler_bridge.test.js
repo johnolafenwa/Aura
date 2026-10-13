@@ -701,7 +701,7 @@ test("compiler bridge reuses one persistent compiler process", async () => {
 });
 
 test("persistent compiler service sends and accepts the current semantic schema", async () => {
-  assert.equal(SUPPORTED_SEMANTIC_INTERFACE_SCHEMA_VERSION, 18);
+  assert.equal(SUPPORTED_SEMANTIC_INTERFACE_SCHEMA_VERSION, 19);
   const script = [
     "const readline = require('node:readline');",
     "const lines = readline.createInterface({ input: process.stdin });",
@@ -754,7 +754,7 @@ test("persistent compiler service rejects and disposes a mismatched semantic sch
       path: "/virtual/main.au",
       source: "def main():\n    pass\n"
     }),
-    /semantic schema mismatch.*received `8`.*expected `18`/
+    /semantic schema mismatch.*received `8`.*expected `19`/
   );
   assert.equal(service.closed, true);
   assert.equal(invalidations, 1);
@@ -1827,6 +1827,47 @@ test("compiler bridge preserves single-consumer duplication diagnostics", async 
   } finally {
     fs.rmSync(tempRoot, { recursive: true, force: true });
   }
+});
+
+test("compiler bridge resolves with items to entry views and their own names", async () => {
+  const examplePath = path.join(repoRoot, "examples/resources/context_managers.au");
+  const exampleUri = `file://${examplePath}`;
+  const source = fs.readFileSync(examplePath, "utf8");
+  const lines = source.split("\n");
+  const header = lines.findIndex((line) => line.includes(" as values, journal = "));
+  const valuesColumn = lines[header].indexOf("as values") + 3;
+  const journalColumn = lines[header].indexOf("journal");
+  const bodyLine = lines.findIndex((line) => line.includes("values.append(step)"));
+
+  setWorkspaceRoots([repoRoot]);
+  const analysis = await analyzeWithCompiler(exampleUri, source);
+
+  assert.ok(analysis);
+  assert.deepEqual(analysis.diagnostics, []);
+  const viewRange = {
+    start: { line: header, character: valuesColumn },
+    end: { line: header, character: valuesColumn + "values".length }
+  };
+  assert.deepEqual(compilerHoverAtPosition(analysis, header, valuesColumn + 1), {
+    value: "```aura\nmutable view values: list[int64]\n```",
+    range: viewRange
+  });
+  const bodyColumn = lines[bodyLine].indexOf("values") + 1;
+  assert.equal(
+    compilerHoverAtPosition(analysis, bodyLine, bodyColumn)?.value,
+    "```aura\nmutable view values: list[int64]\n```"
+  );
+  assert.deepEqual(
+    compilerDefinitionAtPosition(exampleUri, analysis, bodyLine, bodyColumn)?.range,
+    viewRange
+  );
+  assert.deepEqual(compilerHoverAtPosition(analysis, header, journalColumn + 1), {
+    value: "```aura\nlocal journal: Journal\n```",
+    range: {
+      start: { line: header, character: journalColumn },
+      end: { line: header, character: journalColumn + "journal".length }
+    }
+  });
 });
 
 test("compiler bridge preserves single-consumer Task alias provenance", async () => {

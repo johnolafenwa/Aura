@@ -563,7 +563,6 @@ The checker enforces the selected `From.from` method's clone-safety obligations 
 - Generic arguments are invariant, and there is no general subtyping.
 - Type inference is local and contextual, not whole-program.
 - Trait and implementation methods cannot give ordinary parameters defaults.
-- Generic user classes cannot serve as `with` resources.
 - Generic task targets are permitted when their callable type arguments can be resolved. Bare shared and `own` targets use task-owned captures. `mut` targets are rejected.
 - Equal-specificity overlapping implementations are an error at the use site.
 - Clone-safety obligations are inferred, not written. An explicit implementation cannot strengthen the contract inferred by its trait method.
@@ -658,7 +657,7 @@ Aura 0.3 has none of the following:
 - general subtyping
 - a separate orphan-rule restriction
 
-A bare target parameter in `impl[T] Trait for T` is unsupported. Equal-specificity overlaps are errors. Ordinary trait and implementation parameters cannot add defaults. Generic user classes cannot be `with` resources.
+A bare target parameter in `impl[T] Trait for T` is unsupported. Equal-specificity overlaps are errors. Ordinary trait and implementation parameters cannot add defaults.
 
 The rules above define inference and dispatch. Source order and backend implementation choices do not.
 

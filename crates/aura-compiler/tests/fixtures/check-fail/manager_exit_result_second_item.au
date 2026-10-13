@@ -1,0 +1,15 @@
+class Plain:
+    name: str
+
+    def __exit__(mut self) -> None:
+        pass
+
+class Flush:
+    name: str
+
+    def __exit__(mut self) -> Result[None, str]:
+        return Result.Ok(None)
+
+def main():
+    with plain = Plain(name="plain"), sink = Flush(name="sink"):
+        print(plain.name + sink.name)

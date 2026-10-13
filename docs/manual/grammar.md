@@ -757,14 +757,18 @@ the bare-loop shared default.
 
 ```ebnf
 with-statement
-    = "with", identifier, "=", expression,
-      ":", NEWLINE, suite
-    | "with", expression, "as", identifier,
+    = "with", with-item, { ",", with-item },
       ":", NEWLINE, suite ;
+
+with-item
+    = identifier, "=", expression
+    | expression, "as", identifier ;
 ```
 
-The two forms are equivalent. Static semantics requires a supported resource
-and a fresh binding.
+The two item forms are equivalent. A header with several items behaves as
+nested `with` statements, one per item, in source order. A trailing comma is
+rejected. Static semantics requires each item to be a context manager and to
+bind a fresh name.
 
 ## Patterns And Statement Matches
 

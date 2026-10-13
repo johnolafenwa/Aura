@@ -1,0 +1,18 @@
+class Flush:
+    name: str
+
+    def __exit__(mut self) -> Result[None, str]:
+        print("flush " + self.name)
+        return Result.Err("flush failed for " + self.name)
+
+def work(divisor: int64) -> Result[int64, str]:
+    with sink = Flush(name="sink"):
+        return Result.Ok(10 // divisor)
+    return Result.Ok(0)
+
+def main():
+    match work(0):
+        case Result.Ok(value):
+            print(value)
+        case Result.Err(message):
+            print(message)

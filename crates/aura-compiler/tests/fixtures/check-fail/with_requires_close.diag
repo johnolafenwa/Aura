@@ -1,4 +1,4 @@
-error[AU3002]: class `PlainValue` cannot be used with `with` because it does not define `close(mut self)`
+error[AU2017]: class `PlainValue` is not a context manager: `__exit__(mut self)` is missing or has the wrong shape
  --> crates/aura-compiler/tests/fixtures/check-fail/with_requires_close.au:5:5
   |
 5 |     with item = PlainValue(value=1):

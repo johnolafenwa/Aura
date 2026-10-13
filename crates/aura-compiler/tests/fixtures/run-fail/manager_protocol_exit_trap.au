@@ -1,0 +1,13 @@
+class Tracer:
+    name: str
+    trap: bool
+
+    def __exit__(mut self) -> None:
+        print("exit " + self.name)
+        assert not self.trap, "exit of " + self.name + " failed"
+
+def main():
+    with outer = Tracer(name="outer", trap=false):
+        with inner = Tracer(name="inner", trap=true):
+            print("body")
+        print("unreachable after inner")

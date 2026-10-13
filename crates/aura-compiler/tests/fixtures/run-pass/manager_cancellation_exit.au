@@ -1,0 +1,77 @@
+class Lease:
+    name: str
+    probe: Queue[int32]
+
+    def __enter__(mut self) -> None:
+        print("enter " + self.name)
+
+    def __exit__(mut self) -> None:
+        print("exit " + self.name + " cancelled=" + str(cancelled()))
+        match self.probe.get(timeout=5s):
+            case QueueReceive.Item(_):
+                print("exit wait item")
+            case QueueReceive.Closed:
+                print("exit wait closed")
+            case QueueReceive.TimedOut:
+                print("exit wait timed out")
+            case QueueReceive.Cancelled:
+                print("exit wait cancelled")
+
+def acquire(name: own str, gate: Queue[int32], probe: Queue[int32]) -> Result[Lease, str]:
+    match gate.get(timeout=5s):
+        case QueueReceive.Item(_):
+            return Result.Ok(Lease(name=name, probe=probe))
+        case QueueReceive.Closed:
+            return Result.Err("closed")
+        case QueueReceive.TimedOut:
+            return Result.Err("timed out")
+        case QueueReceive.Cancelled:
+            print("acquire " + name + " observed cancellation")
+            return Result.Err("cancelled")
+
+def waits_in_body(ready: Queue[int32], release: Queue[int32], probe: Queue[int32]) -> int32:
+    with lease = Lease(name="body", probe=probe):
+        ready.put(1)
+        match release.get(timeout=5s):
+            case QueueReceive.Cancelled:
+                print("body observed cancellation")
+                return 1
+            case QueueReceive.Item(_):
+                return 2
+            case QueueReceive.Closed:
+                return 3
+            case QueueReceive.TimedOut:
+                return 4
+    return 0
+
+def waits_in_second_entry(ready: Queue[int32], gate: Queue[int32], probe: Queue[int32]) -> Result[int32, str]:
+    with first = Lease(name="first", probe=probe), second = try acquire("second", gate, probe):
+        print("unreachable " + second.name)
+    return Result.Ok(0)
+
+def signal_and_wait(ready: Queue[int32], gate: Queue[int32], probe: Queue[int32]) -> Result[int32, str]:
+    ready.put(2)
+    return waits_in_second_entry(ready, gate, probe)
+
+def main():
+    ready = Queue[int32]()
+    release = Queue[int32]()
+    probe = Queue[int32]()
+    with TaskGroup() as group:
+        group.start(waits_in_body, ready, release, probe)
+        match ready.get(timeout=5s):
+            case QueueReceive.Item(_):
+                group.cancel()
+            case _:
+                print("worker did not start")
+    print("first group joined")
+
+    gate = Queue[int32]()
+    with TaskGroup() as group:
+        group.start(signal_and_wait, ready, gate, probe)
+        match ready.get(timeout=5s):
+            case QueueReceive.Item(_):
+                group.cancel()
+            case _:
+                print("worker did not start")
+    print("second group joined")

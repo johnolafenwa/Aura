@@ -1,0 +1,9 @@
+class Resource:
+    value: int32
+
+    def close(self) -> int32:
+        return 0
+
+def main():
+    with resource = Resource(value=1):
+        print(resource.value)

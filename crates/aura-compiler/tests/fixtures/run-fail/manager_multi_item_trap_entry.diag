@@ -1,0 +1,6 @@
+error[AU4001]: entry of second failed
+ --> crates/aura-compiler/tests/fixtures/run-fail/manager_multi_item_trap_entry.au:7:9
+  |
+7 |         assert not self.trap, "entry of " + self.name + " failed"
+  |         ^
+  = note: Aura call chain (innermost first): Tracer.__enter__ at 5:5 -> main at 12:1

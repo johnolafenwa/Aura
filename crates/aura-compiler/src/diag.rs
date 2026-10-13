@@ -177,6 +177,11 @@ pub const DIAGNOSTIC_CODE_REGISTRY: &[DiagnosticCodeInfo] = &[
         title: "initializer declaration",
     },
     DiagnosticCodeInfo {
+        code: "AU2017",
+        band: "names/types",
+        title: "context manager protocol",
+    },
+    DiagnosticCodeInfo {
         code: "AU2040",
         band: "names/types",
         title: "invalid class pattern",

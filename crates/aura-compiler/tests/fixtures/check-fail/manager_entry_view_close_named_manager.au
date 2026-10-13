@@ -1,0 +1,14 @@
+class Guard:
+    values: list[int64]
+
+    def __exit__(mut self) -> None:
+        pass
+
+    def reset(mut self):
+        self.values = []
+
+def main():
+    with guard = Guard(values=[1]):
+        view first = guard.values
+        guard.reset()
+        print(len(first))

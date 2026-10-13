@@ -1,0 +1,5 @@
+error[AU2017]: exit of `Flush` may fail with `str`; the enclosing function must return `Result[_, str]`
+ --> crates/aura-compiler/tests/fixtures/check-fail/manager_exit_result_second_item.au:14:39
+   |
+14 |     with plain = Plain(name="plain"), sink = Flush(name="sink"):
+   |                                       ^

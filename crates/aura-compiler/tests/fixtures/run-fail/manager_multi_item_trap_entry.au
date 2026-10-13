@@ -1,0 +1,14 @@
+class Tracer:
+    name: str
+    trap: bool
+
+    def __enter__(mut self) -> None:
+        print("enter " + self.name)
+        assert not self.trap, "entry of " + self.name + " failed"
+
+    def __exit__(mut self) -> None:
+        print("exit " + self.name)
+
+def main():
+    with first = Tracer(name="first", trap=false), second = Tracer(name="second", trap=true):
+        print("unreachable body")

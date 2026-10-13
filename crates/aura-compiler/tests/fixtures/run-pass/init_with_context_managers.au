@@ -1,0 +1,29 @@
+class Session:
+    name: str
+    log: list[str]
+
+    def __init__(self, name: own str):
+        self.name = name
+        self.log = []
+
+    def __enter__(mut self) -> view mut list[str] from self:
+        print("enter " + self.name)
+        return view mut self.log
+
+    def __exit__(mut self) -> None:
+        print(f"exit {self.name} with {self.log.len()} entries")
+
+class Pair:
+    left: int64
+    right: int64
+
+    def __init__(self, base: int64):
+        with first = Session("a"), Session("b") as second:
+            first.append("x")
+            second.append("y")
+            self.left = base
+        self.right = base + 1
+
+def main():
+    pair = Pair(4)
+    print(pair.left + pair.right)

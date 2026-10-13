@@ -1,0 +1,5 @@
+error[AU2017]: `with` requires a context manager, found `int64`
+ --> crates/aura-compiler/tests/fixtures/check-fail/manager_protocol_primitive.au:2:5
+  |
+2 |     with value = 5:
+  |     ^

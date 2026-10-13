@@ -49,7 +49,7 @@ contract". This reproduces on `main` without initializers. The
 
 ## Verification
 
-- Fixtures: 19 run-pass (`init_*`, `factory_result_init`), 33 check-fail,
+- Fixtures: 19 run-pass (`init_*`, `factory_result_init`), 34 check-fail,
   2 check-path-fail, and 1 run-fail. Every run-pass fixture matches on the
   forced MIR and direct backends.
 - `crates/aura-compiler/tests/batch3_initializer_validator.rs`: 12
@@ -62,6 +62,6 @@ contract". This reproduces on `main` without initializers. The
 
 ## Follow-Up
 
-- Phase 3b, context managers, lands next on the same branch.
+- Phase 3b, context managers, follows in its own pull request.
 - Fix the callable-field call through shared `self`.
 - Moving a field out of `self` and reinitializing it inside `__init__`.

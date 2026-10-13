@@ -73,7 +73,7 @@ A non-copy value is consumed when it is used in an owned position. Owned positio
   method, or simple dict indexed assignment that stores the value
 - by-value enum matching
 - `own` iteration over `list[T]` or `set[T]`
-- the resource expression of `with`
+- each item expression of `with`
 - a task-start argument copied or moved into task-owned capture storage
 
 A tuple or collection literal builds a new owned value, so it moves its non-copy elements wherever it appears. This holds when the literal itself goes to a shared position, such as a `print` or `len` argument, an f-string, an equality operand, or a bare parameter. Clone the element when the original must stay usable.
@@ -526,9 +526,11 @@ def show_file() -> Result[None, io.Error]:
     return Result.Ok(None)
 ```
 
-`with` consumes the resource expression and creates a fresh mutable managed binding. A managed resource or its non-copy fields cannot be moved out in a way that would prevent cleanup. The registered `close` runs on normal fallthrough, `return`, escaping loop control, `try` propagation, and maintained runtime failure. Nested cleanups run in reverse order.
+`with` consumes each item expression and creates a fresh mutable managed binding. A managed value or its non-copy fields cannot be moved out in a way that would prevent its exit. The registered exit runs on normal fallthrough, `return`, escaping loop control, `try` propagation, maintained runtime failure, and cancellation. Nested exits run in reverse order.
 
-Each builtin resource's module chapter defines its behavior. A user class resource must be non-generic and define `close(mut self) -> None` with no ordinary parameters. [Execution Model](/manual/execution-model#resource-lifetime-and-cleanup) specifies full cleanup ordering and failure precedence.
+A manager whose `__enter__` returns `view [mut] T from self` lends that view to the body. The item name binds the view, and the manager itself stays in a binding the body cannot name. The view follows the ordinary view rules: it cannot be returned or stored, which reports `AU3010`, and it ends before the exit runs.
+
+Each builtin resource's module chapter defines its behavior. [Statements](/manual/statements#with-and-context-managers) defines the user manager protocol. [Execution Model](/manual/execution-model#resource-lifetime-and-cleanup) specifies full cleanup ordering and failure precedence.
 
 ## Grammar
 
@@ -569,7 +571,7 @@ Mutable borrowed calls and `mut` list iteration write through the original place
 
 Simple dict indexed assignment accepts and owns any value type. Direct compound indexed assignment requires a copy `list` element or `dict` value.
 
-Task start first transfers captures into child-owned storage. `with` owns one cleanup registration and runs it exactly once on every maintained scope exit, under the documented failure-precedence rules.
+Task start first transfers captures into child-owned storage. `with` owns one exit registration per item and runs each exactly once on every maintained scope exit, under the documented failure-precedence rules.
 
 ## Ownership And Evaluation Order
 

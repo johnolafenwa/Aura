@@ -1,0 +1,13 @@
+class Flush:
+    name: str
+
+    def __exit__(mut self) -> Result[None, str]:
+        return Result.Ok(None)
+
+def work() -> Result[int64, int64]:
+    with sink = Flush(name="sink"):
+        print(sink.name)
+    return Result.Ok(0)
+
+def main():
+    print(work())

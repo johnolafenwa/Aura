@@ -1,0 +1,6 @@
+error[AU4001]: exit of inner failed
+ --> crates/aura-compiler/tests/fixtures/run-fail/manager_protocol_exit_trap.au:7:9
+  |
+7 |         assert not self.trap, "exit of " + self.name + " failed"
+  |         ^
+  = note: Aura call chain (innermost first): Tracer.__exit__ at 5:5 -> main at 9:1
