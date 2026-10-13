@@ -213,6 +213,32 @@ A bare `self` cannot mutate. The compiler tells you to write `mut self`.
 A method named `close` is special. It makes the class a managed resource for
 `with` blocks, so pick another name unless that is what you want.
 
+### `@property` And `__str__`
+
+Aura keeps the two Python habits you reach for most. `@property` before a
+shared method makes a read-only computed value, read without parentheses:
+
+```aura fragment
+    @property
+    def summary(self) -> str:
+        return f"{self.owner}: {self.balance}"
+```
+
+`print(acct.summary)` calls the getter once. A property has no setter, and
+`@property` is the only decorator. See [Classes](/manual/classes#properties).
+
+Where Python uses `__str__`, Aura uses the `Display` trait:
+
+```aura fragment
+impl Display for Account:
+    def display(self) -> str:
+        return f"<account {self.owner}>"
+```
+
+Then `print(acct)`, `str(acct)`, and `f"{acct}"` all use it, including inside
+lists and other classes. See
+[Generics And Traits](/manual/generics-and-traits#the-display-trait).
+
 ### There Is No Inheritance
 
 `class Dog(Animal):` does not parse. Aura uses traits for shared behavior and

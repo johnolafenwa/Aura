@@ -1,0 +1,9 @@
+class Grid:
+    name: str
+
+    @property
+    def label(self) -> view str from self:
+        return self.name
+
+def main():
+    pass

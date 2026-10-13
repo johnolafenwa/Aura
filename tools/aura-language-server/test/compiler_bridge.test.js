@@ -129,6 +129,15 @@ test("compiler bridge helper conversions cover diagnostics, symbols, and definit
             start_character: 4,
             end_character: 5,
             children: []
+          },
+          {
+            name: "length",
+            kind: "property",
+            detail: "int32",
+            line: 2,
+            start_character: 8,
+            end_character: 14,
+            children: []
           }
         ]
       },
@@ -200,6 +209,7 @@ test("compiler bridge helper conversions cover diagnostics, symbols, and definit
   });
   assert.equal(symbols[0].kind, 5);
   assert.equal(symbols[0].children[0].kind, 8);
+  assert.equal(symbols[0].children[1].kind, 7);
   assert.equal(symbols[1].kind, 12);
   assert.equal(symbols[2].kind, 6);
   assert.equal(symbols[3].kind, 10);

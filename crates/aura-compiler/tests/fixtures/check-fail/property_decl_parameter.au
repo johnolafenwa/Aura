@@ -1,0 +1,9 @@
+class Grid:
+    width: int64
+
+    @property
+    def scaled(self, factor: int64) -> int64:
+        return self.width * factor
+
+def main():
+    pass

@@ -1,0 +1,6 @@
+error[AU2002]: `Score` renders through `Display`, so its format specification cannot use a numeric format code
+ --> crates/aura-compiler/tests/fixtures/check-fail/display_format_numeric_code.au:10:19
+   |
+10 |     print(f"{score:d}")
+   |                   ^
+  = help: a `Display` value accepts fill, alignment, width, precision, and `s`

@@ -1,0 +1,9 @@
+class Grid:
+    width: int64
+
+    @property
+    def width(self) -> int64:
+        return 3
+
+def main():
+    pass

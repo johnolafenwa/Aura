@@ -1,0 +1,21 @@
+class Tag:
+    name: str
+
+impl Display for Tag:
+    def display(self) -> str:
+        print("rendering")
+        return f"#{self.name}"
+
+def make_tag() -> Tag:
+    print("making")
+    return Tag(name="release")
+
+def main():
+    tag = Tag(name="release")
+    print(f"[{tag:>12}]")
+    print(f"[{tag:*^12.4}]")
+    print(f"[{tag:.3}]")
+    print(f"[{tag:.3s}]")
+    print(f"[{tag:<10s}]")
+    print(f"[{tag:é>10}]")
+    print(f"[{make_tag():-^14.5}]")

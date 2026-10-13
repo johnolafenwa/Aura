@@ -1,0 +1,6 @@
+error[AU2043]: method `describe` is not part of trait `Display`
+ --> crates/aura-compiler/tests/fixtures/check-fail/display_impl_extra_method.au:8:5
+  |
+8 |     def describe(self) -> str:
+  |     ^
+  = help: `Display` has exactly one method: `def display(self) -> str`

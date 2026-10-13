@@ -120,6 +120,17 @@ Not built, and listed in Current Limits: spans of `str` or `Array`, a span
 of a receiver field returned from a method, and span-bearing function
 types.
 
+## Verification
+
+- PR #37 merged at `68b6080` after hosted verify passed on Ubuntu and
+  macOS.
+- PR #42 merged at `40ff76e` after hosted verify passed on Ubuntu and
+  macOS at `541af66`. The first hosted run found two gaps, both fixed in
+  the pull request. The docs build could not resolve an `@/` example
+  embed, so the page uses a relative path and AGENTS.md shows that form.
+  Compiler line coverage was 96.459% against the 96.46% floor, so checker
+  and forged-MIR span tests were added.
+
 ## Follow-up
 
 - A read of the scrutinee place inside a `match mut` arm also passes the

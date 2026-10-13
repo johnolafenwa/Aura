@@ -1,0 +1,6 @@
+error[AU2045]: property `origin` is read-only and cannot be matched with `match mut`
+ --> crates/aura-compiler/tests/fixtures/check-fail/property_match_mut.au:25:21
+   |
+25 |     match mut shape.origin:
+   |                     ^
+  = help: a property computes a fresh value on each read; bind it to a local to change the copy

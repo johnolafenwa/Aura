@@ -72,6 +72,7 @@ executable size.
 | `positional_constructors.au` | Positional class constructor arguments with optional trailing named fields | `1`, `2`, `7`, `9` |
 | `initializers.au` | `__init__` with computed and validated fields, a field default, and a method call after every field is set | `buf: 2 slots`, `buf: 0 slots`, `buf: 3 slots`, `[0, 0]`, `0`, `[7, 7, 7]` |
 | `factories.au` | A named factory returning `Result[Port, str]` that calls the initializer only on success | `port-80`, `port 70000 is out of range` |
+| `properties.au` | Read-only `@property` getters read without parentheses, including a non-Copy result that the caller owns | `15`, `30 doubled`, `[HI, THERE, !]`, `[hi, there]` |
 
 ### `agents/`
 
@@ -152,6 +153,7 @@ seven real loopback requests.
 | `match_borrow_mut_fields.au` | Mutable matching through a field place while a proven-disjoint sibling field changes | `9`, `11` |
 | `rich_match.au` | Multi-payload enum variants, nested patterns, named payload fields, and expression-form `match` | `7`, `30`, `0` |
 | `match_expression_positions.au` | Expression-form `match` in binding and argument positions, including nested block-form arm values | `1`, `10`, `3`, `20` |
+| `structural_patterns.au` | Tuple rest targets, list sequence patterns with `*rest`, and keyword class patterns | `1`, `(two, 3.0)`, `empty`, `one: 7`, `from 1 to 4`, `10 then [20, 30]`, `origin`, `on the y axis at 5`, `elsewhere` |
 | `match_guards_and_or_patterns.au` | Exact-Boolean guards, binding-compatible enum or-patterns, and top-level complete-value bindings | `positive`, `non-positive`, `missing`, `4` |
 | `wildcard_match.au` | Wildcard `case _:` arms in statement-form `match` | `2` |
 
@@ -185,6 +187,7 @@ seven real loopback requests.
 | `ordering_traits.au` | Ordering traits with shared right-hand operands and an explicitly consuming generic selector | `true`, `true`, `true`, `true`, `2` |
 | `trait_associated_factory.au` | Associated trait methods called through the implementing type name | `7` |
 | `clone_safety_contract.au` | An inferred clone-safety contract from a generic trait default method, kept through a bounded generic call | `[4, 5]` twice |
+| `display.au` | The prelude `Display` trait for a class and an enum, used by `print`, `str`, f-strings with a width, and nested rendering | `$12.50`, `[  $12.50]`, `paid $12.50`, `[$12.50, $0.05]`, `Invoice(status=due, total=$12.50)` |
 
 ### `modules/`
 
@@ -380,6 +383,7 @@ cargo run -p aura -- run examples/collections/set_basics.au
 cargo run -p aura -- run examples/classes/point_distance.au
 cargo run -p aura -- run examples/classes/methods.au
 cargo run -p aura -- run examples/classes/mutating_methods.au
+cargo run -p aura -- run examples/classes/properties.au
 cargo run -p aura -- run examples/control_flow/for_range.au
 cargo run -p aura -- run examples/control_flow/match_literals.au
 cargo run -p aura -- run examples/control_flow/boolean_logic.au
@@ -401,6 +405,7 @@ cargo run -p aura -- run examples/traits/marker_trait.au
 cargo run -p aura -- run examples/traits/specialized_generic_impl.au
 cargo run -p aura -- run examples/traits/clone_safety_contract.au
 cargo run -p aura -- run examples/traits/builtin_target_traits.au
+cargo run -p aura -- run examples/traits/display.au
 cargo run -p aura -- run examples/error_handling/try_result.au
 cargo run -p aura -- run examples/resources/with_resource.au
 cargo run -p aura -- run examples/io/read_text_file.au

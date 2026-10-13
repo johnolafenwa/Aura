@@ -1,0 +1,6 @@
+error[AU2043]: `display` does not match `Display`: its receiver must be bare shared `self`
+ --> crates/aura-compiler/tests/fixtures/check-fail/display_impl_mut_receiver.au:5:5
+  |
+5 |     def display(mut self) -> str:
+  |     ^
+  = help: declare it exactly as `def display(self) -> str:`

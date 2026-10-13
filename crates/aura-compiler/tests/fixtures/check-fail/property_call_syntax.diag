@@ -1,0 +1,6 @@
+error[AU2045]: property `area` is a computed value, not a method, and cannot be called
+ --> crates/aura-compiler/tests/fixtures/check-fail/property_call_syntax.au:25:17
+   |
+25 |     print(shape.area())
+   |                 ^
+  = help: read it without parentheses: `.area`

@@ -1,0 +1,6 @@
+error[AU2045]: property `doubled` is read-only and cannot be assigned
+ --> crates/aura-compiler/tests/fixtures/check-path-fail/property_imported_assign.au:5:5
+  |
+5 |     meter.doubled = 10
+  |     ^
+  = help: a property computes a fresh value on each read; bind it to a local to change the copy

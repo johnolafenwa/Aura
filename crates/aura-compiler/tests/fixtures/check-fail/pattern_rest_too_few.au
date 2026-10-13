@@ -1,0 +1,3 @@
+def main():
+    a, b, *rest = (1,)
+    print(a)

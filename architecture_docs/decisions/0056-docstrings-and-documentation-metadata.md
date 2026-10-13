@@ -4,7 +4,7 @@
 - Ratified direction: 2026-09-06, user approval of the priority roadmap
 - Date: 2026-08-02
 - Version target: Aura 0.4
-- Implementation: Implemented in Batch 4 (first-slot and field docstrings, `Args:` parameter sections, `AU2042` limits, hover, completion, signature help, and `aura doc`). Decorator retention waits for decorators, and property documentation lands with properties.
+- Implementation: Implemented in Batch 4 (first-slot and field docstrings, `Args:` parameter sections, `AU2042` limits, hover, completion, signature help, `aura doc`, and getter docstrings in property hover and completion). Decorator retention waits for decorators.
 - Roadmap decision: Batch S1, design-only checkpoint
 - Related: ADR-0025, ADR-0037, ADR-0046, ADR-0050, ADR-0053, and ADR-0055
 
@@ -12,7 +12,8 @@
 
 The user approved Markdown docstrings, editor/generated-doc presentation with
 readable indentation normalization, documentation retained through decoration,
-and field/parameter metadata. Implementation has not started. ADR-0062 owns
+and field/parameter metadata. Batch 4 implemented everything except retention
+through decoration, which waits for decorators. ADR-0062 owns
 typed schema/validation behavior; documentation itself does not enable a codec.
 Remaining detailed choices are listed at the end. See the
 [approved roadmap](../14-priority-roadmap.md).

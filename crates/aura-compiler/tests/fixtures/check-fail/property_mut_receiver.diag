@@ -1,0 +1,6 @@
+error[AU2045]: property `labels` is read-only and cannot be mutated
+ --> crates/aura-compiler/tests/fixtures/check-fail/property_mut_receiver.au:25:11
+   |
+25 |     shape.labels.append("b")
+   |           ^
+  = help: a property computes a fresh value on each read; bind it to a local to change the copy

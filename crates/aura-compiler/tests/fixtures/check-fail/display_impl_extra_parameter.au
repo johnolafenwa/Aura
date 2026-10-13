@@ -1,0 +1,9 @@
+class Point:
+    x: int64
+
+impl Display for Point:
+    def display(self, prefix: str) -> str:
+        return prefix
+
+def main():
+    print(Point(x=1))

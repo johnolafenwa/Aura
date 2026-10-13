@@ -271,6 +271,7 @@ fn function_info(
             view_return: None,
             body: Vec::new(),
             span: builtin_span(),
+            property: None,
             doc: None,
         },
         signature: FunctionSignature {
@@ -317,6 +318,7 @@ fn generic_function_info(
             view_return: None,
             body: Vec::new(),
             span: builtin_span(),
+            property: None,
             doc: None,
         },
         signature: FunctionSignature {

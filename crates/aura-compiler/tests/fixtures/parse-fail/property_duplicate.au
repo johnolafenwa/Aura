@@ -1,0 +1,7 @@
+class Grid:
+    width: int64
+
+    @property
+    @property
+    def area(self) -> int64:
+        return self.width

@@ -96,7 +96,7 @@ The `io.Error` variants above are the shared typed failure set for `io`, `fs`, a
 
 ## Runtime Semantics
 
-`print` renders its value, writes the text, and appends a newline. A floating-point value renders as the shortest finite decimal that round-trips to the same `float32` or `float64` value. The rendering keeps a decimal marker on integral values and preserves negative zero.
+`print` renders its value and a trailing newline into one string, then writes that string in one write. If rendering traps, for example inside a `Display` implementation, that `print` writes nothing. The text of two concurrent `print` calls never interleaves within a line. A floating-point value renders as the shortest finite decimal that round-trips to the same `float32` or `float64` value. The rendering keeps a decimal marker on integral values and preserves negative zero.
 
 `io.write` adds no newline. `io.flush` asks for buffered standard output to be delivered to the host.
 

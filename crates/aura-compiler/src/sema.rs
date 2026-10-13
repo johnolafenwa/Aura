@@ -17,6 +17,11 @@ pub use callables::{
 };
 pub(crate) use loans::{synthetic_returned_view_decl, SYNTHETIC_CALLABLE_DECL};
 pub(crate) use types::closure_call_kind_for;
+mod display;
+pub(crate) use display::{is_prelude_display, DISPLAY_METHOD, DISPLAY_TRAIT};
+mod property_reads;
+#[cfg(test)]
+mod property_reads_tests;
 mod resolve;
 use resolve::{find_namespace_in_modules, reject_reserved_type_name, validate_type_params};
 mod traits;
@@ -59,6 +64,7 @@ pub use program::{
 mod aliases;
 pub(crate) use aliases::expand_alias_callee;
 mod patterns;
+mod structural_patterns;
 mod unions;
 #[cfg(test)]
 mod unions_security_tests;
@@ -126,10 +132,10 @@ use std::rc::Rc;
 use serde::{Deserialize, Serialize};
 
 use crate::ast::{
-    Argument, AssignStmt, AssignTarget, BinaryOp, ClassDecl, CompareLink, ComprehensionClause,
-    ComprehensionOutput, EnumDecl, Expr, ExprKind, FunctionDecl, ImplDecl, Item, LambdaParam,
-    LiteralPattern, LiteralPatternKind, MatchExprArm, MatchStmt, Module, Param, ParamMode, Pattern,
-    ReceiverKind, Stmt, TraitDecl, TypeRef, UnaryOp, VariantPattern, WithStmt,
+    Argument, AssignStmt, AssignTarget, BinaryOp, BindingTarget, ClassDecl, CompareLink,
+    ComprehensionClause, ComprehensionOutput, EnumDecl, Expr, ExprKind, FunctionDecl, ImplDecl,
+    Item, LambdaParam, LiteralPattern, LiteralPatternKind, MatchExprArm, MatchStmt, Module, Param,
+    ParamMode, Pattern, ReceiverKind, Stmt, TraitDecl, TypeRef, UnaryOp, VariantPattern, WithStmt,
 };
 use crate::call::{
     bind_call_arguments, callable_params_from_decl, BuiltinAssociatedFunction,
@@ -725,7 +731,9 @@ fn statement_span(stmt: &Stmt) -> crate::diag::Span {
 
 fn collect_binding_target_names(target: &crate::ast::BindingTarget, names: &mut BTreeSet<String>) {
     match target {
-        crate::ast::BindingTarget::Name { name, .. } => {
+        // A `*_` rest target inserts `_`, which never names a local.
+        crate::ast::BindingTarget::Name { name, .. }
+        | crate::ast::BindingTarget::Rest { name, .. } => {
             names.insert(name.clone());
         }
         crate::ast::BindingTarget::Tuple { elements, .. } => {
@@ -829,6 +837,18 @@ fn render_literal_pattern_key(key: &LiteralPatternKey) -> String {
     }
 }
 
+/// `AU2041` for a named rest element that covers no positions: Aura has no
+/// empty tuple, so `*name` must bind at least one position.
+pub(crate) fn rest_covers_no_positions(span: crate::diag::Span, name: &str) -> Diagnostic {
+    Diagnostic::coded_at(
+        "AU2041",
+        span,
+        format!(
+            "rest `*{name}` covers no positions; Aura has no empty tuple, so use `*_` or remove it"
+        ),
+    )
+}
+
 fn pattern_contains_variant_shape(pattern: &Pattern) -> bool {
     match pattern {
         Pattern::Type(_) => true,
@@ -837,8 +857,13 @@ fn pattern_contains_variant_shape(pattern: &Pattern) -> bool {
             .iter()
             .any(pattern_contains_variant_shape),
         Pattern::Tuple(pattern) => pattern.elements.iter().any(pattern_contains_variant_shape),
+        Pattern::Sequence(pattern) => pattern.elements.iter().any(pattern_contains_variant_shape),
         Pattern::Variant(_) => true,
-        Pattern::Binding(_) | Pattern::Literal(_) | Pattern::Wildcard(_) => false,
+        Pattern::Class(_)
+        | Pattern::Rest(_)
+        | Pattern::Binding(_)
+        | Pattern::Literal(_)
+        | Pattern::Wildcard(_) => false,
     }
 }
 
@@ -3664,7 +3689,25 @@ impl<'a> FunctionChecker<'a> {
                         format!("tuple binding requires a tuple value, found `{}`", ty),
                     ));
                 };
-                if elements.len() != element_types.len() {
+                let is_rest = elements
+                    .iter()
+                    .map(BindingTarget::is_rest)
+                    .collect::<Vec<_>>();
+                let Some(ranges) = crate::ast::rest_element_ranges(&is_rest, element_types.len())
+                else {
+                    if is_rest.contains(&true) {
+                        return Err(Diagnostic::coded_at(
+                            "AU2041",
+                            *span,
+                            format!(
+                                "tuple binding has {} element{} besides its rest target but the value has only {} position{}",
+                                elements.len() - 1,
+                                if elements.len() == 2 { "" } else { "s" },
+                                element_types.len(),
+                                if element_types.len() == 1 { "" } else { "s" },
+                            ),
+                        ));
+                    }
                     return Err(Diagnostic::at(
                         *span,
                         format!(
@@ -3673,12 +3716,40 @@ impl<'a> FunctionChecker<'a> {
                             element_types.len()
                         ),
                     ));
-                }
-                for (element, element_ty) in elements.iter().zip(element_types) {
-                    self.bind_target(element, element_ty, passing, mutable_place, locals, context)?;
+                };
+                for (element, range) in elements.iter().zip(ranges) {
+                    match element {
+                        BindingTarget::Rest { name, .. } if name == "_" => {}
+                        BindingTarget::Rest { name, span } => {
+                            if range.is_empty() {
+                                return Err(rest_covers_no_positions(*span, name));
+                            }
+                            let rest_ty = Type::Tuple(element_types[range].to_vec());
+                            self.bind_target(
+                                &BindingTarget::Name {
+                                    name: name.clone(),
+                                    span: *span,
+                                },
+                                &rest_ty,
+                                passing,
+                                mutable_place,
+                                locals,
+                                context,
+                            )?;
+                        }
+                        _ => self.bind_target(
+                            element,
+                            &element_types[range.start],
+                            passing,
+                            mutable_place,
+                            locals,
+                            context,
+                        )?,
+                    }
                 }
                 Ok(())
             }
+            BindingTarget::Rest { .. } => unreachable!("the parser rejects a lone rest target"),
         }
     }
 
@@ -3852,6 +3923,7 @@ impl<'a> FunctionChecker<'a> {
                     let view_source = range_endpoints
                         .map(|(object, _, _)| object)
                         .unwrap_or(&view.source);
+                    self.reject_property_place(view_source, "viewed", locals)?;
                     let syntactic_place = self.borrow_call_place(view_source);
                     let direct_parent = syntactic_place.as_ref().and_then(|place| {
                         locals
@@ -4754,6 +4826,7 @@ impl<'a> FunctionChecker<'a> {
         assign: &AssignStmt,
         locals: &mut HashMap<String, LocalBinding>,
     ) -> Result<()> {
+        self.reject_property_assignment(assign, locals)?;
         if let AssignTarget::Index { object, index } = &assign.target {
             if assign.mutable {
                 return Err(Diagnostic::at(
@@ -6024,6 +6097,21 @@ impl<'a> FunctionChecker<'a> {
                     Self::collect_pattern_binding_names(subpattern, names);
                 }
             }
+            Pattern::Sequence(sequence) => {
+                for element in &sequence.elements {
+                    Self::collect_pattern_binding_names(element, names);
+                }
+            }
+            Pattern::Class(class) => {
+                for field in &class.fields {
+                    Self::collect_pattern_binding_names(&field.pattern, names);
+                }
+            }
+            Pattern::Rest(rest) => {
+                if let Some(name) = &rest.name {
+                    names.insert(name.clone());
+                }
+            }
             Pattern::Literal(_) | Pattern::Wildcard(_) => {}
         }
     }
@@ -6993,6 +7081,14 @@ impl<'a> FunctionChecker<'a> {
                             let parsed = parse_format_spec(spec).map_err(|error| {
                                 Diagnostic::coded_at("AU1101", *spec_span, error.message)
                             })?;
+                            if self.has_custom_display(&value_type) {
+                                display::validate_custom_display_format_spec(
+                                    &parsed,
+                                    &value_type,
+                                    *spec_span,
+                                )?;
+                                continue;
+                            }
                             validate_format_spec_for_type(&parsed, &value_type).map_err(|error| {
                                 Diagnostic::coded_at("AU2002", *spec_span, error.message).with_help(
                                     "supported codes are d, f, e, x, X, b, o, %, and s; omit the code for ordinary rendering",
@@ -8190,6 +8286,9 @@ impl<'a> FunctionChecker<'a> {
                         self.reject_stale_narrowing(&path, expr.span, locals)?;
                     }
                 }
+                if let Some(property) = self.property_read_type(&object_ty, field, expr.span)? {
+                    return Ok(property);
+                }
                 if let Some(bound) = self
                     .type_of_bound_method(expr, object, field, &object_ty, locals, expected, None)?
                 {
@@ -8278,7 +8377,11 @@ impl<'a> FunctionChecker<'a> {
                         && !matches!(&receiver.kind, ExprKind::Name(name) if !locals.contains_key(name))
                     {
                         let receiver_ty = self.type_of_member_object_expr(receiver, locals)?;
-                        if self.member_names_receiver_method(&receiver_ty, field) {
+                        // `value.property[i]` indexes the property's result;
+                        // a property never takes type arguments.
+                        if self.member_names_receiver_method(&receiver_ty, field)
+                            && self.property_getter(&receiver_ty, field).is_none()
+                        {
                             let lowered = self.explicit_type_args_from_index(index)?;
                             if let Some(bound) = self.type_of_bound_method(
                                 object,
@@ -14659,6 +14762,18 @@ impl<'a> FunctionChecker<'a> {
                                     ),
                                 ));
                             }
+                            if method.decl.property.is_some()
+                                && !self.is_rewritten_property_read(span)
+                            {
+                                return Err(Diagnostic::coded_at(
+                                    "AU2045",
+                                    span,
+                                    format!(
+                                        "property `{field}` is a computed value, not a method, and cannot be called"
+                                    ),
+                                )
+                                .with_help(format!("read it without parentheses: `.{field}`")));
+                            }
                             if method.decl.receiver.is_none() {
                                 return Err(Diagnostic::at(
                                     span,
@@ -15299,6 +15414,14 @@ impl<'a> FunctionChecker<'a> {
             return Ok(field_ty.clone());
         }
         if let Some(method) = class_info.methods.get(field) {
+            // A property resolves to its result type. Only a member
+            // expression records the read site (see `type_of_expr`), because
+            // place-path walks pass the span of a larger expression.
+            if method.decl.property.is_some() {
+                if let Some(getter) = self.property_getter(object_ty, field) {
+                    return Ok(getter.result);
+                }
+            }
             if self.is_external_module(&class_info.module_name) && !method.decl.public {
                 return Err(Diagnostic::at(
                     span,
@@ -15587,6 +15710,9 @@ impl<'a> FunctionChecker<'a> {
             }
             ExprKind::Member { object, field } => {
                 let object_ty = self.type_of_member_object_expr(object, locals)?;
+                if let Some(property) = self.property_read_type(&object_ty, field, expr.span)? {
+                    return Ok(property);
+                }
                 self.resolve_member_type(&object_ty, field, expr.span)
             }
             ExprKind::Index { object, index } => {

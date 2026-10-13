@@ -1,0 +1,14 @@
+class Point:
+    x: int64
+    y: int64
+
+    def __init__(self, x: int64):
+        self.y = self.doubled
+        self.x = x
+
+    @property
+    def doubled(self) -> int64:
+        return self.x * 2
+
+def main():
+    print(Point(3).y)

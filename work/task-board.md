@@ -1,6 +1,28 @@
 # Task Board
 
-Last updated: 2026-10-11
+Last updated: 2026-10-12
+
+## Batch 4: everyday syntax and API usability (complete)
+
+- Target: implement the ratified
+  [Batch 4 design checkpoint](../architecture_docs/18-batch-4-design-checkpoint.md)
+  and leave `main` ready for a release. No version bump or tag in this work.
+- Done, each merged after a green hosted run:
+  - trailing commas and parenthesized imports (PR #33);
+  - the syntax-reflowing `aura fmt`, `aura fmt --stdin`, and LSP
+    formatting (PR #34);
+  - text and byte conveniences (PR #36);
+  - the prelude `Display` trait and read-only `@property` getters
+    (PR #38);
+  - tuple rest elements, list sequence patterns, and keyword class
+    patterns (PR #39);
+  - docstrings, editor documentation, and `aura doc` (PR #40);
+  - two ownership fixes found during the work (PR #41).
+- Diagnostics `AU2040` through `AU2045` cover the new rules. ADR-0055,
+  ADR-0056, and ADR-0063 record the implementation.
+- Known defects left for follow-up are listed in
+  `2026-10-12-batch-4-completion.md`.
+- Details per family are in the `2026-10-11-batch-4-*.md` notes.
 
 ## Batch 3 phase 3a (initialization; in progress)
 
@@ -28,25 +50,20 @@ Last updated: 2026-10-11
   cleanup under cancellation, per checkpoint section F (Q17-Q22 A) and
   ADR-0060. Lands after phase 3a on the same branch.
 
-## Batch 2 completion: union borrowing and phase 2b (in progress)
+## Batch 2 completion: union borrowing and phase 2b (complete)
 
 - Target: borrowing non-copy values into union parameters (`AU2010`),
   then phase 2b (slice views and `Span[T]`, returned range views, and the
   dictionary lookup review), each merged after one green hosted run. No
   version bump or release in this work.
-- Done: a bare union parameter borrows a member place (local, field,
-  element, entry, loop binding, view, or returned view) for the call with
-  no copy; the native boxing of a borrowed `str | None` no longer empties
-  the caller's value; reading a list inside its own `for ... in mut` loop
-  reports `AU3002` in the checker instead of failing MIR validation.
-  Details are in `2026-10-11-batch-2-completion.md`.
-- Union borrowing is PR #37, which also fixes a `match` expression
-  argument that moved its local.
-- Phase 2b done locally: `Span[T]` slice views, returned range views, the
-  dictionary lookup review, span validator tests, editor hover and
-  completion, and documentation.
-- Remaining: hosted runs and merges for PR #37 and the phase 2b pull
-  request.
+- Union borrowing merged as PR #37 (`68b6080`). A bare union parameter
+  borrows a member place for the call with no copy, and a `match`
+  expression argument no longer moves its local.
+- Phase 2b merged as PR #42 (`40ff76e`): `Span[T]` slice views, returned
+  range views, the dictionary lookup review, span validator tests, editor
+  hover and completion, and documentation. Hosted verify passed on Ubuntu
+  and macOS at `541af66`, including the compiler coverage floors.
+- Details are in `2026-10-11-batch-2-completion.md`.
 
 ## Aura 0.3.6 preview release (complete)
 

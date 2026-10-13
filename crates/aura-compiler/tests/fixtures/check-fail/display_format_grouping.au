@@ -1,0 +1,10 @@
+class Money:
+    cents: int64
+
+impl Display for Money:
+    def display(self) -> str:
+        return f"{self.cents} cents"
+
+def main():
+    money = Money(cents=1250)
+    print(f"{money:,}")

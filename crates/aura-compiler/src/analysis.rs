@@ -1764,12 +1764,7 @@ impl<'a> AnalysisBuilder<'a> {
                 if name == crate::sema::INITIALIZER_NAME {
                     continue;
                 }
-                completions.push(AnalysisCompletion {
-                    name: name.clone(),
-                    kind: "method".to_string(),
-                    detail: format_function_detail(&method.decl),
-                    documentation: doc_summary(method.decl.doc.as_ref()),
-                });
+                completions.push(member_completion(name, &method.decl));
             }
         }
 
@@ -2540,14 +2535,49 @@ impl<'a> AnalysisBuilder<'a> {
                 binding.span.line,
             )),
             Pattern::Tuple(tuple) => {
-                let element_types = match expected_type {
-                    Some(Type::Tuple(elements)) => Some(elements.as_slice()),
+                for (element, element_ty) in
+                    tuple_pattern_element_types(&tuple.elements, expected_type)
+                {
+                    self.collect_match_pattern_bindings(element, element_ty.as_ref(), bindings);
+                }
+            }
+            Pattern::Sequence(sequence) => {
+                let element_ty = match expected_type {
+                    Some(Type::Named(name, args)) if name == "list" && args.len() == 1 => {
+                        Some(&args[0])
+                    }
                     _ => None,
                 };
-                for (index, element) in tuple.elements.iter().enumerate() {
+                for element in &sequence.elements {
+                    match element {
+                        Pattern::Rest(_) => {
+                            self.collect_match_pattern_bindings(element, expected_type, bindings)
+                        }
+                        element => {
+                            self.collect_match_pattern_bindings(element, element_ty, bindings)
+                        }
+                    }
+                }
+            }
+            Pattern::Rest(rest) => {
+                if let Some(name) = &rest.name {
+                    bindings.push((
+                        name.clone(),
+                        expected_type.cloned().unwrap_or(Type::Unit),
+                        rest.span.line,
+                    ));
+                }
+            }
+            Pattern::Class(class) => {
+                let member = self.class_pattern_member(class, expected_type);
+                for field in &class.fields {
+                    let field_ty = member
+                        .as_ref()
+                        .and_then(|member| self.resolve_member_type(member, &field.name))
+                        .and_then(|resolved| resolved.ty);
                     self.collect_match_pattern_bindings(
-                        element,
-                        element_types.and_then(|types| types.get(index)),
+                        &field.pattern,
+                        field_ty.as_ref(),
                         bindings,
                     );
                 }
@@ -2570,6 +2600,25 @@ impl<'a> AnalysisBuilder<'a> {
         }
     }
 
+    /// The class type a class pattern tests: the scrutinee itself, or the
+    /// union member that names the same class.
+    fn class_pattern_member(
+        &self,
+        class: &crate::ast::ClassPattern,
+        expected_type: Option<&Type>,
+    ) -> Option<Type> {
+        let class_info = self.class_info_for_type_name(&class.class_name)?;
+        let identity = (&class_info.module_name, &class_info.decl.name);
+        let same_class = |ty: &Type| {
+            self.class_info_for_type_name(base_type_name(ty))
+                .is_some_and(|info| (&info.module_name, &info.decl.name) == identity)
+        };
+        match expected_type {
+            Some(Type::Union(union)) => union.members.iter().find(|ty| same_class(ty)).cloned(),
+            ty => ty.filter(|ty| same_class(ty)).cloned(),
+        }
+    }
+
     fn visit_match_arm_pattern(&mut self, arm: &MatchArm, scrutinee_type: Option<&Type>) {
         self.visit_match_pattern_occurrences(&arm.pattern, scrutinee_type);
     }
@@ -2583,15 +2632,49 @@ impl<'a> AnalysisBuilder<'a> {
                 }
             }
             Pattern::Tuple(tuple) => {
-                let element_types = match expected_type {
-                    Some(Type::Tuple(elements)) => Some(elements.as_slice()),
+                for (element, element_ty) in
+                    tuple_pattern_element_types(&tuple.elements, expected_type)
+                {
+                    self.visit_match_pattern_occurrences(element, element_ty.as_ref());
+                }
+            }
+            Pattern::Sequence(sequence) => {
+                let element_ty = match expected_type {
+                    Some(Type::Named(name, args)) if name == "list" && args.len() == 1 => {
+                        Some(args[0].clone())
+                    }
                     _ => None,
                 };
-                for (index, element) in tuple.elements.iter().enumerate() {
-                    self.visit_match_pattern_occurrences(
-                        element,
-                        element_types.and_then(|types| types.get(index)),
+                for element in &sequence.elements {
+                    self.visit_match_pattern_occurrences(element, element_ty.as_ref());
+                }
+            }
+            Pattern::Class(class) => {
+                if let Some(class_info) = self.class_info_for_type_name(&class.class_name) {
+                    let hover = format_class_hover(class_info);
+                    let definition = self.class_definition(class_info);
+                    let range = range_from_span_with_path(
+                        class.span,
+                        class.class_name.len(),
+                        self.current_source_path(),
                     );
+                    self.push_occurrence(range, hover, Some(definition));
+                }
+                let member = self.class_pattern_member(class, expected_type);
+                for field in &class.fields {
+                    let resolved = member
+                        .as_ref()
+                        .and_then(|member| self.resolve_member_type(member, &field.name));
+                    let field_ty = resolved.as_ref().and_then(|resolved| resolved.ty.clone());
+                    if let Some(resolved) = resolved {
+                        let range = range_from_span_with_path(
+                            field.name_span,
+                            field.name.len(),
+                            self.current_source_path(),
+                        );
+                        self.push_occurrence(range, resolved.hover, resolved.definition);
+                    }
+                    self.visit_match_pattern_occurrences(&field.pattern, field_ty.as_ref());
                 }
             }
             Pattern::Variant(variant) => {
@@ -2622,7 +2705,8 @@ impl<'a> AnalysisBuilder<'a> {
                     self.visit_match_pattern_occurrences(subpattern, payload_types.get(index));
                 }
             }
-            Pattern::Binding(_) | Pattern::Literal(_) | Pattern::Wildcard(_) => {}
+            Pattern::Binding(_) | Pattern::Literal(_) | Pattern::Wildcard(_) | Pattern::Rest(_) => {
+            }
         }
     }
 
@@ -2872,8 +2956,8 @@ impl<'a> AnalysisBuilder<'a> {
                 self.bind_named_value(name, ty.clone(), line, kind, scope)
             }
             (crate::ast::BindingTarget::Tuple { elements, .. }, Type::Tuple(element_types)) => {
-                for (element, element_ty) in elements.iter().zip(element_types) {
-                    self.bind_target_value(element, element_ty, line, kind, scope);
+                for (element, element_ty) in tuple_target_element_types(elements, element_types) {
+                    self.bind_target_value(&element, &element_ty, line, kind, scope);
                 }
             }
             _ => {}
@@ -2904,8 +2988,8 @@ impl<'a> AnalysisBuilder<'a> {
                 self.push_occurrence(definition.clone(), hover, Some(definition));
             }
             (crate::ast::BindingTarget::Tuple { elements, .. }, Type::Tuple(element_types)) => {
-                for (element, element_ty) in elements.iter().zip(element_types) {
-                    self.bind_target_value_exact(element, element_ty, kind, scope);
+                for (element, element_ty) in tuple_target_element_types(elements, element_types) {
+                    self.bind_target_value_exact(&element, &element_ty, kind, scope);
                 }
             }
             _ => {}
@@ -5626,8 +5710,8 @@ impl<'a> AnalysisBuilder<'a> {
                 self.insert_scope_binding(name, ty.clone(), line, kind, scope)
             }
             (crate::ast::BindingTarget::Tuple { elements, .. }, Type::Tuple(element_types)) => {
-                for (element, element_ty) in elements.iter().zip(element_types) {
-                    self.insert_scope_target(element, element_ty, line, kind, scope);
+                for (element, element_ty) in tuple_target_element_types(elements, element_types) {
+                    self.insert_scope_target(&element, &element_ty, line, kind, scope);
                 }
             }
             _ => {}
@@ -5656,8 +5740,8 @@ impl<'a> AnalysisBuilder<'a> {
                 );
             }
             (crate::ast::BindingTarget::Tuple { elements, .. }, Type::Tuple(element_types)) => {
-                for (element, element_ty) in elements.iter().zip(element_types) {
-                    self.insert_scope_target_exact(element, element_ty, kind, scope);
+                for (element, element_ty) in tuple_target_element_types(elements, element_types) {
+                    self.insert_scope_target_exact(&element, &element_ty, kind, scope);
                 }
             }
             _ => {}
@@ -5815,7 +5899,7 @@ fn symbols_from_module(module: &Module) -> Vec<AnalysisSymbol> {
                         })
                         .chain(class_decl.methods.iter().map(|method| AnalysisSymbol {
                             name: method.name.clone(),
-                            kind: "method".to_string(),
+                            kind: method_kind(method).to_string(),
                             detail: format_decl_return(method),
                             line: method.span.line.saturating_sub(1),
                             start_character: method.span.column.saturating_sub(1),
@@ -5999,6 +6083,65 @@ fn range_from_span(span: Span, len: usize) -> AnalysisRange {
         start_character: span.column.saturating_sub(1),
         end_character: span.column.saturating_sub(1) + len,
     }
+}
+
+/// Each tuple pattern element with the type it matches. A rest element
+/// matches the tuple of the positions it covers.
+fn tuple_pattern_element_types<'a>(
+    elements: &'a [Pattern],
+    expected_type: Option<&Type>,
+) -> Vec<(&'a Pattern, Option<Type>)> {
+    let element_types = match expected_type {
+        Some(Type::Tuple(types)) => types.as_slice(),
+        _ => &[],
+    };
+    let is_rest = elements.iter().map(Pattern::is_rest).collect::<Vec<_>>();
+    match crate::ast::rest_element_ranges(&is_rest, element_types.len()) {
+        Some(ranges) => elements
+            .iter()
+            .zip(ranges)
+            .map(|(element, range)| {
+                let ty = if element.is_rest() {
+                    Type::Tuple(element_types[range].to_vec())
+                } else {
+                    element_types[range.start].clone()
+                };
+                (element, Some(ty))
+            })
+            .collect(),
+        None => elements.iter().map(|element| (element, None)).collect(),
+    }
+}
+
+/// Each tuple target element with the type it binds. A named rest target
+/// becomes a plain name bound to the tuple of the positions it covers; `*_`
+/// binds nothing.
+fn tuple_target_element_types(
+    elements: &[crate::ast::BindingTarget],
+    element_types: &[Type],
+) -> Vec<(crate::ast::BindingTarget, Type)> {
+    let is_rest = elements
+        .iter()
+        .map(crate::ast::BindingTarget::is_rest)
+        .collect::<Vec<_>>();
+    let Some(ranges) = crate::ast::rest_element_ranges(&is_rest, element_types.len()) else {
+        return Vec::new();
+    };
+    elements
+        .iter()
+        .zip(ranges)
+        .filter_map(|(element, range)| match element {
+            crate::ast::BindingTarget::Rest { name, .. } if name == "_" => None,
+            crate::ast::BindingTarget::Rest { name, span } => Some((
+                crate::ast::BindingTarget::Name {
+                    name: name.clone(),
+                    span: Span::new(span.line, span.column + 1),
+                },
+                Type::Tuple(element_types[range].to_vec()),
+            )),
+            element => Some((element.clone(), element_types[range.start].clone())),
+        })
+        .collect()
 }
 
 fn range_from_span_with_path(span: Span, len: usize, file_path: Option<String>) -> AnalysisRange {
@@ -6535,6 +6678,16 @@ fn format_method_hover(method_decl: &FunctionDecl) -> String {
 }
 
 fn format_method_hover_with_doc(method_decl: &FunctionDecl, doc: Option<&DocString>) -> String {
+    if method_decl.property.is_some() {
+        return with_doc(
+            format!(
+                "```aura\nproperty {}: {}\n```",
+                method_decl.name,
+                format_decl_return(method_decl)
+            ),
+            doc,
+        );
+    }
     let params = method_decl
         .receiver
         .map(canonical_receiver_spelling)
@@ -7599,6 +7752,31 @@ fn builtin_function_return_type(name: &str) -> Option<Type> {
             "Result".to_string(),
             vec![Type::named("float64"), Type::named("str")],
         )),
+    }
+}
+
+/// The analysis kind of a class member function: `property` for an
+/// `@property` getter, otherwise `method`.
+fn method_kind(method_decl: &FunctionDecl) -> &'static str {
+    if method_decl.property.is_some() {
+        "property"
+    } else {
+        "method"
+    }
+}
+
+/// A completion for a class method or property. A property completes as its
+/// result type because it is read without parentheses.
+fn member_completion(name: &str, method_decl: &FunctionDecl) -> AnalysisCompletion {
+    AnalysisCompletion {
+        name: name.to_string(),
+        kind: method_kind(method_decl).to_string(),
+        detail: if method_decl.property.is_some() {
+            format_decl_return(method_decl)
+        } else {
+            format_function_detail(method_decl)
+        },
+        documentation: doc_summary(method_decl.doc.as_ref()),
     }
 }
 

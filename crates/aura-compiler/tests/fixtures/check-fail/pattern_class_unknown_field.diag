@@ -1,0 +1,5 @@
+error[AU2040]: class `Point` has no field `z`
+ --> crates/aura-compiler/tests/fixtures/check-fail/pattern_class_unknown_field.au:6:20
+  |
+6 |         case Point(z=0):
+  |                    ^

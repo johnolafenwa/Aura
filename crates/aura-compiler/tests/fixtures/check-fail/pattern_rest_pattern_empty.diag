@@ -1,0 +1,5 @@
+error[AU2041]: rest `*rest` covers no positions; Aura has no empty tuple, so use `*_` or remove it
+ --> crates/aura-compiler/tests/fixtures/check-fail/pattern_rest_pattern_empty.au:3:21
+  |
+3 |         case (a, b, *rest):
+  |                     ^

@@ -210,6 +210,26 @@ class TrackedJob:
 The fields that never change live on the class. The field that changes is an
 enum, so the compiler can help you handle every transition.
 
+A class pattern reads several fields in one `match` arm. Name each field you
+care about with `field=pattern`:
+
+```aura
+class Reading:
+    sensor: str
+    value: int64
+
+def label(reading: Reading) -> str:
+    return match reading:
+        case Reading(value=0): "idle"
+        case Reading(sensor=name, value=value): f"{name}: {value}"
+
+def main():
+    print(label(Reading(sensor="door", value=3)))
+```
+
+This prints `door: 3`. See
+[Class Patterns](/manual/enums-and-match#class-patterns) for the full rules.
+
 ## Generic Data
 
 Classes and enums can take type parameters. `Box[T]` holds some `T`.

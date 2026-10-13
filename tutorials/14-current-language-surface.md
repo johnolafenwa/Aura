@@ -773,6 +773,9 @@ The compiler supports these patterns:
   `case value if condition:`
 - the wildcard `case _:`
 - nested enum patterns
+- tuple patterns with one optional rest element, such as `(first, *rest)`
+- list sequence patterns in a bare `match`, such as `[]` and `[head, *tail]`
+- keyword class patterns, such as `Point(x=0, y=y)`
 
 `match value:` matches shared and `match mut value:` matches mutably.
 Statement-form `match` must be exhaustive. Expression-form `match` works in

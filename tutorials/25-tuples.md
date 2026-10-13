@@ -110,6 +110,24 @@ The index must be a non-negative integer literal, must be in bounds, and must
 select a copy element. The checker rejects a variable index or a non-copy
 element. To take ownership of a non-copy element, unpack the tuple.
 
+## Rest Targets
+
+One `*name` target collects the positions the other targets leave over. It
+binds them as a smaller tuple. Use `*_` to drop them:
+
+```aura check-pass
+head, *tail = (1, "two", 3.0)
+print(head)
+print(tail)
+first, *_, last = (1, 2, 3, 4)
+print(first + last)
+```
+
+This prints `1`, `(two, 3.0)`, and `5`. A target has at most one rest element.
+Aura has no empty tuple, so `*name` must cover at least one position. `*_` may
+cover none. The same rest element works inside a tuple pattern, such as
+`case (first, *others):`.
+
 ## Unpacking In Loops
 
 A `for` target can unpack tuple items recursively:
@@ -155,7 +173,6 @@ none of these:
 - iteration
 - methods
 - named elements
-- rest or star unpacking
 - slicing
 - dynamic indexing
 - implicit conversion to `list`

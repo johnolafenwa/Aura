@@ -244,6 +244,8 @@ function completionKind(kind) {
       return CompletionItemKind.Function;
     case "method":
       return CompletionItemKind.Method;
+    case "property":
+      return CompletionItemKind.Property;
     case "field":
       return CompletionItemKind.Field;
     case "enum":
@@ -362,6 +364,8 @@ function symbolKind(kind) {
       return SymbolKind.Function;
     case "method":
       return SymbolKind.Method;
+    case "property":
+      return SymbolKind.Property;
     case "field":
       return SymbolKind.Field;
     case "trait":

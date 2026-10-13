@@ -33,8 +33,8 @@ use crate::runtime_value::{
     current_lightweight_task_cancellation, current_lightweight_task_id,
     decode_process_restart_policy, decode_process_stdio, divmod_numeric_values,
     embedded_nominal_runtime_type_name, evaluate_bytes_host_builtin_ref, evaluate_host_builtin,
-    fail_current_lightweight_task, float_floor_divmod, float_power, format_runtime_value, io_error,
-    io_read_line, json_array_metadata_is_exact, json_dump_error_to_diagnostic,
+    fail_current_lightweight_task, float_floor_divmod, float_power, format_runtime_value_with,
+    io_error, io_read_line, json_array_metadata_is_exact, json_dump_error_to_diagnostic,
     json_int_metadata_is_exact, json_object_metadata_is_exact, json_parse_owned_to_runtime,
     lookup_found, lookup_missing, nominal_runtime_base_name, optional_absent, optional_bytes_value,
     optional_present, optional_str_value, optional_value, poll_cancellation, poll_ready,
@@ -4451,10 +4451,83 @@ pub extern "C-unwind" fn aura_direct_string_literal(
     task_runtime_boundary(|| boxed_value(Value::String(decode_bytes(ptr, len))))
 }
 
+/// Runtime nominal type names mapped to the native thunks of their
+/// synthesized `Display` wrappers. The program entry registers them once.
+static DIRECT_DISPLAY_THUNKS: OnceLock<RwLock<Arc<HashMap<String, usize>>>> = OnceLock::new();
+
+fn direct_display_thunks() -> Arc<HashMap<String, usize>> {
+    DIRECT_DISPLAY_THUNKS
+        .get_or_init(Default::default)
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone()
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_register_display(
+    name_ptr: *const u8,
+    name_len: usize,
+    thunk: i64,
+) {
+    task_runtime_boundary(|| {
+        let name = decode_bytes(name_ptr, name_len);
+        let registry = DIRECT_DISPLAY_THUNKS.get_or_init(Default::default);
+        let mut registry = registry
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        Arc::make_mut(&mut registry).insert(name, thunk as usize);
+    })
+}
+
+/// Renders a value for `print`, `str`, and f-strings, dispatching every
+/// nominal value whose type implements `Display` to its native wrapper.
+fn render_direct_display(value: &Value) -> String {
+    let thunks = direct_display_thunks();
+    if thunks.is_empty() {
+        return value.render();
+    }
+    let rendered = value.render_with_display(&mut |type_name, node| {
+        let thunk = *thunks.get(type_name)?;
+        Some(Ok(call_direct_display_thunk(thunk, node)))
+    });
+    rendered.unwrap_or_else(|error| runtime_diagnostic_error(error))
+}
+
+/// Renders an opaque value. Without `Display` implementations the shared
+/// value renders in place. A `Display` body is user code, so the value is
+/// cloned first and its lock is not held while that code runs.
+fn render_direct_value(value: *mut OpaqueValue) -> String {
+    if direct_display_thunks().is_empty() {
+        unsafe { with_value(value, Value::render) }
+    } else {
+        render_direct_display(&unsafe { value_ref(value) })
+    }
+}
+
+fn call_direct_display_thunk(thunk: usize, value: &Value) -> String {
+    let argument = boxed_value(value.clone());
+    let mut arguments = [argument as i64];
+    prepare_indirect_direct_mutable_sinks(0);
+    let thunk: NativeThunk = unsafe { std::mem::transmute(thunk) };
+    let result = unsafe { thunk(arguments.as_mut_ptr(), arguments.len()) };
+    let rendered = unsafe {
+        with_value(result, |value| match value {
+            Value::String(text) => text.clone(),
+            other => runtime_error(format!(
+                "`Display.display` returned `{}` instead of `str`",
+                value_type_name(other)
+            )),
+        })
+    };
+    unregister_direct_owned_value(result);
+    unsafe { release_untracked_value(result) };
+    rendered
+}
+
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_stringify_value(value: *mut OpaqueValue) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
-        let rendered = unsafe { value_ref(value) }.render();
+        let rendered = render_direct_value(value);
         boxed_value(Value::String(rendered))
     })
 }
@@ -4471,7 +4544,9 @@ pub extern "C-unwind" fn aura_direct_format_value(
         let spec = decode_bytes(spec_ptr, spec_len);
         let value_type = Type::named(decode_bytes(type_ptr, type_len));
         let value = unsafe { value_ref(value) };
-        match format_runtime_value(&value, &value_type, &spec) {
+        match format_runtime_value_with(&value, &value_type, &spec, &mut |value| {
+            Ok(render_direct_display(value))
+        }) {
             Ok(rendered) => boxed_value(Value::String(rendered)),
             Err(error) => runtime_diagnostic_error(error),
         }
@@ -7310,7 +7385,7 @@ pub extern "C-unwind" fn aura_direct_unbox_bool(value: *mut OpaqueValue) -> i64 
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_print_value(value: *mut OpaqueValue) {
     task_runtime_boundary(|| {
-        let mut rendered = unsafe { with_value(value, Value::render) };
+        let mut rendered = render_direct_value(value);
         rendered.push('\n');
         write_stdout(&rendered);
     })

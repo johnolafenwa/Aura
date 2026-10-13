@@ -16,6 +16,11 @@ fn pattern_contains_type_arm(pattern: &Pattern) -> bool {
         Pattern::Or(pattern) => pattern.alternatives.iter().any(pattern_contains_type_arm),
         Pattern::Variant(pattern) => pattern.subpatterns.iter().any(pattern_contains_type_arm),
         Pattern::Tuple(pattern) => pattern.elements.iter().any(pattern_contains_type_arm),
+        Pattern::Sequence(pattern) => pattern.elements.iter().any(pattern_contains_type_arm),
+        Pattern::Class(pattern) => pattern
+            .fields
+            .iter()
+            .any(|field| pattern_contains_type_arm(&field.pattern)),
         _ => false,
     }
 }
@@ -35,6 +40,20 @@ fn type_pattern_coverage_diagnostic(mut diagnostic: Diagnostic, has_type_arm: bo
         diagnostic.code = "AU2013".to_string();
     }
     diagnostic
+}
+
+/// A list or class match without a final catch-all whose arms do not cover
+/// every value.
+fn structural_match_not_exhaustive(span: crate::diag::Span, scrutinee_ty: &Type) -> Diagnostic {
+    let help = if vec_element_type(scrutinee_ty).is_some() {
+        "add a final `case _:`, or cover every length, such as with `[]` and `[_, *_]`"
+    } else {
+        "add a final `case _:`, or a class pattern whose field patterns match every value"
+    };
+    Diagnostic::at(
+        span,
+        format!("non-exhaustive match over `{scrutinee_ty}`: {help}"),
+    )
 }
 
 impl FunctionChecker<'_> {
@@ -118,6 +137,15 @@ impl FunctionChecker<'_> {
                 .type_pattern_member(pattern, expected)
                 .map(|member| BTreeSet::from([key(&member)]))
                 .unwrap_or_default(),
+            Pattern::Class(class) if matches!(expected, Type::Union(_)) => {
+                if self.class_pattern_is_irrefutable(class, expected) {
+                    self.class_pattern_target(class, expected)
+                        .map(|target| BTreeSet::from([key(&target.member)]))
+                        .unwrap_or_default()
+                } else {
+                    BTreeSet::new()
+                }
+            }
             Pattern::Variant(pattern) if Self::is_none_type_pattern(pattern) => {
                 let contains_none = match expected {
                     Type::Union(union) => union.members.contains(&Type::Unit),
@@ -294,6 +322,16 @@ impl FunctionChecker<'_> {
                     match &arm.pattern {
                         Pattern::Type(_) => {
                             unreachable!("root type arms use the typed match checker")
+                        }
+                        Pattern::Rest(_) | Pattern::Sequence(_) | Pattern::Class(_) => {
+                            self.bind_pattern_locals(
+                                &arm.pattern,
+                                &scrutinee_ty,
+                                &mut arm_locals,
+                                match_stmt.capability,
+                                active_match_borrow.as_ref().or(shared_match_place.as_ref()),
+                                shared_scrutinee.as_deref(),
+                            )?;
                         }
                         Pattern::Or(pattern) => {
                             self.validate_or_pattern_alternatives(pattern, &scrutinee_ty)?;
@@ -564,9 +602,11 @@ impl FunctionChecker<'_> {
                     .find(|pattern| pattern_contains_variant_shape(pattern))
                 {
                     return Err(Diagnostic::coded_at(
-                        "AU2999",
+                        "AU2040",
                         self.pattern_span(pattern),
-                        "class patterns are not supported; match an explicit enum/tag representation or use a wildcard and ordinary code",
+                        format!(
+                            "a match over class `{scrutinee_ty}` takes keyword class patterns such as `Name(field=pattern)`, `_`, or a name, not enum variant or type patterns"
+                        ),
                     ));
                 }
             }
@@ -577,12 +617,13 @@ impl FunctionChecker<'_> {
                     || is_float_type(&scrutinee_ty)
                     || matches!(scrutinee_ty, Type::Named(ref name, ref args) if name == "bool" && args.is_empty())
                     || is_string_type(&scrutinee_ty)
+                    || vec_element_type(&scrutinee_ty).is_some()
                     || class_scrutinee)
             {
                 return Err(Diagnostic::at(
                 match_stmt.span,
                 format!(
-                    "`match` currently requires a tuple, enum, bool, integer, float, or str scrutinee, found `{}`",
+                    "`match` currently requires a tuple, enum, bool, integer, float, str, list, or class scrutinee, found `{}`",
                     scrutinee_ty
                 ),
             ));
@@ -603,6 +644,16 @@ impl FunctionChecker<'_> {
                 }
                 match &arm.pattern {
                     Pattern::Type(_) => unreachable!("root type arms use the typed match checker"),
+                    Pattern::Rest(_) | Pattern::Sequence(_) | Pattern::Class(_) => {
+                        self.bind_pattern_locals(
+                            &arm.pattern,
+                            &scrutinee_ty,
+                            &mut arm_locals,
+                            match_stmt.capability,
+                            active_match_borrow.as_ref().or(shared_match_place.as_ref()),
+                            shared_scrutinee.as_deref(),
+                        )?;
+                    }
                     Pattern::Or(pattern) => {
                         self.validate_or_pattern_alternatives(pattern, &scrutinee_ty)?;
                         self.bind_pattern_locals(
@@ -763,6 +814,22 @@ impl FunctionChecker<'_> {
                                 "non-exhaustive match over `{}`: add a covering tuple pattern or final `case _:`",
                                 scrutinee_ty
                             ),
+                        ));
+                    }
+                } else if vec_element_type(&scrutinee_ty).is_some() || class_scrutinee {
+                    let patterns = match_stmt
+                        .arms
+                        .iter()
+                        .filter(|arm| arm.guard.is_none())
+                        .map(|arm| &arm.pattern)
+                        .collect::<Vec<_>>();
+                    if !self
+                        .missing_patterns_for_type(&patterns, &scrutinee_ty)
+                        .is_empty()
+                    {
+                        return Err(structural_match_not_exhaustive(
+                            match_stmt.span,
+                            &scrutinee_ty,
                         ));
                     }
                 } else {
@@ -954,28 +1021,32 @@ impl FunctionChecker<'_> {
                         ),
                     ));
                 };
-                if tuple_pattern.elements.len() != element_types.len() {
-                    return Err(Diagnostic::at(
-                        tuple_pattern.span,
-                        format!(
-                            "tuple pattern has {} elements but the scrutinee has {}",
-                            tuple_pattern.elements.len(),
-                            element_types.len()
-                        ),
-                    ));
-                }
-                for (element, element_ty) in tuple_pattern.elements.iter().zip(element_types) {
-                    self.bind_pattern_locals(
-                        element,
-                        element_ty,
-                        locals,
-                        borrow_mode,
-                        match_borrow_place,
-                        shared_match_scrutinee,
-                    )?;
-                }
-                Ok(())
+                self.bind_tuple_pattern_locals(
+                    tuple_pattern,
+                    element_types,
+                    locals,
+                    borrow_mode,
+                    match_borrow_place,
+                    shared_match_scrutinee,
+                )
             }
+            Pattern::Rest(_) => unreachable!("the parser rejects a lone rest pattern"),
+            Pattern::Sequence(sequence) => self.bind_sequence_pattern_locals(
+                sequence,
+                expected_ty,
+                locals,
+                borrow_mode,
+                match_borrow_place,
+                shared_match_scrutinee,
+            ),
+            Pattern::Class(class) => self.bind_class_pattern_locals(
+                class,
+                expected_ty,
+                locals,
+                borrow_mode,
+                match_borrow_place,
+                shared_match_scrutinee,
+            ),
             Pattern::Variant(variant_pattern) => {
                 let Some(variants) = self.enum_variants_for_type(expected_ty) else {
                     return Err(Diagnostic::at(
@@ -1220,6 +1291,16 @@ impl FunctionChecker<'_> {
                     match &arm.pattern {
                         Pattern::Type(_) => {
                             unreachable!("root type arms use the typed match checker")
+                        }
+                        Pattern::Rest(_) | Pattern::Sequence(_) | Pattern::Class(_) => {
+                            self.bind_pattern_locals(
+                                &arm.pattern,
+                                &scrutinee_ty,
+                                &mut arm_locals,
+                                borrow_mode,
+                                active_match_borrow.as_ref().or(shared_match_place.as_ref()),
+                                shared_scrutinee.as_deref(),
+                            )?;
                         }
                         Pattern::Or(pattern) => {
                             self.validate_or_pattern_alternatives(pattern, &scrutinee_ty)?;
@@ -1480,9 +1561,11 @@ impl FunctionChecker<'_> {
                     .find(|pattern| pattern_contains_variant_shape(pattern))
                 {
                     return Err(Diagnostic::coded_at(
-                        "AU2999",
+                        "AU2040",
                         self.pattern_span(pattern),
-                        "class patterns are not supported; match an explicit enum/tag representation or use a wildcard and ordinary code",
+                        format!(
+                            "a match over class `{scrutinee_ty}` takes keyword class patterns such as `Name(field=pattern)`, `_`, or a name, not enum variant or type patterns"
+                        ),
                     ));
                 }
             }
@@ -1493,12 +1576,13 @@ impl FunctionChecker<'_> {
                     || is_float_type(&scrutinee_ty)
                     || matches!(scrutinee_ty, Type::Named(ref name, ref args) if name == "bool" && args.is_empty())
                     || is_string_type(&scrutinee_ty)
+                    || vec_element_type(&scrutinee_ty).is_some()
                     || class_scrutinee)
             {
                 return Err(Diagnostic::at(
                 span,
                 format!(
-                    "`match` currently requires a tuple, enum, bool, integer, float, or str scrutinee, found `{}`",
+                    "`match` currently requires a tuple, enum, bool, integer, float, str, list, or class scrutinee, found `{}`",
                     scrutinee_ty
                 ),
             ));
@@ -1518,6 +1602,16 @@ impl FunctionChecker<'_> {
                 }
                 match &arm.pattern {
                     Pattern::Type(_) => unreachable!("root type arms use the typed match checker"),
+                    Pattern::Rest(_) | Pattern::Sequence(_) | Pattern::Class(_) => {
+                        self.bind_pattern_locals(
+                            &arm.pattern,
+                            &scrutinee_ty,
+                            &mut arm_locals,
+                            borrow_mode,
+                            active_match_borrow.as_ref().or(shared_match_place.as_ref()),
+                            shared_scrutinee.as_deref(),
+                        )?;
+                    }
                     Pattern::Or(pattern) => {
                         self.validate_or_pattern_alternatives(pattern, &scrutinee_ty)?;
                         self.bind_pattern_locals(
@@ -1672,6 +1766,19 @@ impl FunctionChecker<'_> {
                 ),
                 ));
             }
+            if !wildcard_seen && (vec_element_type(&scrutinee_ty).is_some() || class_scrutinee) {
+                let patterns = arms
+                    .iter()
+                    .filter(|arm| arm.guard.is_none())
+                    .map(|arm| &arm.pattern)
+                    .collect::<Vec<_>>();
+                if !self
+                    .missing_patterns_for_type(&patterns, &scrutinee_ty)
+                    .is_empty()
+                {
+                    return Err(structural_match_not_exhaustive(span, &scrutinee_ty));
+                }
+            }
             if !wildcard_seen && matches!(scrutinee_ty, Type::Tuple(_)) {
                 let patterns = arms
                     .iter()
@@ -1817,6 +1924,18 @@ impl FunctionChecker<'_> {
             }
             return vec!["_".to_string()];
         }
+        if let Some(element_ty) = vec_element_type(expected_ty) {
+            if self.sequence_patterns_cover_list(patterns, element_ty) {
+                return Vec::new();
+            }
+            return vec!["_".to_string()];
+        }
+        if self.class_field_types(expected_ty).is_some() {
+            if self.class_patterns_cover_class(patterns, expected_ty) {
+                return Vec::new();
+            }
+            return vec!["_".to_string()];
+        }
         let Some(variants) = self.enum_variants_for_type(expected_ty) else {
             return vec!["_".to_string()];
         };
@@ -1868,15 +1987,7 @@ impl FunctionChecker<'_> {
     }
 
     pub(super) fn pattern_span(&self, pattern: &Pattern) -> crate::diag::Span {
-        match pattern {
-            Pattern::Type(pattern) => pattern.span,
-            Pattern::Or(pattern) => pattern.span,
-            Pattern::Wildcard(span) => *span,
-            Pattern::Literal(pattern) => pattern.span,
-            Pattern::Binding(binding) => binding.span,
-            Pattern::Variant(variant) => variant.span,
-            Pattern::Tuple(tuple) => tuple.span,
-        }
+        pattern.span()
     }
 
     pub(super) fn check_match_guard(
@@ -1964,6 +2075,16 @@ impl FunctionChecker<'_> {
                 .iter()
                 .flat_map(|pattern| self.typed_pattern_members(pattern, expected_ty))
                 .collect::<BTreeSet<_>>();
+            if let Pattern::Class(class) = pattern {
+                if current.is_empty() {
+                    return self.union_class_pattern_is_covered(
+                        patterns,
+                        class,
+                        expected_ty,
+                        &covered,
+                    );
+                }
+            }
             return !current.is_empty() && current.is_subset(&covered);
         }
         match pattern {
@@ -2000,8 +2121,11 @@ impl FunctionChecker<'_> {
                                     covered.insert(value);
                                 }
                             }
-                            Pattern::Variant(_) => {}
-                            Pattern::Tuple(_) => {}
+                            Pattern::Variant(_)
+                            | Pattern::Tuple(_)
+                            | Pattern::Sequence(_)
+                            | Pattern::Class(_)
+                            | Pattern::Rest(_) => {}
                             Pattern::Type(_) => {
                                 if self.pattern_covers_entire_type(previous, expected_ty) {
                                     return true;
@@ -2063,24 +2187,67 @@ impl FunctionChecker<'_> {
                 let Type::Tuple(element_types) = expected_ty else {
                     return false;
                 };
-                if current_tuple.elements.len() != element_types.len() {
+                let Some(current_elements) =
+                    self.expanded_tuple_elements(current_tuple, element_types.len())
+                else {
                     return false;
-                }
+                };
                 let rows = patterns
                     .iter()
                     .filter_map(|previous| match previous {
-                        Pattern::Tuple(tuple) if tuple.elements.len() == element_types.len() => {
-                            Some(tuple.elements.clone())
+                        Pattern::Tuple(tuple) => {
+                            self.expanded_tuple_elements(tuple, element_types.len())
                         }
                         _ => None,
                     })
                     .collect::<Vec<_>>();
-                self.pattern_rows_cover_pattern_union(&rows, &current_tuple.elements, element_types)
+                self.pattern_rows_cover_pattern_union(&rows, &current_elements, element_types)
             }
+            Pattern::Sequence(_) | Pattern::Class(_) => {
+                self.patterns_cover_type_union(patterns, expected_ty)
+                    || patterns.iter().any(|previous| {
+                        self.pattern_is_covered_by_pattern(previous, pattern, expected_ty)
+                    })
+            }
+            Pattern::Rest(_) => false,
             Pattern::Literal(_) => patterns
                 .iter()
                 .any(|previous| self.pattern_is_covered_by_pattern(previous, pattern, expected_ty)),
         }
+    }
+
+    /// Whether earlier arms already match every value a refutable class
+    /// pattern over a union can match: an arm that covers its whole member,
+    /// or an earlier class pattern on the same member that covers it.
+    fn union_class_pattern_is_covered(
+        &self,
+        patterns: &[&Pattern],
+        class: &crate::ast::ClassPattern,
+        expected_ty: &Type,
+        covered_members: &BTreeSet<String>,
+    ) -> bool {
+        let Ok(target) = self.class_pattern_target(class, expected_ty) else {
+            return false;
+        };
+        let key = target
+            .member
+            .canonical_key(self.module_name, self.canonical_type_names);
+        if covered_members.contains(&key) {
+            return true;
+        }
+        let mut pending = patterns.to_vec();
+        while let Some(previous) = pending.pop() {
+            match previous {
+                Pattern::Or(or_pattern) => pending.extend(or_pattern.alternatives.iter()),
+                Pattern::Class(previous)
+                    if self.class_pattern_is_covered_by(previous, class, expected_ty) =>
+                {
+                    return true;
+                }
+                _ => {}
+            }
+        }
+        false
     }
 
     pub(super) fn pattern_is_covered_by_pattern(
@@ -2090,9 +2257,19 @@ impl FunctionChecker<'_> {
         expected_ty: &Type,
     ) -> bool {
         if matches!(expected_ty, Type::Union(_) | Type::Unit) {
+            let previous_members = self.typed_pattern_members(previous, expected_ty);
+            if let Pattern::Class(class) = current {
+                if self.typed_pattern_members(current, expected_ty).is_empty() {
+                    return self.union_class_pattern_is_covered(
+                        &[previous],
+                        class,
+                        expected_ty,
+                        &previous_members,
+                    );
+                }
+            }
             let current = self.typed_pattern_members(current, expected_ty);
-            return !current.is_empty()
-                && current.is_subset(&self.typed_pattern_members(previous, expected_ty));
+            return !current.is_empty() && current.is_subset(&previous_members);
         }
         if self.pattern_covers_entire_type(previous, expected_ty) {
             return true;
@@ -2139,16 +2316,27 @@ impl FunctionChecker<'_> {
                 let Type::Tuple(element_types) = expected_ty else {
                     return false;
                 };
-                previous.elements.len() == element_types.len()
-                    && current.elements.len() == element_types.len()
-                    && previous
-                        .elements
-                        .iter()
-                        .zip(&current.elements)
-                        .zip(element_types)
-                        .all(|((previous, current), ty)| {
-                            self.pattern_is_covered_by_pattern(previous, current, ty)
-                        })
+                let (Some(previous), Some(current)) = (
+                    self.expanded_tuple_elements(previous, element_types.len()),
+                    self.expanded_tuple_elements(current, element_types.len()),
+                ) else {
+                    return false;
+                };
+                previous
+                    .iter()
+                    .zip(&current)
+                    .zip(element_types)
+                    .all(|((previous, current), ty)| {
+                        self.pattern_is_covered_by_pattern(previous, current, ty)
+                    })
+            }
+            (Pattern::Class(previous), Pattern::Class(current)) => {
+                self.class_pattern_is_covered_by(previous, current, expected_ty)
+            }
+            (Pattern::Sequence(previous), Pattern::Sequence(current)) => {
+                vec_element_type(expected_ty).is_some_and(|element_ty| {
+                    self.sequence_pattern_is_covered_by(previous, current, element_ty)
+                })
             }
             _ => false,
         }
@@ -2167,18 +2355,24 @@ impl FunctionChecker<'_> {
                 self.patterns_cover_type_union(&alternatives, expected_ty)
             }
             Pattern::Wildcard(_) | Pattern::Binding(_) => true,
-            Pattern::Literal(_) => false,
+            Pattern::Literal(_) | Pattern::Rest(_) => false,
             Pattern::Tuple(tuple) => {
                 let Type::Tuple(element_types) = expected_ty else {
                     return false;
                 };
-                tuple.elements.len() == element_types.len()
-                    && tuple
-                        .elements
-                        .iter()
-                        .zip(element_types)
-                        .all(|(element, ty)| self.pattern_covers_entire_type(element, ty))
+                self.expanded_tuple_elements(tuple, element_types.len())
+                    .is_some_and(|elements| {
+                        elements
+                            .iter()
+                            .zip(element_types)
+                            .all(|(element, ty)| self.pattern_covers_entire_type(element, ty))
+                    })
             }
+            Pattern::Sequence(sequence) => {
+                vec_element_type(expected_ty).is_some()
+                    && matches!(sequence.elements.as_slice(), [Pattern::Rest(_)])
+            }
+            Pattern::Class(class) => self.class_pattern_is_irrefutable(class, expected_ty),
             Pattern::Variant(variant_pattern) => {
                 let Some(variants) = self.enum_variants_for_type(expected_ty) else {
                     return false;
@@ -2235,6 +2429,12 @@ impl FunctionChecker<'_> {
         if let Type::Tuple(element_types) = expected_ty {
             return self.tuple_patterns_cover_type_union(patterns, element_types);
         }
+        if let Some(element_ty) = vec_element_type(expected_ty) {
+            return self.sequence_patterns_cover_list(patterns, element_ty);
+        }
+        if self.class_field_types(expected_ty).is_some() {
+            return self.class_patterns_cover_class(patterns, expected_ty);
+        }
         let Some(variants) = self.enum_variants_for_type(expected_ty) else {
             return false;
         };
@@ -2277,8 +2477,8 @@ impl FunctionChecker<'_> {
                 alternatives
                     .into_iter()
                     .filter_map(|pattern| match pattern {
-                        Pattern::Tuple(tuple) if tuple.elements.len() == element_types.len() => {
-                            Some(tuple.elements.clone())
+                        Pattern::Tuple(tuple) => {
+                            self.expanded_tuple_elements(tuple, element_types.len())
                         }
                         _ => None,
                     })
@@ -2353,8 +2553,8 @@ impl FunctionChecker<'_> {
                         pattern if irrefutable(pattern) => {
                             vec![Pattern::Wildcard(self.pattern_span(pattern)); nested_types.len()]
                         }
-                        Pattern::Tuple(tuple) if tuple.elements.len() == nested_types.len() => {
-                            tuple.elements.clone()
+                        Pattern::Tuple(tuple) => {
+                            self.expanded_tuple_elements(tuple, nested_types.len())?
                         }
                         _ => return None,
                     };
@@ -2363,6 +2563,34 @@ impl FunctionChecker<'_> {
                 })
                 .collect::<Vec<_>>();
             return self.pattern_rows_cover_type_union(&specialized, &specialized_types);
+        }
+
+        if let Some(fields) = self.class_field_types(first_ty) {
+            if rows
+                .iter()
+                .any(|row| matches!(row.first(), Some(Pattern::Class(_))))
+            {
+                let mut specialized_types =
+                    fields.into_iter().map(|(_, ty)| ty).collect::<Vec<_>>();
+                let width = specialized_types.len();
+                specialized_types.extend_from_slice(remaining_types);
+                let specialized = rows
+                    .iter()
+                    .filter_map(|row| {
+                        let (first, remaining) = row.split_first()?;
+                        let mut values = match first {
+                            pattern if irrefutable(pattern) => {
+                                vec![Pattern::Wildcard(self.pattern_span(pattern)); width]
+                            }
+                            Pattern::Class(class) => self.class_pattern_row(class, first_ty)?,
+                            _ => return None,
+                        };
+                        values.extend_from_slice(remaining);
+                        Some(values)
+                    })
+                    .collect::<Vec<_>>();
+                return self.pattern_rows_cover_type_union(&specialized, &specialized_types);
+            }
         }
 
         if let Some(variants) = self.enum_variants_for_type(first_ty) {
@@ -2470,8 +2698,11 @@ impl FunctionChecker<'_> {
                 pattern if irrefutable(pattern) => {
                     vec![Pattern::Wildcard(self.pattern_span(pattern)); nested_types.len()]
                 }
-                Pattern::Tuple(tuple) if tuple.elements.len() == nested_types.len() => {
-                    tuple.elements.clone()
+                Pattern::Tuple(tuple) => {
+                    match self.expanded_tuple_elements(tuple, nested_types.len()) {
+                        Some(elements) => elements,
+                        None => return false,
+                    }
                 }
                 _ => return false,
             };
@@ -2487,8 +2718,8 @@ impl FunctionChecker<'_> {
                         pattern if irrefutable(pattern) => {
                             vec![Pattern::Wildcard(self.pattern_span(pattern)); nested_types.len()]
                         }
-                        Pattern::Tuple(tuple) if tuple.elements.len() == nested_types.len() => {
-                            tuple.elements.clone()
+                        Pattern::Tuple(tuple) => {
+                            self.expanded_tuple_elements(tuple, nested_types.len())?
                         }
                         _ => return None,
                     };

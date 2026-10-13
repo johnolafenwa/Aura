@@ -1,0 +1,13 @@
+public class Point:
+    public x: int64
+    public y: int64
+    secret: int64 = 0
+
+public def origin() -> Point:
+    return Point(x=0, y=0)
+
+public def classify(point: Point) -> str:
+    return match point:
+        case Point(secret=0, x=0, y=0): "origin"
+        case Point(secret=0): "plain"
+        case _: "marked"

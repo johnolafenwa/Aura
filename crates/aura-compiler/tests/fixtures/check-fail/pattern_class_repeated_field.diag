@@ -1,0 +1,5 @@
+error[AU2040]: field `x` appears more than once in class pattern `Point`
+ --> crates/aura-compiler/tests/fixtures/check-fail/pattern_class_repeated_field.au:6:25
+  |
+6 |         case Point(x=0, x=1):
+  |                         ^

@@ -282,6 +282,10 @@ Tuple `!=` is the logical negation of tuple `==`. Tuple `<`, `<=`, `>`, and `>=`
 | Live resource | An opaque label such as `<file>` or `<tcp-stream>`, with no host identifiers. |
 | FFI opaque handle | `<opaque TypeName>`, using its canonical Aura type name. The foreign pointer address is never shown. |
 
+A class or enum with a `Display` implementation renders as the result of its
+`display` method, at the top level and at any nesting depth. See
+[Generics And Traits](/manual/generics-and-traits#the-display-trait).
+
 Nested strings stay unquoted. This display form is for people. It is not a round-trippable serialization format.
 
 ## Assignment And Mutation

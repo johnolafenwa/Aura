@@ -24,10 +24,13 @@ binding-target-list
 
 binding-target
     = identifier
+    | "*", identifier
     | "(", binding-target-list, ")" ;
 
 tuple-pattern = "(", pattern, ",", ")"
               | "(", pattern, ",", pattern, { ",", pattern }, ")" ;
+
+rest-pattern = "*", ( identifier | "_" ) ;
 ```
 
 Tuple values are always parenthesized:
@@ -69,7 +72,20 @@ Tuple types are structural. Two tuple types are equal exactly when they have the
 
 **`indirect`.** `indirect` tuple types are rejected. `indirect` is the facility for recursive named fields. So a class field cannot place its recursive link inside a tuple. Put that link in a separately named `indirect` field instead. The compiler's diagnostic for the tuple case points to that fix.
 
-**Unpacking and patterns.** An unpacking target or tuple pattern must have the scrutinee's exact recursive tuple shape. Each binding leaf receives its corresponding element type. The ordinary binding rules reject duplicate names and a leaf that shadows a visible name. A tuple binding leaf is a name, not a member or index place.
+**Unpacking and patterns.** An unpacking target or tuple pattern must have the scrutinee's exact recursive tuple shape. Each binding leaf receives its corresponding element type.
+
+**Rest elements.** One `*name` element in a target or tuple pattern takes the positions the other elements leave over. It binds them as a tuple of their element types. `*_` ignores them.
+
+```aura
+def main():
+    head, *tail = (1, "two", 3.0)
+    print(head)
+    print(tail)
+    first, *_, last = (1, 2, 3, 4)
+    print(first + last)
+```
+
+This prints `1`, `(two, 3.0)`, and `5`. The fixed elements must not outnumber the tuple positions. Aura has no empty tuple, so `*name` must cover at least one position, while `*_` may cover none. A second rest element, or a rest that is the whole target, is rejected with `AU2041`. The ordinary binding rules reject duplicate names and a leaf that shadows a visible name. A tuple binding leaf is a name, not a member or index place.
 
 **Indexing.** A tuple index must be a non-negative integer literal known at compile time. It must select an existing position, and that element's type must be copyable. The expression has the selected element's type. These are static errors:
 
@@ -163,6 +179,7 @@ Mutable-borrow iteration with a tuple target is rejected. Aura does not rebuild 
 | --- | --- |
 | `AU1101` | a malformed tuple expression, type, target, or pattern, or misplaced commas |
 | `AU2002` | an annotated tuple element-type mismatch |
+| `AU2041` | a misplaced or repeated rest element, too few tuple positions for the fixed elements, or a `*name` that covers no positions |
 | `AU2999` | a tuple shape or arity mismatch, reported with the checker's general code |
 | `AU3001` | using a non-copy tuple after whole-source unpacking or `match own`, reported at the move |
 | `AU3002` | trying to move an element through shared unpacking or bare `match` |
@@ -177,6 +194,7 @@ Both backends implement tuples: MIR execution and direct native generation. MIR 
 - function returns
 - recursive assignment and loop unpacking
 - tuple patterns
+- rest elements in targets and tuple patterns
 - whole-source ownership
 - copy-only constant indexing
 - recursive structural equality
@@ -192,7 +210,6 @@ Aura 0.3 does not have these tuple features:
 - tuple methods
 - tuple ordering
 - named tuple elements
-- rest or star unpacking
 - mutable tuple-target writeback
 - tuple slicing
 - dynamic tuple indexing
@@ -219,6 +236,7 @@ Tuples are implemented as described on this page:
 - function returns
 - recursive assignment and `for` unpacking
 - recursive tuple patterns
+- rest elements in unpacking targets and tuple patterns
 - structural copy classification
 - whole-source moves
 - shared borrowed destructuring

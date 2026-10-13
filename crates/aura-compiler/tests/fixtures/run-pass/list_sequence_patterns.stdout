@@ -1,0 +1,12 @@
+empty
+one: 4
+from 1 to 2
+from 1 to 3
+zero then [1, 2]
+zero then []
+pair 5 6
+ends in nine after [7, 8]
+other
+a
+2
+y

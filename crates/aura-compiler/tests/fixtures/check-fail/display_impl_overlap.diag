@@ -1,0 +1,7 @@
+error[AU2043]: `Display` for `Point` overlaps an earlier implementation
+ --> crates/aura-compiler/tests/fixtures/check-fail/display_impl_overlap.au:8:1
+  |
+8 | impl Display for Point:
+  | ^
+  = related crates/aura-compiler/tests/fixtures/check-fail/display_impl_overlap.au:4:1: the earlier `Display` implementation is here
+  = help: a type has exactly one `Display` implementation

@@ -1,0 +1,33 @@
+class Tag:
+    label: str
+
+def main():
+    first, *rest = (1, "two", 3.0)
+    print(first)
+    print(rest)
+    *init, last = (1, 2, 3, 4)
+    print(init)
+    print(last)
+    a, *_, z = (10, 20, 30, 40, 50)
+    print(a + z)
+    x, *_, y = (1, 2)
+    print(x + y)
+    (head, *tail) = (Tag(label="a"), Tag(label="b"), "c")
+    print(head.label)
+    print(tail[0].label)
+    for key, *values in [(1, "a", true), (2, "b", false)]:
+        print(key)
+        print(values)
+    match (1, "x", 2.5, false):
+        case (0, *_):
+            print("zero")
+        case (n, *middle, false):
+            print(n)
+            print(middle)
+        case _:
+            print("other")
+    pair = (Tag(label="p"), Tag(label="q"), 7)
+    match own pair:
+        case (left, *others):
+            print(left.label)
+            print(others[1])

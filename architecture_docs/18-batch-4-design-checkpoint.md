@@ -216,6 +216,32 @@ shared lock during the arm, `*rest` clone-safety, class field visibility
 across modules, property rejection, union member tests, coverage, and
 MIR/direct parity for every runnable fixture.
 
+### B4. Implementation refinements
+
+The implementation keeps the rules above with these refinements:
+
+- **Empty parentheses.** `Name()` always parses as a class pattern. A
+  payload-free enum variant is written without parentheses, so `Red()` over
+  an enum is `AU2040`. This keeps `Point()` unambiguous without consulting
+  types in the parser.
+- **Sequence coverage.** Irrefutable arms for every length `0` through
+  `k - 1`, plus an irrefutable arm with `k` fixed elements and a rest, cover
+  every list. `[]` plus `[_, *_]` is the `k = 1` case. Other sequence arms
+  contribute no coverage.
+- **Class coverage.** A class value is also covered by class patterns whose
+  field patterns together cover every value, column by column, such as one
+  arm per variant of an enum field. An irrefutable class pattern remains the
+  simple case.
+- **Diagnostic codes.** Enum variant or type patterns over a class scrutinee
+  report `AU2040`. Rest misplacement detected while parsing reports `AU2041`.
+  A sequence pattern over a non-list scrutinee and a non-exhaustive list or
+  class match keep the general `AU2999` match codes.
+- **Properties.** Aura has no properties yet, so the field rule rejects
+  methods and unknown names with `AU2040`. Properties will fall under the
+  same rejection.
+- **Rest slices.** A named sequence rest builds its list with the same
+  duplication check as a list slice, so a list of `Rng` values rejects it.
+
 ## C. Text and byte conveniences
 
 The additions come from the parsing work in `examples/` and agent-tool
@@ -402,6 +428,29 @@ inside each aggregate, generic local implementations, every `AU2043` and
 implementation with no partial output, property reads in chains and
 expressions, Copy and non-Copy property results, imported Display dispatch
 and properties, and MIR/direct parity.
+
+**Implementation notes.** The implementation settles these details:
+
+- A `Display` implementation for a generic type must cover every
+  specialization with distinct type parameters, as in
+  `impl[T] Display for Box[T]:`. `AU2043` rejects a specialized target such as
+  `Box[int64]` and a bounded parameter. Both backends dispatch by the value's
+  runtime nominal name, so one type has exactly one rendering.
+- The prelude `Display` is visible only where the module neither declares nor
+  imports an item named `Display`. Implementations of such a user trait do
+  not affect rendering.
+- `AU2045` rejects `mut` binding of a property: a `mut` argument, a
+  `mut self` call, and `match mut`. It also rejects assignment and views
+  through a property path, such as `shape.origin.x = 4`. An `own` argument and
+  `match own` accept a property read, because ADR-0055 makes the owned result
+  a fresh value that may be moved without moving from the receiver.
+- The parser reports `AU2044` for `@property` that is not directly before a
+  class method, including at statement level, and for a repeated marker.
+- `str(value)` already rendered any value before this batch. The batch routes
+  it through `display`.
+- The hover text of a property read is `property name: Type`, followed by
+  the getter's docstring when it has one. Member completion carries the
+  docstring's first line.
 
 ## F. Syntax-reflowing formatter
 

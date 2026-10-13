@@ -1,0 +1,5 @@
+error[AU2999]: unreachable match arm
+ --> crates/aura-compiler/tests/fixtures/check-fail/pattern_sequence_unreachable.au:8:14
+  |
+8 |         case _:
+  |              ^

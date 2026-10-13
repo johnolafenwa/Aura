@@ -391,3 +391,15 @@ fn trailing_tabs_and_spaces_are_removed_outside_strings() {
         "def main() -> None:\n    text = \"\"\"keep\t \n\"\"\"\n    print(text)\n",
     );
 }
+
+#[test]
+fn f_string_escapes_and_nested_literals_keep_their_text() {
+    let source = r#"def main():
+    name = "a"
+    print(f"\u{263A} {{literal}}\t{name}")
+    print(f"{name + "x\"y"}")
+    print(f"{name + '''z'''}")
+    print(f"{name + 'q\'r'}")
+"#;
+    assert_formats(source, source);
+}

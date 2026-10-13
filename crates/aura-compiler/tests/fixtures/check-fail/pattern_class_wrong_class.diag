@@ -1,0 +1,5 @@
+error[AU2040]: class pattern `Other` does not match scrutinee type `Point`
+ --> crates/aura-compiler/tests/fixtures/check-fail/pattern_class_wrong_class.au:9:14
+  |
+9 |         case Other(x=0):
+  |              ^

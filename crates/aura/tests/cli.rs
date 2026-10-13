@@ -167,7 +167,7 @@ fn all_benchmark_inputs_pass_checking() {
 #[test]
 fn check_reports_match_expression_and_literal_pattern_diagnostics() {
     let fixture = repo_root().join(
-        "crates/aura-compiler/tests/fixtures/check-fail/match_expression_class_pattern_deferred.au",
+        "crates/aura-compiler/tests/fixtures/check-fail/match_expression_class_variant_pattern.au",
     );
     let output = Command::new(aura_bin())
         .arg("check")
@@ -177,13 +177,13 @@ fn check_reports_match_expression_and_literal_pattern_diagnostics() {
 
     assert!(
         !output.status.success(),
-        "class patterns must remain rejected"
+        "variant patterns over a class must be rejected"
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("error[AU2999]"), "stderr was:\n{stderr}");
+    assert!(stderr.contains("error[AU2040]"), "stderr was:\n{stderr}");
     assert!(
         stderr.contains(
-            "class patterns are not supported; match an explicit enum/tag representation or use a wildcard and ordinary code"
+            "a match over class `Box` takes keyword class patterns such as `Name(field=pattern)`, `_`, or a name, not enum variant or type patterns"
         ),
         "stderr was:\n{stderr}"
     );
@@ -8980,7 +8980,7 @@ fn check_reports_imported_module_syntax_errors_at_the_imported_file() {
     .expect("failed to write main module");
     fs::write(
         &broken_path,
-        "def broken() -> int32:\n    return @@@ syntax error\n",
+        "def broken() -> int32:\n    return $$$ syntax error\n",
     )
     .expect("failed to write broken module");
 
@@ -9001,7 +9001,7 @@ fn check_reports_imported_module_syntax_errors_at_the_imported_file() {
         stderr
     );
     assert!(
-        stderr.contains("unexpected character `@`"),
+        stderr.contains("unexpected character `$`"),
         "stderr should preserve the imported parser error, stderr was:\n{}",
         stderr
     );
@@ -15602,6 +15602,21 @@ fn failed_factories_release_builtin_file_handles_on_both_backends() {
     assert_eq!(String::from_utf8_lossy(&native.stdout), "300\n");
 }
 
+#[test]
+fn structural_patterns_example_runs_on_both_backends() {
+    let expected = "1\n(two, 3.0)\nempty\none: 7\nfrom 1 to 4\n10 then [20, 30]\norigin\non the y axis at 5\nelsewhere\n";
+    assert_default_backend_example_runs(
+        "examples/enums/structural_patterns.au",
+        "structural-patterns-default",
+        expected,
+    );
+    assert_direct_backend_example_runs(
+        "examples/enums/structural_patterns.au",
+        "structural-patterns-direct",
+        expected,
+    );
+}
+
 fn run_fmt_stdin(args: &[&str], input: &str) -> std::process::Output {
     let mut child = Command::new(aura_bin())
         .arg("fmt")
@@ -15756,4 +15771,43 @@ fn lsp_service_formats_whole_documents() {
         .as_str()
         .expect("syntax errors are reported as text")
         .contains("/virtual/main.au"));
+}
+
+#[test]
+fn run_and_direct_build_agree_on_the_display_example() {
+    let expected =
+        "$12.50\n[  $12.50]\npaid $12.50\n[$12.50, $0.05]\nInvoice(status=due, total=$12.50)\n";
+    let output = Command::new(aura_bin())
+        .arg("run")
+        .arg(repo_root().join("examples/traits/display.au"))
+        .output()
+        .expect("failed to run aura run on the display example");
+    assert!(
+        output.status.success(),
+        "run should succeed for the display example, stderr was:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), expected);
+    assert_direct_backend_example_runs("examples/traits/display.au", "display-direct", expected);
+}
+
+#[test]
+fn run_and_direct_build_agree_on_the_properties_example() {
+    let expected = "15\n30 doubled\n[HI, THERE, !]\n[hi, there]\n";
+    let output = Command::new(aura_bin())
+        .arg("run")
+        .arg(repo_root().join("examples/classes/properties.au"))
+        .output()
+        .expect("failed to run aura run on the properties example");
+    assert!(
+        output.status.success(),
+        "run should succeed for the properties example, stderr was:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), expected);
+    assert_direct_backend_example_runs(
+        "examples/classes/properties.au",
+        "properties-direct",
+        expected,
+    );
 }
