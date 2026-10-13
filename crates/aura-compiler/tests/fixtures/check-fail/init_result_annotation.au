@@ -1,0 +1,9 @@
+class Server:
+    port: int64
+
+    def __init__(self, port: int64) -> Result[None, str]:
+        self.port = port
+        return Result.Ok(None)
+
+def main():
+    print("unreachable")

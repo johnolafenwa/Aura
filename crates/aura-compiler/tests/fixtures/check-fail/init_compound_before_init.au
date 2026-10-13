@@ -1,0 +1,8 @@
+class Counter:
+    count: int64
+
+    def __init__(self, start: int64):
+        self.count += start
+
+def main():
+    print(Counter(1).count)

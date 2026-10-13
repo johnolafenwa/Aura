@@ -1,0 +1,6 @@
+error[AU3012]: partially initialized `self` cannot escape
+ --> crates/aura-compiler/tests/fixtures/check-fail/init_partial_self_escape.au:7:14
+  |
+7 |         self.reset()
+  |              ^
+  = help: initialize `label` before using `self` as a whole

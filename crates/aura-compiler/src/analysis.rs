@@ -1760,6 +1760,10 @@ impl<'a> AnalysisBuilder<'a> {
                 });
             }
             for (name, method) in &class_info.methods {
+                // `__init__` runs only through a class call.
+                if name == crate::sema::INITIALIZER_NAME {
+                    continue;
+                }
                 completions.push(member_completion(name, &method.decl));
             }
         }
@@ -6754,6 +6758,10 @@ fn format_class_hover(class_info: &ClassInfo) -> String {
         .map(|(name, field)| format!("{}: {}", name, field.ty))
         .collect::<Vec<_>>();
     fields.sort();
+    if let Some(params) = initializer_params_text(class_info) {
+        let receiver = if params.is_empty() { "self" } else { "self, " };
+        fields.push(format!("def __init__({receiver}{params})"));
+    }
     let signature = if fields.is_empty() {
         format!("```aura\nclass {}\n```", class_info.decl.name)
     } else {
@@ -6766,11 +6774,47 @@ fn format_class_hover(class_info: &ClassInfo) -> String {
     with_doc(signature, class_info.decl.doc.as_ref())
 }
 
+/// The parameter list a class call takes from `__init__`, spelled as a
+/// function contract spells it.
+fn initializer_params_text(class_info: &ClassInfo) -> Option<String> {
+    let initializer = class_info.initializer()?;
+    let contract = Type::Function {
+        params: initializer
+            .decl
+            .params
+            .iter()
+            .zip(&initializer.signature.params)
+            .zip(&initializer.signature.param_passings)
+            .map(
+                |((param, ty), passing)| crate::sema::FunctionParamContract {
+                    name: param.name.clone(),
+                    keyword_only: param.keyword_only,
+                    has_default: param.default.is_some(),
+                    passing: *passing,
+                    ty: ty.clone(),
+                },
+            )
+            .collect(),
+        return_type: Box::new(Type::Unit),
+    }
+    .to_string();
+    Some(
+        contract
+            .strip_prefix("def(")
+            .and_then(|text| text.strip_suffix(") -> None"))
+            .unwrap_or(&contract)
+            .to_owned(),
+    )
+}
+
 fn format_class_detail(class_info: &ClassInfo) -> String {
     if let Some(constructor) = class_info.builtin_constructor() {
         return match constructor {
             BuiltinClassConstructor::RandomRng => "Rng(seed: int64)".to_string(),
         };
+    }
+    if let Some(params) = initializer_params_text(class_info) {
+        return format!("{}({params})", class_info.decl.name);
     }
     let fields = class_info
         .decl

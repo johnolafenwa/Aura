@@ -1,0 +1,6 @@
+error[AU3012]: field `sum` may already be initialized; assignment needs a known state
+ --> crates/aura-compiler/tests/fixtures/check-fail/init_loop_initialization.au:6:13
+  |
+6 |             self.sum = value
+  |             ^
+  = help: initialize `self.sum` exactly once on every path, or assign it on every path before this point

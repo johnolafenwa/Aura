@@ -1,0 +1,6 @@
+error[AU3012]: field `left` may already be initialized; assignment needs a known state
+ --> crates/aura-compiler/tests/fixtures/check-fail/init_maybe_initialized_assignment.au:8:9
+  |
+8 |         self.left = 0
+  |         ^
+  = help: initialize `self.left` exactly once on every path, or assign it on every path before this point

@@ -1,0 +1,6 @@
+error[AU2005]: `__init__` cannot be called as a method or used as a value
+ --> crates/aura-compiler/tests/fixtures/check-fail/init_used_as_value.au:8:19
+  |
+8 |     make = Server.__init__
+  |                   ^
+  = help: call the class itself, as in `Server(...)`, to construct a new object

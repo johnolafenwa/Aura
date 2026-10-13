@@ -1,0 +1,6 @@
+error[AU3012]: initializer returns without initializing `x`, `y` and `z`
+ --> crates/aura-compiler/tests/fixtures/check-fail/init_return_missing_several.au:8:13
+  |
+8 |             return
+  |             ^
+  = help: assign every field without a declaration default on every path through `__init__`

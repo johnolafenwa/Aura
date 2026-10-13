@@ -1147,6 +1147,8 @@ fn maintained_example_subset_runs_via_public_entrypoints_and_direct_codegen() {
         "examples/concurrency/queue_get_timeout_named.au",
         "examples/modules/trait_impl_imports.au",
         "examples/traits/operator_traits.au",
+        "examples/classes/initializers.au",
+        "examples/classes/factories.au",
     ];
 
     for relative in examples {

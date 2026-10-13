@@ -1,0 +1,6 @@
+error[AU3012]: partially initialized `self` cannot escape
+ --> crates/aura-compiler/tests/fixtures/check-fail/init_property_before_init.au:6:23
+  |
+6 |         self.y = self.doubled
+  |                       ^
+  = help: initialize `x` and `y` before using `self` as a whole

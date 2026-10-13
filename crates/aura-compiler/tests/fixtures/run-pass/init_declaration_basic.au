@@ -1,0 +1,20 @@
+class Server:
+    host: str
+    port: int64
+    label: str
+
+    def __init__(self, host: str, port: int64 = 8080, *, prefix: str = "srv"):
+        self.host = host.clone()
+        self.port = port
+        self.label = f"{prefix}:{port}"
+
+    def describe(self) -> str:
+        return f"{self.host} {self.label}"
+
+def main():
+    server = Server("0.0.0.0", port=9090)
+    other = Server(host="127.0.0.1")
+    named = Server("localhost", 1, prefix="api")
+    print(server.describe())
+    print(other.describe())
+    print(named.describe())

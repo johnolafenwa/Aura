@@ -1,0 +1,25 @@
+class Buffer:
+    data: list[int64]
+    capacity: int64
+    label: str = "buf"
+
+    def __init__(self, capacity: int64, *, fill: int64 = 0):
+        if capacity < 0:
+            self.capacity = 0
+        else:
+            self.capacity = capacity
+        self.data = []
+        for _ in range(self.capacity):
+            self.data.append(fill)
+        self.describe()
+
+    def describe(self):
+        print(f"{self.label}: {self.data.len()} slots")
+
+def main():
+    small = Buffer(2)
+    empty = Buffer(-5, fill=9)
+    filled = Buffer(3, fill=7)
+    print(small.data)
+    print(empty.capacity)
+    print(filled.data)

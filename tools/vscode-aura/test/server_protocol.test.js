@@ -5,6 +5,9 @@ const assert = require("node:assert/strict");
 const { spawn } = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");
+const {
+  SUPPORTED_SEMANTIC_INTERFACE_SCHEMA_VERSION
+} = require("../../aura-language-server/src/compiler_bridge.js");
 
 const REQUEST_TIMEOUT_MS = 10_000;
 
@@ -192,7 +195,7 @@ test(
         `    ] },\n` +
         `    { ...base, code: "AU2001", message: "ordinary diagnostic" }\n` +
         `  ], symbols: [], occurrences: [] } : [];\n` +
-        `  process.stdout.write(JSON.stringify({ id: request.id, semantic_interface_version: 17, result }) + "\\n");\n` +
+        `  process.stdout.write(JSON.stringify({ id: request.id, semantic_interface_version: ${SUPPORTED_SEMANTIC_INTERFACE_SCHEMA_VERSION}, result }) + "\\n");\n` +
         `});\n`
     );
     fs.chmodSync(fakeAura, 0o755);
@@ -896,7 +899,7 @@ test(
         `  const result = request.method === "format"\n` +
         `    ? { formatted: request.source.replace("x=1", "x = 1") }\n` +
         `    : request.method === "analyze" ? { diagnostics: [], symbols: [], occurrences: [] } : [];\n` +
-        `  process.stdout.write(JSON.stringify({ id: request.id, semantic_interface_version: 17, result }) + "\\n");\n` +
+        `  process.stdout.write(JSON.stringify({ id: request.id, semantic_interface_version: ${SUPPORTED_SEMANTIC_INTERFACE_SCHEMA_VERSION}, result }) + "\\n");\n` +
         `});\n`
     );
     fs.chmodSync(fakeAura, 0o755);

@@ -1,0 +1,10 @@
+class Counter:
+    value: int64 = 0
+    name: str
+
+    def __init__(self, name: own str):
+        self.name = name
+
+def main():
+    counter = Counter(name="hits", value=3)
+    print(counter.value)

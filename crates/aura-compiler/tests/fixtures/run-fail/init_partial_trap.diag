@@ -1,0 +1,6 @@
+error[AU4003]: list index `10` is out of bounds for length `3`
+ --> crates/aura-compiler/tests/fixtures/run-fail/init_partial_trap.au:10:33
+   |
+10 |         self.total = self.items[index]
+   |                                 ^
+  = note: Aura call chain (innermost first): Session.__init__ at 6:5 -> main at 12:1

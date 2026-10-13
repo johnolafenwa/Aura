@@ -1,0 +1,6 @@
+error[AU3004]: the object under construction cannot be moved out of `__init__`
+ --> crates/aura-compiler/tests/fixtures/check-fail/init_self_moved.au:6:14
+  |
+6 |         keep(self)
+  |              ^
+  = help: the class call returns `self` to its caller; pass `self` as a bare or `mut` argument instead

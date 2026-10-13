@@ -85,6 +85,7 @@ String and format-specification diagnostics are described under
 | `AU2013` | union pattern coverage | Missing, duplicate, unreachable, or nonmember union type arms. | Add the missing arms and remove the others. |
 | `AU2014` | invalidated narrowing | A member use after the `None` test that narrowed the place stopped applying. | Test the current value again. |
 | `AU2015` | callable contract mismatch | A callable whose complete contract differs from the one its destination requires. | Match the contract, or restrict it with an explicit adapter or constructor. |
+| `AU2016` | initializer declaration | An `__init__` without a bare `self` receiver, with its own type parameters, with a result other than `None`, with `return value`, or declared in a trait. | Write `def __init__(self, ...)` with no result, and move fallible construction into a named factory. |
 | `AU2040` | invalid class pattern | A class pattern with a positional, unknown, private, repeated, or method field, a class that does not match the scrutinee, or a `match mut` class pattern. | Name stored fields visible here, once each, as `field=pattern`. |
 | `AU2041` | invalid rest pattern or target | A `*` rest element outside a tuple or sequence, a second rest element, too few positions for the fixed elements, a `*name` that covers no positions, or a sequence pattern in `match mut` or `match own`. | Keep one rest element per tuple or sequence, and use `*_` when it may cover nothing. |
 | `AU2042` | invalid docstring or documentation limit | A triple-quoted string in a class, enum, trait, or `impl` body outside a documentation position, or documentation over a size limit. | Move the string to the first slot or directly after a field, or shorten the documentation. |
@@ -262,6 +263,7 @@ process. They are not Aura diagnostics. See [FFI v0](/manual/ffi).
 | `AU3009` | single-consumer task-result duplication | Copying the right to observe a task's result. | Keep one owner of the task handle and observe its result once. |
 | `AU3010` | view escape or returned provenance | A view that outlives or does not come from its declared origin. | Return an owned clone, index, or handle, or keep the loan inside the owner's region. |
 | `AU3011` | collection mutation under a live element view | `append`, `remove`, dictionary assignment, or another structural change of a collection while a view of one of its elements or entries is live, or a write to an element the view may select. | End the view first, or write a different literal position. |
+| `AU3012` | definite initialization | Inside `__init__`, a read of a field before it is set, an assignment to a field set on only some paths, or a use, escape, or return of `self` before every field is set. | Set the field on every path first, or move the use after the last field assignment. |
 
 The guidance these diagnostics carry is described under
 [Ownership Diagnostics](#ownership-diagnostics).

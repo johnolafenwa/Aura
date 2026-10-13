@@ -91,6 +91,8 @@ Omitted function parameters and class fields then evaluate their defaults in dec
 - An `own` parameter consumes its fresh default temporary.
 - Mutable-borrow defaults are statically rejected.
 
+A class with `__init__` binds its arguments the same way. Aura then evaluates the class's field defaults in declaration order and runs the initializer body on the new object. A trap or cancellation inside the body drops the fields set so far, exactly once.
+
 Enum-variant constructor arguments also evaluate in call-site source order. Named arguments are then bound by name to the variant's payload slots, which are in declaration order. Slot order never reorders their evaluation.
 
 ### Dictionary Literal Keys

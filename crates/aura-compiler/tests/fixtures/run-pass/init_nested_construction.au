@@ -1,0 +1,30 @@
+class Point:
+    x: int64
+    y: int64
+
+    def __init__(self, x: int64, y: int64 = 0):
+        self.x = x
+        self.y = y
+
+class Segment:
+    start: Point
+    end: Point
+    length: int64
+
+    def __init__(self, start: own Point, end: own Point):
+        self.length = (end.x - start.x) + (end.y - start.y)
+        self.start = start
+        self.end = end
+
+class Plain:
+    point: Point
+    note: str = "plain"
+
+def main():
+    segment = Segment(Point(1, 1), Point(4, 5))
+    print(f"{segment.start.x},{segment.start.y} -> {segment.end.x},{segment.end.y} = {segment.length}")
+    points = [Point(index, index * 2) for index in range(3)]
+    for point in points:
+        print(f"{point.x} {point.y}")
+    plain = Plain(point=Point(7))
+    print(f"{plain.note} {plain.point.x} {plain.point.y}")

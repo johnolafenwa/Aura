@@ -220,6 +220,55 @@ impl ClassInfo {
             .then(|| BuiltinClassConstructor::resolve(&self.module_name, &self.decl.name))
             .flatten()
     }
+
+    /// The class's `__init__`, whose parameters define the class call
+    /// (ADR-0059). Declaration checking has already validated its shape, so a
+    /// method of this name is always an initializer.
+    pub(crate) fn initializer(&self) -> Option<&MethodInfo> {
+        self.methods.get(INITIALIZER_NAME)
+    }
+}
+
+/// The reserved method name of a class initializer.
+pub(crate) const INITIALIZER_NAME: &str = "__init__";
+
+const INITIALIZER_SHAPE_HELP: &str = "write `def __init__(self, ...)`; the class call supplies the object, and the body assigns its fields";
+
+/// Rejects every `__init__` declaration whose shape is not
+/// `def __init__(self, ...)` with ordinary parameters (`AU2016`). The result
+/// annotation is checked once its type is lowered.
+fn validate_initializer_declaration(method: &FunctionDecl) -> Result<()> {
+    if method.receiver != Some(ReceiverKind::Borrow) {
+        return Err(Diagnostic::coded_at(
+            "AU2016",
+            method.span,
+            "initializer must be `def __init__(self, ...)` with a bare `self` receiver",
+        )
+        .with_help(INITIALIZER_SHAPE_HELP));
+    }
+    if !method.type_params.is_empty() {
+        return Err(Diagnostic::coded_at(
+            "AU2016",
+            method.span,
+            "initializer `__init__` cannot declare its own type parameters",
+        )
+        .with_help("declare the type parameters on the class; the class call infers them"));
+    }
+    if method.view_return.is_some() {
+        return Err(initializer_result_annotation_error(method));
+    }
+    Ok(())
+}
+
+fn initializer_result_annotation_error(method: &FunctionDecl) -> Diagnostic {
+    Diagnostic::coded_at(
+        "AU2016",
+        method.return_type.span,
+        "initializer `__init__` cannot declare a result type",
+    )
+    .with_help(
+        "the class call returns the new object; use a named factory returning `Result[Class, Error]` for fallible construction",
+    )
 }
 
 #[derive(Clone, Debug)]
@@ -717,6 +766,14 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
         )?;
         let mut methods = BTreeMap::new();
         for method in &trait_decl.methods {
+            if method.name == INITIALIZER_NAME {
+                return Err(Diagnostic::coded_at(
+                    "AU2016",
+                    method.span,
+                    "`__init__` cannot be a trait member",
+                )
+                .with_help("declare `def __init__(self, ...)` on each class instead"));
+            }
             super::property_reads::reject_property_outside_class(
                 method,
                 &format!("a method of trait `{}`", trait_decl.name),
@@ -963,6 +1020,9 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
         }
 
         for method in &class_decl.methods {
+            if method.name == INITIALIZER_NAME {
+                validate_initializer_declaration(method)?;
+            }
             validate_type_params(&method.type_params, method.span, "method")?;
             validate_params(
                 method.receiver,
@@ -1005,6 +1065,9 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
                 &method_type_param_scope,
                 Some(&class_self_type),
             )?;
+            if method.name == INITIALIZER_NAME && return_type != Type::Unit {
+                return Err(initializer_result_annotation_error(method));
+            }
             reject_signature_span_positions(
                 &method.params,
                 &params,

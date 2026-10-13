@@ -2030,9 +2030,35 @@ impl<'a> MirLoanValidationContext<'a> {
         state: &ValidatedLoanState,
         site_name: &str,
     ) -> std::result::Result<(), String> {
+        self.validate_callable_identities_against_type_except(
+            caller,
+            expected,
+            value,
+            state,
+            site_name,
+            &[],
+        )
+    }
+
+    /// As [`Self::validate_callable_identities_against_type`], skipping the
+    /// callable positions inside the named absent fields (`.field`).
+    fn validate_callable_identities_against_type_except(
+        &self,
+        caller: &MirFunction,
+        expected: &Type,
+        value: &Operand,
+        state: &ValidatedLoanState,
+        site_name: &str,
+        absent_fields: &[String],
+    ) -> std::result::Result<(), String> {
         let positions = callable_identities_in_type(expected, self)
             .into_iter()
             .filter(|(suffix, _)| !suffix.is_empty())
+            .filter(|(suffix, _)| {
+                !absent_fields
+                    .iter()
+                    .any(|field| callable_suffix_covers(field, suffix))
+            })
             .collect::<Vec<_>>();
         if positions.is_empty() {
             return Ok(());
@@ -2534,7 +2560,9 @@ impl<'a> MirLoanValidationContext<'a> {
     }
 
     fn root_allows_mutable_loan(&self, function: &MirFunction, root: &str) -> bool {
-        if root == "self" {
+        // `self` names the receiver only in a method that has one; an
+        // initializer's `self` is an ordinary owned local.
+        if root == "self" && function.receiver.is_some() {
             return matches!(
                 function.receiver,
                 Some(MirReceiverKind::Value | MirReceiverKind::BorrowMut)
@@ -2547,7 +2575,7 @@ impl<'a> MirLoanValidationContext<'a> {
     }
 
     fn root_allows_owned_take(&self, function: &MirFunction, root: &str) -> bool {
-        if root == "self" {
+        if root == "self" && function.receiver.is_some() {
             return function.receiver == Some(MirReceiverKind::Value);
         }
         if let Some(param) = function.params.iter().find(|param| param.name == root) {
@@ -8543,12 +8571,32 @@ fn validate_loan_instruction(
                         CallableContractSite::Argument,
                     )?;
                 }
-                context.validate_callable_identities_against_type(
+                // An initializer's object starts without its undefaulted
+                // fields; each callable among them is checked when the body
+                // assigns it, and the slot check proves every one is
+                // assigned before the object is used or returned.
+                let absent_fields = match value {
+                    Rvalue::Construct { class_name, fields } => context
+                        .classes
+                        .get(class_name.as_str())
+                        .map(|class| {
+                            class
+                                .fields
+                                .iter()
+                                .filter(|field| !fields.iter().any(|init| init.name == field.name))
+                                .map(|field| format!(".{}", field.name))
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default(),
+                    _ => Vec::new(),
+                };
+                context.validate_callable_identities_against_type_except(
                     function,
                     &target_type,
                     &assigned_value,
                     &assigned,
                     "assignment",
+                    &absent_fields,
                 )?;
             }
             if let Rvalue::Call {
@@ -9066,9 +9114,408 @@ pub(crate) fn validate_loan_flow(module: &MirModule) -> std::result::Result<(), 
         }
     }
     for function in module.functions.iter().chain(module.top_level.iter()) {
+        validate_initializer_slot(function, &context)?;
         validate_function_loan_flow(function, &context)?;
     }
     Ok(())
+}
+
+/// The fields an initializer's object holds at one program point; `None`
+/// before the slot is allocated.
+type InitializerSlotState = Option<BTreeSet<String>>;
+
+/// Proves that a class value constructed without some of its fields exists
+/// only as an initializer's object under construction (ADR-0059): the
+/// `self` local of a receiver-less `__init__` function returning that class,
+/// allocated once in the entry block. Every read of an absent field, every
+/// use of the whole object before it is complete, and every return of an
+/// incomplete object is refused on every path, so neither backend ever
+/// observes an absent field.
+fn validate_initializer_slot(
+    function: &MirFunction,
+    context: &MirLoanValidationContext<'_>,
+) -> std::result::Result<(), String> {
+    let mut slot = None;
+    for (block_index, block) in function.blocks.iter().enumerate() {
+        for (instruction_index, instruction) in block.instructions.iter().enumerate() {
+            let Instruction::Assign {
+                target,
+                value: Rvalue::Construct { class_name, fields },
+            } = instruction
+            else {
+                continue;
+            };
+            let Some(class) = context.classes.get(class_name.as_str()) else {
+                continue;
+            };
+            if class
+                .fields
+                .iter()
+                .all(|field| fields.iter().any(|init| init.name == field.name))
+            {
+                continue;
+            }
+            let returns_class =
+                matches!(&function.return_type, Type::Named(name, _) if name == class_name);
+            if slot.is_some()
+                || block_index != 0
+                || target != "self"
+                || function.receiver.is_some()
+                || !returns_class
+                || !function
+                    .name
+                    .ends_with(&format!(".{}", crate::sema::INITIALIZER_NAME))
+            {
+                return Err(format!(
+                    "invalid MIR construction of `{class_name}` in `{}` omits fields outside an initializer's object",
+                    function.name
+                ));
+            }
+            let provided = fields
+                .iter()
+                .map(|field| field.name.clone())
+                .collect::<BTreeSet<_>>();
+            slot = Some((instruction_index, provided));
+        }
+    }
+    let Some((slot_index, provided)) = slot else {
+        return Ok(());
+    };
+    let blocks = function
+        .blocks
+        .iter()
+        .map(|block| (block.label.as_str(), block))
+        .collect::<BTreeMap<_, _>>();
+    let all_fields = context.classes[match &function.return_type {
+        Type::Named(name, _) => name.as_str(),
+        _ => unreachable!("the slot check proved a named class result"),
+    }]
+    .fields
+    .iter()
+    .map(|field| field.name.clone())
+    .collect::<BTreeSet<_>>();
+    let check = InitializerSlotCheck {
+        function,
+        all_fields: &all_fields,
+    };
+    let mut states = BTreeMap::<&str, InitializerSlotState>::new();
+    let mut pending = vec![(function.entry.as_str(), None::<BTreeSet<String>>)];
+    while let Some((label, incoming)) = pending.pop() {
+        let state = match states.get(label) {
+            Some(_) if label == function.entry => {
+                return Err(format!(
+                    "invalid MIR initializer `{}` re-enters the block that allocates its object",
+                    function.name
+                ));
+            }
+            Some(Some(existing)) => {
+                let joined = existing
+                    .intersection(incoming.as_ref().expect("only the entry precedes the slot"))
+                    .cloned()
+                    .collect::<BTreeSet<_>>();
+                if &joined == existing {
+                    continue;
+                }
+                Some(joined)
+            }
+            _ => incoming,
+        };
+        states.insert(label, state.clone());
+        let block = blocks.get(label).ok_or_else(|| {
+            format!(
+                "invalid MIR initializer `{}` jumps to unknown block `{label}`",
+                function.name
+            )
+        })?;
+        let mut state = state;
+        for (index, instruction) in block.instructions.iter().enumerate() {
+            if label == function.entry && index == slot_index {
+                state = Some(provided.clone());
+                continue;
+            }
+            check.instruction(instruction, &mut state)?;
+        }
+        for mention in terminator_place_mentions(&block.terminator) {
+            check.mention(mention, &state)?;
+        }
+        for successor in terminator_successors(&block.terminator) {
+            pending.push((successor, state.clone()));
+        }
+    }
+    Ok(())
+}
+
+struct InitializerSlotCheck<'a> {
+    function: &'a MirFunction,
+    all_fields: &'a BTreeSet<String>,
+}
+
+impl InitializerSlotCheck<'_> {
+    fn instruction(
+        &self,
+        instruction: &Instruction,
+        state: &mut InitializerSlotState,
+    ) -> std::result::Result<(), String> {
+        let mut mentions = Vec::new();
+        instruction_place_mentions(instruction, &mut mentions);
+        for mention in mentions {
+            self.mention(mention, state)?;
+        }
+        if let Instruction::Assign { target, .. } = instruction {
+            let mut segments = target.split('.');
+            if segments.next() == Some("self") {
+                let field = segments.next();
+                let nested = segments.next().is_some();
+                match (state.as_mut(), field) {
+                    (Some(initialized), Some(field)) if !nested => {
+                        initialized.insert(field.to_string());
+                    }
+                    _ => self.mention(target, state)?,
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn mention(
+        &self,
+        place: &str,
+        state: &InitializerSlotState,
+    ) -> std::result::Result<(), String> {
+        let mut segments = place.split('.');
+        if segments.next() != Some("self") {
+            return Ok(());
+        }
+        let Some(initialized) = state else {
+            return Err(format!(
+                "invalid MIR initializer `{}` uses `self` before allocating it",
+                self.function.name
+            ));
+        };
+        match segments.next() {
+            Some(field) if self.all_fields.contains(field) => {
+                if initialized.contains(field) {
+                    Ok(())
+                } else {
+                    Err(format!(
+                        "invalid MIR initializer `{}` reads field `{field}` of `self` before initializing it",
+                        self.function.name
+                    ))
+                }
+            }
+            _ if initialized.is_superset(self.all_fields) => Ok(()),
+            _ => Err(format!(
+                "invalid MIR initializer `{}` uses `self` before every field is initialized",
+                self.function.name
+            )),
+        }
+    }
+}
+
+fn terminator_successors(terminator: &Terminator) -> Vec<&str> {
+    match terminator {
+        Terminator::Goto(label) => vec![label],
+        // `while true` tests a constant: only the taken edge executes.
+        Terminator::Branch {
+            condition: Operand::Bool(condition),
+            then_label,
+            else_label,
+        } => vec![if *condition { then_label } else { else_label }],
+        Terminator::Branch {
+            then_label,
+            else_label,
+            ..
+        } => vec![then_label, else_label],
+        Terminator::ForRange {
+            body_label,
+            exit_label,
+            ..
+        } => vec![body_label, exit_label],
+        Terminator::Match {
+            arms, otherwise, ..
+        } => arms
+            .iter()
+            .map(|arm| arm.label.as_str())
+            .chain(std::iter::once(otherwise.as_str()))
+            .collect(),
+        Terminator::Return(_) | Terminator::AssertFail { .. } | Terminator::Unreachable => {
+            Vec::new()
+        }
+    }
+}
+
+fn terminator_place_mentions(terminator: &Terminator) -> Vec<&str> {
+    let mut mentions = Vec::new();
+    match terminator {
+        Terminator::Return(operand)
+        | Terminator::Branch {
+            condition: operand, ..
+        }
+        | Terminator::Match {
+            scrutinee: operand, ..
+        } => operand_place_mention(operand, &mut mentions),
+        Terminator::ForRange {
+            binding, iterable, ..
+        } => {
+            mentions.push(binding.as_str());
+            operand_place_mention(iterable, &mut mentions);
+        }
+        Terminator::AssertFail {
+            message, captures, ..
+        } => {
+            for operand in message
+                .iter()
+                .chain(captures.iter().map(|capture| &capture.value))
+            {
+                operand_place_mention(operand, &mut mentions);
+            }
+        }
+        Terminator::Goto(_) | Terminator::Unreachable => {}
+    }
+    mentions
+}
+
+fn operand_place_mention<'a>(operand: &'a Operand, mentions: &mut Vec<&'a str>) {
+    if let Operand::Place(place) | Operand::MovePlace(place) = operand {
+        mentions.push(place);
+    }
+}
+
+/// Every place an instruction reads, lends, or names, except an `Assign`
+/// target.
+fn instruction_place_mentions<'a>(instruction: &'a Instruction, mentions: &mut Vec<&'a str>) {
+    match instruction {
+        Instruction::Safepoint => {}
+        Instruction::BeginLoan { source, .. } | Instruction::PushCleanup { place: source } => {
+            mentions.push(source)
+        }
+        Instruction::BeginElementLoan {
+            source, selector, ..
+        } => {
+            mentions.push(source);
+            operand_place_mention(selector, mentions);
+        }
+        Instruction::BeginReturnedLoan { origin, .. } => mentions.push(origin),
+        Instruction::Reborrow { parent, .. } => mentions.push(parent),
+        Instruction::ReborrowElement {
+            parent, selector, ..
+        } => {
+            mentions.push(parent);
+            operand_place_mention(selector, mentions);
+        }
+        Instruction::ReadLoan { target, loan } => mentions.extend([target.as_str(), loan]),
+        Instruction::EndLoan { loan } => mentions.push(loan),
+        Instruction::ReturnLoan { loan, origin } => mentions.extend([loan.as_str(), origin]),
+        Instruction::PopCleanup { place, .. } => mentions.push(place),
+        Instruction::WriteLoan { loan, value } => {
+            mentions.push(loan);
+            rvalue_place_mentions(value, mentions);
+        }
+        Instruction::Assign { value, .. } => rvalue_place_mentions(value, mentions),
+        Instruction::Eval { value } => operand_place_mention(value, mentions),
+    }
+}
+
+fn rvalue_place_mentions<'a>(value: &'a Rvalue, mentions: &mut Vec<&'a str>) {
+    match value {
+        Rvalue::Use(operand)
+        | Rvalue::CallableAdapt { value: operand, .. }
+        | Rvalue::UnionInject { value: operand, .. }
+        | Rvalue::NoneTest { value: operand }
+        | Rvalue::Unary { value: operand, .. }
+        | Rvalue::Cast { value: operand, .. }
+        | Rvalue::Try { value: operand }
+        | Rvalue::TupleElement { tuple: operand, .. }
+        | Rvalue::VariantPayload {
+            scrutinee: operand, ..
+        }
+        | Rvalue::Member {
+            object: operand, ..
+        } => operand_place_mention(operand, mentions),
+        Rvalue::UnionTagTest { place, .. }
+        | Rvalue::UnionTakePayload { place, .. }
+        | Rvalue::TupleTakeElement { place, .. } => mentions.push(place),
+        Rvalue::ModuleConstant { .. } => {}
+        Rvalue::Closure { captures, .. } => {
+            for capture in captures {
+                operand_place_mention(&capture.value, mentions);
+                mentions.extend(capture.source_place.as_deref());
+            }
+        }
+        Rvalue::FormatString { parts } => {
+            for part in parts {
+                if let MirFormatPart::Value(operand)
+                | MirFormatPart::Formatted { value: operand, .. } = part
+                {
+                    operand_place_mention(operand, mentions);
+                }
+            }
+        }
+        Rvalue::Binary { left, right, .. } => {
+            operand_place_mention(left, mentions);
+            operand_place_mention(right, mentions);
+        }
+        Rvalue::StartTask {
+            stack_size,
+            task_group,
+            function,
+            args,
+            ..
+        } => {
+            for operand in stack_size.iter().chain([task_group, function]) {
+                operand_place_mention(operand, mentions);
+            }
+            arg_place_mentions(args, mentions);
+        }
+        Rvalue::Call { callee, args } => {
+            match callee {
+                CallTarget::Value(operand) => operand_place_mention(operand, mentions),
+                CallTarget::Member {
+                    object,
+                    receiver_place,
+                    ..
+                }
+                | CallTarget::TraitMember {
+                    object,
+                    receiver_place,
+                    ..
+                } => {
+                    operand_place_mention(object, mentions);
+                    mentions.extend(receiver_place.as_deref());
+                }
+                CallTarget::Name(_) | CallTarget::Extern(_) => {}
+            }
+            arg_place_mentions(args, mentions);
+        }
+        Rvalue::VecLiteral { elements, .. }
+        | Rvalue::TupleLiteral { elements, .. }
+        | Rvalue::SetLiteral { elements, .. }
+        | Rvalue::EnumVariant {
+            payloads: elements, ..
+        } => {
+            for element in elements {
+                operand_place_mention(element, mentions);
+            }
+        }
+        Rvalue::MapLiteral { entries, .. } => {
+            for entry in entries {
+                operand_place_mention(&entry.key, mentions);
+                operand_place_mention(&entry.value, mentions);
+            }
+        }
+        Rvalue::Construct { fields, .. } => {
+            for field in fields {
+                operand_place_mention(&field.value, mentions);
+            }
+        }
+    }
+}
+
+fn arg_place_mentions<'a>(args: &'a [MirArg], mentions: &mut Vec<&'a str>) {
+    for arg in args {
+        operand_place_mention(&arg.value, mentions);
+        mentions.extend(arg.writeback_place.as_deref());
+    }
 }
 
 pub fn lower(program: &Program) -> MirModule {
@@ -9119,16 +9566,11 @@ pub fn lower(program: &Program) -> MirModule {
         let mut methods = Vec::new();
         for method in class.methods.values() {
             let qualified_name = mir_class_method_name(program, class, &method.decl.name);
-            functions.extend(lower_function(
+            functions.extend(lower_class_method(
                 program,
                 &qualified_name,
-                &class.module_name,
-                ClosureOwner::ClassMethod {
-                    class_name: class.decl.name.clone(),
-                    method_name: method.decl.name.clone(),
-                },
-                method.decl.receiver,
-                Some(Type::Named(
+                class,
+                Type::Named(
                     class_name.clone(),
                     class
                         .decl
@@ -9137,17 +9579,13 @@ pub fn lower(program: &Program) -> MirModule {
                         .cloned()
                         .map(Type::TypeParam)
                         .collect(),
-                )),
-                &method.decl,
-                &method.signature.params,
-                &method.signature.param_passings,
-                &method.signature.return_type,
-                method.type_param_bounds.clone(),
+                ),
+                method,
             ));
             methods.push(MirMethod {
                 name: method.decl.name.clone(),
                 function_name: qualified_name,
-                receiver: method.decl.receiver.map(lower_receiver_kind),
+                receiver: lower_class_method_receiver(method),
             });
         }
         classes.push(MirClass {
@@ -9431,16 +9869,11 @@ fn push_imported_module_classes_from_namespace(
                 namespace.path, class.decl.name, method.decl.name
             );
             if seen_function_names.insert(qualified_name.clone()) {
-                functions.extend(lower_function(
+                functions.extend(lower_class_method(
                     program,
                     &qualified_name,
-                    &class.module_name,
-                    ClosureOwner::ClassMethod {
-                        class_name: class.decl.name.clone(),
-                        method_name: method.decl.name.clone(),
-                    },
-                    method.decl.receiver,
-                    Some(Type::Named(
+                    class,
+                    Type::Named(
                         class_name.clone(),
                         class
                             .decl
@@ -9449,18 +9882,14 @@ fn push_imported_module_classes_from_namespace(
                             .cloned()
                             .map(Type::TypeParam)
                             .collect(),
-                    )),
-                    &method.decl,
-                    &method.signature.params,
-                    &method.signature.param_passings,
-                    &method.signature.return_type,
-                    method.type_param_bounds.clone(),
+                    ),
+                    method,
                 ));
             }
             methods.push(MirMethod {
                 name: method.decl.name.clone(),
                 function_name: qualified_name,
-                receiver: method.decl.receiver.map(lower_receiver_kind),
+                receiver: lower_class_method_receiver(method),
             });
         }
         classes.push(MirClass {
@@ -9734,6 +10163,88 @@ fn lower_function(
     return_type: &Type,
     type_param_bounds: BTreeMap<String, Vec<crate::sema::TraitBound>>,
 ) -> Vec<MirFunction> {
+    lower_function_or_initializer(
+        program,
+        name,
+        module_name,
+        metadata_owner,
+        receiver,
+        receiver_type,
+        function,
+        param_types,
+        param_passings,
+        return_type,
+        type_param_bounds,
+        None,
+    )
+}
+
+/// Lowers a class method, or the class's `__init__` as the function the
+/// class call invokes (ADR-0059). An initializer has no receiver: it builds
+/// the object in its own `self` local, whose fields start as the declaration
+/// defaults and are otherwise absent until the body assigns them, and every
+/// completion path returns that local. Definite initialization proves that
+/// no path reads an absent field or returns an incomplete object.
+fn lower_class_method(
+    program: &Program,
+    name: &str,
+    class: &crate::sema::ClassInfo,
+    class_type: Type,
+    method: &crate::sema::MethodInfo,
+) -> Vec<MirFunction> {
+    let initializer = method.decl.name == crate::sema::INITIALIZER_NAME;
+    lower_function_or_initializer(
+        program,
+        name,
+        &class.module_name,
+        ClosureOwner::ClassMethod {
+            class_name: class.decl.name.clone(),
+            method_name: method.decl.name.clone(),
+        },
+        method.decl.receiver,
+        Some(class_type.clone()),
+        &method.decl,
+        &method.signature.params,
+        &method.signature.param_passings,
+        if initializer {
+            &class_type
+        } else {
+            &method.signature.return_type
+        },
+        method.type_param_bounds.clone(),
+        initializer.then_some(class),
+    )
+}
+
+/// The MIR receiver of a class method; an initializer has none.
+fn lower_class_method_receiver(method: &crate::sema::MethodInfo) -> Option<MirReceiverKind> {
+    if method.decl.name == crate::sema::INITIALIZER_NAME {
+        None
+    } else {
+        method.decl.receiver.map(lower_receiver_kind)
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn lower_function_or_initializer(
+    program: &Program,
+    name: &str,
+    module_name: &str,
+    metadata_owner: ClosureOwner,
+    receiver: Option<ReceiverKind>,
+    receiver_type: Option<Type>,
+    function: &crate::ast::FunctionDecl,
+    param_types: &[Type],
+    param_passings: &[ReceiverKind],
+    return_type: &Type,
+    type_param_bounds: BTreeMap<String, Vec<crate::sema::TraitBound>>,
+    initializer: Option<&crate::sema::ClassInfo>,
+) -> Vec<MirFunction> {
+    let receiver = if initializer.is_some() {
+        None
+    } else {
+        receiver
+    };
     let returns_span_range = spans::span_type_element(return_type).is_some();
     let return_type = &spans::span_return_as_range(return_type);
     let params = function
@@ -9815,7 +10326,7 @@ fn lower_function(
         lowerer
             .local_types
             .insert("self".to_string(), receiver_type);
-        if receiver != Some(ReceiverKind::Value) {
+        if initializer.is_none() && receiver != Some(ReceiverKind::Value) {
             lowerer.non_owning_roots.insert("self".to_string());
         }
     }
@@ -9887,16 +10398,25 @@ fn lower_function(
             },
         });
         lowerer.terminate(Terminator::Return(Operand::Place(result)));
+    } else if let Some(class) = initializer {
+        lowerer.initializer_self = true;
+        lowerer.emit_initializer_slot(class, return_type);
+        lowerer.lower_stmts(&function.body);
     } else {
         lowerer.lower_stmts(&function.body);
     }
+    let default_return = if initializer.is_some() {
+        Operand::MovePlace("self".to_string())
+    } else {
+        default_return_operand(return_type)
+    };
     let functions = lowerer.finish_with_generated(MirFunctionSpec {
         name: name.to_string(),
         span: function.span,
         receiver: receiver.map(lower_receiver_kind),
         params,
         return_type: return_type.clone(),
-        default_return: default_return_operand(return_type),
+        default_return,
     });
     functions.into_iter().chain(default_functions).collect()
 }
@@ -10029,6 +10549,9 @@ struct Lowerer<'a> {
     /// position, so a returned view of that argument names the loan.
     contextual_loan_by_span: BTreeMap<(usize, usize), String>,
     view_return_origin: Option<String>,
+    /// Lowering a class initializer: `self` is the owned object under
+    /// construction and a bare `return` returns it.
+    initializer_self: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -10216,7 +10739,44 @@ impl<'a> Lowerer<'a> {
             contextual_element_loans: BTreeSet::new(),
             contextual_loan_by_span: BTreeMap::new(),
             view_return_origin: None,
+            initializer_self: false,
         }
+    }
+
+    /// Allocates the object an initializer builds: the declaration defaults
+    /// are evaluated afresh, in field order, and every other field stays
+    /// absent until the body's first assignment to it.
+    fn emit_initializer_slot(&mut self, class: &crate::sema::ClassInfo, class_type: &Type) {
+        let Type::Named(class_name, _) = class_type else {
+            unreachable!("an initializer builds a named class type");
+        };
+        let fields = class
+            .decl
+            .fields
+            .iter()
+            .filter_map(|field| {
+                let default = field.default.as_ref()?;
+                let field_type = class
+                    .fields
+                    .get(&field.name)
+                    .expect("checked class field should have a semantic type")
+                    .ty
+                    .clone();
+                let value = self.lower_field_default(default, &field_type, &class.module_name);
+                self.retarget_operand_place(&value, &field_type);
+                Some(MirFieldInit {
+                    name: field.name.clone(),
+                    value,
+                })
+            })
+            .collect();
+        self.emit(Instruction::Assign {
+            target: "self".to_string(),
+            value: Rvalue::Construct {
+                class_name: class_name.clone(),
+                fields,
+            },
+        });
     }
 
     fn with_metadata_owner(mut self, owner: ClosureOwner) -> Self {
@@ -11192,15 +11752,46 @@ impl<'a> Lowerer<'a> {
         if class.decl.type_params.is_empty() {
             return Some(Type::named(result_name));
         }
-
-        let mut next_positional_field = 0usize;
-        let mut saw_named = false;
         let type_params = class
             .decl
             .type_params
             .iter()
             .cloned()
             .collect::<BTreeSet<_>>();
+        if let Some(initializer) = class.initializer() {
+            let bound = bind_call_arguments(
+                class_name,
+                &callable_params_from_decl(&initializer.decl.params),
+                args,
+                Span::new(1, 1),
+                CallConvention::PositionalOrNamed,
+            )
+            .ok()?;
+            let mut substitutions = std::collections::HashMap::new();
+            for (argument, param_type) in bound.iter().zip(initializer.signature.params.iter()) {
+                let Some(argument) = argument else {
+                    continue;
+                };
+                let actual_ty = self.infer_expr_type(&argument.value)?;
+                crate::sema::type_pattern_matches(
+                    param_type,
+                    &actual_ty,
+                    &type_params,
+                    &mut substitutions,
+                );
+            }
+            return class
+                .decl
+                .type_params
+                .iter()
+                .map(|type_param| substitutions.get(type_param).cloned())
+                .collect::<Option<Vec<_>>>()
+                .map(|resolved_args| Type::Named(result_name.clone(), resolved_args))
+                .or_else(|| Some(Type::named(result_name)));
+        }
+
+        let mut next_positional_field = 0usize;
+        let mut saw_named = false;
         let mut substitutions = std::collections::HashMap::new();
 
         for argument in args {
@@ -11893,6 +12484,8 @@ impl<'a> Lowerer<'a> {
                     } else {
                         self.lower_expr_for_owned_value(value, Some(&return_type))
                     }
+                } else if self.initializer_self {
+                    Operand::MovePlace("self".to_string())
                 } else {
                     Operand::Unit
                 };
@@ -14137,11 +14730,19 @@ impl<'a> Lowerer<'a> {
             .collect::<BTreeSet<_>>();
         let unmatched_cleanup =
             (!ending_loans.is_empty()).then(|| self.new_block("match_no_arm_cleanup"));
+        // A checked match is exhaustive, so no value reaches the end of the
+        // arm tests. An initializer states this explicitly: definite
+        // initialization proves its object complete only along the arms.
+        let unmatched = if self.initializer_self {
+            self.new_block("match_unmatched")
+        } else {
+            after_block
+        };
         let mut next_case_block = self.current_block;
 
         for (index, arm) in match_stmt.arms.iter().enumerate() {
             let next_arm = if index + 1 == match_stmt.arms.len() {
-                unmatched_cleanup.unwrap_or(after_block)
+                unmatched_cleanup.unwrap_or(unmatched)
             } else {
                 self.new_block("match_next")
             };
@@ -14275,7 +14876,11 @@ impl<'a> Lowerer<'a> {
             for loan in ending_loans.iter().rev() {
                 self.emit(Instruction::EndLoan { loan: loan.clone() });
             }
-            self.terminate(Terminator::Goto(self.label(after_block)));
+            self.terminate(Terminator::Goto(self.label(unmatched)));
+        }
+        if unmatched != after_block {
+            self.switch_to(unmatched);
+            self.terminate(Terminator::Unreachable);
         }
         self.switch_to(after_block);
         self.remove_loans_from_lowering_state(&ending_loans);
@@ -20278,6 +20883,10 @@ impl<'a> Lowerer<'a> {
                     });
                     return Operand::Place(temp);
                 }
+                if class.initializer().is_some() {
+                    self.lower_initializer_call(&class, name, args, callee.span, &temp);
+                    return Operand::Place(temp);
+                }
                 let constructor_type = expected
                     .filter(|expected| {
                         matches!(expected, Type::Named(expected_name, _) if expected_name == name)
@@ -20734,6 +21343,16 @@ impl<'a> Lowerer<'a> {
                             return Operand::Place(temp);
                         }
                         if let Some(class) = namespace.classes.get(field).cloned() {
+                            if class.initializer().is_some() {
+                                self.lower_initializer_call(
+                                    &class,
+                                    field,
+                                    args,
+                                    callee.span,
+                                    &temp,
+                                );
+                                return Operand::Place(temp);
+                            }
                             let runtime_class_name = mir_runtime_class_name(self.program, &class);
                             let qualified_class_name = format!("{}.{}", module_path, field);
                             let constructor_type = expected
@@ -21746,6 +22365,39 @@ impl<'a> Lowerer<'a> {
                 .map(Type::TypeParam),
             _ => None,
         }
+    }
+
+    /// A class call of a class with `__init__` calls the initializer
+    /// function with the arguments bound to its parameters (ADR-0059).
+    fn lower_initializer_call(
+        &mut self,
+        class: &crate::sema::ClassInfo,
+        surface_name: &str,
+        args: &[Argument],
+        span: Span,
+        target: &str,
+    ) {
+        let initializer = class
+            .initializer()
+            .expect("an initializer call lowers only for a class with `__init__`");
+        let lowered_args = self.lower_user_args(
+            &format!("class `{surface_name}`"),
+            &initializer.decl.params,
+            args,
+            span,
+            Some(&initializer.signature.param_passings),
+        );
+        self.emit(Instruction::Assign {
+            target: target.to_string(),
+            value: Rvalue::Call {
+                callee: CallTarget::Name(mir_class_method_name(
+                    self.program,
+                    class,
+                    crate::sema::INITIALIZER_NAME,
+                )),
+                args: lowered_args,
+            },
+        });
     }
 
     fn lower_user_args(

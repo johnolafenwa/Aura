@@ -70,6 +70,8 @@ executable size.
 | `copy_class.au` | `copy class` for explicit copy semantics on fully copyable fields | `1`, `2` |
 | `indirect_recursive.au` | Recursive fields with `indirect Node \| None` and optional children | `2` |
 | `positional_constructors.au` | Positional class constructor arguments with optional trailing named fields | `1`, `2`, `7`, `9` |
+| `initializers.au` | `__init__` with computed and validated fields, a field default, and a method call after every field is set | `buf: 2 slots`, `buf: 0 slots`, `buf: 3 slots`, `[0, 0]`, `0`, `[7, 7, 7]` |
+| `factories.au` | A named factory returning `Result[Port, str]` that calls the initializer only on success | `port-80`, `port 70000 is out of range` |
 | `properties.au` | Read-only `@property` getters read without parentheses, including a non-Copy result that the caller owns | `15`, `30 doubled`, `[HI, THERE, !]`, `[hi, there]` |
 
 ### `agents/`

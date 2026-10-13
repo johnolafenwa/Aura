@@ -1,0 +1,6 @@
+error[AU3012]: field `right` is used before it is initialized
+ --> crates/aura-compiler/tests/fixtures/check-fail/init_assert_whole_self.au:7:39
+  |
+7 |         assert self.left > 0, f"{self.right}"
+  |                                       ^
+  = help: assign `self.right` before this use

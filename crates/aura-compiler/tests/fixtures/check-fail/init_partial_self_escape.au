@@ -1,0 +1,14 @@
+class Buffer:
+    data: list[int64]
+    label: str
+
+    def __init__(self):
+        self.data = []
+        self.reset()
+        self.label = "buf"
+
+    def reset(mut self):
+        self.data.clear()
+
+def main():
+    print(Buffer().label)

@@ -1,0 +1,16 @@
+class Session:
+    name: str
+    items: list[int64]
+    total: int64
+
+    def __init__(self, name: own str, index: int64):
+        self.name = name
+        self.items = [1, 2, 3]
+        print(f"initialized {self.name} with {self.items.len()} items")
+        self.total = self.items[index]
+
+def main():
+    ok = Session("first", 1)
+    print(ok.total)
+    broken = Session("second", 10)
+    print(broken.total)

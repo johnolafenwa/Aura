@@ -1,0 +1,8 @@
+class Holder:
+    items: list[int64]
+
+    def __init__(self) -> view list[int64] from self:
+        self.items = []
+
+def main():
+    print(Holder().items)

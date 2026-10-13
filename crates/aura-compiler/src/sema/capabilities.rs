@@ -327,6 +327,16 @@ impl<'a> FunctionChecker<'a> {
                 }
                 return Err(diagnostic);
             }
+            if name == "self" && self.checks_initializer() {
+                return Err(Diagnostic::coded_at(
+                    "AU3004",
+                    span,
+                    "the object under construction cannot be moved out of `__init__`",
+                )
+                .with_help(
+                    "the class call returns `self` to its caller; pass `self` as a bare or `mut` argument instead",
+                ));
+            }
             let mut diagnostic =
                 Diagnostic::at(span, format!("cannot move borrowed value `{}`", name));
             if let Some(origin) = binding.borrowed_at {
@@ -659,7 +669,14 @@ impl<'a> FunctionChecker<'a> {
             }
             let duplication_member = self.builtin_duplication_member(member_ty);
             let clone_supported = duplication_member.is_some();
-            diagnostic = diagnostic.with_help(if clone_supported {
+            diagnostic = diagnostic.with_help(if name == "self" && self.checks_initializer() {
+                match duplication_member {
+                    Some(member) => format!(
+                        "an initializer cannot move a field out of the object under construction; call `.{member}()` on the field to pass an independent value"
+                    ),
+                    None => "an initializer cannot move a field out of the object under construction; move the value before assigning it to the field".to_string(),
+                }
+            } else if clone_supported {
                 format!(
                     "take `{}` as `own {}` when the field should be moved, or call `.{duplication_member}()` on the field to return an independent value",
                     name,

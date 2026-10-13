@@ -125,11 +125,10 @@ Small values copy instead of moving. Numbers, booleans, and durations are
 copied, so you can pass them freely. Everything else moves, including
 strings, collections, class instances, and files.
 
-## Classes Have No `__init__`
+## Classes And `__init__`
 
-An Aura class is fields and methods. There is no initializer and no `self`
-assignment ceremony. You construct an instance with keyword arguments, and
-fields may declare defaults:
+An Aura class is fields and methods. Without an initializer, you construct an
+instance from its fields, and fields may declare defaults:
 
 ```aura
 class Account:
@@ -142,8 +141,29 @@ class Account:
 account = Account(owner="ada", balance=0.0)
 ```
 
-For named construction, the job `__init__` and `@classmethod` do in Python,
-write a function on the class that takes no `self` and returns an instance:
+`__init__` works much as it does in Python. The class call takes its
+parameters, and the body sets the fields. The compiler checks that every
+field is set on every path before `self` is used as a whole:
+
+```aura
+class Account:
+    owner: str
+    balance: float64
+    currency: str = "USD"
+
+    def __init__(self, owner: own str, deposit: float64 = 0.0):
+        self.owner = owner
+        self.balance = deposit
+```
+
+```aura fragment
+account = Account("ada")
+funded = Account("grace", 100.0)
+```
+
+`__init__` returns nothing and cannot fail. For other ways to build an
+instance, the job `@classmethod` does in Python, write a function on the
+class that takes no `self` and returns an instance:
 
 ```aura
 class Account:

@@ -1,0 +1,6 @@
+error[AU2016]: `__init__` cannot be a trait member
+ --> crates/aura-compiler/tests/fixtures/check-fail/init_trait_member.au:2:5
+  |
+2 |     def __init__(self, name: str)
+  |     ^
+  = help: declare `def __init__(self, ...)` on each class instead

@@ -1,0 +1,16 @@
+class Counter:
+    value: int64 = 0
+    name: str
+    tags: list[str] = []
+
+    def __init__(self, name: own str, start: int64 = 0):
+        self.name = name
+        if start > 0:
+            self.value = start
+        self.tags.append("created")
+
+def main():
+    first = Counter("hits")
+    second = Counter("misses", start=5)
+    print(f"{first.name} {first.value} {first.tags.len()}")
+    print(f"{second.name} {second.value} {second.tags[0]}")

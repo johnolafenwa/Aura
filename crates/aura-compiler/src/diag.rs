@@ -172,6 +172,11 @@ pub const DIAGNOSTIC_CODE_REGISTRY: &[DiagnosticCodeInfo] = &[
         title: "callable contract mismatch",
     },
     DiagnosticCodeInfo {
+        code: "AU2016",
+        band: "names/types",
+        title: "initializer declaration",
+    },
+    DiagnosticCodeInfo {
         code: "AU2040",
         band: "names/types",
         title: "invalid class pattern",
@@ -260,6 +265,11 @@ pub const DIAGNOSTIC_CODE_REGISTRY: &[DiagnosticCodeInfo] = &[
         code: "AU3011",
         band: "ownership",
         title: "collection mutation under a live element view",
+    },
+    DiagnosticCodeInfo {
+        code: "AU3012",
+        band: "ownership",
+        title: "definite initialization",
     },
     DiagnosticCodeInfo {
         code: "AU4001",

@@ -1,0 +1,31 @@
+public class Endpoint:
+    public host: str
+    public port: int64
+    secret: str
+
+    public def __init__(self, host: own str, port: int64 = 80):
+        self.host = host
+        self.port = port
+        self.secret = "hidden"
+
+    public def token(self) -> str:
+        return f"{self.host}:{self.port}:{self.secret}"
+
+public class Connection:
+    public handle: int64
+    public label: str
+
+    def __init__(self, handle: int64):
+        self.handle = handle
+        self.label = f"conn-{handle}"
+
+    public def open(handle: int64) -> Result[Connection, str]:
+        if handle < 0:
+            return Result.Err("negative handle")
+        return Result.Ok(Connection(handle))
+
+public class Box[T]:
+    public value: T
+
+    public def __init__(self, value: own T):
+        self.value = value

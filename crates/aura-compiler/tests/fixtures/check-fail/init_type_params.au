@@ -1,0 +1,8 @@
+class Server:
+    port: int64
+
+    def __init__[T](self, port: int64, extra: T):
+        self.port = port
+
+def main():
+    print(Server(1, "x").port)

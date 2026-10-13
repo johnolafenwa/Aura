@@ -1,0 +1,13 @@
+class Box[T]:
+    value: T
+    count: int64
+
+    def __init__(self, value: own T):
+        self.value = value
+        self.count = 1
+
+def main():
+    box = Box[str]("aura")
+    numbers = Box[list[int64]]([1, 2])
+    print(box.value)
+    print(numbers.value.len() + box.count)

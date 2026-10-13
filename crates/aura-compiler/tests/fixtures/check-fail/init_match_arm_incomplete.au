@@ -1,0 +1,16 @@
+class Shape:
+    sides: int64
+    name: str
+
+    def __init__(self, sides: int64):
+        self.sides = sides
+        match sides:
+            case 3:
+                self.name = "triangle"
+            case 4 if sides > 0:
+                self.name = "square"
+            case _:
+                pass
+
+def main():
+    print(Shape(3).name)

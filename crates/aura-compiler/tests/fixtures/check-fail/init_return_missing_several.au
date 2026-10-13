@@ -1,0 +1,14 @@
+class Point:
+    x: int64
+    y: int64
+    z: int64
+
+    def __init__(self, x: int64):
+        if x < 0:
+            return
+        self.x = x
+        self.y = x
+        self.z = x
+
+def main():
+    print(Point(1).x)

@@ -1,0 +1,11 @@
+class Pair:
+    left: int64
+    right: int64
+
+    def __init__(self, left: int64):
+        self.left = left
+        assert self.left > 0, f"{self.right}"
+        self.right = left
+
+def main():
+    print(Pair(1).right)

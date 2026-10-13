@@ -1,0 +1,6 @@
+error[AU2001]: the initializer of `Connection` is private to its module
+ --> crates/aura-compiler/tests/fixtures/check-path-fail/init_private_initializer_from_import.au:4:18
+  |
+4 |     connection = Connection(handle=3)
+  |                  ^
+  = help: construct `Connection` through one of its public associated functions, or declare `public def __init__`

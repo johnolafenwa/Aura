@@ -1,0 +1,6 @@
+error[AU3012]: initializer falls through without initializing `mode`
+ --> crates/aura-compiler/tests/fixtures/check-fail/init_incomplete_fallthrough.au:5:5
+  |
+5 |     def __init__(self, raw: int64):
+  |     ^
+  = help: assign every field without a declaration default on every path through `__init__`

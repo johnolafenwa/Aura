@@ -1,0 +1,25 @@
+class Log:
+    lines: list[str]
+
+    def write(mut self, line: str):
+        self.lines.append(line.clone())
+
+    def close(mut self):
+        print(f"log closed after {self.lines.len()} lines")
+
+class Report:
+    title: str
+    summary: str
+
+    def __init__(self, title: str):
+        self.title = title.clone()
+        mut count = 0
+        with log = Log(lines=[]):
+            log.write("start")
+            log.write(title)
+            count = log.lines.len()
+        self.summary = f"{title}: {count} lines"
+
+def main():
+    report = Report("weekly")
+    print(report.summary)

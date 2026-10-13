@@ -478,7 +478,7 @@ Compile-time codes:
 | `AU2001` | An unknown or unavailable type name. |
 | `AU2002` | A type mismatch, unresolved contextual literal typing, or a generic arity, payload, field, or annotation mismatch. |
 | `AU2003` | An unsupported numeric operator or cast. |
-| `AU2004` | Invalid constructor argument binding. |
+| `AU2004` | Invalid constructor or initializer argument binding. |
 | `AU2010` | A value that is not a direct member of its expected union. |
 | `AU2011` | An ambiguous contextual literal. |
 | `AU2012` | A cyclic transparent alias. |

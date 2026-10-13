@@ -489,6 +489,11 @@ A class method takes one of these receivers:
 `self: Type` is not a receiver declaration. The checker rejects it with
 guidance that names the valid forms.
 
+A method named `__init__(self, ...)` is the class's initializer. The class
+call takes its parameters, and the checker requires every field to be set on
+every path through the body. See
+[Classes And Data](05-classes-and-data.md#custom-initialization-with-init).
+
 Ordinary functions, instance methods, and associated methods support:
 
 - positional calls

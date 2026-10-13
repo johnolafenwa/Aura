@@ -1,0 +1,8 @@
+error[AU3002]: cannot move non-copy field `data` out of borrowed value `self`
+ --> crates/aura-compiler/tests/fixtures/check-fail/init_field_move_out.au:10:31
+   |
+10 |         self.size = take(self.data)
+   |                               ^
+  = related crates/aura-compiler/tests/fixtures/check-fail/init_field_move_out.au:8:5: `self` is borrowed here
+  = help: an initializer cannot move a field out of the object under construction; call `.copy()` on the field to pass an independent value
+  = fix: replace crates/aura-compiler/tests/fixtures/check-fail/init_field_move_out.au:10:35-10:35 with `.copy()`

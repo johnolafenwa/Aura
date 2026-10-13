@@ -1,0 +1,8 @@
+class Server:
+    host: str
+
+    def __init__(self, host: own str):
+        self.host = host
+
+def main():
+    print(Server().host)

@@ -88,6 +88,46 @@ named = ServerConfig(host="aura.dev")
 
 See [examples/classes/default_fields.au](../examples/classes/default_fields.au).
 
+## Custom Initialization With `__init__`
+
+Declare `__init__(self, ...)` when construction should compute or validate
+fields. The class call then takes the initializer's parameters, and the body
+sets each field on `self`:
+
+```aura check-pass
+class Buffer:
+    data: list[int64]
+    capacity: int64
+    label: str = "buf"
+
+    def __init__(self, capacity: int64, *, fill: int64 = 0):
+        if capacity < 0:
+            self.capacity = 0
+        else:
+            self.capacity = capacity
+        self.data = []
+        for _ in range(self.capacity):
+            self.data.append(fill)
+```
+
+```aura fragment
+small = Buffer(2)
+filled = Buffer(3, fill=7)
+```
+
+`label` has a default, so it is already set when the body starts. The
+compiler checks that every other field is set on every path. It rejects a
+read of `self.data` before the assignment, and any use of `self` as a whole
+before the last field is set. A class with `__init__` has no field-based
+constructor, so `Buffer(data=[], capacity=0)` is an error.
+
+`__init__` cannot fail. When construction can fail, write an
+[associated method](#associated-methods) that returns `Result[Buffer, str]`
+and calls `Buffer(...)` only on success.
+
+See [examples/classes/initializers.au](../examples/classes/initializers.au)
+and [examples/classes/factories.au](../examples/classes/factories.au).
+
 ## Recursive Fields With `indirect`
 
 A field whose type refers back to its own class must be marked `indirect`. An

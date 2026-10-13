@@ -1,0 +1,81 @@
+class Resource:
+    name: str
+
+    def close(mut self) -> None:
+        print("closed " + self.name)
+
+class Survey:
+    total: int64
+    labels: list[str]
+    flags: set[int64]
+    table: dict[str, int64]
+    summary: str
+    narrow: int32
+    pair: (int64, int64)
+
+    def __init__(self, values: list[int64], limit: int64 | None):
+        self.total = 0
+        for value in values:
+            if value < 0:
+                continue
+            if value > 100:
+                break
+            self.total += value
+        mut steps = 0
+        while true:
+            steps += 1
+            if steps >= 2:
+                break
+        while steps < 4:
+            steps += 1
+        self.labels = [f"v{value}" for value in values if value % 2 == 0]
+        self.flags = {value for value in values}
+        self.table = {"total": self.total, "count": values.len()}
+        self.narrow = (self.total + 1) as int32
+        doubled = [-value for value in values][1:3]
+        self.pair = (doubled.len(), values[0])
+        first, second = self.pair
+        view head = self.labels[0]
+        assert head.len() > 0, f"empty {head}"
+        in_range = 0 < self.total < 1000
+        has_three = 3 in self.flags
+        unlimited = limit is None
+        kind = "big" if self.total > 10 else "small"
+        size = match own self.total:
+            case 0: "none"
+            case _: "some"
+        with resource = Resource(name="probe"):
+            print(resource.name)
+        match self.pair:
+            case (left, right) if left > right:
+                print("left")
+            case _:
+                print("right")
+        empty = list[int64]()
+        self.summary = f"{kind} {size} {in_range} {has_three} {unlimited} {first + second} {empty.len()}"
+        total = self.total
+        names = self.labels.copy()
+        seen = self.flags.copy()
+        counts = self.table.copy()
+        narrow = self.narrow
+        report = lambda: f"{counts['count']} {[name.len() for name in names]} {-total} {narrow as int64} {names[0:1]} {1 in seen} {0 < total < 9} {unlimited} {total if total > 0 else 1} {(total, total)} { {"k": total}["k"] } {list[int64]().len()}"
+        print(report())
+        nothing: int64 | None = None
+        probe: def(value: int64) -> int64 = lambda value: {value: value}[value] + [x for x in [value] if x > 0].len() + {key: key for key in [value]}[value] + (1 if nothing is None else 0) + -value
+        print(probe(3))
+        self.labels[0] = "first"
+        grade = match own self.total:
+            case value if value > 5: "high"
+            case _: "low"
+        print(grade + " " + (self).describe())
+        if self.total == 0:
+            return
+        pass
+
+    def describe(self) -> str:
+        return self.labels[0].clone()
+
+def main():
+    survey = Survey([1, 2, -3, 4, 500], None)
+    print(survey.summary)
+    print(survey.table["total"])

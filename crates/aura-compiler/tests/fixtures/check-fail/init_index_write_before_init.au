@@ -1,0 +1,9 @@
+class Grid:
+    cells: list[int64]
+
+    def __init__(self, value: int64):
+        self.cells[0] = value
+        self.cells = [value]
+
+def main():
+    print(Grid(1).cells)

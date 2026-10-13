@@ -52,7 +52,9 @@ use properties::{
 };
 #[cfg(test)]
 use types::type_pattern_specificity;
+mod init;
 mod program;
+pub(crate) use program::INITIALIZER_NAME;
 pub use program::{
     AliasInfo, ClassInfo, ConstantInfo, EnumInfo, EnumPayloadFieldInfo, EnumVariantInfo,
     ExternFunctionInfo, FieldInfo, FunctionInfo, FunctionSignature, ImportedBinding, MethodInfo,
@@ -236,6 +238,28 @@ fn check(module: Module) -> Result<Program> {
 
 pub(crate) fn check_with_context(module: Module, context: ModuleContext) -> Result<Program> {
     program::check_with_context(module, context)
+}
+
+/// `__init__` defines the class call and is never a member: neither
+/// `value.__init__(...)` nor `Class.__init__` names it (ADR-0059).
+fn reject_initializer_member(expr: &Expr) -> Result<()> {
+    let member = match &expr.kind {
+        ExprKind::Member { field, .. } => Some((field, expr.span)),
+        ExprKind::Call { callee, .. } => match &callee.kind {
+            ExprKind::Member { field, .. } => Some((field, callee.span)),
+            _ => None,
+        },
+        _ => None,
+    };
+    match member {
+        Some((field, span)) if field == INITIALIZER_NAME => Err(Diagnostic::coded_at(
+            "AU2005",
+            span,
+            "`__init__` cannot be called as a method or used as a value",
+        )
+        .with_help("call the class itself, as in `Server(...)`, to construct a new object")),
+        _ => Ok(()),
+    }
 }
 
 fn validate_params(receiver: Option<ReceiverKind>, params: &[Param], owner: &str) -> Result<()> {
@@ -2215,6 +2239,14 @@ impl<'a> FunctionChecker<'a> {
         checker
     }
 
+    /// Whether this checker is checking a class initializer's body.
+    fn checks_initializer(&self) -> bool {
+        matches!(
+            &self.closure_owner,
+            ClosureOwner::ClassMethod { method_name, .. } if method_name == INITIALIZER_NAME
+        )
+    }
+
     fn with_closure_owner(mut self, owner: ClosureOwner) -> Self {
         self.closure_owner = owner;
         self
@@ -3034,7 +3066,19 @@ impl<'a> FunctionChecker<'a> {
         let mut locals = HashMap::new();
         checker.seed_module_scope(&mut locals);
         checker.seed_imported_modules(&mut locals);
-        if let Some(receiver_kind) = method.receiver {
+        let initializer = method.name == INITIALIZER_NAME;
+        if initializer {
+            init::check_initializer_definite_initialization(class_decl, method)?;
+        }
+        // Inside `__init__`, `self` is the object under construction: definite
+        // initialization governs which fields are readable, and the checker
+        // otherwise treats it as an exclusive place it may not move.
+        let receiver = if initializer {
+            Some(ReceiverKind::BorrowMut)
+        } else {
+            method.receiver
+        };
+        if let Some(receiver_kind) = receiver {
             locals.insert(
                 "self".to_string(),
                 LocalBinding {
@@ -6679,6 +6723,7 @@ impl<'a> FunctionChecker<'a> {
         locals: &mut HashMap<String, LocalBinding>,
         expected: Option<&Type>,
     ) -> Result<Type> {
+        reject_initializer_member(expr)?;
         let actual = self.type_of_expr_hint_uncontracted(expr, locals, expected)?;
         if let Some(expected) = expected {
             self.enforce_callable_destination(expr, expected, &actual)?;
@@ -9341,6 +9386,19 @@ impl<'a> FunctionChecker<'a> {
         locals: &mut HashMap<String, LocalBinding>,
         expected: Option<&Type>,
     ) -> Result<Type> {
+        if let Some(initializer) = class.initializer() {
+            return self.type_check_initializer_call(
+                class,
+                initializer,
+                surface_name,
+                class_type_name,
+                explicit_type_args,
+                args,
+                span,
+                locals,
+                expected,
+            );
+        }
         let mut substitutions = if let Some(type_args) = explicit_type_args {
             self.explicit_type_substitutions(
                 &class.decl.type_params,
@@ -9519,6 +9577,75 @@ impl<'a> FunctionChecker<'a> {
         }
 
         Ok(Type::Named(class_type_name, resolved_args))
+    }
+
+    /// Checks a class call against the class's `__init__` contract with the
+    /// receiver removed (ADR-0059). The class's type parameters are the
+    /// call's type parameters, so the call infers them from the initializer
+    /// arguments or takes them explicitly.
+    #[allow(clippy::too_many_arguments)]
+    fn type_check_initializer_call(
+        &self,
+        class: &ClassInfo,
+        initializer: &MethodInfo,
+        surface_name: &str,
+        class_type_name: String,
+        explicit_type_args: Option<&[TypeRef]>,
+        args: &[Argument],
+        span: crate::diag::Span,
+        locals: &mut HashMap<String, LocalBinding>,
+        expected: Option<&Type>,
+    ) -> Result<Type> {
+        if self.is_external_module(&class.module_name) && !initializer.decl.public {
+            return Err(Diagnostic::coded_at(
+                "AU2001",
+                span,
+                format!(
+                    "the initializer of `{}` is private to its module",
+                    class.decl.name
+                ),
+            )
+            .with_help(format!(
+                "construct `{}` through one of its public associated functions, or declare `public def __init__`",
+                class.decl.name
+            )));
+        }
+        let seed_substitutions = if let Some(type_args) = explicit_type_args {
+            self.explicit_type_substitutions(
+                &class.decl.type_params,
+                type_args,
+                span,
+                &format!("class `{}`", surface_name),
+            )?
+        } else {
+            HashMap::new()
+        };
+        let result_type = Type::Named(
+            class_type_name,
+            class
+                .decl
+                .type_params
+                .iter()
+                .cloned()
+                .map(Type::TypeParam)
+                .collect(),
+        );
+        self.type_check_callable_args(
+            &format!("class `{}`", surface_name),
+            &class.decl.type_params,
+            &initializer.decl.params,
+            &initializer.signature.param_passings,
+            &initializer.signature.params,
+            &result_type,
+            &initializer.type_param_bounds,
+            &initializer.signature.rng_clone_safe_type_params,
+            &initializer.signature.array_equality_safe_type_params,
+            args,
+            span,
+            locals,
+            expected,
+            seed_substitutions,
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
