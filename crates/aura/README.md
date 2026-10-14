@@ -131,7 +131,7 @@ aura deps update util
 | Command | What it does |
 | --- | --- |
 | `aura help` | Prints CLI usage and exits successfully. |
-| `aura --version` | Prints the build channel and 12-hex-digit source commit, then exits successfully. A release archive prints `aura 0.3.6-preview (0123456789ab)`. A source build prints `aura 0.3.6-dev (0123456789ab)`. |
+| `aura --version` | Prints the build channel and 12-hex-digit source commit, then exits successfully. A release archive prints `aura 0.4.0-preview (0123456789ab)`. A source build prints `aura 0.4.0-dev (0123456789ab)`. |
 | `aura check <file.au>` | Parses and type-checks a program. |
 | `aura run [--backend mir\|direct\|auto] <file.au> [-- <program-args>...]` | Runs a program. The MIR runtime is the default. MIR is the compiler's mid-level intermediate representation. |
 | `aura build -o <output> <file.au>` | Compiles a standalone native binary. |
@@ -227,7 +227,7 @@ Successful native builds from `aura run` are cached by content under
   current OS account. On the maintained Unix hosts, Aura rejects roots owned
   by another user or writable by group or other.
 - Cache keys include the native cache format `v6`, the semantic-interface
-  schema `v16`, the exact linked runtime archive, and the ordered native link
+  schema `v19`, the exact linked runtime archive, and the ordered native link
   arguments, each as a separate component.
 - Inherited launch leases and owner-aware staging cleanup stop an interrupted
   run's cleanup from deleting a live native child.
@@ -276,7 +276,7 @@ stripped from the archive.
 ### Editor Service
 
 Every `aura lsp` request and response carries the compiler-owned
-semantic-interface version `16`. A schema mismatch closes the connection before
+semantic-interface version `19`. A schema mismatch closes the connection before
 analysis.
 
 ### Analysis And Completion

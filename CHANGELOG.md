@@ -7,6 +7,218 @@ in this file.
 
 ## Unreleased
 
+## VS Code extension 0.4.0 — 2026-10-15
+
+- Bundles language server 0.4.0, which speaks semantic interface version 19.
+- Format Document runs the compiler's formatter, the same one `aura fmt`
+  uses. Set `"editor.formatOnSave": true` under `"[aura]"` to format on save.
+  A buffer with a syntax error is left unchanged.
+- Hover, completion, and signature help show declaration docstrings.
+  Signature help also shows each parameter's `Args:` entry.
+- Statement-position triple-quoted strings get the
+  `string.quoted.docstring` scope, so themes can color docstrings apart from
+  other strings.
+
+## 0.4.0 — 2026-10-15 (technical preview)
+
+Aura 0.4.0 adds class initializers, typed context managers, `Span[T]`
+slice views, read-only properties, a `Display` trait, structural patterns,
+and docstrings. `aura fmt` reflows code, and `aura doc` generates API pages.
+Source written for 0.3.6 may need the changes listed under "Breaking
+changes".
+
+### Breaking changes
+
+- The semantic interface schema is version 19. Initializers and context
+  managers change what a class contract means. Tools that pin the schema
+  must update.
+- `Span` is a reserved built-in type name. A class, enum, or alias named
+  `Span` reports `AU2002`.
+- A class that declares `def __init__(self, ...)` is constructed through
+  that initializer. Its class call takes the initializer's parameters, and
+  the field-based constructor is gone for that class. Calling `__init__` as
+  a method or using it as a value reports `AU2005`. A malformed initializer
+  or an `__init__` in a trait reports `AU2016`.
+- `with` accepts a context manager by shape. A class with `__exit__` uses it
+  and ignores `close`. A class with `__enter__` runs it before the body. A
+  `__enter__` or `__exit__` of the wrong shape, or a `with` item that is not
+  a manager, reports `AU2017`.
+- A tuple, list, set, or dictionary literal moves its non-copy elements in
+  every position. A later use of the moved name reports `AU3001`, as in
+  `print((pair, 2))` followed by `print(pair)`. Such a program passed
+  `aura check` and trapped at run time.
+- Reading a list inside its own `for x in mut items:` loop reports `AU3002`.
+  Read through the loop binding, or read the list before or after the loop.
+- `aura fmt` reflows code to an 88-column layout with two blank lines
+  between top-level declarations. Running it on existing files changes most
+  of them, so `aura fmt --check` fails until the code is reformatted once.
+
+### Language
+
+- **Span views.** `view part = values[a:b]` lends a range of a list as a
+  `Span[T]` without copying. `view mut part = values[a:b]` lends it for
+  writing. A span supports indexing, iteration, `in`, `==`, `len`, `index`,
+  `count`, `reverse`, `sort`, `swap`, `fill`, and `to_list`. An invalid
+  range or position traps with `AU4003`.
+- **Span parameters.** A `Span[T]` or `mut Span[T]` parameter accepts a
+  slice, a whole list, or another span, as in `total(values[1:3])`.
+- **Returned range views.** A function can return a range of a list
+  parameter with `-> view Span[T] from values`. Bind the result with `view`
+  or `view mut`. Any other use reports `AU3010`.
+- **Union-parameter borrowing.** A bare union parameter such as
+  `str | None` borrows a member argument for the call. A local, field,
+  list element, dictionary entry, loop binding, or view works, and nothing
+  is copied. A `mut` union parameter still needs the exact union type, and
+  other arguments report `AU2010`.
+- **Class initializers.** `def __init__(self, ...)` gives a class call its
+  own parameters, with defaults and keyword-only parameters. Field defaults
+  run before the body. The checker proves that every field is set before it
+  is read, before `self` is used as a whole, and on every path out. A
+  violation reports `AU3012`. A trap or cancellation during an initializer
+  drops the fields already set, exactly once.
+- **Typed context managers.** A class is a context manager when it declares
+  `__exit__(mut self)` returning `None` or `Result[None, E]`. An optional
+  `__enter__(mut self)` returns `None` or a view of `self`, and the `with`
+  name then binds that view. A class with only `close(mut self) -> None` is
+  a manager too, and generic classes qualify.
+- **Multi-item `with`.** `with a = A(), b = B():` enters items left to
+  right and exits them in reverse. Later items can use earlier bindings.
+- **Result exits.** An `__exit__` that returns `Result` acts like `try` on
+  the normal paths out of the body. Under a trap, its error becomes a note on
+  the trap diagnostic. Under `try` propagation or cancellation, it is
+  dropped. Exits run with cancellation still pending.
+- **Trailing commas.** Every comma-separated list closed by `)`, `]`, or `}`
+  accepts one trailing comma. A list without a closing delimiter still
+  rejects one.
+- **Parenthesized imports.** `from module import (a, b as c,)` can span
+  several lines.
+- **Text methods.** `str` gains `trim_start`, `trim_end`, `split_once`,
+  `rsplit_once`, `lines`, `split_whitespace`, `find`, `count`, and
+  `repeat`. An empty separator for `split_once` or `rsplit_once`, an empty
+  `count` text, or a negative `repeat` count traps with `AU4003`. A `repeat`
+  result above 64 MiB traps with `AU4005` before it allocates.
+- **Byte search.** The `bytes` module gains `starts_with`, `ends_with`, and
+  `find`. They compare raw bytes, and `find` runs in linear time.
+- **Display.** Every module sees a prelude `Display` trait with
+  `def display(self) -> str`. Implement it for a class or enum the module
+  declares. `print`, `str(value)`, f-string fields, and nested rendering
+  then call `display`. A module's own item named `Display` shadows the
+  prelude trait. Invalid implementations report `AU2043`.
+- **Display formatting.** An f-string field with a `Display` value accepts
+  fill, alignment, width, precision, and `s`. Other format flags report
+  `AU2002`.
+- **Atomic `print`.** `print` renders its whole line before it writes. If a
+  `display` call traps, that `print` writes nothing.
+- **Read-only properties.** `@property` on the line before a shared method
+  makes it a getter that reads like a field, as in `reply.total_tokens`. A
+  getter has no parameters and returns an owned value other than `None`.
+  Invalid getters report `AU2044`. Assignment, `mut` use, views, and call
+  syntax on a property report `AU2045`. Any other decorator reports
+  `AU2005`.
+- **Tuple rest elements.** `*name` or `*_` in a tuple pattern or unpacking
+  target covers the leftover positions, as in `head, *tail = triple`.
+  Misplaced or extra rest elements report `AU2041`.
+- **Sequence patterns.** A bare `match` on a list accepts patterns such as
+  `[]`, `[only]`, and `[first, *rest]`. A named rest binds an owned list
+  slice. `match mut` and `match own` reject sequence patterns with `AU2041`.
+- **Class patterns.** `Point(x=0, y=y)` matches a class value or a union
+  member class and tests the named fields. `match own` moves the fields out.
+  Invalid class patterns report `AU2040`.
+- **Docstrings.** A triple-quoted string as the first statement of a module,
+  class, enum, trait, function, or method documents it. A triple-quoted
+  string on the line after a field documents the field. Docstrings produce
+  no code. A misplaced triple-quoted string in a class, enum, trait, or
+  `impl` body, or documentation over a size limit, reports `AU2042`.
+
+### Tooling
+
+- **Formatter.** `aura fmt` is a token-based formatter. It applies
+  four-space indentation, operator and comma spacing, blank-line rules,
+  88-column bracket reflow, and magic trailing commas. Comments and literal
+  text are kept exactly. The output must lex to the same tokens and parse,
+  or the file is left unchanged.
+- **`aura fmt --stdin`.** Formats standard input to standard output. Add
+  `--check` to report without writing.
+- **Editor formatting.** The `aura lsp` compiler service has a `format`
+  method. The language server offers whole-document formatting with the
+  same rules as `aura fmt`.
+- **`aura doc`.** Checks each source and writes one API page per module.
+  Pages go to standard output or to `--out DIR`, as Markdown or as JSON with
+  `--json`. Private declarations are omitted.
+- **Hover.** Hover shows declaration docstrings after the signature. A
+  span binding hovers as `Span[T]` with its range source. A `with` name
+  that binds an entry view hovers as that view. Class hover lists
+  `__init__`, and property hover shows the property type and the getter's
+  docstring.
+- **Completion.** Items carry the first docstring line. Member completion
+  lists span members, properties, and the new `str` methods, and omits
+  `__init__`. Completion in the `bytes` namespace lists the new byte
+  functions. Class completion detail shows the initializer's call shape.
+- **Signature help.** A class call shows the initializer's parameters.
+  Signature help shows the docstring and each parameter's `Args:` entry.
+- **Navigation.** Hover and go-to-definition work on rest, sequence, and
+  class pattern bindings, and on class and field names in class patterns.
+  Properties appear in document symbols.
+
+### Fixes
+
+- The direct backend released a shared-loan lambda capture twice. Calling
+  `lambda [values]: len(values)` and then dropping the closure trapped with
+  `AU4001`.
+- On the direct backend, passing a borrowed `str | None` to a generic
+  `T | None` parameter emptied the caller's string. A later `print(name)`
+  printed `None`.
+- A `match` expression passed to a borrowed parameter moved a non-copy arm
+  place. A later use failed at run time with "unknown MIR place".
+- Assigning an element through a whole-list view, as in
+  `view mut w = items` then `w[2] = 9`, failed MIR validation.
+- An unknown `dict` member such as `get_optional` reports `AU2001` with help
+  that points to `get` and `in`.
+
+### Documentation
+
+- A new manual page, Docstrings And API Docs, covers docstring placement,
+  `Args:` sections, presentation, `aura doc`, and limits.
+- The Classes page covers initializers, definite initialization, properties,
+  and context manager classes. The Statements page describes the manager
+  protocol, entry views, and `Result` exits.
+- Collections has a `Span[T]` section. Enums And Pattern Matching covers
+  rest elements, sequence patterns, and class patterns. Generics And Traits
+  covers `Display`.
+- CLI And Tooling describes the formatter rules, `aura fmt --stdin`,
+  `aura doc`, and editor formatting.
+- New examples: `collections/span_views.au`, `classes/initializers.au`,
+  `classes/factories.au`, `classes/properties.au`,
+  `resources/context_managers.au`, `strings/text_parsing.au`,
+  `traits/display.au`, `enums/structural_patterns.au`, and
+  `modules/documented_api.au`. Tutorials 02, 05 through 11, 14, 16, 17, 22,
+  24, and 25 cover the new features.
+
+### Current limits
+
+- `Span[T]` covers `list[T]` only. There are no spans of `str` or `Array`,
+  and a method cannot return a span of its receiver.
+- A function with a `Span[T]` parameter or result is not a function value,
+  and a lambda cannot capture a span.
+- An initializer cannot move a field out of `self` or return a `Result`. Use
+  a named factory for fallible or alternate construction.
+- `match mut` rejects class and sequence patterns, and `match own` rejects
+  sequence patterns.
+- `aura doc` writes Markdown and JSON, not HTML. Enum variants and `impl`
+  blocks have no documentation.
+- `aura fmt` cannot break a long expression at a binary operator. A
+  statement without brackets may stay longer than 88 columns.
+- A view local forwarded from a method's returned view can fail at run time
+  with `AU4001` "uses ended loan".
+- A union over a module-qualified type, such as `geometry.Point | None`, can
+  fail at run time with `AU4001` "union tag test type identity mismatch".
+- Duplicate or-alternatives of refutable class patterns over a union are not
+  reported as unreachable.
+- A cast of a method result, such as `x.m() as float64`, reports "result
+  type mismatch".
+- A comprehension over `obj.items()` can fail with "cannot move borrowed
+  value" or "unknown name".
+
 ## VS Code extension 0.3.7 — 2026-10-11
 
 - Bundles language server 0.3.6. The semantic interface version stays 17.

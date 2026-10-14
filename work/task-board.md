@@ -1,6 +1,16 @@
 # Task Board
 
-Last updated: 2026-10-13
+Last updated: 2026-10-14
+
+## Aura 0.4.0 preview release (in progress)
+
+- Target: release Batches 2, 3, and 4 as `v0.4.0-preview`, as John asked.
+  CLI, compiler, language server, and VS Code extension 0.4.0.
+- Done: version bump, lockfiles, install and Manual pages, stale schema
+  references, CHANGELOG, and a schema consistency test. Details are in
+  `2026-10-14-v0.4.0-preview-release.md`.
+- Remaining: hosted CI on the release PR, merge, the `v0.4.0-preview` tag,
+  and the Release run.
 
 ## Batch 4: everyday syntax and API usability (complete)
 

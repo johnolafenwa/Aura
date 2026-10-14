@@ -1,6 +1,6 @@
 # Status And Compatibility
 
-Aura 0.3.6 is a technical preview. It is suitable for compiler and runtime evaluation, examples, and controlled experiments. It is not a production systems-language release, and it is not a security boundary for untrusted programs.
+Aura 0.4.0 is a technical preview. It is suitable for compiler and runtime evaluation, examples, and controlled experiments. It is not a production systems-language release, and it is not a security boundary for untrusted programs.
 
 This page states what the maintained language contract is, which surface it currently covers, and how that surface may change.
 
@@ -183,7 +183,7 @@ See [Execution Model](/manual/execution-model) and [Current Limits](/manual/curr
 - Both maintained backends produce complete typed runtime frames. Diagnostics carry innermost-first Aura call frames and youngest-first task ancestry.
 - Each public schema-version-1 frame span has its own required source `path`. The analysis/LSP editor shape permits an optional `file_path` for source-only analysis.
 - The public diagnostic schema stays at version `1`, because the always-present arrays are an additive extension.
-- Compiler-service and editor transport uses semantic schema version `17`. This version includes structural function values, import aliases, and the expanded numeric expression surface, and returned views of list elements and dictionary entries. It forwards the same diagnostic records.
+- Compiler-service and editor transport uses semantic schema version `19`. This version includes structural function values, import aliases, the expanded numeric expression surface, returned views of list elements and dictionary entries, class initializers, and context managers. It forwards the same diagnostic records.
 
 ## Platform And Distribution Support
 

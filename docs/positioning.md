@@ -1,6 +1,6 @@
 # Why Aura
 
-Aura 0.3.6 is a technical preview of a compiled, statically typed language for
+Aura 0.4.0 is a technical preview of a compiled, statically typed language for
 reliable software. It combines Python-inspired syntax, deterministic
 ownership, structured concurrency, typed failure, and native executables.
 
