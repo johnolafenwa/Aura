@@ -1,6 +1,6 @@
 # Task Board
 
-Last updated: 2026-10-12
+Last updated: 2026-10-13
 
 ## Batch 4: everyday syntax and API usability (complete)
 
@@ -41,7 +41,7 @@ Last updated: 2026-10-12
 - Verification: merged in PR #35 after a green hosted run, including the
   coverage floors.
 
-## Batch 3 phase 3b (context managers; in progress)
+## Batch 3 phase 3b (context managers; complete)
 
 - Target: typed and generic `with` managers, multiple header items, and
   cleanup under cancellation, per checkpoint section F (Q17-Q22 A) and
@@ -51,8 +51,8 @@ Last updated: 2026-10-12
   cleanup actions with validator refusals, both backends, editor hover,
   docs, and `examples/resources/context_managers.au`. `AU2017` joins the
   registry. Semantic interface 19.
-- Verification: full forced backend parity passes on 3a and 3b combined.
-- Remaining: hosted CI and merge.
+- Verification: merged in PR #45 after a green hosted run, including the
+  coverage floors and full forced backend parity.
 
 ## Batch 2 completion: union borrowing and phase 2b (complete)
 
