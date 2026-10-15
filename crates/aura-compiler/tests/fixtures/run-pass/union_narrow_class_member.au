@@ -1,0 +1,54 @@
+class Inner:
+    x: int64
+
+class Point:
+    x: int64
+    inner: Inner
+    label: str
+
+    def norm(self) -> int64:
+        return self.x + self.inner.x
+
+    def shift(mut self, by: int64):
+        self.x += by
+
+def total(point: Point | None) -> int64:
+    if point is None:
+        return 0
+    return point.x + point.inner.x
+
+def grow(inner: mut Inner):
+    inner.x += 100
+
+def bump(point: mut Point | None):
+    if point is not None:
+        point.x += 1
+        grow(point.inner)
+        print(point.x + point.inner.x)
+        point.shift(2)
+
+def main():
+    p: Point | None = Point(x=7, inner=Inner(x=2), label="pt")
+    if p is not None:
+        print(p.x)
+        print(p.inner.x)
+        print(p.label)
+        print(p.norm())
+        print(f"{p.label}:{p.x}")
+        copied = p.label.clone()
+        print(copied)
+        match p.inner:
+            case Inner(x=x):
+                print(x)
+        view inner = p.inner
+        print(inner.x)
+    print(total(p))
+    print(total(None))
+    mut q: Point | None = Point(x=1, inner=Inner(x=1), label="q")
+    if q is not None:
+        q.x += 10
+        q.inner.x = 5
+        print(q.x + q.inner.x)
+    bump(q)
+    if q is not None:
+        print(q.x)

@@ -126,8 +126,8 @@ Assertion failure ends the current Aura execution path. It is not a catchable ex
 
 ## Status
 
-Both assertion forms are accepted, with the sequencing, cleanup, top-level, and no-strip behavior on this page. Aura 0.3 includes the bounded two-operand diagnostic.
+Both assertion forms are accepted, with the sequencing, cleanup, top-level, and no-strip behavior on this page. Aura 0.4 includes the bounded two-operand diagnostic.
 
-Aura 0.3 has no exception statements, no `raise`, and no catchable assertion failures.
+Aura 0.4 has no exception statements, no `raise`, and no catchable assertion failures.
 
 Design record: `architecture_docs/decisions/0024-assertion-evaluation-and-diagnostic-policy.md` for the assertion forms and their behavior, and `architecture_docs/decisions/0045-testing-framework-and-assertion-introspection.md` for operand introspection.

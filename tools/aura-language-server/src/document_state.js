@@ -1,5 +1,7 @@
 "use strict";
 
+// `dependenciesForAnalysis(analysis, previous)` returns the URIs a document's
+// analysis read. `previous` is the set the last analysis found.
 function createDocumentStateCache(analyzeDocument, dependenciesForAnalysis = () => []) {
   const documentStates = new Map();
   const generations = new Map();
@@ -56,7 +58,10 @@ function createDocumentStateCache(analyzeDocument, dependenciesForAnalysis = () 
             version: document.version,
             state
           });
-          updateDependencies(document.uri, dependenciesForAnalysis(compilerAnalysis));
+          updateDependencies(
+            document.uri,
+            dependenciesForAnalysis(compilerAnalysis, dependencies.get(document.uri) || new Set())
+          );
         }
         return state;
       })
@@ -94,6 +99,21 @@ function createDocumentStateCache(analyzeDocument, dependenciesForAnalysis = () 
     return affected;
   }
 
+  // Invalidates every document whose state matches, with its dependents.
+  // An analysis still in flight is passed as `null`.
+  function invalidateWhere(predicate) {
+    const affected = new Set();
+    const matching = [...documentStates]
+      .filter(([, entry]) => predicate(entry.state || null))
+      .map(([uri]) => uri);
+    for (const uri of matching) {
+      for (const affectedUri of invalidate(uri)) {
+        affected.add(affectedUri);
+      }
+    }
+    return affected;
+  }
+
   function invalidateAll() {
     const affected = new Set(documentStates.keys());
     for (const uri of affected) {
@@ -114,7 +134,8 @@ function createDocumentStateCache(analyzeDocument, dependenciesForAnalysis = () 
     deleteDocument,
     get,
     invalidate,
-    invalidateAll
+    invalidateAll,
+    invalidateWhere
   };
 }
 

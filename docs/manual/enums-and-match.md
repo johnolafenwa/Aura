@@ -90,6 +90,26 @@ This prints `missing`, `4`, `8`, and `cleared`. Where `value is not None` holds,
 
 Only `is None` and `is not None` narrow. `==` and `!=` compare values. A `match` arm narrows its own binding instead.
 
+### Narrowed Classes
+
+A place narrowed to a class member reads as that class. Its fields, nested fields, and methods are available through the place:
+
+```aura
+class Point:
+    x: int64
+    y: int64
+
+def main():
+    mut point: Point | None = Point(x=1, y=2)
+    if point is not None:
+        point.x += 10
+        print(point.x + point.y)
+```
+
+This prints `13`. The same rule applies to a module-qualified class such as `geometry.Point | None`, and to a narrowed class field such as `holder.point`.
+
+A narrowed union keeps its tag beside the payload, so a non-Copy field cannot move out of the payload alone. Moving one is rejected with `AU3004`. Clone the field, move the whole value, or use `match own` with a class pattern.
+
 ### Stable Places
 
 A stable place is one of:
@@ -123,9 +143,10 @@ A fact ends when the place or an enclosing place is assigned, matched with `matc
 
 Moving the place, including with `match own`, leaves it moved as usual, so a later use reports `AU3001`.
 
-Two writes keep the fact, because neither can change the member:
+These writes keep the fact, because none can change the member:
 
 - writing through the narrowed payload, such as `local += 1` above
+- writing or mutating a place inside the payload, such as `point.x += 10` above
 - changing a proven-disjoint sibling field
 
 A narrowed union with more than two members keeps its remaining member set for match coverage. After `if value is None: return`, a `match value` over `int64 | str | None` is exhaustive with only `int64` and `str` arms.
@@ -213,7 +234,7 @@ Bare builtin constructor names such as `Found(...)`, `Missing`, `Ok(...)`, and `
 
 A user enum is copyable when every payload type of every variant is statically copyable. Otherwise the enum is a move type. The classification is structural across all variants. It does not depend on the variant held at runtime.
 
-`Lookup[T]`, `Poll[T]`, `Result[T, E]`, `SendError[T]`, and `QueueReceive[T]` follow the same payload-copy rule. `TaskResult[T]`, `SelectOutcome[Q, T]`, `WaitAny[T]`, and `WaitAll[T]` are move outcome types in Aura 0.3, even with copy payloads. An unconstrained generic payload is not assumed copyable. See [Types](/manual/types#copy-and-move-categories).
+`Lookup[T]`, `Poll[T]`, `Result[T, E]`, `SendError[T]`, and `QueueReceive[T]` follow the same payload-copy rule. `TaskResult[T]`, `SelectOutcome[Q, T]`, `WaitAny[T]`, and `WaitAll[T]` are move outcome types in Aura 0.4, even with copy payloads. An unconstrained generic payload is not assumed copyable. See [Types](/manual/types#copy-and-move-categories).
 
 ## Statement Matches
 
@@ -267,7 +288,7 @@ Expression arms may also use the inline form `case Pattern: expression`. Stateme
 
 ## Pattern Forms
 
-At the top level of a match arm, Aura 0.3 supports:
+At the top level of a match arm, Aura 0.4 supports:
 
 - an enum variant pattern for an enum scrutinee
 - a recursively nested tuple pattern for a tuple scrutinee, with at most one rest element
@@ -447,7 +468,7 @@ def main():
 - Without a rest element, the list length must equal the element count.
 - With a rest element, the length must be at least the fixed element count.
 - Element bindings are shared borrows of the list elements, as in any bare `match`.
-- A named rest such as `*more` binds a new owned `list` slice of the remaining elements. A list of `Rng` values cannot be sliced, so this is rejected for them.
+- A named rest such as `*more` binds a new owned `list` slice of the remaining elements. The arm can change it, return it, or pass it to an `own` parameter, even beside a type arm such as `[int64 as first, *more]`. A list of `Rng` values cannot be sliced, so this is rejected for them.
 - `match mut` and `match own` reject sequence patterns with `AU2041`.
 
 A sequence match needs a final `case _:`, or arms that cover every length. Irrefutable arms for lengths `0` through `k - 1` plus an irrefutable arm with `k` fixed elements and a rest cover every list. `[]` and `[_, *_]` together are exhaustive.
@@ -475,11 +496,55 @@ def main():
 - Fields left out are not tested. `Point()` matches every `Point`.
 - Each field may appear once. Order does not matter.
 - A field must be a stored field visible at the match. A private field of a class from another module is rejected.
-- The class must be the scrutinee class, or one member of a union scrutinee. Spell it as a declared, imported, or module-qualified class name, such as `geometry.Point`.
+- The class must be the scrutinee class, or a class among the members of a union scrutinee. Spell it as a declared, imported, or module-qualified class name, such as `geometry.Point`.
 - Field bindings follow the match capability. A bare `match` gives shared borrows. `match own` moves the fields out of the consumed value. `match mut` rejects class patterns.
 - A class match needs a final `case _:`, or class patterns whose field patterns together cover every value.
 
 `Name()` with empty parentheses is always a class pattern. Write a payload-free enum variant without parentheses, as `case Color.Red:`.
+
+### Generic Classes In A Union
+
+Over a union, a class pattern matches every specialization of its class that the union holds. A specialization is a generic class with its type arguments filled in, such as `Box[int64]`. `Box()` below matches both `Box[int64]` and `Box[str]`:
+
+```aura
+class Box[T]:
+    value: T
+
+def describe(item: Box[int64] | Box[str] | None) -> str:
+    match item:
+        case Box():
+            return "box"
+        case None:
+            return "none"
+
+def main():
+    print(describe(Box(value="a")))
+```
+
+This prints `box`.
+
+- An irrefutable class pattern covers every specialization it matches. A later arm for one of them is unreachable and reports `AU2013`.
+- A field the pattern tests must have one type in every specialization it matches. A field declared as `label: str` has one type in every specialization, so it qualifies. `Box(value=v)` over `Box[int64] | Box[str]` is rejected with `AU2040`, because `value` is an `int64` in one member and a `str` in the other.
+- A `_` subpattern tests nothing, so `Box(value=_)` is accepted.
+
+To test the fields of one specialization, select it with a type pattern:
+
+```aura
+class Box[T]:
+    value: T
+
+def show(item: Box[int64] | Box[str]) -> str:
+    match item:
+        case Box[int64] as number:
+            return f"int {number.value}"
+        case Box[str] as text:
+            return f"str {text.value}"
+
+def main():
+    print(show(Box(value=2)))
+```
+
+This prints `int 2`.
 
 The checker reports class pattern errors with `AU2040`:
 
@@ -565,7 +630,7 @@ A match evaluates its scrutinee exactly once, tests arms in source order, and ru
 | `AU2004` | Invalid variant-constructor argument binding. |
 | `AU2013` | Union type-arm coverage: missing members, duplicate coverage, unreachable type arms, nonmembers, and type arms that are not one member. |
 | `AU2014` | A member use through a place whose narrowing fact was invalidated. |
-| `AU2040` | A class pattern with a positional, unknown, private, repeated, or method field. A class that is not the scrutinee class or one union member. A class pattern under `match mut`. Enum variant or type patterns over a class scrutinee. |
+| `AU2040` | A class pattern with a positional, unknown, private, repeated, or method field. A class that is not the scrutinee class or a union member. A tested field whose type differs between the union specializations the pattern matches. A class pattern under `match mut`. Enum variant or type patterns over a class scrutinee. |
 | `AU2041` | A rest element outside a tuple or sequence, a second rest element, too few positions for the fixed elements, a `*name` that covers no positions, or a sequence pattern under `match mut` or `match own`. |
 | `AU2999` | Duplicate variants, invalid payload shapes, missing or unreachable arms, non-exhaustive matches, mismatched alternative bindings, duplicate or subsumed alternatives, unsupported pattern forms, and other enum and match rejections. |
 | `AU3001` | Use after `match own`, after a payload move, or after moving an owned candidate before its guard commits. |

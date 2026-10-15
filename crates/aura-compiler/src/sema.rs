@@ -73,6 +73,7 @@ mod structural_patterns;
 mod unions;
 #[cfg(test)]
 mod unions_security_tests;
+pub(crate) use unions::narrowed_read_place;
 pub use unions::{NarrowedRead, NarrowedReadId, UnionInjection, UnionInjectionId};
 mod type_budget;
 #[cfg(test)]
@@ -2474,6 +2475,14 @@ impl<'a> FunctionChecker<'a> {
         if self.suppress_narrowing.get() {
             return None;
         }
+        Self::proven_member_at(path, locals)
+    }
+
+    /// The single member a live fact proves for a place. An enclosing
+    /// object of a field or tuple position uses it even where the place
+    /// itself is read as its declared union, because the path reaches that
+    /// place only through the proven payload.
+    fn proven_member_at(path: &PlacePath, locals: &HashMap<String, LocalBinding>) -> Option<Type> {
         let fact = locals.get(&path.root)?.narrowed.get(&path.projections)?;
         match fact.members.as_slice() {
             [single] => Some(single.clone()),
@@ -2481,9 +2490,31 @@ impl<'a> FunctionChecker<'a> {
         }
     }
 
-    /// Records a single-member read for the lowering, which replaces the
-    /// union place by its payload projection at that expression.
-    fn record_narrowed_read(&self, span: crate::diag::Span, declared: &Type, member: &Type) {
+    /// The innermost enclosing place of `path` that a live fact narrows to
+    /// one member: the union whose proven payload the path passes through.
+    fn narrowed_enclosing_union(
+        path: &PlacePath,
+        locals: &HashMap<String, LocalBinding>,
+    ) -> Option<PlacePath> {
+        (0..path.projections.0.len())
+            .rev()
+            .map(|depth| PlacePath {
+                root: path.root.clone(),
+                projections: ProjectionPath(path.projections.0[..depth].to_vec()),
+            })
+            .find(|prefix| Self::proven_member_at(prefix, locals).is_some())
+    }
+
+    /// Records a single-member read of the written `place` for the lowering,
+    /// which replaces the union place by its payload projection at that
+    /// expression.
+    fn record_narrowed_read(
+        &self,
+        span: crate::diag::Span,
+        place: String,
+        declared: &Type,
+        member: &Type,
+    ) {
         let Type::Union(union) = declared else {
             return;
         };
@@ -2499,6 +2530,7 @@ impl<'a> FunctionChecker<'a> {
                 module_name: self.module_name.to_owned(),
                 line: span.line,
                 column: span.column,
+                place,
             },
             NarrowedRead {
                 union_type: declared.clone(),
@@ -2686,7 +2718,9 @@ impl<'a> FunctionChecker<'a> {
     }
 
     /// Forgets every fact overlapping a place that was just assigned, moved,
-    /// or exposed to mutation, remembering it for AU2014.
+    /// or exposed to mutation, remembering it for AU2014. A fact on a strict
+    /// ancestor survives: a place below a narrowed union is reached through
+    /// its proven payload, so writing it cannot change the member.
     fn invalidate_narrowing(
         &self,
         place: &PlacePath,
@@ -2700,7 +2734,11 @@ impl<'a> FunctionChecker<'a> {
         let stale = binding
             .narrowed
             .iter()
-            .filter(|(projection, _)| projection.overlaps(&place.projections))
+            .filter(|(projection, _)| {
+                projection.overlaps(&place.projections)
+                    && !(place.projections.0.len() > projection.0.len()
+                        && place.projections.is_descendant_of_or_equal(projection))
+            })
             .map(|(projection, fact)| (projection.clone(), fact.tested_at))
             .collect::<Vec<_>>();
         for (projection, tested_at) in stale {
@@ -3974,6 +4012,15 @@ impl<'a> FunctionChecker<'a> {
                             "AU3004",
                             view_source.span,
                             "bind the returned view with `view` before taking a slice view of it",
+                        ));
+                    }
+                    if returned_kind.is_some()
+                        && self.selects_returned_view_element(view_source, locals)?
+                    {
+                        return Err(Diagnostic::coded_at(
+                            "AU3004",
+                            view_source.span,
+                            "bind the returned view with `view` before taking an element view of it",
                         ));
                     }
                     if let Some(returned_kind) = returned_kind {
@@ -5444,7 +5491,7 @@ impl<'a> FunctionChecker<'a> {
                 .clone()
                 .unwrap_or_else(|| existing.ty.clone());
             if let Some(member) = &narrowed_operand_ty {
-                self.record_narrowed_read(assign.span, &existing.ty, member);
+                self.record_narrowed_read(assign.span, binding_name.clone(), &existing.ty, member);
             }
             let final_value_ty = if let Some(op) = assign.op {
                 self.type_of_binary(assign.span, op, operand_ty.clone(), value_ty.clone())?
@@ -6013,6 +6060,29 @@ impl<'a> FunctionChecker<'a> {
                 }
                 Ok((object_ty, member_ty))
             }
+        }
+    }
+
+    /// Whether a place rooted at a returned-view call selects a list element
+    /// or dictionary entry. Fields and tuple positions are fixed projections
+    /// of the returned view; an element selection needs a bound view first.
+    fn selects_returned_view_element(
+        &self,
+        expr: &Expr,
+        locals: &HashMap<String, LocalBinding>,
+    ) -> Result<bool> {
+        match &grouped_expr(expr).kind {
+            ExprKind::Member { object, .. } => self.selects_returned_view_element(object, locals),
+            ExprKind::Index { object, .. } => {
+                if !matches!(
+                    self.type_of_expr_without_move_state(object, locals, None)?,
+                    Type::Tuple(_)
+                ) {
+                    return Ok(true);
+                }
+                self.selects_returned_view_element(object, locals)
+            }
+            _ => Ok(false),
         }
     }
 
@@ -6952,7 +7022,7 @@ impl<'a> FunctionChecker<'a> {
                     if let Some(member) =
                         self.narrowed_type_at(&PlacePath::root(name.clone()), locals)
                     {
-                        self.record_narrowed_read(expr.span, &declared, &member);
+                        self.record_narrowed_read(expr.span, name.clone(), &declared, &member);
                         return Ok(member);
                     }
                     return Ok(declared);
@@ -8286,7 +8356,12 @@ impl<'a> FunctionChecker<'a> {
                 let member_ty = self.resolve_member_type(&object_ty, field, expr.span)?;
                 if let Some(path) = self.member_access_path(expr) {
                     if let Some(narrowed) = self.narrowed_type_at(&path, locals) {
-                        self.record_narrowed_read(expr.span, &member_ty, &narrowed);
+                        self.record_narrowed_read(
+                            expr.span,
+                            narrowed_read_place(expr),
+                            &member_ty,
+                            &narrowed,
+                        );
                         return Ok(narrowed);
                     }
                 }
@@ -8447,7 +8522,12 @@ impl<'a> FunctionChecker<'a> {
                         self.narrowed_type_at(&path.with_tuple(tuple_index), locals)
                     }) {
                         Some(narrowed) => {
-                            self.record_narrowed_read(expr.span, &element_ty, &narrowed);
+                            self.record_narrowed_read(
+                                expr.span,
+                                narrowed_read_place(expr),
+                                &element_ty,
+                                &narrowed,
+                            );
                             narrowed
                         }
                         None => element_ty,
@@ -15499,21 +15579,28 @@ impl<'a> FunctionChecker<'a> {
         if binding.moved || Self::field_path_is_moved(binding, &path.projections) {
             return false;
         }
-        let ty = if path.is_root() {
-            binding.ty.clone()
-        } else {
-            let mut ty = binding.ty.clone();
-            for projection in &path.projections.0 {
-                let PlaceProjection::Field(field) = projection else {
-                    return false;
-                };
-                let Ok(next) = self.resolve_member_type(&ty, field, object.span) else {
-                    return false;
-                };
-                ty = next;
+        // Each union along the path, and the receiver itself, reads as the
+        // member a live fact proves.
+        let mut ty = binding.ty.clone();
+        for (depth, projection) in path.projections.0.iter().enumerate() {
+            let PlaceProjection::Field(field) = projection else {
+                return false;
+            };
+            let prefix = PlacePath {
+                root: path.root.clone(),
+                projections: ProjectionPath(path.projections.0[..depth].to_vec()),
+            };
+            if let Some(member) = Self::proven_member_at(&prefix, locals) {
+                ty = member;
             }
-            ty
-        };
+            let Ok(next) = self.resolve_member_type(&ty, field, object.span) else {
+                return false;
+            };
+            ty = next;
+        }
+        if let Some(member) = Self::proven_member_at(&path, locals) {
+            ty = member;
+        }
         matches!(&ty, Type::Named(collection, args)
             if (collection == "Span" && args.len() == 1
                 && matches!(method, "reverse" | "sort" | "swap" | "fill"))
@@ -15550,6 +15637,29 @@ impl<'a> FunctionChecker<'a> {
             .retain(|moved_path, _| !moved_path.is_descendant_of_or_equal(path));
     }
 
+    /// The type a member or tuple-position object reads as: the single
+    /// member a live `is None` fact proves for its stable place, or else its
+    /// declared type. A narrowed read is recorded so the lowering projects
+    /// the proven payload before the following field or position.
+    fn narrowed_member_object_type(
+        &self,
+        expr: &Expr,
+        declared: Type,
+        locals: &HashMap<String, LocalBinding>,
+    ) -> Type {
+        if !matches!(declared, Type::Union(_)) {
+            return declared;
+        }
+        let Some(member) = self
+            .narrowable_place(expr)
+            .and_then(|path| Self::proven_member_at(&path, locals))
+        else {
+            return declared;
+        };
+        self.record_narrowed_read(expr.span, narrowed_read_place(expr), &declared, &member);
+        member
+    }
+
     fn type_of_member_object_expr(
         &self,
         expr: &Expr,
@@ -15564,7 +15674,8 @@ impl<'a> FunctionChecker<'a> {
                 if binding.moved {
                     return Err(self.moved_value_diagnostic(name, expr.span, binding));
                 }
-                Ok(binding.ty.clone())
+                let declared = binding.ty.clone();
+                Ok(self.narrowed_member_object_type(expr, declared, locals))
             }
             ExprKind::Group(inner)
             | ExprKind::Cast { expr: inner, .. }
@@ -15573,10 +15684,16 @@ impl<'a> FunctionChecker<'a> {
             }
             ExprKind::Member { object, field } => {
                 let object_ty = self.type_of_member_object_expr(object, locals)?;
+                if matches!(object_ty, Type::Union(_)) {
+                    if let Some(path) = self.member_access_path(object) {
+                        self.reject_stale_narrowing(&path, expr.span, locals)?;
+                    }
+                }
                 if let Some(property) = self.property_read_type(&object_ty, field, expr.span)? {
                     return Ok(property);
                 }
-                self.resolve_member_type(&object_ty, field, expr.span)
+                let member_ty = self.resolve_member_type(&object_ty, field, expr.span)?;
+                Ok(self.narrowed_member_object_type(expr, member_ty, locals))
             }
             ExprKind::Index { object, index } => {
                 let object_ty = self.type_of_member_object_expr(object, locals)?;
@@ -15591,13 +15708,14 @@ impl<'a> FunctionChecker<'a> {
                             "invalid tuple projection position",
                         )
                     })?;
-                    elements.get(index).cloned().ok_or_else(|| {
+                    let element = elements.get(index).cloned().ok_or_else(|| {
                         Diagnostic::coded_at(
                             "AU3004",
                             expr.span,
                             format!("tuple has no position {index}"),
                         )
-                    })
+                    })?;
+                    Ok(self.narrowed_member_object_type(expr, element, locals))
                 } else if vec_element_type(&object_ty).is_some()
                     || map_key_value_types(&object_ty).is_some()
                 {

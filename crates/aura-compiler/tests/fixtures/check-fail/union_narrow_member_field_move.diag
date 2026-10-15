@@ -1,0 +1,6 @@
+error[AU3004]: cannot move non-copy field `label` out of narrowed union `point`
+ --> crates/aura-compiler/tests/fixtures/check-fail/union_narrow_member_field_move.au:11:26
+   |
+11 |         print(take(point.label))
+   |                          ^
+  = help: call `.clone()` on the field, move the whole `point`, or use `match own point:` with a class pattern to move the field

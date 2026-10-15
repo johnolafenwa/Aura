@@ -1,0 +1,9 @@
+class Point:
+    x: int64
+
+def main():
+    mut point: Point | None = Point(x=1)
+    if point is not None:
+        point.x = 2
+        point = None
+        print(point.x)

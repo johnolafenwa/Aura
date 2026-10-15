@@ -323,7 +323,7 @@ Overlap rules:
 - Dispatch selects the unique applicable implementation with the greatest structural specificity. Equal-best matches are ambiguous and rejected.
 - Source order never breaks a tie.
 
-Aura 0.3 imposes no separate orphan rule. An implementation must still refer to known, visible types and traits. It takes part only where it is present in the loaded module or package context.
+Aura 0.4 imposes no separate orphan rule. An implementation must still refer to known, visible types and traits. It takes part only where it is present in the loaded module or package context.
 
 ### Trait Methods On Unions
 
@@ -364,7 +364,7 @@ The checker rejects the following before any body runs:
 - signature mismatches
 - default ordinary arguments added by an implementation method
 
-An explicit implementation MUST NOT strengthen its trait method's clone-safety contract. Its body can rely on obligations that the trait method already inferred. It cannot add a requirement that bound-based callers cannot see. Aura 0.3 has no explicit clone-safety annotation, so generic clone-producing behavior belongs in a trait default body. An implementation that adds such a requirement is rejected with `AU3007`.
+An explicit implementation MUST NOT strengthen its trait method's clone-safety contract. Its body can rely on obligations that the trait method already inferred. It cannot add a requirement that bound-based callers cannot see. Aura 0.4 has no explicit clone-safety annotation, so generic clone-producing behavior belongs in a trait default body. An implementation that adds such a requirement is rejected with `AU3007`.
 
 An `impl` targeting any builtin type MUST NOT explicitly define or inherit a trait method whose name is a builtin member of that target. This covers:
 
@@ -646,7 +646,7 @@ The checker gives lowering, analysis, and the language server one resolved speci
 
 ## Limits And Implementation-Defined Behavior
 
-Aura 0.3 has none of the following:
+Aura 0.4 has none of the following:
 
 - trait objects or dynamic dispatch
 - associated types or constants

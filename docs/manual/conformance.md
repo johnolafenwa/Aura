@@ -13,7 +13,7 @@ A **conforming Aura implementation**:
 - preserves the observable evaluation and cleanup behavior defined by the Manual
 - produces the specified typed outcomes or runtime failures
 - provides the maintained public API surface
-- does not expose proposal-only constructs as accepted 0.3 language features
+- does not expose proposal-only constructs as accepted 0.4 language features
 
 Exact diagnostic prose is normative only where a fixture or this Manual explicitly requires it. Otherwise, a conforming implementation needs a clear diagnostic with an accurate source location and the same stable `AU####` code. The message wording may differ, as long as the code keeps its documented meaning.
 
@@ -42,7 +42,7 @@ Each row names a reference area and the tests, fixtures, and maintained examples
 | Power, `round`, and `divmod`: right-associative precedence, exact numeric types, checked integer results, ties-to-even conversion, paired floor quotient/remainder, runtime classification, one-time evaluation, and MIR/direct parity | focused parser/sema/integer/runtime-value/MIR/native tests; `numeric_round_divmod`, `bitwise_power`, and numeric failure fixtures; `examples/numbers/bit_packing.au`; language-server and extension coverage; and the forced MIR/direct parity matrix |
 | Exact triple-quoted and raw string forms plus static f-string format specifications: delimiter and escape rules, no whitespace normalization, Unicode-scalar width and string precision, sign-aware numeric zero padding, type-directed numeric codes, binary32 identity, left-to-right evaluation, focused raw/triple-f diagnostics, formatter preservation, and MIR/direct parity | focused lexer/parser/sema/runtime-value/MIR/native tests; `string_literal_forms_and_format_specs`, `fstring_zero_padding`, and `fstring_*` rejection fixtures; `examples/strings/literal_forms_and_formatting.au`; compiler-bridge and extension grammar/snippet tests; and the forced MIR/direct parity matrix |
 | Match guards, or-patterns, and top-level catch-all bindings: exact-`bool` guards, left-to-right alternatives, identical alternative bindings, guarded-arm reachability and exhaustiveness, delayed `match own` extraction, mutable candidate writeback before false continuation/failure/trap and every selected-arm exit, complete-scrutinee binding capabilities, and MIR/direct parity | focused parser/sema/MIR/analysis tests; the `match_guard*`, `match_own*`, `match_mut_guard*`, `match_root_binding_patterns`, `or_pattern*`, guarded-exhaustiveness, and `match_expression_class_variant_pattern` fixtures; `examples/enums/match_guards_and_or_patterns.au`; compiler-bridge tests; and the forced MIR/direct parity matrix |
-| Tuple rest elements in targets and patterns, list sequence patterns in bare `match`, and keyword class patterns: rest ranges, `AU2041` placement and arity rejections, length tests, owned rest slices, class and union-member selection, field visibility, `match own` field moves, `AU2040` rejections, structural exhaustiveness, analysis hover and definition, and MIR/direct parity | focused parser and analysis tests; the `tuple_rest_unpacking`, `list_sequence_patterns`, `class_patterns`, `class_and_sequence_patterns_nested`, and `class_pattern_imported` run fixtures; the `pattern_*` parse-fail and check-fail fixtures; `class_pattern_private_field`; `examples/enums/structural_patterns.au`; and the forced MIR/direct parity matrix |
+| Tuple rest elements in targets and patterns, list sequence patterns in bare `match`, and keyword class patterns: rest ranges, `AU2041` placement and arity rejections, length tests, owned rest slices, class and union-member selection, matching every generic specialization in a union, field visibility, `match own` field moves, `AU2040` rejections, structural exhaustiveness, analysis hover and definition, and MIR/direct parity | focused parser and analysis tests; the `tuple_rest_unpacking`, `list_sequence_patterns`, `class_patterns`, `class_and_sequence_patterns_nested`, `class_pattern_imported`, `class_pattern_generic_union`, and `sequence_rest_beside_type_pattern` run fixtures; the `pattern_*` parse-fail and check-fail fixtures; `class_pattern_private_field` and `class_pattern_generic_union_field_types`; `examples/enums/structural_patterns.au`; and the forced MIR/direct parity matrix |
 | Module constants: inferred/annotated/public declarations, declaration-order scope, dependency-first and source-ordered eager once-only initialization, one defining storage identity, Copy versus shared non-Copy reads, move/mutation rejection, guarded re-entry, package visibility, analysis/editor exposure, cleanup, and MIR/direct parity | focused parser/sema/MIR/native/runtime/analysis tests; `module_constant*` check/run fixtures; multi-module and package dependency tests; `examples/modules/constants.au`; language-server compiler-bridge tests; and the forced MIR/direct parity matrix |
 | signed-i128-nanosecond Duration literals, exact two-limb direct ABI, constructors, checked arithmetic, `FloorDiv`, comparison, conversion, rendering, and invalid host timers | `duration_literals_scale_to_nonnegative_i128_nanoseconds_at_each_unit_boundary`, parser/MIR/native-codegen/runtime unit tests, Duration run/failure fixtures, native-runtime FFI tests, and the MIR/direct parity matrix |
 | persistent descriptor registrations, heap-ordered deadlines, direct Queue/task-completion/blocking-pool wakeups, wait-epoch race containment, one-winner cleanup, and event-or-deadline idle blocking without a periodic tick | `runtime_reactor` unit tests including `timers_fire_at_the_earliest_deadline_and_preserve_equal_deadline_order`, `one_persistent_fd_registration_aggregates_waiters_and_narrows_interest`, and `waker_coalescing_does_not_lose_inbox_entries_and_ready_is_deduplicated`; runtime-value direct-wakeup and cleanup tests; `scheduler_model` lost-wake/stale-epoch/one-winner state-space tests; `scheduler_mixed_wakeups_complete_in_mir_and_direct_backends`; `scripts/stress-scheduler.sh`; the contractual `scripts/bench-scalable-runtime.py` after-reactor run; and the MIR/direct parity matrix |
@@ -108,7 +108,7 @@ Regression tests supplement fixtures when a case needs multiple files, temporary
 
 ## Backend Equivalence
 
-Aura 0.3 has two maintained semantic runtime representations:
+Aura 0.4 has two maintained semantic runtime representations:
 
 - `aura run` lowers checked source to MIR and executes it in the MIR runtime.
 - `aura build --backend direct` lowers checked source to native code through the direct backend and links the native runtime.
@@ -164,7 +164,7 @@ A language or tooling behavior change is complete only when the same pass update
 6. categorized examples and Learn/tutorial material
 7. the task board and dated work note
 
-Syntax expansion is frozen for the 0.3 technical-preview release. A new construct needs an explicit compatibility decision. Being easy to parse is not enough.
+Each new construct needs an explicit compatibility decision. Being easy to parse is not enough.
 
 ## Deriving A Book
 

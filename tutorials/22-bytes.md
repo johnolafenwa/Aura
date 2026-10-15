@@ -177,7 +177,7 @@ Some failures trap with `AU4005` instead:
 A codec never returns a partial successful value.
 
 The optional `encoding` parameter is reserved and not implemented. These are
-the complete 0.3 conversion calls:
+the complete 0.4 conversion calls:
 
 - `text.to_bytes()`
 - `str.from_bytes(payload)`

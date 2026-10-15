@@ -252,9 +252,10 @@ impl Lowerer<'_> {
         }
     }
 
-    /// `view name = items[a:b]` or `view name = span[a:b]`: the endpoints
-    /// are evaluated before the base loan begins. The view then lowers as a
-    /// loan or reborrow of the base, and `finish_span_view` adds the range.
+    /// `view name = items[a:b]` or `view name = span[a:b]`: the base place
+    /// and then the endpoints are evaluated before the base loan begins. The
+    /// view then lowers as a loan or reborrow of the base, and
+    /// `finish_span_view` adds the range.
     pub(super) fn begin_span_view(
         &mut self,
         view: &crate::ast::ViewStmt,
@@ -268,11 +269,12 @@ impl Lowerer<'_> {
         else {
             return None;
         };
+        let object = self.pin_span_base(object);
         let endpoints = self.lower_span_endpoints(start.as_deref(), end.as_deref());
-        let outer = self.span_range_of(object).map(|(_, range)| range);
+        let outer = self.span_range_of(&object).map(|(_, range)| range);
         Some((
             crate::ast::ViewStmt {
-                source: (**object).clone(),
+                source: object,
                 ..view.clone()
             },
             PendingSpanView::Slice {
@@ -285,7 +287,9 @@ impl Lowerer<'_> {
 
     /// `view part = f(items)` where `f` returns `view Span[T] from items`:
     /// the call returns the absolute range, then the view lends the origin
-    /// argument's base place with that range.
+    /// argument's base place with that range. When the call lent an element
+    /// or entry origin through a hidden loan, the view reborrows that loan,
+    /// so the origin's selector is not evaluated a second time.
     pub(super) fn begin_returned_span_view(
         &mut self,
         view: &crate::ast::ViewStmt,
@@ -297,6 +301,13 @@ impl Lowerer<'_> {
             _ => origin,
         };
         let range = self.lower_span_call_range(call);
+        let origin = match self.lent_origin_loan(&origin) {
+            Some(loan) => Expr {
+                kind: ExprKind::Name(loan),
+                span: origin.span,
+            },
+            None => origin,
+        };
         Some((
             crate::ast::ViewStmt {
                 source: origin,
@@ -326,6 +337,98 @@ impl Lowerer<'_> {
         args.iter()
             .find(|arg| arg.name.as_deref() == Some(contract.origin.as_str()))
             .map(|arg| arg.value.clone())
+    }
+
+    /// The live hidden loan through which a call lent the element or entry
+    /// that `origin` names, if the call took one.
+    fn lent_origin_loan(&self, origin: &Expr) -> Option<String> {
+        [origin, grouped_mir_expr(origin)]
+            .into_iter()
+            .find_map(|expr| {
+                self.contextual_loan_by_span
+                    .get(&(expr.span.line, expr.span.column))
+            })
+            .filter(|loan| self.view_sources.contains_key(*loan))
+            .cloned()
+    }
+
+    /// Evaluates a span base once, before the slice endpoints, and returns
+    /// the base with each evaluated part replaced by the place that holds
+    /// it. A root that is not a name, such as a call, is evaluated first.
+    /// Element and entry selectors follow, left to right. Lending the
+    /// returned place later only reads those places, so the base loan can
+    /// begin after the endpoints. A base rooted at a call that returns a
+    /// view is left as written, because that call must lower into its loan.
+    fn pin_span_base(&mut self, base: &Expr) -> Expr {
+        if self.returned_view_source(base).is_some() {
+            base.clone()
+        } else {
+            self.pin_span_place(base)
+        }
+    }
+
+    fn pin_span_place(&mut self, base: &Expr) -> Expr {
+        let kind = match &base.kind {
+            ExprKind::Group(inner) => ExprKind::Group(Box::new(self.pin_span_place(inner))),
+            ExprKind::Member { object, field } => ExprKind::Member {
+                object: Box::new(self.pin_span_place(object)),
+                field: field.clone(),
+            },
+            ExprKind::Index { object, index } => {
+                let object = self.pin_span_place(object);
+                let index = self.pin_span_selector(&object, index);
+                ExprKind::Index {
+                    object: Box::new(object),
+                    index: Box::new(index),
+                }
+            }
+            ExprKind::Name(_) => return base.clone(),
+            // The root value, read the way an index reads its collection.
+            _ => match self.lower_expr_at_sequence_point(base, None) {
+                Operand::Place(place) | Operand::MovePlace(place) => ExprKind::Name(place),
+                value => {
+                    let temp = self.new_temp_for_expr(base);
+                    self.emit(Instruction::Assign {
+                        target: temp.clone(),
+                        value: Rvalue::Use(value),
+                    });
+                    ExprKind::Name(temp)
+                }
+            },
+        };
+        Expr {
+            kind,
+            span: base.span,
+        }
+    }
+
+    /// A list position or dictionary key, evaluated into a temporary. A
+    /// literal stays as written, so element loans keep their literal
+    /// selectors, and a tuple position is not a selector.
+    fn pin_span_selector(&mut self, object: &Expr, index: &Expr) -> Expr {
+        let selector_ty = match self.infer_expr_type(object) {
+            Some(Type::Named(name, args)) if name == "list" && args.len() == 1 => int64(),
+            Some(Type::Named(name, mut args)) if name == "dict" && args.len() == 2 => {
+                args.swap_remove(0)
+            }
+            _ => return index.clone(),
+        };
+        if matches!(
+            index.kind,
+            ExprKind::Int(_) | ExprKind::String(_) | ExprKind::Bool(_)
+        ) {
+            return index.clone();
+        }
+        let value = self.lower_expr_with_expected(index, Some(&selector_ty));
+        let temp = self.new_typed_temp(selector_ty);
+        self.emit(Instruction::Assign {
+            target: temp.clone(),
+            value: Rvalue::Use(value),
+        });
+        Expr {
+            kind: ExprKind::Name(temp),
+            span: index.span,
+        }
     }
 
     /// Calls a span-returning function and reads its `(start, len)` range.
@@ -747,11 +850,13 @@ impl Lowerer<'_> {
                 end,
                 colon_span,
             } => {
+                let base = self.pin_span_base(object);
                 let endpoints = self.lower_span_endpoints(start.as_deref(), end.as_deref());
-                (&**object, Some((endpoints, *colon_span)))
+                (base, Some((endpoints, *colon_span)))
             }
-            _ => (argument, None),
+            _ => (argument.clone(), None),
         };
+        let base_expr = &base_expr;
         let outer = self.span_range_of(base_expr).map(|(_, range)| range);
         let value = self.lower_expr_for_passing(base_expr, Some(&list_ty), passing);
         let base = match &value {

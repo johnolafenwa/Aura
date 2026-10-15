@@ -2,7 +2,7 @@
 
 Last updated: 2026-10-15
 
-## 0.4.0 preview security review (in progress)
+## 0.4.0 preview security review (complete)
 
 - Target: security review of the `v0.4.0-preview` candidate, as John asked,
   and fixes for confirmed issues.
@@ -10,17 +10,20 @@ Last updated: 2026-10-15
   pinned publish tools with step-scoped tokens, installer truncation guard,
   read-only CI token, strict HTTP length parsing. Details are in
   `2026-10-15-v0.4.0-security-review.md`.
-- Remaining: hosted CI and merge of the fix PR.
+- Merged as PR #49 (`f8257c8`) after green hosted CI.
 
 ## Aura 0.4.0 preview release (in progress)
 
 - Target: release Batches 2, 3, and 4 as `v0.4.0-preview`, as John asked.
   CLI, compiler, language server, and VS Code extension 0.4.0.
-- Done: version bump, lockfiles, install and Manual pages, stale schema
-  references, CHANGELOG, and a schema consistency test. Details are in
-  `2026-10-14-v0.4.0-preview-release.md`.
-- Remaining: hosted CI on the release PR, merge, the `v0.4.0-preview` tag,
-  and the Release run.
+- Done: release preparation merged as PR #48 (`53382d17`). An external
+  review of that commit found 11 defects, so the tag was held. All 11 are
+  fixed with regression tests, plus element views of returned views, the
+  docs deploy gate, and stale 0.3 labels. Details are in
+  `2026-10-14-v0.4.0-preview-release.md` and
+  `2026-10-15-v0.4.0-review-fixes.md`.
+- Remaining: hosted CI and merge of the review-fix PR, then the
+  `v0.4.0-preview` tag on the merge commit and the Release run.
 
 ## Batch 4: everyday syntax and API usability (complete)
 

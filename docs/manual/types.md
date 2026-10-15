@@ -98,7 +98,7 @@ At those positions, values of type `int8`, `int16`, `int32`, `uint8`, `uint16`, 
 
 Literal lexing first requires a finite binary64 value. Contextual `float32` conversion may then round or overflow, as recorded in [Current Limits](/manual/current-limits).
 
-Runtime operations may produce NaN. In Aura 0.3, `/`, `//`, or `%` by a floating zero is an explicit runtime failure. Those operators never produce infinity or NaN.
+Runtime operations may produce NaN. In Aura 0.4, `/`, `//`, or `%` by a floating zero is an explicit runtime failure. Those operators never produce infinity or NaN.
 
 ### Duration And Range
 

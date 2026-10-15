@@ -385,6 +385,67 @@ fn a_comprehension_never_gains_a_trailing_comma() {
 }
 
 #[test]
+fn a_parenthesized_lambda_stays_one_element_when_it_breaks() {
+    let source = "def main():\n    callback: def(int64, int64) -> int64 = (lambda first_parameter, second_parameter: first_parameter + second_parameter)\n    print(callback(1, 2))\n";
+    let expected = "def main():\n    callback: def(int64, int64) -> int64 = (\n        lambda first_parameter, second_parameter: first_parameter + second_parameter\n    )\n    print(callback(1, 2))\n";
+    assert_formats(source, expected);
+    crate::check_source(expected)
+        .unwrap_or_else(|error| panic!("formatted lambda should check: {}", error.message));
+}
+
+#[test]
+fn lambda_parameter_commas_do_not_separate_list_elements() {
+    let source = "def main():\n    print(apply_both(lambda left_value, right_value: left_value + right_value, first_input, second_input))\n    table = {\"first_entry_name\": lambda first, second: lambda third, fourth: first, \"second_entry_name\": 1}\n";
+    assert_formats(
+        source,
+        "def main():\n    print(\n        apply_both(\n            lambda left_value, right_value: left_value + right_value,\n            first_input,\n            second_input,\n        )\n    )\n    table = {\n        \"first_entry_name\": lambda first, second: lambda third, fourth: first,\n        \"second_entry_name\": 1,\n    }\n",
+    );
+    // A one-element tuple that holds a lambda keeps its comma and its layout.
+    assert_formats(
+        "def main():\n    pair = (lambda first, second: first,)\n",
+        "def main():\n    pair = (lambda first, second: first,)\n",
+    );
+    // A field named `lambda` does not start a parameter list.
+    assert_formats(
+        "def main():\n    print(holder.lambda, first_value_name_that_is_long, second_value_name_that_is_long_too)\n",
+        "def main():\n    print(\n        holder.lambda,\n        first_value_name_that_is_long,\n        second_value_name_that_is_long_too,\n    )\n",
+    );
+}
+
+#[test]
+fn the_token_guard_does_not_count_lambda_parameter_commas_as_tuple_commas() {
+    for (source, changed) in [
+        (
+            "x = (lambda a, b: a + b)\n",
+            "x = (\n    lambda a, b: a + b,\n)\n",
+        ),
+        (
+            "x = (lambda a: lambda b, c: a)\n",
+            "x = (lambda a: lambda b, c: a,)\n",
+        ),
+        (
+            "x = (lambda [a, b] c, *, d: c)\n",
+            "x = (lambda [a, b] c, *, d: c,)\n",
+        ),
+    ] {
+        let original = lex(source).unwrap();
+        assert!(
+            matches!(
+                verify(&original, changed),
+                Err(FormatError::Unstable(message)) if message.contains("changes the token stream")
+            ),
+            "{changed:?} must not pass for {source:?}"
+        );
+    }
+    // A comma that separates tuple elements still allows a trailing comma, and
+    // a field named `lambda` does not start a parameter list.
+    let pair = lex("x = (lambda a, b: a, 2)\n").unwrap();
+    assert!(verify(&pair, "x = (lambda a, b: a, 2,)\n").is_ok());
+    let field = lex("x = (item.lambda, 2)\n").unwrap();
+    assert!(verify(&field, "x = (item.lambda, 2,)\n").is_ok());
+}
+
+#[test]
 fn trailing_tabs_and_spaces_are_removed_outside_strings() {
     assert_formats(
         "def main() -> None:\t \n    text = \"\"\"keep\t \n\"\"\"\t\n    print(text)\t\n",

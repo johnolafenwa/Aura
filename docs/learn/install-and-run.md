@@ -7,7 +7,7 @@ Aura release archives ship a command-line tool called `aura` and its private
 native runtime under `lib/aura`. The tool parses, type-checks, runs, and
 builds Aura source files. It is also the entry point for editor tooling.
 
-Aura 0.3 is a technical preview.
+Aura 0.4 is a technical preview.
 
 ## Install A Release Archive
 

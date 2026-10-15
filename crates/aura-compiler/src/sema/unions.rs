@@ -19,12 +19,34 @@ pub struct UnionInjection {
 
 /// A read (or compound-assignment target) of a union place that the checker
 /// proved to hold exactly one member on the current path (ADR-0052 A3/A4).
-/// Keyed by the expression span; the lowering reads the payload projection.
+/// Keyed by the expression span and the written place; the lowering reads
+/// the payload projection.
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct NarrowedReadId {
     pub module_name: String,
     pub line: usize,
     pub column: usize,
+    /// The place as written, such as `holder.point`. Every object in an
+    /// assignment target's chain shares the target's span, so the span alone
+    /// does not name one read.
+    pub place: String,
+}
+
+/// The written place of a narrowed read, as [`NarrowedReadId::place`]
+/// spells it.
+pub(crate) fn narrowed_read_place(expr: &Expr) -> String {
+    match &expr.kind {
+        ExprKind::Name(name) => name.clone(),
+        ExprKind::Group(inner)
+        | ExprKind::Cast { expr: inner, .. }
+        | ExprKind::Specialize { expr: inner, .. } => narrowed_read_place(inner),
+        ExprKind::Member { object, field } => format!("{}.{field}", narrowed_read_place(object)),
+        ExprKind::Index { object, index } => match &index.kind {
+            ExprKind::Int(position) => format!("{}[{position}]", narrowed_read_place(object)),
+            _ => format!("{}[?]", narrowed_read_place(object)),
+        },
+        _ => "?".to_string(),
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -39,11 +61,13 @@ impl Program {
         &self,
         module_name: &str,
         span: crate::diag::Span,
+        place: &str,
     ) -> Option<NarrowedRead> {
         let id = NarrowedReadId {
             module_name: module_name.to_owned(),
             line: span.line,
             column: span.column,
+            place: place.to_owned(),
         };
         self.type_definitions
             .narrowed_reads

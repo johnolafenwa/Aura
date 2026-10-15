@@ -1,0 +1,5 @@
+error[AU3004]: bind the returned view with `view` before taking an element view of it
+ --> crates/aura-compiler/tests/fixtures/check-fail/returned_view_element_view.au:9:18
+  |
+9 |     view first = rows_of(g)[0]
+  |                  ^

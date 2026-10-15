@@ -1713,7 +1713,42 @@ fn lsp_result_for_request(request: &JsonValue) -> Result<JsonValue, String> {
         .get("source")
         .and_then(JsonValue::as_str)
         .ok_or_else(|| "LSP compiler request requires string field `source`".to_string())?;
+    let overlays = lsp_source_overlays(request)?;
 
+    aura_compiler::with_source_overlays(overlays, || {
+        lsp_method_result(method, path, source, request)
+    })
+}
+
+/// Unsaved editor buffers for other files, as `overlays: [{path, source}]`.
+fn lsp_source_overlays(request: &JsonValue) -> Result<Vec<(PathBuf, String)>, String> {
+    let Some(overlays) = request.get("overlays") else {
+        return Ok(Vec::new());
+    };
+    let entries = overlays
+        .as_array()
+        .ok_or_else(|| "LSP compiler request field `overlays` must be an array".to_string())?;
+    entries
+        .iter()
+        .map(|entry| {
+            let field = |name: &str| {
+                entry.get(name).and_then(JsonValue::as_str).ok_or_else(|| {
+                    format!(
+                        "each LSP compiler request `overlays` entry requires string field `{name}`"
+                    )
+                })
+            };
+            Ok((PathBuf::from(field("path")?), field("source")?.to_owned()))
+        })
+        .collect()
+}
+
+fn lsp_method_result(
+    method: &str,
+    path: &str,
+    source: &str,
+    request: &JsonValue,
+) -> Result<JsonValue, String> {
     match method {
         "analyze" => serde_json::to_value(analyze_path_source(Path::new(path), source))
             .map_err(|error| format!("failed to serialize compiler analysis: {error}")),
@@ -5214,6 +5249,59 @@ mod tests {
                 .is_some_and(|message| message.contains("semantic schema mismatch")),
             "mismatched clients must receive an explicit schema error: {response}"
         );
+    }
+
+    #[test]
+    fn lsp_service_checks_against_open_dependency_overlays() {
+        let root = unique_temp_dir("lsp-overlays");
+        let library = root.join("library.au");
+        fs::write(&library, "public def answer() -> int64:\n    return 42\n")
+            .expect("library should be written");
+        let main = root.join("main.au");
+        let source = "from library import answer\n\ndef main():\n    print(answer() + 1)\n";
+        fs::write(&main, source).expect("main should be written");
+        let request = |overlays: serde_json::Value| {
+            let mut request = serde_json::json!({
+                "id": 9,
+                "semantic_interface_version": aura_compiler::SEMANTIC_INTERFACE_SCHEMA_VERSION,
+                "method": "analyze",
+                "path": main.display().to_string(),
+                "source": source
+            });
+            if !overlays.is_null() {
+                request["overlays"] = overlays;
+            }
+            lsp_response_for_line(&request.to_string())
+        };
+
+        let saved = request(serde_json::Value::Null);
+        assert_eq!(saved["result"]["diagnostics"], serde_json::json!([]));
+        let unsaved = request(serde_json::json!([{
+            "path": library.display().to_string(),
+            "source": "public def answer() -> str:\n    return \"forty-two\"\n"
+        }]));
+        let diagnostics = unsaved["result"]["diagnostics"]
+            .as_array()
+            .expect("analysis diagnostics should be an array");
+        assert_eq!(diagnostics.len(), 1, "{unsaved}");
+        assert_eq!(
+            request(serde_json::json!([]))["result"]["diagnostics"],
+            serde_json::json!([])
+        );
+
+        for malformed in [
+            serde_json::json!({ "path": "x" }),
+            serde_json::json!([{ "path": "x" }]),
+            serde_json::json!([{ "source": "x" }]),
+        ] {
+            assert!(
+                request(malformed)["error"]
+                    .as_str()
+                    .is_some_and(|message| message.contains("overlays")),
+                "malformed overlays must be rejected"
+            );
+        }
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

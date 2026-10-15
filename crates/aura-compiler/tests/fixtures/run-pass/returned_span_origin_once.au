@@ -1,0 +1,44 @@
+def identity(values: list[int64]) -> view Span[int64] from values:
+    return view values
+
+def tail(values: Span[int64]) -> view Span[int64] from values:
+    return view values[1:]
+
+def writable(values: mut list[int64]) -> view mut Span[int64] from values:
+    return view mut values[1:]
+
+def choose_index(counter: mut list[int64]) -> int64:
+    value = counter[0]
+    counter[0] += 1
+    return value
+
+def choose_key(counter: mut list[int64]) -> str:
+    counter[0] += 1
+    if counter[0] == 1:
+        return "first"
+    return "second"
+
+def main():
+    rows: list[list[int64]] = [[10, 20], [30, 40]]
+    mut calls: list[int64] = [0]
+    view part = identity(rows[choose_index(calls)])
+    print(calls[0])
+    print(part.to_list())
+
+    mut table: dict[str, list[int64]] = {"first": [1, 2, 3], "second": [4, 5, 6]}
+    mut key_calls: list[int64] = [0]
+    view entry = identity(table[choose_key(key_calls)])
+    print(key_calls[0])
+    print(entry.to_list())
+
+    mut picks: list[int64] = [1]
+    view rest = tail(rows[choose_index(picks)][0:2])
+    print(picks[0])
+    print(rest.to_list())
+
+    mut grid: list[list[int64]] = [[1, 2, 3], [4, 5, 6]]
+    mut writes: list[int64] = [0]
+    view mut changed = writable(values=grid[choose_index(writes)])
+    changed.fill(0)
+    print(writes[0])
+    print(grid)

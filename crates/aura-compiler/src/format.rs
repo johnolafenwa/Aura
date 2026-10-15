@@ -67,7 +67,8 @@ fn strip_trailing_whitespace(source: &str) -> String {
 ///
 /// Spans are ignored. A comma directly before a closing bracket is ignored
 /// too, unless it makes a one-element tuple, because reflow may add or keep
-/// one without changing meaning.
+/// one without changing meaning. A comma between lambda parameters does not
+/// separate tuple elements, so it does not make a later comma optional.
 fn verify(original: &[Token], formatted: &str) -> Result<(), FormatError> {
     let unstable = |detail: String| {
         FormatError::Unstable(format!(
@@ -99,26 +100,49 @@ fn verify(original: &[Token], formatted: &str) -> Result<(), FormatError> {
     }
 }
 
+/// One open bracket while the token guard walks a token stream.
+#[derive(Default)]
+struct GuardFrame {
+    paren: bool,
+    /// A comma at this level has separated two elements.
+    separated: bool,
+    /// A `lambda` at this level has not reached its `:`, so a comma here
+    /// separates lambda parameters.
+    lambda_parameters: bool,
+}
+
 fn comparable_tokens(tokens: &[Token]) -> Vec<&Token> {
-    // Each frame records whether the bracket is `(` and whether it has seen a
-    // comma at its own level.
-    let mut frames: Vec<(bool, bool)> = Vec::new();
+    let mut frames: Vec<GuardFrame> = Vec::new();
     let mut kept = Vec::with_capacity(tokens.len());
     for (index, token) in tokens.iter().enumerate() {
-        match token.kind {
-            TokenKind::LParen => frames.push((true, false)),
-            TokenKind::LBracket | TokenKind::LBrace => frames.push((false, false)),
+        match &token.kind {
+            TokenKind::LParen => frames.push(GuardFrame {
+                paren: true,
+                ..GuardFrame::default()
+            }),
+            TokenKind::LBracket | TokenKind::LBrace => frames.push(GuardFrame::default()),
             TokenKind::RParen | TokenKind::RBracket | TokenKind::RBrace => {
                 frames.pop();
+            }
+            TokenKind::Identifier(name) if name == "lambda" => {
+                let field = index > 0 && tokens[index - 1].kind == TokenKind::Dot;
+                if let Some(frame) = frames.last_mut().filter(|_| !field) {
+                    frame.lambda_parameters = true;
+                }
+            }
+            TokenKind::Colon => {
+                if let Some(frame) = frames.last_mut() {
+                    frame.lambda_parameters = false;
+                }
             }
             TokenKind::Comma => {
                 let before_closer = matches!(
                     tokens.get(index + 1).map(|next| &next.kind),
                     Some(TokenKind::RParen | TokenKind::RBracket | TokenKind::RBrace)
                 );
-                if let Some(frame) = frames.last_mut() {
-                    let one_element_tuple = frame.0 && !frame.1;
-                    frame.1 = true;
+                if let Some(frame) = frames.last_mut().filter(|frame| !frame.lambda_parameters) {
+                    let one_element_tuple = frame.paren && !frame.separated;
+                    frame.separated = true;
                     if before_closer && !one_element_tuple {
                         continue;
                     }
@@ -870,16 +894,27 @@ impl<'a> Formatter<'a> {
         *cursor += 1;
         let mut elements = Vec::new();
         let mut current = Vec::new();
+        // A comma between a `lambda` and its `:` separates the lambda's
+        // parameters, not the elements of this list.
+        let mut lambda_parameters = false;
         while *cursor < self.synthetic_comma && self.toks[*cursor].class != Class::Close {
-            if self.toks[*cursor].class == Class::Comma {
-                elements.push(Element {
-                    items: std::mem::take(&mut current),
-                    comma: Some(*cursor),
-                });
-                *cursor += 1;
-            } else {
-                current.push(self.build_item(cursor));
+            let tok = &self.toks[*cursor];
+            match tok.class {
+                Class::Comma if !lambda_parameters => {
+                    elements.push(Element {
+                        items: std::mem::take(&mut current),
+                        comma: Some(*cursor),
+                    });
+                    *cursor += 1;
+                    continue;
+                }
+                Class::Colon => lambda_parameters = false,
+                Class::Name if tok.text == "lambda" => {
+                    lambda_parameters = self.toks[*cursor - 1].class != Class::Dot;
+                }
+                _ => {}
             }
+            current.push(self.build_item(cursor));
         }
         if !current.is_empty() {
             elements.push(Element {

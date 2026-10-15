@@ -142,6 +142,13 @@ class HostedWorkflowHardeningTests(unittest.TestCase):
             workflow,
         )
 
+    def test_docs_deploy_waits_for_the_example_check(self) -> None:
+        workflow = DOCS_WORKFLOW.read_text(encoding="utf-8")
+        deploy = workflow.split("\n  deploy:\n", 1)[1]
+        needs = re.search(r"^    needs: (.+)$", deploy, re.MULTILINE)
+        self.assertIsNotNone(needs)
+        self.assertEqual(needs.group(1), "[build, examples]")
+
 
 class LandingAndInstallerTests(unittest.TestCase):
     def test_installer_is_posix_and_verifies_release_checksum(self) -> None:

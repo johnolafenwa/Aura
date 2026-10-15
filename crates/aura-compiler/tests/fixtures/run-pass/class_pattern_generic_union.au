@@ -1,0 +1,59 @@
+class Box[T]:
+    value: T
+
+class Tagged[T]:
+    label: str
+    value: T
+
+class Point:
+    x: int64
+    y: int64
+
+def describe(item: Box[int64] | Box[str] | None) -> str:
+    match item:
+        case Box():
+            return "box"
+        case None:
+            return "none"
+
+def label_of(item: Tagged[int64] | Tagged[bool]) -> str:
+    return match item:
+        case Tagged(label="skip"): "skipped"
+        case Tagged(label=label): label.clone()
+
+def owned_label(item: own Tagged[int64] | Tagged[str] | None) -> str:
+    match own item:
+        case Tagged(label="drop"):
+            return "dropped"
+        case Tagged(label=label):
+            return label
+        case None:
+            return "none"
+
+def pick(item: Box[int64] | Box[str]) -> str:
+    match item:
+        case Box[int64] as number:
+            return f"int {number.value}"
+        case Box[str] as text:
+            return f"str {text.value}"
+
+def either(item: Point | Box[int64]) -> int64:
+    match item:
+        case Point(x=a) | Box(value=a):
+            return a
+
+def main():
+    print(describe(Box(value=1)))
+    print(describe(Box(value="a")))
+    print(describe(None))
+    print(label_of(Tagged(label="first", value=1)))
+    print(label_of(Tagged(label="second", value=true)))
+    print(label_of(Tagged(label="skip", value=true)))
+    print(owned_label(Tagged(label="moved", value="x")))
+    print(owned_label(Tagged(label="number", value=3)))
+    print(owned_label(Tagged(label="drop", value="y")))
+    print(owned_label(None))
+    print(pick(Box(value=2)))
+    print(pick(Box(value="b")))
+    print(either(Point(x=1, y=2)))
+    print(either(Box(value=5)))

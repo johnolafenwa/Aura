@@ -1,0 +1,10 @@
+class Box[T]:
+    value: T
+
+def main():
+    item: Box[int64] | Box[str] = Box(value=1)
+    match item:
+        case Box(value=value):
+            print(value)
+        case _:
+            print("other")

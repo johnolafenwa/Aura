@@ -1257,39 +1257,9 @@ impl Env {
     }
 
     fn read_member(&self, place: &str, field: &str) -> Result<Value> {
-        let resolved_place = self.resolve_loan_place(place)?;
-        let place = resolved_place.as_str();
-        let segments = split_place_segments(place)?;
-        let (root, rest) = segments
-            .split_first()
-            .expect("split_place_segments rejects empty MIR places");
-        let mut current = if let Some(value) = self.shared_values.get(root) {
-            value.as_ref()
-        } else {
-            self.values
-                .get(root)
-                .ok_or_else(|| Diagnostic::new(format!("unknown MIR place `{}`", place)))?
-        };
-        let mut index = 0usize;
-        while index < rest.len() {
-            let segment = &rest[index];
-            let Value::Instance(instance) = current else {
-                return Err(Diagnostic::new(format!(
-                    "cannot access field `{}` on non-instance MIR place `{}`",
-                    segment, place
-                )));
-            };
-            current = match instance.fields.get(segment) {
-                Some(value) => value,
-                None => {
-                    return Err(Diagnostic::new(format!(
-                        "class `{}` has no field `{}` in MIR place `{}`",
-                        instance.class_name, segment, place
-                    )));
-                }
-            };
-            index += 1;
-        }
+        // The object place may pass through a proven union payload, such as
+        // `target.__union_payload_0.inner` after `target is not None`.
+        let current = self.place_ref(place)?;
         let Value::Instance(instance) = current else {
             return Err(Diagnostic::new(format!(
                 "cannot access field `{}` on non-instance MIR place `{}`",

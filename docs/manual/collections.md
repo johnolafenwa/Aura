@@ -255,9 +255,13 @@ values[start:end]` lends it for writing and needs a mutable list.
 
 - Endpoints follow the slice rules: `int64` endpoints, an omitted endpoint
   means the start or end, and a negative endpoint counts from the end once.
+- A span evaluates its base, start, and end once each, in that order. In
+  `rows[i][a:b]`, `i` runs before `a` and `b`.
 - An invalid or reversed range traps with `AU4003` when the span is created.
 - Slicing a span with `view inner = part[1:]` makes a nested span. Its
   endpoints are positions in `part`, and it must fit inside `part`.
+- `view alias = part` reborrows a span. `alias` covers the same range as
+  `part`. A `Span[T]` parameter reborrows the same way.
 
 A parameter of type `Span[T]` or `mut Span[T]` accepts a slice such as
 `total(values[1:3])`, a whole list such as `total(values)`, or an existing
@@ -306,6 +310,10 @@ def main():
 Bind the result with `view`, or `view mut` for a `view mut Span[T]` result.
 Using the call in any other position reports `AU3010`. A method cannot return
 a span of its receiver.
+
+The call evaluates its origin argument once. For an element or entry origin,
+such as `middle(rows[i])`, the view covers the element that the call
+selected.
 
 ### Span Ownership
 
@@ -577,6 +585,6 @@ resources and the runtime's size caps.
 
 ## Status
 
-The collection contract on this page is the Aura 0.3 surface.
+The collection contract on this page is the Aura 0.4 surface.
 
 Design record: [ADR-0044: Canonical collection surface](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/decisions/0044-canonical-collection-surface.md).

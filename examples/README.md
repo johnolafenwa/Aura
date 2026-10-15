@@ -143,7 +143,7 @@ seven real loopback requests.
 | File | Shows | Prints |
 | --- | --- | --- |
 | `union_type_patterns.au` | A transparent union alias, exhaustive type arms, and mutable member access | `42` twice |
-| `union_narrowing.au` | `is None` and `is not None` tests that narrow a parameter and a class field, an early `return` edge, and an `and` composition | `missing`, `4`, `anonymous or new`, `aura`, `anonymous or new` |
+| `union_narrowing.au` | `is None` and `is not None` tests that narrow a parameter, a class field, and a class value, an early `return` edge, and an `and` composition | `missing`, `4`, `anonymous or new`, `aura`, `anonymous or new`, `7`, `0` |
 | `result_match.au` | Enum declarations, owned payload variants, an explicit `own` parameter, and exhaustive consuming `match` | `42`, `bad`, `0` |
 | `result_option.au` | Built-in `Result[T, E]` and optional `T \| None` values with exhaustive `match` | `4`, `division by zero`, `7` |
 | `optional_arguments.au` | A bare `str \| None` parameter that borrows a list element, a field, and a loop binding without copying them | `hello, Lin`, `hello, guest`, `hello, Grace`, `hello, guest`, `hello, Ada`, `hello, Lin`, `[Ada, Lin]` |
@@ -153,7 +153,7 @@ seven real loopback requests.
 | `match_borrow_mut_fields.au` | Mutable matching through a field place while a proven-disjoint sibling field changes | `9`, `11` |
 | `rich_match.au` | Multi-payload enum variants, nested patterns, named payload fields, and expression-form `match` | `7`, `30`, `0` |
 | `match_expression_positions.au` | Expression-form `match` in binding and argument positions, including nested block-form arm values | `1`, `10`, `3`, `20` |
-| `structural_patterns.au` | Tuple rest targets, list sequence patterns with `*rest`, and keyword class patterns | `1`, `(two, 3.0)`, `empty`, `one: 7`, `from 1 to 4`, `10 then [20, 30]`, `origin`, `on the y axis at 5`, `elsewhere` |
+| `structural_patterns.au` | Tuple rest targets, list sequence patterns with `*rest`, and keyword class patterns, including one that matches every specialization in a union | `1`, `(two, 3.0)`, `empty`, `one: 7`, `from 1 to 4`, `10 then [20, 30]`, `origin`, `on the y axis at 5`, `elsewhere`, `box`, `box`, `no box` |
 | `match_guards_and_or_patterns.au` | Exact-Boolean guards, binding-compatible enum or-patterns, and top-level complete-value bindings | `positive`, `non-positive`, `missing`, `4` |
 | `wildcard_match.au` | Wildcard `case _:` arms in statement-form `match` | `2` |
 

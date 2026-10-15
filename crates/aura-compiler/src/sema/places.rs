@@ -284,7 +284,18 @@ impl<'a> FunctionChecker<'a> {
             return Ok(None);
         }
         let mut ty = binding.ty.clone();
-        for projection in &path.projections.0 {
+        for (depth, projection) in path.projections.0.iter().enumerate() {
+            // A projection through a union place follows the member a live
+            // `is None` fact proves for that prefix.
+            if matches!(ty, Type::Union(_)) {
+                let prefix = PlacePath {
+                    root: path.root.clone(),
+                    projections: ProjectionPath(path.projections.0[..depth].to_vec()),
+                };
+                if let Some(member) = Self::proven_member_at(&prefix, locals) {
+                    ty = member;
+                }
+            }
             match projection {
                 PlaceProjection::Field(field) => {
                     ty = self.resolve_member_type(&ty, field, span)?;

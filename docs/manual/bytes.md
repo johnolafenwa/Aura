@@ -32,7 +32,7 @@ list or str is a fresh owned value.
 `str.from_bytes` is an associated method, so you call it on the type:
 `str.from_bytes(payload)`. It is not a `str(...)` constructor.
 
-The parameter name `encoding` is reserved. Aura 0.3 accepts no encoding
+The parameter name `encoding` is reserved. Aura 0.4 accepts no encoding
 argument on either conversion.
 
 ## Example
@@ -186,7 +186,7 @@ those uses.
 
 This surface adds no grammar. `list[uint8]`, `import bytes`, associated calls,
 method calls, module calls, named arguments, and `Result` patterns use the
-ordinary forms defined elsewhere in this Manual. Aura 0.3 has no byte-string
+ordinary forms defined elsewhere in this Manual. Aura 0.4 has no byte-string
 literal.
 
 ## Typing Rules
@@ -210,7 +210,7 @@ for the call, so you can reuse an input after `to_bytes`, `from_bytes`, an
 encoder, a decoder, or a hash. These signatures neither require nor imply
 `own`.
 
-An `encoding` argument, positional or named, is not part of the 0.3
+An `encoding` argument, positional or named, is not part of the 0.4
 signature. Ordinary argument checking rejects it.
 
 A source module you write whose last path component is `bytes` does not get
@@ -300,7 +300,7 @@ Whether an allocation within the ceiling succeeds depends on the host. SHA-256
 output is always 32 bytes. Codec output, errors, and offsets do not depend on
 the host.
 
-Aura 0.3 does not provide:
+Aura 0.4 does not provide:
 
 - other text encodings
 - URL-safe or unpadded base64
@@ -314,8 +314,8 @@ The reserved `encoding` parameter is not implemented.
 
 ## Status
 
-`list[uint8]` is the Aura 0.3 bytes type, and the conversion, codec, error,
-and hash behavior on this page is implemented. Aura 0.3 does not derive codecs
+`list[uint8]` is the Aura 0.4 bytes type, and the conversion, codec, error,
+and hash behavior on this page is implemented. Aura 0.4 does not derive codecs
 or schemas for classes and enums.
 
 Design record: [ADR-0023: Byte-vector codecs and hashing policy](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/decisions/0023-byte-vector-codecs-and-hashing-policy.md).

@@ -15635,7 +15635,7 @@ fn failed_factories_release_builtin_file_handles_on_both_backends() {
 
 #[test]
 fn structural_patterns_example_runs_on_both_backends() {
-    let expected = "1\n(two, 3.0)\nempty\none: 7\nfrom 1 to 4\n10 then [20, 30]\norigin\non the y axis at 5\nelsewhere\n";
+    let expected = "1\n(two, 3.0)\nempty\none: 7\nfrom 1 to 4\n10 then [20, 30]\norigin\non the y axis at 5\nelsewhere\nbox\nbox\nno box\n";
     assert_default_backend_example_runs(
         "examples/enums/structural_patterns.au",
         "structural-patterns-default",
@@ -15689,6 +15689,41 @@ fn fmt_stdin_writes_formatted_source_to_stdout() {
     assert!(!changed.status.success());
     assert!(changed.stdout.is_empty());
     assert!(String::from_utf8_lossy(&changed.stderr).contains("would format `<stdin>`"));
+}
+
+#[test]
+fn fmt_stdin_keeps_a_parenthesized_lambda_a_lambda() {
+    let output = run_fmt_stdin(
+        &["--stdin"],
+        "def main():\n    callback: def(int64, int64) -> int64 = (lambda first_parameter, second_parameter: first_parameter + second_parameter)\n    print(callback(1, 2))\n",
+    );
+    assert!(
+        output.status.success(),
+        "aura fmt --stdin should succeed, stderr was:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let formatted = String::from_utf8(output.stdout).unwrap();
+    assert_eq!(
+        formatted,
+        "def main():\n    callback: def(int64, int64) -> int64 = (\n        lambda first_parameter, second_parameter: first_parameter + second_parameter\n    )\n    print(callback(1, 2))\n"
+    );
+
+    let temp = TempDir::new("aura-fmt-lambda");
+    let path = temp.path().join("lambda.au");
+    fs::write(&path, &formatted).expect("formatted source should write");
+    let run = Command::new(aura_bin())
+        .args([
+            "run",
+            path.to_str().expect("temporary path should be UTF-8"),
+        ])
+        .output()
+        .expect("failed to run formatted source");
+    assert!(
+        run.status.success(),
+        "formatted lambda should still check and run, stderr was:\n{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "3\n");
 }
 
 #[test]

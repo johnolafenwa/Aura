@@ -1,0 +1,11 @@
+class Point:
+    x: int64
+    label: str
+
+def take(label: own str) -> int64:
+    return label.len()
+
+def main():
+    point: Point | None = Point(x=1, label="aura")
+    if point is not None:
+        print(take(point.label))

@@ -1,5 +1,8 @@
 "use strict";
 
+const fs = require("node:fs");
+const { pathToFileURL } = require("node:url");
+
 function uriToPath(uri, platform = process.platform) {
   if (typeof uri !== "string") {
     return null;
@@ -34,6 +37,21 @@ function uriToPath(uri, platform = process.platform) {
   return pathname;
 }
 
+// The compiler reports canonical file paths. Resolve links so an editor URI
+// and a compiler path for the same file produce the same key.
+function canonicalFileUri(uri) {
+  const filePath = uriToPath(uri);
+  if (!filePath) {
+    return uri;
+  }
+  try {
+    return pathToFileURL(fs.realpathSync.native(filePath)).toString();
+  } catch (_error) {
+    return pathToFileURL(filePath).toString();
+  }
+}
+
 module.exports = {
+  canonicalFileUri,
   uriToPath
 };

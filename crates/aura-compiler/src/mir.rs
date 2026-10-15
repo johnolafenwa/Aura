@@ -2474,9 +2474,16 @@ impl<'a> MirLoanValidationContext<'a> {
                     let Some(index) = union_payload_projection_index(segment) else {
                         return Err(format!("invalid MIR projection `{segment}` in `{place}` traverses a union without a canonical payload projection"));
                     };
-                    union.members.get(index).cloned().ok_or_else(|| {
+                    let member = union.members.get(index).cloned().ok_or_else(|| {
                         format!("invalid MIR union payload projection `{segment}` in `{place}` in `{}` is out of bounds", function.name)
-                    })?
+                    })?;
+                    // A member spelled through a module alias, such as
+                    // `geometry.Point`, follows its planned canonical type,
+                    // whose class metadata the module carries.
+                    self.unions
+                        .get(&crate::union_layout::union_plan_key(&Type::Union(union)))
+                        .and_then(|plan| plan.members.get(index))
+                        .map_or(member, |planned| planned.ty.clone())
                 }
                 Type::TypeParam(_) => return Ok(None),
                 Type::Function { .. }
@@ -10723,6 +10730,10 @@ struct PatternLoweringOptions {
     typed_payload_views: bool,
 }
 
+/// The union tag index and class type of each specialization a class
+/// pattern tests, then the stored fields of the first one.
+type ClassPatternLayout = (Vec<(Option<usize>, Type)>, Vec<(String, Type)>);
+
 struct TaskStartTarget {
     function_name: Option<String>,
     params: Vec<Param>,
@@ -12443,6 +12454,14 @@ impl<'a> Lowerer<'a> {
                     Some((base_view, _)) => (base_view, true),
                     None => (view, false),
                 };
+                // `view alias = part` reborrows a span and `view alias =
+                // values` lends a `Span[T]` parameter: either way the new
+                // view covers the same range.
+                let reborrowed_range = if pending_span {
+                    None
+                } else {
+                    self.span_range_of(&view.source).map(|(_, range)| range)
+                };
                 let ty = self.infer_expr_type(&view.source).or_else(|| {
                     let ExprKind::Call { callee, .. } = &grouped_mir_expr(&view.source).kind else {
                         return None;
@@ -12567,6 +12586,8 @@ impl<'a> Lowerer<'a> {
                 if pending_span {
                     let (_, pending) = span_view.expect("checked pending span view");
                     self.finish_span_view(&loan_name, pending);
+                } else if let Some(range) = reborrowed_range {
+                    self.span_ranges.insert(loan_name.clone(), range);
                 }
                 if let Some(scope) = self.loan_scopes.last_mut() {
                     scope.push(loan_name);
@@ -13259,9 +13280,13 @@ impl<'a> Lowerer<'a> {
             return;
         }
 
-        let narrowed_target = assign
-            .op
-            .and_then(|_| self.program.narrowed_read(self.module_name, assign.span));
+        let narrowed_target = match (&assign.target, assign.op) {
+            (AssignTarget::Name(name), Some(_)) => {
+                self.program
+                    .narrowed_read(self.module_name, assign.span, name)
+            }
+            _ => None,
+        };
         let target = match (&assign.target, &narrowed_target) {
             (AssignTarget::Name(name), Some(read)) => format!(
                 "{}.{UNION_PAYLOAD_PROJECTION_PREFIX}{}",
@@ -13683,9 +13708,12 @@ impl<'a> Lowerer<'a> {
     fn render_assign_target(&self, target: &AssignTarget) -> String {
         match target {
             AssignTarget::Name(name) => self.render_local_name(name),
-            AssignTarget::Member { object, field } => {
-                format!("{}.{}", self.render_expr_place(object), field)
-            }
+            AssignTarget::Member { object, field } => format!(
+                "{}{}.{}",
+                self.render_expr_place(object),
+                self.narrowed_object_projection(object),
+                field
+            ),
             AssignTarget::Index { .. } => {
                 panic!("indexed assignments must lower through runtime helper calls")
             }
@@ -14321,6 +14349,11 @@ impl<'a> Lowerer<'a> {
                 let ExprKind::Int(index) = index.kind else {
                     return None;
                 };
+                // A literal index is a tuple position here. A list element
+                // or dictionary entry is a selection, not a fixed projection.
+                if !matches!(self.infer_expr_type(object), Some(Type::Tuple(_))) {
+                    return None;
+                }
                 let index = usize::try_from(index).ok()?;
                 let (call, projection) = self.returned_view_call_root(object)?;
                 Some((
@@ -15539,9 +15572,6 @@ impl<'a> Lowerer<'a> {
         rest
     }
 
-    /// The member a class pattern tests and its stored field types,
-    /// specialized by the scrutinee. For a union scrutinee the member index
-    /// is the union's own.
     /// Resolves a class name as a pattern or a checked type spells it,
     /// including a module-alias spelling such as `geometry.Point`.
     fn resolve_pattern_class_info(&self, name: &str) -> Option<&crate::sema::ClassInfo> {
@@ -15553,38 +15583,48 @@ impl<'a> Lowerer<'a> {
         })
     }
 
+    /// The class types a checked class pattern tests, with their union tag
+    /// indexes, and the stored fields of the first one. Over a union, the
+    /// pattern tests every specialization of its class that the union
+    /// holds; the checker proved each field the pattern tests has one type
+    /// in all of them.
     fn class_pattern_layout(
         &self,
         pattern: &crate::ast::ClassPattern,
         scrutinee_ty: Option<&Type>,
-    ) -> (Option<usize>, Type, Vec<(String, Type)>) {
-        let (member_index, member) = match scrutinee_ty {
+    ) -> ClassPatternLayout {
+        let candidates = match scrutinee_ty {
             Some(Type::Union(union)) => {
-                // The checker proved the pattern names exactly one class
+                // The checker proved the pattern names at least one class
                 // member, possibly through a module alias.
                 let named = self
                     .resolve_pattern_class_info(&pattern.class_name)
                     .map(|info| (&info.module_name, &info.decl.name));
-                let (index, member) = union
+                let candidates = union
                     .members
                     .iter()
                     .enumerate()
-                    .find(|(_, member)| {
+                    .filter(|(_, member)| {
                         matches!(member, Type::Named(name, _) if self
                             .resolve_pattern_class_info(name)
                             .map(|info| (&info.module_name, &info.decl.name))
                             == named)
                     })
-                    .expect("checked class pattern names a union member");
-                (Some(index), member.clone())
+                    .map(|(index, member)| (Some(index), member.clone()))
+                    .collect::<Vec<_>>();
+                assert!(
+                    !candidates.is_empty(),
+                    "checked class pattern names a union member"
+                );
+                candidates
             }
-            ty => (
+            ty => vec![(
                 None,
                 ty.cloned()
                     .expect("checked class patterns have a typed scrutinee"),
-            ),
+            )],
         };
-        let Type::Named(name, args) = &member else {
+        let Type::Named(name, args) = &candidates[0].1 else {
             unreachable!("a checked class pattern member is a named class type");
         };
         let class_info = self
@@ -15602,7 +15642,23 @@ impl<'a> Lowerer<'a> {
                     .map(|info| (decl.name.clone(), substitute_type(&info.ty, &substitutions)))
             })
             .collect();
-        (member_index, member, fields)
+        (candidates, fields)
+    }
+
+    /// A scrutinee operand as a place, copying a computed value into a
+    /// temporary of type `ty` once.
+    fn pattern_scrutinee_place(&mut self, scrutinee: Operand, ty: &Type) -> String {
+        match scrutinee {
+            Operand::Place(place) | Operand::MovePlace(place) => place,
+            value => {
+                let place = self.new_typed_temp(ty.clone());
+                self.emit(Instruction::Assign {
+                    target: place.clone(),
+                    value: Rvalue::Use(value),
+                });
+                place
+            }
+        }
     }
 
     /// Tests a class pattern: the union member when the scrutinee is a
@@ -15617,23 +15673,12 @@ impl<'a> Lowerer<'a> {
         options: PatternLoweringOptions,
     ) {
         let first_loan = self.loan_scopes.last().map_or(0, Vec::len);
-        let (member_index, member, fields) = self.class_pattern_layout(pattern, scrutinee_ty);
-        let object = match (member_index, scrutinee_ty) {
-            (Some(_), Some(union_ty)) => {
-                // Read the selected member through a shared payload view,
-                // as a type arm does; the arm's loan cleanup ends it.
-                let payload =
-                    self.lower_type_pattern_test(scrutinee, union_ty, &member, failure_block);
-                let view = self.new_typed_temp(member.clone());
-                self.begin_pattern_view(&view, &payload, false);
-                Operand::Place(view)
-            }
-            _ => scrutinee,
-        };
+        let (candidates, fields) = self.class_pattern_layout(pattern, scrutinee_ty);
         let options = PatternLoweringOptions {
             collect_writeback: false,
             ..options
         };
+        let mut tested = Vec::new();
         for field in &pattern.fields {
             if matches!(field.pattern, Pattern::Wildcard(_)) {
                 continue;
@@ -15648,21 +15693,56 @@ impl<'a> Lowerer<'a> {
                 continue;
             }
             let value = self.new_typed_temp(field_ty.clone());
-            let read = match &object {
-                // A payload view reads its field through the view's place,
-                // as `view.field` does in source.
-                Operand::Place(view) if member_index.is_some() => {
-                    Rvalue::Use(Operand::Place(format!("{view}.{}", field.name)))
+            tested.push((field, field_ty, value));
+        }
+        match scrutinee_ty {
+            Some(union_ty @ Type::Union(_)) => {
+                // Each specialization the pattern names is selected by its
+                // tag, and its tested fields are read in place under that
+                // proof. Every candidate fills the same field temporaries,
+                // so the subpatterns are tested once after the selection
+                // and no branch holds a loan the others lack.
+                let place = self.pattern_scrutinee_place(scrutinee, union_ty);
+                let fields_block = self.new_block("match_class_fields");
+                for (position, (_, member)) in candidates.iter().enumerate() {
+                    let last = position + 1 == candidates.len();
+                    let next = if last {
+                        failure_block
+                    } else {
+                        self.new_block("match_class_specialization")
+                    };
+                    let payload = self.lower_type_pattern_test(
+                        Operand::Place(place.clone()),
+                        union_ty,
+                        member,
+                        next,
+                    );
+                    for (field, _, value) in &tested {
+                        self.emit(Instruction::Assign {
+                            target: value.clone(),
+                            value: Rvalue::Use(Operand::Place(format!("{payload}.{}", field.name))),
+                        });
+                    }
+                    self.terminate(Terminator::Goto(self.label(fields_block)));
+                    if !last {
+                        self.switch_to(next);
+                    }
                 }
-                object => Rvalue::Member {
-                    object: object.clone(),
-                    field: field.name.clone(),
-                },
-            };
-            self.emit(Instruction::Assign {
-                target: value.clone(),
-                value: read,
-            });
+                self.switch_to(fields_block);
+            }
+            _ => {
+                for (field, _, value) in &tested {
+                    self.emit(Instruction::Assign {
+                        target: value.clone(),
+                        value: Rvalue::Member {
+                            object: scrutinee.clone(),
+                            field: field.name.clone(),
+                        },
+                    });
+                }
+            }
+        }
+        for (field, field_ty, value) in tested {
             let next = self.new_block("match_class_field");
             let child_failure = self.pattern_failure_cleanup(failure_block, first_loan);
             self.lower_pattern(
@@ -15851,7 +15931,7 @@ impl<'a> Lowerer<'a> {
                 }
             };
             let binding;
-            let element_pattern = match element {
+            let (element_pattern, element_options) = match element {
                 Pattern::Rest(crate::ast::RestPattern {
                     name: Some(name),
                     span,
@@ -15860,9 +15940,18 @@ impl<'a> Lowerer<'a> {
                         name: name.clone(),
                         span: *span,
                     });
-                    &binding
+                    // The slice is a new list the arm owns, so it binds by
+                    // value even when a type arm elsewhere in the pattern
+                    // binds its payloads through views.
+                    (
+                        &binding,
+                        PatternLoweringOptions {
+                            typed_payload_views: false,
+                            ..options
+                        },
+                    )
                 }
-                element => element,
+                element => (element, options),
             };
             let next = self.new_block("match_sequence_element");
             let child_failure = self.pattern_failure_cleanup(failure_block, first_loan);
@@ -15872,7 +15961,7 @@ impl<'a> Lowerer<'a> {
                 Some(&value_ty),
                 next,
                 child_failure,
-                options,
+                element_options,
             );
             self.switch_to(next);
         }
@@ -15931,7 +16020,7 @@ impl<'a> Lowerer<'a> {
                 }
             }
             Pattern::Class(pattern) => {
-                let (_, _, fields) = self.class_pattern_layout(pattern, Some(pattern_ty));
+                let (_, fields) = self.class_pattern_layout(pattern, Some(pattern_ty));
                 for field in &pattern.fields {
                     if let Some((_, field_ty)) = fields.iter().find(|(name, _)| name == &field.name)
                     {
@@ -16191,58 +16280,68 @@ impl<'a> Lowerer<'a> {
     }
 
     /// Moves the fields a selected `match own` class pattern binds out of
-    /// the private captured object.
+    /// the private captured object. Over a union, the tag selects which
+    /// specialization's payload is taken.
     fn lower_consuming_class_pattern_bindings(
         &mut self,
         pattern: &crate::ast::ClassPattern,
         scrutinee: Operand,
         scrutinee_ty: Option<&Type>,
     ) {
-        let (member_index, member, fields) = self.class_pattern_layout(pattern, scrutinee_ty);
-        let place = match scrutinee {
-            Operand::Place(place) | Operand::MovePlace(place) => place,
-            value => {
-                let place = self.new_typed_temp(member.clone());
-                self.emit(Instruction::Assign {
-                    target: place.clone(),
-                    value: Rvalue::Use(value),
-                });
-                place
-            }
+        let (candidates, fields) = self.class_pattern_layout(pattern, scrutinee_ty);
+        let union_ty = scrutinee_ty.filter(|ty| matches!(ty, Type::Union(_)));
+        let place = self.pattern_scrutinee_place(scrutinee, union_ty.unwrap_or(&candidates[0].1));
+        let Some(union_ty) = union_ty else {
+            self.move_class_pattern_fields(pattern, &fields, &place);
+            return;
         };
-        let object = match (member_index, scrutinee_ty) {
-            (Some(index), Some(union_ty)) => {
-                let rejected = self.new_block("match_commit_invalid_tag");
-                let current = self.current_block;
-                self.switch_to(rejected);
-                self.terminate(Terminator::AssertFail {
-                    message: Some(Operand::String(
-                        "owned pattern payload changed after selection".to_string(),
-                    )),
-                    captures: Vec::new(),
-                    span: pattern.span,
-                });
-                self.switch_to(current);
-                self.lower_type_pattern_test(
-                    Operand::Place(place.clone()),
-                    union_ty,
-                    &member,
-                    rejected,
-                );
-                let object = self.new_typed_temp(member.clone());
-                self.emit(Instruction::Assign {
-                    target: object.clone(),
-                    value: Rvalue::UnionTakePayload {
-                        place,
-                        union_type: union_ty.clone(),
-                        member_type: member,
-                        member_index: index,
-                    },
-                });
-                object
+        let rejected = self.new_block("match_commit_invalid_tag");
+        let current = self.current_block;
+        self.switch_to(rejected);
+        self.terminate(Terminator::AssertFail {
+            message: Some(Operand::String(
+                "owned pattern payload changed after selection".to_string(),
+            )),
+            captures: Vec::new(),
+            span: pattern.span,
+        });
+        self.switch_to(current);
+        let done = self.new_block("match_class_commit_done");
+        for (position, (index, member)) in candidates.iter().enumerate() {
+            let last = position + 1 == candidates.len();
+            let next = if last {
+                rejected
+            } else {
+                self.new_block("match_class_commit_next")
+            };
+            self.lower_type_pattern_test(Operand::Place(place.clone()), union_ty, member, next);
+            let object = self.new_typed_temp(member.clone());
+            self.emit(Instruction::Assign {
+                target: object.clone(),
+                value: Rvalue::UnionTakePayload {
+                    place: place.clone(),
+                    union_type: union_ty.clone(),
+                    member_type: member.clone(),
+                    member_index: index.expect("a union candidate has a tag index"),
+                },
+            });
+            self.move_class_pattern_fields(pattern, &fields, &object);
+            self.terminate(Terminator::Goto(self.label(done)));
+            if !last {
+                self.switch_to(next);
             }
-            _ => place,
-        };
+        }
+        self.switch_to(done);
+    }
+
+    /// Moves or copies each field a class pattern binds out of `object`
+    /// into its bindings.
+    fn move_class_pattern_fields(
+        &mut self,
+        pattern: &crate::ast::ClassPattern,
+        fields: &[(String, Type)],
+        object: &str,
+    ) {
         for field in &pattern.fields {
             if !pattern_contains_binding(&field.pattern) {
                 continue;
@@ -17408,7 +17507,11 @@ impl<'a> Lowerer<'a> {
         ) {
             return None;
         }
-        self.program.narrowed_read(self.module_name, expr.span)
+        self.program.narrowed_read(
+            self.module_name,
+            expr.span,
+            &crate::sema::narrowed_read_place(expr),
+        )
     }
 
     /// A module constant the checker narrowed (for example after `if value
@@ -19672,6 +19775,13 @@ impl<'a> Lowerer<'a> {
             // collection (ADR-0061, 2026-09-21 section, contextual loans).
             if let Some(value) = self.lower_contextual_element_loan(expr, true) {
                 return value;
+            }
+            // A `mut` union parameter receives the whole union place even
+            // where a test narrowed it: the callee may change the member.
+            if matches!(expected, Some(Type::Union(_))) && self.narrowed_read(expr).is_some() {
+                if let Some(place) = self.render_place_expr_option(expr) {
+                    return Operand::Place(place);
+                }
             }
         }
         if passing == ReceiverKind::Borrow {
@@ -25148,21 +25258,33 @@ impl<'a> Lowerer<'a> {
         }
     }
 
+    /// The payload projection a narrowed object adds before the field or
+    /// tuple position that follows it: the checker proved one member of the
+    /// union place, so the projection goes through that member's payload.
+    fn narrowed_object_projection(&self, object: &Expr) -> String {
+        self.narrowed_read(grouped_mir_expr(object))
+            .map(|read| format!(".{UNION_PAYLOAD_PROJECTION_PREFIX}{}", read.member_index))
+            .unwrap_or_default()
+    }
+
     fn render_place_expr_option(&self, expr: &Expr) -> Option<String> {
         match &expr.kind {
             ExprKind::Name(name) => Some(self.render_local_name(name)),
             ExprKind::Group(inner) => self.render_place_expr_option(inner),
             // A bound method is a closure value, never a field place (C6).
-            ExprKind::Member { object, field } if self.bound_method_info_at(expr).is_none() => self
-                .render_place_expr_option(object)
-                .map(|object| format!("{object}.{field}")),
+            ExprKind::Member { object, field } if self.bound_method_info_at(expr).is_none() => {
+                let narrowed = self.narrowed_object_projection(object);
+                self.render_place_expr_option(object)
+                    .map(|object| format!("{object}{narrowed}.{field}"))
+            }
             ExprKind::Index { object, index } => {
                 let ExprKind::Int(index) = index.kind else {
                     return None;
                 };
                 let index = usize::try_from(index).ok()?;
+                let narrowed = self.narrowed_object_projection(object);
                 self.render_place_expr_option(object)
-                    .map(|object| format!("{object}.{index}"))
+                    .map(|object| format!("{object}{narrowed}.{index}"))
             }
             _ => None,
         }
@@ -25178,9 +25300,11 @@ impl<'a> Lowerer<'a> {
             ExprKind::Name(name) => Some(self.render_local_name(name)),
             ExprKind::Group(inner) => self.render_stable_place_expr_option(inner),
             // A bound method is a closure value, never a field place (C6).
-            ExprKind::Member { object, field } if self.bound_method_info_at(expr).is_none() => self
-                .render_stable_place_expr_option(object)
-                .map(|object| format!("{object}.{field}")),
+            ExprKind::Member { object, field } if self.bound_method_info_at(expr).is_none() => {
+                let narrowed = self.narrowed_object_projection(object);
+                self.render_stable_place_expr_option(object)
+                    .map(|object| format!("{object}{narrowed}.{field}"))
+            }
             ExprKind::Index { object, index }
                 if matches!(self.infer_expr_type(object), Some(Type::Tuple(_))) =>
             {
@@ -25188,8 +25312,9 @@ impl<'a> Lowerer<'a> {
                     return None;
                 };
                 let index = usize::try_from(index).ok()?;
+                let narrowed = self.narrowed_object_projection(object);
                 self.render_stable_place_expr_option(object)
-                    .map(|object| format!("{object}.{index}"))
+                    .map(|object| format!("{object}{narrowed}.{index}"))
             }
             _ => None,
         }
@@ -25206,16 +25331,19 @@ impl<'a> Lowerer<'a> {
             }
             ExprKind::Group(inner) => self.render_addressable_place_expr_option(inner),
             // A bound method is a closure value, never a field place (C6).
-            ExprKind::Member { object, field } if self.bound_method_info_at(expr).is_none() => self
-                .render_addressable_place_expr_option(object)
-                .map(|object| format!("{object}.{field}")),
+            ExprKind::Member { object, field } if self.bound_method_info_at(expr).is_none() => {
+                let narrowed = self.narrowed_object_projection(object);
+                self.render_addressable_place_expr_option(object)
+                    .map(|object| format!("{object}{narrowed}.{field}"))
+            }
             ExprKind::Index { object, index } => {
                 let ExprKind::Int(index) = index.kind else {
                     return None;
                 };
                 let index = usize::try_from(index).ok()?;
+                let narrowed = self.narrowed_object_projection(object);
                 self.render_addressable_place_expr_option(object)
-                    .map(|object| format!("{object}.{index}"))
+                    .map(|object| format!("{object}{narrowed}.{index}"))
             }
             _ => None,
         }

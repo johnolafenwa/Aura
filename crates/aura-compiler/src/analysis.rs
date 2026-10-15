@@ -39,6 +39,9 @@ pub struct AnalysisOutput {
     pub diagnostics: Vec<AnalysisDiagnostic>,
     pub symbols: Vec<AnalysisSymbol>,
     pub occurrences: Vec<AnalysisOccurrence>,
+    /// Source files read for the modules the analyzed file imports, directly
+    /// or transitively, including when the file does not check.
+    pub dependencies: Vec<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -160,9 +163,18 @@ pub fn analyze_source(source: &str) -> AnalysisOutput {
 }
 
 pub fn analyze_path_source(path: &Path, source: &str) -> AnalysisOutput {
-    analyze_with_checker(source, |candidate| {
-        crate::check_path_with_source_without_lockfile(path, candidate)
-    })
+    let (mut output, reads) = crate::with_source_reads(|| {
+        analyze_with_checker(source, |candidate| {
+            crate::check_path_with_source_without_lockfile(path, candidate)
+        })
+    });
+    let analyzed = crate::absolutize(path);
+    output.dependencies = reads
+        .into_iter()
+        .filter(|read| *read != analyzed)
+        .map(|read| read.display().to_string())
+        .collect();
+    output
 }
 
 pub fn complete_path_source(
@@ -178,7 +190,7 @@ pub fn complete_path_source(
 }
 
 pub fn analyze_program(source: &str, program: &Program) -> AnalysisOutput {
-    let symbols = symbols_from_module(&program.module);
+    let symbols = symbols_from_module(&program.module, source);
     AnalysisBuilder::new(source, program, symbols).build()
 }
 
@@ -214,16 +226,18 @@ where
                     diagnostics: vec![analysis_diagnostic(&error)],
                     symbols: Vec::new(),
                     occurrences: Vec::new(),
+                    dependencies: Vec::new(),
                 }
             }
         }
         Ok(module) => {
-            let symbols = symbols_from_module(&module);
+            let symbols = symbols_from_module(&module, source);
             match check_program(source) {
                 Err(error) => AnalysisOutput {
                     diagnostics: vec![analysis_diagnostic(&error)],
                     symbols,
                     occurrences: Vec::new(),
+                    dependencies: Vec::new(),
                 },
                 Ok(program) => AnalysisBuilder::new(source, &program, symbols).build(),
             }
@@ -267,6 +281,8 @@ struct AnalysisBuilder<'a> {
     type_parameters: BTreeSet<String>,
     /// Module docstrings read from imported source files, by source path.
     module_docs: std::cell::RefCell<BTreeMap<String, Option<DocString>>>,
+    /// Imported module source lines, by source path.
+    module_sources: std::cell::RefCell<BTreeMap<String, Vec<String>>>,
 }
 
 impl<'a> AnalysisBuilder<'a> {
@@ -276,10 +292,12 @@ impl<'a> AnalysisBuilder<'a> {
             program,
             type_parameters: BTreeSet::new(),
             module_docs: Default::default(),
+            module_sources: Default::default(),
             output: AnalysisOutput {
                 diagnostics: Vec::new(),
                 symbols,
                 occurrences: Vec::new(),
+                dependencies: Vec::new(),
             },
         }
     }
@@ -1992,15 +2010,31 @@ impl<'a> AnalysisBuilder<'a> {
             .and_then(|namespace| namespace.source_path.clone())
     }
 
-    fn definition_range(&self, module_name: &str, span: Span, len: usize) -> AnalysisRange {
-        range_from_span_with_path(span, len, self.module_source_path(module_name))
+    fn definition_range(&self, module_name: &str, span: Span, name: &str) -> AnalysisRange {
+        let file_path = self.module_source_path(module_name);
+        let line = span.line.saturating_sub(1);
+        if module_name == self.program.module_name {
+            let text = self.source_lines.get(line).copied();
+            return declared_name_range(text, span, name, file_path);
+        }
+        let Some(path) = file_path.clone() else {
+            return range_from_span_with_path(span, name.len(), file_path);
+        };
+        let mut sources = self.module_sources.borrow_mut();
+        let lines = sources.entry(path).or_insert_with_key(|path| {
+            crate::read_source_file(Path::new(path))
+                .map(|source| source.lines().map(str::to_owned).collect())
+                .unwrap_or_default()
+        });
+        let text = lines.get(line).map(String::as_str);
+        declared_name_range(text, span, name, file_path)
     }
 
     fn function_definition(&self, function: &FunctionInfo) -> AnalysisRange {
         self.definition_range(
             &function.module_name,
             function.decl.span,
-            function.decl.name.len(),
+            &function.decl.name,
         )
     }
 
@@ -2008,7 +2042,7 @@ impl<'a> AnalysisBuilder<'a> {
         self.definition_range(
             &constant.module_name,
             constant.decl.span,
-            constant.decl.name.len(),
+            &constant.decl.name,
         )
     }
 
@@ -2016,7 +2050,7 @@ impl<'a> AnalysisBuilder<'a> {
         self.definition_range(
             &function.module_name,
             function.decl.name_span,
-            function.decl.name.len(),
+            &function.decl.name,
         )
     }
 
@@ -2024,7 +2058,7 @@ impl<'a> AnalysisBuilder<'a> {
         self.definition_range(
             &handle.module_name,
             handle.decl.name_span,
-            handle.decl.name.len(),
+            &handle.decl.name,
         )
     }
 
@@ -2032,7 +2066,7 @@ impl<'a> AnalysisBuilder<'a> {
         self.definition_range(
             &class_info.module_name,
             class_info.decl.span,
-            class_info.decl.name.len(),
+            &class_info.decl.name,
         )
     }
 
@@ -2040,12 +2074,12 @@ impl<'a> AnalysisBuilder<'a> {
         self.definition_range(
             &enum_info.module_name,
             enum_info.decl.span,
-            enum_info.decl.name.len(),
+            &enum_info.decl.name,
         )
     }
 
     fn alias_definition(&self, alias: &AliasInfo) -> AnalysisRange {
-        self.definition_range(&alias.module_name, alias.decl.span, alias.decl.name.len())
+        self.definition_range(&alias.module_name, alias.decl.span, &alias.decl.name)
     }
 
     /// An implementation method's docstring, falling back to the trait
@@ -2084,7 +2118,7 @@ impl<'a> AnalysisBuilder<'a> {
         if let Some(cached) = self.module_docs.borrow().get(&source_path) {
             return cached.clone();
         }
-        let doc = std::fs::read_to_string(&source_path)
+        let doc = crate::read_source_file(Path::new(&source_path))
             .ok()
             .and_then(|source| parser::parse(&source).ok())
             .and_then(|module| module.doc);
@@ -2102,7 +2136,7 @@ impl<'a> AnalysisBuilder<'a> {
         self.definition_range(
             &trait_info.module_name,
             trait_info.decl.span,
-            trait_info.decl.name.len(),
+            &trait_info.decl.name,
         )
     }
 
@@ -2291,7 +2325,7 @@ impl<'a> AnalysisBuilder<'a> {
             definition: Some(self.definition_range(
                 &enum_info.module_name,
                 variant_decl.span,
-                variant_decl.name.len(),
+                &variant_decl.name,
             )),
         })
     }
@@ -2898,7 +2932,7 @@ impl<'a> AnalysisBuilder<'a> {
                 class
                     .fields
                     .get(name)
-                    .map(|field| self.definition_range(&class.module_name, field.span, name.len()))
+                    .map(|field| self.definition_range(&class.module_name, field.span, name))
             })
     }
 
@@ -3069,7 +3103,7 @@ impl<'a> AnalysisBuilder<'a> {
             }
             ExprKind::Name(name) => {
                 if let Some(resolved) = self.resolve_name(name, scope) {
-                    let hover = self.narrowed_hover(expr.span, resolved.hover);
+                    let hover = self.narrowed_hover(expr, resolved.hover);
                     self.push_occurrence(
                         range_from_span(expr.span, name.len()),
                         hover,
@@ -3080,7 +3114,7 @@ impl<'a> AnalysisBuilder<'a> {
             ExprKind::Member { object, field } => {
                 self.visit_expr(object, scope);
                 if let Some(resolved) = self.resolve_member_expr(object, field, scope) {
-                    let hover = self.narrowed_hover(expr.span, resolved.hover);
+                    let hover = self.narrowed_hover(expr, resolved.hover);
                     self.push_occurrence(
                         range_from_span(expr.span, field.len()),
                         hover,
@@ -3525,7 +3559,7 @@ impl<'a> AnalysisBuilder<'a> {
                 definition: Some(self.definition_range(
                     &trait_info.module_name,
                     method.decl.span,
-                    method.decl.name.len(),
+                    &method.decl.name,
                 )),
                 ty: Some(crate::sema::substitute_type(
                     &method.signature.return_type,
@@ -3716,7 +3750,7 @@ impl<'a> AnalysisBuilder<'a> {
                     definition: Some(self.definition_range(
                         &class_info.module_name,
                         field_info.span,
-                        field.len(),
+                        field,
                     )),
                     ty: Some(crate::sema::substitute_type(
                         &field_info.ty,
@@ -3730,7 +3764,7 @@ impl<'a> AnalysisBuilder<'a> {
                     definition: Some(self.definition_range(
                         &class_info.module_name,
                         method_info.decl.span,
-                        method_info.decl.name.len(),
+                        &method_info.decl.name,
                     )),
                     ty: Some(crate::sema::substitute_type(
                         &method_info.signature.return_type,
@@ -3751,7 +3785,7 @@ impl<'a> AnalysisBuilder<'a> {
                 definition: Some(self.definition_range(
                     &trait_impl.module_name,
                     trait_method.decl.span,
-                    trait_method.decl.name.len(),
+                    &trait_method.decl.name,
                 )),
                 ty: Some(crate::sema::substitute_type(
                     &trait_method.signature.return_type,
@@ -3775,7 +3809,7 @@ impl<'a> AnalysisBuilder<'a> {
                     definition: Some(self.definition_range(
                         &enum_info.module_name,
                         variant_info.span,
-                        field.len(),
+                        field,
                     )),
                     ty: Some(Type::named(enum_name)),
                 });
@@ -5701,8 +5735,12 @@ impl<'a> AnalysisBuilder<'a> {
 
     /// Appends the checker's narrowing fact to a hover when this use reads a
     /// union place through an `is None` / `is not None` refinement.
-    fn narrowed_hover(&self, span: Span, hover: String) -> String {
-        match self.program.narrowed_read(&self.program.module_name, span) {
+    fn narrowed_hover(&self, expr: &Expr, hover: String) -> String {
+        match self.program.narrowed_read(
+            &self.program.module_name,
+            expr.span,
+            &crate::sema::narrowed_read_place(expr),
+        ) {
             Some(read) => format!(
                 "{hover}\n\nNarrowed to `{}` from `{}` at this use.",
                 read.member_type, read.union_type
@@ -5905,167 +5943,169 @@ where
     }
 }
 
-fn symbols_from_module(module: &Module) -> Vec<AnalysisSymbol> {
+fn symbols_from_module(module: &Module, source: &str) -> Vec<AnalysisSymbol> {
+    let lines = source.lines().collect::<Vec<_>>();
+    let symbol =
+        |name: &str, kind: &str, detail: String, span: Span, children: Vec<AnalysisSymbol>| {
+            let line = lines.get(span.line.saturating_sub(1)).copied();
+            let range = declared_name_range(line, span, name, None);
+            AnalysisSymbol {
+                name: name.to_string(),
+                kind: kind.to_string(),
+                detail,
+                line: range.line,
+                start_character: range.start_character,
+                end_character: range.end_character,
+                children,
+            }
+        };
+    let method_symbols = |methods: &[FunctionDecl], kind: fn(&FunctionDecl) -> &'static str| {
+        methods
+            .iter()
+            .map(|method| {
+                symbol(
+                    &method.name,
+                    kind(method),
+                    format_decl_return(method),
+                    method.span,
+                    Vec::new(),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
     let mut symbols = module
         .constants
         .iter()
-        .map(|constant| AnalysisSymbol {
-            name: constant.name.clone(),
-            kind: "constant".to_string(),
-            detail: constant
-                .annotation
-                .as_ref()
-                .map(|ty| lower_type_ref(ty).to_string())
-                .unwrap_or_else(|| "inferred".to_string()),
-            line: constant.span.line.saturating_sub(1),
-            start_character: constant.span.column.saturating_sub(1),
-            end_character: constant.span.column.saturating_sub(1) + constant.name.len(),
-            children: Vec::new(),
+        .map(|constant| {
+            symbol(
+                &constant.name,
+                "constant",
+                constant
+                    .annotation
+                    .as_ref()
+                    .map(|ty| lower_type_ref(ty).to_string())
+                    .unwrap_or_else(|| "inferred".to_string()),
+                constant.span,
+                Vec::new(),
+            )
         })
         .collect::<Vec<_>>();
     for item in &module.items {
         match item {
-            Item::TypeAlias(alias) => symbols.push(AnalysisSymbol {
-                name: alias.name.clone(),
-                kind: "type".to_string(),
-                detail: String::new(),
-                line: alias.span.line.saturating_sub(1),
-                start_character: alias.span.column.saturating_sub(1),
-                end_character: alias.span.column.saturating_sub(1) + alias.name.len(),
-                children: Vec::new(),
-            }),
+            Item::TypeAlias(alias) => symbols.push(symbol(
+                &alias.name,
+                "type",
+                String::new(),
+                alias.span,
+                Vec::new(),
+            )),
             Item::Class(class_decl) => {
-                symbols.push(AnalysisSymbol {
-                    name: class_decl.name.clone(),
-                    kind: "class".to_string(),
-                    detail: String::new(),
-                    line: class_decl.span.line.saturating_sub(1),
-                    start_character: class_decl.span.column.saturating_sub(1),
-                    end_character: class_decl.span.column.saturating_sub(1) + class_decl.name.len(),
-                    children: class_decl
-                        .fields
-                        .iter()
-                        .map(|field| AnalysisSymbol {
-                            name: field.name.clone(),
-                            kind: "field".to_string(),
-                            detail: lower_type_ref(&field.ty).to_string(),
-                            line: field.span.line.saturating_sub(1),
-                            start_character: field.span.column.saturating_sub(1),
-                            end_character: field.span.column.saturating_sub(1) + field.name.len(),
-                            children: Vec::new(),
-                        })
-                        .chain(class_decl.methods.iter().map(|method| AnalysisSymbol {
-                            name: method.name.clone(),
-                            kind: method_kind(method).to_string(),
-                            detail: format_decl_return(method),
-                            line: method.span.line.saturating_sub(1),
-                            start_character: method.span.column.saturating_sub(1),
-                            end_character: method.span.column.saturating_sub(1) + method.name.len(),
-                            children: Vec::new(),
-                        }))
-                        .collect(),
-                });
+                let mut children = class_decl
+                    .fields
+                    .iter()
+                    .map(|field| {
+                        symbol(
+                            &field.name,
+                            "field",
+                            lower_type_ref(&field.ty).to_string(),
+                            field.span,
+                            Vec::new(),
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                children.extend(method_symbols(&class_decl.methods, method_kind));
+                symbols.push(symbol(
+                    &class_decl.name,
+                    "class",
+                    String::new(),
+                    class_decl.span,
+                    children,
+                ));
             }
             Item::Enum(enum_decl) => {
-                symbols.push(AnalysisSymbol {
-                    name: enum_decl.name.clone(),
-                    kind: "enum".to_string(),
-                    detail: String::new(),
-                    line: enum_decl.span.line.saturating_sub(1),
-                    start_character: enum_decl.span.column.saturating_sub(1),
-                    end_character: enum_decl.span.column.saturating_sub(1) + enum_decl.name.len(),
-                    children: enum_decl
-                        .variants
-                        .iter()
-                        .map(|variant| AnalysisSymbol {
-                            name: variant.name.clone(),
-                            kind: "variant".to_string(),
-                            detail: if variant.payloads.is_empty() {
-                                String::new()
-                            } else {
-                                variant
-                                    .payloads
-                                    .iter()
-                                    .map(|payload| lower_type_ref(&payload.ty).to_string())
-                                    .collect::<Vec<_>>()
-                                    .join(", ")
-                            },
-                            line: variant.span.line.saturating_sub(1),
-                            start_character: variant.span.column.saturating_sub(1),
-                            end_character: variant.span.column.saturating_sub(1)
-                                + variant.name.len(),
-                            children: Vec::new(),
-                        })
-                        .collect(),
-                });
+                let children = enum_decl
+                    .variants
+                    .iter()
+                    .map(|variant| {
+                        symbol(
+                            &variant.name,
+                            "variant",
+                            variant
+                                .payloads
+                                .iter()
+                                .map(|payload| lower_type_ref(&payload.ty).to_string())
+                                .collect::<Vec<_>>()
+                                .join(", "),
+                            variant.span,
+                            Vec::new(),
+                        )
+                    })
+                    .collect();
+                symbols.push(symbol(
+                    &enum_decl.name,
+                    "enum",
+                    String::new(),
+                    enum_decl.span,
+                    children,
+                ));
             }
-            Item::Function(function_decl) => {
-                symbols.push(AnalysisSymbol {
-                    name: function_decl.name.clone(),
-                    kind: "function".to_string(),
-                    detail: format_decl_return(function_decl),
-                    line: function_decl.span.line.saturating_sub(1),
-                    start_character: function_decl.span.column.saturating_sub(1),
-                    end_character: function_decl.span.column.saturating_sub(1)
-                        + function_decl.name.len(),
-                    children: Vec::new(),
-                });
-            }
-            Item::ExternFunction(function_decl) => {
-                symbols.push(AnalysisSymbol {
-                    name: function_decl.name.clone(),
-                    kind: "function".to_string(),
-                    detail: format!(
-                        "extern \"{}\" -> {}",
-                        function_decl.abi,
-                        lower_type_ref(&function_decl.return_type)
-                    ),
-                    line: function_decl.name_span.line.saturating_sub(1),
-                    start_character: function_decl.name_span.column.saturating_sub(1),
-                    end_character: function_decl.name_span.column.saturating_sub(1)
-                        + function_decl.name.len(),
-                    children: Vec::new(),
-                });
-            }
-            Item::ExternOpaqueClass(class_decl) => {
-                symbols.push(AnalysisSymbol {
-                    name: class_decl.name.clone(),
-                    kind: "class".to_string(),
-                    detail: format!("extern \"{}\" opaque", class_decl.abi),
-                    line: class_decl.name_span.line.saturating_sub(1),
-                    start_character: class_decl.name_span.column.saturating_sub(1),
-                    end_character: class_decl.name_span.column.saturating_sub(1)
-                        + class_decl.name.len(),
-                    children: Vec::new(),
-                });
-            }
-            Item::Trait(trait_decl) => {
-                symbols.push(AnalysisSymbol {
-                    name: trait_decl.name.clone(),
-                    kind: "trait".to_string(),
-                    detail: String::new(),
-                    line: trait_decl.span.line.saturating_sub(1),
-                    start_character: trait_decl.span.column.saturating_sub(1),
-                    end_character: trait_decl.span.column.saturating_sub(1) + trait_decl.name.len(),
-                    children: trait_decl
-                        .methods
-                        .iter()
-                        .map(|method| AnalysisSymbol {
-                            name: method.name.clone(),
-                            kind: "method".to_string(),
-                            detail: format_decl_return(method),
-                            line: method.span.line.saturating_sub(1),
-                            start_character: method.span.column.saturating_sub(1),
-                            end_character: method.span.column.saturating_sub(1) + method.name.len(),
-                            children: Vec::new(),
-                        })
-                        .collect(),
-                });
-            }
+            Item::Function(function_decl) => symbols.push(symbol(
+                &function_decl.name,
+                "function",
+                format_decl_return(function_decl),
+                function_decl.span,
+                Vec::new(),
+            )),
+            Item::ExternFunction(function_decl) => symbols.push(symbol(
+                &function_decl.name,
+                "function",
+                format!(
+                    "extern \"{}\" -> {}",
+                    function_decl.abi,
+                    lower_type_ref(&function_decl.return_type)
+                ),
+                function_decl.name_span,
+                Vec::new(),
+            )),
+            Item::ExternOpaqueClass(class_decl) => symbols.push(symbol(
+                &class_decl.name,
+                "class",
+                format!("extern \"{}\" opaque", class_decl.abi),
+                class_decl.name_span,
+                Vec::new(),
+            )),
+            Item::Trait(trait_decl) => symbols.push(symbol(
+                &trait_decl.name,
+                "trait",
+                String::new(),
+                trait_decl.span,
+                method_symbols(&trait_decl.methods, |_| "method"),
+            )),
             Item::Impl(_) => {}
         }
     }
     symbols
+}
+
+/// The range of a declared `name`. A declaration span starts at its keyword,
+/// such as `def` or `class`, so the name is the first matching identifier
+/// from there on the same line.
+fn declared_name_range(
+    line: Option<&str>,
+    span: Span,
+    name: &str,
+    file_path: Option<String>,
+) -> AnalysisRange {
+    let mut range = range_from_span_with_path(span, name.len(), file_path);
+    let keyword_start = range.start_character;
+    if let Some((start, end)) = line
+        .and_then(|line| line.get(keyword_start..))
+        .and_then(|rest| find_identifier_in_line(rest, name))
+    {
+        range.start_character = keyword_start + start;
+        range.end_character = keyword_start + end;
+    }
+    range
 }
 
 fn analysis_diagnostic(error: &Diagnostic) -> AnalysisDiagnostic {
@@ -8085,12 +8125,12 @@ fn lambda_capture_opener_before_position(
     let mut delimiters = Vec::<(char, Option<LambdaCaptureOpener>)>::new();
     let mut pending_lambda = false;
     for (line_index, text) in source_lines.iter().enumerate().take(line + 1) {
-        let limit = if line_index == line {
-            character
-        } else {
-            text.chars().count()
-        };
-        let chars = text.chars().take(limit).collect::<Vec<_>>();
+        // `character` is a UTF-8 byte column; scan the characters before it.
+        let chars = text
+            .char_indices()
+            .take_while(|(offset, _)| line_index < line || *offset < character)
+            .map(|(_, ch)| ch)
+            .collect::<Vec<_>>();
         let mut index = 0usize;
         while index < chars.len() {
             let ch = chars[index];
@@ -8334,12 +8374,14 @@ fn sanitize_member_completion_source(source: &str, line: usize, character: usize
     let Some(line_text) = lines.get_mut(line) else {
         return source.to_string();
     };
+    // `character` is a UTF-8 byte column; use the boundary at or before it.
     let byte_index = line_text
         .char_indices()
         .map(|(index, _)| index)
         .chain(std::iter::once(line_text.len()))
-        .nth(character)
-        .unwrap_or(line_text.len());
+        .take_while(|index| *index <= character)
+        .last()
+        .unwrap_or_default();
     if byte_index == 0 || byte_index > line_text.len() {
         return source.to_string();
     }
