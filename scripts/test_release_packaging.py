@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 from pathlib import Path
 import platform
@@ -74,6 +75,18 @@ class HostedWorkflowHardeningTests(unittest.TestCase):
         ):
             with self.subTest(path=path):
                 self.assertEqual(trigger.count(f"      - {path}\n"), 2)
+
+    def test_every_workflow_declares_a_read_only_default_token(self) -> None:
+        for workflow_path in sorted((REPO_ROOT / ".github" / "workflows").glob("*.yml")):
+            workflow = workflow_path.read_text(encoding="utf-8")
+            with self.subTest(workflow=workflow_path.name):
+                self.assertRegex(workflow, r"(?m)^permissions:\n  contents: read\n")
+
+    def test_extension_packaging_pins_the_vsce_version(self) -> None:
+        manifest = json.loads(
+            (REPO_ROOT / "tools" / "vscode-aura" / "package.json").read_text(encoding="utf-8")
+        )
+        self.assertIn("npx --yes @vscode/vsce@4.0.0 package", manifest["scripts"]["package:vsix"])
 
     def test_cargo_color_is_disabled_at_workflow_scope(self) -> None:
         for workflow_path in (CI_WORKFLOW, RELEASE_WORKFLOW):
@@ -152,6 +165,36 @@ class LandingAndInstallerTests(unittest.TestCase):
                 check=False,
             )
             self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_installer_does_nothing_when_a_piped_download_is_truncated(self) -> None:
+        installer = INSTALL_SCRIPT.read_text(encoding="utf-8")
+        lines = installer.rstrip("\n").splitlines()
+        # `curl ... | sh` runs whatever arrived. Defining everything in a
+        # function and calling it on the last line means a cut-off download
+        # defines code but never runs it.
+        self.assertEqual(lines[-1], 'main "$@"')
+        with tempfile.TemporaryDirectory(prefix="aura-install-truncated-") as temp:
+            root = Path(temp)
+            prefix = root / "prefix"
+            for cut in range(1, len(lines)):
+                truncated = "\n".join(lines[:cut]) + "\n"
+                result = subprocess.run(
+                    ["sh"],
+                    input=truncated,
+                    cwd=root,
+                    env={
+                        **os.environ,
+                        "AURA_INSTALL_BASE_URL": (root / "missing").as_uri(),
+                        "AURA_INSTALL_PREFIX": str(prefix),
+                    },
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    timeout=10,
+                    check=False,
+                )
+                self.assertEqual(result.stdout, "", f"line {cut} ran: {result.stdout}")
+                self.assertFalse(prefix.exists(), f"truncation after line {cut} installed files")
 
     def test_installer_places_binary_and_native_runtime_under_prefix(self) -> None:
         system = platform.system()
@@ -277,20 +320,31 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("name: Download VS Code extension", self.workflow)
         self.assertIn("name: Download VSIX from existing GitHub Release", self.workflow)
         self.assertIn("name: Confirm existing GitHub Release", self.workflow)
-        self.assertIn("VSCE_PAT: ${{ secrets.VSCE_PAT }}", self.workflow)
-        self.assertIn("OVSX_TOKEN: ${{ secrets.OVSX_TOKEN }}", self.workflow)
-        self.assertIn("if: env.VSCE_PAT != ''", self.workflow)
-        self.assertIn("if: env.VSCE_PAT == ''", self.workflow)
-        self.assertIn("if: env.OVSX_TOKEN != ''", self.workflow)
-        self.assertIn("if: env.OVSX_TOKEN == ''", self.workflow)
+        publish_job = self.workflow[self.workflow.index("  publish-extension:\n"):]
+        job_env = publish_job[publish_job.index("    env:\n"):publish_job.index("    steps:\n")]
+        # Publishing tokens reach only the step that uses them, never the
+        # whole job, so download, validation, and setup steps cannot read them.
+        self.assertNotIn("secrets.VSCE_PAT }}", job_env)
+        self.assertNotIn("secrets.OVSX_TOKEN }}", job_env)
+        self.assertIn("HAS_VSCE_PAT: ${{ secrets.VSCE_PAT != '' }}", job_env)
+        self.assertIn("HAS_OVSX_TOKEN: ${{ secrets.OVSX_TOKEN != '' }}", job_env)
+        self.assertEqual(publish_job.count("VSCE_PAT: ${{ secrets.VSCE_PAT }}"), 1)
+        self.assertEqual(publish_job.count("OVSX_TOKEN: ${{ secrets.OVSX_TOKEN }}"), 1)
+        self.assertIn("if: env.HAS_VSCE_PAT == 'true'", self.workflow)
+        self.assertIn("if: env.HAS_VSCE_PAT != 'true'", self.workflow)
+        self.assertIn("if: env.HAS_OVSX_TOKEN == 'true'", self.workflow)
+        self.assertIn("if: env.HAS_OVSX_TOKEN != 'true'", self.workflow)
+        # Publishing tools run with marketplace tokens, so they are pinned to
+        # exact versions instead of whatever npm serves as latest.
         self.assertIn(
-            "npx @vscode/vsce publish --packagePath \"$VSIX_PATH\" -p \"$VSCE_PAT\"",
+            "npx --yes @vscode/vsce@4.0.0 publish --packagePath \"$VSIX_PATH\" -p \"$VSCE_PAT\"",
             self.workflow,
         )
         self.assertIn(
-            "npx ovsx publish \"$VSIX_PATH\" -p \"$OVSX_TOKEN\"",
+            "npx --yes ovsx@1.2.0 publish \"$VSIX_PATH\" -p \"$OVSX_TOKEN\"",
             self.workflow,
         )
+        self.assertNotRegex(self.workflow, r"npx (--yes )?(@vscode/vsce|ovsx)(?!@\d)")
         self.assertIn("::notice::VSCE_PAT is not configured", self.workflow)
         self.assertIn("::notice::OVSX_TOKEN is not configured", self.workflow)
         self.assertIn("inputs.publish_extension", self.workflow)

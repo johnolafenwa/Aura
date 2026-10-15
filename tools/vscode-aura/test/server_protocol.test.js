@@ -4,7 +4,9 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const { spawn } = require("node:child_process");
 const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
+const { pathToFileURL } = require("node:url");
 const {
   SUPPORTED_SEMANTIC_INTERFACE_SCHEMA_VERSION
 } = require("../../aura-language-server/src/compiler_bridge.js");
@@ -12,7 +14,14 @@ const {
 const REQUEST_TIMEOUT_MS = 10_000;
 
 function startLanguageServer(serverPath, environment = {}) {
-  const env = { ...process.env, ...environment, PATH: "" };
+  // These tests analyze this checkout with its own build, as a contributor
+  // who opts in to workspace compiler discovery would.
+  const env = {
+    ...process.env,
+    AURA_LSP_USE_WORKSPACE_COMPILER: "1",
+    ...environment,
+    PATH: ""
+  };
   if (process.platform === "win32") {
     env.Path = "";
   }
@@ -241,6 +250,52 @@ test(
     );
   }
 );
+
+test("bundled language server never runs a compiler found inside an untrusted workspace", async (t) => {
+  if (process.platform === "win32") {
+    t.skip("the planted compiler is a POSIX shell script");
+    return;
+  }
+  const serverPath = process.env.AURA_EXTENSION_SERVER_PATH
+    ? path.resolve(process.env.AURA_EXTENSION_SERVER_PATH)
+    : path.resolve(__dirname, "..", "dist", "server.js");
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "aura-untrusted-workspace-"));
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  const marker = path.join(workspace, "planted-compiler-ran");
+  for (const profile of ["debug", "release"]) {
+    const planted = path.join(workspace, "target", profile, "aura");
+    fs.mkdirSync(path.dirname(planted), { recursive: true });
+    fs.writeFileSync(planted, `#!/bin/sh\necho ran > '${marker}'\n`);
+    fs.chmodSync(planted, 0o755);
+  }
+  fs.mkdirSync(path.join(workspace, "crates", "aura"), { recursive: true });
+  fs.writeFileSync(path.join(workspace, "Cargo.toml"), "[workspace]\n");
+  fs.writeFileSync(path.join(workspace, "crates", "aura", "Cargo.toml"), "[package]\n");
+
+  const client = startLanguageServer(serverPath, { AURA_LSP_USE_WORKSPACE_COMPILER: "" });
+  t.after(() => client.dispose());
+  const workspaceUri = pathToFileURL(workspace).toString();
+  const initialize = await client.request("initialize", {
+    processId: null,
+    rootUri: workspaceUri,
+    capabilities: {},
+    workspaceFolders: [{ uri: workspaceUri, name: "untrusted" }]
+  });
+  assert.equal(initialize.error, undefined, JSON.stringify(initialize.error));
+  client.notify("initialized", {});
+
+  const uri = pathToFileURL(path.join(workspace, "main.au")).toString();
+  const published = client.waitForNotification(
+    "textDocument/publishDiagnostics",
+    (message) => message.params?.uri === uri
+  );
+  client.notify("textDocument/didOpen", {
+    textDocument: { uri, languageId: "aura", version: 1, text: "def main():\n    pass\n" }
+  });
+  await published;
+
+  assert.equal(fs.existsSync(marker), false, "the server ran a binary from the workspace");
+});
 
 test("bundled language server completes safely while a function header is incomplete", async (t) => {
   const serverPath = process.env.AURA_EXTENSION_SERVER_PATH

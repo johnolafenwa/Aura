@@ -7,6 +7,19 @@ in this file.
 
 ## Unreleased
 
+### Security
+
+- The language server no longer runs `target/debug/aura`,
+  `target/release/aura`, or `cargo run` from the opened folder unless
+  `AURA_LSP_USE_WORKSPACE_COMPILER=1` is set. Before, opening an `.au` file
+  in a cloned repository could run a program that repository supplied. Set
+  `AURA_LSP_AURA_PATH` or put `aura` on `PATH` instead.
+- The installer script runs only after the whole script has downloaded, so a
+  cut-off `curl ... | sh` installs nothing.
+- The HTTP runtime rejects a `Content-Length` or chunk size with a sign, such
+  as `+5`. Only digits are valid, so Aura agrees with proxies on where a
+  message ends.
+
 ## VS Code extension 0.4.0 — 2026-10-15
 
 - Bundles language server 0.4.0, which speaks semantic interface version 19.

@@ -437,6 +437,13 @@ function resolveCompilerCommand() {
     return { cmd: envPath, args: [], cwd: undefined };
   }
 
+  // A workspace is untrusted input: running its `target/` binaries or
+  // `cargo run` would execute code from any folder the editor opens. Only
+  // contributors who ask for it get the checkout's own compiler.
+  if (process.env.AURA_LSP_USE_WORKSPACE_COMPILER !== "1") {
+    return { cmd: "aura", args: [], cwd: workspaceRoots[0] };
+  }
+
   for (const root of workspaceRoots) {
     const debugBinary = path.join(root, "target", "debug", binaryName());
     if (fs.existsSync(debugBinary)) {
