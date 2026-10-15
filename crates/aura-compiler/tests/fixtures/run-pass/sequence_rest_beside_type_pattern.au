@@ -1,0 +1,66 @@
+class Box[T]:
+    value: T
+
+def consume(items: own list[int64 | None]) -> int64:
+    return len(items)
+
+def grow(values: list[int64 | None]) -> int64:
+    match values:
+        case [int64 as first, *rest]:
+            rest.append(first)
+            print(rest)
+            return consume(rest)
+        case _:
+            return -1
+
+def after_label(words: list[str | None]) -> list[str | None]:
+    match words:
+        case [str as label, *others]:
+            print(label)
+            return others
+        case _:
+            return []
+
+def nested(pair: (list[int64 | None], str)) -> int64:
+    match pair:
+        case ([int64 as first, *rest], label):
+            rest.append(first)
+            print(label)
+            print(rest)
+            return len(rest)
+        case _:
+            return -1
+
+def boxed(box: Box[list[str | None]]) -> list[str | None]:
+    match box:
+        case Box(value=[str as head, *tail]):
+            print(head)
+            return tail
+        case _:
+            return []
+
+def either(values: list[int64 | None]) -> list[int64 | None]:
+    match values:
+        case [int64 as n, *rest] | [None, int64 as n, *rest]:
+            rest.append(n)
+            return rest
+        case _:
+            return []
+
+def main():
+    values: list[int64 | None] = [1, 2, None]
+    print(grow(values))
+    print(values)
+    print(grow([None, 3]))
+    words: list[str | None] = ["a", None, "c"]
+    mut tail = after_label(words)
+    tail.append("d")
+    print(tail)
+    print(words)
+    print(nested(([5, None, 6], "pair")))
+    mut boxed_tail = boxed(Box(value=["x", "y", None]))
+    boxed_tail.append("z")
+    print(boxed_tail)
+    print(either([1, 2]))
+    print(either([None, 3, 4]))
+    print(either([None, None]))

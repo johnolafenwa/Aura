@@ -140,7 +140,7 @@ impl FunctionChecker<'_> {
             Pattern::Class(class) if matches!(expected, Type::Union(_)) => {
                 if self.class_pattern_is_irrefutable(class, expected) {
                     self.class_pattern_target(class, expected)
-                        .map(|target| BTreeSet::from([key(&target.member)]))
+                        .map(|target| target.members.iter().map(key).collect())
                         .unwrap_or_default()
                 } else {
                     BTreeSet::new()
@@ -2229,10 +2229,10 @@ impl FunctionChecker<'_> {
         let Ok(target) = self.class_pattern_target(class, expected_ty) else {
             return false;
         };
-        let key = target
-            .member
-            .canonical_key(self.module_name, self.canonical_type_names);
-        if covered_members.contains(&key) {
+        if target.members.iter().all(|member| {
+            covered_members
+                .contains(&member.canonical_key(self.module_name, self.canonical_type_names))
+        }) {
             return true;
         }
         let mut pending = patterns.to_vec();

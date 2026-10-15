@@ -1,0 +1,26 @@
+class Point:
+    x: int64
+
+class Holder:
+    point: Point | None
+    name: str | None
+
+def reset(target: mut str | None):
+    target = None
+
+def clear(point: mut Point | None):
+    point = None
+
+def main():
+    mut value: str | None = "aura"
+    if value is not None:
+        reset(value)
+    print(value is None)
+    mut holder: Holder | None = Holder(point=Point(x=1), name="h")
+    if holder is not None and holder.point is not None:
+        print(holder.point.x)
+        clear(holder.point)
+        reset(holder.name)
+    if holder is not None:
+        print(holder.point is None)
+        print(holder.name is None)

@@ -1,0 +1,15 @@
+public class Offset:
+    public dx: int64
+
+public class Point:
+    public x: int64
+    public y: int64
+    public offset: Offset
+
+    public def sum(self) -> int64:
+        return self.x + self.y + self.offset.dx
+
+public def find(present: bool) -> Point | None:
+    if present:
+        return Point(x=3, y=4, offset=Offset(dx=10))
+    return None

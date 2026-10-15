@@ -1,0 +1,6 @@
+error[AU2040]: class pattern `Box` matches `Box[int64]` and `Box[str]`, but field `value` has type `int64` in one and `str` in the other
+ --> crates/aura-compiler/tests/fixtures/check-fail/class_pattern_generic_union_field_types.au:7:18
+  |
+7 |         case Box(value=value):
+  |                  ^
+  = help: select one specialization with a type pattern such as `case Box[int64] as value:`

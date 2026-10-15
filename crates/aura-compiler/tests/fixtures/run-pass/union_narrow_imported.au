@@ -1,0 +1,20 @@
+import union_narrow_support.geometry as geometry
+from union_narrow_support.geometry import Point
+
+def describe(point: geometry.Point | None) -> str:
+    if point is None:
+        return "missing"
+    return f"{point.x},{point.y} shifted by {point.offset.dx}"
+
+def main():
+    found: geometry.Point | None = geometry.find(true)
+    if found is not None:
+        print(found.x)
+        print(found.offset.dx)
+        print(found.sum())
+    print(describe(geometry.find(true)))
+    print(describe(geometry.find(false)))
+    mut local: Point | None = Point(x=1, y=2, offset=geometry.Offset(dx=0))
+    if local is not None:
+        local.y = 5
+        print(local.x + local.y)
