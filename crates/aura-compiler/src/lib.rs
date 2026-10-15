@@ -358,6 +358,77 @@ fn check_path_with_source_without_lockfile(path: &Path, source: &str) -> Result<
     check_path_with_source_inner(path, source, false)
 }
 
+thread_local! {
+    static SOURCE_OVERLAYS: std::cell::RefCell<HashMap<PathBuf, String>> =
+        std::cell::RefCell::new(HashMap::new());
+    static SOURCE_READS: std::cell::RefCell<Option<BTreeSet<PathBuf>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Runs `operation` with in-memory text standing in for the named source
+/// files. An editor uses this to check a file against the unsaved buffers of
+/// the modules it imports. The overlays apply to the current thread and end
+/// when `operation` returns. Source passed directly for the checked file
+/// still takes precedence over an overlay for that file.
+pub fn with_source_overlays<T>(
+    overlays: impl IntoIterator<Item = (PathBuf, String)>,
+    operation: impl FnOnce() -> T,
+) -> T {
+    struct Restore(HashMap<PathBuf, String>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            let previous = std::mem::take(&mut self.0);
+            SOURCE_OVERLAYS.with(|current| *current.borrow_mut() = previous);
+        }
+    }
+    let overlays = overlays
+        .into_iter()
+        .map(|(path, source)| (absolutize(&path), source))
+        .collect();
+    let _restore = Restore(SOURCE_OVERLAYS.with(|current| current.replace(overlays)));
+    operation()
+}
+
+/// Runs `operation` and returns the source files it read, as absolute paths.
+pub(crate) fn with_source_reads<T>(operation: impl FnOnce() -> T) -> (T, BTreeSet<PathBuf>) {
+    struct Restore(Option<Option<BTreeSet<PathBuf>>>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            if let Some(previous) = self.0.take() {
+                SOURCE_READS.with(|reads| *reads.borrow_mut() = previous);
+            }
+        }
+    }
+    let mut restore = Restore(Some(
+        SOURCE_READS.with(|reads| reads.replace(Some(BTreeSet::new()))),
+    ));
+    let result = operation();
+    let previous = restore.0.take().unwrap_or_default();
+    let reads = SOURCE_READS.with(|reads| reads.replace(previous));
+    (result, reads.unwrap_or_default())
+}
+
+/// Reads a source file, preferring an active overlay for the same file.
+pub(crate) fn read_source_file(path: &Path) -> std::io::Result<String> {
+    SOURCE_READS.with(|reads| {
+        if let Some(reads) = reads.borrow_mut().as_mut() {
+            reads.insert(absolutize(path));
+        }
+    });
+    let overlay = SOURCE_OVERLAYS.with(|overlays| {
+        let overlays = overlays.borrow();
+        if overlays.is_empty() {
+            None
+        } else {
+            overlays.get(&absolutize(path)).cloned()
+        }
+    });
+    match overlay {
+        Some(source) => Ok(source),
+        None => fs::read_to_string(path),
+    }
+}
+
 fn check_path_with_source_inner(
     path: &Path,
     source: &str,
@@ -513,7 +584,7 @@ impl ModuleLoader {
         let source = if let Some(source) = source_override {
             source.to_string()
         } else {
-            fs::read_to_string(&path).map_err(|error| {
+            read_source_file(&path).map_err(|error| {
                 Diagnostic::new(format!("failed to read `{}`: {}", path.display(), error))
             })?
         };

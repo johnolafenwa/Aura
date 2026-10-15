@@ -814,6 +814,50 @@ fn zero_exit_value() -> Value {
     Value::Int(crate::integer::IntegerValue::zero())
 }
 
+#[test]
+fn source_overlays_replace_imported_files_for_one_scope() {
+    let temp = TempDir::new("aura-source-overlays");
+    let library = temp.path().join("library.au");
+    fs::write(&library, "public def answer() -> int64:\n    return 42\n").expect("write library");
+    let main = temp.path().join("main.au");
+    let main_source = "from library import answer\n\ndef main():\n    print(answer() + 1)\n";
+    fs::write(&main, main_source).expect("write main");
+    check_path_with_source(&main, main_source).expect("the files on disk check");
+
+    let text_library = "public def answer() -> str:\n    return \"forty-two\"\n";
+    let overlays = || [(library.clone(), text_library.to_string())];
+    let overlaid = crate::with_source_overlays(overlays(), || {
+        let inner = crate::with_source_overlays(Vec::new(), || {
+            check_path_with_source(&main, main_source).is_ok()
+        });
+        assert!(
+            inner,
+            "a nested scope without overlays reads the files on disk"
+        );
+        check_path_with_source(&main, main_source)
+    });
+    assert!(
+        overlaid.is_err(),
+        "the overlay text replaces the imported file on disk"
+    );
+    let analysis =
+        crate::with_source_overlays(overlays(), || analyze_path_source(&main, main_source));
+    assert_eq!(analysis.diagnostics.len(), 1, "{:?}", analysis.diagnostics);
+    check_path_with_source(&main, main_source).expect("overlays end with their scope");
+
+    let entry_overlay = crate::with_source_overlays(
+        [(
+            main.clone(),
+            "def main():\n    print(missing)\n".to_string(),
+        )],
+        || check_path_with_source(&main, main_source),
+    );
+    assert!(
+        entry_overlay.is_ok(),
+        "the requested source wins over an overlay for the same file"
+    );
+}
+
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()

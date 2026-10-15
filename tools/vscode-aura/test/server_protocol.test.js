@@ -1025,3 +1025,83 @@ test("bundled language server maps Unicode positions and selects declared names"
   const helper = symbols.result.find((symbol) => symbol.name === "helper");
   assert.deepEqual(helper.selectionRange, helperName);
 });
+
+test(
+  "bundled language server refreshes importers when a dependency changes",
+  { skip: process.platform === "win32" },
+  async (t) => {
+    const temp = fs.mkdtempSync(path.join(require("node:os").tmpdir(), "aura-lsp-dependency-"));
+    t.after(() => fs.rmSync(temp, { recursive: true, force: true }));
+    const libraryPath = path.join(temp, "library.au");
+    const libraryUri = `file://${libraryPath}`;
+    const intLibrary = "public def answer() -> int64:\n    return 42\n";
+    const textLibrary = 'public def answer() -> str:\n    return "forty-two"\n';
+    fs.writeFileSync(libraryPath, intLibrary);
+    const mainUri = `file://${path.join(temp, "main.au")}`;
+    const mainLines = ["from library import answer", "", "def main():", "    print(answer() + 1)", ""];
+    fs.writeFileSync(path.join(temp, "main.au"), mainLines.join("\n"));
+    // `show.au` checks with either return type, so its hover stays available.
+    const showUri = `file://${path.join(temp, "show.au")}`;
+    const showLines = ["from library import answer", "", "def show():", "    print(answer())", ""];
+    fs.writeFileSync(path.join(temp, "show.au"), showLines.join("\n"));
+    const hoverAnswer = async (uri, lines) =>
+      (
+        await client.request("textDocument/hover", {
+          textDocument: { uri },
+          position: { line: 3, character: lines[3].indexOf("answer") }
+        })
+      ).result?.contents?.value;
+    const failing = (diagnostics) => diagnostics.length > 0;
+    const clean = (diagnostics) => diagnostics.length === 0;
+
+    const client = await startWorkspaceServer(t, [workspaceRoot, temp]);
+    let published = publishedDiagnostics(client, mainUri);
+    const showPublished = publishedDiagnostics(client, showUri);
+    client.notify("textDocument/didOpen", {
+      textDocument: { uri: mainUri, languageId: "aura", version: 1, text: mainLines.join("\n") }
+    });
+    client.notify("textDocument/didOpen", {
+      textDocument: { uri: showUri, languageId: "aura", version: 1, text: showLines.join("\n") }
+    });
+    assert.deepEqual(await published, []);
+    assert.deepEqual(await showPublished, []);
+    assert.match(await hoverAnswer(mainUri, mainLines), /function answer\(\) -> int64/);
+    assert.match(await hoverAnswer(showUri, showLines), /function answer\(\) -> int64/);
+
+    // A saved change to a closed dependency arrives as a watched-file event.
+    fs.writeFileSync(libraryPath, textLibrary);
+    published = publishedDiagnostics(client, mainUri, failing);
+    client.notify("workspace/didChangeWatchedFiles", {
+      changes: [{ uri: libraryUri, type: 2 }]
+    });
+    assert.equal((await published)[0].source, "aura-compiler");
+    assert.equal(await hoverAnswer(mainUri, mainLines), undefined);
+    assert.match(await hoverAnswer(showUri, showLines), /function answer\(\) -> str/);
+
+    // An open dependency's unsaved buffer is what the importer checks against.
+    published = publishedDiagnostics(client, mainUri, clean);
+    client.notify("textDocument/didOpen", {
+      textDocument: { uri: libraryUri, languageId: "aura", version: 1, text: textLibrary }
+    });
+    client.notify("textDocument/didChange", {
+      textDocument: { uri: libraryUri, version: 2 },
+      contentChanges: [{ text: intLibrary }]
+    });
+    assert.deepEqual(await published, []);
+    assert.match(await hoverAnswer(mainUri, mainLines), /function answer\(\) -> int64/);
+    assert.match(await hoverAnswer(showUri, showLines), /function answer\(\) -> int64/);
+
+    // Closing the buffer without saving returns to the file on disk.
+    published = publishedDiagnostics(client, mainUri, failing);
+    client.notify("textDocument/didClose", { textDocument: { uri: libraryUri } });
+    assert.equal((await published).length, 1);
+
+    // Fixing the file on disk refreshes the importer even after it failed.
+    fs.writeFileSync(libraryPath, intLibrary);
+    published = publishedDiagnostics(client, mainUri, clean);
+    client.notify("workspace/didChangeWatchedFiles", {
+      changes: [{ uri: libraryUri, type: 2 }]
+    });
+    assert.deepEqual(await published, []);
+  }
+);

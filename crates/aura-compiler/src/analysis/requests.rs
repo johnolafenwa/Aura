@@ -38,7 +38,7 @@ fn editor_range(source: &str, mut range: AnalysisRange) -> AnalysisRange {
     let imported = range
         .file_path
         .as_ref()
-        .and_then(|file| std::fs::read_to_string(file).ok());
+        .and_then(|file| crate::read_source_file(Path::new(file)).ok());
     let text = imported
         .as_deref()
         .unwrap_or(source)

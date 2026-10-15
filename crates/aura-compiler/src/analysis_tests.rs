@@ -10698,6 +10698,55 @@ fn declaration_symbols_and_definitions_select_the_declared_name() {
 }
 
 #[test]
+fn path_analysis_lists_every_imported_source_file() {
+    let temp = TempDir::new("aura-analysis-dependencies");
+    fs::write(
+        temp.path().join("base.au"),
+        "public def base_value() -> int64:\n    return 1\n",
+    )
+    .expect("write base");
+    fs::write(
+        temp.path().join("middle.au"),
+        "from base import base_value\n\npublic def middle_value() -> int64:\n    return base_value() + 1\n",
+    )
+    .expect("write middle");
+    let main_path = temp.path().join("main.au");
+    let source = "from middle import middle_value\n\ndef main():\n    print(middle_value())\n";
+    fs::write(&main_path, source).expect("write main");
+
+    let analysis = analyze_path_source(&main_path, source);
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "{:?}",
+        analysis.diagnostics
+    );
+    let canonical = |name: &str| {
+        fs::canonicalize(temp.path().join(name))
+            .expect("canonical module path")
+            .display()
+            .to_string()
+    };
+    assert_eq!(
+        analysis.dependencies,
+        vec![canonical("base.au"), canonical("middle.au")],
+        "analysis lists direct and transitive imports, without the analyzed file"
+    );
+    assert!(analyze_source("def main():\n    pass\n")
+        .dependencies
+        .is_empty());
+
+    let failing =
+        "from middle import middle_value\n\ndef main():\n    print(middle_value() + \"x\")\n";
+    let failed = analyze_path_source(&main_path, failing);
+    assert_eq!(failed.diagnostics.len(), 1, "{:?}", failed.diagnostics);
+    assert_eq!(
+        failed.dependencies,
+        vec![canonical("base.au"), canonical("middle.au")],
+        "a file that fails to check still lists the modules it read"
+    );
+}
+
+#[test]
 fn imported_definitions_select_the_declared_name_in_their_source_file() {
     let temp = TempDir::new("aura-analysis-imported-name");
     let library_path = temp.path().join("library.au");

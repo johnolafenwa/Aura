@@ -12,7 +12,6 @@ const {
   TextDocumentSyncKind
 } = require("vscode-languageserver/node");
 const { TextDocument } = require("vscode-languageserver-textdocument");
-const { pathToFileURL } = require("node:url");
 const {
   completionsForDocument,
   definitionForPosition,
@@ -26,14 +25,17 @@ const {
   editorRequestWithCompiler,
   compilerCompletionToLsp,
   compilerDefinitionAtPosition,
+  compilerDependencyUris,
   compilerDiagnosticsToLsp,
   compilerHoverAtPosition,
   compilerSymbolsToLsp,
+  openDocumentOverlays,
   setCompilerSchemaMismatchHandler,
+  setSourceOverlayProvider,
   setWorkspaceRoots
 } = require("./compiler_bridge");
 const { createDocumentStateCache } = require("./document_state");
-const { uriToPath } = require("./uri");
+const { canonicalFileUri, uriToPath } = require("./uri");
 
 const { registerEditorHandlers, editorCapabilities } = require("./editor_handlers");
 
@@ -41,20 +43,12 @@ const connection = createConnection(ProposedFeatures.all);
 const documents = new TextDocuments(TextDocument);
 const documentStateCache = createDocumentStateCache(
   (document) => analyzeWithCompiler(document.uri, document.getText()),
-  (analysis) => {
-    const dependencies = new Set();
-    for (const occurrence of analysis && Array.isArray(analysis.occurrences)
-      ? analysis.occurrences
-      : []) {
-      const filePath = occurrence.definition && occurrence.definition.file_path;
-      if (filePath) {
-        dependencies.add(pathToFileURL(filePath).toString());
-      }
-    }
-    return dependencies;
-  }
+  compilerDependencyUris
 );
 const validationTimers = new Map();
+
+// The compiler checks each document against the unsaved text of the others.
+setSourceOverlayProvider((uri) => openDocumentOverlays(uri, documents.all()));
 
 setCompilerSchemaMismatchHandler(() => {
   documentStateCache.invalidateAll();
@@ -215,15 +209,15 @@ connection.onDefinition(async (params) => {
 });
 
 documents.onDidOpen((event) => {
-  scheduleValidation(documentStateCache.invalidate(event.document.uri));
+  scheduleValidation(invalidateDocument(event.document.uri));
 });
 
 documents.onDidChangeContent((event) => {
-  scheduleValidation(documentStateCache.invalidate(event.document.uri));
+  scheduleValidation(invalidateDocument(event.document.uri));
 });
 
 documents.onDidClose((event) => {
-  const affected = documentStateCache.invalidate(event.document.uri);
+  const affected = invalidateDocument(event.document.uri);
   affected.delete(event.document.uri);
   documentStateCache.deleteDocument(event.document.uri);
   clearValidationTimer(event.document.uri);
@@ -231,8 +225,37 @@ documents.onDidClose((event) => {
   scheduleValidation(affected);
 });
 
+// Saved, created, and deleted files reach the server as watched-file events.
+// A document whose analysis failed or is in flight may not know every file it
+// imports yet, so it is checked again too.
+connection.onDidChangeWatchedFiles((params) => {
+  const affected = documentStateCache.invalidateWhere(
+    (state) =>
+      !state || !state.compilerAnalysis || (state.compilerAnalysis.diagnostics || []).length > 0
+  );
+  for (const change of params.changes || []) {
+    for (const uri of invalidateDocument(change.uri)) {
+      affected.add(uri);
+    }
+  }
+  scheduleValidation(affected);
+});
+
 documents.listen(connection);
 connection.listen();
+
+// Dependencies are recorded by canonical file URI, which can differ from the
+// editor's URI for the same file.
+function invalidateDocument(uri) {
+  const affected = documentStateCache.invalidate(uri);
+  const canonical = canonicalFileUri(uri);
+  if (canonical !== uri) {
+    for (const affectedUri of documentStateCache.invalidate(canonical)) {
+      affected.add(affectedUri);
+    }
+  }
+  return affected;
+}
 
 function completionKind(kind) {
   switch (kind) {

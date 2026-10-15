@@ -205,3 +205,49 @@ test("dependency invalidation terminates when dependencies form a cycle", async 
   await cache.get(second);
   assert.deepEqual([...cache.invalidate(first.uri)].sort(), [first.uri, second.uri].sort());
 });
+
+test("dependency updates see the dependencies the previous analysis found", async () => {
+  const seen = [];
+  const cache = createDocumentStateCache(
+    async (document) => ({ dependencies: document.dependencies, failed: document.failed }),
+    (analysis, previous) => {
+      seen.push([...previous]);
+      return analysis.failed ? previous : analysis.dependencies;
+    }
+  );
+  const uri = "file:///workspace/main.au";
+  await cache.get({ uri, version: 1, dependencies: ["file:///workspace/util.au"] });
+  await cache.get({ uri, version: 2, dependencies: [], failed: true });
+  assert.deepEqual(seen, [[], ["file:///workspace/util.au"]]);
+  assert.deepEqual([...cache.invalidate("file:///workspace/util.au")].sort(), [
+    uri,
+    "file:///workspace/util.au"
+  ]);
+});
+
+test("predicate invalidation covers matching, in-flight, and dependent documents", async () => {
+  let release;
+  const cache = createDocumentStateCache(
+    (document) =>
+      document.pending
+        ? new Promise((resolve) => {
+            release = resolve;
+          })
+        : Promise.resolve({ failed: document.failed, dependencies: document.dependencies || [] }),
+    (analysis) => analysis.dependencies
+  );
+  const failed = { uri: "file:///failed.au", version: 1, failed: true };
+  const healthy = { uri: "file:///healthy.au", version: 1 };
+  const importer = { uri: "file:///importer.au", version: 1, dependencies: [failed.uri] };
+  const pending = { uri: "file:///pending.au", version: 1, pending: true };
+  await cache.get(failed);
+  await cache.get(healthy);
+  await cache.get(importer);
+  const inFlight = cache.get(pending);
+
+  const affected = cache.invalidateWhere((state) => !state || state.compilerAnalysis.failed);
+  assert.deepEqual([...affected].sort(), [failed.uri, importer.uri, pending.uri]);
+  release({ dependencies: [] });
+  await inFlight;
+  assert.deepEqual([...cache.invalidateWhere(() => false)], []);
+});

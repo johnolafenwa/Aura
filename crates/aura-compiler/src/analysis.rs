@@ -39,6 +39,9 @@ pub struct AnalysisOutput {
     pub diagnostics: Vec<AnalysisDiagnostic>,
     pub symbols: Vec<AnalysisSymbol>,
     pub occurrences: Vec<AnalysisOccurrence>,
+    /// Source files read for the modules the analyzed file imports, directly
+    /// or transitively, including when the file does not check.
+    pub dependencies: Vec<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -160,9 +163,18 @@ pub fn analyze_source(source: &str) -> AnalysisOutput {
 }
 
 pub fn analyze_path_source(path: &Path, source: &str) -> AnalysisOutput {
-    analyze_with_checker(source, |candidate| {
-        crate::check_path_with_source_without_lockfile(path, candidate)
-    })
+    let (mut output, reads) = crate::with_source_reads(|| {
+        analyze_with_checker(source, |candidate| {
+            crate::check_path_with_source_without_lockfile(path, candidate)
+        })
+    });
+    let analyzed = crate::absolutize(path);
+    output.dependencies = reads
+        .into_iter()
+        .filter(|read| *read != analyzed)
+        .map(|read| read.display().to_string())
+        .collect();
+    output
 }
 
 pub fn complete_path_source(
@@ -214,6 +226,7 @@ where
                     diagnostics: vec![analysis_diagnostic(&error)],
                     symbols: Vec::new(),
                     occurrences: Vec::new(),
+                    dependencies: Vec::new(),
                 }
             }
         }
@@ -224,6 +237,7 @@ where
                     diagnostics: vec![analysis_diagnostic(&error)],
                     symbols,
                     occurrences: Vec::new(),
+                    dependencies: Vec::new(),
                 },
                 Ok(program) => AnalysisBuilder::new(source, &program, symbols).build(),
             }
@@ -283,6 +297,7 @@ impl<'a> AnalysisBuilder<'a> {
                 diagnostics: Vec::new(),
                 symbols,
                 occurrences: Vec::new(),
+                dependencies: Vec::new(),
             },
         }
     }
@@ -2007,7 +2022,7 @@ impl<'a> AnalysisBuilder<'a> {
         };
         let mut sources = self.module_sources.borrow_mut();
         let lines = sources.entry(path).or_insert_with_key(|path| {
-            std::fs::read_to_string(path)
+            crate::read_source_file(Path::new(path))
                 .map(|source| source.lines().map(str::to_owned).collect())
                 .unwrap_or_default()
         });
@@ -2103,7 +2118,7 @@ impl<'a> AnalysisBuilder<'a> {
         if let Some(cached) = self.module_docs.borrow().get(&source_path) {
             return cached.clone();
         }
-        let doc = std::fs::read_to_string(&source_path)
+        let doc = crate::read_source_file(Path::new(&source_path))
             .ok()
             .and_then(|source| parser::parse(&source).ok())
             .and_then(|module| module.doc);

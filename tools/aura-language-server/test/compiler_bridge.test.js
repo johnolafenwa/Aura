@@ -16,15 +16,18 @@ const {
   editorRequestWithCompiler,
   compilerDefinitionAtPosition,
   compilerDefinitionToLspLocation,
+  compilerDependencyUris,
   compilerDiagnosticsToLsp,
   compilerHoverAtPosition,
   compilerSymbolsToLsp,
   findOccurrence,
   disposeCompilerService,
+  openDocumentOverlays,
   resolveCompilerCommand,
   runCommand,
   SUPPORTED_SEMANTIC_INTERFACE_SCHEMA_VERSION,
   setCompilerSchemaMismatchHandler,
+  setSourceOverlayProvider,
   setWorkspaceRoots,
   uriToPath
 } = require("../src/compiler_bridge");
@@ -6503,6 +6506,203 @@ test("compiler bridge maps UTF-8 compiler columns to UTF-16 editor positions", a
     completions?.some((item) => item.name === "contains"),
     "member completion after a non-ASCII string must see the `label.` receiver"
   );
+});
+
+test("compiler bridge derives dependency URIs and open-document overlays", () => {
+  const previous = new Set(["file:///workspace/old.au"]);
+  assert.deepEqual(
+    [...compilerDependencyUris({ diagnostics: [], dependencies: ["/workspace/lib.au"] }, previous)],
+    ["file:///workspace/lib.au"]
+  );
+  assert.deepEqual(
+    [
+      ...compilerDependencyUris(
+        { diagnostics: [{ code: "AU2001" }], dependencies: ["/workspace/lib.au"] },
+        previous
+      )
+    ].sort(),
+    ["file:///workspace/lib.au", "file:///workspace/old.au"],
+    "a failed analysis keeps the dependencies the last analysis found"
+  );
+  assert.deepEqual([...compilerDependencyUris(null, previous)], ["file:///workspace/old.au"]);
+  assert.deepEqual(
+    [
+      ...compilerDependencyUris({
+        occurrences: [
+          { definition: { file_path: "/workspace/older.au" } },
+          { definition: { file_path: null } },
+          { definition: null }
+        ]
+      })
+    ],
+    ["file:///workspace/older.au"],
+    "an older compiler without a dependency list falls back to definition paths"
+  );
+  assert.deepEqual([...compilerDependencyUris({})], []);
+
+  const documents = [
+    { uri: "file:///workspace/main.au", getText: () => "main" },
+    { uri: "file:///workspace/lib.au", getText: () => "lib" },
+    { uri: "untitled:Untitled-1", getText: () => "scratch" }
+  ];
+  assert.deepEqual(openDocumentOverlays("file:///workspace/main.au", documents), [
+    { path: "/workspace/lib.au", source: "lib" }
+  ]);
+});
+
+test("compiler bridge sends open-document overlays with semantic requests", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aura-bridge-overlays-"));
+  const originalEnvPath = process.env.AURA_LSP_AURA_PATH;
+  try {
+    const script = path.join(tempRoot, "echo.js");
+    fs.writeFileSync(
+      script,
+      [
+        "const readline = require('node:readline');",
+        "readline.createInterface({ input: process.stdin }).on('line', (line) => {",
+        "  const request = JSON.parse(line);",
+        "  const result = request.method === 'analyze'",
+        "    ? { diagnostics: [], symbols: [], occurrences: [], overlays: request.overlays || null }",
+        "    : { overlays: request.overlays || null };",
+        `  process.stdout.write(JSON.stringify({ id: request.id, semantic_interface_version: ${SUPPORTED_SEMANTIC_INTERFACE_SCHEMA_VERSION}, result }) + '\\n');`,
+        "});"
+      ].join("\n")
+    );
+    const fakeCompiler = path.join(tempRoot, "aura-echo");
+    fs.writeFileSync(fakeCompiler, `#!/bin/sh\nexec "${process.execPath}" "${script}" "$@"\n`);
+    fs.chmodSync(fakeCompiler, 0o755);
+    process.env.AURA_LSP_AURA_PATH = fakeCompiler;
+    setWorkspaceRoots([]);
+
+    const uri = "file:///workspace/main.au";
+    const overlays = [{ path: "/workspace/lib.au", source: "public def answer() -> str:\n" }];
+    const requested = [];
+    setSourceOverlayProvider((documentUri) => {
+      requested.push(documentUri);
+      return overlays;
+    });
+    assert.deepEqual((await analyzeWithCompiler(uri, "print(1)\n")).overlays, overlays);
+    assert.deepEqual((await completeWithCompiler(uri, "x.\n", 0, 2, ".")).overlays, overlays);
+    assert.deepEqual(
+      (await editorRequestWithCompiler("references", uri, "x\n", { line: 0, character: 0 })).overlays,
+      overlays
+    );
+    assert.equal((await editorRequestWithCompiler("format", uri, "x\n", {})).overlays, null);
+    assert.deepEqual(requested, [uri, uri, uri]);
+
+    setSourceOverlayProvider(() => []);
+    assert.equal((await analyzeWithCompiler(uri, "print(1)\n")).overlays, null);
+    setSourceOverlayProvider(null);
+    assert.equal((await analyzeWithCompiler(uri, "print(1)\n")).overlays, null);
+  } finally {
+    setSourceOverlayProvider(null);
+    disposeCompilerService();
+    if (originalEnvPath === undefined) {
+      delete process.env.AURA_LSP_AURA_PATH;
+    } else {
+      process.env.AURA_LSP_AURA_PATH = originalEnvPath;
+    }
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("compiler definitions map with the overlay text sent for a linked path", async () => {
+  const tempRoot = fs.realpathSync.native(
+    fs.mkdtempSync(path.join(os.tmpdir(), "aura-bridge-linked-overlay-"))
+  );
+  const originalEnvPath = process.env.AURA_LSP_AURA_PATH;
+  try {
+    fs.mkdirSync(path.join(tempRoot, "real"));
+    const realLibrary = path.join(tempRoot, "real", "lib.au");
+    fs.writeFileSync(realLibrary, "value = 1 + name\n");
+    fs.symlinkSync(path.join(tempRoot, "real"), path.join(tempRoot, "linked"));
+    const definition = { file_path: realLibrary, line: 0, start_character: 13, end_character: 17 };
+    const script = path.join(tempRoot, "definition.js");
+    fs.writeFileSync(
+      script,
+      [
+        "const readline = require('node:readline');",
+        "readline.createInterface({ input: process.stdin }).on('line', (line) => {",
+        "  const request = JSON.parse(line);",
+        `  const occurrences = [{ line: 0, start_character: 0, end_character: 4, hover: 'name', definition: ${JSON.stringify(definition)} }];`,
+        "  const result = { diagnostics: [], symbols: [], occurrences };",
+        `  process.stdout.write(JSON.stringify({ id: request.id, semantic_interface_version: ${SUPPORTED_SEMANTIC_INTERFACE_SCHEMA_VERSION}, result }) + '\\n');`,
+        "});"
+      ].join("\n")
+    );
+    const fakeCompiler = path.join(tempRoot, "aura-definition");
+    fs.writeFileSync(fakeCompiler, `#!/bin/sh\nexec "${process.execPath}" "${script}" "$@"\n`);
+    fs.chmodSync(fakeCompiler, 0o755);
+    process.env.AURA_LSP_AURA_PATH = fakeCompiler;
+    setWorkspaceRoots([]);
+    setSourceOverlayProvider(() => [
+      { path: path.join(tempRoot, "missing.au"), source: "" },
+      { path: path.join(tempRoot, "linked", "lib.au"), source: 'v = "😀" + name\n' }
+    ]);
+
+    const uri = "file:///workspace/main.au";
+    const analysis = await analyzeWithCompiler(uri, "name\n");
+    assert.deepEqual(compilerDefinitionAtPosition(uri, analysis, 0, 0), {
+      uri: `file://${realLibrary}`,
+      range: { start: { line: 0, character: 11 }, end: { line: 0, character: 15 } }
+    });
+  } finally {
+    setSourceOverlayProvider(null);
+    disposeCompilerService();
+    if (originalEnvPath === undefined) {
+      delete process.env.AURA_LSP_AURA_PATH;
+    } else {
+      process.env.AURA_LSP_AURA_PATH = originalEnvPath;
+    }
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("compiler analysis reads unsaved dependency buffers and maps their positions", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aura-lsp-overlay-analysis-"));
+  try {
+    const libraryPath = path.join(tempRoot, "library.au");
+    fs.writeFileSync(libraryPath, "public def answer(count: int64 = 1) -> int64:\n    return count\n");
+    const mainPath = path.join(tempRoot, "main.au");
+    const mainUri = `file://${mainPath}`;
+    const mainLines = ["from library import answer", "", "def main():", "    print(answer(count=2) + 1)", ""];
+    const mainSource = mainLines.join("\n");
+    fs.writeFileSync(mainPath, mainSource);
+    setWorkspaceRoots([repoRoot, tempRoot]);
+
+    const saved = await analyzeWithCompiler(mainUri, mainSource);
+    assert.deepEqual(saved.diagnostics, []);
+    const canonicalLibrary = path.join(fs.realpathSync.native(tempRoot), "library.au");
+    assert.deepEqual(saved.dependencies, [canonicalLibrary]);
+
+    const unsavedLines = [
+      'public def answer(label: str = "😀", count: int64 = 1) -> int64:',
+      "    return count",
+      ""
+    ];
+    setSourceOverlayProvider(() => [{ path: libraryPath, source: unsavedLines.join("\n") }]);
+    const overlaid = await analyzeWithCompiler(mainUri, mainSource);
+    assert.deepEqual(overlaid.diagnostics, []);
+    const countUse = mainLines[3].indexOf("count");
+    const definition = compilerDefinitionAtPosition(mainUri, overlaid, 3, countUse);
+    assert.deepEqual(definition, {
+      uri: `file://${canonicalLibrary}`,
+      range: {
+        start: { line: 0, character: unsavedLines[0].indexOf("count") },
+        end: { line: 0, character: unsavedLines[0].indexOf("count") + "count".length }
+      }
+    });
+
+    setSourceOverlayProvider(() => [
+      { path: libraryPath, source: 'public def answer(count: int64 = 1) -> str:\n    return "x"\n' }
+    ]);
+    const failing = await analyzeWithCompiler(mainUri, mainSource);
+    assert.equal(failing.diagnostics.length, 1);
+    assert.deepEqual(failing.dependencies, [canonicalLibrary]);
+  } finally {
+    setSourceOverlayProvider(null);
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
 });
 
 test("compiler bridge maps imported definition columns with the imported file text", () => {

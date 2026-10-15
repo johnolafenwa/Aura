@@ -11,6 +11,7 @@ let workspaceRoots = [];
 let compilerService = null;
 let compilerServiceKey = null;
 let compilerSchemaMismatchHandler = null;
+let sourceOverlayProvider = null;
 const COMPILER_REQUEST_TIMEOUT_MS = 15_000;
 const COMPILER_RESPONSE_LIMIT_BYTES = 16 * 1024 * 1024;
 // The compiler owns the canonical identity; this transport declares the one
@@ -22,6 +23,28 @@ const analyzedSources = new WeakMap();
 
 function setCompilerSchemaMismatchHandler(handler) {
   compilerSchemaMismatchHandler = typeof handler === "function" ? handler : null;
+}
+
+// The provider returns `[{ path, source }]` for the open documents other than
+// the requested one. The compiler reads those buffers instead of the files.
+function setSourceOverlayProvider(provider) {
+  sourceOverlayProvider = typeof provider === "function" ? provider : null;
+}
+
+function withSourceOverlays(uri, params) {
+  const overlays = sourceOverlayProvider ? sourceOverlayProvider(uri) : [];
+  return overlays.length > 0 ? { ...params, overlays } : params;
+}
+
+function openDocumentOverlays(documentUri, documents) {
+  const overlays = [];
+  for (const document of documents) {
+    const overlayPath = document.uri !== documentUri && uriToPath(document.uri);
+    if (overlayPath) {
+      overlays.push({ path: overlayPath, source: document.getText() });
+    }
+  }
+  return overlays;
 }
 
 function notifyCompilerSchemaMismatch(details) {
@@ -40,12 +63,10 @@ function setWorkspaceRoots(roots) {
 
 async function analyzeWithCompiler(uri, source) {
   try {
-    const analysis = await requestCompiler("analyze", {
-      path: uriToPath(uri) || uri,
-      source
-    });
+    const params = withSourceOverlays(uri, { path: uriToPath(uri) || uri, source });
+    const analysis = await requestCompiler("analyze", params);
     if (analysis && typeof analysis === "object") {
-      analyzedSources.set(analysis, source);
+      analyzedSources.set(analysis, { source, overlays: params.overlays || [] });
     }
     return analysis;
   } catch (error) {
@@ -65,13 +86,13 @@ async function completeWithCompiler(
   try {
     return await requestCompiler(
       "complete",
-      {
+      withSourceOverlays(uri, {
         path: uriToPath(uri) || uri,
         source,
         line,
         character: createPositionMapper(source).toCompilerColumn(line, character),
         trigger: triggerCharacter || null
-      },
+      }),
       cancellationToken
     );
   } catch (error) {
@@ -82,7 +103,13 @@ async function completeWithCompiler(
 
 async function editorRequestWithCompiler(method, uri, source, position, cancellationToken) {
   try {
-    return await requestCompiler(method, { path: uriToPath(uri) || uri, source, ...position }, cancellationToken);
+    const params = { path: uriToPath(uri) || uri, source, ...position };
+    // Formatting reads only the buffer, so it needs no other files.
+    return await requestCompiler(
+      method,
+      method === "format" ? params : withSourceOverlays(uri, params),
+      cancellationToken
+    );
   } catch (error) {
     reportCompilerFailure(method, error);
     return null;
@@ -275,7 +302,47 @@ function reportCompilerFailure(operation, error) {
 }
 
 function analysisPositions(analysis) {
-  return createPositionMapper(analyzedSources.get(analysis));
+  const analyzed = analyzedSources.get(analysis);
+  return createPositionMapper(analyzed && analyzed.source);
+}
+
+// The text the compiler read for `filePath`: an overlay it was sent, or the
+// file on disk. Compiler paths are canonical, so compare resolved paths too.
+function analyzedFileSource(analysis, filePath) {
+  const analyzed = analyzedSources.get(analysis);
+  const overlays = analyzed ? analyzed.overlays : [];
+  const overlay =
+    overlays.find((candidate) => candidate.path === filePath) ||
+    overlays.find((candidate) => realPath(candidate.path) === filePath);
+  return overlay ? overlay.source : readSourceFile(filePath);
+}
+
+function realPath(filePath) {
+  try {
+    return fs.realpathSync.native(filePath);
+  } catch (_error) {
+    return null;
+  }
+}
+
+// The file URIs an analysis read, as dependency keys. A failed analysis may
+// stop before it reads every import, so it keeps the previous dependencies.
+function compilerDependencyUris(analysis, previous = new Set()) {
+  const dependencies = new Set();
+  const paths = Array.isArray(analysis && analysis.dependencies)
+    ? analysis.dependencies
+    : ((analysis && analysis.occurrences) || [])
+        .map((occurrence) => occurrence.definition && occurrence.definition.file_path)
+        .filter(Boolean);
+  for (const filePath of paths) {
+    dependencies.add(pathToFileURL(filePath).toString());
+  }
+  if (!analysis || (analysis.diagnostics || []).length > 0) {
+    for (const dependency of previous) {
+      dependencies.add(dependency);
+    }
+  }
+  return dependencies;
 }
 
 function findOccurrence(analysis, line, character) {
@@ -364,8 +431,13 @@ function readSourceFile(filePath) {
 }
 
 // A definition without a file path is in the analyzed document. Another
-// file's columns convert with that file's text on disk.
-function compilerDefinitionToLspLocation(documentUri, definition, documentPositions) {
+// file's columns convert with that file's text.
+function compilerDefinitionToLspLocation(
+  documentUri,
+  definition,
+  documentPositions = createPositionMapper(null),
+  fileSource = readSourceFile
+) {
   if (!definition) {
     return null;
   }
@@ -374,8 +446,8 @@ function compilerDefinitionToLspLocation(documentUri, definition, documentPositi
     ? pathToFileURL(definition.file_path).toString()
     : documentUri;
   const positions = definition.file_path
-    ? createPositionMapper(readSourceFile(definition.file_path))
-    : documentPositions || createPositionMapper(null);
+    ? createPositionMapper(fileSource(definition.file_path))
+    : documentPositions;
   return {
     uri,
     range: positions.range(definition.line, definition.start_character, definition.end_character)
@@ -406,7 +478,8 @@ function compilerDefinitionAtPosition(documentUri, analysis, line, character) {
   return compilerDefinitionToLspLocation(
     documentUri,
     occurrence.definition,
-    analysisPositions(analysis)
+    analysisPositions(analysis),
+    (filePath) => analyzedFileSource(analysis, filePath)
   );
 }
 
@@ -522,15 +595,18 @@ module.exports = {
   compilerCompletionToLsp,
   compilerDefinitionAtPosition,
   compilerDefinitionToLspLocation,
+  compilerDependencyUris,
   compilerDiagnosticsToLsp,
   compilerHoverAtPosition,
   compilerSymbolsToLsp,
   findOccurrence,
   disposeCompilerService,
+  openDocumentOverlays,
   resolveCompilerCommand,
   runCommand,
   SUPPORTED_SEMANTIC_INTERFACE_SCHEMA_VERSION,
   setCompilerSchemaMismatchHandler,
+  setSourceOverlayProvider,
   setWorkspaceRoots,
   uriToPath
 };
