@@ -933,3 +933,95 @@ test(
     ]);
   }
 );
+
+const workspaceRoot = path.resolve(__dirname, "../../..");
+const workspaceCompiler = path.join(
+  workspaceRoot,
+  "target",
+  "debug",
+  process.platform === "win32" ? "aura.exe" : "aura"
+);
+
+async function startWorkspaceServer(t, folders) {
+  const serverPath = process.env.AURA_EXTENSION_SERVER_PATH
+    ? path.resolve(process.env.AURA_EXTENSION_SERVER_PATH)
+    : path.resolve(__dirname, "..", "dist", "server.js");
+  assert.equal(fs.existsSync(serverPath), true, `language server bundle not found: ${serverPath}`);
+  const client = startLanguageServer(serverPath, {
+    AURA_LSP_AURA_PATH: process.env.AURA_LSP_AURA_PATH || workspaceCompiler
+  });
+  t.after(() => client.dispose());
+  const initialize = await client.request("initialize", {
+    processId: null,
+    rootUri: `file://${folders[0]}`,
+    capabilities: {},
+    workspaceFolders: folders.map((folder) => ({ uri: `file://${folder}`, name: path.basename(folder) }))
+  });
+  assert.equal(initialize.error, undefined, JSON.stringify(initialize.error));
+  client.notify("initialized", {});
+  return client;
+}
+
+function publishedDiagnostics(client, uri, predicate = () => true) {
+  return client
+    .waitForNotification(
+      "textDocument/publishDiagnostics",
+      (message) => message.params?.uri === uri && predicate(message.params.diagnostics)
+    )
+    .then((message) => message.params.diagnostics);
+}
+
+test("bundled language server maps Unicode positions and selects declared names", async (t) => {
+  const client = await startWorkspaceServer(t, [workspaceRoot]);
+  const lines = [
+    "def helper() -> int64:",
+    "    return 1",
+    "",
+    "def main():",
+    "    value = helper()",
+    '    print(len("😀") + value)',
+    ""
+  ];
+  const uri = `file://${path.join(workspaceRoot, "unicode-protocol.au")}`;
+  const diagnostics = publishedDiagnostics(client, uri);
+  client.notify("textDocument/didOpen", {
+    textDocument: { uri, languageId: "aura", version: 1, text: lines.join("\n") }
+  });
+  assert.deepEqual(await diagnostics, []);
+
+  assert.equal(lines[5].indexOf("value"), 22);
+  for (const character of [22, 26]) {
+    const hover = await client.request("textDocument/hover", {
+      textDocument: { uri },
+      position: { line: 5, character }
+    });
+    assert.equal(hover.result?.contents?.value, "```aura\nbinding value: int64\n```");
+    assert.deepEqual(hover.result.range, {
+      start: { line: 5, character: 22 },
+      end: { line: 5, character: 27 }
+    });
+    const definition = await client.request("textDocument/definition", {
+      textDocument: { uri },
+      position: { line: 5, character }
+    });
+    assert.deepEqual(definition.result?.range, {
+      start: { line: 4, character: 4 },
+      end: { line: 4, character: 9 }
+    });
+  }
+
+  const helperDefinition = await client.request("textDocument/definition", {
+    textDocument: { uri },
+    position: { line: 4, character: lines[4].indexOf("helper") }
+  });
+  const helperName = {
+    start: { line: 0, character: 4 },
+    end: { line: 0, character: 10 }
+  };
+  assert.deepEqual(helperDefinition.result?.range, helperName);
+  const symbols = await client.request("textDocument/documentSymbol", {
+    textDocument: { uri }
+  });
+  const helper = symbols.result.find((symbol) => symbol.name === "helper");
+  assert.deepEqual(helper.selectionRange, helperName);
+});

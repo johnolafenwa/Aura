@@ -6709,6 +6709,28 @@ fn analysis_builtin_completion_and_statement_helpers_cover_remaining_branches() 
         sanitize_member_completion_source("def main():\n    value", 1, 10),
         "def main():\n    value"
     );
+    // Completion positions are UTF-8 byte columns, like every analysis span.
+    let unicode_member = "    total = \"😀\" + label.x.y";
+    let after_label_dot = unicode_member.find("label.").unwrap() + "label.".len();
+    assert_eq!(
+        sanitize_member_completion_source(
+            &format!("def main():\n{unicode_member}"),
+            1,
+            after_label_dot
+        ),
+        "def main():\n    total = \"😀\" + labelx.y"
+    );
+    let unicode_capture = "    callback = (\"😀\", lambda [x])";
+    let after_capture_open = unicode_capture.find('[').unwrap() + 1;
+    assert_eq!(
+        lambda_capture_opener_before_position(
+            &format!("def main():\n{unicode_capture}"),
+            1,
+            after_capture_open
+        )
+        .map(|opener| (opener.line, opener.character)),
+        Some((1, unicode_capture.chars().position(|ch| ch == '[').unwrap()))
+    );
     assert_eq!(
         replace_dangling_member_stmt_with_recovery_stmt("def main():\n    value.", 20),
         "def main():\n    value."

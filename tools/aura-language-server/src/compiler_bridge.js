@@ -5,6 +5,7 @@ const path = require("node:path");
 const { pathToFileURL } = require("node:url");
 const { spawn } = require("node:child_process");
 const { uriToPath } = require("./uri");
+const { createPositionMapper } = require("./positions");
 
 let workspaceRoots = [];
 let compilerService = null;
@@ -15,6 +16,9 @@ const COMPILER_RESPONSE_LIMIT_BYTES = 16 * 1024 * 1024;
 // The compiler owns the canonical identity; this transport declares the one
 // compiler interface it can safely decode.
 const SUPPORTED_SEMANTIC_INTERFACE_SCHEMA_VERSION = 19;
+// The source text each compiler analysis describes, so that its UTF-8 byte
+// columns convert to the UTF-16 positions of that same text.
+const analyzedSources = new WeakMap();
 
 function setCompilerSchemaMismatchHandler(handler) {
   compilerSchemaMismatchHandler = typeof handler === "function" ? handler : null;
@@ -36,10 +40,14 @@ function setWorkspaceRoots(roots) {
 
 async function analyzeWithCompiler(uri, source) {
   try {
-    return await requestCompiler("analyze", {
+    const analysis = await requestCompiler("analyze", {
       path: uriToPath(uri) || uri,
       source
     });
+    if (analysis && typeof analysis === "object") {
+      analyzedSources.set(analysis, source);
+    }
+    return analysis;
   } catch (error) {
     reportCompilerFailure("analysis", error);
     return null;
@@ -61,7 +69,7 @@ async function completeWithCompiler(
         path: uriToPath(uri) || uri,
         source,
         line,
-        character,
+        character: createPositionMapper(source).toCompilerColumn(line, character),
         trigger: triggerCharacter || null
       },
       cancellationToken
@@ -266,17 +274,22 @@ function reportCompilerFailure(operation, error) {
   );
 }
 
+function analysisPositions(analysis) {
+  return createPositionMapper(analyzedSources.get(analysis));
+}
+
 function findOccurrence(analysis, line, character) {
   if (!analysis || !Array.isArray(analysis.occurrences)) {
     return null;
   }
 
+  const column = analysisPositions(analysis).toCompilerColumn(line, character);
   return (
     analysis.occurrences.find(
       (occurrence) =>
         occurrence.line === line &&
-        character >= occurrence.start_character &&
-        character < occurrence.end_character
+        column >= occurrence.start_character &&
+        column < occurrence.end_character
     ) || null
   );
 }
@@ -294,13 +307,15 @@ function compilerCompletionToLsp(item, kind) {
 }
 
 function compilerDiagnosticsToLsp(analysis, documentUri) {
+  const positions = analysisPositions(analysis);
   return (analysis.diagnostics || []).map((diagnostic) => {
     const result = {
       severity: diagnostic.severity,
-      range: {
-        start: { line: diagnostic.line, character: diagnostic.start_character },
-        end: { line: diagnostic.line, character: diagnostic.end_character }
-      },
+      range: positions.range(
+        diagnostic.line,
+        diagnostic.start_character,
+        diagnostic.end_character
+      ),
       message: diagnostic.message,
       source: "aura-compiler"
     };
@@ -312,16 +327,11 @@ function compilerDiagnosticsToLsp(analysis, documentUri) {
       result.relatedInformation = diagnostic.secondary_spans.map((secondary) => ({
         location: {
           uri: documentUri,
-          range: {
-            start: {
-              line: secondary.line,
-              character: secondary.start_character
-            },
-            end: {
-              line: secondary.line,
-              character: secondary.end_character
-            }
-          }
+          range: positions.range(
+            secondary.line,
+            secondary.start_character,
+            secondary.end_character
+          )
         },
         message: secondary.label
       }));
@@ -341,10 +351,21 @@ function compilerDiagnosticsToLsp(analysis, documentUri) {
 }
 
 function compilerSymbolsToLsp(analysis) {
-  return (analysis.symbols || []).map(toDocumentSymbol);
+  const positions = analysisPositions(analysis);
+  return (analysis.symbols || []).map((symbol) => toDocumentSymbol(symbol, positions));
 }
 
-function compilerDefinitionToLspLocation(documentUri, definition) {
+function readSourceFile(filePath) {
+  try {
+    return fs.readFileSync(filePath, "utf8");
+  } catch (_error) {
+    return null;
+  }
+}
+
+// A definition without a file path is in the analyzed document. Another
+// file's columns convert with that file's text on disk.
+function compilerDefinitionToLspLocation(documentUri, definition, documentPositions) {
   if (!definition) {
     return null;
   }
@@ -352,12 +373,12 @@ function compilerDefinitionToLspLocation(documentUri, definition) {
   const uri = definition.file_path
     ? pathToFileURL(definition.file_path).toString()
     : documentUri;
+  const positions = definition.file_path
+    ? createPositionMapper(readSourceFile(definition.file_path))
+    : documentPositions || createPositionMapper(null);
   return {
     uri,
-    range: {
-      start: { line: definition.line, character: definition.start_character },
-      end: { line: definition.line, character: definition.end_character }
-    }
+    range: positions.range(definition.line, definition.start_character, definition.end_character)
   };
 }
 
@@ -369,16 +390,11 @@ function compilerHoverAtPosition(analysis, line, character) {
 
   return {
     value: occurrence.hover,
-    range: {
-      start: {
-        line: occurrence.line,
-        character: occurrence.start_character
-      },
-      end: {
-        line: occurrence.line,
-        character: occurrence.end_character
-      }
-    }
+    range: analysisPositions(analysis).range(
+      occurrence.line,
+      occurrence.start_character,
+      occurrence.end_character
+    )
   };
 }
 
@@ -387,14 +403,16 @@ function compilerDefinitionAtPosition(documentUri, analysis, line, character) {
   if (!occurrence) {
     return null;
   }
-  return compilerDefinitionToLspLocation(documentUri, occurrence.definition);
+  return compilerDefinitionToLspLocation(
+    documentUri,
+    occurrence.definition,
+    analysisPositions(analysis)
+  );
 }
 
-function toDocumentSymbol(symbol) {
-  const range = {
-    start: { line: symbol.line, character: symbol.start_character || 0 },
-    end: { line: symbol.line, character: symbol.end_character || symbol.start_character || 0 }
-  };
+function toDocumentSymbol(symbol, positions) {
+  const start = symbol.start_character || 0;
+  const range = positions.range(symbol.line, start, symbol.end_character || start);
 
   return {
     name: symbol.name,
@@ -402,7 +420,7 @@ function toDocumentSymbol(symbol) {
     kind: symbolKind(symbol.kind),
     range,
     selectionRange: range,
-    children: (symbol.children || []).map(toDocumentSymbol)
+    children: (symbol.children || []).map((child) => toDocumentSymbol(child, positions))
   };
 }
 

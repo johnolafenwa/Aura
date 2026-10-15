@@ -8106,12 +8106,12 @@ fn lambda_capture_opener_before_position(
     let mut delimiters = Vec::<(char, Option<LambdaCaptureOpener>)>::new();
     let mut pending_lambda = false;
     for (line_index, text) in source_lines.iter().enumerate().take(line + 1) {
-        let limit = if line_index == line {
-            character
-        } else {
-            text.chars().count()
-        };
-        let chars = text.chars().take(limit).collect::<Vec<_>>();
+        // `character` is a UTF-8 byte column; scan the characters before it.
+        let chars = text
+            .char_indices()
+            .take_while(|(offset, _)| line_index < line || *offset < character)
+            .map(|(_, ch)| ch)
+            .collect::<Vec<_>>();
         let mut index = 0usize;
         while index < chars.len() {
             let ch = chars[index];
@@ -8355,12 +8355,14 @@ fn sanitize_member_completion_source(source: &str, line: usize, character: usize
     let Some(line_text) = lines.get_mut(line) else {
         return source.to_string();
     };
+    // `character` is a UTF-8 byte column; use the boundary at or before it.
     let byte_index = line_text
         .char_indices()
         .map(|(index, _)| index)
         .chain(std::iter::once(line_text.len()))
-        .nth(character)
-        .unwrap_or(line_text.len());
+        .take_while(|index| *index <= character)
+        .last()
+        .unwrap_or_default();
     if byte_index == 0 || byte_index > line_text.len() {
         return source.to_string();
     }

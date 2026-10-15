@@ -6447,3 +6447,90 @@ test("compiler definitions and document symbols select declared names", async ()
     range: nameRange(6, "norm")
   });
 });
+
+test("compiler bridge maps UTF-8 compiler columns to UTF-16 editor positions", async () => {
+  setWorkspaceRoots([repoRoot]);
+  const uri = `file://${path.join(repoRoot, "unicode-positions.au")}`;
+  const lines = ["def main():", "    value = 1", '    print(len("😀") + value)', ""];
+  const analysis = await analyzeWithCompiler(uri, lines.join("\n"));
+  assert.ok(analysis);
+  assert.deepEqual(analysis.diagnostics, []);
+
+  const valueStart = lines[2].indexOf("value");
+  assert.equal(valueStart, 22);
+  const valueRange = {
+    start: { line: 2, character: 22 },
+    end: { line: 2, character: 27 }
+  };
+  for (const character of [22, 26]) {
+    const hover = compilerHoverAtPosition(analysis, 2, character);
+    assert.equal(hover?.value, "```aura\nbinding value: int64\n```");
+    assert.deepEqual(hover.range, valueRange);
+    assert.deepEqual(compilerDefinitionAtPosition(uri, analysis, 2, character), {
+      uri,
+      range: { start: { line: 1, character: 4 }, end: { line: 1, character: 9 } }
+    });
+  }
+  assert.notEqual(
+    compilerHoverAtPosition(analysis, 2, 27)?.value,
+    "```aura\nbinding value: int64\n```",
+    "the position after `value` must not resolve to `value`"
+  );
+
+  const diagnosticLines = [
+    "def main():",
+    '    total: int64 = len("😀") + missing',
+    "    print(total)",
+    ""
+  ];
+  const diagnosticAnalysis = await analyzeWithCompiler(uri, diagnosticLines.join("\n"));
+  const [diagnostic] = compilerDiagnosticsToLsp(diagnosticAnalysis, uri);
+  assert.equal(diagnostic.code, "AU2001");
+  assert.deepEqual(diagnostic.range, {
+    start: { line: 1, character: diagnosticLines[1].indexOf("missing") },
+    end: { line: 1, character: diagnosticLines[1].indexOf("missing") + 1 }
+  });
+
+  const completionLines = ["def main():", '    label = "😀"', '    print(len("😀"), label.)', ""];
+  const completions = await completeWithCompiler(
+    uri,
+    completionLines.join("\n"),
+    2,
+    completionLines[2].indexOf(".") + 1,
+    "."
+  );
+  assert.ok(
+    completions?.some((item) => item.name === "contains"),
+    "member completion after a non-ASCII string must see the `label.` receiver"
+  );
+});
+
+test("compiler bridge maps imported definition columns with the imported file text", () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aura-lsp-unicode-definition-"));
+  try {
+    const libraryPath = path.join(tempRoot, "library.au");
+    fs.writeFileSync(libraryPath, 'NAMES: list[str] = ["é", "😀"]\nlabel = "😀"; value = 1\n');
+    const definition = compilerDefinitionToLspLocation("file:///main.au", {
+      file_path: libraryPath,
+      line: 1,
+      start_character: 16,
+      end_character: 21
+    });
+    assert.deepEqual(definition, {
+      uri: `file://${libraryPath}`,
+      range: { start: { line: 1, character: 14 }, end: { line: 1, character: 19 } }
+    });
+    const missing = compilerDefinitionToLspLocation("file:///main.au", {
+      file_path: path.join(tempRoot, "missing.au"),
+      line: 0,
+      start_character: 3,
+      end_character: 5
+    });
+    assert.deepEqual(missing.range, {
+      start: { line: 0, character: 3 },
+      end: { line: 0, character: 5 }
+    });
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
