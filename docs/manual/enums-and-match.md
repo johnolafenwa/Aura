@@ -524,7 +524,7 @@ def main():
 This prints `box`.
 
 - An irrefutable class pattern covers every specialization it matches. A later arm for one of them is unreachable and reports `AU2013`.
-- A field the pattern tests must have one type in every specialization it matches. A field such as `label: str` in `Tagged[T]` qualifies. `Box(value=v)` over `Box[int64] | Box[str]` is rejected with `AU2040`, because `value` is an `int64` in one member and a `str` in the other.
+- A field the pattern tests must have one type in every specialization it matches. A field declared as `label: str` has one type in every specialization, so it qualifies. `Box(value=v)` over `Box[int64] | Box[str]` is rejected with `AU2040`, because `value` is an `int64` in one member and a `str` in the other.
 - A `_` subpattern tests nothing, so `Box(value=_)` is accepted.
 
 To test the fields of one specialization, select it with a type pattern:
