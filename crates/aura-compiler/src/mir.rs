@@ -14349,6 +14349,11 @@ impl<'a> Lowerer<'a> {
                 let ExprKind::Int(index) = index.kind else {
                     return None;
                 };
+                // A literal index is a tuple position here. A list element
+                // or dictionary entry is a selection, not a fixed projection.
+                if !matches!(self.infer_expr_type(object), Some(Type::Tuple(_))) {
+                    return None;
+                }
                 let index = usize::try_from(index).ok()?;
                 let (call, projection) = self.returned_view_call_root(object)?;
                 Some((

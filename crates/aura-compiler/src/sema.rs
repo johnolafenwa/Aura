@@ -4014,6 +4014,15 @@ impl<'a> FunctionChecker<'a> {
                             "bind the returned view with `view` before taking a slice view of it",
                         ));
                     }
+                    if returned_kind.is_some()
+                        && self.selects_returned_view_element(view_source, locals)?
+                    {
+                        return Err(Diagnostic::coded_at(
+                            "AU3004",
+                            view_source.span,
+                            "bind the returned view with `view` before taking an element view of it",
+                        ));
+                    }
                     if let Some(returned_kind) = returned_kind {
                         let requested = if view.mutable {
                             crate::ast::ViewKind::Mutable
@@ -6051,6 +6060,29 @@ impl<'a> FunctionChecker<'a> {
                 }
                 Ok((object_ty, member_ty))
             }
+        }
+    }
+
+    /// Whether a place rooted at a returned-view call selects a list element
+    /// or dictionary entry. Fields and tuple positions are fixed projections
+    /// of the returned view; an element selection needs a bound view first.
+    fn selects_returned_view_element(
+        &self,
+        expr: &Expr,
+        locals: &HashMap<String, LocalBinding>,
+    ) -> Result<bool> {
+        match &grouped_expr(expr).kind {
+            ExprKind::Member { object, .. } => self.selects_returned_view_element(object, locals),
+            ExprKind::Index { object, .. } => {
+                if !matches!(
+                    self.type_of_expr_without_move_state(object, locals, None)?,
+                    Type::Tuple(_)
+                ) {
+                    return Ok(true);
+                }
+                self.selects_returned_view_element(object, locals)
+            }
+            _ => Ok(false),
         }
     }
 

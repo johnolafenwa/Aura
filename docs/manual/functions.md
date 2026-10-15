@@ -253,6 +253,7 @@ At a call site, these rules apply:
 
 - The origin argument must be an addressable place.
 - A returned view may initialize a matching local `view` or `view mut` binding.
+- To view a list element or dictionary entry of a returned view, bind the returned view with `view` first. `view first = rows_of(grid)[0]` reports `AU3004`.
 - A shared result may instead be read directly within one containing expression.
 - A mutable result may instead be reborrowed immediately into a `mut` call.
 - A returned view cannot initialize an ordinary owned binding or be stored inside an aggregate.
