@@ -15915,7 +15915,7 @@ impl<'a> Lowerer<'a> {
                 }
             };
             let binding;
-            let element_pattern = match element {
+            let (element_pattern, element_options) = match element {
                 Pattern::Rest(crate::ast::RestPattern {
                     name: Some(name),
                     span,
@@ -15924,9 +15924,18 @@ impl<'a> Lowerer<'a> {
                         name: name.clone(),
                         span: *span,
                     });
-                    &binding
+                    // The slice is a new list the arm owns, so it binds by
+                    // value even when a type arm elsewhere in the pattern
+                    // binds its payloads through views.
+                    (
+                        &binding,
+                        PatternLoweringOptions {
+                            typed_payload_views: false,
+                            ..options
+                        },
+                    )
                 }
-                element => element,
+                element => (element, options),
             };
             let next = self.new_block("match_sequence_element");
             let child_failure = self.pattern_failure_cleanup(failure_block, first_loan);
@@ -15936,7 +15945,7 @@ impl<'a> Lowerer<'a> {
                 Some(&value_ty),
                 next,
                 child_failure,
-                options,
+                element_options,
             );
             self.switch_to(next);
         }

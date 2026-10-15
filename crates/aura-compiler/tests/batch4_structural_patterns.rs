@@ -180,6 +180,14 @@ fn structural_patterns_run_through_rest_slices_and_owned_classes() {
 }
 
 #[test]
+fn sequence_rest_beside_a_type_arm_binds_an_owned_list() {
+    runs(
+        "def consume(items: own list[int64 | None]) -> int64:\n    return len(items)\n\ndef main():\n    values: list[int64 | None] = [1, 2, None]\n    match values:\n        case [int64 as first, *rest]:\n            rest.append(first)\n            print(rest)\n            print(consume(rest))\n        case _:\n            print(\"other\")\n    print(values)\n",
+        "[2, None, 1]\n3\n[1, 2, None]\n",
+    );
+}
+
+#[test]
 fn structural_pattern_bindings_reject_shadowing_in_every_position() {
     rejects(
         "def f(rest: int64):\n    match (1, 2, 3):\n        case (a, *rest):\n            print(a)\n\ndef main():\n    f(1)\n",

@@ -468,7 +468,7 @@ def main():
 - Without a rest element, the list length must equal the element count.
 - With a rest element, the length must be at least the fixed element count.
 - Element bindings are shared borrows of the list elements, as in any bare `match`.
-- A named rest such as `*more` binds a new owned `list` slice of the remaining elements. A list of `Rng` values cannot be sliced, so this is rejected for them.
+- A named rest such as `*more` binds a new owned `list` slice of the remaining elements. The arm can change it, return it, or pass it to an `own` parameter, even beside a type arm such as `[int64 as first, *more]`. A list of `Rng` values cannot be sliced, so this is rejected for them.
 - `match mut` and `match own` reject sequence patterns with `AU2041`.
 
 A sequence match needs a final `case _:`, or arms that cover every length. Irrefutable arms for lengths `0` through `k - 1` plus an irrefutable arm with `k` fixed elements and a rest cover every list. `[]` and `[_, *_]` together are exhaustive.
