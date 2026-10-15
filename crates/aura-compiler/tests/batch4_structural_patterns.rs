@@ -332,6 +332,55 @@ fn refutable_class_arms_over_unions_track_reachability() {
 }
 
 #[test]
+fn class_patterns_match_every_generic_specialization_in_a_union() {
+    let tagged = "class Tagged[T]:\n    label: str\n    value: T\n\nclass Pair[A, B]:\n    first: A\n    second: B\n\n";
+    let with_tagged = |body: &str| with_classes(&format!("{tagged}{body}"));
+    rejects(
+        &with_classes("def f(item: Box[int64] | Box[str]) -> str:\n    match item:\n        case Box():\n            return \"box\"\n        case _:\n            return \"other\"\n\ndef main():\n    print(f(Box(value=1)))\n"),
+        "AU2013",
+        "unreachable type arm",
+    );
+    rejects(
+        &with_classes("def f(item: Box[int64] | Box[str]) -> int64:\n    return match item:\n        case Box(): 1\n        case Box[int64] as number: number.value\n\ndef main():\n    print(f(Box(value=1)))\n"),
+        "AU2013",
+        "unreachable type arm",
+    );
+    rejects(
+        &with_classes("def f(item: Box[int64] | Box[str]):\n    match item:\n        case Box(value=value):\n            print(value)\n\ndef main():\n    f(Box(value=1))\n"),
+        "AU2040",
+        "class pattern `Box` matches `Box[int64]` and `Box[str]`, but field `value` has type `int64` in one and `str` in the other",
+    );
+    rejects(
+        &with_tagged("def f(item: Tagged[int64] | Tagged[bool]) -> int64:\n    return match item:\n        case Tagged(label=\"a\"): 1\n        case Tagged(label=\"a\"): 2\n        case _: 0\n\ndef main():\n    print(f(Tagged(label=\"a\", value=1)))\n"),
+        "AU2013",
+        "unreachable type arm",
+    );
+    rejects(
+        &with_tagged("def f(item: Tagged[int64] | Tagged[bool] | None) -> int64:\n    return match item:\n        case Tagged(label=\"a\"): 1\n        case None: 0\n\ndef main():\n    print(f(None))\n"),
+        "AU2013",
+        "match does not cover Tagged[bool], Tagged[int64]",
+    );
+    accepts(&with_classes("def f(item: Box[int64] | Box[str] | None) -> int64:\n    return match item:\n        case Box(value=_): 1\n        case None: 0\n\ndef main():\n    print(f(None))\n"));
+    accepts(&with_classes("def f(item: Box[int64] | Box[str]) -> int64:\n    return match item:\n        case Box[int64] as number: number.value\n        case Box(): 0\n\ndef main():\n    print(f(Box(value=1)))\n"));
+    runs(
+        &with_tagged("def first(pair: Pair[int64, str] | Pair[int64, bool]) -> int64:\n    return match pair:\n        case Pair(first=0): -1\n        case Pair(first=value): value\n\ndef label(item: Tagged[int64] | Tagged[bool]) -> str:\n    return match item:\n        case Tagged(label=text) if text == \"skip\": \"skipped\"\n        case Tagged(label=text): text.clone()\n\ndef main():\n    print(first(Pair(first=4, second=\"a\")))\n    print(first(Pair(first=0, second=true)))\n    print(first(Pair(first=7, second=false)))\n    print(label(Tagged(label=\"skip\", value=1)))\n    print(label(Tagged(label=\"keep\", value=true)))\n"),
+        "4\n-1\n7\nskipped\nkeep\n",
+    );
+}
+
+#[test]
+fn class_or_patterns_over_unions_bind_from_each_member() {
+    runs(
+        &with_classes("def pick(value: Point | Box[int64]) -> int64:\n    match value:\n        case Point(x=a) | Box(value=a):\n            return a\n\ndef main():\n    print(pick(Point(x=1, y=2)))\n    print(pick(Box(value=5)))\n"),
+        "1\n5\n",
+    );
+    runs(
+        &with_classes("def pick(value: own Flag | Box[str] | None) -> str:\n    match own value:\n        case Flag(label=text) | Box(value=text):\n            return text\n        case None:\n            return \"none\"\n\ndef main():\n    print(pick(Flag(on=true, label=\"lamp\")))\n    print(pick(Box(value=\"crate\")))\n    print(pick(None))\n"),
+        "lamp\ncrate\nnone\n",
+    );
+}
+
+#[test]
 fn owned_matches_move_nested_rest_tuples_and_class_fields() {
     runs("class Flag:\n    on: bool\n    label: str\n\ndef make() -> Flag:\n    return Flag(on=true, label=\"made\")\n\ndef main():\n    nested = ((\"a\", \"b\", \"c\"), \"d\")\n    match own nested:\n        case ((x, *r), d):\n            print(x)\n            print(r)\n            print(d)\n    match own make():\n        case Flag(label=label):\n            print(label)\n    either: Result[Flag, Flag] = Err(Flag(on=false, label=\"bad\"))\n    match own either:\n        case Ok(Flag(label=label)) | Err(Flag(label=label)):\n            print(label)\n", "a\n(b, c)\nd\nmade\nbad\n");
 }

@@ -15567,38 +15567,48 @@ impl<'a> Lowerer<'a> {
         })
     }
 
+    /// The class types a checked class pattern tests, with their union tag
+    /// indexes, and the stored fields of the first one. Over a union, the
+    /// pattern tests every specialization of its class that the union
+    /// holds; the checker proved each field the pattern tests has one type
+    /// in all of them.
     fn class_pattern_layout(
         &self,
         pattern: &crate::ast::ClassPattern,
         scrutinee_ty: Option<&Type>,
-    ) -> (Option<usize>, Type, Vec<(String, Type)>) {
-        let (member_index, member) = match scrutinee_ty {
+    ) -> (Vec<(Option<usize>, Type)>, Vec<(String, Type)>) {
+        let candidates = match scrutinee_ty {
             Some(Type::Union(union)) => {
-                // The checker proved the pattern names exactly one class
+                // The checker proved the pattern names at least one class
                 // member, possibly through a module alias.
                 let named = self
                     .resolve_pattern_class_info(&pattern.class_name)
                     .map(|info| (&info.module_name, &info.decl.name));
-                let (index, member) = union
+                let candidates = union
                     .members
                     .iter()
                     .enumerate()
-                    .find(|(_, member)| {
+                    .filter(|(_, member)| {
                         matches!(member, Type::Named(name, _) if self
                             .resolve_pattern_class_info(name)
                             .map(|info| (&info.module_name, &info.decl.name))
                             == named)
                     })
-                    .expect("checked class pattern names a union member");
-                (Some(index), member.clone())
+                    .map(|(index, member)| (Some(index), member.clone()))
+                    .collect::<Vec<_>>();
+                assert!(
+                    !candidates.is_empty(),
+                    "checked class pattern names a union member"
+                );
+                candidates
             }
-            ty => (
+            ty => vec![(
                 None,
                 ty.cloned()
                     .expect("checked class patterns have a typed scrutinee"),
-            ),
+            )],
         };
-        let Type::Named(name, args) = &member else {
+        let Type::Named(name, args) = &candidates[0].1 else {
             unreachable!("a checked class pattern member is a named class type");
         };
         let class_info = self
@@ -15616,7 +15626,23 @@ impl<'a> Lowerer<'a> {
                     .map(|info| (decl.name.clone(), substitute_type(&info.ty, &substitutions)))
             })
             .collect();
-        (member_index, member, fields)
+        (candidates, fields)
+    }
+
+    /// A scrutinee operand as a place, copying a computed value into a
+    /// temporary of type `ty` once.
+    fn pattern_scrutinee_place(&mut self, scrutinee: Operand, ty: &Type) -> String {
+        match scrutinee {
+            Operand::Place(place) | Operand::MovePlace(place) => place,
+            value => {
+                let place = self.new_typed_temp(ty.clone());
+                self.emit(Instruction::Assign {
+                    target: place.clone(),
+                    value: Rvalue::Use(value),
+                });
+                place
+            }
+        }
     }
 
     /// Tests a class pattern: the union member when the scrutinee is a
@@ -15631,23 +15657,12 @@ impl<'a> Lowerer<'a> {
         options: PatternLoweringOptions,
     ) {
         let first_loan = self.loan_scopes.last().map_or(0, Vec::len);
-        let (member_index, member, fields) = self.class_pattern_layout(pattern, scrutinee_ty);
-        let object = match (member_index, scrutinee_ty) {
-            (Some(_), Some(union_ty)) => {
-                // Read the selected member through a shared payload view,
-                // as a type arm does; the arm's loan cleanup ends it.
-                let payload =
-                    self.lower_type_pattern_test(scrutinee, union_ty, &member, failure_block);
-                let view = self.new_typed_temp(member.clone());
-                self.begin_pattern_view(&view, &payload, false);
-                Operand::Place(view)
-            }
-            _ => scrutinee,
-        };
+        let (candidates, fields) = self.class_pattern_layout(pattern, scrutinee_ty);
         let options = PatternLoweringOptions {
             collect_writeback: false,
             ..options
         };
+        let mut tested = Vec::new();
         for field in &pattern.fields {
             if matches!(field.pattern, Pattern::Wildcard(_)) {
                 continue;
@@ -15662,21 +15677,56 @@ impl<'a> Lowerer<'a> {
                 continue;
             }
             let value = self.new_typed_temp(field_ty.clone());
-            let read = match &object {
-                // A payload view reads its field through the view's place,
-                // as `view.field` does in source.
-                Operand::Place(view) if member_index.is_some() => {
-                    Rvalue::Use(Operand::Place(format!("{view}.{}", field.name)))
+            tested.push((field, field_ty, value));
+        }
+        match scrutinee_ty {
+            Some(union_ty @ Type::Union(_)) => {
+                // Each specialization the pattern names is selected by its
+                // tag, and its tested fields are read in place under that
+                // proof. Every candidate fills the same field temporaries,
+                // so the subpatterns are tested once after the selection
+                // and no branch holds a loan the others lack.
+                let place = self.pattern_scrutinee_place(scrutinee, union_ty);
+                let fields_block = self.new_block("match_class_fields");
+                for (position, (_, member)) in candidates.iter().enumerate() {
+                    let last = position + 1 == candidates.len();
+                    let next = if last {
+                        failure_block
+                    } else {
+                        self.new_block("match_class_specialization")
+                    };
+                    let payload = self.lower_type_pattern_test(
+                        Operand::Place(place.clone()),
+                        union_ty,
+                        member,
+                        next,
+                    );
+                    for (field, _, value) in &tested {
+                        self.emit(Instruction::Assign {
+                            target: value.clone(),
+                            value: Rvalue::Use(Operand::Place(format!("{payload}.{}", field.name))),
+                        });
+                    }
+                    self.terminate(Terminator::Goto(self.label(fields_block)));
+                    if !last {
+                        self.switch_to(next);
+                    }
                 }
-                object => Rvalue::Member {
-                    object: object.clone(),
-                    field: field.name.clone(),
-                },
-            };
-            self.emit(Instruction::Assign {
-                target: value.clone(),
-                value: read,
-            });
+                self.switch_to(fields_block);
+            }
+            _ => {
+                for (field, _, value) in &tested {
+                    self.emit(Instruction::Assign {
+                        target: value.clone(),
+                        value: Rvalue::Member {
+                            object: scrutinee.clone(),
+                            field: field.name.clone(),
+                        },
+                    });
+                }
+            }
+        }
+        for (field, field_ty, value) in tested {
             let next = self.new_block("match_class_field");
             let child_failure = self.pattern_failure_cleanup(failure_block, first_loan);
             self.lower_pattern(
@@ -15945,7 +15995,7 @@ impl<'a> Lowerer<'a> {
                 }
             }
             Pattern::Class(pattern) => {
-                let (_, _, fields) = self.class_pattern_layout(pattern, Some(pattern_ty));
+                let (_, fields) = self.class_pattern_layout(pattern, Some(pattern_ty));
                 for field in &pattern.fields {
                     if let Some((_, field_ty)) = fields.iter().find(|(name, _)| name == &field.name)
                     {
@@ -16205,58 +16255,68 @@ impl<'a> Lowerer<'a> {
     }
 
     /// Moves the fields a selected `match own` class pattern binds out of
-    /// the private captured object.
+    /// the private captured object. Over a union, the tag selects which
+    /// specialization's payload is taken.
     fn lower_consuming_class_pattern_bindings(
         &mut self,
         pattern: &crate::ast::ClassPattern,
         scrutinee: Operand,
         scrutinee_ty: Option<&Type>,
     ) {
-        let (member_index, member, fields) = self.class_pattern_layout(pattern, scrutinee_ty);
-        let place = match scrutinee {
-            Operand::Place(place) | Operand::MovePlace(place) => place,
-            value => {
-                let place = self.new_typed_temp(member.clone());
-                self.emit(Instruction::Assign {
-                    target: place.clone(),
-                    value: Rvalue::Use(value),
-                });
-                place
-            }
+        let (candidates, fields) = self.class_pattern_layout(pattern, scrutinee_ty);
+        let union_ty = scrutinee_ty.filter(|ty| matches!(ty, Type::Union(_)));
+        let place = self.pattern_scrutinee_place(scrutinee, union_ty.unwrap_or(&candidates[0].1));
+        let Some(union_ty) = union_ty else {
+            self.move_class_pattern_fields(pattern, &fields, &place);
+            return;
         };
-        let object = match (member_index, scrutinee_ty) {
-            (Some(index), Some(union_ty)) => {
-                let rejected = self.new_block("match_commit_invalid_tag");
-                let current = self.current_block;
-                self.switch_to(rejected);
-                self.terminate(Terminator::AssertFail {
-                    message: Some(Operand::String(
-                        "owned pattern payload changed after selection".to_string(),
-                    )),
-                    captures: Vec::new(),
-                    span: pattern.span,
-                });
-                self.switch_to(current);
-                self.lower_type_pattern_test(
-                    Operand::Place(place.clone()),
-                    union_ty,
-                    &member,
-                    rejected,
-                );
-                let object = self.new_typed_temp(member.clone());
-                self.emit(Instruction::Assign {
-                    target: object.clone(),
-                    value: Rvalue::UnionTakePayload {
-                        place,
-                        union_type: union_ty.clone(),
-                        member_type: member,
-                        member_index: index,
-                    },
-                });
-                object
+        let rejected = self.new_block("match_commit_invalid_tag");
+        let current = self.current_block;
+        self.switch_to(rejected);
+        self.terminate(Terminator::AssertFail {
+            message: Some(Operand::String(
+                "owned pattern payload changed after selection".to_string(),
+            )),
+            captures: Vec::new(),
+            span: pattern.span,
+        });
+        self.switch_to(current);
+        let done = self.new_block("match_class_commit_done");
+        for (position, (index, member)) in candidates.iter().enumerate() {
+            let last = position + 1 == candidates.len();
+            let next = if last {
+                rejected
+            } else {
+                self.new_block("match_class_commit_next")
+            };
+            self.lower_type_pattern_test(Operand::Place(place.clone()), union_ty, member, next);
+            let object = self.new_typed_temp(member.clone());
+            self.emit(Instruction::Assign {
+                target: object.clone(),
+                value: Rvalue::UnionTakePayload {
+                    place: place.clone(),
+                    union_type: union_ty.clone(),
+                    member_type: member.clone(),
+                    member_index: index.expect("a union candidate has a tag index"),
+                },
+            });
+            self.move_class_pattern_fields(pattern, &fields, &object);
+            self.terminate(Terminator::Goto(self.label(done)));
+            if !last {
+                self.switch_to(next);
             }
-            _ => place,
-        };
+        }
+        self.switch_to(done);
+    }
+
+    /// Moves or copies each field a class pattern binds out of `object`
+    /// into its bindings.
+    fn move_class_pattern_fields(
+        &mut self,
+        pattern: &crate::ast::ClassPattern,
+        fields: &[(String, Type)],
+        object: &str,
+    ) {
         for field in &pattern.fields {
             if !pattern_contains_binding(&field.pattern) {
                 continue;

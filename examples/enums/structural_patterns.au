@@ -2,6 +2,9 @@ class Point:
     x: int64
     y: int64
 
+class Box[T]:
+    value: T
+
 def describe(values: list[int64]) -> str:
     return match values:
         case []: "empty"
@@ -14,6 +17,11 @@ def locate(point: Point) -> str:
         case Point(x=0, y=y): f"on the y axis at {y}"
         case Point(x=x, y=0): f"on the x axis at {x}"
         case _: "elsewhere"
+
+def kind(item: Box[int64] | Box[str] | None) -> str:
+    return match item:
+        case Box(): "box"
+        case None: "no box"
 
 def main():
     head, *tail = (1, "two", 3.0)
@@ -33,3 +41,7 @@ def main():
     print(locate(Point(x=0, y=0)))
     print(locate(Point(x=0, y=5)))
     print(locate(Point(x=3, y=4)))
+
+    print(kind(Box(value=1)))
+    print(kind(Box(value="lid")))
+    print(kind(None))

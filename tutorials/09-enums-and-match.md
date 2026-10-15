@@ -300,7 +300,8 @@ print(locate(Point(x=0, y=5)))
 ```
 
 This prints `on the y axis at 5`. A class pattern also selects a class member
-of a union, as in `case Point(x=x):` over `Point | None`. See
+of a union, as in `case Point(x=x):` over `Point | None`. Over
+`Box[int64] | Box[str]`, `case Box():` matches both specializations. See
 [structural_patterns.au](../examples/enums/structural_patterns.au).
 
 ## Testing For `None`

@@ -496,11 +496,55 @@ def main():
 - Fields left out are not tested. `Point()` matches every `Point`.
 - Each field may appear once. Order does not matter.
 - A field must be a stored field visible at the match. A private field of a class from another module is rejected.
-- The class must be the scrutinee class, or one member of a union scrutinee. Spell it as a declared, imported, or module-qualified class name, such as `geometry.Point`.
+- The class must be the scrutinee class, or a class among the members of a union scrutinee. Spell it as a declared, imported, or module-qualified class name, such as `geometry.Point`.
 - Field bindings follow the match capability. A bare `match` gives shared borrows. `match own` moves the fields out of the consumed value. `match mut` rejects class patterns.
 - A class match needs a final `case _:`, or class patterns whose field patterns together cover every value.
 
 `Name()` with empty parentheses is always a class pattern. Write a payload-free enum variant without parentheses, as `case Color.Red:`.
+
+### Generic Classes In A Union
+
+Over a union, a class pattern matches every specialization of its class that the union holds. A specialization is a generic class with its type arguments filled in, such as `Box[int64]`. `Box()` below matches both `Box[int64]` and `Box[str]`:
+
+```aura
+class Box[T]:
+    value: T
+
+def describe(item: Box[int64] | Box[str] | None) -> str:
+    match item:
+        case Box():
+            return "box"
+        case None:
+            return "none"
+
+def main():
+    print(describe(Box(value="a")))
+```
+
+This prints `box`.
+
+- An irrefutable class pattern covers every specialization it matches. A later arm for one of them is unreachable and reports `AU2013`.
+- A field the pattern tests must have one type in every specialization it matches. A field such as `label: str` in `Tagged[T]` qualifies. `Box(value=v)` over `Box[int64] | Box[str]` is rejected with `AU2040`, because `value` is an `int64` in one member and a `str` in the other.
+- A `_` subpattern tests nothing, so `Box(value=_)` is accepted.
+
+To test the fields of one specialization, select it with a type pattern:
+
+```aura
+class Box[T]:
+    value: T
+
+def show(item: Box[int64] | Box[str]) -> str:
+    match item:
+        case Box[int64] as number:
+            return f"int {number.value}"
+        case Box[str] as text:
+            return f"str {text.value}"
+
+def main():
+    print(show(Box(value=2)))
+```
+
+This prints `int 2`.
 
 The checker reports class pattern errors with `AU2040`:
 
@@ -586,7 +630,7 @@ A match evaluates its scrutinee exactly once, tests arms in source order, and ru
 | `AU2004` | Invalid variant-constructor argument binding. |
 | `AU2013` | Union type-arm coverage: missing members, duplicate coverage, unreachable type arms, nonmembers, and type arms that are not one member. |
 | `AU2014` | A member use through a place whose narrowing fact was invalidated. |
-| `AU2040` | A class pattern with a positional, unknown, private, repeated, or method field. A class that is not the scrutinee class or one union member. A class pattern under `match mut`. Enum variant or type patterns over a class scrutinee. |
+| `AU2040` | A class pattern with a positional, unknown, private, repeated, or method field. A class that is not the scrutinee class or a union member. A tested field whose type differs between the union specializations the pattern matches. A class pattern under `match mut`. Enum variant or type patterns over a class scrutinee. |
 | `AU2041` | A rest element outside a tuple or sequence, a second rest element, too few positions for the fixed elements, a `*name` that covers no positions, or a sequence pattern under `match mut` or `match own`. |
 | `AU2999` | Duplicate variants, invalid payload shapes, missing or unreachable arms, non-exhaustive matches, mismatched alternative bindings, duplicate or subsumed alternatives, unsupported pattern forms, and other enum and match rejections. |
 | `AU3001` | Use after `match own`, after a payload move, or after moving an owned candidate before its guard commits. |

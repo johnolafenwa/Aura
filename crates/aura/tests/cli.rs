@@ -15635,7 +15635,7 @@ fn failed_factories_release_builtin_file_handles_on_both_backends() {
 
 #[test]
 fn structural_patterns_example_runs_on_both_backends() {
-    let expected = "1\n(two, 3.0)\nempty\none: 7\nfrom 1 to 4\n10 then [20, 30]\norigin\non the y axis at 5\nelsewhere\n";
+    let expected = "1\n(two, 3.0)\nempty\none: 7\nfrom 1 to 4\n10 then [20, 30]\norigin\non the y axis at 5\nelsewhere\nbox\nbox\nno box\n";
     assert_default_backend_example_runs(
         "examples/enums/structural_patterns.au",
         "structural-patterns-default",

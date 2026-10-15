@@ -3,12 +3,14 @@
 use super::*;
 use crate::ast::{ClassPattern, RestPattern, SequencePattern, TuplePattern};
 
-/// The resolved target of one class pattern: the scrutinee member it tests
+/// The resolved target of one class pattern: the scrutinee members it tests
 /// and the specialized type of every stored field it may name.
 pub(super) struct ClassPatternTarget {
-    /// The class type as the scrutinee spells it (the union member for a
-    /// union scrutinee).
-    pub member: Type,
+    /// The class types as the scrutinee spells them: the scrutinee itself,
+    /// or every specialization of the class among a union's members.
+    pub members: Vec<Type>,
+    /// The stored fields of the first member. A field the pattern tests has
+    /// this type in every member.
     pub fields: Vec<(String, Type)>,
 }
 
@@ -235,11 +237,16 @@ impl FunctionChecker<'_> {
                 .is_some_and(|info| (&info.module_name, &info.decl.name) == identity),
             _ => false,
         };
-        let member = match expected_ty {
-            Type::Union(union) => union.members.iter().find(|member| same_class(member)),
-            ty => same_class(ty).then_some(ty),
+        let members = match expected_ty {
+            Type::Union(union) => union
+                .members
+                .iter()
+                .filter(|member| same_class(member))
+                .cloned()
+                .collect::<Vec<_>>(),
+            ty => same_class(ty).then(|| ty.clone()).into_iter().collect(),
         };
-        let Some(member) = member.cloned() else {
+        let Some(member) = members.first() else {
             return Err(Diagnostic::coded_at(
                 "AU2040",
                 class.span,
@@ -302,9 +309,43 @@ impl FunctionChecker<'_> {
             }
         }
         let fields = self
-            .class_field_types(&member)
+            .class_field_types(member)
             .expect("a class member has stored fields");
-        Ok(ClassPatternTarget { member, fields })
+        // Over several specializations, a tested field must have one type
+        // in all of them, so the subpattern and its bindings check once.
+        for other in &members[1..] {
+            let other_fields = self
+                .class_field_types(other)
+                .expect("a class member has stored fields");
+            for field in &class.fields {
+                if matches!(field.pattern, Pattern::Wildcard(_)) {
+                    continue;
+                }
+                let field_ty = |fields: &[(String, Type)]| {
+                    fields
+                        .iter()
+                        .find(|(name, _)| name == &field.name)
+                        .map(|(_, ty)| ty.clone())
+                        .expect("checked class pattern field")
+                };
+                let (first_ty, other_ty) = (field_ty(&fields), field_ty(&other_fields));
+                let key = |ty: &Type| ty.canonical_key(self.module_name, self.canonical_type_names);
+                if key(&first_ty) != key(&other_ty) {
+                    return Err(Diagnostic::coded_at(
+                        "AU2040",
+                        field.name_span,
+                        format!(
+                            "class pattern `{}` matches `{member}` and `{other}`, but field `{}` has type `{first_ty}` in one and `{other_ty}` in the other",
+                            class.class_name, field.name
+                        ),
+                    )
+                    .with_help(format!(
+                        "select one specialization with a type pattern such as `case {member} as value:`"
+                    )));
+                }
+            }
+        }
+        Ok(ClassPatternTarget { members, fields })
     }
 
     /// The stored fields of a class type in declaration order, specialized
@@ -445,7 +486,7 @@ impl FunctionChecker<'_> {
         ) else {
             return false;
         };
-        if previous_target.member != current_target.member {
+        if previous_target.members != current_target.members {
             return false;
         }
         Self::class_pattern_rows(previous, &previous_target)
