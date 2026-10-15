@@ -135,8 +135,12 @@ From the repo root:
 - `npm run test:lsp`
 - `npm run coverage:lsp`
 
-The build command provides `target/debug/aura` for work in this checkout. To
-install the compiler-owned server binary on `PATH` for any Aura workspace, run:
+The build command provides `target/debug/aura` for work in this checkout.
+The server uses it only when `AURA_LSP_USE_WORKSPACE_COMPILER=1` is set,
+because running a binary or `cargo run` from an opened folder executes that
+folder's code. Without the variable, the server uses `AURA_LSP_AURA_PATH` or
+`aura` on `PATH`. To install the compiler-owned server binary on `PATH` for
+any Aura workspace, run:
 
 ```bash
 cargo install --path crates/aura --locked --force

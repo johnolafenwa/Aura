@@ -124,6 +124,18 @@ test("extension manifest and listing are ready for both public marketplaces", ()
   assert.doesNotMatch(manifest.scripts["package:vsix"], /allow-missing-repository|skip-license/);
 });
 
+test("extension stays off in untrusted and virtual workspaces", () => {
+  const extensionRoot = path.resolve(__dirname, "..");
+  const manifest = JSON.parse(
+    fs.readFileSync(path.join(extensionRoot, "package.json"), "utf8")
+  );
+  // The extension starts a compiler process that reads workspace files, so
+  // it waits for the user to trust the folder.
+  assert.equal(manifest.capabilities.untrustedWorkspaces.supported, false);
+  assert.match(manifest.capabilities.untrustedWorkspaces.description, /\S/);
+  assert.equal(manifest.capabilities.virtualWorkspaces, false);
+});
+
 test("extension package includes the assertion-aware Aura grammar", () => {
   const extensionRoot = path.resolve(__dirname, "..");
   const manifest = JSON.parse(

@@ -9747,7 +9747,7 @@ fn parse_http_content_length(headers: &[(String, String)]) -> io::Result<Option<
             ));
         }
         if http_header_name_eq(name, "Content-Length") {
-            let parsed = value.parse::<usize>().map_err(|error| {
+            let parsed = parse_http_content_length_value(value).map_err(|error| {
                 io::Error::new(
                     io::ErrorKind::InvalidData,
                     format!("invalid HTTP content length `{}`: {}", value, error),
@@ -9768,6 +9768,23 @@ fn parse_http_content_length(headers: &[(String, String)]) -> io::Result<Option<
     Ok(content_length)
 }
 
+// Rust's integer parsers accept a leading `+`, but HTTP lengths are bare
+// digits. Accepting more than a front proxy would lets the two disagree on
+// where a message ends.
+fn parse_http_content_length_value(value: &str) -> std::result::Result<usize, String> {
+    if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err("expected decimal digits".to_string());
+    }
+    value.parse::<usize>().map_err(|error| error.to_string())
+}
+
+fn parse_http_chunk_size(value: &str) -> std::result::Result<usize, String> {
+    if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err("expected hexadecimal digits".to_string());
+    }
+    usize::from_str_radix(value, 16).map_err(|error| error.to_string())
+}
+
 fn parse_http_body_framing(
     headers: &[(String, String)],
     default: HttpBodyFraming,
@@ -9776,7 +9793,7 @@ fn parse_http_body_framing(
         .iter()
         .filter(|(name, _)| http_header_name_eq(name, "Content-Length"))
         .try_fold(None, |current, (_, value)| {
-            let parsed = value.parse::<usize>().map_err(|error| {
+            let parsed = parse_http_content_length_value(value).map_err(|error| {
                 io::Error::new(
                     io::ErrorKind::InvalidData,
                     format!("invalid HTTP content length `{value}`: {error}"),
@@ -9855,7 +9872,7 @@ fn try_decode_chunked_http_body_with_limit(
             )
         })?;
         let size_text = line.split_once(';').map_or(line, |(size, _)| size).trim();
-        let size = usize::from_str_radix(size_text, 16).map_err(|error| {
+        let size = parse_http_chunk_size(size_text).map_err(|error| {
             io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!("invalid HTTP chunk size `{size_text}`: {error}"),

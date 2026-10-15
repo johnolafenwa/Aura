@@ -31,6 +31,10 @@ const {
   setWorkspaceRoots,
   uriToPath
 } = require("../src/compiler_bridge");
+
+// Most tests below analyze examples in this checkout with its own build, so
+// they opt in to workspace compiler discovery the way a contributor would.
+process.env.AURA_LSP_USE_WORKSPACE_COMPILER = "1";
 const { createDocumentStateCache } = require("../src/document_state");
 
 test.after(() => {
@@ -507,6 +511,53 @@ test("compiler bridge preserves populated runtime frame metadata without rewriti
       }
     ]
   });
+});
+
+test("compiler bridge ignores workspace binaries and cargo unless explicitly opted in", () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aura-bridge-untrusted-"));
+  const originalEnvPath = process.env.AURA_LSP_AURA_PATH;
+  const originalOptIn = process.env.AURA_LSP_USE_WORKSPACE_COMPILER;
+  try {
+    delete process.env.AURA_LSP_AURA_PATH;
+    const workspace = path.join(tempRoot, "cloned-project");
+    fs.mkdirSync(path.join(workspace, "target", "debug"), { recursive: true });
+    fs.mkdirSync(path.join(workspace, "target", "release"), { recursive: true });
+    fs.mkdirSync(path.join(workspace, "crates", "aura"), { recursive: true });
+    fs.writeFileSync(path.join(workspace, "target", "debug", binaryName()), "");
+    fs.writeFileSync(path.join(workspace, "target", "release", binaryName()), "");
+    fs.writeFileSync(path.join(workspace, "Cargo.toml"), "[workspace]\n");
+    fs.writeFileSync(path.join(workspace, "crates", "aura", "Cargo.toml"), "[package]\n");
+    setWorkspaceRoots([workspace]);
+
+    for (const value of [undefined, "", "0", "true", "yes"]) {
+      if (value === undefined) {
+        delete process.env.AURA_LSP_USE_WORKSPACE_COMPILER;
+      } else {
+        process.env.AURA_LSP_USE_WORKSPACE_COMPILER = value;
+      }
+      assert.deepEqual(resolveCompilerCommand(), { cmd: "aura", args: [], cwd: workspace });
+    }
+
+    process.env.AURA_LSP_USE_WORKSPACE_COMPILER = "1";
+    assert.deepEqual(resolveCompilerCommand(), {
+      cmd: path.join(workspace, "target", "debug", binaryName()),
+      args: [],
+      cwd: workspace
+    });
+  } finally {
+    if (originalEnvPath === undefined) {
+      delete process.env.AURA_LSP_AURA_PATH;
+    } else {
+      process.env.AURA_LSP_AURA_PATH = originalEnvPath;
+    }
+    if (originalOptIn === undefined) {
+      delete process.env.AURA_LSP_USE_WORKSPACE_COMPILER;
+    } else {
+      process.env.AURA_LSP_USE_WORKSPACE_COMPILER = originalOptIn;
+    }
+    setWorkspaceRoots([]);
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
 });
 
 test("compiler bridge resolves compiler commands across env, cargo, binaries, and fallback", () => {

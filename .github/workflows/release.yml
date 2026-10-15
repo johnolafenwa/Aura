@@ -298,8 +298,9 @@ jobs:
     env:
       RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
       VSIX_PATH: extension-artifact/aura-language.vsix
-      VSCE_PAT: ${{ secrets.VSCE_PAT }}
-      OVSX_TOKEN: ${{ secrets.OVSX_TOKEN }}
+      # Only the publish steps receive the tokens themselves.
+      HAS_VSCE_PAT: ${{ secrets.VSCE_PAT != '' }}
+      HAS_OVSX_TOKEN: ${{ secrets.OVSX_TOKEN != '' }}
       GH_TOKEN: ${{ github.token }}
       EXPECTED_EXTENSION_VERSION: ${{ needs.release_identity.outputs.extension_version }}
 
@@ -362,19 +363,23 @@ jobs:
           NODE
 
       - name: Publish to Visual Studio Marketplace
-        if: env.VSCE_PAT != ''
+        if: env.HAS_VSCE_PAT == 'true'
         shell: bash
-        run: npx @vscode/vsce publish --packagePath "$VSIX_PATH" -p "$VSCE_PAT"
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: npx --yes @vscode/vsce@4.0.0 publish --packagePath "$VSIX_PATH" -p "$VSCE_PAT"
 
       - name: Skip Visual Studio Marketplace publish
-        if: env.VSCE_PAT == ''
+        if: env.HAS_VSCE_PAT != 'true'
         run: echo "::notice::VSCE_PAT is not configured; skipping Visual Studio Marketplace publish."
 
       - name: Publish to Open VSX
-        if: env.OVSX_TOKEN != ''
+        if: env.HAS_OVSX_TOKEN == 'true'
         shell: bash
-        run: npx ovsx publish "$VSIX_PATH" -p "$OVSX_TOKEN"
+        env:
+          OVSX_TOKEN: ${{ secrets.OVSX_TOKEN }}
+        run: npx --yes ovsx@1.2.0 publish "$VSIX_PATH" -p "$OVSX_TOKEN"
 
       - name: Skip Open VSX publish
-        if: env.OVSX_TOKEN == ''
+        if: env.HAS_OVSX_TOKEN != 'true'
         run: echo "::notice::OVSX_TOKEN is not configured; skipping Open VSX publish."
