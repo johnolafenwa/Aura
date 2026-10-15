@@ -26,8 +26,8 @@ Last updated: 2026-10-15
   annotated, unsigned tag on `cbb654e4` ran Release `38762272903`, which
   published the GitHub Release with three CLI archives, the docs archive,
   and the VSIX, and published extension 0.4.0 to the Visual Studio
-  Marketplace and Open VSX. Details
-  are in `2026-10-14-v0.4.0-preview-release.md`,
+  Marketplace and Open VSX. Details are in
+  `2026-10-14-v0.4.0-preview-release.md`,
   `2026-10-15-v0.4.0-review-fixes.md`, and
   `2026-10-15-v0.4.0-security-review.md`.
 - `VSCE_PAT` must be an org-scoped token before 2026-12-01.
