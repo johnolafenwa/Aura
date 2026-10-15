@@ -90,6 +90,26 @@ This prints `missing`, `4`, `8`, and `cleared`. Where `value is not None` holds,
 
 Only `is None` and `is not None` narrow. `==` and `!=` compare values. A `match` arm narrows its own binding instead.
 
+### Narrowed Classes
+
+A place narrowed to a class member reads as that class. Its fields, nested fields, and methods are available through the place:
+
+```aura
+class Point:
+    x: int64
+    y: int64
+
+def main():
+    mut point: Point | None = Point(x=1, y=2)
+    if point is not None:
+        point.x += 10
+        print(point.x + point.y)
+```
+
+This prints `13`. The same rule applies to a module-qualified class such as `geometry.Point | None`, and to a narrowed class field such as `holder.point`.
+
+A narrowed union keeps its tag beside the payload, so a non-Copy field cannot move out of the payload alone. Moving one is rejected with `AU3004`. Clone the field, move the whole value, or use `match own` with a class pattern.
+
 ### Stable Places
 
 A stable place is one of:
@@ -123,9 +143,10 @@ A fact ends when the place or an enclosing place is assigned, matched with `matc
 
 Moving the place, including with `match own`, leaves it moved as usual, so a later use reports `AU3001`.
 
-Two writes keep the fact, because neither can change the member:
+These writes keep the fact, because none can change the member:
 
 - writing through the narrowed payload, such as `local += 1` above
+- writing or mutating a place inside the payload, such as `point.x += 10` above
 - changing a proven-disjoint sibling field
 
 A narrowed union with more than two members keeps its remaining member set for match coverage. After `if value is None: return`, a `match value` over `int64 | str | None` is exhaustive with only `int64` and `str` arms.

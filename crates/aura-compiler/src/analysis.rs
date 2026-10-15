@@ -3069,7 +3069,7 @@ impl<'a> AnalysisBuilder<'a> {
             }
             ExprKind::Name(name) => {
                 if let Some(resolved) = self.resolve_name(name, scope) {
-                    let hover = self.narrowed_hover(expr.span, resolved.hover);
+                    let hover = self.narrowed_hover(expr, resolved.hover);
                     self.push_occurrence(
                         range_from_span(expr.span, name.len()),
                         hover,
@@ -3080,7 +3080,7 @@ impl<'a> AnalysisBuilder<'a> {
             ExprKind::Member { object, field } => {
                 self.visit_expr(object, scope);
                 if let Some(resolved) = self.resolve_member_expr(object, field, scope) {
-                    let hover = self.narrowed_hover(expr.span, resolved.hover);
+                    let hover = self.narrowed_hover(expr, resolved.hover);
                     self.push_occurrence(
                         range_from_span(expr.span, field.len()),
                         hover,
@@ -5701,8 +5701,12 @@ impl<'a> AnalysisBuilder<'a> {
 
     /// Appends the checker's narrowing fact to a hover when this use reads a
     /// union place through an `is None` / `is not None` refinement.
-    fn narrowed_hover(&self, span: Span, hover: String) -> String {
-        match self.program.narrowed_read(&self.program.module_name, span) {
+    fn narrowed_hover(&self, expr: &Expr, hover: String) -> String {
+        match self.program.narrowed_read(
+            &self.program.module_name,
+            expr.span,
+            &crate::sema::narrowed_read_place(expr),
+        ) {
             Some(read) => format!(
                 "{hover}\n\nNarrowed to `{}` from `{}` at this use.",
                 read.member_type, read.union_type

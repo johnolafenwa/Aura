@@ -322,6 +322,7 @@ def main():
 After `if value is None: return`, and inside an `else` branch, `value` is a plain `str`. Narrowing works the same way for:
 
 - `mut` locals, class fields, and views
+- class values, so `point.x` and `point.norm()` work after `if point is not None:`
 - conditions combined with `not`, `and`, and `or`
 
 These actions end the narrowing:

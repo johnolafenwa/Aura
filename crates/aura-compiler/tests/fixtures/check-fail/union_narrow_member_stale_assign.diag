@@ -1,0 +1,7 @@
+error[AU2014]: narrowing of `point` no longer applies after assignment; test the current value again
+ --> crates/aura-compiler/tests/fixtures/check-fail/union_narrow_member_stale_assign.au:9:21
+  |
+9 |         print(point.x)
+  |                     ^
+  = related crates/aura-compiler/tests/fixtures/check-fail/union_narrow_member_stale_assign.au:6:14: narrowed by this test
+  = related crates/aura-compiler/tests/fixtures/check-fail/union_narrow_member_stale_assign.au:8:9: invalidated here

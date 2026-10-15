@@ -707,6 +707,27 @@ impl<'a> FunctionChecker<'a> {
             return Err(diagnostic);
         }
         if let Some(path) = self.member_access_path(expr) {
+            // A narrowed union keeps its tag beside the payload, so one field
+            // cannot leave it; the whole union moves, or `match own` takes
+            // the payload apart.
+            if let Some(union_place) = Self::narrowed_enclosing_union(&path, locals) {
+                let mut diagnostic = Diagnostic::coded_at(
+                    "AU3004",
+                    expr.span,
+                    format!(
+                        "cannot move non-copy field `{field}` out of narrowed union `{union_place}`"
+                    ),
+                );
+                diagnostic = diagnostic.with_help(match self.builtin_duplication_member(member_ty) {
+                    Some(member) => format!(
+                        "call `.{member}()` on the field, move the whole `{union_place}`, or use `match own {union_place}:` with a class pattern to move the field"
+                    ),
+                    None => format!(
+                        "move the whole `{union_place}`, or use `match own {union_place}:` with a class pattern to move the field"
+                    ),
+                });
+                return Err(diagnostic);
+            }
             self.ensure_place_not_frozen_for_move(&path, expr.span, locals)?;
             if let Some(binding) = locals.get_mut(&path.root) {
                 if binding.managed_resource {

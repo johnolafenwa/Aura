@@ -1,0 +1,47 @@
+class Point:
+    x: int64
+    label: str
+
+class Holder:
+    point: Point | None
+
+    def first_x(self) -> int64:
+        if self.point is None:
+            return -1
+        return self.point.x
+
+class Bag:
+    items: list[int64]
+    tags: dict[str, int64]
+
+class Shelf:
+    bag: Bag | None
+
+def main():
+    mut holder: Holder | None = Holder(point=Point(x=8, label="held"))
+    if holder is not None and holder.point is not None:
+        holder.point.x = 50
+        holder.point.x += 1
+        print(holder.point.x)
+        print(holder.point.label)
+    if holder is not None:
+        print(holder.first_x())
+    mut shelf = Shelf(bag=Bag(items=[1], tags={"a": 1}))
+    if shelf.bag is not None:
+        shelf.bag.items.append(2)
+        shelf.bag.tags["b"] = 2
+        shelf.bag.items[0] = 7
+        print(shelf.bag.items)
+        print(len(shelf.bag.tags))
+    mut bag: Bag | None = Bag(items=[3], tags={})
+    if bag is not None:
+        bag.items.append(4)
+        bag.items[1] += 10
+        print(bag.items)
+    mut values: list[int64] | None = [5, 6]
+    if values is not None:
+        print(values[1])
+        values.append(7)
+    pair: ((int64, int64) | None, int64) = ((3, 4), 5)
+    if pair[0] is not None:
+        print(pair[0][1])

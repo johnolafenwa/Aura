@@ -2,11 +2,20 @@ class Profile:
     name: str | None
     visits: int64
 
+class Point:
+    x: int64
+    y: int64
+
 def describe(value: str | None):
     if value is None:
         print("missing")
         return
     print(value.len())
+
+def length(point: Point | None) -> int64:
+    if point is None:
+        return 0
+    return point.x + point.y
 
 def report(profile: Profile):
     if profile.name is not None and profile.visits > 0:
@@ -23,3 +32,5 @@ def main():
     report(profile)
     profile.name = None
     report(profile)
+    print(length(Point(x=3, y=4)))
+    print(length(None))

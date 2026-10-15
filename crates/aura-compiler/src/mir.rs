@@ -2474,9 +2474,16 @@ impl<'a> MirLoanValidationContext<'a> {
                     let Some(index) = union_payload_projection_index(segment) else {
                         return Err(format!("invalid MIR projection `{segment}` in `{place}` traverses a union without a canonical payload projection"));
                     };
-                    union.members.get(index).cloned().ok_or_else(|| {
+                    let member = union.members.get(index).cloned().ok_or_else(|| {
                         format!("invalid MIR union payload projection `{segment}` in `{place}` in `{}` is out of bounds", function.name)
-                    })?
+                    })?;
+                    // A member spelled through a module alias, such as
+                    // `geometry.Point`, follows its planned canonical type,
+                    // whose class metadata the module carries.
+                    self.unions
+                        .get(&crate::union_layout::union_plan_key(&Type::Union(union)))
+                        .and_then(|plan| plan.members.get(index))
+                        .map_or(member, |planned| planned.ty.clone())
                 }
                 Type::TypeParam(_) => return Ok(None),
                 Type::Function { .. }
@@ -13259,9 +13266,13 @@ impl<'a> Lowerer<'a> {
             return;
         }
 
-        let narrowed_target = assign
-            .op
-            .and_then(|_| self.program.narrowed_read(self.module_name, assign.span));
+        let narrowed_target = match (&assign.target, assign.op) {
+            (AssignTarget::Name(name), Some(_)) => {
+                self.program
+                    .narrowed_read(self.module_name, assign.span, name)
+            }
+            _ => None,
+        };
         let target = match (&assign.target, &narrowed_target) {
             (AssignTarget::Name(name), Some(read)) => format!(
                 "{}.{UNION_PAYLOAD_PROJECTION_PREFIX}{}",
@@ -13683,9 +13694,12 @@ impl<'a> Lowerer<'a> {
     fn render_assign_target(&self, target: &AssignTarget) -> String {
         match target {
             AssignTarget::Name(name) => self.render_local_name(name),
-            AssignTarget::Member { object, field } => {
-                format!("{}.{}", self.render_expr_place(object), field)
-            }
+            AssignTarget::Member { object, field } => format!(
+                "{}{}.{}",
+                self.render_expr_place(object),
+                self.narrowed_object_projection(object),
+                field
+            ),
             AssignTarget::Index { .. } => {
                 panic!("indexed assignments must lower through runtime helper calls")
             }
@@ -17408,7 +17422,11 @@ impl<'a> Lowerer<'a> {
         ) {
             return None;
         }
-        self.program.narrowed_read(self.module_name, expr.span)
+        self.program.narrowed_read(
+            self.module_name,
+            expr.span,
+            &crate::sema::narrowed_read_place(expr),
+        )
     }
 
     /// A module constant the checker narrowed (for example after `if value
@@ -19672,6 +19690,13 @@ impl<'a> Lowerer<'a> {
             // collection (ADR-0061, 2026-09-21 section, contextual loans).
             if let Some(value) = self.lower_contextual_element_loan(expr, true) {
                 return value;
+            }
+            // A `mut` union parameter receives the whole union place even
+            // where a test narrowed it: the callee may change the member.
+            if matches!(expected, Some(Type::Union(_))) && self.narrowed_read(expr).is_some() {
+                if let Some(place) = self.render_place_expr_option(expr) {
+                    return Operand::Place(place);
+                }
             }
         }
         if passing == ReceiverKind::Borrow {
@@ -25148,21 +25173,33 @@ impl<'a> Lowerer<'a> {
         }
     }
 
+    /// The payload projection a narrowed object adds before the field or
+    /// tuple position that follows it: the checker proved one member of the
+    /// union place, so the projection goes through that member's payload.
+    fn narrowed_object_projection(&self, object: &Expr) -> String {
+        self.narrowed_read(grouped_mir_expr(object))
+            .map(|read| format!(".{UNION_PAYLOAD_PROJECTION_PREFIX}{}", read.member_index))
+            .unwrap_or_default()
+    }
+
     fn render_place_expr_option(&self, expr: &Expr) -> Option<String> {
         match &expr.kind {
             ExprKind::Name(name) => Some(self.render_local_name(name)),
             ExprKind::Group(inner) => self.render_place_expr_option(inner),
             // A bound method is a closure value, never a field place (C6).
-            ExprKind::Member { object, field } if self.bound_method_info_at(expr).is_none() => self
-                .render_place_expr_option(object)
-                .map(|object| format!("{object}.{field}")),
+            ExprKind::Member { object, field } if self.bound_method_info_at(expr).is_none() => {
+                let narrowed = self.narrowed_object_projection(object);
+                self.render_place_expr_option(object)
+                    .map(|object| format!("{object}{narrowed}.{field}"))
+            }
             ExprKind::Index { object, index } => {
                 let ExprKind::Int(index) = index.kind else {
                     return None;
                 };
                 let index = usize::try_from(index).ok()?;
+                let narrowed = self.narrowed_object_projection(object);
                 self.render_place_expr_option(object)
-                    .map(|object| format!("{object}.{index}"))
+                    .map(|object| format!("{object}{narrowed}.{index}"))
             }
             _ => None,
         }
@@ -25178,9 +25215,11 @@ impl<'a> Lowerer<'a> {
             ExprKind::Name(name) => Some(self.render_local_name(name)),
             ExprKind::Group(inner) => self.render_stable_place_expr_option(inner),
             // A bound method is a closure value, never a field place (C6).
-            ExprKind::Member { object, field } if self.bound_method_info_at(expr).is_none() => self
-                .render_stable_place_expr_option(object)
-                .map(|object| format!("{object}.{field}")),
+            ExprKind::Member { object, field } if self.bound_method_info_at(expr).is_none() => {
+                let narrowed = self.narrowed_object_projection(object);
+                self.render_stable_place_expr_option(object)
+                    .map(|object| format!("{object}{narrowed}.{field}"))
+            }
             ExprKind::Index { object, index }
                 if matches!(self.infer_expr_type(object), Some(Type::Tuple(_))) =>
             {
@@ -25188,8 +25227,9 @@ impl<'a> Lowerer<'a> {
                     return None;
                 };
                 let index = usize::try_from(index).ok()?;
+                let narrowed = self.narrowed_object_projection(object);
                 self.render_stable_place_expr_option(object)
-                    .map(|object| format!("{object}.{index}"))
+                    .map(|object| format!("{object}{narrowed}.{index}"))
             }
             _ => None,
         }
@@ -25206,16 +25246,19 @@ impl<'a> Lowerer<'a> {
             }
             ExprKind::Group(inner) => self.render_addressable_place_expr_option(inner),
             // A bound method is a closure value, never a field place (C6).
-            ExprKind::Member { object, field } if self.bound_method_info_at(expr).is_none() => self
-                .render_addressable_place_expr_option(object)
-                .map(|object| format!("{object}.{field}")),
+            ExprKind::Member { object, field } if self.bound_method_info_at(expr).is_none() => {
+                let narrowed = self.narrowed_object_projection(object);
+                self.render_addressable_place_expr_option(object)
+                    .map(|object| format!("{object}{narrowed}.{field}"))
+            }
             ExprKind::Index { object, index } => {
                 let ExprKind::Int(index) = index.kind else {
                     return None;
                 };
                 let index = usize::try_from(index).ok()?;
+                let narrowed = self.narrowed_object_projection(object);
                 self.render_addressable_place_expr_option(object)
-                    .map(|object| format!("{object}.{index}"))
+                    .map(|object| format!("{object}{narrowed}.{index}"))
             }
             _ => None,
         }

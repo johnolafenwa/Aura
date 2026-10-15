@@ -143,7 +143,7 @@ seven real loopback requests.
 | File | Shows | Prints |
 | --- | --- | --- |
 | `union_type_patterns.au` | A transparent union alias, exhaustive type arms, and mutable member access | `42` twice |
-| `union_narrowing.au` | `is None` and `is not None` tests that narrow a parameter and a class field, an early `return` edge, and an `and` composition | `missing`, `4`, `anonymous or new`, `aura`, `anonymous or new` |
+| `union_narrowing.au` | `is None` and `is not None` tests that narrow a parameter, a class field, and a class value, an early `return` edge, and an `and` composition | `missing`, `4`, `anonymous or new`, `aura`, `anonymous or new`, `7`, `0` |
 | `result_match.au` | Enum declarations, owned payload variants, an explicit `own` parameter, and exhaustive consuming `match` | `42`, `bad`, `0` |
 | `result_option.au` | Built-in `Result[T, E]` and optional `T \| None` values with exhaustive `match` | `4`, `division by zero`, `7` |
 | `optional_arguments.au` | A bare `str \| None` parameter that borrows a list element, a field, and a loop binding without copying them | `hello, Lin`, `hello, guest`, `hello, Grace`, `hello, guest`, `hello, Ada`, `hello, Lin`, `[Ada, Lin]` |
