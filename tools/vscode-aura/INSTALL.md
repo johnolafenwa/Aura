@@ -31,7 +31,8 @@ The extension activates for `.au` files and starts the bundled Aura language
 server.
 
 Step 3 creates the repo-local `target/debug/aura`. It powers compiler-backed
-diagnostics, symbols, hover, go-to-definition, and completions. To install the
+diagnostics, symbols, hover, go-to-definition, and completions once you opt in
+to workspace compiler discovery, described below. To install the
 compiler-owned server on `PATH` for all Aura workspaces, run:
 
 ```bash
@@ -43,13 +44,25 @@ no second semantic-server executable. The extension starts `aura lsp` over
 stdio on its own, so do not start a separate server process by hand.
 
 The extension bundles the JavaScript Language Server Protocol (LSP) transport,
-which starts the semantic service as `aura lsp`. It looks for the compiler in this order:
+which starts the semantic service as `aura lsp`. It uses the first compiler
+it finds:
 
 1. `AURA_LSP_AURA_PATH`
-2. `target/debug/aura`
-3. `target/release/aura`
-4. `cargo run -q -p aura --` inside the repo workspace
-5. `aura` on `PATH`
+2. `aura` on `PATH`
+
+The extension never runs a program from the opened folder by default. A
+cloned repository can contain its own `target/debug/aura`, so running it would
+execute that repository's code as soon as you open an `.au` file. To develop
+the compiler in this checkout, launch VS Code with
+`AURA_LSP_USE_WORKSPACE_COMPILER=1`:
+
+```bash
+AURA_LSP_USE_WORKSPACE_COMPILER=1 code .
+```
+
+With that variable set to `1`, the search between steps 1 and 2 also tries
+`target/debug/aura`, then `target/release/aura`, then
+`cargo run -q -p aura --` when the folder is an Aura compiler checkout.
 
 If it finds no compiler command, the extension falls back to a small lexical
 recovery layer. Semantic diagnostics and member intelligence need the

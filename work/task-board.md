@@ -1,6 +1,16 @@
 # Task Board
 
-Last updated: 2026-10-14
+Last updated: 2026-10-15
+
+## 0.4.0 preview security review (in progress)
+
+- Target: security review of the `v0.4.0-preview` candidate, as John asked,
+  and fixes for confirmed issues.
+- Done: language server no longer runs workspace binaries by default,
+  pinned publish tools with step-scoped tokens, installer truncation guard,
+  read-only CI token, strict HTTP length parsing. Details are in
+  `2026-10-15-v0.4.0-security-review.md`.
+- Remaining: hosted CI and merge of the fix PR.
 
 ## Aura 0.4.0 preview release (in progress)
 

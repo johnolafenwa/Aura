@@ -15887,6 +15887,23 @@ fn chunked_http_framing_rejects_ambiguous_malformed_and_oversized_inputs() {
             .kind(),
         io::ErrorKind::InvalidData
     );
+    // RFC 9110 allows only digits. A signed length is a framing disagreement
+    // a front proxy could exploit to smuggle a second request.
+    for signed in ["+2", "-0"] {
+        let signed_length = vec![("Content-Length".to_string(), signed.to_string())];
+        assert_eq!(
+            super::parse_http_body_framing(&signed_length, HttpBodyFraming::UntilClose)
+                .expect_err("signed content lengths should fail")
+                .kind(),
+            io::ErrorKind::InvalidData
+        );
+    }
+    assert_eq!(
+        super::try_decode_chunked_http_body(b"+2\r\nab\r\n0\r\n\r\n", 0)
+            .expect_err("signed chunk sizes should fail")
+            .kind(),
+        io::ErrorKind::InvalidData
+    );
     let conflicting_lengths = vec![
         ("Content-Length".to_string(), "1".to_string()),
         ("Content-Length".to_string(), "2".to_string()),
