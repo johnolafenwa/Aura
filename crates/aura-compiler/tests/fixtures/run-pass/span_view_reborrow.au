@@ -1,0 +1,53 @@
+def total(values: Span[int64]) -> int64:
+    mut sum = 0
+    for value in values:
+        sum += value
+    return sum
+
+def describe(values: Span[int64]):
+    view alias = values
+    print(len(alias))
+    print(alias[0])
+    print(alias.to_list())
+    print(total(alias))
+    view inner = alias[1:]
+    print(inner.to_list())
+
+def bump(values: mut Span[int64]):
+    view mut alias = values
+    alias[0] += 100
+    alias.reverse()
+
+def middle(values: list[int64]) -> view Span[int64] from values:
+    view part = values[1:-1]
+    view alias = part
+    return view alias
+
+def main():
+    mut values: list[int64] = [10, 20, 30, 40]
+    view part = values[1:3]
+    view alias = part
+    print(len(alias))
+    print(alias[0])
+    print(alias[-1])
+    print(alias.to_list())
+    print(30 in alias)
+    print(40 in alias)
+    print(alias == [20, 30])
+    print(total(alias))
+    for value in alias:
+        print(value)
+    view again = (alias)
+    print(again.to_list())
+    copied = again[1:]
+    print(copied)
+    describe(values[1:4])
+    bump(values[0:3])
+    print(values)
+    view mut writable = values[2:]
+    view mut through = writable
+    through[0] = 7
+    through.swap(0, 1)
+    print(values)
+    view inner = middle(values)
+    print(inner.to_list())

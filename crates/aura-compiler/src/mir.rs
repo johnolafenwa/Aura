@@ -12443,6 +12443,14 @@ impl<'a> Lowerer<'a> {
                     Some((base_view, _)) => (base_view, true),
                     None => (view, false),
                 };
+                // `view alias = part` reborrows a span and `view alias =
+                // values` lends a `Span[T]` parameter: either way the new
+                // view covers the same range.
+                let reborrowed_range = if pending_span {
+                    None
+                } else {
+                    self.span_range_of(&view.source).map(|(_, range)| range)
+                };
                 let ty = self.infer_expr_type(&view.source).or_else(|| {
                     let ExprKind::Call { callee, .. } = &grouped_mir_expr(&view.source).kind else {
                         return None;
@@ -12567,6 +12575,8 @@ impl<'a> Lowerer<'a> {
                 if pending_span {
                     let (_, pending) = span_view.expect("checked pending span view");
                     self.finish_span_view(&loan_name, pending);
+                } else if let Some(range) = reborrowed_range {
+                    self.span_ranges.insert(loan_name.clone(), range);
                 }
                 if let Some(scope) = self.loan_scopes.last_mut() {
                     scope.push(loan_name);
