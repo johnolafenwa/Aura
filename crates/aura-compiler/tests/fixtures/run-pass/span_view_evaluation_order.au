@@ -1,6 +1,22 @@
 class Holder:
     items: list[int64]
 
+class Grid:
+    rows: list[list[int64]]
+
+class Box:
+    holder: Holder
+
+def rows_of(grid: Grid) -> view list[list[int64]] from grid:
+    return view grid.rows
+
+def holder_of(box: Box) -> view Holder from box:
+    return view box.holder
+
+def make() -> list[list[int64]]:
+    print("make")
+    return [[1, 2, 3], [4, 5, 6]]
+
 def trace(label: str, value: int64) -> int64:
     print(label)
     return value
@@ -28,6 +44,16 @@ def main():
     print(total(rows[trace("row", 0)][trace("start", 1):trace("end", 3)]))
     view rest = tail(rows[trace("row", 1)][trace("start", 0):trace("end", 2)])
     print(rest.to_list())
+    print(total(make()[trace("row", 1)][trace("start", 1):trace("end", 3)]))
+    flag = false
+    first: list[list[int64]] = [[1, 2], [3, 4]]
+    second: list[list[int64]] = [[5, 6], [7, 8]]
+    print(total((first if flag else second)[trace("row", 1)][trace("start", 1):]))
+    print(first)
+    grids = [Grid([[1, 2, 3], [4, 5, 6]]), Grid([[7, 8], [9, 10]])]
+    print(total(rows_of(grids[trace("grid", 1)])[trace("row", 1)][trace("start", 1):]))
+    box = Box(Holder([1, 2, 3]))
+    print(total(holder_of(box).items[trace("start", 1):]))
 
     grid: list[list[list[int64]]] = [[[1, 2], [3, 4]], [[5, 6], [7, 8]]]
     view cell = grid[trace("outer", 1)][trace("inner", 0)][trace("start", 1):]

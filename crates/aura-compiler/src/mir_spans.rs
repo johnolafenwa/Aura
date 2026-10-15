@@ -352,27 +352,49 @@ impl Lowerer<'_> {
             .cloned()
     }
 
-    /// Evaluates the element and entry selectors of a span base once, left
-    /// to right, and returns the base with each evaluated selector replaced
-    /// by the temporary that holds it. Lending the returned place later only
-    /// reads those temporaries, so a slice evaluates its base before its
-    /// endpoints even though the base loan begins after them.
+    /// Evaluates a span base once, before the slice endpoints, and returns
+    /// the base with each evaluated part replaced by the place that holds
+    /// it. A root that is not a name, such as a call, is evaluated first.
+    /// Element and entry selectors follow, left to right. Lending the
+    /// returned place later only reads those places, so the base loan can
+    /// begin after the endpoints. A base rooted at a call that returns a
+    /// view is left as written, because that call must lower into its loan.
     fn pin_span_base(&mut self, base: &Expr) -> Expr {
+        if self.returned_view_source(base).is_some() {
+            base.clone()
+        } else {
+            self.pin_span_place(base)
+        }
+    }
+
+    fn pin_span_place(&mut self, base: &Expr) -> Expr {
         let kind = match &base.kind {
-            ExprKind::Group(inner) => ExprKind::Group(Box::new(self.pin_span_base(inner))),
+            ExprKind::Group(inner) => ExprKind::Group(Box::new(self.pin_span_place(inner))),
             ExprKind::Member { object, field } => ExprKind::Member {
-                object: Box::new(self.pin_span_base(object)),
+                object: Box::new(self.pin_span_place(object)),
                 field: field.clone(),
             },
             ExprKind::Index { object, index } => {
-                let object = self.pin_span_base(object);
+                let object = self.pin_span_place(object);
                 let index = self.pin_span_selector(&object, index);
                 ExprKind::Index {
                     object: Box::new(object),
                     index: Box::new(index),
                 }
             }
-            _ => return base.clone(),
+            ExprKind::Name(_) => return base.clone(),
+            // The root value, read the way an index reads its collection.
+            _ => match self.lower_expr_at_sequence_point(base, None) {
+                Operand::Place(place) | Operand::MovePlace(place) => ExprKind::Name(place),
+                value => {
+                    let temp = self.new_temp_for_expr(base);
+                    self.emit(Instruction::Assign {
+                        target: temp.clone(),
+                        value: Rvalue::Use(value),
+                    });
+                    ExprKind::Name(temp)
+                }
+            },
         };
         Expr {
             kind,
