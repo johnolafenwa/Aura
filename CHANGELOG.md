@@ -174,6 +174,8 @@ changes".
   `view mut w = items` then `w[2] = 9`, failed MIR validation.
 - An unknown `dict` member such as `get_optional` reports `AU2001` with help
   that points to `get` and `in`.
+- TLS connections use rustls 0.23.46, which fixes advisories
+  RUSTSEC-2026-0346 through RUSTSEC-2026-0349.
 
 ### Documentation
 
