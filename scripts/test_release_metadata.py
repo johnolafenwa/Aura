@@ -10,8 +10,8 @@ import unittest
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-VERSION = "0.3.6"
-EXTENSION_VERSION = "0.3.7"
+VERSION = "0.4.0"
+EXTENSION_VERSION = "0.4.0"
 
 
 class ReleaseMetadataTests(unittest.TestCase):
@@ -76,6 +76,41 @@ class ReleaseMetadataTests(unittest.TestCase):
         # This npm workspace intentionally uses one root lock. The LSP and
         # extension entries above are their lock records; package-local lock
         # files would split dependency resolution and are not maintained.
+
+    def test_documentation_names_the_current_semantic_interface_and_cache_format(self) -> None:
+        compiler = (ROOT / "crates/aura-compiler/src/lib.rs").read_text()
+        schema = re.search(
+            r"pub const SEMANTIC_INTERFACE_SCHEMA_VERSION: u32 = (\d+);", compiler
+        )
+        self.assertIsNotNone(schema)
+        schema = schema.group(1)
+        cli = (ROOT / "crates/aura/src/main.rs").read_text()
+        cache = re.search(r'const NATIVE_CACHE_FORMAT: &str = "aura-native-cache-(v\d+)";', cli)
+        self.assertIsNotNone(cache)
+        cache = cache.group(1)
+
+        pages = [
+            "README.md",
+            "crates/aura/README.md",
+            "tools/aura-language-server/README.md",
+            "docs/manual/cli-and-tooling.md",
+            "docs/manual/diagnostics.md",
+            "docs/manual/status-and-compatibility.md",
+        ]
+        patterns = [
+            r"semantic[_ -]interface[_ -](?:schema )?version(?: is)?[`:\" ]*(\d+)",
+            r"semantic schema version `(\d+)`",
+            r"semantic-interface\s+schema(?: version)?\s+`v?(\d+)`",
+        ]
+        for page in pages:
+            text = (ROOT / page).read_text()
+            for pattern in patterns:
+                for found in re.findall(pattern, text, re.IGNORECASE):
+                    with self.subTest(page=page, pattern=pattern):
+                        self.assertEqual(found, schema)
+            for found in re.findall(r"native cache format `(v\d+)`", text):
+                with self.subTest(page=page, cache=found):
+                    self.assertEqual(found, cache)
 
     def test_scheduled_safety_jobs_pin_the_instrumented_toolchain_and_leaks(self) -> None:
         workflow = (ROOT / ".github/workflows/safety.yml").read_text()
