@@ -197,14 +197,16 @@ Stdin analysis and completion do not change package lockfiles.
 - hover information
 - definition targets
 
-The output is one JSON object with `diagnostics`, `symbols`, and `occurrences`
-arrays. Positions are zero-based.
+The output is one JSON object with `diagnostics`, `symbols`, `occurrences`,
+and `dependencies` arrays. Lines are zero-based. A `character` field is a
+zero-based UTF-8 byte offset within its line.
 
 | Array | Entry fields |
 | --- | --- |
 | `diagnostics` | `code`, `line`, `start_character`, `end_character`, `message`, numeric `severity`, `secondary_spans`, `notes`, `help`, `edits`, and the always-present `call_frames` and `task_ancestry` arrays. |
-| `symbols` | `name`, `kind`, `detail`, and recursive `children`. |
-| `occurrences` | `hover` and an optional `definition` range, whose `file_path` may identify another module. |
+| `symbols` | `name`, `kind`, `detail`, a range that selects the declared name, and recursive `children`. |
+| `occurrences` | `hover` and an optional `definition` range, whose `file_path` may identify another module. A declaration's range selects its name. |
+| `dependencies` | The absolute path of each source file read for the modules the file imports, directly or transitively. When a check fails, the list keeps the files read before the failure. |
 
 Analysis frame spans use zero-based coordinates and an optional `file_path`.
 An edit includes its range, replacement text, and applicability.
@@ -222,9 +224,9 @@ cargo run -p aura -- complete --line 12 --character 8 --trigger . app.au
 ```
 
 The result is a JSON array of `{ "name": str, "kind": str, "detail": str }`
-objects. `line` and `character` are zero-based. `--trigger` uses its first
-character. The output is meant for tools, not people, but it helps when
-debugging the LSP.
+objects. `line` and `character` are zero-based, and `character` counts UTF-8
+bytes like the `analyze` ranges. `--trigger` uses its first character. The
+output is meant for tools, not people, but it helps when debugging the LSP.
 
 ## Signature Help, References, And Rename
 
@@ -241,8 +243,9 @@ aura rename --line 5 --character 7 --new-name answer --stdin /project/main.au
 ```
 
 Each command reads source from stdin and returns JSON. They also accept a
-source file in place of `--stdin <virtual-path>`. They do not change source or
-package lockfiles.
+source file in place of `--stdin <virtual-path>`. Their positions and ranges
+use the Language Server Protocol unit: `character` counts UTF-16 code units.
+They do not change source or package lockfiles.
 
 | Command | Result | When refused or unresolved |
 | --- | --- | --- |
@@ -277,7 +280,12 @@ Each response is one line. It contains the same `id`,
 `semantic_interface_version: 19`, and either `result` or an `error` string.
 
 - The path gives the virtual source its package and import context.
-- Ranges and completion positions are zero-based.
+- Ranges and completion positions are zero-based and use the units of the
+  matching command above.
+- An optional `overlays` array of `{"path": str, "source": str}` objects gives
+  unsaved text for other files. The compiler reads each overlay in place of
+  the file at that absolute path. The request's own `source` still wins for
+  its `path`.
 - A missing or different semantic interface version is an incompatible
   request and returns a schema-mismatch error.
 
@@ -483,7 +491,14 @@ diagnostics, symbols, hover, go-to-definition, completions, and whole-document
 formatting through the Language Server Protocol (LSP). Hover, completion, and
 signature help show declaration docstrings, as
 [Docstrings And API Docs](/manual/docstrings) describes. Requests are debounced, cancellable,
-version-guarded, and invalidated by dependency.
+version-guarded, and invalidated by dependency. The server converts compiler
+byte offsets to the editor's UTF-16 positions.
+
+The compiler checks each open document against the unsaved text of the other
+open Aura documents. A change to an open document refreshes the documents that
+import it. When an `.au` file is saved, created, or deleted, the client's
+watched-file event refreshes those importers and any document whose last
+check failed.
 
 If the compiler process cannot start, a small lexical recovery layer provides
 declarations and top-level completion. It does not duplicate compiler

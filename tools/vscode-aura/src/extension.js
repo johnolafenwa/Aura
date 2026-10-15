@@ -65,12 +65,25 @@ async function activate(context) {
           indentUnit,
           precedingLines
         );
-        const newPosition = new vscode.Position(selection.active.line + 1, indent.length);
         return {
           selection,
-          text: `${eol}${indent}`,
-          cursor: new vscode.Selection(newPosition, newPosition)
+          indent,
+          text: `${eol}${indent}`
         };
+      });
+
+      // Every inserted line break moves each later cursor down one more line.
+      const documentOrder = [...newSelections].sort(
+        (left, right) =>
+          left.selection.active.line - right.selection.active.line ||
+          left.selection.active.character - right.selection.active.character
+      );
+      documentOrder.forEach((entry, earlierBreaks) => {
+        const newPosition = new vscode.Position(
+          entry.selection.active.line + 1 + earlierBreaks,
+          entry.indent.length
+        );
+        entry.cursor = new vscode.Selection(newPosition, newPosition);
       });
 
       await activeEditor.edit(

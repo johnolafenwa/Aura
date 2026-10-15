@@ -933,3 +933,175 @@ test(
     ]);
   }
 );
+
+const workspaceRoot = path.resolve(__dirname, "../../..");
+const workspaceCompiler = path.join(
+  workspaceRoot,
+  "target",
+  "debug",
+  process.platform === "win32" ? "aura.exe" : "aura"
+);
+
+async function startWorkspaceServer(t, folders) {
+  const serverPath = process.env.AURA_EXTENSION_SERVER_PATH
+    ? path.resolve(process.env.AURA_EXTENSION_SERVER_PATH)
+    : path.resolve(__dirname, "..", "dist", "server.js");
+  assert.equal(fs.existsSync(serverPath), true, `language server bundle not found: ${serverPath}`);
+  const client = startLanguageServer(serverPath, {
+    AURA_LSP_AURA_PATH: process.env.AURA_LSP_AURA_PATH || workspaceCompiler
+  });
+  t.after(() => client.dispose());
+  const initialize = await client.request("initialize", {
+    processId: null,
+    rootUri: `file://${folders[0]}`,
+    capabilities: {},
+    workspaceFolders: folders.map((folder) => ({ uri: `file://${folder}`, name: path.basename(folder) }))
+  });
+  assert.equal(initialize.error, undefined, JSON.stringify(initialize.error));
+  client.notify("initialized", {});
+  return client;
+}
+
+function publishedDiagnostics(client, uri, predicate = () => true) {
+  return client
+    .waitForNotification(
+      "textDocument/publishDiagnostics",
+      (message) => message.params?.uri === uri && predicate(message.params.diagnostics)
+    )
+    .then((message) => message.params.diagnostics);
+}
+
+test("bundled language server maps Unicode positions and selects declared names", async (t) => {
+  const client = await startWorkspaceServer(t, [workspaceRoot]);
+  const lines = [
+    "def helper() -> int64:",
+    "    return 1",
+    "",
+    "def main():",
+    "    value = helper()",
+    '    print(len("😀") + value)',
+    ""
+  ];
+  const uri = `file://${path.join(workspaceRoot, "unicode-protocol.au")}`;
+  const diagnostics = publishedDiagnostics(client, uri);
+  client.notify("textDocument/didOpen", {
+    textDocument: { uri, languageId: "aura", version: 1, text: lines.join("\n") }
+  });
+  assert.deepEqual(await diagnostics, []);
+
+  assert.equal(lines[5].indexOf("value"), 22);
+  for (const character of [22, 26]) {
+    const hover = await client.request("textDocument/hover", {
+      textDocument: { uri },
+      position: { line: 5, character }
+    });
+    assert.equal(hover.result?.contents?.value, "```aura\nbinding value: int64\n```");
+    assert.deepEqual(hover.result.range, {
+      start: { line: 5, character: 22 },
+      end: { line: 5, character: 27 }
+    });
+    const definition = await client.request("textDocument/definition", {
+      textDocument: { uri },
+      position: { line: 5, character }
+    });
+    assert.deepEqual(definition.result?.range, {
+      start: { line: 4, character: 4 },
+      end: { line: 4, character: 9 }
+    });
+  }
+
+  const helperDefinition = await client.request("textDocument/definition", {
+    textDocument: { uri },
+    position: { line: 4, character: lines[4].indexOf("helper") }
+  });
+  const helperName = {
+    start: { line: 0, character: 4 },
+    end: { line: 0, character: 10 }
+  };
+  assert.deepEqual(helperDefinition.result?.range, helperName);
+  const symbols = await client.request("textDocument/documentSymbol", {
+    textDocument: { uri }
+  });
+  const helper = symbols.result.find((symbol) => symbol.name === "helper");
+  assert.deepEqual(helper.selectionRange, helperName);
+});
+
+test(
+  "bundled language server refreshes importers when a dependency changes",
+  { skip: process.platform === "win32" },
+  async (t) => {
+    const temp = fs.mkdtempSync(path.join(require("node:os").tmpdir(), "aura-lsp-dependency-"));
+    t.after(() => fs.rmSync(temp, { recursive: true, force: true }));
+    const libraryPath = path.join(temp, "library.au");
+    const libraryUri = `file://${libraryPath}`;
+    const intLibrary = "public def answer() -> int64:\n    return 42\n";
+    const textLibrary = 'public def answer() -> str:\n    return "forty-two"\n';
+    fs.writeFileSync(libraryPath, intLibrary);
+    const mainUri = `file://${path.join(temp, "main.au")}`;
+    const mainLines = ["from library import answer", "", "def main():", "    print(answer() + 1)", ""];
+    fs.writeFileSync(path.join(temp, "main.au"), mainLines.join("\n"));
+    // `show.au` checks with either return type, so its hover stays available.
+    const showUri = `file://${path.join(temp, "show.au")}`;
+    const showLines = ["from library import answer", "", "def show():", "    print(answer())", ""];
+    fs.writeFileSync(path.join(temp, "show.au"), showLines.join("\n"));
+    const hoverAnswer = async (uri, lines) =>
+      (
+        await client.request("textDocument/hover", {
+          textDocument: { uri },
+          position: { line: 3, character: lines[3].indexOf("answer") }
+        })
+      ).result?.contents?.value;
+    const failing = (diagnostics) => diagnostics.length > 0;
+    const clean = (diagnostics) => diagnostics.length === 0;
+
+    const client = await startWorkspaceServer(t, [workspaceRoot, temp]);
+    let published = publishedDiagnostics(client, mainUri);
+    const showPublished = publishedDiagnostics(client, showUri);
+    client.notify("textDocument/didOpen", {
+      textDocument: { uri: mainUri, languageId: "aura", version: 1, text: mainLines.join("\n") }
+    });
+    client.notify("textDocument/didOpen", {
+      textDocument: { uri: showUri, languageId: "aura", version: 1, text: showLines.join("\n") }
+    });
+    assert.deepEqual(await published, []);
+    assert.deepEqual(await showPublished, []);
+    assert.match(await hoverAnswer(mainUri, mainLines), /function answer\(\) -> int64/);
+    assert.match(await hoverAnswer(showUri, showLines), /function answer\(\) -> int64/);
+
+    // A saved change to a closed dependency arrives as a watched-file event.
+    fs.writeFileSync(libraryPath, textLibrary);
+    published = publishedDiagnostics(client, mainUri, failing);
+    client.notify("workspace/didChangeWatchedFiles", {
+      changes: [{ uri: libraryUri, type: 2 }]
+    });
+    assert.equal((await published)[0].source, "aura-compiler");
+    assert.equal(await hoverAnswer(mainUri, mainLines), undefined);
+    assert.match(await hoverAnswer(showUri, showLines), /function answer\(\) -> str/);
+
+    // An open dependency's unsaved buffer is what the importer checks against.
+    published = publishedDiagnostics(client, mainUri, clean);
+    client.notify("textDocument/didOpen", {
+      textDocument: { uri: libraryUri, languageId: "aura", version: 1, text: textLibrary }
+    });
+    client.notify("textDocument/didChange", {
+      textDocument: { uri: libraryUri, version: 2 },
+      contentChanges: [{ text: intLibrary }]
+    });
+    assert.deepEqual(await published, []);
+    assert.match(await hoverAnswer(mainUri, mainLines), /function answer\(\) -> int64/);
+    assert.match(await hoverAnswer(showUri, showLines), /function answer\(\) -> int64/);
+
+    // Closing the buffer without saving returns to the file on disk.
+    published = publishedDiagnostics(client, mainUri, failing);
+    client.notify("textDocument/didClose", { textDocument: { uri: libraryUri } });
+    assert.equal((await published).length, 1);
+
+    // Fixing the file on disk refreshes the importer even after it failed.
+    fs.writeFileSync(libraryPath, intLibrary);
+    published = publishedDiagnostics(client, mainUri, clean);
+    client.notify("workspace/didChangeWatchedFiles", {
+      changes: [{ uri: libraryUri, type: 2 }]
+    });
+    assert.deepEqual(await published, []);
+  }
+);
