@@ -66,6 +66,28 @@ Responses are bounded to 16 MiB. With a matching compiler, the server:
 - cancels obsolete completion work
 - guards asynchronous responses by document version
 - invalidates only changed documents and their dependents
+- sends the unsaved text of other open documents as `overlays`, so a document
+  is checked against the buffers it imports
+- refreshes importers on `workspace/didChangeWatchedFiles`, along with any
+  document whose last check failed
+
+The compiler's `dependencies` list names every source file an analysis read,
+including the files read before a failed check. The server keys dependents by
+that canonical path, so a linked path to the same file still refreshes them.
+
+## Positions
+
+Compiler analysis and completion use UTF-8 byte offsets within a line. LSP
+positions count UTF-16 code units. The bridge converts at the protocol
+boundary:
+
+- hover, definition, diagnostic, related-span, and symbol ranges convert with
+  the text the compiler analyzed
+- a definition in another file converts with that file's overlay or disk text
+- a completion position converts to a byte offset before the request
+
+Signature help, references, and rename already take and return UTF-16
+positions, so the bridge forwards them unchanged.
 
 ## Diagnostics
 
@@ -142,6 +164,8 @@ path before you launch VS Code.
 | --- | --- |
 | `src/server.js` | LSP transport and request handlers |
 | `src/compiler_bridge.js` | Owns the persistent compiler process and the machine-readable request lifecycle |
+| `src/document_state.js` | Caches analysis per document version and tracks dependents |
+| `src/positions.js` | Converts between compiler byte offsets and LSP UTF-16 positions |
 | `src/recovery.js` | Lexical recovery for when the compiler is unavailable, and nothing else |
 
 Two rules shape the design:
