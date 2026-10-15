@@ -5673,10 +5673,10 @@ test("compiler bridge completes capture boundaries and resolves bounded returned
     assert.deepEqual(definition, {
       uri: `file://${path.join(fs.realpathSync(tempRoot), "main.au")}`,
       range: {
-        start: { line: 1, character: traitLines[1].indexOf("def") },
+        start: { line: 1, character: traitLines[1].indexOf("get") },
         end: {
           line: 1,
-          character: traitLines[1].indexOf("def") + "get".length
+          character: traitLines[1].indexOf("get") + "get".length
         }
       }
     });
@@ -6395,4 +6395,55 @@ test("compiler hover shows imported docstrings from a real example", async () =>
   assert.ok(hovers.some((hover) => hover.includes("method restock(mut self, amount: int64) -> None\n```\n\nAdd units to the shelf.")));
   assert.ok(hovers.some((hover) => hover.includes("method label(self) -> str\n```\n\nReturn a one-line label.")));
   assert.ok(hovers.some((hover) => hover.includes("enum pkg.inventory.Level\n```\n\nHow full a shelf is.")));
+});
+
+test("compiler definitions and document symbols select declared names", async () => {
+  setWorkspaceRoots([repoRoot]);
+  const uri = `file://${path.join(repoRoot, "declared-names.au")}`;
+  const lines = [
+    "def helper() -> int64:",
+    "    return 1",
+    "",
+    "class Point:",
+    "    x: int64",
+    "",
+    "    def norm(self) -> int64:",
+    "        return self.x",
+    "",
+    "def main():",
+    "    point = Point(x=helper())",
+    "    print(point.norm())",
+    ""
+  ];
+  const analysis = await analyzeWithCompiler(uri, lines.join("\n"));
+  assert.ok(analysis);
+  assert.deepEqual(analysis.diagnostics, []);
+
+  const nameRange = (line, name) => ({
+    start: { line, character: lines[line].indexOf(name) },
+    end: { line, character: lines[line].indexOf(name) + name.length }
+  });
+  const symbols = compilerSymbolsToLsp(analysis);
+  const helper = symbols.find((symbol) => symbol.name === "helper");
+  assert.deepEqual(helper.selectionRange, nameRange(0, "helper"));
+  assert.deepEqual(helper.range, nameRange(0, "helper"));
+  const point = symbols.find((symbol) => symbol.name === "Point");
+  assert.deepEqual(point.selectionRange, nameRange(3, "Point"));
+  const norm = point.children.find((symbol) => symbol.name === "norm");
+  assert.deepEqual(norm.selectionRange, nameRange(6, "norm"));
+
+  for (const [name, declarationLine] of [
+    ["helper", 0],
+    ["Point", 3]
+  ]) {
+    const use = lines[10].indexOf(name);
+    assert.deepEqual(compilerDefinitionAtPosition(uri, analysis, 10, use), {
+      uri,
+      range: nameRange(declarationLine, name)
+    });
+  }
+  assert.deepEqual(compilerDefinitionAtPosition(uri, analysis, 11, lines[11].indexOf("norm")), {
+    uri,
+    range: nameRange(6, "norm")
+  });
 });

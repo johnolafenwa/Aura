@@ -64,69 +64,18 @@ fn request_analysis(path: &Path, source: &str) -> AnalysisOutput {
         std::env::current_dir().unwrap_or_default().join(path)
     };
     let canonical = crate::canonicalize_if_exists(&absolute).unwrap_or(absolute);
-    let mut declarations = Vec::new();
-    fn collect(
-        symbols: &mut [AnalysisSymbol],
-        source: &str,
-        declarations: &mut Vec<(AnalysisRange, AnalysisRange)>,
-    ) {
-        for symbol in symbols {
-            let old = AnalysisRange {
-                file_path: None,
-                line: symbol.line,
-                start_character: symbol.start_character,
-                end_character: symbol.end_character,
-            };
-            if let Some((start, end)) = source
-                .lines()
-                .nth(symbol.line)
-                .and_then(|line| find_identifier_in_line(line, &symbol.name))
-            {
-                let new = AnalysisRange {
-                    start_character: start,
-                    end_character: end,
-                    ..old.clone()
-                };
-                declarations.push((old, new));
-                symbol.start_character = start;
-                symbol.end_character = end;
-            }
-            collect(&mut symbol.children, source, declarations);
-        }
-    }
-    collect(&mut output.symbols, source, &mut declarations);
-    let mut imported_declarations = BTreeMap::new();
-    for item in &mut output.occurrences {
-        if let Some(definition) = &mut item.definition {
-            if definition
-                .file_path
-                .as_deref()
-                .is_some_and(|file| Path::new(file) == path || Path::new(file) == canonical)
-            {
-                definition.file_path = None;
-            }
-            let mapping = if let Some(file) = &definition.file_path {
-                imported_declarations
-                    .entry(file.clone())
-                    .or_insert_with(|| {
-                        let mut ranges = Vec::new();
-                        if let Ok(text) = std::fs::read_to_string(file) {
-                            if let Ok(module) = crate::parse_source(&text) {
-                                collect(&mut symbols_from_module(&module), &text, &mut ranges);
-                                for (old, new) in &mut ranges {
-                                    old.file_path = Some(file.clone());
-                                    new.file_path = Some(file.clone());
-                                }
-                            }
-                        }
-                        ranges
-                    })
-            } else {
-                &declarations
-            };
-            if let Some((_, replacement)) = mapping.iter().find(|(old, _)| old == definition) {
-                *definition = replacement.clone();
-            }
+    // Definitions in the requested file compare equal to its local ranges.
+    for definition in output
+        .occurrences
+        .iter_mut()
+        .filter_map(|item| item.definition.as_mut())
+    {
+        if definition
+            .file_path
+            .as_deref()
+            .is_some_and(|file| Path::new(file) == path || Path::new(file) == canonical)
+        {
+            definition.file_path = None;
         }
     }
     output

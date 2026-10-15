@@ -917,7 +917,7 @@ fn s1_frontend_analysis_resolves_trait_symbols_and_integer_round_results() {
     assert_eq!(resolved.hover, "```aura\ntrait Show\n```");
     assert_eq!(
         resolved.definition.expect("trait definition"),
-        range_from_span(Span::new(1, 1), "Show".len())
+        range_from_span(Span::new(1, 7), "Show".len())
     );
 
     let analysis = analyze_source(source);
@@ -1072,12 +1072,12 @@ fn machine_readable_analysis_covers_symbols_and_occurrences() {
 
 #[test]
 fn p64_extern_items_are_preserved_in_machine_readable_symbols() {
-    let module = crate::parser::parse(concat!(
+    let source = concat!(
         "public extern \"C\" opaque class ProcessHandle\n",
         "public extern \"C\" def getpid() -> int32\n",
-    ))
-    .expect("extern declarations should parse");
-    let symbols = symbols_from_module(&module);
+    );
+    let module = crate::parser::parse(source).expect("extern declarations should parse");
+    let symbols = symbols_from_module(&module, source);
 
     assert!(symbols.iter().any(|symbol| {
         symbol.kind == "class"
@@ -6903,9 +6903,12 @@ fn adr0038_analysis_resolves_unambiguous_bounded_trait_returned_view_methods() {
     assert_eq!(definition.line, 1);
     assert_eq!(
         definition.start_character,
-        lines[1].find("def").expect("method declaration")
+        lines[1].find("get").expect("method declaration")
     );
-    assert_eq!(definition.end_character, definition.start_character + 3);
+    assert_eq!(
+        definition.end_character,
+        definition.start_character + "get".len()
+    );
 }
 
 #[test]
@@ -9255,7 +9258,7 @@ fn type_alias_calls_resolve_targets_hover_definitions_and_completions() {
             .definition
             .as_ref()
             .map(|definition| (definition.line, definition.start_character)),
-        Some((2, 0)),
+        Some((2, 5)),
         "the alias use should navigate to its declaration"
     );
     assert_eq!(
@@ -10481,7 +10484,7 @@ fn properties_hover_complete_and_navigate_as_properties() {
             .definition
             .as_ref()
             .expect("a property read navigates to its getter");
-        assert_eq!((definition.line, definition.start_character), (4, 4));
+        assert_eq!((definition.line, definition.start_character), (4, 8));
     }
 
     let class = analysis
@@ -10571,4 +10574,144 @@ fn with_items_bind_entry_views_at_their_declared_names() {
         super::find_with_item_binding("value as alias", "alias"),
         Some((9, 14))
     );
+}
+
+fn declared_symbol<'a>(
+    symbols: &'a [super::AnalysisSymbol],
+    name: &str,
+) -> &'a super::AnalysisSymbol {
+    symbols
+        .iter()
+        .find_map(|symbol| {
+            if symbol.name == name {
+                Some(symbol)
+            } else {
+                symbol.children.iter().find(|child| child.name == name)
+            }
+        })
+        .unwrap_or_else(|| panic!("missing symbol `{name}`"))
+}
+
+fn definition_of<'a>(analysis: &'a super::AnalysisOutput, hover: &str) -> &'a super::AnalysisRange {
+    analysis
+        .occurrences
+        .iter()
+        .find(|occurrence| occurrence.hover.contains(hover))
+        .and_then(|occurrence| occurrence.definition.as_ref())
+        .unwrap_or_else(|| panic!("missing definition for `{hover}`"))
+}
+
+#[test]
+fn declaration_symbols_and_definitions_select_the_declared_name() {
+    let source = concat!(
+        "public def helper() -> int64:\n",
+        "    return 1\n",
+        "\n",
+        "class  Point:\n",
+        "    x: int64\n",
+        "\n",
+        "    def norm(self) -> int64:\n",
+        "        return self.x\n",
+        "\n",
+        "enum Color:\n",
+        "    Red\n",
+        "\n",
+        "trait Named:\n",
+        "    def name(self) -> str\n",
+        "\n",
+        "type Count = int64\n",
+        "\n",
+        "def main():\n",
+        "    point = Point(x=helper())\n",
+        "    print(point.norm())\n",
+        "    color = Color.Red\n",
+        "    count: Count = 1\n",
+        "    print(count)\n",
+    );
+    let analysis = analyze_source(source);
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "{:?}",
+        analysis.diagnostics
+    );
+
+    for (name, line, start) in [
+        ("helper", 0, 11),
+        ("Point", 3, 7),
+        ("x", 4, 4),
+        ("norm", 6, 8),
+        ("Color", 9, 5),
+        ("Red", 10, 4),
+        ("Named", 12, 6),
+        ("name", 13, 8),
+        ("Count", 15, 5),
+        ("main", 17, 4),
+    ] {
+        let symbol = declared_symbol(&analysis.symbols, name);
+        assert_eq!(
+            (symbol.line, symbol.start_character, symbol.end_character),
+            (line, start, start + name.len()),
+            "symbol `{name}` should select its declared name"
+        );
+    }
+
+    for (hover, line, start, len) in [
+        ("function helper() -> int64", 0, 11, "helper".len()),
+        ("class Point", 3, 7, "Point".len()),
+        ("method norm(self) -> int64", 6, 8, "norm".len()),
+        ("enum Color", 9, 5, "Color".len()),
+    ] {
+        let definition = definition_of(&analysis, hover);
+        assert_eq!(
+            (
+                definition.file_path.as_deref(),
+                definition.line,
+                definition.start_character,
+                definition.end_character
+            ),
+            (None, line, start, start + len),
+            "definition for `{hover}` should select the declared name"
+        );
+    }
+}
+
+#[test]
+fn imported_definitions_select_the_declared_name_in_their_source_file() {
+    let temp = TempDir::new("aura-analysis-imported-name");
+    let library_path = temp.path().join("library.au");
+    fs::write(
+        &library_path,
+        "public def  answer() -> int64:\n    return 42\n\npublic class Box:\n    public value: int64\n",
+    )
+    .expect("write library");
+    let main_path = temp.path().join("main.au");
+    let source = "from library import answer, Box\n\ndef main():\n    box = Box(value=answer())\n    print(box.value)\n";
+    fs::write(&main_path, source).expect("write main");
+
+    let analysis = analyze_path_source(&main_path, source);
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "{:?}",
+        analysis.diagnostics
+    );
+    let canonical_library = fs::canonicalize(&library_path)
+        .expect("canonical library path")
+        .display()
+        .to_string();
+    for (hover, line, start, len) in [
+        ("function answer() -> int64", 0, 12, "answer".len()),
+        ("class Box", 3, 13, "Box".len()),
+    ] {
+        let definition = definition_of(&analysis, hover);
+        assert_eq!(
+            (
+                definition.file_path.as_deref(),
+                definition.line,
+                definition.start_character,
+                definition.end_character
+            ),
+            (Some(canonical_library.as_str()), line, start, start + len),
+            "imported definition for `{hover}` should select the declared name"
+        );
+    }
 }
