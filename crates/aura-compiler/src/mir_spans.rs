@@ -285,7 +285,9 @@ impl Lowerer<'_> {
 
     /// `view part = f(items)` where `f` returns `view Span[T] from items`:
     /// the call returns the absolute range, then the view lends the origin
-    /// argument's base place with that range.
+    /// argument's base place with that range. When the call lent an element
+    /// or entry origin through a hidden loan, the view reborrows that loan,
+    /// so the origin's selector is not evaluated a second time.
     pub(super) fn begin_returned_span_view(
         &mut self,
         view: &crate::ast::ViewStmt,
@@ -297,6 +299,13 @@ impl Lowerer<'_> {
             _ => origin,
         };
         let range = self.lower_span_call_range(call);
+        let origin = match self.lent_origin_loan(&origin) {
+            Some(loan) => Expr {
+                kind: ExprKind::Name(loan),
+                span: origin.span,
+            },
+            None => origin,
+        };
         Some((
             crate::ast::ViewStmt {
                 source: origin,
@@ -326,6 +335,19 @@ impl Lowerer<'_> {
         args.iter()
             .find(|arg| arg.name.as_deref() == Some(contract.origin.as_str()))
             .map(|arg| arg.value.clone())
+    }
+
+    /// The live hidden loan through which a call lent the element or entry
+    /// that `origin` names, if the call took one.
+    fn lent_origin_loan(&self, origin: &Expr) -> Option<String> {
+        [origin, grouped_mir_expr(origin)]
+            .into_iter()
+            .find_map(|expr| {
+                self.contextual_loan_by_span
+                    .get(&(expr.span.line, expr.span.column))
+            })
+            .filter(|loan| self.view_sources.contains_key(*loan))
+            .cloned()
     }
 
     /// Calls a span-returning function and reads its `(start, len)` range.
