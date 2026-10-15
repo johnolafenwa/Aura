@@ -12,18 +12,24 @@ Last updated: 2026-10-15
   `2026-10-15-v0.4.0-security-review.md`.
 - Merged as PR #49 (`f8257c8`) after green hosted CI.
 
-## Aura 0.4.0 preview release (in progress)
+## Aura 0.4.0 preview release (complete)
 
-- Target: release Batches 2, 3, and 4 as `v0.4.0-preview`, as John asked.
-  CLI, compiler, language server, and VS Code extension 0.4.0.
-- Done: release preparation merged as PR #48 (`53382d17`). An external
-  review of that commit found 11 defects, so the tag was held. All 11 are
-  fixed with regression tests, plus element views of returned views, the
-  docs deploy gate, and stale 0.3 labels. Details are in
-  `2026-10-14-v0.4.0-preview-release.md` and
-  `2026-10-15-v0.4.0-review-fixes.md`.
-- Remaining: hosted CI and merge of the review-fix PR, then the
-  `v0.4.0-preview` tag on the merge commit and the Release run.
+- Released 2026-10-15 from `main` at `cbb654e4` (PR #50) as
+  `v0.4.0-preview`: CLI, compiler, language server, and VS Code extension
+  0.4.0. It ships Batches 2, 3, and 4. Release preparation merged as PR #48
+  (`53382d17`). An external review of that commit found 11 defects, so its
+  tag was held and never pushed. PR #50 fixes all 11 with regression tests,
+  plus element views of returned views, the docs deploy gate, and stale 0.3
+  labels. The security fixes from PR #49 are included.
+- Hosted CI `38741730088` passed on PR #50 on both platforms, and main CI
+  `38759172723` runs on the merge commit. The annotated, unsigned tag on
+  `cbb654e4` ran Release `38762272903`, which published the GitHub Release
+  with three CLI archives, the docs archive, and the VSIX, and published
+  extension 0.4.0 to the Visual Studio Marketplace and Open VSX. Details
+  are in `2026-10-14-v0.4.0-preview-release.md`,
+  `2026-10-15-v0.4.0-review-fixes.md`, and
+  `2026-10-15-v0.4.0-security-review.md`.
+- `VSCE_PAT` must be an org-scoped token before 2026-12-01.
 
 ## Batch 4: everyday syntax and API usability (complete)
 
