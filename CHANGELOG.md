@@ -7,6 +7,41 @@ in this file.
 
 ## Unreleased
 
+## VS Code extension 0.4.0 — 2026-10-15
+
+- Bundles language server 0.4.0, which speaks semantic interface version 19.
+- Format Document runs the compiler's formatter, the same one `aura fmt`
+  uses. Set `"editor.formatOnSave": true` under `"[aura]"` to format on save.
+  A buffer with a syntax error is left unchanged.
+- Hover, completion, and signature help show declaration docstrings.
+  Signature help also shows each parameter's `Args:` entry.
+- Statement-position triple-quoted strings get the
+  `string.quoted.docstring` scope, so themes can color docstrings apart from
+  other strings.
+- The language server runs the compiler named by `AURA_LSP_AURA_PATH`, or
+  `aura` on `PATH`. It runs a compiler from the opened folder only when
+  `AURA_LSP_USE_WORKSPACE_COMPILER=1` is set. The extension does not run in
+  untrusted or virtual workspaces.
+- Hover, go-to-definition, diagnostics, document symbols, and completion
+  map compiler byte offsets to editor positions. Non-ASCII text earlier on a
+  line no longer shifts their results.
+- Saving, creating, or deleting an `.au` file refreshes the diagnostics and
+  hover of every open file that imports it.
+- An open file is checked against the unsaved text of the other open Aura
+  files.
+- Go-to-definition and the outline select the declared name, such as
+  `helper` in `def helper()`, instead of text from the `def` keyword.
+- Pressing Enter with several cursors places each cursor on its own new
+  line.
+
+## 0.4.0 — 2026-10-15 (technical preview)
+
+Aura 0.4.0 adds class initializers, typed context managers, `Span[T]`
+slice views, read-only properties, a `Display` trait, structural patterns,
+and docstrings. `aura fmt` reflows code, and `aura doc` generates API pages.
+Source written for 0.3.6 may need the changes listed under "Breaking
+changes".
+
 ### Security
 
 - The language server no longer runs `target/debug/aura`,
@@ -19,26 +54,6 @@ in this file.
 - The HTTP runtime rejects a `Content-Length` or chunk size with a sign, such
   as `+5`. Only digits are valid, so Aura agrees with proxies on where a
   message ends.
-
-## VS Code extension 0.4.0 — 2026-10-15
-
-- Bundles language server 0.4.0, which speaks semantic interface version 19.
-- Format Document runs the compiler's formatter, the same one `aura fmt`
-  uses. Set `"editor.formatOnSave": true` under `"[aura]"` to format on save.
-  A buffer with a syntax error is left unchanged.
-- Hover, completion, and signature help show declaration docstrings.
-  Signature help also shows each parameter's `Args:` entry.
-- Statement-position triple-quoted strings get the
-  `string.quoted.docstring` scope, so themes can color docstrings apart from
-  other strings.
-
-## 0.4.0 — 2026-10-15 (technical preview)
-
-Aura 0.4.0 adds class initializers, typed context managers, `Span[T]`
-slice views, read-only properties, a `Display` trait, structural patterns,
-and docstrings. `aura fmt` reflows code, and `aura doc` generates API pages.
-Source written for 0.3.6 may need the changes listed under "Breaking
-changes".
 
 ### Breaking changes
 
@@ -65,6 +80,8 @@ changes".
 - `aura fmt` reflows code to an 88-column layout with two blank lines
   between top-level declarations. Running it on existing files changes most
   of them, so `aura fmt --check` fails until the code is reformatted once.
+- `aura complete` reads its character position as a UTF-8 byte offset, the
+  same unit as the columns `aura analyze` reports.
 
 ### Language
 
@@ -73,11 +90,14 @@ changes".
   writing. A span supports indexing, iteration, `in`, `==`, `len`, `index`,
   `count`, `reverse`, `sort`, `swap`, `fill`, and `to_list`. An invalid
   range or position traps with `AU4003`.
+- **Span evaluation.** A span evaluates its base, start, and end once each,
+  in that order. `view alias = part` reborrows a span with the same range.
 - **Span parameters.** A `Span[T]` or `mut Span[T]` parameter accepts a
   slice, a whole list, or another span, as in `total(values[1:3])`.
 - **Returned range views.** A function can return a range of a list
   parameter with `-> view Span[T] from values`. Bind the result with `view`
-  or `view mut`. Any other use reports `AU3010`.
+  or `view mut`. Any other use reports `AU3010`. The call evaluates its
+  origin argument once, so `middle(rows[i()])` covers the row the call used.
 - **Union-parameter borrowing.** A bare union parameter such as
   `str | None` borrows a member argument for the call. A local, field,
   list element, dictionary entry, loop binding, or view works, and nothing
@@ -137,6 +157,9 @@ changes".
 - **Class patterns.** `Point(x=0, y=y)` matches a class value or a union
   member class and tests the named fields. `match own` moves the fields out.
   Invalid class patterns report `AU2040`.
+- **Generic class patterns.** Over a union, `Box()` matches every
+  specialization of `Box` in the union. A tested field whose type differs
+  between those specializations reports `AU2040`.
 - **Docstrings.** A triple-quoted string as the first statement of a module,
   class, enum, trait, function, or method documents it. A triple-quoted
   string on the line after a field documents the field. Docstrings produce
@@ -149,7 +172,14 @@ changes".
   four-space indentation, operator and comma spacing, blank-line rules,
   88-column bracket reflow, and magic trailing commas. Comments and literal
   text are kept exactly. The output must lex to the same tokens and parse,
-  or the file is left unchanged.
+  or the file is left unchanged. A parenthesized lambda keeps its
+  parameters together and never gains a trailing comma.
+- **Analysis dependencies.** `aura analyze` reports a `dependencies` array
+  with every source file the check read. A failed check keeps the files it
+  read before the failure.
+- **Unsaved buffers.** `aura lsp` accepts an optional `overlays` array of
+  `{"path", "source"}` objects. The compiler reads that text in place of the
+  named files.
 - **`aura fmt --stdin`.** Formats standard input to standard output. Add
   `--check` to report without writing.
 - **Editor formatting.** The `aura lsp` compiler service has a `format`
@@ -189,6 +219,16 @@ changes".
   that points to `get` and `in`.
 - TLS connections use rustls 0.23.46, which fixes advisories
   RUSTSEC-2026-0346 through RUSTSEC-2026-0349.
+- Field reads, nested fields, method calls, and field writes such as
+  `point.x += 10` work on a class value narrowed by `is not None`. This
+  includes a module-qualified class such as `geometry.Point | None`. The
+  checker reported `AU2999`.
+- Moving a non-copy field out of a narrowed union reports `AU3004` with a
+  fix. Passing a narrowed field to a `mut T | None` parameter passes MIR
+  validation.
+- A view of a list element of a returned view, such as
+  `view first = rows_of(grid)[0]`, reports `AU3004` and asks for a `view`
+  binding first. It failed at run time with `AU4001`.
 
 ### Documentation
 

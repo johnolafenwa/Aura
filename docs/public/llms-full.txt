@@ -3126,7 +3126,7 @@ The formatter works on tokens. It applies these rules:
 | Spacing | One space around binary operators, after a comma, and after a colon in annotations, dictionary entries, and block headers. No space inside brackets, before a comma, before a call or index bracket, or in a slice. |
 | Defaults and keywords | No space around `=` in a keyword argument. A parameter default after a type annotation keeps one space on each side. |
 | Blank lines | At most two blank lines at module level and one inside a body. Two blank lines separate top-level declarations. No blank line starts a body or ends the file. |
-| Reflow | A statement that fits in 88 columns goes on one line. A longer statement breaks its outermost bracket first and puts each element on its own line, indented one level. A list of two or more elements then ends with a trailing comma. A comprehension stays one element. Breaking repeats inward until each line fits. A signature breaks its parameter list before its result type. |
+| Reflow | A statement that fits in 88 columns goes on one line. A longer statement breaks its outermost bracket first and puts each element on its own line, indented one level. A list of two or more elements then ends with a trailing comma. A comprehension stays one element. A lambda keeps its parameters in one element, so `(lambda a, b: a + b)` never becomes a tuple. Breaking repeats inward until each line fits. A signature breaks its parameter list before its result type. |
 | Magic trailing comma | A bracketed list written with a trailing comma stays one element per line, even when it would fit. A one-element tuple such as `(x,)` is not affected. |
 | Comments | A comment stays on the line it started on. A comment inside a bracketed list keeps that list one element per line. |
 | Literals | String, f-string, raw string, triple-quoted, and number literals keep their exact source text, including docstrings. |
@@ -4381,9 +4381,13 @@ values[start:end]` lends it for writing and needs a mutable list.
 
 - Endpoints follow the slice rules: `int64` endpoints, an omitted endpoint
   means the start or end, and a negative endpoint counts from the end once.
+- A span evaluates its base, start, and end once each, in that order. In
+  `rows[i][a:b]`, `i` runs before `a` and `b`.
 - An invalid or reversed range traps with `AU4003` when the span is created.
 - Slicing a span with `view inner = part[1:]` makes a nested span. Its
   endpoints are positions in `part`, and it must fit inside `part`.
+- `view alias = part` reborrows a span. `alias` covers the same range as
+  `part`. A `Span[T]` parameter reborrows the same way.
 
 A parameter of type `Span[T]` or `mut Span[T]` accepts a slice such as
 `total(values[1:3])`, a whole list such as `total(values)`, or an existing
@@ -4432,6 +4436,10 @@ def main():
 Bind the result with `view`, or `view mut` for a `view mut Span[T]` result.
 Using the call in any other position reports `AU3010`. A method cannot return
 a span of its receiver.
+
+The call evaluates its origin argument once. For an element or entry origin,
+such as `middle(rows[i])`, the view covers the element that the call
+selected.
 
 ### Span Ownership
 
@@ -5608,7 +5616,7 @@ Each row names a reference area and the tests, fixtures, and maintained examples
 | Power, `round`, and `divmod`: right-associative precedence, exact numeric types, checked integer results, ties-to-even conversion, paired floor quotient/remainder, runtime classification, one-time evaluation, and MIR/direct parity | focused parser/sema/integer/runtime-value/MIR/native tests; `numeric_round_divmod`, `bitwise_power`, and numeric failure fixtures; `examples/numbers/bit_packing.au`; language-server and extension coverage; and the forced MIR/direct parity matrix |
 | Exact triple-quoted and raw string forms plus static f-string format specifications: delimiter and escape rules, no whitespace normalization, Unicode-scalar width and string precision, sign-aware numeric zero padding, type-directed numeric codes, binary32 identity, left-to-right evaluation, focused raw/triple-f diagnostics, formatter preservation, and MIR/direct parity | focused lexer/parser/sema/runtime-value/MIR/native tests; `string_literal_forms_and_format_specs`, `fstring_zero_padding`, and `fstring_*` rejection fixtures; `examples/strings/literal_forms_and_formatting.au`; compiler-bridge and extension grammar/snippet tests; and the forced MIR/direct parity matrix |
 | Match guards, or-patterns, and top-level catch-all bindings: exact-`bool` guards, left-to-right alternatives, identical alternative bindings, guarded-arm reachability and exhaustiveness, delayed `match own` extraction, mutable candidate writeback before false continuation/failure/trap and every selected-arm exit, complete-scrutinee binding capabilities, and MIR/direct parity | focused parser/sema/MIR/analysis tests; the `match_guard*`, `match_own*`, `match_mut_guard*`, `match_root_binding_patterns`, `or_pattern*`, guarded-exhaustiveness, and `match_expression_class_variant_pattern` fixtures; `examples/enums/match_guards_and_or_patterns.au`; compiler-bridge tests; and the forced MIR/direct parity matrix |
-| Tuple rest elements in targets and patterns, list sequence patterns in bare `match`, and keyword class patterns: rest ranges, `AU2041` placement and arity rejections, length tests, owned rest slices, class and union-member selection, field visibility, `match own` field moves, `AU2040` rejections, structural exhaustiveness, analysis hover and definition, and MIR/direct parity | focused parser and analysis tests; the `tuple_rest_unpacking`, `list_sequence_patterns`, `class_patterns`, `class_and_sequence_patterns_nested`, and `class_pattern_imported` run fixtures; the `pattern_*` parse-fail and check-fail fixtures; `class_pattern_private_field`; `examples/enums/structural_patterns.au`; and the forced MIR/direct parity matrix |
+| Tuple rest elements in targets and patterns, list sequence patterns in bare `match`, and keyword class patterns: rest ranges, `AU2041` placement and arity rejections, length tests, owned rest slices, class and union-member selection, matching every generic specialization in a union, field visibility, `match own` field moves, `AU2040` rejections, structural exhaustiveness, analysis hover and definition, and MIR/direct parity | focused parser and analysis tests; the `tuple_rest_unpacking`, `list_sequence_patterns`, `class_patterns`, `class_and_sequence_patterns_nested`, `class_pattern_imported`, `class_pattern_generic_union`, and `sequence_rest_beside_type_pattern` run fixtures; the `pattern_*` parse-fail and check-fail fixtures; `class_pattern_private_field` and `class_pattern_generic_union_field_types`; `examples/enums/structural_patterns.au`; and the forced MIR/direct parity matrix |
 | Module constants: inferred/annotated/public declarations, declaration-order scope, dependency-first and source-ordered eager once-only initialization, one defining storage identity, Copy versus shared non-Copy reads, move/mutation rejection, guarded re-entry, package visibility, analysis/editor exposure, cleanup, and MIR/direct parity | focused parser/sema/MIR/native/runtime/analysis tests; `module_constant*` check/run fixtures; multi-module and package dependency tests; `examples/modules/constants.au`; language-server compiler-bridge tests; and the forced MIR/direct parity matrix |
 | signed-i128-nanosecond Duration literals, exact two-limb direct ABI, constructors, checked arithmetic, `FloorDiv`, comparison, conversion, rendering, and invalid host timers | `duration_literals_scale_to_nonnegative_i128_nanoseconds_at_each_unit_boundary`, parser/MIR/native-codegen/runtime unit tests, Duration run/failure fixtures, native-runtime FFI tests, and the MIR/direct parity matrix |
 | persistent descriptor registrations, heap-ordered deadlines, direct Queue/task-completion/blocking-pool wakeups, wait-epoch race containment, one-winner cleanup, and event-or-deadline idle blocking without a periodic tick | `runtime_reactor` unit tests including `timers_fire_at_the_earliest_deadline_and_preserve_equal_deadline_order`, `one_persistent_fd_registration_aggregates_waiters_and_narrows_interest`, and `waker_coalescing_does_not_lose_inbox_entries_and_ready_is_deduplicated`; runtime-value direct-wakeup and cleanup tests; `scheduler_model` lost-wake/stale-epoch/one-winner state-space tests; `scheduler_mixed_wakeups_complete_in_mir_and_direct_backends`; `scripts/stress-scheduler.sh`; the contractual `scripts/bench-scalable-runtime.py` after-reactor run; and the MIR/direct parity matrix |
@@ -6542,7 +6550,7 @@ String and format-specification diagnostics are described under
 | `AU2015` | callable contract mismatch | A callable whose complete contract differs from the one its destination requires. | Match the contract, or restrict it with an explicit adapter or constructor. |
 | `AU2016` | initializer declaration | An `__init__` without a bare `self` receiver, with its own type parameters, with a result other than `None`, with `return value`, or declared in a trait. | Write `def __init__(self, ...)` with no result, and move fallible construction into a named factory. |
 | `AU2017` | context manager protocol | A `with` item that is not a context manager, a manager method of the wrong shape, or an exit `Result` the enclosing function cannot return. | Declare `__exit__(mut self)` with a valid result, or return a compatible `Result` from the enclosing function. |
-| `AU2040` | invalid class pattern | A class pattern with a positional, unknown, private, repeated, or method field, a class that does not match the scrutinee, or a `match mut` class pattern. | Name stored fields visible here, once each, as `field=pattern`. |
+| `AU2040` | invalid class pattern | A class pattern with a positional, unknown, private, repeated, or method field, a class that does not match the scrutinee, a tested field whose type differs between the union specializations the pattern matches, or a `match mut` class pattern. | Name stored fields visible here, once each, as `field=pattern`. Select one specialization with a type pattern such as `case Box[int64] as box:`. |
 | `AU2041` | invalid rest pattern or target | A `*` rest element outside a tuple or sequence, a second rest element, too few positions for the fixed elements, a `*name` that covers no positions, or a sequence pattern in `match mut` or `match own`. | Keep one rest element per tuple or sequence, and use `*_` when it may cover nothing. |
 | `AU2042` | invalid docstring or documentation limit | A triple-quoted string in a class, enum, trait, or `impl` body outside a documentation position, or documentation over a size limit. | Move the string to the first slot or directly after a field, or shorten the documentation. |
 | `AU2043` | invalid Display implementation | A `Display` implementation for a type the module does not declare, a builtin, tuple, or union, a partial or bounded generic target, an overlap, or a mismatched `display` method. | Implement `def display(self) -> str` once, in the module that declares the type, for every specialization. |
@@ -7674,6 +7682,26 @@ This prints `missing`, `4`, `8`, and `cleared`. Where `value is not None` holds,
 
 Only `is None` and `is not None` narrow. `==` and `!=` compare values. A `match` arm narrows its own binding instead.
 
+### Narrowed Classes
+
+A place narrowed to a class member reads as that class. Its fields, nested fields, and methods are available through the place:
+
+```aura
+class Point:
+    x: int64
+    y: int64
+
+def main():
+    mut point: Point | None = Point(x=1, y=2)
+    if point is not None:
+        point.x += 10
+        print(point.x + point.y)
+```
+
+This prints `13`. The same rule applies to a module-qualified class such as `geometry.Point | None`, and to a narrowed class field such as `holder.point`.
+
+A narrowed union keeps its tag beside the payload, so a non-Copy field cannot move out of the payload alone. Moving one is rejected with `AU3004`. Clone the field, move the whole value, or use `match own` with a class pattern.
+
 ### Stable Places
 
 A stable place is one of:
@@ -7707,9 +7735,10 @@ A fact ends when the place or an enclosing place is assigned, matched with `matc
 
 Moving the place, including with `match own`, leaves it moved as usual, so a later use reports `AU3001`.
 
-Two writes keep the fact, because neither can change the member:
+These writes keep the fact, because none can change the member:
 
 - writing through the narrowed payload, such as `local += 1` above
+- writing or mutating a place inside the payload, such as `point.x += 10` above
 - changing a proven-disjoint sibling field
 
 A narrowed union with more than two members keeps its remaining member set for match coverage. After `if value is None: return`, a `match value` over `int64 | str | None` is exhaustive with only `int64` and `str` arms.
@@ -8031,7 +8060,7 @@ def main():
 - Without a rest element, the list length must equal the element count.
 - With a rest element, the length must be at least the fixed element count.
 - Element bindings are shared borrows of the list elements, as in any bare `match`.
-- A named rest such as `*more` binds a new owned `list` slice of the remaining elements. A list of `Rng` values cannot be sliced, so this is rejected for them.
+- A named rest such as `*more` binds a new owned `list` slice of the remaining elements. The arm can change it, return it, or pass it to an `own` parameter, even beside a type arm such as `[int64 as first, *more]`. A list of `Rng` values cannot be sliced, so this is rejected for them.
 - `match mut` and `match own` reject sequence patterns with `AU2041`.
 
 A sequence match needs a final `case _:`, or arms that cover every length. Irrefutable arms for lengths `0` through `k - 1` plus an irrefutable arm with `k` fixed elements and a rest cover every list. `[]` and `[_, *_]` together are exhaustive.
@@ -8059,11 +8088,55 @@ def main():
 - Fields left out are not tested. `Point()` matches every `Point`.
 - Each field may appear once. Order does not matter.
 - A field must be a stored field visible at the match. A private field of a class from another module is rejected.
-- The class must be the scrutinee class, or one member of a union scrutinee. Spell it as a declared, imported, or module-qualified class name, such as `geometry.Point`.
+- The class must be the scrutinee class, or a class among the members of a union scrutinee. Spell it as a declared, imported, or module-qualified class name, such as `geometry.Point`.
 - Field bindings follow the match capability. A bare `match` gives shared borrows. `match own` moves the fields out of the consumed value. `match mut` rejects class patterns.
 - A class match needs a final `case _:`, or class patterns whose field patterns together cover every value.
 
 `Name()` with empty parentheses is always a class pattern. Write a payload-free enum variant without parentheses, as `case Color.Red:`.
+
+### Generic Classes In A Union
+
+Over a union, a class pattern matches every specialization of its class that the union holds. A specialization is a generic class with its type arguments filled in, such as `Box[int64]`. `Box()` below matches both `Box[int64]` and `Box[str]`:
+
+```aura
+class Box[T]:
+    value: T
+
+def describe(item: Box[int64] | Box[str] | None) -> str:
+    match item:
+        case Box():
+            return "box"
+        case None:
+            return "none"
+
+def main():
+    print(describe(Box(value="a")))
+```
+
+This prints `box`.
+
+- An irrefutable class pattern covers every specialization it matches. A later arm for one of them is unreachable and reports `AU2013`.
+- A field the pattern tests must have one type in every specialization it matches. A field declared as `label: str` has one type in every specialization, so it qualifies. `Box(value=v)` over `Box[int64] | Box[str]` is rejected with `AU2040`, because `value` is an `int64` in one member and a `str` in the other.
+- A `_` subpattern tests nothing, so `Box(value=_)` is accepted.
+
+To test the fields of one specialization, select it with a type pattern:
+
+```aura
+class Box[T]:
+    value: T
+
+def show(item: Box[int64] | Box[str]) -> str:
+    match item:
+        case Box[int64] as number:
+            return f"int {number.value}"
+        case Box[str] as text:
+            return f"str {text.value}"
+
+def main():
+    print(show(Box(value=2)))
+```
+
+This prints `int 2`.
 
 The checker reports class pattern errors with `AU2040`:
 
@@ -8149,7 +8222,7 @@ A match evaluates its scrutinee exactly once, tests arms in source order, and ru
 | `AU2004` | Invalid variant-constructor argument binding. |
 | `AU2013` | Union type-arm coverage: missing members, duplicate coverage, unreachable type arms, nonmembers, and type arms that are not one member. |
 | `AU2014` | A member use through a place whose narrowing fact was invalidated. |
-| `AU2040` | A class pattern with a positional, unknown, private, repeated, or method field. A class that is not the scrutinee class or one union member. A class pattern under `match mut`. Enum variant or type patterns over a class scrutinee. |
+| `AU2040` | A class pattern with a positional, unknown, private, repeated, or method field. A class that is not the scrutinee class or a union member. A tested field whose type differs between the union specializations the pattern matches. A class pattern under `match mut`. Enum variant or type patterns over a class scrutinee. |
 | `AU2041` | A rest element outside a tuple or sequence, a second rest element, too few positions for the fixed elements, a `*name` that covers no positions, or a sequence pattern under `match mut` or `match own`. |
 | `AU2999` | Duplicate variants, invalid payload shapes, missing or unreachable arms, non-exhaustive matches, mismatched alternative bindings, duplicate or subsumed alternatives, unsupported pattern forms, and other enum and match rejections. |
 | `AU3001` | Use after `match own`, after a payload move, or after moving an owned candidate before its guard commits. |
@@ -10919,6 +10992,7 @@ At a call site, these rules apply:
 
 - The origin argument must be an addressable place.
 - A returned view may initialize a matching local `view` or `view mut` binding.
+- To view a list element or dictionary entry of a returned view, bind the returned view with `view` first. `view first = rows_of(grid)[0]` reports `AU3004`.
 - A shared result may instead be read directly within one containing expression.
 - A mutable result may instead be reborrowed immediately into a `mut` call.
 - A returned view cannot initialize an ordinary owned binding or be stored inside an aggregate.
@@ -26522,6 +26596,7 @@ def main():
 ```
 
 - Positions in a span count from the start of its range.
+- `view alias = part` reborrows a span with the same range.
 - A `Span[T]` parameter accepts a slice, a whole list, or another span.
 - A span holds a loan of the whole list. While it is live, the list is reached
   only through the span, or read if the span is shared.
@@ -27886,7 +27961,8 @@ print(locate(Point(x=0, y=5)))
 ```
 
 This prints `on the y axis at 5`. A class pattern also selects a class member
-of a union, as in `case Point(x=x):` over `Point | None`. See
+of a union, as in `case Point(x=x):` over `Point | None`. Over
+`Box[int64] | Box[str]`, `case Box():` matches both specializations. See
 [structural_patterns.au](../examples/enums/structural_patterns.au).
 
 ## Testing For `None`
@@ -27908,6 +27984,7 @@ def main():
 After `if value is None: return`, and inside an `else` branch, `value` is a plain `str`. Narrowing works the same way for:
 
 - `mut` locals, class fields, and views
+- class values, so `point.x` and `point.norm()` work after `if point is not None:`
 - conditions combined with `not`, `and`, and `or`
 
 These actions end the narrowing:
