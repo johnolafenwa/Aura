@@ -21,11 +21,12 @@ Last updated: 2026-10-15
   tag was held and never pushed. PR #50 fixes all 11 with regression tests,
   plus element views of returned views, the docs deploy gate, and stale 0.3
   labels. The security fixes from PR #49 are included.
-- Hosted CI `38741730088` passed on PR #50 on both platforms, and main CI
-  `38759172723` and Docs `38759173104` are green on the merge commit. The annotated, unsigned tag on
-  `cbb654e4` ran Release `38762272903`, which published the GitHub Release
-  with three CLI archives, the docs archive, and the VSIX, and published
-  extension 0.4.0 to the Visual Studio Marketplace and Open VSX. Details
+- Hosted CI `38741730088` passed on PR #50 on both platforms. Main CI
+  `38759172723` and Docs `38759173104` are green on the merge commit. The
+  annotated, unsigned tag on `cbb654e4` ran Release `38762272903`, which
+  published the GitHub Release with three CLI archives, the docs archive,
+  and the VSIX, and published extension 0.4.0 to the Visual Studio
+  Marketplace and Open VSX. Details
   are in `2026-10-14-v0.4.0-preview-release.md`,
   `2026-10-15-v0.4.0-review-fixes.md`, and
   `2026-10-15-v0.4.0-security-review.md`.
