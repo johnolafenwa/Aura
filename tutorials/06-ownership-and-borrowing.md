@@ -812,6 +812,7 @@ def main():
 ```
 
 - Positions in a span count from the start of its range.
+- `view alias = part` reborrows a span with the same range.
 - A `Span[T]` parameter accepts a slice, a whole list, or another span.
 - A span holds a loan of the whole list. While it is live, the list is reached
   only through the span, or read if the span is shared.

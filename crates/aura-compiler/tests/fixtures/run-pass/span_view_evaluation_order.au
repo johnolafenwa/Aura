@@ -1,0 +1,91 @@
+class Holder:
+    items: list[int64]
+
+class Grid:
+    rows: list[list[int64]]
+
+class Box:
+    holder: Holder
+
+def rows_of(grid: Grid) -> view list[list[int64]] from grid:
+    return view grid.rows
+
+def holder_of(box: Box) -> view Holder from box:
+    return view box.holder
+
+def make() -> list[list[int64]]:
+    print("make")
+    return [[1, 2, 3], [4, 5, 6]]
+
+def trace(label: str, value: int64) -> int64:
+    print(label)
+    return value
+
+def trace_key(label: str, key: own str) -> str:
+    print(label)
+    return key
+
+def total(values: Span[int64]) -> int64:
+    mut sum = 0
+    for value in values:
+        sum += value
+    return sum
+
+def fill_all(values: mut Span[int64], value: int64):
+    values.fill(value)
+
+def tail(values: Span[int64]) -> view Span[int64] from values:
+    return view values[1:]
+
+def main():
+    rows: list[list[int64]] = [[1, 2, 3], [4, 5, 6]]
+    view part = rows[trace("row", 1)][trace("start", 0):trace("end", 2)]
+    print(part.to_list())
+    print(total(rows[trace("row", 0)][trace("start", 1):trace("end", 3)]))
+    view rest = tail(rows[trace("row", 1)][trace("start", 0):trace("end", 2)])
+    print(rest.to_list())
+    print(total(make()[trace("row", 1)][trace("start", 1):trace("end", 3)]))
+    flag = false
+    first: list[list[int64]] = [[1, 2], [3, 4]]
+    second: list[list[int64]] = [[5, 6], [7, 8]]
+    print(total((first if flag else second)[trace("row", 1)][trace("start", 1):]))
+    print(first)
+    grids = [Grid([[1, 2, 3], [4, 5, 6]]), Grid([[7, 8], [9, 10]])]
+    print(total(rows_of(grids[trace("grid", 1)])[trace("row", 1)][trace("start", 1):]))
+    box = Box(Holder([1, 2, 3]))
+    print(total(holder_of(box).items[trace("start", 1):]))
+
+    grid: list[list[list[int64]]] = [[[1, 2], [3, 4]], [[5, 6], [7, 8]]]
+    view cell = grid[trace("outer", 1)][trace("inner", 0)][trace("start", 1):]
+    print(cell.to_list())
+
+    table: dict[str, list[int64]] = {"a": [1, 2, 3], "b": [4, 5, 6]}
+    view entry = table[trace_key("key", "b")][:trace("end", 2)]
+    print(entry.to_list())
+    print(total(table[trace_key("key", "a")][trace("start", 2):]))
+
+    view grouped = (rows[trace("row", 0)])[trace("start", 1):]
+    print(grouped.to_list())
+    holders = [Holder([1, 2, 3]), Holder([4, 5, 6])]
+    view field = holders[trace("holder", 1)].items[trace("start", 0):trace("end", 2)]
+    print(field.to_list())
+    pairs: list[(str, list[int64])] = [("a", [1, 2, 3]), ("b", [4, 5, 6])]
+    view position = pairs[trace("pair", 1)][1][trace("start", 1):]
+    print(position.to_list())
+
+    mut index = 0
+    view snapshot = rows[index][trace("start", 0):trace("end", 1)]
+    index = 1
+    print(snapshot.to_list())
+    print(index)
+
+    mut targets: list[list[int64]] = [[1, 2, 3], [4, 5, 6]]
+    view mut front = targets[1][0:len(targets[1]) - 1]
+    front.fill(9)
+    fill_all(targets[0][0:len(targets)], 7)
+    print(targets)
+    mut cube: list[list[list[int64]]] = [[[1, 2], [3, 4]], [[5, 6], [7, 8]]]
+    view mut corner = cube[1][0][0:len(cube)]
+    corner.fill(0)
+    fill_all(cube[0][1][0:len(cube[0])], 8)
+    print(cube)
