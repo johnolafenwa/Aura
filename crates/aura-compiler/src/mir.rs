@@ -10730,6 +10730,10 @@ struct PatternLoweringOptions {
     typed_payload_views: bool,
 }
 
+/// The union tag index and class type of each specialization a class
+/// pattern tests, then the stored fields of the first one.
+type ClassPatternLayout = (Vec<(Option<usize>, Type)>, Vec<(String, Type)>);
+
 struct TaskStartTarget {
     function_name: Option<String>,
     params: Vec<Param>,
@@ -15553,9 +15557,6 @@ impl<'a> Lowerer<'a> {
         rest
     }
 
-    /// The member a class pattern tests and its stored field types,
-    /// specialized by the scrutinee. For a union scrutinee the member index
-    /// is the union's own.
     /// Resolves a class name as a pattern or a checked type spells it,
     /// including a module-alias spelling such as `geometry.Point`.
     fn resolve_pattern_class_info(&self, name: &str) -> Option<&crate::sema::ClassInfo> {
@@ -15576,7 +15577,7 @@ impl<'a> Lowerer<'a> {
         &self,
         pattern: &crate::ast::ClassPattern,
         scrutinee_ty: Option<&Type>,
-    ) -> (Vec<(Option<usize>, Type)>, Vec<(String, Type)>) {
+    ) -> ClassPatternLayout {
         let candidates = match scrutinee_ty {
             Some(Type::Union(union)) => {
                 // The checker proved the pattern names at least one class
