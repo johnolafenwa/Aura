@@ -60,7 +60,7 @@ Aura aims to become a general-purpose systems language that can build every
 type of software. The intended scope spans applications, services, databases,
 language runtimes, embedded software, operating systems, and device drivers.
 
-Aura 0.3 lays the foundation: static typing, deterministic ownership, native
+Aura 0.4 lays the foundation: static typing, deterministic ownership, native
 compilation, structured concurrency, typed failure, packages, and integrated
 tooling. Later releases will add freestanding compilation, low-level memory
 access, hardware interfaces, portable layout controls, cross-compilation, and
@@ -92,7 +92,7 @@ compiler-tracked ownership. Its roadmap centers on
 Its ownership documentation gives each value one owner and defines
 [default immutable, `mut`, and `var` argument conventions](https://mojolang.org/docs/manual/values/ownership/).
 
-Aura 0.3 centers on the application control plane around models and agents.
+Aura 0.4 centers on the application control plane around models and agents.
 That covers scoped child tasks, transferable messages, typed I/O and process
 failures, timeouts, retries, and supervision. GPU programming, heterogeneous
 hardware, and interoperability with Python libraries are future areas for
@@ -146,7 +146,7 @@ The [Performance](/manual/performance) chapter records current measurements,
 known gaps, the evidence to reproduce them, and the optimization direction for
 later releases.
 
-Aura 0.3 is an executable technical preview. It includes the language, the
+Aura 0.4 is an executable technical preview. It includes the language, the
 native compiler, the ownership model, the structured task runtime, numeric
 arrays, control-plane modules, package tooling, the Manual, and the editor
 extension. The [Current Limits](/manual/current-limits) chapter lists the

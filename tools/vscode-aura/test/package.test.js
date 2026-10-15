@@ -142,7 +142,7 @@ test("extension package includes the assertion-aware Aura grammar", () => {
   assert.match(packagedGrammar, /assert/);
 });
 
-test("extension grammar and snippets cover Aura 0.3 string forms", () => {
+test("extension grammar and snippets cover Aura string forms", () => {
   const extensionRoot = path.resolve(__dirname, "..");
   const grammar = JSON.parse(
     fs.readFileSync(path.join(extensionRoot, "syntaxes", "aura.tmLanguage.json"), "utf8")

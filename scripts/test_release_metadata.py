@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Release-metadata regression tests for the Aura 0.3 technical preview."""
+"""Release-metadata regression tests for the Aura technical preview."""
 
 from __future__ import annotations
 
@@ -111,6 +111,30 @@ class ReleaseMetadataTests(unittest.TestCase):
             for found in re.findall(r"native cache format `(v\d+)`", text):
                 with self.subTest(page=page, cache=found):
                     self.assertEqual(found, cache)
+
+    def test_maintained_pages_frame_the_current_minor_release(self) -> None:
+        current_minor = ".".join(VERSION.split(".")[:2])
+        major, minor = (int(part) for part in current_minor.split("."))
+        stale_minors = [f"{major}.{minor - 1}"] if minor else []
+        pages = [ROOT / "README.md", ROOT / "SECURITY.md", ROOT / "SUPPORTED_PLATFORMS.md"]
+        pages += sorted(
+            path
+            for path in (ROOT / "docs").rglob("*.md")
+            if "node_modules" not in path.parts
+            and path.name not in {"aurora_language_proposal.md", "ml_systems_support_plan.md"}
+        )
+        pages += sorted((ROOT / "tutorials").rglob("*.md"))
+        pages += sorted((ROOT / "tools").glob("*/README.md"))
+        pages += sorted((ROOT / "crates").glob("*/README.md"))
+        pages += sorted((ROOT / "examples").rglob("*.md"))
+        for stale in stale_minors:
+            # A bare minor version such as "0.3" frames the current release.
+            # Patch versions and series promises such as "0.3.x" are history.
+            pattern = re.compile(rf"(?<![\w.]){re.escape(stale)}(?![\w.])")
+            for page in pages:
+                for number, line in enumerate(page.read_text().splitlines(), 1):
+                    with self.subTest(page=str(page.relative_to(ROOT)), line=number):
+                        self.assertIsNone(pattern.search(line), line)
 
     def test_scheduled_safety_jobs_pin_the_instrumented_toolchain_and_leaks(self) -> None:
         workflow = (ROOT / ".github/workflows/safety.yml").read_text()

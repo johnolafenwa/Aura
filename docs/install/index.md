@@ -1,6 +1,6 @@
 # Install Aura
 
-Aura 0.3 ships as a self-contained command-line tool with its own private
+Aura 0.4 ships as a self-contained command-line tool with its own private
 native runtime. Pick the guide for the operating system where `aura` will run:
 
 | Platform | Release archive | Guide |

@@ -13,7 +13,7 @@ A **conforming Aura implementation**:
 - preserves the observable evaluation and cleanup behavior defined by the Manual
 - produces the specified typed outcomes or runtime failures
 - provides the maintained public API surface
-- does not expose proposal-only constructs as accepted 0.3 language features
+- does not expose proposal-only constructs as accepted 0.4 language features
 
 Exact diagnostic prose is normative only where a fixture or this Manual explicitly requires it. Otherwise, a conforming implementation needs a clear diagnostic with an accurate source location and the same stable `AU####` code. The message wording may differ, as long as the code keeps its documented meaning.
 
@@ -108,7 +108,7 @@ Regression tests supplement fixtures when a case needs multiple files, temporary
 
 ## Backend Equivalence
 
-Aura 0.3 has two maintained semantic runtime representations:
+Aura 0.4 has two maintained semantic runtime representations:
 
 - `aura run` lowers checked source to MIR and executes it in the MIR runtime.
 - `aura build --backend direct` lowers checked source to native code through the direct backend and links the native runtime.
@@ -164,7 +164,7 @@ A language or tooling behavior change is complete only when the same pass update
 6. categorized examples and Learn/tutorial material
 7. the task board and dated work note
 
-Syntax expansion is frozen for the 0.3 technical-preview release. A new construct needs an explicit compatibility decision. Being easy to parse is not enough.
+Each new construct needs an explicit compatibility decision. Being easy to parse is not enough.
 
 ## Deriving A Book
 

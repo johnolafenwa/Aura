@@ -1,6 +1,6 @@
 # Install Aura On Linux
 
-The Aura 0.3 preview supports x86-64 Ubuntu 24.04 and compatible Linux
+The Aura 0.4 preview supports x86-64 Ubuntu 24.04 and compatible Linux
 distributions that use glibc. The release has no Linux ARM64 or musl
 archives.
 
