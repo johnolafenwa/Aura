@@ -1,9 +1,9 @@
 use super::{
     bind_args, bind_builtin_args, bind_optional_builtin_args, build_range, bytes_vec_value,
     collect_queue_handles, collect_runtime_type_substitutions, collect_type_params_from_type,
-    eval_ordering, evaluate_named_args, render_runtime_error, result_err, result_ok,
-    run_serialized_mir, send_error_closed, task_result_ready, write_stream, CancellationContext,
-    Env, EvaluatedMirArg, MirRuntime, TaskGroupValue, TaskValue,
+    eval_ordering, evaluate_named_args, result_err, result_ok, run_serialized_mir,
+    send_error_closed, task_result_ready, CancellationContext, Env, EvaluatedMirArg, MirRuntime,
+    TaskGroupValue, TaskValue,
 };
 use crate::diag::{Diagnostic, RuntimeCallFrame, RuntimeSourceSpan, RuntimeTaskFrame, Span};
 use crate::integer::{IntegerKind, IntegerValue};
@@ -2617,19 +2617,6 @@ def main() -> int32:
     };
     assert!(process_id.as_i128().is_some_and(|value| value > 0));
     assert_eq!(process_id.runtime_kind(), Some(IntegerKind::Int32));
-
-    let serialized_getpid = serde_json::to_vec(&getpid).expect("trusted FFI MIR should serialize");
-    let embedded = super::run_serialized_mir_trusted(
-        &serialized_getpid,
-        "/tmp/trusted-getpid.au",
-        "def main():\n    pass\n",
-    )
-    .expect("compiler-embedded FFI MIR should retain its trusted runtime route");
-    let Value::Int(embedded_process_id) = embedded.value else {
-        panic!("embedded getpid should return int32");
-    };
-    assert!(embedded_process_id.as_i128().is_some_and(|value| value > 0));
-    assert_eq!(embedded_process_id.runtime_kind(), Some(IntegerKind::Int32));
 
     let missing = lower_ffi_runtime_source(
         r#"
@@ -6347,26 +6334,6 @@ fn string_map_value(items: &[(&str, &str)]) -> Value {
     })
 }
 
-fn run_native_entry(
-    mir_ptr: *const u8,
-    mir_len: usize,
-    source_path_ptr: *const u8,
-    source_path_len: usize,
-    source_ptr: *const u8,
-    source_len: usize,
-) -> i32 {
-    unsafe {
-        crate::mir_runtime::aura_native_run(
-            mir_ptr,
-            mir_len,
-            source_path_ptr,
-            source_path_len,
-            source_ptr,
-            source_len,
-        )
-    }
-}
-
 #[test]
 fn contextual_none_rhs_equality_preserves_the_left_optional_snapshot() {
     let source = r#"
@@ -6597,15 +6564,6 @@ fn mir_runtime_helper_values_and_streams_cover_optional_result_and_diagnostics()
         send_error_closed(Value::Int(IntegerValue::from_signed(5))).render(),
         "SendError.Closed(5)"
     );
-
-    let diagnostic = Diagnostic::at(Span::new(2, 3), "division by zero");
-    let rendered = render_runtime_error("/tmp/test.au", "def main():\n    1 // 0\n", &diagnostic);
-    assert!(rendered.contains("/tmp/test.au"));
-    assert!(rendered.contains("division by zero"));
-
-    let mut buffer = Vec::new();
-    write_stream(&mut buffer, "aura").expect("write_stream should flush successfully");
-    assert_eq!(String::from_utf8(buffer).unwrap(), "aura");
 
     assert_eq!(
         MirRuntime::infer_value_type(&Value::Duration(5)),
@@ -8832,204 +8790,6 @@ fn mir_runtime_stream_and_http_member_helpers_cover_resource_branches() {
     http_listener.close();
 }
 
-struct FlushFailWriter;
-
-impl Write for FlushFailWriter {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        Ok(buf.len())
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        Err(io::Error::new(io::ErrorKind::BrokenPipe, "broken pipe"))
-    }
-}
-
-struct WriteFailWriter {
-    kind: io::ErrorKind,
-}
-
-impl Write for WriteFailWriter {
-    fn write(&mut self, _buf: &[u8]) -> io::Result<usize> {
-        Err(io::Error::new(self.kind, "write failed"))
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
-}
-
-#[test]
-fn mir_runtime_stream_and_entrypoint_helpers_cover_success_and_error_paths() {
-    let flush_error =
-        write_stream(&mut FlushFailWriter, "aura").expect_err("flush failures should be surfaced");
-    assert_eq!(flush_error.kind(), io::ErrorKind::BrokenPipe);
-
-    let source = "def main() -> int32:\n    return 3\n";
-    let mir = crate::lower_source_to_mir(source).expect("source should lower to MIR");
-    let mir_json = serde_json::to_vec(&mir).expect("MIR should serialize");
-    let source_path = b"/tmp/runtime_entry.au";
-    let code = run_native_entry(
-        mir_json.as_ptr(),
-        mir_json.len(),
-        source_path.as_ptr(),
-        source_path.len(),
-        source.as_ptr(),
-        source.len(),
-    );
-    assert_eq!(code, 3);
-
-    let invalid_json = b"not-json";
-    let invalid_code = run_native_entry(
-        invalid_json.as_ptr(),
-        invalid_json.len(),
-        source_path.as_ptr(),
-        source_path.len(),
-        source.as_ptr(),
-        source.len(),
-    );
-    assert_eq!(invalid_code, 1);
-
-    let tiny = [b'x'];
-    let oversized_code = run_native_entry(
-        tiny.as_ptr(),
-        (1 << 30) + 1,
-        source_path.as_ptr(),
-        source_path.len(),
-        source.as_ptr(),
-        source.len(),
-    );
-    assert_eq!(oversized_code, 1);
-
-    let stdout_source = "def main() -> int32:\n    print(\"before\")\n    return 5\n";
-    let stdout_mir =
-        crate::lower_source_to_mir(stdout_source).expect("stdout source should lower to MIR");
-    let stdout_mir_json = serde_json::to_vec(&stdout_mir).expect("stdout MIR should serialize");
-    let mut captured_stdout = Vec::new();
-    let mut captured_stderr = Vec::new();
-    let stdout_code = super::run_serialized_mir_entrypoint_with_streams(
-        &stdout_mir_json,
-        "/tmp/stdout.au",
-        stdout_source,
-        &mut captured_stdout,
-        &mut captured_stderr,
-    );
-    assert_eq!(stdout_code, 5);
-    assert_eq!(String::from_utf8(captured_stdout).unwrap(), "before\n");
-    assert!(captured_stderr.is_empty());
-
-    let unit_source = "def main():\n    print(\"unit\")\n";
-    let unit_mir =
-        crate::lower_source_to_mir(unit_source).expect("unit source should lower to MIR");
-    let unit_mir_json = serde_json::to_vec(&unit_mir).expect("unit MIR should serialize");
-    let mut unit_stdout = Vec::new();
-    let mut unit_stderr = Vec::new();
-    let unit_code = super::run_serialized_mir_entrypoint_with_streams(
-        &unit_mir_json,
-        "/tmp/unit.au",
-        unit_source,
-        &mut unit_stdout,
-        &mut unit_stderr,
-    );
-    assert_eq!(unit_code, 0);
-    assert_eq!(String::from_utf8(unit_stdout).unwrap(), "unit\n");
-    assert!(unit_stderr.is_empty());
-
-    let mut broken_stdout = WriteFailWriter {
-        kind: io::ErrorKind::BrokenPipe,
-    };
-    let mut ignored_stderr = Vec::new();
-    let broken_stdout_code = super::run_serialized_mir_entrypoint_with_streams(
-        &stdout_mir_json,
-        "/tmp/stdout.au",
-        stdout_source,
-        &mut broken_stdout,
-        &mut ignored_stderr,
-    );
-    assert_eq!(broken_stdout_code, 0);
-    assert!(ignored_stderr.is_empty());
-
-    let mut failing_stdout = WriteFailWriter {
-        kind: io::ErrorKind::PermissionDenied,
-    };
-    let mut write_error_stderr = Vec::new();
-    let write_error_code = super::run_serialized_mir_entrypoint_with_streams(
-        &stdout_mir_json,
-        "/tmp/stdout.au",
-        stdout_source,
-        &mut failing_stdout,
-        &mut write_error_stderr,
-    );
-    assert_eq!(write_error_code, 1);
-    assert!(String::from_utf8(write_error_stderr)
-        .unwrap()
-        .contains("failed to write to stdout"));
-
-    let error_source = "def main() -> int32:\n    print(\"before\")\n    return 1 // 0\n";
-    let error_mir =
-        crate::lower_source_to_mir(error_source).expect("error source should lower to MIR");
-    let error_mir_json = serde_json::to_vec(&error_mir).expect("error MIR should serialize");
-
-    let mut broken_error_stdout = WriteFailWriter {
-        kind: io::ErrorKind::BrokenPipe,
-    };
-    let mut ignored_error_stderr = Vec::new();
-    let broken_error_code = super::run_serialized_mir_entrypoint_with_streams(
-        &error_mir_json,
-        "/tmp/error.au",
-        error_source,
-        &mut broken_error_stdout,
-        &mut ignored_error_stderr,
-    );
-    assert_eq!(broken_error_code, 0);
-    assert!(ignored_error_stderr.is_empty());
-
-    let mut failing_error_stdout = WriteFailWriter {
-        kind: io::ErrorKind::PermissionDenied,
-    };
-    let mut error_write_stderr = Vec::new();
-    let error_write_code = super::run_serialized_mir_entrypoint_with_streams(
-        &error_mir_json,
-        "/tmp/error.au",
-        error_source,
-        &mut failing_error_stdout,
-        &mut error_write_stderr,
-    );
-    assert_eq!(error_write_code, 1);
-    assert!(String::from_utf8(error_write_stderr)
-        .unwrap()
-        .contains("failed to write to stdout"));
-
-    let mut partial_error_stdout = Vec::new();
-    let mut rendered_partial_error_stderr = Vec::new();
-    let partial_error_code = super::run_serialized_mir_entrypoint_with_streams(
-        &error_mir_json,
-        "/tmp/error.au",
-        error_source,
-        &mut partial_error_stdout,
-        &mut rendered_partial_error_stderr,
-    );
-    assert_eq!(partial_error_code, 1);
-    assert_eq!(String::from_utf8(partial_error_stdout).unwrap(), "before\n");
-    assert!(String::from_utf8(rendered_partial_error_stderr)
-        .unwrap()
-        .contains("division by zero"));
-
-    let mut rendered_error_stdout = Vec::new();
-    let mut rendered_error_stderr = Vec::new();
-    let rendered_error_code = super::run_serialized_mir_entrypoint_with_streams(
-        invalid_json,
-        "/tmp/error.au",
-        error_source,
-        &mut rendered_error_stdout,
-        &mut rendered_error_stderr,
-    );
-    assert_eq!(rendered_error_code, 1);
-    assert!(rendered_error_stdout.is_empty());
-    assert!(String::from_utf8(rendered_error_stderr)
-        .unwrap()
-        .contains("failed to deserialize embedded MIR"));
-}
-
 #[test]
 fn mir_runtime_public_run_wrappers_cover_serialized_success_and_error_paths() {
     let source = "def main() -> int32:\n    return 7\n";
@@ -9378,15 +9138,6 @@ fn mir_runtime_deadline_helper_rejects_overflowing_instants() {
 
 #[test]
 fn mir_runtime_complexity_guard_rejects_excessive_instruction_counts() {
-    super::validate_embedded_runtime_length("MIR payload", super::MAX_EMBEDDED_RUNTIME_BYTES)
-        .expect("embedded runtime payloads at the limit should pass");
-    let length_error = super::validate_embedded_runtime_length(
-        "MIR payload",
-        super::MAX_EMBEDDED_RUNTIME_BYTES + 1,
-    )
-    .expect_err("embedded runtime payloads above the limit should fail");
-    assert!(length_error.contains("exceeds the supported runtime limit"));
-
     let block = |label: &str, terminator: Terminator| BasicBlock {
         label: label.to_string(),
         instructions: Vec::new(),
@@ -18035,57 +17786,6 @@ fn mir_runtime_terminator_and_cleanup_helpers_cover_branch_and_error_paths() {
 
 #[test]
 fn mir_runtime_entrypoint_call_and_type_helpers_cover_remaining_edges() {
-    assert_eq!(
-        run_native_entry(
-            std::ptr::null(),
-            0,
-            std::ptr::null(),
-            0,
-            std::ptr::null(),
-            0,
-        ),
-        1
-    );
-
-    let source = "def main() -> int32:\n    return 0\n";
-    let mir = crate::lower_source_to_mir(source).expect("source should lower");
-    let mir_json = serde_json::to_vec(&mir).expect("mir should serialize");
-    let bad_utf8 = [0xffu8];
-    assert_eq!(
-        run_native_entry(
-            mir_json.as_ptr(),
-            mir_json.len(),
-            bad_utf8.as_ptr(),
-            bad_utf8.len(),
-            source.as_ptr(),
-            source.len(),
-        ),
-        1
-    );
-    assert_eq!(
-        run_native_entry(
-            mir_json.as_ptr(),
-            mir_json.len(),
-            b"/tmp/test.au".as_ptr(),
-            b"/tmp/test.au".len(),
-            bad_utf8.as_ptr(),
-            bad_utf8.len(),
-        ),
-        1
-    );
-    let tiny = [b'x'];
-    assert_eq!(
-        run_native_entry(
-            tiny.as_ptr(),
-            (1 << 30) + 1,
-            b"/tmp/test.au".as_ptr(),
-            b"/tmp/test.au".len(),
-            source.as_ptr(),
-            source.len(),
-        ),
-        1
-    );
-
     let mut runtime = MirRuntime::new(
         MirModule {
             unions: Vec::new(),
@@ -18427,26 +18127,7 @@ fn mir_runtime_entrypoint_call_and_type_helpers_cover_remaining_edges() {
 }
 
 #[test]
-fn mir_runtime_entrypoint_and_env_helpers_cover_write_stream_and_place_edges() {
-    let mut sink = Vec::new();
-    write_stream(&mut sink, "aura").expect("write_stream should write into Vec sinks");
-    assert_eq!(
-        String::from_utf8(sink).expect("sink should be UTF-8"),
-        "aura"
-    );
-
-    let source = "def main() -> int32:\n    print(1)\n    return 7\n";
-    let module = crate::lower_source_to_mir(source).expect("source should lower to MIR");
-    let mir_json = serde_json::to_vec(&module).expect("MIR should serialize");
-    assert_eq!(
-        super::run_serialized_mir_entrypoint(&mir_json, "/tmp/entry.au", source),
-        7
-    );
-    assert_eq!(
-        super::run_serialized_mir_entrypoint(b"{not json", "/tmp/entry.au", source),
-        1
-    );
-
+fn mir_runtime_env_helpers_cover_place_edges() {
     let env = Env::default();
     let empty_place = env
         .read_place("")
@@ -19186,16 +18867,6 @@ fn mir_runtime_env_and_entry_helpers_cover_additional_branch_paths() {
         Err(error) => error,
     };
     assert!(receiver_error.message.contains("missing its receiver"));
-
-    let panic_code = run_native_entry(
-        std::ptr::null(),
-        0,
-        std::ptr::null(),
-        0,
-        std::ptr::null(),
-        0,
-    );
-    assert_eq!(panic_code, 1);
 
     let missing_main_runtime = MirRuntime::new(
         MirModule {
@@ -23108,54 +22779,7 @@ fn optional_helpers_infer_lookup_and_poll_types_and_decode_bare_payloads() {
 }
 
 #[test]
-fn native_runtime_entrypoint_guards_invalid_inputs() {
-    assert_eq!(
-        unsafe {
-            super::aura_native_run(
-                std::ptr::null(),
-                0,
-                std::ptr::null(),
-                0,
-                std::ptr::null(),
-                0,
-            )
-        },
-        1
-    );
-
-    let mir_json = b"{}";
-    let invalid_path = [0xff_u8];
-    let source = b"def main() -> int32:\n    return 0\n";
-    assert_eq!(
-        unsafe {
-            super::aura_native_run(
-                mir_json.as_ptr(),
-                mir_json.len(),
-                invalid_path.as_ptr(),
-                invalid_path.len(),
-                source.as_ptr(),
-                source.len(),
-            )
-        },
-        1
-    );
-
-    let source_path = b"/tmp/test.au";
-    let invalid_source = [0xff_u8];
-    assert_eq!(
-        unsafe {
-            super::aura_native_run(
-                mir_json.as_ptr(),
-                mir_json.len(),
-                source_path.as_ptr(),
-                source_path.len(),
-                invalid_source.as_ptr(),
-                invalid_source.len(),
-            )
-        },
-        1
-    );
-
+fn native_runtime_diagnostic_rendering_keeps_the_bare_prefix() {
     // Another test in this binary may already have installed the process-wide
     // program source, which appends a ` --> path` trailer to every rendering;
     // only the bare prefix is order-independent.

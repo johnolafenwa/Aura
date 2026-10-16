@@ -111,8 +111,7 @@ Regression tests supplement fixtures when a case needs multiple files, temporary
 Aura 0.4 has two maintained semantic runtime representations:
 
 - `aura run` lowers checked source to MIR and executes it in the MIR runtime.
-- `aura build --backend direct` lowers checked source to native code through the direct backend and links the native runtime.
-- The default `aura build --backend auto` first attempts direct emission. It may instead build a native launcher that contains serialized MIR plus the MIR runtime.
+- `aura build` lowers checked source to native code through the direct backend and links the native runtime.
 
 For the maintained source subset, the two paths MUST agree on:
 

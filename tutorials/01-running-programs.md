@@ -37,15 +37,9 @@ cargo run -p aura -- build -o ./target/aura-point examples/point.au
 
 ## Build Backends
 
-The `build` command accepts a `--backend` flag:
-
-| Flag | Behavior |
-|------|----------|
-| `--backend auto` | The default. Tries direct native emission first. It may fall back to a standalone launcher with embedded MIR. |
-| `--backend direct` | Requires direct native emission. Rejects programs that cannot use it. |
-
-The default is usually what you want. Use `direct` for backend testing, or
-when an embedded-MIR fallback is not acceptable.
+The `build` command compiles the program to native code with the direct
+backend. It accepts `--backend auto` and `--backend direct`, and both select
+that backend.
 
 Building requires a host C compiler. A CLI run from a source checkout may use
 Cargo to refresh the native runtime. Installed release archives carry that

@@ -20014,6 +20014,9 @@ impl<'a> Lowerer<'a> {
         if let ExprKind::Group(inner) = &expr.kind {
             return self.lower_union_injection(inner, Some(expected), owned);
         }
+        if Self::injects_per_arm(expr) {
+            return None;
+        }
         let injection = self
             .program
             .union_injection(self.module_name, expr.span, expected)?;
@@ -20048,6 +20051,9 @@ impl<'a> Lowerer<'a> {
         if let ExprKind::Group(inner) = &expr.kind {
             return self.lower_borrowed_union_injection(inner, Some(expected));
         }
+        if Self::injects_per_arm(expr) {
+            return None;
+        }
         let injection = self
             .program
             .union_injection(self.module_name, expr.span, expected)?;
@@ -20064,6 +20070,16 @@ impl<'a> Lowerer<'a> {
             },
         });
         Some(Operand::Place(target))
+    }
+
+    /// The checker records union injections on each arm of a conditional or
+    /// match, never on the whole expression. A conditional starts at its
+    /// first arm's span, so looking it up would find that arm's injection.
+    fn injects_per_arm(expr: &Expr) -> bool {
+        matches!(
+            expr.kind,
+            ExprKind::Conditional { .. } | ExprKind::Match { .. }
+        )
     }
 
     fn is_contextual_none_expr(expr: &Expr) -> bool {
@@ -22365,6 +22381,11 @@ impl<'a> Lowerer<'a> {
                                 .or_else(|| Some(class_args[0].clone())),
                             _ => self.infer_expr_type(&argument.value),
                         }
+                    } else if let Some(element) = builtin_member
+                        .element_typed_argument(index)
+                        .and_then(|position| class_args.get(position))
+                    {
+                        Some(element.clone())
                     } else {
                         self.infer_expr_type(&argument.value)
                     };

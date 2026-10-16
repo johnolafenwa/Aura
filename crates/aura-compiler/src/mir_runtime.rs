@@ -1,9 +1,8 @@
 #[cfg(test)]
 use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::io::{self, Write};
+use std::io;
 use std::panic::{self, AssertUnwindSafe};
-use std::slice;
 use std::str;
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -392,18 +391,6 @@ pub fn run_serialized_mir(mir_json: &[u8], source_path: &str, source: &str) -> R
     run_with_stdout_sink_and_program_args(&module, None, host_process_args())
 }
 
-fn run_serialized_mir_trusted(
-    mir_json: &[u8],
-    source_path: &str,
-    source: &str,
-) -> Result<RunOutput> {
-    let module = deserialize_runtime_module(mir_json)?;
-    validate_runtime_module_complexity(&module).map_err(Diagnostic::into_runtime_trap)?;
-    let _ = source_path;
-    let _ = source;
-    run_with_stdout_sink_and_program_args_trusted(&module, None, host_process_args())
-}
-
 fn deserialize_runtime_module(mir_json: &[u8]) -> Result<MirModule> {
     let module = match serde_json::from_slice::<MirModule>(mir_json) {
         Ok(module) => module,
@@ -437,7 +424,6 @@ pub(crate) const TASK_STACK_HEADROOM_RESERVE: usize = if cfg!(debug_assertions) 
     128 * 1024
 };
 pub(crate) const MIR_RUNTIME_STACK_SIZE: usize = 64 * 1024 * 1024;
-const MAX_EMBEDDED_RUNTIME_BYTES: usize = 1 << 30;
 const MAX_RUNTIME_BLOCKS: usize = 1_000_000;
 const MAX_RUNTIME_INSTRUCTIONS: usize = 1_000_000;
 const MAX_RUNTIME_TERMINATOR_ARMS: usize = 1_000_000;
@@ -640,25 +626,6 @@ fn validate_runtime_loan_expansion_complexity(
     Ok(total_path_bytes)
 }
 
-fn render_runtime_error(path: &str, source: &str, error: &Diagnostic) -> String {
-    error.render_with_source(path, source)
-}
-
-fn write_stream(mut stream: impl Write, text: &str) -> io::Result<()> {
-    stream.write_all(text.as_bytes())?;
-    stream.flush()
-}
-
-fn validate_embedded_runtime_length(name: &str, len: usize) -> std::result::Result<(), String> {
-    if len > MAX_EMBEDDED_RUNTIME_BYTES {
-        return Err(format!(
-            "embedded {} length {} exceeds the supported runtime limit of {} bytes",
-            name, len, MAX_EMBEDDED_RUNTIME_BYTES
-        ));
-    }
-    Ok(())
-}
-
 fn validate_runtime_module_complexity(module: &MirModule) -> Result<()> {
     validate_runtime_module_complexity_with_limits(module, DEFAULT_RUNTIME_MODULE_LIMITS)
 }
@@ -748,142 +715,6 @@ fn validate_runtime_module_complexity_with_limits(
         }
     }
     Ok(())
-}
-
-fn run_serialized_mir_entrypoint(mir_json: &[u8], source_path: &str, source: &str) -> i32 {
-    let mut stdout = io::stdout().lock();
-    let mut stderr = io::stderr().lock();
-    run_serialized_mir_entrypoint_with_streams(
-        mir_json,
-        source_path,
-        source,
-        &mut stdout,
-        &mut stderr,
-    )
-}
-
-fn run_serialized_mir_entrypoint_with_streams(
-    mir_json: &[u8],
-    source_path: &str,
-    source: &str,
-    stdout: &mut impl Write,
-    stderr: &mut impl Write,
-) -> i32 {
-    match run_serialized_mir_trusted(mir_json, source_path, source) {
-        Ok(output) => {
-            if let Err(error) = write_stream(&mut *stdout, &output.stdout) {
-                if error.kind() == io::ErrorKind::BrokenPipe {
-                    return 0;
-                }
-                let _ = writeln!(&mut *stderr, "failed to write to stdout: {}", error);
-                return 1;
-            }
-            if let Value::Int(code) = output.value {
-                return code.as_i128().unwrap_or(0) as i32;
-            }
-            0
-        }
-        Err(error) => {
-            if let Some(partial_stdout) = error.partial_stdout() {
-                if let Err(write_error) = write_stream(&mut *stdout, partial_stdout) {
-                    if write_error.kind() == io::ErrorKind::BrokenPipe {
-                        return 0;
-                    }
-                    let _ = writeln!(&mut *stderr, "failed to write to stdout: {}", write_error);
-                    return 1;
-                }
-            }
-            let rendered = render_runtime_error(source_path, source, &error);
-            let _ = writeln!(&mut *stderr, "{}", rendered);
-            1
-        }
-    }
-}
-
-#[no_mangle]
-/// # Safety
-///
-/// `mir_ptr`, `source_path_ptr`, and `source_ptr` must either be valid for reads of their paired
-/// lengths or be null when the paired length is zero. The byte buffers must remain alive for the
-/// duration of this call and must point to valid UTF-8 for the embedded source path/source
-/// payloads.
-pub unsafe extern "C" fn aura_native_run(
-    mir_ptr: *const u8,
-    mir_len: usize,
-    source_path_ptr: *const u8,
-    source_path_len: usize,
-    source_ptr: *const u8,
-    source_len: usize,
-) -> i32 {
-    let result = panic::catch_unwind(|| {
-        if mir_ptr.is_null() || source_path_ptr.is_null() || source_ptr.is_null() {
-            let _ = writeln!(
-                io::stderr().lock(),
-                "aura native runtime received a null input"
-            );
-            return 1;
-        }
-
-        for (name, len) in [
-            ("MIR payload", mir_len),
-            ("source path", source_path_len),
-            ("source payload", source_len),
-        ] {
-            if let Err(message) = validate_embedded_runtime_length(name, len) {
-                let _ = writeln!(io::stderr().lock(), "{}", message);
-                return 1;
-            }
-        }
-
-        let mir_json = unsafe { slice::from_raw_parts(mir_ptr, mir_len) };
-        let source_path_bytes = unsafe { slice::from_raw_parts(source_path_ptr, source_path_len) };
-        let source_bytes = unsafe { slice::from_raw_parts(source_ptr, source_len) };
-
-        let source_path = match str::from_utf8(source_path_bytes) {
-            Ok(text) => text,
-            Err(error) => {
-                let _ = writeln!(
-                    io::stderr().lock(),
-                    "embedded source path is not valid UTF-8: {}",
-                    error
-                );
-                return 1;
-            }
-        };
-
-        let source = match str::from_utf8(source_bytes) {
-            Ok(text) => text,
-            Err(error) => {
-                let _ = writeln!(
-                    io::stderr().lock(),
-                    "embedded source is not valid UTF-8: {}",
-                    error
-                );
-                return 1;
-            }
-        };
-
-        run_serialized_mir_entrypoint(mir_json, source_path, source)
-    });
-
-    match result {
-        Ok(code) => code,
-        Err(payload) => {
-            let message = if let Some(text) = payload.downcast_ref::<&str>() {
-                text.to_string()
-            } else if let Some(text) = payload.downcast_ref::<String>() {
-                text.clone()
-            } else {
-                "unknown panic".to_string()
-            };
-            let _ = writeln!(
-                io::stderr().lock(),
-                "aura native runtime panicked: {}",
-                message
-            );
-            1
-        }
-    }
 }
 
 struct MirRuntime {

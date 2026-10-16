@@ -106,7 +106,7 @@ and silently stop protecting MIR behavior.
 
 ### Direct backend path
 
-For `--backend direct`, Aura:
+Every build uses the direct backend. Aura:
 
 1. checks and lowers to MIR
 2. asks `emit_host_native_object_with_metadata` for object bytes
@@ -115,17 +115,8 @@ For `--backend direct`, Aura:
 5. invokes the host C compiler/linker
 6. produces the final executable
 
-### MIR-runtime launcher fallback
-
-If `--backend auto` cannot use direct codegen successfully, Aura can build a launcher binary that embeds:
-
-- serialized MIR
-- source path
-- source text
-
-That launcher calls `aura_native_run(...)` from the runtime library.
-
-This fallback is implemented through `build_mir_runtime_binary` in the CLI.
+Batch 5 removed the earlier MIR-runtime launcher fallback. A program the
+direct backend cannot emit is a build error, never a launcher binary.
 
 ## Why the CLI embeds source in built binaries
 
