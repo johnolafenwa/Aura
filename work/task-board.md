@@ -1,6 +1,20 @@
 # Task Board
 
-Last updated: 2026-10-15
+Last updated: 2026-10-16
+
+## Aura 0.4.1 fixes (in progress)
+
+- Target: fix the defects left open after Batch 4 and remove the shared git
+  cache fallback from the 0.4.0 security review, then release 0.4.1, as
+  John asked on 2026-10-15.
+- Done: casts of call results, duplicate class patterns in an or-pattern
+  over a union, module-alias unions on the MIR backend, enum payload arity
+  in the MIR validator, and the git cache fallback, each with a regression
+  test. Three reported defects no longer reproduce and gained regression
+  tests. Details are in `2026-10-15-v0.4.1-fixes.md`.
+- Verification: fixtures and compiler library tests pass locally. Hosted CI
+  is pending on the pull request.
+- Remaining: green hosted CI and merge, then the 0.4.1 release.
 
 ## 0.4.0 preview security review (complete)
 

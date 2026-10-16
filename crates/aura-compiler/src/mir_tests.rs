@@ -13629,3 +13629,61 @@ fn docstring_edits_do_not_change_executable_mir() {
     assert_eq!(edited, comments);
     assert!(!documented.contains("Method docs"));
 }
+
+#[test]
+fn loan_validator_rejects_enum_payload_arity_forgery() {
+    let module = crate::lower_source_to_mir(
+        r#"
+enum Signal:
+    Level(int64)
+    Off
+
+def main():
+    level = Signal.Level(3)
+    match level:
+        case Level(value):
+            print(value)
+        case Off:
+            print(0)
+"#,
+    )
+    .expect("valid enum construction should lower");
+    validate_loan_flow(&module).expect("source-produced enum construction should validate");
+
+    let forge = |edit: &dyn Fn(&mut String, &mut Vec<Operand>)| {
+        let mut forged = module.clone();
+        let (variant_name, payloads) = forged
+            .functions
+            .iter_mut()
+            .flat_map(|function| &mut function.blocks)
+            .flat_map(|block| &mut block.instructions)
+            .find_map(|instruction| match instruction {
+                Instruction::Assign {
+                    value:
+                        Rvalue::EnumVariant {
+                            enum_name,
+                            variant_name,
+                            payloads,
+                        },
+                    ..
+                } if enum_name == "Signal" => Some((variant_name, payloads)),
+                _ => None,
+            })
+            .expect("the source should construct a Signal variant");
+        edit(variant_name, payloads);
+        validate_loan_flow(&forged)
+    };
+
+    let error = forge(&|_, payloads| payloads.clear())
+        .expect_err("a payload variant cannot be built without its payload");
+    assert!(
+        error.contains("Signal.Level") && error.contains("1 payload"),
+        "{error}"
+    );
+    let error = forge(&|_, payloads| payloads.push(payloads[0].clone()))
+        .expect_err("a variant cannot carry extra payloads");
+    assert!(error.contains("Signal.Level"), "{error}");
+    let error = forge(&|variant, _| *variant = "Missing".to_string())
+        .expect_err("a variant must be declared by its enum");
+    assert!(error.contains("Signal.Missing"), "{error}");
+}

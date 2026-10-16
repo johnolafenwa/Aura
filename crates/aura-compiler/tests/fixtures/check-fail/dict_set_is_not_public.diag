@@ -1,0 +1,6 @@
+error[AU2001]: `dict[str, int64]` has no member `set`
+ --> crates/aura-compiler/tests/fixtures/check-fail/dict_set_is_not_public.au:3:12
+  |
+3 |     counts.set("a", 1)
+  |            ^
+  = help: `get(key)` returns `Lookup.Found(value)` or `Lookup.Missing`, and `key in table` tests presence

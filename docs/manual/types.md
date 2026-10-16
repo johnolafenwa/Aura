@@ -430,6 +430,8 @@ A numeric cast uses `value as NumericType`. Non-numeric casts are not implemente
 
 A cast is checked at runtime when the source value is not a compile-time literal. A failed cast is a runtime diagnostic, not `Result.Err`.
 
+The operand keeps its own type. In `box.size() as float64`, the call returns its declared `int64` and the cast converts that value. Only literal arithmetic, such as `300 as uint16` or `(200 + 100) as uint8`, is typed at the target directly.
+
 To convert text to a number, use a parsing function:
 
 ```aura

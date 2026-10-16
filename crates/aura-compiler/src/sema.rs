@@ -6125,6 +6125,19 @@ impl<'a> FunctionChecker<'a> {
         }
     }
 
+    fn is_literal_arithmetic_expr(expr: &Expr) -> bool {
+        match &expr.kind {
+            ExprKind::Int(_) | ExprKind::Float(_) => true,
+            ExprKind::Group(inner) | ExprKind::Unary { expr: inner, .. } => {
+                Self::is_literal_arithmetic_expr(inner)
+            }
+            ExprKind::Binary { left, right, .. } => {
+                Self::is_literal_arithmetic_expr(left) && Self::is_literal_arithmetic_expr(right)
+            }
+            _ => false,
+        }
+    }
+
     fn is_float_literal_expr(expr: &Expr) -> bool {
         match &expr.kind {
             ExprKind::Float(_) => true,
@@ -7648,8 +7661,12 @@ impl<'a> FunctionChecker<'a> {
                     // An explicit integer-to-float cast retains its exactness-
                     // checked cast semantics; it is not contextual literal typing.
                     self.type_of_expr(value, locals)?
-                } else {
+                } else if Self::is_literal_arithmetic_expr(value) {
                     self.type_of_expr_hint(value, locals, Some(&target_ty))?
+                } else {
+                    // The target type types literals only. A call result or a
+                    // conditional keeps its own type and the cast converts it.
+                    self.type_of_expr(value, locals)?
                 };
                 if !is_numeric_type(&source_ty) || !is_numeric_type(&target_ty) {
                     return Err(Diagnostic::at(

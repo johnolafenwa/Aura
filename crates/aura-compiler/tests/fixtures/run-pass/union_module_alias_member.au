@@ -1,0 +1,25 @@
+import union_module_alias_support.geometry as geometry
+
+def describe(point: geometry.Point | None):
+    match point:
+        case geometry.Point(x=x, y=y):
+            print(x + y)
+        case None:
+            print("none")
+
+def main():
+    describe(geometry.Point(x=1, y=2))
+    describe(None)
+    maybe: geometry.Point | None = geometry.Point(x=3, y=4)
+    if maybe is not None:
+        print(maybe.x)
+    missing: geometry.Point | None = None
+    if missing is None:
+        print("missing")
+    shade: geometry.Shade | None = geometry.Shade.Dark
+    if shade is not None:
+        match shade:
+            case Light:
+                print("light")
+            case Dark:
+                print("dark")

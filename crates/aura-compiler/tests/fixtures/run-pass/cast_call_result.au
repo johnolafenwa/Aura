@@ -1,0 +1,23 @@
+class Box:
+    value: int64
+
+    def get(self) -> int64:
+        return self.value
+
+def four() -> int64:
+    return 4
+
+def pick[T](value: own T) -> T:
+    return value
+
+def main():
+    box = Box(value=3)
+    n: int64 = 5
+    print(box.get() as float64)
+    print(four() as float64)
+    print(pick(n) as float64)
+    print((box.get() + 1) as float64)
+    print((n if n > 0 else 1) as float64)
+    print(box.get() as uint8)
+    print(300 as uint16)
+    print(-5 as int8)

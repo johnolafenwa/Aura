@@ -1,0 +1,7 @@
+public class Point:
+    public x: int64
+    public y: int64
+
+public enum Shade:
+    Light
+    Dark

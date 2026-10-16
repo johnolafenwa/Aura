@@ -9263,8 +9263,54 @@ pub(crate) fn validate_loan_flow(module: &MirModule) -> std::result::Result<(), 
         }
     }
     for function in module.functions.iter().chain(module.top_level.iter()) {
+        validate_enum_variant_payloads(function, &context)?;
         validate_initializer_slot(function, &context)?;
         validate_function_loan_flow(function, &context)?;
+    }
+    Ok(())
+}
+
+/// Every variant built of a module enum is one the enum declares, with
+/// exactly its declared payload count. Built-in enums such as `Lookup` are
+/// constructed by the runtime's own operations and are not listed here.
+fn validate_enum_variant_payloads(
+    function: &MirFunction,
+    context: &MirLoanValidationContext<'_>,
+) -> std::result::Result<(), String> {
+    for instruction in function.blocks.iter().flat_map(|block| &block.instructions) {
+        let Instruction::Assign {
+            value:
+                Rvalue::EnumVariant {
+                    enum_name,
+                    variant_name,
+                    payloads,
+                },
+            ..
+        } = instruction
+        else {
+            continue;
+        };
+        let Some(declared) = context.enums.get(enum_name.as_str()) else {
+            continue;
+        };
+        let Some(variant) = declared
+            .variants
+            .iter()
+            .find(|variant| &variant.name == variant_name)
+        else {
+            return Err(format!(
+                "invalid MIR enum construction in `{}`: `{enum_name}.{variant_name}` is not a declared variant",
+                function.name
+            ));
+        };
+        if payloads.len() != variant.payloads.len() {
+            return Err(format!(
+                "invalid MIR enum construction in `{}`: `{enum_name}.{variant_name}` takes {} payload(s), found {}",
+                function.name,
+                variant.payloads.len(),
+                payloads.len()
+            ));
+        }
     }
     Ok(())
 }
@@ -11763,7 +11809,24 @@ impl<'a> Lowerer<'a> {
         }
     }
 
+    /// A type written through a module alias, such as `geometry.Point` after
+    /// `import shapes.geometry as geometry`, names the class by its module
+    /// path. Other spellings are returned unchanged.
+    fn canonical_module_alias_name<'n>(&'n self, name: &'n str) -> &'n str {
+        let Some((module_path, _)) = name.rsplit_once('.') else {
+            return name;
+        };
+        if self.program.module_registry.contains_key(module_path) {
+            return name;
+        }
+        self.program
+            .canonical_type_names
+            .get(name)
+            .map_or(name, String::as_str)
+    }
+
     fn resolve_class_info(&self, name: &str) -> Option<&crate::sema::ClassInfo> {
+        let name = self.canonical_module_alias_name(name);
         if let Some((module_path, item_name)) = name.rsplit_once('.') {
             if let Some(namespace) = self.module_namespace(module_path) {
                 if let Some(class_info) = namespace
@@ -11782,6 +11845,7 @@ impl<'a> Lowerer<'a> {
     }
 
     fn resolve_enum_info(&self, name: &str) -> Option<&crate::sema::EnumInfo> {
+        let name = self.canonical_module_alias_name(name);
         if let Some((module_path, item_name)) = name.rsplit_once('.') {
             if let Some(namespace) = self.module_namespace(module_path) {
                 if let Some(enum_info) = namespace

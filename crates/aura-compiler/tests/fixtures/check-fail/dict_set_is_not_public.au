@@ -1,0 +1,4 @@
+def main():
+    mut counts: dict[str, int64] = {}
+    counts.set("a", 1)
+    print(counts["a"])
