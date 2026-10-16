@@ -316,11 +316,18 @@ Each step is one pull request with a green hosted run on Linux and macOS.
 | --- | --- | --- |
 | 0 | Baseline and gates: attribution mode, absence and presence tests recorded against today's output, dependency feature trim from section C, one object section per generated function, and removal of the tracked 1 MB `crates/aura-compiler/src/mir.rs.orig` | none |
 | 1 | Extract `aura-core` | none |
-| 2 | Create `aura-runtime`, ship `libaura_runtime.a`, update packaging, installer, smoke tests, and cache format | archive name |
+| 2a | Create `aura-runtime` and move the runtime into it. `aura-compiler` keeps building the shipped archive, which now contains the runtime crate | none |
+| 2b | Fallback census and retirement from section E, with direct-backend fixes for every program that still falls back | `aura build` backends |
+| 2c | Ship `libaura_runtime.a`, update packaging, installer, smoke tests, and cache format | archive name |
 | 3 | Resources behind handles, B1 | none |
 | 4 | Per-builtin entry points and static metadata, B2 and B3 | none |
 | 5 | Reachability pass and binary type descriptors, B4 and B5 | none |
-| 6 | Fallback census and retirement from section E, final measurements, Performance chapter, roadmap, and task board | `aura build` backends |
+| 6 | Final measurements, Performance chapter, roadmap, and task board | none |
+
+Step 2 is split in three because the launcher fallback links the MIR
+interpreter, which a runtime-only archive cannot provide. Retiring the
+launcher before the archive changes avoids shipping two archives in the
+meantime.
 
 The absence gate starts by recording today's contents and tightens as
 steps 3 through 5 land. It reaches the full list in step 5.

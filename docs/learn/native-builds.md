@@ -40,15 +40,10 @@ Use `build` when:
 
 ## Backends
 
-```bash
-aura build --backend auto -o ./app app.au
-aura build --backend direct -o ./app app.au
-```
-
-`auto` is the default. It first tries the direct native backend. It may fall
-back to a standalone launcher that embeds checked MIR and the MIR runtime.
-`direct` forbids fallback. Use it when CI must prove that direct emission
-still works.
+`aura build` always uses the direct native backend. `--backend auto` and
+`--backend direct` are accepted and select the same backend. A file with no
+`main` function and no top-level statements has no entry point, so the build
+fails with `AU2999`.
 
 ## Runtime Diagnostics
 

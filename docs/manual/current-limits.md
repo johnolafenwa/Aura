@@ -274,7 +274,7 @@ These figures come from the clean Mac14,9 measurement at `181204b`.
 - `build` requires a host C compiler. Source-checkout builds may use Cargo to refresh the native runtime. Release archives carry that runtime and do not require Rust or the source checkout.
 - Native `run` cache entries larger than 512 MiB are not retained. The just-built program still runs, but a later invocation rebuilds it instead of using the cache.
 - The direct backend is the maintained native backend for the implemented language surface.
-- The default `--backend auto` first tries direct emission. It may package an embedded-MIR launcher when direct emission is unavailable. Use `--backend direct` when fallback is unacceptable.
+- `aura build` always emits directly. A file with no entry point fails with `AU2999` instead of producing an executable.
 - Editor tooling uses a persistent compiler service. If that process is unavailable, recovery is lexical only, with no semantic diagnostics or member inference.
 - `aura fmt` has one fixed style with an 88-column width and no configuration. A statement without brackets cannot break, so it may stay longer than 88 columns.
 - `aura test` discovers each parameterless `def test_*()` function as a separate result. A file with no such function still runs as one file-level test.
@@ -289,7 +289,7 @@ These figures come from the clean Mac14,9 measurement at `181204b`.
 
 - The workspace release profile builds the shipped compiler executable with optimization level 3, fat link-time optimization (LTO), one codegen unit, no debug data, and symbol stripping.
 - Panic unwinding stays enabled. The runtime archive keeps linkable symbols.
-- Direct and embedded-MIR user executables link with `-Wl,-dead_strip` on macOS or `-Wl,--gc-sections` on Linux.
+- Built user executables link with `-Wl,-dead_strip` on macOS or `-Wl,--gc-sections` on Linux.
 - After linking, `strip -S -x` removes debug and local symbols while keeping the globals that process-global FFI needs.
 - Source locations, typed Aura call frames, and task ancestry are embedded runtime metadata and stay available. Native symbol and debugger information is reduced.
 - The host toolchain must provide `strip` as well as `cc`.

@@ -7,6 +7,7 @@
 pub mod diag;
 pub mod integer;
 pub mod ops;
+pub mod places;
 pub mod task;
 pub mod type_budget;
 pub mod types;

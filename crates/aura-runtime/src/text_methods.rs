@@ -9,11 +9,11 @@ use crate::integer::IntegerValue;
 use crate::runtime_value::{
     host_bytes_from_runtime, optional_value, TupleValue, Value, VecValue, MAX_STRING_BYTES,
 };
-use crate::sema::Type;
+use aura_core::types::Type;
 
 /// The `str` text-convenience methods, in the order the direct backend
 /// numbers them for its runtime dispatcher.
-pub(crate) const TEXT_METHOD_NAMES: [&str; 9] = [
+pub const TEXT_METHOD_NAMES: [&str; 9] = [
     "trim_start",
     "trim_end",
     "split_once",
@@ -28,7 +28,7 @@ pub(crate) const TEXT_METHOD_NAMES: [&str; 9] = [
 /// Evaluates one text-convenience method by name. `argument` is the text
 /// argument of `split_once`, `rsplit_once`, `find`, and `count`; `count` is
 /// the scalar argument of `repeat`.
-pub(crate) fn evaluate_text_method(
+pub fn evaluate_text_method(
     method: &str,
     text: &str,
     argument: Option<&str>,
@@ -78,19 +78,19 @@ fn optional_index(index: Option<usize>) -> Value {
 }
 
 /// `str.trim_start()`: removes leading Unicode whitespace.
-pub(crate) fn trim_start(text: &str) -> Value {
+pub fn trim_start(text: &str) -> Value {
     Value::String(text.trim_start().to_string())
 }
 
 /// `str.trim_end()`: removes trailing Unicode whitespace.
-pub(crate) fn trim_end(text: &str) -> Value {
+pub fn trim_end(text: &str) -> Value {
     Value::String(text.trim_end().to_string())
 }
 
 /// `str.split_once(separator)` and `str.rsplit_once(separator)`.
 ///
 /// Returns `(before, after) | None`. An empty separator traps with `AU4003`.
-pub(crate) fn split_once(text: &str, separator: &str, from_end: bool) -> Result<Value> {
+pub fn split_once(text: &str, separator: &str, from_end: bool) -> Result<Value> {
     let method = if from_end {
         "rsplit_once"
     } else {
@@ -125,7 +125,7 @@ pub(crate) fn split_once(text: &str, separator: &str, from_end: bool) -> Result<
 /// `str.lines()`: splits at `\n` and removes one `\r` before each `\n`.
 /// A final line terminator adds no empty line, and an empty string has no
 /// lines.
-pub(crate) fn lines(text: &str) -> Value {
+pub fn lines(text: &str) -> Value {
     let mut parts = Vec::new();
     let mut rest = text;
     while !rest.is_empty() {
@@ -145,13 +145,13 @@ pub(crate) fn lines(text: &str) -> Value {
 
 /// `str.split_whitespace()`: splits on runs of Unicode whitespace and drops
 /// empty parts.
-pub(crate) fn split_whitespace(text: &str) -> Value {
+pub fn split_whitespace(text: &str) -> Value {
     string_list(text.split_whitespace().map(str::to_string))
 }
 
 /// `str.find(text)`: the index of the first occurrence, counted in Unicode
 /// scalar values. An empty needle is found at index `0`.
-pub(crate) fn find(text: &str, needle: &str) -> Value {
+pub fn find(text: &str, needle: &str) -> Value {
     optional_index(
         text.find(needle)
             .map(|byte_index| text[..byte_index].chars().count()),
@@ -160,7 +160,7 @@ pub(crate) fn find(text: &str, needle: &str) -> Value {
 
 /// `str.count(text)`: the number of non-overlapping occurrences. An empty
 /// needle traps with `AU4003`.
-pub(crate) fn count_occurrences(text: &str, needle: &str) -> Result<Value> {
+pub fn count_occurrences(text: &str, needle: &str) -> Result<Value> {
     if needle.is_empty() {
         return Err(Diagnostic::coded("AU4003", "`count` text cannot be empty"));
     }
@@ -170,7 +170,7 @@ pub(crate) fn count_occurrences(text: &str, needle: &str) -> Result<Value> {
 /// `str.repeat(count)`: `count` concatenated copies. A negative count traps
 /// with `AU4003`. A result above the string limit traps with `AU4005` before
 /// any allocation.
-pub(crate) fn repeat(text: &str, count: i64) -> Result<Value> {
+pub fn repeat(text: &str, count: i64) -> Result<Value> {
     let Ok(count) = usize::try_from(count) else {
         return Err(Diagnostic::coded(
             "AU4003",
@@ -201,7 +201,7 @@ pub(crate) fn repeat(text: &str, count: i64) -> Result<Value> {
 
 /// Byte search helpers for `bytes.starts_with`, `bytes.ends_with`, and
 /// `bytes.find`.
-pub(crate) fn is_bytes_search_builtin(name: &str) -> bool {
+pub fn is_bytes_search_builtin(name: &str) -> bool {
     matches!(
         name,
         "bytes::starts_with" | "bytes::ends_with" | "bytes::find"
@@ -209,15 +209,23 @@ pub(crate) fn is_bytes_search_builtin(name: &str) -> bool {
 }
 
 /// Copies one shared `list[uint8]` argument of a byte search builtin.
-pub(crate) fn bytes_search_operand(name: &str, value: &Value) -> Result<Vec<u8>> {
+pub fn bytes_search_operand(name: &str, value: &Value) -> Result<Vec<u8>> {
     host_bytes_from_runtime(value, &name.replace("::", "."))
 }
 
 /// Evaluates one byte search builtin over two copied byte operands.
-pub(crate) fn evaluate_bytes_search(name: &str, value: &[u8], pattern: &[u8]) -> Value {
+pub fn evaluate_bytes_search(name: &str, value: &[u8], pattern: &[u8]) -> Value {
     match name {
         "bytes::starts_with" => Value::Bool(value.starts_with(pattern)),
         "bytes::ends_with" => Value::Bool(value.ends_with(pattern)),
         _ => optional_index(memchr::memmem::find(value, pattern)),
     }
+}
+
+/// The opcode generated code passes for a `str` text method.
+pub fn text_method_opcode(field: &str) -> Option<i64> {
+    TEXT_METHOD_NAMES
+        .iter()
+        .position(|name| *name == field)
+        .map(|index| index as i64)
 }

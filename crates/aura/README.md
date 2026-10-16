@@ -237,16 +237,15 @@ Successful native builds from `aura run` are cached by content under
 
 ### Building
 
-`aura build` accepts `--backend auto|direct` and `--format human|json` for
-compile and build diagnostics.
-
-| Backend | Behavior |
-| --- | --- |
-| `auto` | The default. Tries the direct native backend first. If direct emission is unavailable, it may fall back to a standalone embedded-MIR launcher that packages MIR with the native runtime. |
-| `direct` | Forces the low-level native backend, which covers the full implemented Aura language surface. |
+`aura build` emits a native executable with the direct backend, which covers
+the full implemented Aura language surface. It accepts `--format human|json`
+for compile and build diagnostics. `--backend auto` and `--backend direct` are
+accepted and select the same backend.
 
 - Built binaries run without the original `.au` source files.
-- Both backends need a host C compiler.
+- A build needs a host C compiler.
+- A file without a `main` function or top-level statements fails with
+  `AU2999` and creates no output.
 - A source-checkout build can refresh the runtime through Cargo. In human
   mode, it flushes `aura: waiting for a concurrent build...` before blocking
   on another process that is refreshing the shared native runtime.

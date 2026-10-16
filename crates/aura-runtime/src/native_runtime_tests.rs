@@ -8,7 +8,6 @@ use super::{
     runtime_type_pattern_from_name, runtime_type_pattern_matches, value_mut, value_ref,
     value_type_name, with_cancellation_scope, OpaqueValue,
 };
-use crate::ast::{BinaryOp, ReceiverKind, UnaryOp};
 use crate::diag::{
     Diagnostic, RuntimeCallFrame, RuntimeSourceSpan, RuntimeTaskFrame, Span, StructuredDiagnostic,
 };
@@ -24,7 +23,8 @@ use crate::runtime_value::{
     TcpStreamValue, TlsListenerValue, TlsStreamValue, TupleValue, UdpDatagramValue, UdpSocketValue,
     UnixListenerValue, UnixStreamValue, Value, VecValue, WebSocketListenerValue, WebSocketValue,
 };
-use crate::sema::{
+use aura_core::ops::{BinaryOp, ReceiverKind, UnaryOp};
+use aura_core::types::{
     ClosureCallKind, ClosureCapture, ClosureCaptureMode, FunctionParamContract, Type,
 };
 #[cfg(unix)]
@@ -568,7 +568,7 @@ fn adr0038_direct_closure_capture_abi_covers_mutability_and_errors() {
                     params: Box::new(Vec::new()),
                     return_type: Box::new(Type::named("int64")),
                     captures: Box::new(Vec::new()),
-                    call_kind: crate::sema::ClosureCallKind::Repeatable,
+                    call_kind: aura_core::types::ClosureCallKind::Repeatable,
                 },
                 source_path: None,
                 entry_span: Span::new(1, 1),
@@ -2896,7 +2896,7 @@ fn assert_value_metadata(value: &Value, display_name: &str, type_name: &str) {
     assert_eq!(value_type_name(value), display_name);
     assert_eq!(
         inferred_collection_type(value),
-        crate::sema::Type::named(type_name)
+        aura_core::types::Type::named(type_name)
     );
 }
 
@@ -3667,7 +3667,7 @@ fn direct_bytes_host_ffi_dispatches_without_consuming_borrowed_input() {
 }
 
 fn direct_text_method(method: &str, text: &str, argument: Option<&str>, count: i64) -> Value {
-    let opcode = crate::native_codegen::text_method_opcode(method).expect("known text method");
+    let opcode = crate::text_methods::text_method_opcode(method).expect("known text method");
     let receiver = string_value(text);
     let argument = argument.map_or(std::ptr::null_mut(), string_value);
     let result = super::aura_direct_string_text_method(opcode, receiver, argument, count);
@@ -3743,7 +3743,7 @@ fn direct_text_methods_dispatch_every_opcode_with_mir_semantics() {
         Value::String("ababab".to_string())
     );
 
-    let split = crate::native_codegen::text_method_opcode("split_once").unwrap();
+    let split = crate::text_methods::text_method_opcode("split_once").unwrap();
     let error = direct_text_method_trap(
         split,
         Value::String("a".into()),
@@ -3752,7 +3752,7 @@ fn direct_text_methods_dispatch_every_opcode_with_mir_semantics() {
     );
     assert_eq!(error.code, "AU4003");
     assert_eq!(error.message, "`split_once` separator cannot be empty");
-    let count = crate::native_codegen::text_method_opcode("count").unwrap();
+    let count = crate::text_methods::text_method_opcode("count").unwrap();
     let error = direct_text_method_trap(
         count,
         Value::String("a".into()),
@@ -3760,7 +3760,7 @@ fn direct_text_methods_dispatch_every_opcode_with_mir_semantics() {
         0,
     );
     assert_eq!(error.code, "AU4003");
-    let repeat = crate::native_codegen::text_method_opcode("repeat").unwrap();
+    let repeat = crate::text_methods::text_method_opcode("repeat").unwrap();
     let error = direct_text_method_trap(repeat, Value::String("a".into()), None, -1);
     assert_eq!(error.message, "`repeat` count cannot be negative, found -1");
     let error = direct_text_method_trap(repeat, Value::String("ab".into()), None, i64::MAX);
@@ -4985,7 +4985,7 @@ fn native_runtime_timeout_and_option_decoders_cover_error_edges() {
     assert_eq!(
         super::expect_command_vec(
             &Value::Vec(VecValue {
-                element_type: crate::sema::Type::named("Unknown"),
+                element_type: aura_core::types::Type::named("Unknown"),
                 elements: vec![Value::String("echo".to_string())],
             }),
             "command",
@@ -4995,7 +4995,7 @@ fn native_runtime_timeout_and_option_decoders_cover_error_edges() {
     let message = capture_runtime_error_message(|| {
         let _ = super::expect_command_vec(
             &Value::Vec(VecValue {
-                element_type: crate::sema::Type::named("int32"),
+                element_type: aura_core::types::Type::named("int32"),
                 elements: vec![Value::Int(IntegerValue::from_signed(1))],
             }),
             "command",
@@ -6218,7 +6218,7 @@ fn native_runtime_process_capture_task_helper_covers_success_and_malformed_resul
 
     let bytes_task = TaskValue::from_handle(thread::spawn(|| {
         Ok(Value::Vec(VecValue {
-            element_type: crate::sema::Type::named("uint8"),
+            element_type: aura_core::types::Type::named("uint8"),
             elements: vec![
                 Value::Int(IntegerValue::from_signed(65)),
                 Value::Int(IntegerValue::from_literal(66)),
@@ -6232,7 +6232,7 @@ fn native_runtime_process_capture_task_helper_covers_success_and_malformed_resul
 
     let non_byte_integer = TaskValue::from_handle(thread::spawn(|| {
         Ok(Value::Vec(VecValue {
-            element_type: crate::sema::Type::named("uint8"),
+            element_type: aura_core::types::Type::named("uint8"),
             elements: vec![Value::Int(IntegerValue::from_signed(300))],
         }))
     }));
@@ -6243,7 +6243,7 @@ fn native_runtime_process_capture_task_helper_covers_success_and_malformed_resul
 
     let wrong_payload = TaskValue::from_handle(thread::spawn(|| {
         Ok(Value::Vec(VecValue {
-            element_type: crate::sema::Type::named("uint8"),
+            element_type: aura_core::types::Type::named("uint8"),
             elements: vec![Value::String("bad".to_string())],
         }))
     }));
@@ -6254,7 +6254,7 @@ fn native_runtime_process_capture_task_helper_covers_success_and_malformed_resul
 
     let wrong_result_type = TaskValue::from_handle(thread::spawn(|| {
         Ok(Value::Vec(VecValue {
-            element_type: crate::sema::Type::named("str"),
+            element_type: aura_core::types::Type::named("str"),
             elements: vec![Value::String("bad".to_string())],
         }))
     }));
@@ -6277,7 +6277,7 @@ fn native_runtime_process_capture_task_helper_covers_success_and_malformed_resul
         let cancelled_task = TaskValue::from_handle(thread::spawn(|| {
             thread::sleep(StdDuration::from_millis(50));
             Ok(Value::Vec(VecValue {
-                element_type: crate::sema::Type::named("uint8"),
+                element_type: aura_core::types::Type::named("uint8"),
                 elements: Vec::new(),
             }))
         }));
@@ -9604,7 +9604,7 @@ fn native_runtime_direct_task_claim_flag_is_released_after_normal_completion() {
                 group,
                 1,
                 1,
-                crate::call::MIN_TASK_STACK_BYTES,
+                aura_core::task::MIN_TASK_STACK_BYTES,
             )
         };
         let joined = super::aura_direct_task_join(task);
@@ -9720,7 +9720,7 @@ fn native_runtime_invalid_task_stack_releases_transferred_arguments() {
                     group,
                     1,
                     1,
-                    crate::call::MIN_TASK_STACK_BYTES - 1,
+                    aura_core::task::MIN_TASK_STACK_BYTES - 1,
                 )
             })
         });
@@ -9786,33 +9786,33 @@ fn native_runtime_task_start_validation_releases_owned_abi_state() {
         (
             std::ptr::null_mut(),
             1,
-            crate::call::MIN_TASK_STACK_BYTES,
+            aura_core::task::MIN_TASK_STACK_BYTES,
             "task starting requires a `TaskGroup`".to_string(),
             None,
         ),
         (
             bool_value(true),
             1,
-            crate::call::MIN_TASK_STACK_BYTES,
+            aura_core::task::MIN_TASK_STACK_BYTES,
             "expected `TaskGroup`, found `bool`".to_string(),
             None,
         ),
         (
             super::aura_direct_task_group_new(),
             1,
-            crate::call::MAX_TASK_STACK_BYTES + 1,
+            aura_core::task::MAX_TASK_STACK_BYTES + 1,
             format!(
                 "task stack size must be between {} and {} bytes, found {}",
-                crate::call::MIN_TASK_STACK_BYTES,
-                crate::call::MAX_TASK_STACK_BYTES,
-                crate::call::MAX_TASK_STACK_BYTES + 1
+                aura_core::task::MIN_TASK_STACK_BYTES,
+                aura_core::task::MAX_TASK_STACK_BYTES,
+                aura_core::task::MAX_TASK_STACK_BYTES + 1
             ),
             Some("AU4005"),
         ),
         (
             super::aura_direct_task_group_new(),
             2,
-            crate::call::MIN_TASK_STACK_BYTES,
+            aura_core::task::MIN_TASK_STACK_BYTES,
             "invalid task-start stack-presence flag".to_string(),
             None,
         ),
@@ -9868,7 +9868,7 @@ fn native_runtime_task_stack_allocation_failure_releases_transferred_arguments()
                     group,
                     1,
                     1,
-                    crate::call::MIN_TASK_STACK_BYTES,
+                    aura_core::task::MIN_TASK_STACK_BYTES,
                 )
             })
         });
@@ -9898,7 +9898,7 @@ fn native_runtime_task_stack_allocation_failure_releases_transferred_arguments()
 fn lightweight_task_stack_allocation_rounds_up_and_includes_a_guard_page() {
     let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as usize;
     assert!(page_size.is_power_of_two());
-    let requested = usize::try_from(crate::call::MIN_TASK_STACK_BYTES)
+    let requested = usize::try_from(aura_core::task::MIN_TASK_STACK_BYTES)
         .expect("minimum task stack size fits usize")
         + 1;
     let stack = crate::runtime_value::allocate_lightweight_task_stack(requested)
@@ -9914,7 +9914,7 @@ fn lightweight_task_stack_allocation_rounds_up_and_includes_a_guard_page() {
     );
     assert!(reservation >= requested + page_size);
 
-    let maximum = usize::try_from(crate::call::MAX_TASK_STACK_BYTES)
+    let maximum = usize::try_from(aura_core::task::MAX_TASK_STACK_BYTES)
         .expect("maximum task stack size fits usize");
     let maximum_stack = crate::runtime_value::allocate_lightweight_task_stack(maximum)
         .expect("maximum accepted task stack should allocate");
@@ -12000,65 +12000,6 @@ fn direct_root_entrypoint_helper_exits_for_invalid_thunks_and_return_types() {
 }
 
 #[test]
-fn native_runtime_entrypoint_guards_invalid_inputs() {
-    assert_eq!(
-        unsafe {
-            crate::mir_runtime::aura_native_run(
-                std::ptr::null(),
-                0,
-                std::ptr::null(),
-                0,
-                std::ptr::null(),
-                0,
-            )
-        },
-        1
-    );
-
-    let mir_json = b"{}";
-    let invalid_path = [0xff_u8];
-    let source = b"def main() -> int32:\n    return 0\n";
-    assert_eq!(
-        unsafe {
-            crate::mir_runtime::aura_native_run(
-                mir_json.as_ptr(),
-                mir_json.len(),
-                invalid_path.as_ptr(),
-                invalid_path.len(),
-                source.as_ptr(),
-                source.len(),
-            )
-        },
-        1
-    );
-
-    let source_path = b"/tmp/test.au";
-    let invalid_source = [0xff_u8];
-    assert_eq!(
-        unsafe {
-            crate::mir_runtime::aura_native_run(
-                mir_json.as_ptr(),
-                mir_json.len(),
-                source_path.as_ptr(),
-                source_path.len(),
-                invalid_source.as_ptr(),
-                invalid_source.len(),
-            )
-        },
-        1
-    );
-
-    // Another test in this binary may already have installed the process-wide
-    // program source, which appends a ` --> path` trailer to every rendering;
-    // only the bare prefix is order-independent.
-    let rendered = render_runtime_diagnostic(crate::diag::Diagnostic::new("oops"));
-    assert!(
-        rendered.starts_with("error[AU2999]: oops"),
-        "unexpected runtime diagnostic rendering: {rendered}"
-    );
-}
-
-#[test]
 fn native_runtime_private_value_decoders_cover_success_paths() {
     assert_eq!(
         super::expect_string_value(&Value::String("aura".to_string()), "text"),
@@ -12067,7 +12008,7 @@ fn native_runtime_private_value_decoders_cover_success_paths() {
     assert_eq!(
         super::expect_bytes_value(
             &Value::Vec(VecValue {
-                element_type: crate::sema::Type::named("Unknown"),
+                element_type: aura_core::types::Type::named("Unknown"),
                 elements: vec![
                     Value::Int(IntegerValue::from_signed(65)),
                     Value::Int(IntegerValue::from_signed(66)),
@@ -12085,8 +12026,8 @@ fn native_runtime_private_value_decoders_cover_success_paths() {
     assert_eq!(
         super::expect_headers_map(
             &Value::Map(MapValue {
-                key_type: crate::sema::Type::named("Unknown"),
-                value_type: crate::sema::Type::named("Unknown"),
+                key_type: aura_core::types::Type::named("Unknown"),
+                value_type: aura_core::types::Type::named("Unknown"),
                 entries: vec![(
                     Value::String("content-type".to_string()),
                     Value::String("text/plain".to_string()),
@@ -12161,7 +12102,7 @@ fn native_runtime_private_value_decoders_cover_success_paths() {
     assert_eq!(
         super::expect_command_vec(
             &Value::Vec(VecValue {
-                element_type: crate::sema::Type::named("Unknown"),
+                element_type: aura_core::types::Type::named("Unknown"),
                 elements: vec![
                     Value::String("/bin/echo".to_string()),
                     Value::String("ok".to_string()),
@@ -12199,7 +12140,7 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
             "bytes-element-range" => {
                 super::expect_bytes_value(
                     &Value::Vec(VecValue {
-                        element_type: crate::sema::Type::named("uint8"),
+                        element_type: aura_core::types::Type::named("uint8"),
                         elements: vec![Value::Int(IntegerValue::from_signed(300))],
                     }),
                     "bytes",
@@ -12223,8 +12164,8 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
             "headers-key-type" => {
                 super::expect_headers_map(
                     &Value::Map(MapValue {
-                        key_type: crate::sema::Type::named("Unknown"),
-                        value_type: crate::sema::Type::named("Unknown"),
+                        key_type: aura_core::types::Type::named("Unknown"),
+                        value_type: aura_core::types::Type::named("Unknown"),
                         entries: vec![(
                             Value::Int(IntegerValue::from_signed(1)),
                             Value::String("value".to_string()),
@@ -12257,7 +12198,7 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
             "command-element-type" => {
                 super::expect_command_vec(
                     &Value::Vec(VecValue {
-                        element_type: crate::sema::Type::named("str"),
+                        element_type: aura_core::types::Type::named("str"),
                         elements: vec![Value::Int(IntegerValue::from_signed(1))],
                     }),
                     "command",
@@ -14666,7 +14607,7 @@ fn native_runtime_scalar_helpers_cover_comparisons_unary_ops_and_metadata() {
     assert_eq!(value_type_name(Value::Float(1.5)), "float64");
     assert_eq!(
         value_type_name(Value::Vec(VecValue {
-            element_type: crate::sema::Type::named("int32"),
+            element_type: aura_core::types::Type::named("int32"),
             elements: Vec::new(),
         })),
         "list"
@@ -14682,15 +14623,15 @@ fn native_runtime_scalar_helpers_cover_comparisons_unary_ops_and_metadata() {
     );
     assert_eq!(
         value_type_name(Value::Set(SetValue {
-            element_type: crate::sema::Type::named("str"),
+            element_type: aura_core::types::Type::named("str"),
             elements: Vec::new(),
         })),
         "set"
     );
     assert_eq!(
         value_type_name(Value::Map(MapValue {
-            key_type: crate::sema::Type::named("str"),
-            value_type: crate::sema::Type::named("int32"),
+            key_type: aura_core::types::Type::named("str"),
+            value_type: aura_core::types::Type::named("int32"),
             entries: Vec::new(),
         })),
         "dict"
@@ -14723,82 +14664,88 @@ fn native_runtime_scalar_helpers_cover_comparisons_unary_ops_and_metadata() {
     );
     assert_eq!(
         inferred_collection_type(&Value::Bool(true)),
-        crate::sema::Type::named("bool")
+        aura_core::types::Type::named("bool")
     );
     assert_eq!(
         inferred_collection_type(&Value::Float(1.5)),
-        crate::sema::Type::named("float64")
+        aura_core::types::Type::named("float64")
     );
     assert_eq!(
         inferred_collection_type(&Value::Int(IntegerValue::from_i32(7))),
-        crate::sema::Type::named("int32")
+        aura_core::types::Type::named("int32")
     );
     assert_eq!(
         inferred_collection_type(&Value::Int(IntegerValue::from_signed(7))),
-        crate::sema::Type::named("Unknown")
+        aura_core::types::Type::named("Unknown")
     );
     assert_eq!(
         inferred_collection_type(&Value::String("text".to_string())),
-        crate::sema::Type::named("str")
+        aura_core::types::Type::named("str")
     );
     assert_eq!(
         inferred_collection_type(&Value::Vec(VecValue {
-            element_type: crate::sema::Type::named("int32"),
+            element_type: aura_core::types::Type::named("int32"),
             elements: Vec::new(),
         })),
-        crate::sema::Type::Named("list".to_string(), vec![crate::sema::Type::named("int32")])
+        aura_core::types::Type::Named(
+            "list".to_string(),
+            vec![aura_core::types::Type::named("int32")]
+        )
     );
     assert_eq!(
         inferred_collection_type(&Value::Set(SetValue {
-            element_type: crate::sema::Type::named("str"),
+            element_type: aura_core::types::Type::named("str"),
             elements: Vec::new(),
         })),
-        crate::sema::Type::Named("set".to_string(), vec![crate::sema::Type::named("str")])
+        aura_core::types::Type::Named(
+            "set".to_string(),
+            vec![aura_core::types::Type::named("str")]
+        )
     );
     assert_eq!(
         inferred_collection_type(&Value::Map(MapValue {
-            key_type: crate::sema::Type::named("str"),
-            value_type: crate::sema::Type::named("int32"),
+            key_type: aura_core::types::Type::named("str"),
+            value_type: aura_core::types::Type::named("int32"),
             entries: Vec::new(),
         })),
-        crate::sema::Type::Named(
+        aura_core::types::Type::Named(
             "dict".to_string(),
             vec![
-                crate::sema::Type::named("str"),
-                crate::sema::Type::named("int32"),
+                aura_core::types::Type::named("str"),
+                aura_core::types::Type::named("int32"),
             ],
         )
     );
     assert_eq!(
         inferred_collection_type(&Value::Duration(5)),
-        crate::sema::Type::named("Duration")
+        aura_core::types::Type::named("Duration")
     );
     assert_eq!(
         inferred_collection_type(&Value::Range(RangeValue { start: 1, end: 2 })),
-        crate::sema::Type::named("Range")
+        aura_core::types::Type::named("Range")
     );
     assert_eq!(
         inferred_collection_type(&Value::Instance(InstanceValue {
             class_name: "Point".to_string(),
             fields: Default::default(),
         })),
-        crate::sema::Type::named("Point")
+        aura_core::types::Type::named("Point")
     );
     assert_eq!(
         inferred_collection_type(&Value::Channel(ChannelValue::new())),
-        crate::sema::Type::named("Queue")
+        aura_core::types::Type::named("Queue")
     );
     assert_eq!(
         inferred_collection_type(&Value::Task(TaskValue::from_handle(thread::spawn(|| Ok(
             Value::Unit
         ))))),
-        crate::sema::Type::named("Task")
+        aura_core::types::Type::named("Task")
     );
     assert_eq!(
         inferred_collection_type(&Value::TaskGroup(TaskGroupValue::new(
             &CancellationContext::default()
         ))),
-        crate::sema::Type::named("TaskGroup")
+        aura_core::types::Type::named("TaskGroup")
     );
 
     assert_eq!(
@@ -14869,11 +14816,11 @@ fn native_runtime_scalar_helpers_cover_comparisons_unary_ops_and_metadata() {
     assert_eq!(
         compare_values(
             Value::Vec(VecValue {
-                element_type: crate::sema::Type::named("int32"),
+                element_type: aura_core::types::Type::named("int32"),
                 elements: vec![Value::Int(IntegerValue::from_signed(1))],
             }),
             Value::Vec(VecValue {
-                element_type: crate::sema::Type::named("int32"),
+                element_type: aura_core::types::Type::named("int32"),
                 elements: vec![Value::Int(IntegerValue::from_signed(1))],
             }),
             BinaryOp::Eq,
@@ -16465,14 +16412,14 @@ fn native_runtime_closure_task_handoff_transfers_capture_ownership_to_child() {
                 signature: Type::Closure {
                     params: Box::new(Vec::new()),
                     return_type: Box::new(capture_type.clone()),
-                    captures: Box::new(vec![crate::sema::ClosureCapture {
+                    captures: Box::new(vec![aura_core::types::ClosureCapture {
                         name: "captured".to_string(),
                         ty: capture_type.clone(),
-                        mode: crate::sema::ClosureCaptureMode::Copy,
+                        mode: aura_core::types::ClosureCaptureMode::Copy,
                         span: Span::new(2, 1),
                         mutated: false,
                     }]),
-                    call_kind: crate::sema::ClosureCallKind::Repeatable,
+                    call_kind: aura_core::types::ClosureCallKind::Repeatable,
                 },
                 source_path: Some("/workspace/capturing_child.au".to_string()),
                 entry_span: Span::new(2, 1),
@@ -16550,21 +16497,21 @@ fn native_runtime_closure_task_handoff_preserves_repeatable_and_one_shot_semanti
             signature: Type::Closure {
                 params: Box::new(Vec::new()),
                 return_type: Box::new(Type::named("int64")),
-                captures: Box::new(vec![crate::sema::ClosureCapture {
+                captures: Box::new(vec![aura_core::types::ClosureCapture {
                     name: "captured".to_string(),
                     ty: Type::named("int64"),
                     mode: if consuming {
-                        crate::sema::ClosureCaptureMode::Move
+                        aura_core::types::ClosureCaptureMode::Move
                     } else {
-                        crate::sema::ClosureCaptureMode::Copy
+                        aura_core::types::ClosureCaptureMode::Copy
                     },
                     span: Span::new(2, 1),
                     mutated: false,
                 }]),
                 call_kind: if consuming {
-                    crate::sema::ClosureCallKind::Consuming
+                    aura_core::types::ClosureCallKind::Consuming
                 } else {
-                    crate::sema::ClosureCallKind::Repeatable
+                    aura_core::types::ClosureCallKind::Repeatable
                 },
             },
             source_path: Some("/workspace/task_closure.au".to_string()),
@@ -16716,14 +16663,14 @@ fn native_runtime_closure_task_rejects_negative_public_arity_then_allows_valid_r
                 signature: Type::Closure {
                     params: Box::new(Vec::new()),
                     return_type: Box::new(Type::named("int64")),
-                    captures: Box::new(vec![crate::sema::ClosureCapture {
+                    captures: Box::new(vec![aura_core::types::ClosureCapture {
                         name: "captured".to_string(),
                         ty: Type::named("int64"),
-                        mode: crate::sema::ClosureCaptureMode::Copy,
+                        mode: aura_core::types::ClosureCaptureMode::Copy,
                         span: Span::new(2, 1),
                         mutated: false,
                     }]),
-                    call_kind: crate::sema::ClosureCallKind::Repeatable,
+                    call_kind: aura_core::types::ClosureCallKind::Repeatable,
                 },
                 source_path: Some("/workspace/retryable_child.au".to_string()),
                 entry_span: Span::new(2, 1),
@@ -16833,14 +16780,14 @@ fn native_runtime_detached_closure_task_surfaces_unobserved_trap_and_cleans_capt
                         signature: Type::Closure {
                             params: Box::new(Vec::new()),
                             return_type: Box::new(Type::Unit),
-                            captures: Box::new(vec![crate::sema::ClosureCapture {
+                            captures: Box::new(vec![aura_core::types::ClosureCapture {
                                 name: "payload".to_string(),
                                 ty: Type::named("str"),
-                                mode: crate::sema::ClosureCaptureMode::Move,
+                                mode: aura_core::types::ClosureCaptureMode::Move,
                                 span: Span::new(2, 1),
                                 mutated: false,
                             }]),
-                            call_kind: crate::sema::ClosureCallKind::Consuming,
+                            call_kind: aura_core::types::ClosureCallKind::Consuming,
                         },
                         source_path: Some("/workspace/detached.au".to_string()),
                         entry_span: Span::new(2, 1),
@@ -17250,14 +17197,14 @@ fn native_runtime_closure_calls_preserve_results_writebacks_and_call_kind() {
                         has_default: false,
                     }]),
                     return_type: Box::new(Type::named("int64")),
-                    captures: Box::new(vec![crate::sema::ClosureCapture {
+                    captures: Box::new(vec![aura_core::types::ClosureCapture {
                         name: "offset".to_string(),
                         ty: Type::named("int64"),
-                        mode: crate::sema::ClosureCaptureMode::Copy,
+                        mode: aura_core::types::ClosureCaptureMode::Copy,
                         span: Span::new(2, 17),
                         mutated: false,
                     }]),
-                    call_kind: crate::sema::ClosureCallKind::Repeatable,
+                    call_kind: aura_core::types::ClosureCallKind::Repeatable,
                 },
                 source_path: Some("/workspace/main.au".to_string()),
                 entry_span: Span::new(2, 17),
@@ -17329,14 +17276,14 @@ fn native_runtime_closure_calls_preserve_results_writebacks_and_call_kind() {
                 signature: Type::Closure {
                     params: Box::new(Vec::new()),
                     return_type: Box::new(Type::named("int64")),
-                    captures: Box::new(vec![crate::sema::ClosureCapture {
+                    captures: Box::new(vec![aura_core::types::ClosureCapture {
                         name: "payload".to_string(),
                         ty: Type::named("int64"),
-                        mode: crate::sema::ClosureCaptureMode::Move,
+                        mode: aura_core::types::ClosureCaptureMode::Move,
                         span: Span::new(4, 17),
                         mutated: false,
                     }]),
-                    call_kind: crate::sema::ClosureCallKind::Consuming,
+                    call_kind: aura_core::types::ClosureCallKind::Consuming,
                 },
                 source_path: Some("/workspace/main.au".to_string()),
                 entry_span: Span::new(4, 17),
@@ -17388,14 +17335,14 @@ fn native_runtime_closure_call_moves_owned_args_and_copies_only_mutable_writebac
                         },
                     ]),
                     return_type: Box::new(Type::named("int64")),
-                    captures: Box::new(vec![crate::sema::ClosureCapture {
+                    captures: Box::new(vec![aura_core::types::ClosureCapture {
                         name: "offset".to_string(),
                         ty: Type::named("int64"),
-                        mode: crate::sema::ClosureCaptureMode::Copy,
+                        mode: aura_core::types::ClosureCaptureMode::Copy,
                         span: Span::new(3, 17),
                         mutated: false,
                     }]),
-                    call_kind: crate::sema::ClosureCallKind::Repeatable,
+                    call_kind: aura_core::types::ClosureCallKind::Repeatable,
                 },
                 source_path: Some("/workspace/main.au".to_string()),
                 entry_span: Span::new(3, 17),
@@ -17458,7 +17405,7 @@ fn native_runtime_closure_construction_handles_zero_captures_and_reports_invalid
                     params: Box::new(Vec::new()),
                     return_type: Box::new(Type::named("int64")),
                     captures: Box::new(Vec::new()),
-                    call_kind: crate::sema::ClosureCallKind::Repeatable,
+                    call_kind: aura_core::types::ClosureCallKind::Repeatable,
                 },
                 source_path: Some("/workspace/main.au".to_string()),
                 entry_span: Span::new(2, 17),
@@ -17502,7 +17449,7 @@ fn native_runtime_closure_construction_handles_zero_captures_and_reports_invalid
                     params: Box::new(Vec::new()),
                     return_type: Box::new(Type::Unit),
                     captures: Box::new(Vec::new()),
-                    call_kind: crate::sema::ClosureCallKind::Repeatable,
+                    call_kind: aura_core::types::ClosureCallKind::Repeatable,
                 },
                 source_path: None,
                 entry_span: Span::new(1, 1),
@@ -17586,7 +17533,7 @@ fn native_runtime_selected_default_callbacks_bind_functions_and_closures() {
                     }]),
                     return_type: Box::new(Type::Unit),
                     captures: Box::new(Vec::new()),
-                    call_kind: crate::sema::ClosureCallKind::Repeatable,
+                    call_kind: aura_core::types::ClosureCallKind::Repeatable,
                 },
                 source_path: None,
                 entry_span: Span::new(1, 1),
@@ -17724,14 +17671,14 @@ fn native_runtime_trapping_closure_call_releases_combined_buffer_without_mut_wri
             has_default: false,
         }]),
         return_type: Box::new(Type::Unit),
-        captures: Box::new(vec![crate::sema::ClosureCapture {
+        captures: Box::new(vec![aura_core::types::ClosureCapture {
             name: "captured".to_string(),
             ty: Type::named("str"),
-            mode: crate::sema::ClosureCaptureMode::Move,
+            mode: aura_core::types::ClosureCaptureMode::Move,
             span: Span::new(3, 13),
             mutated: false,
         }]),
-        call_kind: crate::sema::ClosureCallKind::Consuming,
+        call_kind: aura_core::types::ClosureCallKind::Consuming,
     };
     let function = boxed_value(Value::Function(Box::new(FunctionValue {
         name: "main::__lambda_trap".to_string(),
@@ -17801,14 +17748,14 @@ fn native_runtime_uncalled_closure_releases_owned_capture_environment() {
                 signature: Type::Closure {
                     params: Box::new(Vec::new()),
                     return_type: Box::new(Type::Unit),
-                    captures: Box::new(vec![crate::sema::ClosureCapture {
+                    captures: Box::new(vec![aura_core::types::ClosureCapture {
                         name: "payload".to_string(),
                         ty: Type::named("str"),
-                        mode: crate::sema::ClosureCaptureMode::Move,
+                        mode: aura_core::types::ClosureCaptureMode::Move,
                         span: Span::new(2, 17),
                         mutated: false,
                     }]),
-                    call_kind: crate::sema::ClosureCallKind::Consuming,
+                    call_kind: aura_core::types::ClosureCallKind::Consuming,
                 },
                 source_path: Some("/workspace/main.au".to_string()),
                 entry_span: Span::new(2, 17),
@@ -21266,9 +21213,11 @@ fn coverage_native_runtime_dynamic_json_and_process_stdio_errors_stay_structured
     let unknown = super::evaluate_direct_json_host_builtin("json::is_valid", &json_args)
         .expect_err("an unclassified JSON name must not fall through to another host API");
     assert_eq!(unknown.code, "AU4001");
+    // `json::is_valid` is not in the dynamic host ABI table, so argument
+    // validation rejects it before any JSON evaluator arm can run.
     assert_eq!(
         unknown.message,
-        "unknown dynamic JSON host builtin `json::is_valid`"
+        "unknown dynamic host builtin `json::is_valid`"
     );
     drop(json_args);
 
@@ -21584,14 +21533,14 @@ fn direct_frame_metadata_materializes_call_frames_and_task_ancestry() {
 // patterns on the direct runtime ABI.
 // ---------------------------------------------------------------------------
 
-fn coverage_union(members: Vec<Type>) -> crate::sema::UnionType {
+fn coverage_union(members: Vec<Type>) -> aura_core::types::UnionType {
     match Type::normalize_union(members, "main", &BTreeMap::new()).expect("normalized union") {
         Type::Union(union) => *union,
         other => panic!("expected a union, found {other}"),
     }
 }
 
-fn coverage_union_member_index(target: &crate::sema::UnionType, member: &Type) -> usize {
+fn coverage_union_member_index(target: &aura_core::types::UnionType, member: &Type) -> usize {
     target
         .members
         .iter()
@@ -21600,7 +21549,7 @@ fn coverage_union_member_index(target: &crate::sema::UnionType, member: &Type) -
 }
 
 fn coverage_union_value(
-    target: &crate::sema::UnionType,
+    target: &aura_core::types::UnionType,
     member_index: usize,
     payload: Value,
 ) -> Value {
@@ -22040,7 +21989,7 @@ fn direct_owned_field_assignment_writes_through_enum_and_union_payloads() {
 
 #[test]
 fn direct_runtime_type_patterns_decode_and_match_callable_and_view_contracts() {
-    use crate::sema::{CallableType, ReturnedViewType};
+    use aura_core::types::{CallableType, ReturnedViewType};
 
     fn param(ty: Type) -> FunctionParamContract {
         FunctionParamContract {

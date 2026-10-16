@@ -55,23 +55,20 @@ use crate::runtime_config::{blocking_io_pool_config, BlockingIoPoolConfig};
 use crate::runtime_reactor::{
     IoInterest, ReactorHandle, ReactorSubscription, ReactorSubscriptionKey, RuntimeReactor, WaitKey,
 };
-use crate::sema::Type;
+use aura_core::types::Type;
 
 type HttpHeaders = Vec<(String, String)>;
 type HttpRequestHead = (usize, String, String, HttpHeaders, HttpBodyFraming);
 type HttpResponseHead = (usize, i32, String, HttpHeaders, HttpBodyFraming);
 type HttpRequestParts = (String, String, HttpHeaders, Vec<u8>);
 
-pub(crate) const DIRECT_RUNTIME_TYPE_FIELD: &str = "\0aura:runtime-type";
-pub(crate) const DIRECT_RUNTIME_TYPE_SEPARATOR: char = '\0';
-pub(crate) const NANOS_PER_MILLISECOND: i128 = 1_000_000;
-pub(crate) const NANOS_PER_SECOND: i128 = 1_000_000_000;
-pub(crate) const NANOS_PER_MINUTE: i128 = 60 * NANOS_PER_SECOND;
+pub const DIRECT_RUNTIME_TYPE_FIELD: &str = "\0aura:runtime-type";
+pub const DIRECT_RUNTIME_TYPE_SEPARATOR: char = '\0';
+pub const NANOS_PER_MILLISECOND: i128 = 1_000_000;
+pub const NANOS_PER_SECOND: i128 = 1_000_000_000;
+pub const NANOS_PER_MINUTE: i128 = 60 * NANOS_PER_SECOND;
 
-pub(crate) fn validate_retry_runtime_policy(
-    max_attempts: i32,
-    initial_backoff: i128,
-) -> Result<()> {
+pub fn validate_retry_runtime_policy(max_attempts: i32, initial_backoff: i128) -> Result<()> {
     if max_attempts < 1 {
         return Err(
             Diagnostic::coded("AU4003", "control.retry max_attempts must be at least 1")
@@ -98,7 +95,7 @@ pub(crate) fn validate_retry_runtime_policy(
     Ok(())
 }
 
-pub(crate) fn next_retry_runtime_backoff(backoff: i128) -> Result<i128> {
+pub fn next_retry_runtime_backoff(backoff: i128) -> Result<i128> {
     let next = backoff.checked_mul(2).ok_or_else(|| {
         Diagnostic::coded(
             "AU4002",
@@ -114,13 +111,13 @@ pub(crate) fn next_retry_runtime_backoff(backoff: i128) -> Result<i128> {
     Ok(next)
 }
 
-pub(crate) fn propagate_retry_task_cancellation() {
+pub fn propagate_retry_task_cancellation() {
     if current_lightweight_task_cancellation().is_some_and(|context| context.is_cancelled()) {
         panic::panic_any(TaskCancelledSignal);
     }
 }
 
-pub(crate) fn render_duration(nanoseconds: i128) -> String {
+pub fn render_duration(nanoseconds: i128) -> String {
     let negative = nanoseconds.is_negative();
     let magnitude = nanoseconds.unsigned_abs();
     let whole_milliseconds = magnitude / NANOS_PER_MILLISECOND as u128;
@@ -138,11 +135,11 @@ pub(crate) fn render_duration(nanoseconds: i128) -> String {
     )
 }
 
-pub(crate) fn duration_to_milliseconds(nanoseconds: i128) -> f64 {
+pub fn duration_to_milliseconds(nanoseconds: i128) -> f64 {
     exact_i128_ratio_to_f64(nanoseconds, NANOS_PER_MILLISECOND as u128)
 }
 
-pub(crate) fn duration_to_seconds(nanoseconds: i128) -> f64 {
+pub fn duration_to_seconds(nanoseconds: i128) -> f64 {
     exact_i128_ratio_to_f64(nanoseconds, NANOS_PER_SECOND as u128)
 }
 
@@ -194,7 +191,7 @@ fn exact_i128_ratio_to_f64(numerator: i128, denominator: u128) -> f64 {
     f64::from_bits(sign | (biased_exponent << 52) | fraction)
 }
 
-pub(crate) fn duration_to_host_timer(nanoseconds: i128, label: &str) -> io::Result<StdDuration> {
+pub fn duration_to_host_timer(nanoseconds: i128, label: &str) -> io::Result<StdDuration> {
     if nanoseconds < 0 {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -238,12 +235,12 @@ fn checked_deadline_after(duration: StdDuration, label: &str) -> io::Result<Inst
     })
 }
 
-pub(crate) fn nominal_runtime_base_name(name: &str) -> &str {
+pub fn nominal_runtime_base_name(name: &str) -> &str {
     name.split_once(DIRECT_RUNTIME_TYPE_SEPARATOR)
         .map_or(name, |(base, _)| base)
 }
 
-pub(crate) fn embedded_nominal_runtime_type_name(name: &str) -> Option<&str> {
+pub fn embedded_nominal_runtime_type_name(name: &str) -> Option<&str> {
     name.split_once(DIRECT_RUNTIME_TYPE_SEPARATOR)
         .map(|(_, runtime_type)| runtime_type)
 }
@@ -427,7 +424,7 @@ pub mod representation_stats {
 
 /// Boxes a union value and counts the allocation for the representation
 /// measurements; every runtime union construction goes through here.
-pub(crate) fn union_value(union_type: Type, member_index: usize, payload: Value) -> Value {
+pub fn union_value(union_type: Type, member_index: usize, payload: Value) -> Value {
     representation_stats::note_union_payload_box();
     Value::Union(Box::new(UnionValue {
         union_type,
@@ -468,18 +465,18 @@ impl fmt::Debug for FfiHandleValue {
 }
 
 impl FfiHandleValue {
-    pub(crate) fn new(type_name: String, pointer: *mut c_void) -> Option<Self> {
+    pub fn new(type_name: String, pointer: *mut c_void) -> Option<Self> {
         Some(Self {
             type_name,
             address: NonZeroUsize::new(pointer as usize)?,
         })
     }
 
-    pub(crate) fn type_name(&self) -> &str {
+    pub fn type_name(&self) -> &str {
         &self.type_name
     }
 
-    pub(crate) fn as_ptr(&self) -> *mut c_void {
+    pub fn as_ptr(&self) -> *mut c_void {
         self.address.get() as *mut c_void
     }
 }
@@ -522,7 +519,7 @@ pub struct ClosureEnvironment {
 
 impl ClosureEnvironment {
     /// The number of captured values the environment was created with.
-    pub(crate) fn capture_count(&self) -> usize {
+    pub fn capture_count(&self) -> usize {
         self.captures
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -539,7 +536,7 @@ impl ClosureEnvironment {
         }
     }
 
-    pub(crate) fn arguments(&self, function_name: &str) -> Result<Vec<ClosureCaptureValue>> {
+    pub fn arguments(&self, function_name: &str) -> Result<Vec<ClosureCaptureValue>> {
         let mut captures = self
             .captures
             .lock()
@@ -588,7 +585,7 @@ impl ClosureEnvironment {
         Ok(copied)
     }
 
-    pub(crate) fn write_back_mutable(&self, index: usize, value: Value) -> Result<()> {
+    pub fn write_back_mutable(&self, index: usize, value: Value) -> Result<()> {
         let mut captures = self
             .captures
             .lock()
@@ -609,7 +606,7 @@ impl ClosureEnvironment {
         Ok(())
     }
 
-    pub(crate) fn capture_value(&self, index: usize) -> Result<Value> {
+    pub fn capture_value(&self, index: usize) -> Result<Value> {
         let captures = self
             .captures
             .lock()
@@ -652,7 +649,7 @@ pub struct EnumVariantValue {
 /// The note a trap carries when a manager's `__exit__` also returned
 /// `Result.Err` while the frame was failing (checkpoint F5). Both runtimes
 /// render it identically so backend diagnostics stay byte-equal.
-pub(crate) fn manager_exit_failure_note(class_name: &str, failure: &EnumVariantValue) -> String {
+pub fn manager_exit_failure_note(class_name: &str, failure: &EnumVariantValue) -> String {
     let rendered = failure
         .single_payload()
         .map(Value::render)
@@ -661,7 +658,7 @@ pub(crate) fn manager_exit_failure_note(class_name: &str, failure: &EnumVariantV
 }
 
 impl EnumVariantValue {
-    pub(crate) fn single_payload(&self) -> Option<&Value> {
+    pub fn single_payload(&self) -> Option<&Value> {
         match self.payloads.as_slice() {
             [payload] => Some(payload),
             _ => None,
@@ -1340,23 +1337,23 @@ fn array_allocation_error(label: &str, len: usize) -> Diagnostic {
     )
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 std::thread_local! {
     static ARRAY_ALLOCATION_BUDGET: Cell<Option<usize>> = const { Cell::new(None) };
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 struct ArrayAllocationBudgetGuard(Option<usize>);
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl Drop for ArrayAllocationBudgetGuard {
     fn drop(&mut self) {
         ARRAY_ALLOCATION_BUDGET.with(|budget| budget.set(self.0));
     }
 }
 
-#[cfg(test)]
-pub(crate) fn with_array_allocation_budget<T>(
+#[cfg(any(test, feature = "test-support"))]
+pub fn with_array_allocation_budget<T>(
     successful_allocations: usize,
     operation: impl FnOnce() -> T,
 ) -> T {
@@ -1366,8 +1363,8 @@ pub(crate) fn with_array_allocation_budget<T>(
     operation()
 }
 
-pub(crate) fn try_array_buffer<T>(len: usize, label: &str) -> Result<Vec<T>> {
-    #[cfg(test)]
+pub fn try_array_buffer<T>(len: usize, label: &str) -> Result<Vec<T>> {
+    #[cfg(any(test, feature = "test-support"))]
     {
         let injected_failure = ARRAY_ALLOCATION_BUDGET.with(|budget| match budget.get() {
             Some(0) => true,
@@ -1875,7 +1872,7 @@ fn normalize_slice_endpoint(
     Ok(normalized as usize)
 }
 
-pub(crate) fn normalize_slice_bounds(
+pub fn normalize_slice_bounds(
     start: Option<i128>,
     end: Option<i128>,
     len: usize,
@@ -1893,7 +1890,7 @@ pub(crate) fn normalize_slice_bounds(
     Ok((start, end))
 }
 
-pub(crate) fn slice_vec_owned(
+pub fn slice_vec_owned(
     vector: &VecValue,
     start: Option<i128>,
     end: Option<i128>,
@@ -1911,7 +1908,7 @@ pub(crate) fn slice_vec_owned(
 
 /// The private span operations, in the order of the direct backend's
 /// opcodes.
-pub(crate) const SPAN_OPERATIONS: [&str; 10] = [
+pub const SPAN_OPERATIONS: [&str; 10] = [
     "__span_start",
     "__span_stop",
     "__span_index",
@@ -1944,7 +1941,7 @@ fn checked_span_range(list_len: usize, start: i128, len: i128) -> Result<(usize,
 
 /// Normalizes slice endpoints inside an outer range and returns the
 /// absolute start (`stop == false`) or the absolute stop of the result.
-pub(crate) fn span_bound(
+pub fn span_bound(
     list_len: usize,
     outer_start: i128,
     outer_len: i128,
@@ -1959,7 +1956,7 @@ pub(crate) fn span_bound(
 
 /// The absolute position of span element `index`, with one negative
 /// normalization and no clamping.
-pub(crate) fn span_index(list_len: usize, start: i128, len: i128, index: i128) -> Result<i128> {
+pub fn span_index(list_len: usize, start: i128, len: i128, index: i128) -> Result<i128> {
     let (start, len) = checked_span_range(list_len, start, len)?;
     let normalized = if index < 0 {
         index + len as i128
@@ -1976,13 +1973,13 @@ pub(crate) fn span_index(list_len: usize, start: i128, len: i128, index: i128) -
 }
 
 /// The elements a span range covers.
-pub(crate) fn span_elements(vector: &VecValue, start: i128, len: i128) -> Result<&[Value]> {
+pub fn span_elements(vector: &VecValue, start: i128, len: i128) -> Result<&[Value]> {
     let (start, len) = checked_span_range(vector.elements.len(), start, len)?;
     Ok(&vector.elements[start..start + len])
 }
 
 /// `value in span`, `span.index(value)`, and `span.count(value)`.
-pub(crate) fn span_search(elements: &[Value], needle: &Value, field: &str) -> Result<Value> {
+pub fn span_search(elements: &[Value], needle: &Value, field: &str) -> Result<Value> {
     match field {
         "__span_contains" => Ok(Value::Bool(
             elements.iter().any(|candidate| candidate == needle),
@@ -2006,7 +2003,7 @@ pub(crate) fn span_search(elements: &[Value], needle: &Value, field: &str) -> Re
 
 /// Takes a span range out of its base for a length-preserving list
 /// operation; `span_restore` puts it back.
-pub(crate) fn span_extract(vector: &mut VecValue, start: i128, len: i128) -> Result<VecValue> {
+pub fn span_extract(vector: &mut VecValue, start: i128, len: i128) -> Result<VecValue> {
     let (start, len) = checked_span_range(vector.elements.len(), start, len)?;
     Ok(VecValue {
         element_type: vector.element_type.clone(),
@@ -2014,19 +2011,14 @@ pub(crate) fn span_extract(vector: &mut VecValue, start: i128, len: i128) -> Res
     })
 }
 
-pub(crate) fn span_restore(vector: &mut VecValue, start: i128, values: VecValue) -> Result<()> {
+pub fn span_restore(vector: &mut VecValue, start: i128, values: VecValue) -> Result<()> {
     checked_span_range(vector.elements.len(), start, 0)?;
     let start = start as usize;
     vector.elements.splice(start..start, values.elements);
     Ok(())
 }
 
-pub(crate) fn span_fill(
-    vector: &mut VecValue,
-    start: i128,
-    len: i128,
-    value: &Value,
-) -> Result<()> {
+pub fn span_fill(vector: &mut VecValue, start: i128, len: i128, value: &Value) -> Result<()> {
     let (start, len) = checked_span_range(vector.elements.len(), start, len)?;
     for element in &mut vector.elements[start..start + len] {
         *element = value.clone();
@@ -2034,11 +2026,7 @@ pub(crate) fn span_fill(
     Ok(())
 }
 
-pub(crate) fn slice_string_owned(
-    text: &str,
-    start: Option<i128>,
-    end: Option<i128>,
-) -> Result<String> {
+pub fn slice_string_owned(text: &str, start: Option<i128>, end: Option<i128>) -> Result<String> {
     let scalar_len = text.chars().count();
     let (start, end) = normalize_slice_bounds(start, end, scalar_len)?;
     Ok(text.chars().skip(start).take(end - start).collect())
@@ -2139,7 +2127,7 @@ fn drop_array_containing_value_iteratively(value: Value, frames: &mut Vec<ArrayC
     }
 }
 
-pub(crate) fn try_clone_array_containing_value(value: &Value) -> Result<Value> {
+pub fn try_clone_array_containing_value(value: &Value) -> Result<Value> {
     enum CloneFrame<'a> {
         Tuple {
             tuple: &'a TupleValue,
@@ -2621,25 +2609,21 @@ pub struct RngValue {
 }
 
 impl RngValue {
-    pub(crate) fn from_seed(seed: i64) -> Self {
+    pub fn from_seed(seed: i64) -> Self {
         Self {
             inner: Arc::new(Mutex::new(DeterministicRng::from_seed(seed))),
         }
     }
 
-    pub(crate) fn next_int(
-        &self,
-        lo: i64,
-        hi: i64,
-    ) -> std::result::Result<i64, InvalidRandomRange> {
+    pub fn next_int(&self, lo: i64, hi: i64) -> std::result::Result<i64, InvalidRandomRange> {
         lock_mutex(&self.inner).next_int(lo, hi)
     }
 
-    pub(crate) fn next_float(&self) -> f64 {
+    pub fn next_float(&self) -> f64 {
         lock_mutex(&self.inner).next_float()
     }
 
-    pub(crate) fn shuffle(&self, values: &mut [Value]) {
+    pub fn shuffle(&self, values: &mut [Value]) {
         lock_mutex(&self.inner).shuffle(values);
     }
 }
@@ -2902,14 +2886,14 @@ struct ProcessSupervisorEntry {
     next_restart_at: Option<Instant>,
 }
 
-pub(crate) enum ProcessChildWaitStatus {
+pub enum ProcessChildWaitStatus {
     Exited(StdExitStatus),
     TimedOut,
     Cancelled,
     Failed(io::Error),
 }
 
-pub(crate) enum ProcessSupervisorWaitStatus {
+pub enum ProcessSupervisorWaitStatus {
     Event(Value),
     TimedOut,
     Cancelled,
@@ -2921,7 +2905,7 @@ enum SupervisorRestartSchedule {
 }
 
 #[derive(Clone, Copy)]
-pub(crate) enum ProcessStdioConfig {
+pub enum ProcessStdioConfig {
     Inherit,
     Null,
     Pipe,
@@ -2938,7 +2922,7 @@ impl ProcessStdioConfig {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ProcessRestartPolicy {
+pub enum ProcessRestartPolicy {
     Never,
     OnFailure,
     Always,
@@ -2994,12 +2978,12 @@ impl Drop for ProtocolOperationGuard<'_> {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) enum TaskExecutionResult {
+pub enum TaskExecutionResult {
     Ready(std::result::Result<Value, Diagnostic>),
     Cancelled,
 }
 
-pub(crate) struct LightweightTaskFailureSignal(pub(crate) Diagnostic);
+pub struct LightweightTaskFailureSignal(pub Diagnostic);
 
 enum TaskHandle {
     Running,
@@ -3007,7 +2991,7 @@ enum TaskHandle {
 }
 
 #[derive(Clone, Default)]
-pub(crate) struct CancellationContext {
+pub struct CancellationContext {
     flags: Vec<Arc<RuntimeWakeSignal>>,
 }
 
@@ -3133,27 +3117,27 @@ struct LightweightTaskRecord {
 
 /// The writable extent of one lightweight task's coroutine stack.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct TaskStackBounds {
+pub struct TaskStackBounds {
     /// Lowest address a frame may occupy. The platform allocator's guard
     /// layout below it is excluded, so `stack pointer - usable_limit` is
     /// writable headroom rather than mapped address space.
-    pub(crate) usable_limit: usize,
+    pub usable_limit: usize,
     /// Highest address of the stack (the initial stack pointer).
-    pub(crate) base: usize,
+    pub base: usize,
 }
 
 impl TaskStackBounds {
     /// Writable capacity in bytes, `base - usable_limit`; tests use it to
     /// attribute headroom probes to the task whose capacity they requested.
-    #[cfg(test)]
-    pub(crate) fn usable_capacity(self) -> usize {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn usable_capacity(self) -> usize {
         self.base.saturating_sub(self.usable_limit)
     }
 }
 
 /// Size of a host memory page, cached after the first query.
 #[cfg(unix)]
-fn host_page_size() -> usize {
+pub fn host_page_size() -> usize {
     static PAGE_SIZE: OnceLock<usize> = OnceLock::new();
     *PAGE_SIZE.get_or_init(|| {
         // SAFETY: `sysconf` reads a process-wide constant and has no
@@ -3205,7 +3189,7 @@ fn task_stack_guard_bytes(stack: &DefaultStack) -> usize {
 }
 
 /// The writable extent of a freshly allocated coroutine stack.
-pub(crate) fn task_stack_bounds(stack: &DefaultStack) -> TaskStackBounds {
+pub fn task_stack_bounds(stack: &DefaultStack) -> TaskStackBounds {
     let base = stack.base().get();
     let mapping_start = stack.limit().get();
     let usable_limit = mapping_start
@@ -3232,12 +3216,12 @@ fn enter_task_stack_bounds(bounds: TaskStackBounds) -> TaskStackBoundsGuard {
 
 /// Writable bytes of the running lightweight task's coroutine stack that
 /// remain below the caller's frame, or `None` outside a task.
-pub(crate) fn task_stack_headroom() -> Option<usize> {
+pub fn task_stack_headroom() -> Option<usize> {
     let bounds = CURRENT_TASK_STACK_BOUNDS.with(|bounds| bounds.get())?;
     let marker = 0u8;
     let stack_pointer = std::ptr::addr_of!(marker) as usize;
     let headroom = stack_pointer.saturating_sub(bounds.usable_limit);
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     task_stack_observation::record(bounds, headroom);
     Some(headroom)
 }
@@ -3245,16 +3229,16 @@ pub(crate) fn task_stack_headroom() -> Option<usize> {
 /// Test-only capture of every headroom probe, so a test can measure how much
 /// stack the interpreter consumes between consecutive Aura calls on a task
 /// whose stack it can identify by writable capacity.
-#[cfg(test)]
-pub(crate) mod task_stack_observation {
+#[cfg(any(test, feature = "test-support"))]
+pub mod task_stack_observation {
     use super::{lock_mutex, TaskStackBounds};
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Mutex;
 
     #[derive(Clone, Copy, Debug)]
-    pub(crate) struct TaskStackHeadroomObservation {
-        pub(crate) usable_capacity: usize,
-        pub(crate) headroom: usize,
+    pub struct TaskStackHeadroomObservation {
+        pub usable_capacity: usize,
+        pub headroom: usize,
     }
 
     static RECORDING: AtomicBool = AtomicBool::new(false);
@@ -3270,14 +3254,14 @@ pub(crate) mod task_stack_observation {
         });
     }
 
-    pub(crate) fn start_recording() {
+    pub fn start_recording() {
         lock_mutex(&OBSERVATIONS).clear();
         RECORDING.store(true, Ordering::SeqCst);
     }
 
     /// Stops recording and returns the probes seen on tasks whose writable
     /// capacity is exactly `usable_capacity`, in probe order.
-    pub(crate) fn stop_recording(usable_capacity: usize) -> Vec<usize> {
+    pub fn stop_recording(usable_capacity: usize) -> Vec<usize> {
         RECORDING.store(false, Ordering::SeqCst);
         lock_mutex(&OBSERVATIONS)
             .drain(..)
@@ -3349,18 +3333,18 @@ struct LightweightWorkerCoordinator {
 const LIGHTWEIGHT_TASK_STACK_SIZE: usize = 768 * 1024;
 /// Stack reserved for the root task that executes the program entry; it is
 /// mapped lazily, so the reservation costs only address space.
-const ROOT_LIGHTWEIGHT_TASK_STACK_SIZE: usize = 16 * 1024 * 1024;
+pub const ROOT_LIGHTWEIGHT_TASK_STACK_SIZE: usize = 16 * 1024 * 1024;
 #[cfg(test)]
 thread_local! {
     static FAIL_NEXT_LIGHTWEIGHT_TASK_STACK_ALLOCATION: Cell<bool> = const { Cell::new(false) };
 }
 
 #[cfg(test)]
-pub(crate) fn fail_next_lightweight_task_stack_allocation() {
+pub fn fail_next_lightweight_task_stack_allocation() {
     FAIL_NEXT_LIGHTWEIGHT_TASK_STACK_ALLOCATION.with(|fail| fail.set(true));
 }
 
-pub(crate) fn allocate_lightweight_task_stack(
+pub fn allocate_lightweight_task_stack(
     stack_size: usize,
 ) -> std::result::Result<DefaultStack, Diagnostic> {
     #[cfg(test)]
@@ -3378,8 +3362,8 @@ pub(crate) fn allocate_lightweight_task_stack(
     })
 }
 
-pub(crate) const MAX_FILESYSTEM_READ_BYTES: usize = 256 * 1024 * 1024;
-pub(crate) const MAX_STREAM_READ_BYTES: usize = 64 * 1024 * 1024;
+pub const MAX_FILESYSTEM_READ_BYTES: usize = 256 * 1024 * 1024;
+pub const MAX_STREAM_READ_BYTES: usize = 64 * 1024 * 1024;
 const MAX_TLS_CONFIG_BYTES: usize = MAX_STREAM_READ_BYTES;
 const MAX_UDP_DATAGRAM_BYTES: usize = 65_535;
 const MAX_WEBSOCKET_MESSAGE_BYTES: usize = 64 << 20;
@@ -3408,7 +3392,7 @@ struct RuntimeSchedulerWaiter {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum RuntimeSchedulerWakeReason {
+pub enum RuntimeSchedulerWakeReason {
     Ready,
     TimedOut,
     Cancelled,
@@ -3528,7 +3512,7 @@ pub struct RunOutput {
     pub stdout: String,
 }
 
-pub(crate) fn cast_numeric_value(value: Value, target: &Type, span: Option<Span>) -> Result<Value> {
+pub fn cast_numeric_value(value: Value, target: &Type, span: Option<Span>) -> Result<Value> {
     fn render_target_error(span: Option<Span>, message: String) -> Diagnostic {
         match span {
             Some(span) => Diagnostic::at(span, message),
@@ -3588,7 +3572,7 @@ pub(crate) fn cast_numeric_value(value: Value, target: &Type, span: Option<Span>
 
     match value {
         Value::Int(value) => {
-            if let Some(bounds) = crate::sema::integer_type_bounds(target) {
+            if let Some(bounds) = aura_core::integer::integer_type_bounds(target) {
                 if !value.fits_bounds(bounds) {
                     return Err(render_target_error(
                         span,
@@ -3635,7 +3619,7 @@ pub(crate) fn cast_numeric_value(value: Value, target: &Type, span: Option<Span>
             }
         }
         Value::Float(value) => {
-            if let Some(bounds) = crate::sema::integer_type_bounds(target) {
+            if let Some(bounds) = aura_core::integer::integer_type_bounds(target) {
                 if !value.is_finite() {
                     return Err(render_target_error(
                         span,
@@ -4738,7 +4722,7 @@ fn json_codec_pool() -> &'static Arc<JsonCodecPool> {
     POOL.get_or_init(JsonCodecPool::start)
 }
 
-pub(crate) fn wait_for_runtime_scheduler(
+pub fn wait_for_runtime_scheduler(
     recv_channels: Vec<ChannelValue>,
     ignore_closed_recv_channels: bool,
     send_channels: Vec<ChannelValue>,
@@ -4810,7 +4794,7 @@ thread_local! {
 }
 
 #[cfg(test)]
-pub(crate) fn install_after_select_source_validation_hook(hook: impl FnOnce() + 'static) {
+pub fn install_after_select_source_validation_hook(hook: impl FnOnce() + 'static) {
     AFTER_SELECT_SOURCE_VALIDATION_HOOK.with(|slot| {
         assert!(
             slot.borrow().is_none(),
@@ -4821,7 +4805,7 @@ pub(crate) fn install_after_select_source_validation_hook(hook: impl FnOnce() + 
 }
 
 #[cfg(test)]
-pub(crate) fn install_after_select_queue_commit_hook(hook: impl FnOnce() + 'static) {
+pub fn install_after_select_queue_commit_hook(hook: impl FnOnce() + 'static) {
     AFTER_SELECT_QUEUE_COMMIT_HOOK.with(|slot| {
         assert!(
             slot.borrow().is_none(),
@@ -4949,7 +4933,7 @@ fn select_runtime_probe(
 /// readiness is observed. The wait itself is one persistent-reactor
 /// registration; wakeups trigger cancellation-first, original-index
 /// arbitration and never choose a winner directly.
-pub(crate) fn select_runtime_values(
+pub fn select_runtime_values(
     values: Vec<Value>,
     cancellation: Option<&CancellationContext>,
 ) -> Result<Value> {
@@ -4999,7 +4983,7 @@ pub(crate) fn select_runtime_values(
     }
 }
 
-pub(crate) fn sleep_with_runtime_scheduler(
+pub fn sleep_with_runtime_scheduler(
     duration: StdDuration,
     cancellation: Option<&CancellationContext>,
 ) -> io::Result<RuntimeSchedulerWakeReason> {
@@ -5033,7 +5017,7 @@ thread_local! {
 }
 
 #[cfg(test)]
-pub(crate) fn install_after_task_group_send_reachability_initial_check_hook(
+pub fn install_after_task_group_send_reachability_initial_check_hook(
     hook: impl FnOnce() + 'static,
 ) {
     AFTER_TASK_GROUP_SEND_REACHABILITY_INITIAL_CHECK_HOOK.with(|slot| {
@@ -5054,7 +5038,7 @@ struct TaskWaitReadyEnqueueProbe {
 }
 
 #[cfg(test)]
-pub(crate) fn install_after_task_wait_subscribe_hook(hook: impl FnOnce() + 'static) {
+pub fn install_after_task_wait_subscribe_hook(hook: impl FnOnce() + 'static) {
     AFTER_TASK_WAIT_SUBSCRIBE_HOOK.with(|slot| {
         assert!(
             slot.borrow().is_none(),
@@ -5065,7 +5049,7 @@ pub(crate) fn install_after_task_wait_subscribe_hook(hook: impl FnOnce() + 'stat
 }
 
 #[cfg(test)]
-pub(crate) fn install_next_task_wait_ready_enqueue_counter(counter: Arc<AtomicUsize>) {
+pub fn install_next_task_wait_ready_enqueue_counter(counter: Arc<AtomicUsize>) {
     NEXT_TASK_WAIT_READY_ENQUEUE_PROBE.with(|slot| {
         assert!(
             slot.borrow().is_none(),
@@ -5079,7 +5063,7 @@ pub(crate) fn install_next_task_wait_ready_enqueue_counter(counter: Arc<AtomicUs
 }
 
 #[cfg(test)]
-pub(crate) fn clear_task_wait_ready_enqueue_counter() {
+pub fn clear_task_wait_ready_enqueue_counter() {
     NEXT_TASK_WAIT_READY_ENQUEUE_PROBE.with(|slot| {
         slot.borrow_mut().take();
     });
@@ -5154,21 +5138,21 @@ fn current_lightweight_task() -> Option<TaskValue> {
         .map(|inner| TaskValue { inner })
 }
 
-pub(crate) fn current_lightweight_task_cancellation() -> Option<CancellationContext> {
+pub fn current_lightweight_task_cancellation() -> Option<CancellationContext> {
     CURRENT_LIGHTWEIGHT_TASK_CANCELLATION.with(|slot| slot.borrow().clone())
 }
 
-pub(crate) fn current_lightweight_task_id() -> Option<u64> {
+pub fn current_lightweight_task_id() -> Option<u64> {
     with_current_lightweight_task_context(|context| context.task_id)
 }
 
 #[cfg(test)]
-pub(crate) fn current_lightweight_worker_index() -> Option<usize> {
+pub fn current_lightweight_worker_index() -> Option<usize> {
     with_current_lightweight_task_context(|context| context.worker_index)
 }
 
 #[derive(Debug)]
-pub(crate) struct TaskCancelledSignal;
+pub struct TaskCancelledSignal;
 
 fn task_panic_message(payload: &(dyn Any + Send)) -> String {
     if let Some(message) = payload.downcast_ref::<String>() {
@@ -5211,7 +5195,7 @@ where
     }
 }
 
-pub(crate) fn run_blocking_io<T, F>(
+pub fn run_blocking_io<T, F>(
     operation: F,
     cancellation: Option<&CancellationContext>,
 ) -> io::Result<T>
@@ -5222,7 +5206,7 @@ where
     run_blocking_io_with_deadline(operation, None, cancellation)
 }
 
-pub(crate) fn run_protocol_step<T, F>(operation: F) -> io::Result<T>
+pub fn run_protocol_step<T, F>(operation: F) -> io::Result<T>
 where
     T: Send + 'static,
     F: FnOnce() -> io::Result<T> + Send + 'static,
@@ -5409,9 +5393,7 @@ fn preserve_blocking_io_submission_error(result: io::Result<()>) -> io::Result<(
     }
 }
 
-pub(crate) fn catch_lightweight_task_failure<T>(
-    operation: impl FnOnce() -> Result<T>,
-) -> Result<T> {
+pub fn catch_lightweight_task_failure<T>(operation: impl FnOnce() -> Result<T>) -> Result<T> {
     match panic::catch_unwind(AssertUnwindSafe(operation)) {
         Ok(result) => result,
         Err(payload) => match payload.downcast::<LightweightTaskFailureSignal>() {
@@ -5495,7 +5477,7 @@ fn yield_now_current_lightweight_task() -> Option<RuntimeSchedulerWakeReason> {
     yield_current_lightweight_task(TaskYield::YieldNow)
 }
 
-pub(crate) fn yield_now_with_runtime_scheduler() {
+pub fn yield_now_with_runtime_scheduler() {
     let _ = yield_now_current_lightweight_task();
 }
 
@@ -5505,11 +5487,11 @@ fn exit_current_lightweight_task(result: TaskExecutionResult) -> ! {
     std::process::abort()
 }
 
-pub(crate) fn fail_current_lightweight_task(diagnostic: Diagnostic) -> ! {
+pub fn fail_current_lightweight_task(diagnostic: Diagnostic) -> ! {
     exit_current_lightweight_task(TaskExecutionResult::Ready(Err(diagnostic)))
 }
 
-pub(crate) fn cancel_current_lightweight_task_boundary() -> ! {
+pub fn cancel_current_lightweight_task_boundary() -> ! {
     exit_current_lightweight_task(TaskExecutionResult::Cancelled)
 }
 
@@ -5695,7 +5677,7 @@ fn prepare_lightweight_task(
     ))
 }
 
-pub(crate) fn decode_lightweight_worker_count(
+pub fn decode_lightweight_worker_count(
     override_value: Option<&OsStr>,
     available_workers: usize,
 ) -> std::result::Result<usize, Diagnostic> {
@@ -6446,7 +6428,7 @@ where
     Ok(task)
 }
 
-pub(crate) fn spawn_lightweight_task<F>(entry: F) -> std::result::Result<TaskValue, Diagnostic>
+pub fn spawn_lightweight_task<F>(entry: F) -> std::result::Result<TaskValue, Diagnostic>
 where
     F: FnOnce() -> std::result::Result<Value, Diagnostic> + Send + 'static,
 {
@@ -6454,7 +6436,7 @@ where
 }
 
 #[cfg(test)]
-pub(crate) fn spawn_lightweight_task_with_result_repeatability<F>(
+pub fn spawn_lightweight_task_with_result_repeatability<F>(
     result_is_repeatable: bool,
     entry: F,
 ) -> std::result::Result<TaskValue, Diagnostic>
@@ -6471,7 +6453,7 @@ where
     )
 }
 
-pub(crate) fn spawn_lightweight_task_with_result_repeatability_registered<F, R>(
+pub fn spawn_lightweight_task_with_result_repeatability_registered<F, R>(
     result_is_repeatable: bool,
     entry: F,
     register_before_submit: R,
@@ -6491,7 +6473,7 @@ where
 }
 
 #[cfg(test)]
-pub(crate) fn spawn_lightweight_task_with_stack<F>(
+pub fn spawn_lightweight_task_with_stack<F>(
     stack_size: usize,
     entry: F,
 ) -> std::result::Result<TaskValue, Diagnostic>
@@ -6502,7 +6484,7 @@ where
 }
 
 #[cfg(test)]
-pub(crate) fn spawn_lightweight_task_with_stack_and_result_repeatability<F>(
+pub fn spawn_lightweight_task_with_stack_and_result_repeatability<F>(
     stack_size: usize,
     result_is_repeatable: bool,
     entry: F,
@@ -6520,7 +6502,7 @@ where
     )
 }
 
-pub(crate) fn spawn_lightweight_task_with_stack_and_result_repeatability_registered<F, R>(
+pub fn spawn_lightweight_task_with_stack_and_result_repeatability_registered<F, R>(
     stack_size: usize,
     result_is_repeatable: bool,
     entry: F,
@@ -6565,7 +6547,7 @@ fn notify_group_completion_wake_flags(task_state: &TaskState) {
     notify_runtime_scheduler_if_started();
 }
 
-pub(crate) fn spawn_lightweight_task_with_cancellation<F>(
+pub fn spawn_lightweight_task_with_cancellation<F>(
     cancellation: CancellationContext,
     entry: F,
 ) -> std::result::Result<TaskValue, Diagnostic>
@@ -6591,7 +6573,7 @@ where
 /// callback must not panic: scheduler teardown relies on it completing so the
 /// remaining task records can also be retired.
 #[cfg(test)]
-pub(crate) unsafe fn spawn_lightweight_task_with_cancellation_and_forced_exit_cleanup<F, C>(
+pub unsafe fn spawn_lightweight_task_with_cancellation_and_forced_exit_cleanup<F, C>(
     cancellation: CancellationContext,
     entry: F,
     forced_exit_cleanup: C,
@@ -6617,10 +6599,7 @@ where
 /// This has the same forced-exit ownership requirements as
 /// `spawn_lightweight_task_with_cancellation_and_forced_exit_cleanup`.
 #[cfg(test)]
-pub(crate) unsafe fn spawn_lightweight_task_with_cancellation_and_forced_exit_cleanup_and_stack<
-    F,
-    C,
->(
+pub unsafe fn spawn_lightweight_task_with_cancellation_and_forced_exit_cleanup_and_stack<F, C>(
     cancellation: CancellationContext,
     stack_size: Option<usize>,
     entry: F,
@@ -6648,7 +6627,7 @@ where
 /// This has the same forced-exit ownership requirements as
 /// `spawn_lightweight_task_with_cancellation_and_forced_exit_cleanup`.
 #[cfg(test)]
-pub(crate) unsafe fn spawn_lightweight_task_with_cancellation_and_forced_exit_cleanup_and_stack_and_result_repeatability<
+pub unsafe fn spawn_lightweight_task_with_cancellation_and_forced_exit_cleanup_and_stack_and_result_repeatability<
     F,
     C,
 >(
@@ -6672,7 +6651,8 @@ where
     )
 }
 
-pub(crate) unsafe fn spawn_lightweight_task_with_cancellation_and_forced_exit_cleanup_and_stack_and_result_repeatability_registered<
+#[allow(clippy::missing_safety_doc)]
+pub unsafe fn spawn_lightweight_task_with_cancellation_and_forced_exit_cleanup_and_stack_and_result_repeatability_registered<
     F,
     C,
     R,
@@ -6854,7 +6834,7 @@ fn run_lightweight_root_task_on_workers(
 }
 
 #[cfg(test)]
-pub(crate) fn run_lightweight_root_task_with_worker_count<F>(
+pub fn run_lightweight_root_task_with_worker_count<F>(
     worker_count: usize,
     entry: F,
 ) -> std::result::Result<Value, Diagnostic>
@@ -6871,7 +6851,7 @@ where
     run_lightweight_root_task_on_workers(worker_count, Box::new(entry), None)
 }
 
-pub(crate) fn run_lightweight_root_task<F>(entry: F) -> std::result::Result<Value, Diagnostic>
+pub fn run_lightweight_root_task<F>(entry: F) -> std::result::Result<Value, Diagnostic>
 where
     F: FnOnce() -> std::result::Result<Value, Diagnostic> + Send + 'static,
 {
@@ -6891,7 +6871,7 @@ where
 /// coroutine stack must be owned and released by `forced_exit_cleanup`. The
 /// callback must not panic: scheduler teardown relies on it completing so the
 /// remaining task records can also be retired.
-pub(crate) unsafe fn run_lightweight_root_task_with_forced_exit_cleanup<F, C>(
+pub unsafe fn run_lightweight_root_task_with_forced_exit_cleanup<F, C>(
     entry: F,
     forced_exit_cleanup: C,
 ) -> std::result::Result<Value, Diagnostic>
@@ -7259,7 +7239,7 @@ impl Value {
     /// Renders the value, asking `hook` first at every class instance and
     /// enum variant, including the value itself. A hook that returns text
     /// replaces that node's structural rendering; an error stops rendering.
-    pub(crate) fn render_with_display(&self, hook: &mut DisplayHook<'_>) -> Result<String> {
+    pub fn render_with_display(&self, hook: &mut DisplayHook<'_>) -> Result<String> {
         self.render_inner(Some(hook))
     }
 
@@ -7442,18 +7422,18 @@ impl Value {
 /// A rendering callback for nominal values with a `Display` implementation.
 /// It receives the value's base nominal type name and the value, and returns
 /// `None` when the type has no implementation.
-pub(crate) type DisplayHook<'a> = dyn FnMut(&str, &Value) -> Option<Result<String>> + 'a;
+pub type DisplayHook<'a> = dyn FnMut(&str, &Value) -> Option<Result<String>> + 'a;
 
-pub(crate) fn render_float(value: f64) -> String {
+pub fn render_float(value: f64) -> String {
     format!("{value:?}")
 }
 
-pub(crate) fn render_float32(value: f32) -> String {
+pub fn render_float32(value: f32) -> String {
     format!("{value:?}")
 }
 
-pub(crate) const MAX_FORMAT_COMPONENT: usize = 1_000_000;
-pub(crate) const MAX_STRING_BYTES: usize = 64 * 1024 * 1024;
+pub const MAX_FORMAT_COMPONENT: usize = 1_000_000;
+pub const MAX_STRING_BYTES: usize = 64 * 1024 * 1024;
 
 fn append_string_with_limit(output: &mut String, text: &str, limit: usize) -> Result<()> {
     let required = output
@@ -7473,51 +7453,51 @@ fn append_string_with_limit(output: &mut String, text: &str, limit: usize) -> Re
     Ok(())
 }
 
-pub(crate) fn append_string_checked(output: &mut String, text: &str) -> Result<()> {
+pub fn append_string_checked(output: &mut String, text: &str) -> Result<()> {
     append_string_with_limit(output, text, MAX_STRING_BYTES)
 }
 
-pub(crate) fn concat_strings_checked(mut left: String, right: &str) -> Result<String> {
+pub fn concat_strings_checked(mut left: String, right: &str) -> Result<String> {
     append_string_checked(&mut left, right)?;
     Ok(left)
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub(crate) enum FormatSpecErrorKind {
+pub enum FormatSpecErrorKind {
     Syntax,
     Type,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct FormatSpecError {
-    pub(crate) kind: FormatSpecErrorKind,
-    pub(crate) message: String,
+pub struct FormatSpecError {
+    pub kind: FormatSpecErrorKind,
+    pub message: String,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub(crate) enum FormatAlignment {
+pub enum FormatAlignment {
     Left,
     Center,
     Right,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub(crate) enum FormatSign {
+pub enum FormatSign {
     Minus,
     Plus,
     Space,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ParsedFormatSpec {
-    pub(crate) fill: char,
-    pub(crate) alignment: Option<FormatAlignment>,
-    pub(crate) sign: Option<FormatSign>,
-    pub(crate) width: Option<usize>,
-    pub(crate) zero_pad: bool,
-    pub(crate) grouping: bool,
-    pub(crate) precision: Option<usize>,
-    pub(crate) ty: Option<char>,
+pub struct ParsedFormatSpec {
+    pub fill: char,
+    pub alignment: Option<FormatAlignment>,
+    pub sign: Option<FormatSign>,
+    pub width: Option<usize>,
+    pub zero_pad: bool,
+    pub grouping: bool,
+    pub precision: Option<usize>,
+    pub ty: Option<char>,
 }
 
 fn format_syntax_error(message: impl Into<String>) -> FormatSpecError {
@@ -7534,9 +7514,7 @@ fn format_type_error(message: impl Into<String>) -> FormatSpecError {
     }
 }
 
-pub(crate) fn parse_format_spec(
-    source: &str,
-) -> std::result::Result<ParsedFormatSpec, FormatSpecError> {
+pub fn parse_format_spec(source: &str) -> std::result::Result<ParsedFormatSpec, FormatSpecError> {
     if source.contains(['{', '}']) {
         return Err(format_syntax_error(
             "format specifications cannot contain nested replacement fields",
@@ -7676,7 +7654,7 @@ fn format_type_family(ty: &Type) -> (&'static str, bool, bool, bool) {
     }
 }
 
-pub(crate) fn validate_format_spec_for_type(
+pub fn validate_format_spec_for_type(
     spec: &ParsedFormatSpec,
     value_type: &Type,
 ) -> std::result::Result<(), FormatSpecError> {
@@ -7865,17 +7843,13 @@ fn apply_format_width(rendered: String, spec: &ParsedFormatSpec, numeric: bool) 
 }
 
 #[cfg(test)]
-pub(crate) fn format_runtime_value(
-    value: &Value,
-    value_type: &Type,
-    source: &str,
-) -> Result<String> {
+pub fn format_runtime_value(value: &Value, value_type: &Type, source: &str) -> Result<String> {
     format_runtime_value_with(value, value_type, source, &mut |value| Ok(value.render()))
 }
 
 /// Formats a value with an explicit specification, rendering a value with
 /// no numeric or text code through `render`.
-pub(crate) fn format_runtime_value_with(
+pub fn format_runtime_value_with(
     value: &Value,
     value_type: &Type,
     source: &str,
@@ -8077,7 +8051,7 @@ fn format_numeric_float(number: f64, code: char, spec: &ParsedFormatSpec) -> Str
     rendered
 }
 
-pub(crate) fn float_floor_divmod(left: f64, right: f64) -> (f64, f64) {
+pub fn float_floor_divmod(left: f64, right: f64) -> (f64, f64) {
     let mut remainder = left % right;
     let mut quotient = (left - remainder) / right;
 
@@ -8104,7 +8078,7 @@ pub(crate) fn float_floor_divmod(left: f64, right: f64) -> (f64, f64) {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum FloatPowerWidth {
+pub enum FloatPowerWidth {
     Float32,
     Float64,
 }
@@ -8112,7 +8086,7 @@ pub(crate) enum FloatPowerWidth {
 /// Implements the shared floating-power contract at the destination type's
 /// width. Computing float32 power in f64 and narrowing afterwards can both
 /// double-round finite results and hide destination-width overflow.
-pub(crate) fn float_power(left: f64, right: f64, width: FloatPowerWidth) -> Result<f64> {
+pub fn float_power(left: f64, right: f64, width: FloatPowerWidth) -> Result<f64> {
     if right == 0.0 || left == 1.0 {
         return Ok(1.0);
     }
@@ -8143,7 +8117,7 @@ pub(crate) fn float_power(left: f64, right: f64, width: FloatPowerWidth) -> Resu
 /// execution backends. Floating results use ties-to-even and must fit the
 /// complete mathematical `int64` range; integer values retain their exact
 /// runtime kind.
-pub(crate) fn round_numeric_value(value: &Value) -> Result<Value> {
+pub fn round_numeric_value(value: &Value) -> Result<Value> {
     match value {
         Value::Int(value) => Ok(Value::Int(*value)),
         Value::Float(value) => {
@@ -8176,11 +8150,7 @@ pub(crate) fn round_numeric_value(value: &Value) -> Result<Value> {
 /// Implements Aura's paired floor quotient/remainder contract once so MIR
 /// and direct execution cannot drift. `operand_type` is the statically
 /// checked exact type used for both tuple elements.
-pub(crate) fn divmod_numeric_values(
-    left: &Value,
-    right: &Value,
-    operand_type: &Type,
-) -> Result<Value> {
+pub fn divmod_numeric_values(left: &Value, right: &Value, operand_type: &Type) -> Result<Value> {
     let integer_kind = match operand_type {
         Type::Named(name, args) if args.is_empty() => IntegerKind::from_runtime_type_name(name),
         _ => None,
@@ -8241,11 +8211,12 @@ impl ChannelValue {
         !lock_mutex(&self.inner.state).queue.is_empty()
     }
 
-    pub(crate) fn new() -> Self {
+    #[allow(clippy::new_without_default)]
+    pub fn new() -> Self {
         Self::with_optional_capacity(None)
     }
 
-    pub(crate) fn with_capacity(capacity: usize) -> Self {
+    pub fn with_capacity(capacity: usize) -> Self {
         Self::with_optional_capacity(Some(capacity))
     }
 
@@ -8268,16 +8239,16 @@ impl ChannelValue {
         }
     }
 
-    pub(crate) fn runtime_type_name(&self) -> Option<String> {
+    pub fn runtime_type_name(&self) -> Option<String> {
         lock_mutex(&self.inner.runtime_type_name).clone()
     }
 
-    pub(crate) fn set_runtime_type_name(&self, runtime_type_name: String) {
+    pub fn set_runtime_type_name(&self, runtime_type_name: String) {
         *lock_mutex(&self.inner.runtime_type_name) = Some(runtime_type_name);
     }
 }
 
-pub(crate) fn collect_queue_values(value: &Value, queues: &mut Vec<ChannelValue>) {
+pub fn collect_queue_values(value: &Value, queues: &mut Vec<ChannelValue>) {
     match value {
         Value::Union(union) => collect_queue_values(&union.payload, queues),
         Value::Channel(channel) => queues.push(channel.clone()),
@@ -8328,7 +8299,7 @@ fn register_current_task_queue_handles(value: &Value) {
 }
 
 #[cfg(test)]
-pub(crate) fn register_task_as_queue_producer_for_values<'a>(
+pub fn register_task_as_queue_producer_for_values<'a>(
     values: impl IntoIterator<Item = &'a Value>,
     task: &TaskValue,
 ) {
@@ -8343,21 +8314,21 @@ pub(crate) fn register_task_as_queue_producer_for_values<'a>(
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) enum TryRecvResult {
+pub enum TryRecvResult {
     Value(Value),
     Closed,
     Empty,
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) enum TrySendResult {
+pub enum TrySendResult {
     Sent,
     Closed(Value),
     Full(Value),
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) enum SendValueError {
+pub enum SendValueError {
     Closed(Box<Value>),
     Cancelled(Box<Value>),
     TimedOut(Box<Value>),
@@ -8376,7 +8347,7 @@ impl SendValueError {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) enum RecvValueResult {
+pub enum RecvValueResult {
     Value(Value),
     Closed,
     TimedOut,
@@ -8384,7 +8355,7 @@ pub(crate) enum RecvValueResult {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) enum TaskWaitStatus {
+pub enum TaskWaitStatus {
     Ready(std::result::Result<Value, Diagnostic>),
     TimedOut,
     Cancelled,
@@ -8484,7 +8455,7 @@ impl ChannelValue {
         !state.queue.is_empty() || (!ignore_closed && state.closed)
     }
 
-    pub(crate) fn is_ready_for_scheduler_send(&self) -> bool {
+    pub fn is_ready_for_scheduler_send(&self) -> bool {
         let state = lock_mutex(&self.inner.state);
         state.closed
             || state
@@ -8492,11 +8463,11 @@ impl ChannelValue {
                 .is_none_or(|capacity| state.queue.len() < capacity)
     }
 
-    pub(crate) fn register_task_handle(&self, task: &TaskValue) {
+    pub fn register_task_handle(&self, task: &TaskValue) {
         Self::register_task(&self.inner.task_handles, task);
     }
 
-    pub(crate) fn register_producer_task(&self, task: &TaskValue) {
+    pub fn register_producer_task(&self, task: &TaskValue) {
         Self::register_task(&self.inner.producer_tasks, task);
     }
 
@@ -8527,7 +8498,7 @@ impl ChannelValue {
             .all(|task| task.completed_result().is_some())
     }
 
-    pub(crate) fn try_recv(&self) -> TryRecvResult {
+    pub fn try_recv(&self) -> TryRecvResult {
         self.register_current_receiver();
         let mut state = lock_mutex(&self.inner.state);
         let was_full = state
@@ -8548,7 +8519,7 @@ impl ChannelValue {
         TryRecvResult::Empty
     }
 
-    pub(crate) fn try_send(&self, value: Value) -> TrySendResult {
+    pub fn try_send(&self, value: Value) -> TrySendResult {
         self.register_current_sender();
         let mut state = lock_mutex(&self.inner.state);
         if state.closed {
@@ -8570,14 +8541,14 @@ impl ChannelValue {
         TrySendResult::Sent
     }
 
-    pub(crate) fn send(&self, value: Value) -> std::result::Result<(), Value> {
+    pub fn send(&self, value: Value) -> std::result::Result<(), Value> {
         match self.send_with_cancellation(value, None) {
             Ok(()) => Ok(()),
             Err(error) => Err(*error.into_value()),
         }
     }
 
-    pub(crate) fn send_with_cancellation(
+    pub fn send_with_cancellation(
         &self,
         value: Value,
         cancellation: Option<&CancellationContext>,
@@ -8585,7 +8556,7 @@ impl ChannelValue {
         self.send_with_deadline(value, None, cancellation, false)
     }
 
-    pub(crate) fn try_send_result(&self, value: Value) -> std::result::Result<(), SendValueError> {
+    pub fn try_send_result(&self, value: Value) -> std::result::Result<(), SendValueError> {
         match self.try_send(value) {
             TrySendResult::Sent => Ok(()),
             TrySendResult::Closed(value) => Err(SendValueError::Closed(Box::new(value))),
@@ -8593,7 +8564,7 @@ impl ChannelValue {
         }
     }
 
-    pub(crate) fn send_with_timeout(
+    pub fn send_with_timeout(
         &self,
         value: Value,
         timeout: Option<StdDuration>,
@@ -8641,8 +8612,8 @@ impl ChannelValue {
         }
     }
 
-    #[cfg(test)]
-    pub(crate) fn recv_with_cancellation(
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn recv_with_cancellation(
         &self,
         timeout: Option<StdDuration>,
         cancellation: Option<&CancellationContext>,
@@ -8657,7 +8628,7 @@ impl ChannelValue {
         )
     }
 
-    pub(crate) fn recv_result_with_cancellation(
+    pub fn recv_result_with_cancellation(
         &self,
         timeout: Option<StdDuration>,
         cancellation: Option<&CancellationContext>,
@@ -8698,7 +8669,7 @@ impl ChannelValue {
         }
     }
 
-    pub(crate) fn close(&self) {
+    pub fn close(&self) {
         let mut state = lock_mutex(&self.inner.state);
         state.closed = true;
         drop(state);
@@ -8750,11 +8721,11 @@ fn normalize_udp_send_error(error: io::Error) -> io::Error {
     error
 }
 
-pub(crate) fn create_dir_once(path: impl AsRef<Path>) -> io::Result<()> {
+pub fn create_dir_once(path: impl AsRef<Path>) -> io::Result<()> {
     std::fs::create_dir(path)
 }
 
-pub(crate) fn remove_file_checked(path: impl AsRef<Path>) -> io::Result<()> {
+pub fn remove_file_checked(path: impl AsRef<Path>) -> io::Result<()> {
     let path = path.as_ref();
     match std::fs::symlink_metadata(path) {
         Ok(metadata) if metadata.file_type().is_dir() => {
@@ -9097,7 +9068,7 @@ fn wait_for_tls_listener_progress(
     Ok(())
 }
 
-pub(crate) fn io_decode_utf8(bytes: &[u8]) -> io::Result<String> {
+pub fn io_decode_utf8(bytes: &[u8]) -> io::Result<String> {
     String::from_utf8(bytes.to_vec()).map_err(|error| {
         io::Error::new(
             io::ErrorKind::InvalidData,
@@ -9112,7 +9083,7 @@ fn trim_line_endings(text: String) -> String {
         .to_string()
 }
 
-pub(crate) fn read_all_limit_error(label: &str, limit: usize) -> io::Error {
+pub fn read_all_limit_error(label: &str, limit: usize) -> io::Error {
     io::Error::new(
         io::ErrorKind::InvalidData,
         format!(
@@ -9187,7 +9158,7 @@ fn read_all_from_reader_with_limit<R: Read>(
 }
 
 #[cfg(not(unix))]
-pub(crate) fn read_all_from_reader<R: Read>(reader: &mut R, label: &str) -> io::Result<Vec<u8>> {
+pub fn read_all_from_reader<R: Read>(reader: &mut R, label: &str) -> io::Result<Vec<u8>> {
     read_all_from_reader_with_limit(reader, label, MAX_STREAM_READ_BYTES)
 }
 
@@ -9213,7 +9184,7 @@ fn read_std_file_with_limit(file: &mut StdFile, label: &str, limit: usize) -> io
     read_all_from_reader_with_limit(file, label, limit)
 }
 
-pub(crate) fn read_file_limited(path: &str, label: &str) -> io::Result<Vec<u8>> {
+pub fn read_file_limited(path: &str, label: &str) -> io::Result<Vec<u8>> {
     let mut file = StdFile::open(path)?;
     read_std_file_with_limit(&mut file, label, MAX_FILESYSTEM_READ_BYTES)
 }
@@ -10586,7 +10557,7 @@ impl FileValue {
         }
     }
 
-    pub(crate) fn open(path: &str) -> io::Result<Self> {
+    pub fn open(path: &str) -> io::Result<Self> {
         let path = path.to_string();
         run_blocking_io(
             move || StdFile::open(path).map(Self::from_std),
@@ -10594,7 +10565,7 @@ impl FileValue {
         )
     }
 
-    pub(crate) fn create(path: &str) -> io::Result<Self> {
+    pub fn create(path: &str) -> io::Result<Self> {
         let path = path.to_string();
         run_blocking_io(
             move || StdFile::create(path).map(Self::from_std),
@@ -10602,7 +10573,7 @@ impl FileValue {
         )
     }
 
-    pub(crate) fn append(path: &str) -> io::Result<Self> {
+    pub fn append(path: &str) -> io::Result<Self> {
         let path = path.to_string();
         run_blocking_io(
             move || {
@@ -10616,7 +10587,7 @@ impl FileValue {
         )
     }
 
-    pub(crate) fn read_all(&self) -> io::Result<String> {
+    pub fn read_all(&self) -> io::Result<String> {
         let state = self.inner.clone();
         run_blocking_io(
             move || {
@@ -10634,7 +10605,7 @@ impl FileValue {
         )
     }
 
-    pub(crate) fn read_bytes(&self) -> io::Result<Vec<u8>> {
+    pub fn read_bytes(&self) -> io::Result<Vec<u8>> {
         let state = self.inner.clone();
         run_blocking_io(
             move || {
@@ -10648,11 +10619,11 @@ impl FileValue {
         )
     }
 
-    pub(crate) fn write_all(&self, text: &str) -> io::Result<()> {
+    pub fn write_all(&self, text: &str) -> io::Result<()> {
         self.write_bytes(text.as_bytes())
     }
 
-    pub(crate) fn write_bytes(&self, bytes: &[u8]) -> io::Result<()> {
+    pub fn write_bytes(&self, bytes: &[u8]) -> io::Result<()> {
         let state = self.inner.clone();
         let bytes = bytes.to_vec();
         run_blocking_io(
@@ -10667,7 +10638,7 @@ impl FileValue {
         )
     }
 
-    pub(crate) fn flush(&self) -> io::Result<()> {
+    pub fn flush(&self) -> io::Result<()> {
         let state = self.inner.clone();
         run_blocking_io(
             move || {
@@ -10681,7 +10652,7 @@ impl FileValue {
         )
     }
 
-    pub(crate) fn close(&self) {
+    pub fn close(&self) {
         let mut file = lock_mutex(&self.inner.file);
         *file = None;
     }
@@ -10745,15 +10716,12 @@ impl ProcessPipeValue {
         })
     }
 
-    pub(crate) fn read_all(
-        &self,
-        cancellation: Option<&CancellationContext>,
-    ) -> io::Result<String> {
+    pub fn read_all(&self, cancellation: Option<&CancellationContext>) -> io::Result<String> {
         let bytes = self.read_all_bytes(cancellation)?;
         io_decode_utf8(&bytes)
     }
 
-    pub(crate) fn read_all_bytes(
+    pub fn read_all_bytes(
         &self,
         cancellation: Option<&CancellationContext>,
     ) -> io::Result<Vec<u8>> {
@@ -10790,7 +10758,7 @@ impl ProcessPipeValue {
         Ok(bytes)
     }
 
-    pub(crate) fn read_line(
+    pub fn read_line(
         &self,
         timeout: Option<StdDuration>,
         cancellation: Option<&CancellationContext>,
@@ -10826,7 +10794,7 @@ impl ProcessPipeValue {
         }
     }
 
-    pub(crate) fn read_bytes(
+    pub fn read_bytes(
         &self,
         max_bytes: usize,
         timeout: Option<StdDuration>,
@@ -10864,7 +10832,7 @@ impl ProcessPipeValue {
         }
     }
 
-    pub(crate) fn write_all(
+    pub fn write_all(
         &self,
         text: &str,
         timeout: Option<StdDuration>,
@@ -10873,7 +10841,7 @@ impl ProcessPipeValue {
         self.write_bytes(text.as_bytes(), timeout, cancellation)
     }
 
-    pub(crate) fn write_bytes(
+    pub fn write_bytes(
         &self,
         bytes: &[u8],
         timeout: Option<StdDuration>,
@@ -10908,7 +10876,7 @@ impl ProcessPipeValue {
         }
     }
 
-    pub(crate) fn flush(&self) -> io::Result<()> {
+    pub fn flush(&self) -> io::Result<()> {
         let mut pipe = lock_mutex(&self.inner.pipe);
         let Some(pipe) = pipe.as_mut() else {
             return Err(closed_resource_error());
@@ -10919,14 +10887,14 @@ impl ProcessPipeValue {
         }
     }
 
-    pub(crate) fn close(&self) {
+    pub fn close(&self) {
         let mut pipe = lock_mutex(&self.inner.pipe);
         *pipe = None;
     }
 }
 
 impl ProcessCompletedValue {
-    pub(crate) fn new(status: Value, stdout: Vec<u8>, stderr: Vec<u8>) -> Self {
+    pub fn new(status: Value, stdout: Vec<u8>, stderr: Vec<u8>) -> Self {
         Self {
             inner: Arc::new(ProcessCompletedState {
                 status,
@@ -10936,27 +10904,27 @@ impl ProcessCompletedValue {
         }
     }
 
-    pub(crate) fn status(&self) -> Value {
+    pub fn status(&self) -> Value {
         self.inner.status.clone()
     }
 
-    pub(crate) fn stdout(&self) -> io::Result<String> {
+    pub fn stdout(&self) -> io::Result<String> {
         io_decode_utf8(&self.inner.stdout)
     }
 
-    pub(crate) fn stderr(&self) -> io::Result<String> {
+    pub fn stderr(&self) -> io::Result<String> {
         io_decode_utf8(&self.inner.stderr)
     }
 
-    pub(crate) fn stdout_bytes(&self) -> Vec<u8> {
+    pub fn stdout_bytes(&self) -> Vec<u8> {
         self.inner.stdout.clone()
     }
 
-    pub(crate) fn stderr_bytes(&self) -> Vec<u8> {
+    pub fn stderr_bytes(&self) -> Vec<u8> {
         self.inner.stderr.clone()
     }
 
-    pub(crate) fn success(&self) -> bool {
+    pub fn success(&self) -> bool {
         matches!(
             &self.inner.status,
             Value::EnumVariant(EnumVariantValue {
@@ -10969,7 +10937,7 @@ impl ProcessCompletedValue {
         )
     }
 
-    pub(crate) fn check(&self) -> std::result::Result<(), Value> {
+    pub fn check(&self) -> std::result::Result<(), Value> {
         if self.success() {
             Ok(())
         } else {
@@ -11013,7 +10981,8 @@ fn supervisor_restart_schedule(
 }
 
 impl ProcessSupervisorValue {
-    pub(crate) fn new() -> Self {
+    #[allow(clippy::new_without_default)]
+    pub fn new() -> Self {
         Self {
             inner: Arc::new(ProcessSupervisorState {
                 services: Mutex::new(BTreeMap::new()),
@@ -11022,7 +10991,7 @@ impl ProcessSupervisorValue {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn start(
+    pub fn start(
         &self,
         name: String,
         command: Vec<String>,
@@ -11104,7 +11073,7 @@ impl ProcessSupervisorValue {
         Ok(())
     }
 
-    pub(crate) fn wait(
+    pub fn wait(
         &self,
         timeout: Option<StdDuration>,
         cancellation: Option<&CancellationContext>,
@@ -11150,7 +11119,7 @@ impl ProcessSupervisorValue {
         }
     }
 
-    pub(crate) fn wait_or_none(
+    pub fn wait_or_none(
         &self,
         timeout: Option<StdDuration>,
         cancellation: Option<&CancellationContext>,
@@ -11162,7 +11131,7 @@ impl ProcessSupervisorValue {
         }
     }
 
-    pub(crate) fn stop(&self) -> std::result::Result<(), Value> {
+    pub fn stop(&self) -> std::result::Result<(), Value> {
         let drained: Vec<ProcessChildValue> = {
             let mut services = lock_mutex(&self.inner.services);
             std::mem::take(&mut *services)
@@ -11176,11 +11145,11 @@ impl ProcessSupervisorValue {
         Ok(())
     }
 
-    pub(crate) fn is_empty(&self) -> bool {
+    pub fn is_empty(&self) -> bool {
         lock_mutex(&self.inner.services).is_empty()
     }
 
-    pub(crate) fn close(&self) {
+    pub fn close(&self) {
         let _ = self.stop();
     }
 
@@ -11297,7 +11266,7 @@ impl ProcessSupervisorValue {
 }
 
 impl ProcessChildValue {
-    pub(crate) fn spawn(
+    pub fn spawn(
         command: Vec<String>,
         cwd: Option<String>,
         env: Vec<(String, String)>,
@@ -11374,19 +11343,19 @@ impl ProcessChildValue {
         })
     }
 
-    pub(crate) fn stdin(&self) -> Option<ProcessPipeValue> {
+    pub fn stdin(&self) -> Option<ProcessPipeValue> {
         self.inner.stdin.clone()
     }
 
-    pub(crate) fn stdout(&self) -> Option<ProcessPipeValue> {
+    pub fn stdout(&self) -> Option<ProcessPipeValue> {
         self.inner.stdout.clone()
     }
 
-    pub(crate) fn stderr(&self) -> Option<ProcessPipeValue> {
+    pub fn stderr(&self) -> Option<ProcessPipeValue> {
         self.inner.stderr.clone()
     }
 
-    pub(crate) fn wait(
+    pub fn wait(
         &self,
         timeout: Option<StdDuration>,
         cancellation: Option<&CancellationContext>,
@@ -11418,7 +11387,7 @@ impl ProcessChildValue {
         }
     }
 
-    pub(crate) fn wait_or_none(
+    pub fn wait_or_none(
         &self,
         timeout: Option<StdDuration>,
         cancellation: Option<&CancellationContext>,
@@ -11431,7 +11400,7 @@ impl ProcessChildValue {
         }
     }
 
-    pub(crate) fn wait_ok(
+    pub fn wait_ok(
         &self,
         timeout: Option<StdDuration>,
         cancellation: Option<&CancellationContext>,
@@ -11466,7 +11435,7 @@ impl ProcessChildValue {
         }
     }
 
-    pub(crate) fn kill(&self) -> io::Result<()> {
+    pub fn kill(&self) -> io::Result<()> {
         if let Some(process_group_id) = self.inner.process_group_id {
             return signal_process_group(process_group_id, libc::SIGKILL);
         }
@@ -11477,7 +11446,7 @@ impl ProcessChildValue {
         child.kill()
     }
 
-    pub(crate) fn terminate(&self) -> io::Result<()> {
+    pub fn terminate(&self) -> io::Result<()> {
         if let Some(process_group_id) = self.inner.process_group_id {
             return signal_process_group(process_group_id, libc::SIGTERM);
         }
@@ -11498,7 +11467,7 @@ impl ProcessChildValue {
         }
     }
 
-    pub(crate) fn close(&self) {
+    pub fn close(&self) {
         let _ = self.terminate();
         let wait_timed_out = matches!(
             self.wait(
@@ -11628,7 +11597,7 @@ impl TcpListenerValue {
         })
     }
 
-    pub(crate) fn bind(address: &str) -> io::Result<Self> {
+    pub fn bind(address: &str) -> io::Result<Self> {
         let address = address.to_string();
         let listener = run_blocking_io_with_deadline(
             move || StdTcpListener::bind(address),
@@ -11638,7 +11607,7 @@ impl TcpListenerValue {
         Self::from_std(listener)
     }
 
-    pub(crate) fn accept(
+    pub fn accept(
         &self,
         timeout: Option<StdDuration>,
         cancellation: Option<&CancellationContext>,
@@ -11664,7 +11633,7 @@ impl TcpListenerValue {
         }
     }
 
-    pub(crate) fn local_addr(&self) -> io::Result<String> {
+    pub fn local_addr(&self) -> io::Result<String> {
         let mut listener = lock_mutex(&self.inner.listener);
         let Some(listener) = listener.as_mut() else {
             return Err(closed_resource_error());
@@ -11672,7 +11641,7 @@ impl TcpListenerValue {
         Ok(listener.local_addr()?.to_string())
     }
 
-    pub(crate) fn close(&self) {
+    pub fn close(&self) {
         let mut listener = lock_mutex(&self.inner.listener);
         *listener = None;
     }
@@ -11761,7 +11730,7 @@ impl TcpStreamValue {
         })
     }
 
-    pub(crate) fn connect(
+    pub fn connect(
         address: &str,
         timeout: Option<StdDuration>,
         cancellation: Option<&CancellationContext>,
@@ -11890,7 +11859,7 @@ impl TcpStreamValue {
         Self::from_std(stream)
     }
 
-    pub(crate) fn read_all(
+    pub fn read_all(
         &self,
         timeout: Option<StdDuration>,
         cancellation: Option<&CancellationContext>,
@@ -11898,7 +11867,7 @@ impl TcpStreamValue {
         io_decode_utf8(&self.read_bytes_all(timeout, cancellation)?)
     }
 
-    pub(crate) fn read_bytes_all(
+    pub fn read_bytes_all(
         &self,
         timeout: Option<StdDuration>,
         cancellation: Option<&CancellationContext>,
@@ -11943,7 +11912,7 @@ impl TcpStreamValue {
         }
     }
 
-    pub(crate) fn read_line(
+    pub fn read_line(
         &self,
         timeout: Option<StdDuration>,
         cancellation: Option<&CancellationContext>,
@@ -11955,7 +11924,7 @@ impl TcpStreamValue {
         read_line_with_deadline(stream, deadline_from_timeout(timeout)?, cancellation)
     }
 
-    pub(crate) fn read_bytes(
+    pub fn read_bytes(
         &self,
         max_bytes: usize,
         timeout: Option<StdDuration>,
@@ -11973,7 +11942,7 @@ impl TcpStreamValue {
         )
     }
 
-    pub(crate) fn read_exact(
+    pub fn read_exact(
         &self,
         count: usize,
         timeout: Option<StdDuration>,
@@ -11986,7 +11955,7 @@ impl TcpStreamValue {
         read_exact_with_deadline(stream, count, deadline_from_timeout(timeout)?, cancellation)
     }
 
-    pub(crate) fn write_all(
+    pub fn write_all(
         &self,
         text: &str,
         timeout: Option<StdDuration>,
@@ -11995,7 +11964,7 @@ impl TcpStreamValue {
         self.write_bytes(text.as_bytes(), timeout, cancellation)
     }
 
-    pub(crate) fn write_bytes(
+    pub fn write_bytes(
         &self,
         bytes: &[u8],
         timeout: Option<StdDuration>,
@@ -12019,7 +11988,7 @@ impl TcpStreamValue {
         }
     }
 
-    pub(crate) fn flush(&self) -> io::Result<()> {
+    pub fn flush(&self) -> io::Result<()> {
         let mut stream = lock_mutex(&self.inner.stream);
         let Some(stream) = stream.as_mut() else {
             return Err(closed_resource_error());
@@ -12027,7 +11996,7 @@ impl TcpStreamValue {
         stream.flush()
     }
 
-    pub(crate) fn local_addr(&self) -> io::Result<String> {
+    pub fn local_addr(&self) -> io::Result<String> {
         let mut stream = lock_mutex(&self.inner.stream);
         let Some(stream) = stream.as_mut() else {
             return Err(closed_resource_error());
@@ -12035,7 +12004,7 @@ impl TcpStreamValue {
         Ok(stream.local_addr()?.to_string())
     }
 
-    pub(crate) fn peer_addr(&self) -> io::Result<String> {
+    pub fn peer_addr(&self) -> io::Result<String> {
         let mut stream = lock_mutex(&self.inner.stream);
         let Some(stream) = stream.as_mut() else {
             return Err(closed_resource_error());
@@ -12043,14 +12012,14 @@ impl TcpStreamValue {
         Ok(stream.peer_addr()?.to_string())
     }
 
-    pub(crate) fn close(&self) {
+    pub fn close(&self) {
         let mut stream = lock_mutex(&self.inner.stream);
         if let Some(stream) = stream.take() {
             let _ = stream.shutdown(Shutdown::Both);
         }
     }
 
-    pub(crate) fn shutdown_read(&self) -> io::Result<()> {
+    pub fn shutdown_read(&self) -> io::Result<()> {
         let mut stream = lock_mutex(&self.inner.stream);
         let Some(stream) = stream.as_mut() else {
             return Err(closed_resource_error());
@@ -12058,7 +12027,7 @@ impl TcpStreamValue {
         stream.shutdown(Shutdown::Read)
     }
 
-    pub(crate) fn shutdown_write(&self) -> io::Result<()> {
+    pub fn shutdown_write(&self) -> io::Result<()> {
         let mut stream = lock_mutex(&self.inner.stream);
         let Some(stream) = stream.as_mut() else {
             return Err(closed_resource_error());
@@ -12066,7 +12035,7 @@ impl TcpStreamValue {
         stream.shutdown(Shutdown::Write)
     }
 
-    pub(crate) fn shutdown_both(&self) -> io::Result<()> {
+    pub fn shutdown_both(&self) -> io::Result<()> {
         let mut stream = lock_mutex(&self.inner.stream);
         let Some(stream) = stream.as_mut() else {
             return Err(closed_resource_error());
@@ -12076,15 +12045,15 @@ impl TcpStreamValue {
 }
 
 impl UdpDatagramValue {
-    pub(crate) fn address(&self) -> String {
+    pub fn address(&self) -> String {
         self.address.clone()
     }
 
-    pub(crate) fn bytes(&self) -> Vec<u8> {
+    pub fn bytes(&self) -> Vec<u8> {
         self.data.clone()
     }
 
-    pub(crate) fn text(&self) -> io::Result<String> {
+    pub fn text(&self) -> io::Result<String> {
         io_decode_utf8(&self.data)
     }
 }
@@ -12100,7 +12069,7 @@ impl UdpSocketValue {
         })
     }
 
-    pub(crate) fn bind(address: &str) -> io::Result<Self> {
+    pub fn bind(address: &str) -> io::Result<Self> {
         let address = address.to_string();
         let socket = run_blocking_io_with_deadline(
             move || StdUdpSocket::bind(address),
@@ -12110,7 +12079,7 @@ impl UdpSocketValue {
         Self::from_std(socket)
     }
 
-    pub(crate) fn send_to_text(
+    pub fn send_to_text(
         &self,
         address: &str,
         text: &str,
@@ -12120,7 +12089,7 @@ impl UdpSocketValue {
         self.send_to_bytes(address, text.as_bytes(), timeout, cancellation)
     }
 
-    pub(crate) fn send_to_bytes(
+    pub fn send_to_bytes(
         &self,
         address: &str,
         bytes: &[u8],
@@ -12166,7 +12135,7 @@ impl UdpSocketValue {
         }
     }
 
-    pub(crate) fn recv(
+    pub fn recv(
         &self,
         max_bytes: usize,
         timeout: Option<StdDuration>,
@@ -12231,7 +12200,7 @@ impl UdpSocketValue {
         }
     }
 
-    pub(crate) fn recv_from(
+    pub fn recv_from(
         &self,
         max_bytes: usize,
         timeout: Option<StdDuration>,
@@ -12300,7 +12269,7 @@ impl UdpSocketValue {
         }
     }
 
-    pub(crate) fn local_addr(&self) -> io::Result<String> {
+    pub fn local_addr(&self) -> io::Result<String> {
         let socket = lock_mutex(&self.inner.socket);
         let Some(socket) = socket.as_ref() else {
             return Err(closed_resource_error());
@@ -12308,7 +12277,7 @@ impl UdpSocketValue {
         Ok(socket.local_addr()?.to_string())
     }
 
-    pub(crate) fn peer_addr(&self) -> io::Result<String> {
+    pub fn peer_addr(&self) -> io::Result<String> {
         let socket = lock_mutex(&self.inner.socket);
         let Some(socket) = socket.as_ref() else {
             return Err(closed_resource_error());
@@ -12316,7 +12285,7 @@ impl UdpSocketValue {
         Ok(socket.peer_addr()?.to_string())
     }
 
-    pub(crate) fn close(&self) {
+    pub fn close(&self) {
         let mut socket = lock_mutex(&self.inner.socket);
         *socket = None;
     }
@@ -12333,7 +12302,7 @@ impl UnixListenerValue {
         })
     }
 
-    pub(crate) fn bind(path: &str) -> io::Result<Self> {
+    pub fn bind(path: &str) -> io::Result<Self> {
         let path = path.to_string();
         let listener = run_blocking_io_with_deadline(
             move || {
@@ -12355,7 +12324,7 @@ impl UnixListenerValue {
         Self::from_std(listener)
     }
 
-    pub(crate) fn accept(
+    pub fn accept(
         &self,
         timeout: Option<StdDuration>,
         cancellation: Option<&CancellationContext>,
@@ -12381,7 +12350,7 @@ impl UnixListenerValue {
         }
     }
 
-    pub(crate) fn close(&self) {
+    pub fn close(&self) {
         let mut listener = lock_mutex(&self.inner.listener);
         *listener = None;
     }
@@ -12389,7 +12358,7 @@ impl UnixListenerValue {
 
 #[cfg(not(unix))]
 impl UnixListenerValue {
-    pub(crate) fn bind(_path: &str) -> io::Result<Self> {
+    pub fn bind(_path: &str) -> io::Result<Self> {
         Err(io::Error::new(
             io::ErrorKind::Unsupported,
             "unix domain sockets are not supported on this platform",
@@ -12408,7 +12377,7 @@ impl UnixStreamValue {
         })
     }
 
-    pub(crate) fn connect(
+    pub fn connect(
         path: &str,
         timeout: Option<StdDuration>,
         cancellation: Option<&CancellationContext>,
@@ -12453,7 +12422,7 @@ impl UnixStreamValue {
         Self::from_std(stream)
     }
 
-    pub(crate) fn read_line(
+    pub fn read_line(
         &self,
         timeout: Option<StdDuration>,
         cancellation: Option<&CancellationContext>,
@@ -12465,7 +12434,7 @@ impl UnixStreamValue {
         read_line_with_deadline(stream, deadline_from_timeout(timeout)?, cancellation)
     }
 
-    pub(crate) fn read_exact(
+    pub fn read_exact(
         &self,
         count: usize,
         timeout: Option<StdDuration>,
@@ -12478,7 +12447,7 @@ impl UnixStreamValue {
         read_exact_with_deadline(stream, count, deadline_from_timeout(timeout)?, cancellation)
     }
 
-    pub(crate) fn write_all(
+    pub fn write_all(
         &self,
         text: &str,
         timeout: Option<StdDuration>,
@@ -12496,7 +12465,7 @@ impl UnixStreamValue {
         )
     }
 
-    pub(crate) fn close(&self) {
+    pub fn close(&self) {
         let mut stream = lock_mutex(&self.inner.stream);
         *stream = None;
     }
@@ -12504,7 +12473,7 @@ impl UnixStreamValue {
 
 #[cfg(not(unix))]
 impl UnixStreamValue {
-    pub(crate) fn connect(
+    pub fn connect(
         _path: &str,
         _timeout: Option<StdDuration>,
         _cancellation: Option<&CancellationContext>,
@@ -12517,7 +12486,7 @@ impl UnixStreamValue {
 }
 
 impl TlsListenerValue {
-    pub(crate) fn bind(address: &str, cert_pem_path: &str, key_pem_path: &str) -> io::Result<Self> {
+    pub fn bind(address: &str, cert_pem_path: &str, key_pem_path: &str) -> io::Result<Self> {
         let address = address.to_string();
         let cert_pem_path = cert_pem_path.to_string();
         let key_pem_path = key_pem_path.to_string();
@@ -12547,7 +12516,7 @@ impl TlsListenerValue {
         })
     }
 
-    pub(crate) fn accept(
+    pub fn accept(
         &self,
         timeout: Option<StdDuration>,
         cancellation: Option<&CancellationContext>,
@@ -12687,7 +12656,7 @@ impl TlsListenerValue {
         }
     }
 
-    pub(crate) fn local_addr(&self) -> io::Result<String> {
+    pub fn local_addr(&self) -> io::Result<String> {
         let listener = lock_mutex(&self.inner.listener);
         let Some(listener) = listener.as_ref() else {
             return Err(closed_resource_error());
@@ -12695,7 +12664,7 @@ impl TlsListenerValue {
         Ok(listener.local_addr()?.to_string())
     }
 
-    pub(crate) fn close(&self) {
+    pub fn close(&self) {
         let mut listener = lock_mutex(&self.inner.listener);
         *listener = None;
     }
@@ -13007,7 +12976,7 @@ impl TlsStreamValue {
         *lock_mutex(&self.inner.stream) = Some(stream);
     }
 
-    pub(crate) fn connect(
+    pub fn connect(
         address: &str,
         server_name: &str,
         ca_pem_path: Option<&str>,
@@ -13075,7 +13044,7 @@ impl TlsStreamValue {
         })
     }
 
-    pub(crate) fn read_line(
+    pub fn read_line(
         &self,
         timeout: Option<StdDuration>,
         cancellation: Option<&CancellationContext>,
@@ -13115,7 +13084,7 @@ impl TlsStreamValue {
         }
     }
 
-    pub(crate) fn read_exact(
+    pub fn read_exact(
         &self,
         count: usize,
         timeout: Option<StdDuration>,
@@ -13149,7 +13118,7 @@ impl TlsStreamValue {
         Ok(output)
     }
 
-    pub(crate) fn write_all(
+    pub fn write_all(
         &self,
         text: &str,
         timeout: Option<StdDuration>,
@@ -13184,7 +13153,7 @@ impl TlsStreamValue {
         Ok(())
     }
 
-    pub(crate) fn close(&self) {
+    pub fn close(&self) {
         let Ok(_operation) = acquire_protocol_operation(&self.inner.busy, None, None) else {
             return;
         };
@@ -13211,7 +13180,7 @@ impl TlsStreamValue {
 }
 
 impl HttpListenerValue {
-    pub(crate) fn bind(address: &str) -> io::Result<Self> {
+    pub fn bind(address: &str) -> io::Result<Self> {
         let address = address.to_string();
         let listener = run_blocking_io_with_deadline(
             move || StdTcpListener::bind(address),
@@ -13227,7 +13196,7 @@ impl HttpListenerValue {
         })
     }
 
-    pub(crate) fn accept(
+    pub fn accept(
         &self,
         timeout: Option<StdDuration>,
         cancellation: Option<&CancellationContext>,
@@ -13329,7 +13298,7 @@ impl HttpListenerValue {
         }
     }
 
-    pub(crate) fn local_addr(&self) -> io::Result<String> {
+    pub fn local_addr(&self) -> io::Result<String> {
         let listener = lock_mutex(&self.inner.listener);
         let Some(listener) = listener.as_ref() else {
             return Err(closed_resource_error());
@@ -13337,34 +13306,34 @@ impl HttpListenerValue {
         Ok(listener.local_addr()?.to_string())
     }
 
-    pub(crate) fn close(&self) {
+    pub fn close(&self) {
         let mut listener = lock_mutex(&self.inner.listener);
         *listener = None;
     }
 }
 
 impl HttpExchangeValue {
-    pub(crate) fn method(&self) -> String {
+    pub fn method(&self) -> String {
         self.inner.method.clone()
     }
 
-    pub(crate) fn path(&self) -> String {
+    pub fn path(&self) -> String {
         self.inner.path.clone()
     }
 
-    pub(crate) fn headers(&self) -> Vec<(String, String)> {
+    pub fn headers(&self) -> Vec<(String, String)> {
         self.inner.headers.clone()
     }
 
-    pub(crate) fn body_text(&self) -> io::Result<String> {
+    pub fn body_text(&self) -> io::Result<String> {
         io_decode_utf8(&self.inner.body)
     }
 
-    pub(crate) fn body_bytes(&self) -> Vec<u8> {
+    pub fn body_bytes(&self) -> Vec<u8> {
         self.inner.body.clone()
     }
 
-    pub(crate) fn respond_text(
+    pub fn respond_text(
         &self,
         status: i32,
         body: &str,
@@ -13373,7 +13342,7 @@ impl HttpExchangeValue {
         self.respond_bytes(status, body.as_bytes(), headers)
     }
 
-    pub(crate) fn respond_bytes(
+    pub fn respond_bytes(
         &self,
         status: i32,
         body: &[u8],
@@ -13397,7 +13366,7 @@ impl HttpExchangeValue {
 }
 
 impl HttpResponseValue {
-    pub(crate) fn request_text(
+    pub fn request_text(
         method: &str,
         url: &str,
         body: &str,
@@ -13408,8 +13377,8 @@ impl HttpResponseValue {
         Self::request_bytes(method, url, body.as_bytes(), headers, timeout, cancellation)
     }
 
-    #[cfg(test)]
-    pub(crate) fn request_text_with_ca(
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn request_text_with_ca(
         method: &str,
         url: &str,
         body: &str,
@@ -13429,7 +13398,7 @@ impl HttpResponseValue {
         )
     }
 
-    pub(crate) fn request_bytes(
+    pub fn request_bytes(
         method: &str,
         url: &str,
         body: &[u8],
@@ -13543,29 +13512,29 @@ impl HttpResponseValue {
         }
     }
 
-    pub(crate) fn status(&self) -> i32 {
+    pub fn status(&self) -> i32 {
         self.status
     }
 
-    pub(crate) fn reason(&self) -> String {
+    pub fn reason(&self) -> String {
         self.reason.clone()
     }
 
-    pub(crate) fn headers(&self) -> Vec<(String, String)> {
+    pub fn headers(&self) -> Vec<(String, String)> {
         self.headers.clone()
     }
 
-    pub(crate) fn text(&self) -> io::Result<String> {
+    pub fn text(&self) -> io::Result<String> {
         io_decode_utf8(&self.body)
     }
 
-    pub(crate) fn bytes(&self) -> Vec<u8> {
+    pub fn bytes(&self) -> Vec<u8> {
         self.body.clone()
     }
 }
 
 impl WebSocketListenerValue {
-    pub(crate) fn bind(address: &str) -> io::Result<Self> {
+    pub fn bind(address: &str) -> io::Result<Self> {
         let address = address.to_string();
         let listener = run_blocking_io_with_deadline(
             move || StdTcpListener::bind(address),
@@ -13581,7 +13550,7 @@ impl WebSocketListenerValue {
         })
     }
 
-    pub(crate) fn accept(&self, timeout: Option<StdDuration>) -> io::Result<WebSocketValue> {
+    pub fn accept(&self, timeout: Option<StdDuration>) -> io::Result<WebSocketValue> {
         let listener = {
             let listener = lock_mutex(&self.inner.listener);
             let Some(listener) = listener.as_ref() else {
@@ -13642,7 +13611,7 @@ impl WebSocketListenerValue {
         }
     }
 
-    pub(crate) fn local_addr(&self) -> io::Result<String> {
+    pub fn local_addr(&self) -> io::Result<String> {
         let listener = lock_mutex(&self.inner.listener);
         let Some(listener) = listener.as_ref() else {
             return Err(closed_resource_error());
@@ -13665,7 +13634,7 @@ impl WebSocketValue {
         *lock_mutex(&self.inner.socket) = Some(socket);
     }
 
-    pub(crate) fn connect(url: &str, timeout: Option<StdDuration>) -> io::Result<Self> {
+    pub fn connect(url: &str, timeout: Option<StdDuration>) -> io::Result<Self> {
         #[cfg(unix)]
         {
             let deadline = deadline_from_timeout(timeout)?;
@@ -13736,11 +13705,11 @@ impl WebSocketValue {
         }
     }
 
-    pub(crate) fn send_text(&self, text: &str, timeout: Option<StdDuration>) -> io::Result<()> {
+    pub fn send_text(&self, text: &str, timeout: Option<StdDuration>) -> io::Result<()> {
         self.send_message(Message::Text(text.into()), timeout)
     }
 
-    pub(crate) fn send_bytes(&self, bytes: &[u8], timeout: Option<StdDuration>) -> io::Result<()> {
+    pub fn send_bytes(&self, bytes: &[u8], timeout: Option<StdDuration>) -> io::Result<()> {
         self.send_message(Message::Binary(bytes.into()), timeout)
     }
 
@@ -13793,7 +13762,7 @@ impl WebSocketValue {
         }
     }
 
-    pub(crate) fn recv_text(&self, timeout: Option<StdDuration>) -> io::Result<Option<String>> {
+    pub fn recv_text(&self, timeout: Option<StdDuration>) -> io::Result<Option<String>> {
         let message = match self.recv_message(timeout)? {
             Some(message) => message,
             None => return Ok(None),
@@ -13806,7 +13775,7 @@ impl WebSocketValue {
         }
     }
 
-    pub(crate) fn recv_bytes(&self, timeout: Option<StdDuration>) -> io::Result<Option<Vec<u8>>> {
+    pub fn recv_bytes(&self, timeout: Option<StdDuration>) -> io::Result<Option<Vec<u8>>> {
         let message = match self.recv_message(timeout)? {
             Some(message) => message,
             None => return Ok(None),
@@ -13866,7 +13835,7 @@ impl WebSocketValue {
         }
     }
 
-    pub(crate) fn close(&self) -> io::Result<()> {
+    pub fn close(&self) -> io::Result<()> {
         let _operation = acquire_protocol_operation(&self.inner.busy, None, None)?;
         let socket = self.take_socket_for_step()?;
         self.inner.closed.store(true, Ordering::Release);
@@ -13890,7 +13859,7 @@ impl WebSocketValue {
     }
 }
 
-pub(crate) fn io_read_line() -> io::Result<Option<String>> {
+pub fn io_read_line() -> io::Result<Option<String>> {
     let mut stdin = io::stdin().lock();
     let mut buffer = String::new();
     let bytes = stdin.read_line(&mut buffer)?;
@@ -13901,13 +13870,13 @@ pub(crate) fn io_read_line() -> io::Result<Option<String>> {
 }
 
 impl CancellationContext {
-    pub(crate) fn merged(&self, other: &CancellationContext) -> CancellationContext {
+    pub fn merged(&self, other: &CancellationContext) -> CancellationContext {
         let mut flags = self.flags.clone();
         flags.extend(other.flags.iter().cloned());
         CancellationContext { flags }
     }
 
-    pub(crate) fn is_cancelled(&self) -> bool {
+    pub fn is_cancelled(&self) -> bool {
         self.flags.iter().any(|flag| flag.load(Ordering::SeqCst))
     }
 
@@ -13924,7 +13893,7 @@ impl CancellationContext {
     }
 }
 
-pub(crate) fn poll_cancellation(cancellation: &CancellationContext) -> bool {
+pub fn poll_cancellation(cancellation: &CancellationContext) -> bool {
     if cancellation.is_cancelled() {
         return true;
     }
@@ -13933,7 +13902,7 @@ pub(crate) fn poll_cancellation(cancellation: &CancellationContext) -> bool {
 }
 
 impl TaskGroupValue {
-    pub(crate) fn new(parent: &CancellationContext) -> Self {
+    pub fn new(parent: &CancellationContext) -> Self {
         Self {
             inner: Arc::new(TaskGroupState {
                 tasks: Mutex::new(Vec::new()),
@@ -13945,13 +13914,13 @@ impl TaskGroupValue {
         }
     }
 
-    pub(crate) fn child_cancellation(&self) -> CancellationContext {
+    pub fn child_cancellation(&self) -> CancellationContext {
         let mut flags = self.inner.parent_flags.clone();
         flags.push(self.inner.cancel_flag.clone());
         CancellationContext { flags }
     }
 
-    pub(crate) fn queue_iteration_signal(&self) -> CancellationContext {
+    pub fn queue_iteration_signal(&self) -> CancellationContext {
         CancellationContext {
             flags: vec![
                 self.inner.cancel_flag.clone(),
@@ -13964,39 +13933,39 @@ impl TaskGroupValue {
     // Task-start adapters invoke this during prepared-task publication, before
     // the prepared task enters any worker inbox. A later drain therefore sees
     // the complete task set even when the selected worker is already idle.
-    pub(crate) fn register_task(&self, task: TaskValue) {
+    pub fn register_task(&self, task: TaskValue) {
         task.register_group_failure_wake_flag(self.inner.failure_wake_flag.clone());
         task.register_group_completion_wake_flag(self.inner.completion_wake_flag.clone());
         lock_mutex(&self.inner.tasks).push(task);
     }
 
-    pub(crate) fn cancel(&self) {
+    pub fn cancel(&self) {
         self.inner.cancel_flag.store(true, Ordering::SeqCst);
         notify_runtime_scheduler_if_started();
     }
 
-    pub(crate) fn is_cancelled(&self) -> bool {
+    pub fn is_cancelled(&self) -> bool {
         self.inner.cancel_flag.load(Ordering::SeqCst)
     }
 
-    pub(crate) fn has_unobserved_error(&self) -> bool {
+    pub fn has_unobserved_error(&self) -> bool {
         lock_mutex(&self.inner.tasks)
             .iter()
             .any(|task| task.unobserved_error().is_some())
     }
 
-    pub(crate) fn clear_failure_wake_if_no_unobserved_error(&self) {
+    pub fn clear_failure_wake_if_no_unobserved_error(&self) {
         if !self.has_unobserved_error() {
             self.inner.failure_wake_flag.store(false, Ordering::SeqCst);
         }
     }
 
-    pub(crate) fn all_registered_tasks_completed(&self) -> bool {
+    pub fn all_registered_tasks_completed(&self) -> bool {
         let tasks = lock_mutex(&self.inner.tasks);
         tasks.iter().all(|task| task.completed_result().is_some())
     }
 
-    pub(crate) fn clear_completion_wake_if_tasks_still_running(&self) {
+    pub fn clear_completion_wake_if_tasks_still_running(&self) {
         if !self.all_registered_tasks_completed() {
             self.inner
                 .completion_wake_flag
@@ -14005,7 +13974,7 @@ impl TaskGroupValue {
     }
 
     // Invariant: callers drain only after they have finished registering tasks for the group.
-    pub(crate) fn drain_tasks(&self) -> Vec<TaskValue> {
+    pub fn drain_tasks(&self) -> Vec<TaskValue> {
         let mut tasks = lock_mutex(&self.inner.tasks);
         std::mem::take(&mut *tasks)
     }
@@ -14121,11 +14090,11 @@ impl TaskValue {
         unsubscribe_reactor_target(&self.inner.completion_reactor_subscribers, subscription);
     }
 
-    pub(crate) fn runtime_type_name(&self) -> Option<String> {
+    pub fn runtime_type_name(&self) -> Option<String> {
         lock_mutex(&self.inner.runtime_type_name).clone()
     }
 
-    pub(crate) fn set_runtime_type_name(&self, runtime_type_name: String) {
+    pub fn set_runtime_type_name(&self, runtime_type_name: String) {
         *lock_mutex(&self.inner.runtime_type_name) = Some(runtime_type_name);
     }
 
@@ -14159,7 +14128,7 @@ impl TaskValue {
         }
     }
 
-    pub(crate) fn claim_result_observation(&self) -> Result<()> {
+    pub fn claim_result_observation(&self) -> Result<()> {
         if self.inner.result_is_repeatable {
             return Ok(());
         }
@@ -14175,7 +14144,7 @@ impl TaskValue {
             })
     }
 
-    pub(crate) fn completed_result(&self) -> Option<TaskExecutionResult> {
+    pub fn completed_result(&self) -> Option<TaskExecutionResult> {
         let state = lock_mutex(&self.inner.handle);
         match &*state {
             TaskHandle::Completed(result) => Some(result.clone()),
@@ -14183,7 +14152,7 @@ impl TaskValue {
         }
     }
 
-    pub(crate) fn completed_result_observed(&self) -> Option<TaskExecutionResult> {
+    pub fn completed_result_observed(&self) -> Option<TaskExecutionResult> {
         let result = self.completed_result()?;
         self.observe_result(&result);
         if let TaskExecutionResult::Ready(Ok(value)) = &result {
@@ -14192,15 +14161,13 @@ impl TaskValue {
         Some(result)
     }
 
-    #[cfg(test)]
-    pub(crate) fn from_handle(
-        handle: thread::JoinHandle<std::result::Result<Value, Diagnostic>>,
-    ) -> Self {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn from_handle(handle: thread::JoinHandle<std::result::Result<Value, Diagnostic>>) -> Self {
         Self::from_handle_with_result_repeatability(handle, true)
     }
 
-    #[cfg(test)]
-    pub(crate) fn from_handle_with_result_repeatability(
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn from_handle_with_result_repeatability(
         handle: thread::JoinHandle<std::result::Result<Value, Diagnostic>>,
         result_is_repeatable: bool,
     ) -> Self {
@@ -14237,7 +14204,7 @@ impl TaskValue {
         Self { inner }
     }
 
-    pub(crate) fn wait_result_with_cancellation(
+    pub fn wait_result_with_cancellation(
         &self,
         timeout: Option<StdDuration>,
         cancellation: Option<&CancellationContext>,
@@ -14266,7 +14233,7 @@ impl TaskValue {
         }
     }
 
-    pub(crate) fn wait_result_with_cancellation_observed(
+    pub fn wait_result_with_cancellation_observed(
         &self,
         timeout: Option<StdDuration>,
         cancellation: Option<&CancellationContext>,
@@ -14281,7 +14248,7 @@ impl TaskValue {
         Ok(status)
     }
 
-    pub(crate) fn unobserved_error(&self) -> Option<Diagnostic> {
+    pub fn unobserved_error(&self) -> Option<Diagnostic> {
         if self.inner.observed_failure.load(Ordering::SeqCst) {
             return None;
         }
@@ -14291,7 +14258,7 @@ impl TaskValue {
         }
     }
 
-    pub(crate) fn waits_without_deadline(&self) -> bool {
+    pub fn waits_without_deadline(&self) -> bool {
         if self.completed_result().is_some() || !self.inner.lightweight {
             return false;
         }
@@ -14386,7 +14353,7 @@ impl TaskValue {
     }
 }
 
-pub(crate) fn claim_task_result_observations(tasks: &[TaskValue]) -> Result<()> {
+pub fn claim_task_result_observations(tasks: &[TaskValue]) -> Result<()> {
     for task in tasks {
         task.claim_result_observation()?;
     }
@@ -14395,35 +14362,35 @@ pub(crate) fn claim_task_result_observations(tasks: &[TaskValue]) -> Result<()> 
 
 /// Wraps a present builtin optional result in the canonical `member | None`
 /// union (ADR-0052). Both backends build the same runtime value.
-pub(crate) fn optional_present(member: crate::sema::Type, value: Value) -> Value {
-    let union_type = crate::sema::optional_type(member);
-    let crate::sema::Type::Union(union) = &union_type else {
+pub fn optional_present(member: aura_core::types::Type, value: Value) -> Value {
+    let union_type = aura_core::types::optional_type(member);
+    let aura_core::types::Type::Union(union) = &union_type else {
         unreachable!("an optional union has two members");
     };
     let member_index = union
         .members
         .iter()
-        .position(|member| !matches!(member, crate::sema::Type::Unit))
+        .position(|member| !matches!(member, aura_core::types::Type::Unit))
         .expect("an optional union has a present member");
     union_value(union_type.clone(), member_index, value)
 }
 
 /// The absent builtin optional result: the `None` member of `member | None`.
-pub(crate) fn optional_absent(member: crate::sema::Type) -> Value {
-    let union_type = crate::sema::optional_type(member);
-    let crate::sema::Type::Union(union) = &union_type else {
+pub fn optional_absent(member: aura_core::types::Type) -> Value {
+    let union_type = aura_core::types::optional_type(member);
+    let aura_core::types::Type::Union(union) = &union_type else {
         unreachable!("an optional union has two members");
     };
     let member_index = union
         .members
         .iter()
-        .position(|member| matches!(member, crate::sema::Type::Unit))
+        .position(|member| matches!(member, aura_core::types::Type::Unit))
         .expect("an optional union has a None member");
     union_value(union_type.clone(), member_index, Value::Unit)
 }
 
 /// `Some(value)` becomes the present member, `None` the absent member.
-pub(crate) fn optional_value(member: crate::sema::Type, value: Option<Value>) -> Value {
+pub fn optional_value(member: aura_core::types::Type, value: Option<Value>) -> Value {
     match value {
         Some(value) => optional_present(member, value),
         None => optional_absent(member),
@@ -14431,21 +14398,27 @@ pub(crate) fn optional_value(member: crate::sema::Type, value: Option<Value>) ->
 }
 
 /// `str | None` from an optional Rust string.
-pub(crate) fn optional_str_value(value: Option<String>) -> Value {
-    optional_value(crate::sema::Type::named("str"), value.map(Value::String))
+pub fn optional_str_value(value: Option<String>) -> Value {
+    optional_value(
+        aura_core::types::Type::named("str"),
+        value.map(Value::String),
+    )
 }
 
 /// `list[uint8] | None` from an optional already-built byte list value.
-pub(crate) fn optional_bytes_value(value: Option<Value>) -> Value {
+pub fn optional_bytes_value(value: Option<Value>) -> Value {
     optional_value(
-        crate::sema::Type::Named("list".to_string(), vec![crate::sema::Type::named("uint8")]),
+        aura_core::types::Type::Named(
+            "list".to_string(),
+            vec![aura_core::types::Type::named("uint8")],
+        ),
         value,
     )
 }
 
 /// The present member type of a `json.into_*` result.
-pub(crate) fn json_into_member_type(expected: &str) -> crate::sema::Type {
-    use crate::sema::Type;
+pub fn json_into_member_type(expected: &str) -> aura_core::types::Type {
+    use aura_core::types::Type;
     let text = Type::named("str");
     let value = Type::named("json.Value");
     let list_name = "list".to_string();
@@ -14457,7 +14430,7 @@ pub(crate) fn json_into_member_type(expected: &str) -> crate::sema::Type {
     }
 }
 
-pub(crate) fn lookup_found(value: Value) -> Value {
+pub fn lookup_found(value: Value) -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: "Lookup".to_string(),
         variant_name: "Found".to_string(),
@@ -14465,7 +14438,7 @@ pub(crate) fn lookup_found(value: Value) -> Value {
     })
 }
 
-pub(crate) fn lookup_missing() -> Value {
+pub fn lookup_missing() -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: "Lookup".to_string(),
         variant_name: "Missing".to_string(),
@@ -14473,7 +14446,7 @@ pub(crate) fn lookup_missing() -> Value {
     })
 }
 
-pub(crate) fn poll_ready(value: Value) -> Value {
+pub fn poll_ready(value: Value) -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: "Poll".to_string(),
         variant_name: "Ready".to_string(),
@@ -14481,7 +14454,7 @@ pub(crate) fn poll_ready(value: Value) -> Value {
     })
 }
 
-pub(crate) fn poll_unavailable() -> Value {
+pub fn poll_unavailable() -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: "Poll".to_string(),
         variant_name: "Unavailable".to_string(),
@@ -14489,7 +14462,7 @@ pub(crate) fn poll_unavailable() -> Value {
     })
 }
 
-pub(crate) fn recv_for_task_group_iteration(
+pub fn recv_for_task_group_iteration(
     channel: &ChannelValue,
     cancellation: &CancellationContext,
     group: &TaskGroupValue,
@@ -14540,7 +14513,7 @@ pub(crate) fn recv_for_task_group_iteration(
     }
 }
 
-pub(crate) fn recv_for_registered_producers_iteration(
+pub fn recv_for_registered_producers_iteration(
     channel: &ChannelValue,
     cancellation: &CancellationContext,
 ) -> RecvValueResult {
@@ -14609,7 +14582,7 @@ impl Drop for TaskGroupJoinReachabilityGuard {
     }
 }
 
-pub(crate) fn task_group_cleanup_should_cancel(
+pub fn task_group_cleanup_should_cancel(
     tasks: &[TaskValue],
     cancellation: &CancellationContext,
 ) -> bool {
@@ -14640,7 +14613,7 @@ pub(crate) fn task_group_cleanup_should_cancel(
     }
 }
 
-pub(crate) fn result_ok(value: Value) -> Value {
+pub fn result_ok(value: Value) -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: "Result".to_string(),
         variant_name: "Ok".to_string(),
@@ -14648,7 +14621,7 @@ pub(crate) fn result_ok(value: Value) -> Value {
     })
 }
 
-pub(crate) fn result_err(value: Value) -> Value {
+pub fn result_err(value: Value) -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: "Result".to_string(),
         variant_name: "Err".to_string(),
@@ -14656,24 +14629,24 @@ pub(crate) fn result_err(value: Value) -> Value {
     })
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 std::thread_local! {
     static BYTES_RUNTIME_ALLOCATION_BUDGET: Cell<Option<usize>> = const { Cell::new(None) };
     static BYTES_RUNTIME_ENCODED_INPUT_LEN_OVERRIDE: Cell<Option<usize>> = const { Cell::new(None) };
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 struct BytesRuntimeAllocationBudgetGuard(Option<usize>);
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl Drop for BytesRuntimeAllocationBudgetGuard {
     fn drop(&mut self) {
         BYTES_RUNTIME_ALLOCATION_BUDGET.with(|budget| budget.set(self.0));
     }
 }
 
-#[cfg(test)]
-pub(crate) fn with_bytes_runtime_allocation_budget<T>(
+#[cfg(any(test, feature = "test-support"))]
+pub fn with_bytes_runtime_allocation_budget<T>(
     successful_allocations: usize,
     operation: impl FnOnce() -> T,
 ) -> T {
@@ -14683,18 +14656,18 @@ pub(crate) fn with_bytes_runtime_allocation_budget<T>(
     operation()
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 struct BytesRuntimeEncodedInputLenGuard(Option<usize>);
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl Drop for BytesRuntimeEncodedInputLenGuard {
     fn drop(&mut self) {
         BYTES_RUNTIME_ENCODED_INPUT_LEN_OVERRIDE.with(|length| length.set(self.0));
     }
 }
 
-#[cfg(test)]
-pub(crate) fn with_bytes_runtime_encoded_input_len_for_test<T>(
+#[cfg(any(test, feature = "test-support"))]
+pub fn with_bytes_runtime_encoded_input_len_for_test<T>(
     input_len: usize,
     operation: impl FnOnce() -> T,
 ) -> T {
@@ -14712,7 +14685,7 @@ fn bytes_runtime_allocation_error() -> Diagnostic {
 }
 
 fn bytes_runtime_allocation_checkpoint() -> Result<()> {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     {
         let injected_failure = BYTES_RUNTIME_ALLOCATION_BUDGET.with(|budget| match budget.get() {
             Some(0) => true,
@@ -14795,7 +14768,7 @@ fn host_bytes_from_runtime_elements(elements: &[Value]) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
-pub(crate) fn host_bytes_from_runtime(value: &Value, call: &str) -> Result<Vec<u8>> {
+pub fn host_bytes_from_runtime(value: &Value, call: &str) -> Result<Vec<u8>> {
     host_bytes_from_runtime_elements(runtime_uint8_elements(value, call)?)
 }
 
@@ -14857,11 +14830,11 @@ fn preflight_runtime_bytes_encoder<'a>(
     Ok(elements)
 }
 
-pub(crate) fn bytes_resource_error_to_diagnostic(error: BytesResourceError) -> Diagnostic {
+pub fn bytes_resource_error_to_diagnostic(error: BytesResourceError) -> Diagnostic {
     Diagnostic::coded("AU4005", error.to_string())
 }
 
-pub(crate) fn runtime_bytes_from_host(bytes: &[u8]) -> Result<Value> {
+pub fn runtime_bytes_from_host(bytes: &[u8]) -> Result<Value> {
     if bytes.len() > bytes_codec::MAX_CODEC_OUTPUT_LEN {
         return Err(bytes_resource_error_to_diagnostic(
             BytesResourceError::OutputTooLarge {
@@ -14945,7 +14918,7 @@ fn bytes_data_error_to_runtime(error: BytesDataError) -> Result<Value> {
     bytes_runtime_enum_value("bytes.Error", variant_name, payloads)
 }
 
-pub(crate) fn bytes_codec_error_to_result(error: BytesCodecError) -> Result<Value> {
+pub fn bytes_codec_error_to_result(error: BytesCodecError) -> Result<Value> {
     match error {
         BytesCodecError::Data(error) => {
             bytes_runtime_result("Err", bytes_data_error_to_runtime(error)?)
@@ -14993,12 +14966,12 @@ fn bytes_host_builtin_name(name: &str) -> bool {
     )
 }
 
-pub(crate) fn evaluate_string_to_bytes_host_ref(text: &str) -> Result<Value> {
+pub fn evaluate_string_to_bytes_host_ref(text: &str) -> Result<Value> {
     bytes_resource_only(bytes_codec::string_to_bytes(text), "str.to_bytes")
         .and_then(|bytes| runtime_bytes_from_host(&bytes))
 }
 
-pub(crate) fn evaluate_bytes_host_builtin_ref(name: &str, value: &Value) -> Option<Result<Value>> {
+pub fn evaluate_bytes_host_builtin_ref(name: &str, value: &Value) -> Option<Result<Value>> {
     if !bytes_host_builtin_name(name) {
         return None;
     }
@@ -15142,7 +15115,7 @@ fn host_string_map_value(entries: BTreeMap<String, String>) -> Value {
     })
 }
 
-pub(crate) fn host_process_args() -> Vec<String> {
+pub fn host_process_args() -> Vec<String> {
     std::env::args_os()
         .skip(1)
         .map(|argument| argument.to_string_lossy().into_owned())
@@ -15172,7 +15145,7 @@ fn host_millis_value(millis: u128, clock: &str) -> Result<Value> {
     Ok(Value::Int(IntegerValue::from_signed(i128::from(millis))))
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 std::thread_local! {
     static JSON_RUNTIME_ALLOCATION_BUDGET: Cell<Option<usize>> = const { Cell::new(None) };
     static JSON_RUNTIME_NODE_LIMIT: Cell<Option<usize>> = const { Cell::new(None) };
@@ -15181,38 +15154,38 @@ std::thread_local! {
     static FAIL_NEXT_JSON_CODEC_SOURCE_CLONE: Cell<bool> = const { Cell::new(false) };
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 struct JsonRuntimeAllocationBudgetGuard(Option<usize>);
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl Drop for JsonRuntimeAllocationBudgetGuard {
     fn drop(&mut self) {
         JSON_RUNTIME_ALLOCATION_BUDGET.with(|budget| budget.set(self.0));
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 struct JsonRuntimeNodeLimitGuard(Option<usize>);
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl Drop for JsonRuntimeNodeLimitGuard {
     fn drop(&mut self) {
         JSON_RUNTIME_NODE_LIMIT.with(|limit| limit.set(self.0));
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 struct JsonRuntimeConversionAllocationBudgetGuard(Option<usize>);
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl Drop for JsonRuntimeConversionAllocationBudgetGuard {
     fn drop(&mut self) {
         JSON_RUNTIME_CONVERSION_ALLOCATION_BUDGET.with(|budget| budget.set(self.0));
     }
 }
 
-#[cfg(test)]
-pub(crate) fn with_json_runtime_allocation_budget<T>(
+#[cfg(any(test, feature = "test-support"))]
+pub fn with_json_runtime_allocation_budget<T>(
     successful_allocations: usize,
     operation: impl FnOnce() -> T,
 ) -> T {
@@ -15222,15 +15195,15 @@ pub(crate) fn with_json_runtime_allocation_budget<T>(
     operation()
 }
 
-#[cfg(test)]
-pub(crate) fn with_json_runtime_node_limit<T>(limit: usize, operation: impl FnOnce() -> T) -> T {
+#[cfg(any(test, feature = "test-support"))]
+pub fn with_json_runtime_node_limit<T>(limit: usize, operation: impl FnOnce() -> T) -> T {
     let previous = JSON_RUNTIME_NODE_LIMIT.with(|current| current.replace(Some(limit)));
     let _guard = JsonRuntimeNodeLimitGuard(previous);
     operation()
 }
 
-#[cfg(test)]
-pub(crate) fn with_json_runtime_conversion_allocation_budget<T>(
+#[cfg(any(test, feature = "test-support"))]
+pub fn with_json_runtime_conversion_allocation_budget<T>(
     successful_allocations: usize,
     operation: impl FnOnce() -> T,
 ) -> T {
@@ -15241,7 +15214,7 @@ pub(crate) fn with_json_runtime_conversion_allocation_budget<T>(
 }
 
 fn json_runtime_node_limit() -> usize {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     if let Some(limit) = JSON_RUNTIME_NODE_LIMIT.with(Cell::get) {
         return limit;
     }
@@ -15269,7 +15242,7 @@ enum JsonCodecServiceError {
     Panicked(String),
 }
 
-pub(crate) struct JsonCodecReservation {
+pub struct JsonCodecReservation {
     pool: Arc<JsonCodecPool>,
     submitted: bool,
 }
@@ -15326,19 +15299,17 @@ where
     Ok((source, reservation))
 }
 
-pub(crate) fn prepare_json_codec_source<F>(
-    clone_source: F,
-) -> Result<(String, JsonCodecReservation)>
+pub fn prepare_json_codec_source<F>(clone_source: F) -> Result<(String, JsonCodecReservation)>
 where
     F: FnOnce() -> Result<String>,
 {
     prepare_json_codec_source_with_pool(json_codec_pool(), clone_source)
 }
 
-pub(crate) fn clone_json_codec_source(source: &str) -> Result<String> {
-    #[cfg(test)]
+pub fn clone_json_codec_source(source: &str) -> Result<String> {
+    #[cfg(any(test, feature = "test-support"))]
     JSON_CODEC_SOURCE_CLONE_COUNT.with(|count| count.set(count.get() + 1));
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     if FAIL_NEXT_JSON_CODEC_SOURCE_CLONE.with(|fail| fail.replace(false)) {
         return Err(Diagnostic::coded(
             "AU4005",
@@ -15435,7 +15406,7 @@ fn json_parse_allocation_error() -> Diagnostic {
 }
 
 fn json_runtime_conversion_allocation_checkpoint() -> Result<()> {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     {
         let injected_failure =
             JSON_RUNTIME_CONVERSION_ALLOCATION_BUDGET.with(|budget| match budget.get() {
@@ -15457,7 +15428,7 @@ fn json_runtime_conversion_allocation_checkpoint() -> Result<()> {
 }
 
 fn json_parse_allocation_checkpoint() -> Result<()> {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     {
         let injected_failure = JSON_RUNTIME_ALLOCATION_BUDGET.with(|budget| match budget.get() {
             Some(0) => true,
@@ -15519,7 +15490,7 @@ fn json_runtime_enum_value(
     }))
 }
 
-pub(crate) fn json_value_to_runtime(value: JsonValue) -> Result<Value> {
+pub fn json_value_to_runtime(value: JsonValue) -> Result<Value> {
     enum MaterializationFrame {
         Array {
             remaining: std::vec::IntoIter<JsonValue>,
@@ -15676,7 +15647,7 @@ fn json_parse_failure_value(error: JsonCodecError) -> Result<Value> {
     json_runtime_enum_value("Result", "Err", json_runtime_single_payload(error)?)
 }
 
-pub(crate) fn json_parse_owned_to_runtime(
+pub fn json_parse_owned_to_runtime(
     source: String,
     reservation: JsonCodecReservation,
 ) -> Result<Value> {
@@ -15697,12 +15668,12 @@ pub(crate) fn json_parse_owned_to_runtime(
 }
 
 #[cfg(test)]
-pub(crate) fn json_parse_to_runtime(source: &str) -> Result<Value> {
+pub fn json_parse_to_runtime(source: &str) -> Result<Value> {
     let (source, reservation) = prepare_json_codec_source(|| clone_json_codec_source(source))?;
     json_parse_owned_to_runtime(source, reservation)
 }
 
-pub(crate) fn runtime_value_to_json(value: &Value) -> Result<JsonValue> {
+pub fn runtime_value_to_json(value: &Value) -> Result<JsonValue> {
     enum ConversionFrame<'a> {
         Array {
             values: &'a [Value],
@@ -15921,7 +15892,7 @@ pub(crate) fn runtime_value_to_json(value: &Value) -> Result<JsonValue> {
     }
 }
 
-pub(crate) fn json_int_metadata_is_exact(value: &IntegerValue) -> bool {
+pub fn json_int_metadata_is_exact(value: &IntegerValue) -> bool {
     value.runtime_kind() == Some(IntegerKind::Int64)
 }
 
@@ -15932,11 +15903,11 @@ fn json_exact_nominal_type(value: &Type, expected_name: &str) -> bool {
     )
 }
 
-pub(crate) fn json_array_metadata_is_exact(value: &VecValue) -> bool {
+pub fn json_array_metadata_is_exact(value: &VecValue) -> bool {
     json_exact_nominal_type(&value.element_type, "json.Value")
 }
 
-pub(crate) fn json_object_metadata_is_exact(value: &MapValue) -> bool {
+pub fn json_object_metadata_is_exact(value: &MapValue) -> bool {
     json_exact_nominal_type(&value.key_type, "str")
         && json_exact_nominal_type(&value.value_type, "json.Value")
 }
@@ -16046,7 +16017,7 @@ fn json_parse_error_value(error: JsonCodecError) -> Result<Value> {
     }
 }
 
-pub(crate) fn json_dump_error_to_diagnostic(error: JsonCodecError) -> Diagnostic {
+pub fn json_dump_error_to_diagnostic(error: JsonCodecError) -> Diagnostic {
     let code = match error {
         JsonCodecError::InvalidIndent { .. } | JsonCodecError::NestingTooDeep { .. } => "AU4003",
         JsonCodecError::NonFiniteNumber => "AU4001",
@@ -16333,8 +16304,8 @@ fn evaluate_host_builtin_with_args(
             Ok(std::env::var(name)
                 .ok()
                 .map(Value::String)
-                .map(|text| optional_present(crate::sema::Type::named("str"), text))
-                .unwrap_or_else(|| optional_absent(crate::sema::Type::named("str"))))
+                .map(|text| optional_present(aura_core::types::Type::named("str"), text))
+                .unwrap_or_else(|| optional_absent(aura_core::types::Type::named("str"))))
         }
         "sys::current_dir" => {
             host_expect_arity(name, &args, 0)?;
@@ -16390,8 +16361,8 @@ fn evaluate_host_builtin_with_args(
             };
             Ok(value
                 .map(Value::String)
-                .map(|text| optional_present(crate::sema::Type::named("str"), text))
-                .unwrap_or_else(|| optional_absent(crate::sema::Type::named("str"))))
+                .map(|text| optional_present(aura_core::types::Type::named("str"), text))
+                .unwrap_or_else(|| optional_absent(aura_core::types::Type::named("str"))))
         }
         "path::is_absolute" => {
             host_expect_arity(name, &args, 1)?;
@@ -16429,7 +16400,7 @@ fn evaluate_host_builtin_with_args(
             host_expect_arity(name, &args, 1)?;
             Ok(match host_json_exact_payload(&args[0], "Bool", name)? {
                 Some(Value::Bool(value)) => {
-                    optional_present(crate::sema::Type::named("bool"), Value::Bool(value))
+                    optional_present(aura_core::types::Type::named("bool"), Value::Bool(value))
                 }
                 Some(_) => {
                     return Err(Diagnostic::coded(
@@ -16437,14 +16408,14 @@ fn evaluate_host_builtin_with_args(
                         "malformed runtime `json.Value.Bool` payload in `json::as_bool`",
                     ))
                 }
-                None => optional_absent(crate::sema::Type::named("bool")),
+                None => optional_absent(aura_core::types::Type::named("bool")),
             })
         }
         "json::as_int" => {
             host_expect_arity(name, &args, 1)?;
             Ok(match host_json_exact_payload(&args[0], "Int", name)? {
                 Some(Value::Int(value)) if json_int_metadata_is_exact(&value) => {
-                    optional_present(crate::sema::Type::named("int64"), Value::Int(value))
+                    optional_present(aura_core::types::Type::named("int64"), Value::Int(value))
                 }
                 Some(_) => {
                     return Err(Diagnostic::coded(
@@ -16452,22 +16423,23 @@ fn evaluate_host_builtin_with_args(
                         "malformed runtime `json.Value.Int` payload in `json::as_int`",
                     ))
                 }
-                None => optional_absent(crate::sema::Type::named("int64")),
+                None => optional_absent(aura_core::types::Type::named("int64")),
             })
         }
         "json::as_float" => {
             host_expect_arity(name, &args, 1)?;
             Ok(match host_json_exact_payload(&args[0], "Float", name)? {
-                Some(Value::Float(value)) => {
-                    optional_present(crate::sema::Type::named("float64"), Value::Float(value))
-                }
+                Some(Value::Float(value)) => optional_present(
+                    aura_core::types::Type::named("float64"),
+                    Value::Float(value),
+                ),
                 Some(_) => {
                     return Err(Diagnostic::coded(
                         "AU4001",
                         "malformed runtime `json.Value.Float` payload in `json::as_float`",
                     ))
                 }
-                None => optional_absent(crate::sema::Type::named("float64")),
+                None => optional_absent(aura_core::types::Type::named("float64")),
             })
         }
         "json::into_string" => {
@@ -16622,11 +16594,11 @@ fn evaluate_host_builtin_with_args(
     }
 }
 
-pub(crate) fn evaluate_host_builtin(name: &str, args: Vec<Value>) -> Result<Value> {
+pub fn evaluate_host_builtin(name: &str, args: Vec<Value>) -> Result<Value> {
     evaluate_host_builtin_with_args(name, args, None)
 }
 
-pub(crate) fn evaluate_host_builtin_with_program_args(
+pub fn evaluate_host_builtin_with_program_args(
     name: &str,
     args: Vec<Value>,
     program_args: &[String],
@@ -16634,7 +16606,7 @@ pub(crate) fn evaluate_host_builtin_with_program_args(
     evaluate_host_builtin_with_args(name, args, Some(program_args))
 }
 
-pub(crate) fn send_error_closed(value: Value) -> Value {
+pub fn send_error_closed(value: Value) -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: "SendError".to_string(),
         variant_name: "Closed".to_string(),
@@ -16642,7 +16614,7 @@ pub(crate) fn send_error_closed(value: Value) -> Value {
     })
 }
 
-pub(crate) fn send_error_cancelled(value: Value) -> Value {
+pub fn send_error_cancelled(value: Value) -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: "SendError".to_string(),
         variant_name: "Cancelled".to_string(),
@@ -16650,7 +16622,7 @@ pub(crate) fn send_error_cancelled(value: Value) -> Value {
     })
 }
 
-pub(crate) fn send_error_timed_out(value: Value) -> Value {
+pub fn send_error_timed_out(value: Value) -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: "SendError".to_string(),
         variant_name: "TimedOut".to_string(),
@@ -16658,7 +16630,7 @@ pub(crate) fn send_error_timed_out(value: Value) -> Value {
     })
 }
 
-pub(crate) fn send_error_full(value: Value) -> Value {
+pub fn send_error_full(value: Value) -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: "SendError".to_string(),
         variant_name: "Full".to_string(),
@@ -16666,7 +16638,7 @@ pub(crate) fn send_error_full(value: Value) -> Value {
     })
 }
 
-pub(crate) fn queue_receive_item(value: Value) -> Value {
+pub fn queue_receive_item(value: Value) -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: "QueueReceive".to_string(),
         variant_name: "Item".to_string(),
@@ -16674,7 +16646,7 @@ pub(crate) fn queue_receive_item(value: Value) -> Value {
     })
 }
 
-pub(crate) fn queue_receive_closed() -> Value {
+pub fn queue_receive_closed() -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: "QueueReceive".to_string(),
         variant_name: "Closed".to_string(),
@@ -16682,7 +16654,7 @@ pub(crate) fn queue_receive_closed() -> Value {
     })
 }
 
-pub(crate) fn queue_receive_timed_out() -> Value {
+pub fn queue_receive_timed_out() -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: "QueueReceive".to_string(),
         variant_name: "TimedOut".to_string(),
@@ -16690,7 +16662,7 @@ pub(crate) fn queue_receive_timed_out() -> Value {
     })
 }
 
-pub(crate) fn queue_receive_cancelled() -> Value {
+pub fn queue_receive_cancelled() -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: "QueueReceive".to_string(),
         variant_name: "Cancelled".to_string(),
@@ -16698,7 +16670,7 @@ pub(crate) fn queue_receive_cancelled() -> Value {
     })
 }
 
-pub(crate) fn task_result_ready(value: Value) -> Value {
+pub fn task_result_ready(value: Value) -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: "TaskResult".to_string(),
         variant_name: "Ready".to_string(),
@@ -16706,7 +16678,7 @@ pub(crate) fn task_result_ready(value: Value) -> Value {
     })
 }
 
-pub(crate) fn task_result_error(message: String) -> Value {
+pub fn task_result_error(message: String) -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: "TaskResult".to_string(),
         variant_name: "Error".to_string(),
@@ -16714,7 +16686,7 @@ pub(crate) fn task_result_error(message: String) -> Value {
     })
 }
 
-pub(crate) fn task_result_timed_out() -> Value {
+pub fn task_result_timed_out() -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: "TaskResult".to_string(),
         variant_name: "TimedOut".to_string(),
@@ -16722,7 +16694,7 @@ pub(crate) fn task_result_timed_out() -> Value {
     })
 }
 
-pub(crate) fn task_result_cancelled() -> Value {
+pub fn task_result_cancelled() -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: "TaskResult".to_string(),
         variant_name: "Cancelled".to_string(),
@@ -16730,7 +16702,7 @@ pub(crate) fn task_result_cancelled() -> Value {
     })
 }
 
-pub(crate) fn select_outcome_queue(index: i64, outcome: Value) -> Value {
+pub fn select_outcome_queue(index: i64, outcome: Value) -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: "SelectOutcome".to_string(),
         variant_name: "Queue".to_string(),
@@ -16738,7 +16710,7 @@ pub(crate) fn select_outcome_queue(index: i64, outcome: Value) -> Value {
     })
 }
 
-pub(crate) fn select_outcome_task(index: i64, outcome: Value) -> Value {
+pub fn select_outcome_task(index: i64, outcome: Value) -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: "SelectOutcome".to_string(),
         variant_name: "Task".to_string(),
@@ -16746,7 +16718,7 @@ pub(crate) fn select_outcome_task(index: i64, outcome: Value) -> Value {
     })
 }
 
-pub(crate) fn select_outcome_deadline(index: i64) -> Value {
+pub fn select_outcome_deadline(index: i64) -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: "SelectOutcome".to_string(),
         variant_name: "Deadline".to_string(),
@@ -16754,7 +16726,7 @@ pub(crate) fn select_outcome_deadline(index: i64) -> Value {
     })
 }
 
-pub(crate) fn select_outcome_cancelled() -> Value {
+pub fn select_outcome_cancelled() -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: "SelectOutcome".to_string(),
         variant_name: "Cancelled".to_string(),
@@ -16762,7 +16734,7 @@ pub(crate) fn select_outcome_cancelled() -> Value {
     })
 }
 
-pub(crate) fn wait_any_ready(index: i64, value: Value) -> Value {
+pub fn wait_any_ready(index: i64, value: Value) -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: "WaitAny".to_string(),
         variant_name: "Ready".to_string(),
@@ -16770,7 +16742,7 @@ pub(crate) fn wait_any_ready(index: i64, value: Value) -> Value {
     })
 }
 
-pub(crate) fn wait_any_error(index: i64, message: String) -> Value {
+pub fn wait_any_error(index: i64, message: String) -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: "WaitAny".to_string(),
         variant_name: "Error".to_string(),
@@ -16781,7 +16753,7 @@ pub(crate) fn wait_any_error(index: i64, message: String) -> Value {
     })
 }
 
-pub(crate) fn wait_any_timed_out() -> Value {
+pub fn wait_any_timed_out() -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: "WaitAny".to_string(),
         variant_name: "TimedOut".to_string(),
@@ -16789,7 +16761,7 @@ pub(crate) fn wait_any_timed_out() -> Value {
     })
 }
 
-pub(crate) fn wait_any_cancelled() -> Value {
+pub fn wait_any_cancelled() -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: "WaitAny".to_string(),
         variant_name: "Cancelled".to_string(),
@@ -16797,7 +16769,7 @@ pub(crate) fn wait_any_cancelled() -> Value {
     })
 }
 
-pub(crate) fn wait_all_ready(values: Vec<Value>) -> Value {
+pub fn wait_all_ready(values: Vec<Value>) -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: "WaitAll".to_string(),
         variant_name: "Ready".to_string(),
@@ -16808,7 +16780,7 @@ pub(crate) fn wait_all_ready(values: Vec<Value>) -> Value {
     })
 }
 
-pub(crate) fn wait_all_error(index: i64, message: String) -> Value {
+pub fn wait_all_error(index: i64, message: String) -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: "WaitAll".to_string(),
         variant_name: "Error".to_string(),
@@ -16819,7 +16791,7 @@ pub(crate) fn wait_all_error(index: i64, message: String) -> Value {
     })
 }
 
-pub(crate) fn wait_all_timed_out() -> Value {
+pub fn wait_all_timed_out() -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: "WaitAll".to_string(),
         variant_name: "TimedOut".to_string(),
@@ -16827,7 +16799,7 @@ pub(crate) fn wait_all_timed_out() -> Value {
     })
 }
 
-pub(crate) fn wait_all_cancelled() -> Value {
+pub fn wait_all_cancelled() -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: "WaitAll".to_string(),
         variant_name: "Cancelled".to_string(),
@@ -16835,7 +16807,7 @@ pub(crate) fn wait_all_cancelled() -> Value {
     })
 }
 
-pub(crate) fn process_stdio_inherit() -> Value {
+pub fn process_stdio_inherit() -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: "Stdio".to_string(),
         variant_name: "Inherit".to_string(),
@@ -16843,7 +16815,7 @@ pub(crate) fn process_stdio_inherit() -> Value {
     })
 }
 
-pub(crate) fn process_stdio_null() -> Value {
+pub fn process_stdio_null() -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: "Stdio".to_string(),
         variant_name: "Null".to_string(),
@@ -16851,7 +16823,7 @@ pub(crate) fn process_stdio_null() -> Value {
     })
 }
 
-pub(crate) fn process_stdio_pipe() -> Value {
+pub fn process_stdio_pipe() -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: "Stdio".to_string(),
         variant_name: "Pipe".to_string(),
@@ -16859,7 +16831,7 @@ pub(crate) fn process_stdio_pipe() -> Value {
     })
 }
 
-pub(crate) fn process_exit_status(status: StdExitStatus) -> Value {
+pub fn process_exit_status(status: StdExitStatus) -> Value {
     #[cfg(unix)]
     {
         use std::os::unix::process::ExitStatusExt;
@@ -16879,7 +16851,7 @@ pub(crate) fn process_exit_status(status: StdExitStatus) -> Value {
     })
 }
 
-pub(crate) fn process_wait_exited(status: StdExitStatus) -> Value {
+pub fn process_wait_exited(status: StdExitStatus) -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: "Wait".to_string(),
         variant_name: "Exited".to_string(),
@@ -16887,7 +16859,7 @@ pub(crate) fn process_wait_exited(status: StdExitStatus) -> Value {
     })
 }
 
-pub(crate) fn process_wait_timed_out() -> Value {
+pub fn process_wait_timed_out() -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: "Wait".to_string(),
         variant_name: "TimedOut".to_string(),
@@ -16895,7 +16867,7 @@ pub(crate) fn process_wait_timed_out() -> Value {
     })
 }
 
-pub(crate) fn process_wait_cancelled() -> Value {
+pub fn process_wait_cancelled() -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: "Wait".to_string(),
         variant_name: "Cancelled".to_string(),
@@ -16903,7 +16875,7 @@ pub(crate) fn process_wait_cancelled() -> Value {
     })
 }
 
-pub(crate) fn process_wait_failed(error: Value) -> Value {
+pub fn process_wait_failed(error: Value) -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: "Wait".to_string(),
         variant_name: "Failed".to_string(),
@@ -16911,7 +16883,7 @@ pub(crate) fn process_wait_failed(error: Value) -> Value {
     })
 }
 
-pub(crate) fn process_supervisor_wait_event(event: Value) -> Value {
+pub fn process_supervisor_wait_event(event: Value) -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: "SupervisorWait".to_string(),
         variant_name: "Event".to_string(),
@@ -16919,7 +16891,7 @@ pub(crate) fn process_supervisor_wait_event(event: Value) -> Value {
     })
 }
 
-pub(crate) fn process_supervisor_wait_timed_out() -> Value {
+pub fn process_supervisor_wait_timed_out() -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: "SupervisorWait".to_string(),
         variant_name: "TimedOut".to_string(),
@@ -16927,7 +16899,7 @@ pub(crate) fn process_supervisor_wait_timed_out() -> Value {
     })
 }
 
-pub(crate) fn process_supervisor_wait_cancelled() -> Value {
+pub fn process_supervisor_wait_cancelled() -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: "SupervisorWait".to_string(),
         variant_name: "Cancelled".to_string(),
@@ -16935,7 +16907,7 @@ pub(crate) fn process_supervisor_wait_cancelled() -> Value {
     })
 }
 
-pub(crate) fn process_supervisor_event_exited(
+pub fn process_supervisor_event_exited(
     name: String,
     status: StdExitStatus,
     restart_count: IntegerValue,
@@ -16951,7 +16923,7 @@ pub(crate) fn process_supervisor_event_exited(
     })
 }
 
-pub(crate) fn process_supervisor_event_restarted(
+pub fn process_supervisor_event_restarted(
     name: String,
     status: StdExitStatus,
     restart_count: IntegerValue,
@@ -16967,7 +16939,7 @@ pub(crate) fn process_supervisor_event_restarted(
     })
 }
 
-pub(crate) fn process_supervisor_event_failed(
+pub fn process_supervisor_event_failed(
     name: String,
     error: Value,
     restart_count: IntegerValue,
@@ -16979,7 +16951,7 @@ pub(crate) fn process_supervisor_event_failed(
     })
 }
 
-pub(crate) fn process_error_no_command() -> Value {
+pub fn process_error_no_command() -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: "Error".to_string(),
         variant_name: "NoCommand".to_string(),
@@ -16987,7 +16959,7 @@ pub(crate) fn process_error_no_command() -> Value {
     })
 }
 
-pub(crate) fn process_error_timed_out() -> Value {
+pub fn process_error_timed_out() -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: "Error".to_string(),
         variant_name: "TimedOut".to_string(),
@@ -16995,7 +16967,7 @@ pub(crate) fn process_error_timed_out() -> Value {
     })
 }
 
-pub(crate) fn process_error_cancelled() -> Value {
+pub fn process_error_cancelled() -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: "Error".to_string(),
         variant_name: "Cancelled".to_string(),
@@ -17003,7 +16975,7 @@ pub(crate) fn process_error_cancelled() -> Value {
     })
 }
 
-pub(crate) fn process_error_io(error: io::Error) -> Value {
+pub fn process_error_io(error: io::Error) -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: "Error".to_string(),
         variant_name: "Io".to_string(),
@@ -17011,7 +16983,7 @@ pub(crate) fn process_error_io(error: io::Error) -> Value {
     })
 }
 
-pub(crate) fn process_error_spawn(message: String) -> Value {
+pub fn process_error_spawn(message: String) -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: "Error".to_string(),
         variant_name: "Spawn".to_string(),
@@ -17019,7 +16991,7 @@ pub(crate) fn process_error_spawn(message: String) -> Value {
     })
 }
 
-pub(crate) fn process_error_other(message: String) -> Value {
+pub fn process_error_other(message: String) -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: "Error".to_string(),
         variant_name: "Other".to_string(),
@@ -17027,7 +16999,7 @@ pub(crate) fn process_error_other(message: String) -> Value {
     })
 }
 
-pub(crate) fn decode_process_stdio(value: &Value, label: &str) -> Result<ProcessStdioConfig> {
+pub fn decode_process_stdio(value: &Value, label: &str) -> Result<ProcessStdioConfig> {
     match value {
         Value::EnumVariant(variant)
             if matches!(variant.enum_name.as_str(), "Stdio" | "process.Stdio") =>
@@ -17050,10 +17022,7 @@ pub(crate) fn decode_process_stdio(value: &Value, label: &str) -> Result<Process
     }
 }
 
-pub(crate) fn decode_process_restart_policy(
-    value: &Value,
-    label: &str,
-) -> Result<ProcessRestartPolicy> {
+pub fn decode_process_restart_policy(value: &Value, label: &str) -> Result<ProcessRestartPolicy> {
     match value {
         Value::EnumVariant(variant)
             if matches!(
@@ -17079,7 +17048,7 @@ pub(crate) fn decode_process_restart_policy(
     }
 }
 
-pub(crate) fn io_error(error: io::Error) -> Value {
+pub fn io_error(error: io::Error) -> Value {
     let (variant_name, payloads) = match error.kind() {
         io::ErrorKind::NotFound => ("NotFound", Vec::new()),
         io::ErrorKind::PermissionDenied => ("PermissionDenied", Vec::new()),
@@ -17115,7 +17084,3 @@ pub(crate) fn io_error(error: io::Error) -> Value {
 #[cfg(test)]
 #[path = "runtime_value_tests.rs"]
 mod tests;
-
-#[cfg(test)]
-#[path = "runtime_value_task_stack_tests.rs"]
-mod task_stack_tests;

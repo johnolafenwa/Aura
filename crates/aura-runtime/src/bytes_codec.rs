@@ -6,10 +6,10 @@ use base64::Engine as _;
 use sha2::{Digest, Sha256};
 
 const HEX_DIGITS: &[u8; 16] = b"0123456789abcdef";
-pub(crate) const MAX_CODEC_OUTPUT_LEN: usize = i32::MAX as usize;
+pub const MAX_CODEC_OUTPUT_LEN: usize = i32::MAX as usize;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum BytesDataError {
+pub enum BytesDataError {
     InvalidUtf8 { index: usize },
     InvalidHexLength { length: usize },
     InvalidHexDigit { index: usize, byte: u8 },
@@ -17,13 +17,13 @@ pub(crate) enum BytesDataError {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum BytesResourceError {
+pub enum BytesResourceError {
     OutputTooLarge { maximum: usize },
     AllocationFailed,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum BytesCodecError {
+pub enum BytesCodecError {
     Data(BytesDataError),
     Resource(BytesResourceError),
 }
@@ -92,11 +92,11 @@ impl From<BytesResourceError> for BytesCodecError {
     }
 }
 
-pub(crate) fn hex_encoded_len(input_len: usize) -> Result<usize, BytesResourceError> {
+pub fn hex_encoded_len(input_len: usize) -> Result<usize, BytesResourceError> {
     checked_codec_output_len(input_len.checked_mul(2))
 }
 
-pub(crate) fn base64_encoded_len(input_len: usize) -> Result<usize, BytesResourceError> {
+pub fn base64_encoded_len(input_len: usize) -> Result<usize, BytesResourceError> {
     let encoded_len = input_len
         .checked_add(2)
         .map(|length| length / 3)
@@ -104,14 +104,14 @@ pub(crate) fn base64_encoded_len(input_len: usize) -> Result<usize, BytesResourc
     checked_codec_output_len(encoded_len)
 }
 
-pub(crate) fn string_to_bytes(text: &str) -> Result<Vec<u8>, BytesCodecError> {
+pub fn string_to_bytes(text: &str) -> Result<Vec<u8>, BytesCodecError> {
     let output_len = checked_codec_output_len(Some(text.len()))?;
     let mut bytes = try_byte_buffer(output_len)?;
     bytes.copy_from_slice(text.as_bytes());
     Ok(bytes)
 }
 
-pub(crate) fn string_from_bytes(bytes: &[u8]) -> Result<String, BytesCodecError> {
+pub fn string_from_bytes(bytes: &[u8]) -> Result<String, BytesCodecError> {
     let text = str::from_utf8(bytes).map_err(|error| BytesDataError::InvalidUtf8 {
         index: error.valid_up_to(),
     })?;
@@ -119,7 +119,7 @@ pub(crate) fn string_from_bytes(bytes: &[u8]) -> Result<String, BytesCodecError>
     try_owned_string(text).map_err(Into::into)
 }
 
-pub(crate) fn hex_encode(bytes: &[u8]) -> Result<String, BytesCodecError> {
+pub fn hex_encode(bytes: &[u8]) -> Result<String, BytesCodecError> {
     let output_len = hex_encoded_len(bytes.len())?;
     let mut output = try_string_with_capacity(output_len)?;
     for byte in bytes {
@@ -129,7 +129,7 @@ pub(crate) fn hex_encode(bytes: &[u8]) -> Result<String, BytesCodecError> {
     Ok(output)
 }
 
-pub(crate) fn hex_decode(text: &str) -> Result<Vec<u8>, BytesCodecError> {
+pub fn hex_decode(text: &str) -> Result<Vec<u8>, BytesCodecError> {
     let source = text.as_bytes();
     if !source.len().is_multiple_of(2) {
         return Err(BytesDataError::InvalidHexLength {
@@ -153,7 +153,7 @@ pub(crate) fn hex_decode(text: &str) -> Result<Vec<u8>, BytesCodecError> {
     Ok(output)
 }
 
-pub(crate) fn base64_encode(bytes: &[u8]) -> Result<String, BytesCodecError> {
+pub fn base64_encode(bytes: &[u8]) -> Result<String, BytesCodecError> {
     let output_len = base64_encoded_len(bytes.len())?;
     let mut output = try_byte_buffer(output_len)?;
     let written = match STANDARD.encode_slice(bytes, &mut output) {
@@ -167,7 +167,7 @@ pub(crate) fn base64_encode(bytes: &[u8]) -> Result<String, BytesCodecError> {
     Ok(unsafe { String::from_utf8_unchecked(output) })
 }
 
-pub(crate) fn base64_decode(text: &str) -> Result<Vec<u8>, BytesCodecError> {
+pub fn base64_decode(text: &str) -> Result<Vec<u8>, BytesCodecError> {
     let layout = validate_base64(text)?;
     let mut output = try_byte_buffer(layout.buffer_len)?;
     let mut output_index = 0;
@@ -206,14 +206,14 @@ pub(crate) fn base64_decode(text: &str) -> Result<Vec<u8>, BytesCodecError> {
     Ok(output)
 }
 
-pub(crate) fn sha256_bytes(bytes: &[u8]) -> Result<Vec<u8>, BytesCodecError> {
+pub fn sha256_bytes(bytes: &[u8]) -> Result<Vec<u8>, BytesCodecError> {
     let digest = Sha256::digest(bytes);
     let mut output = try_byte_buffer(digest.len())?;
     output.copy_from_slice(&digest);
     Ok(output)
 }
 
-pub(crate) fn sha256_string(text: &str) -> Result<Vec<u8>, BytesCodecError> {
+pub fn sha256_string(text: &str) -> Result<Vec<u8>, BytesCodecError> {
     sha256_bytes(text.as_bytes())
 }
 

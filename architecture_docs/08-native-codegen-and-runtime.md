@@ -12,7 +12,7 @@ In Aura, the direct backend:
 - uses Cranelift to emit native code into an object file
 - links that object file against Aura's direct runtime
 
-The code generator lives in [`native_codegen.rs`](../crates/aura-compiler/src/native_codegen.rs). The runtime ABI it targets lives in [`native_runtime.rs`](../crates/aura-compiler/src/native_runtime.rs).
+The code generator lives in [`native_codegen.rs`](../crates/aura-compiler/src/native_codegen.rs). The runtime ABI it targets lives in [`native_runtime.rs`](../crates/aura-runtime/src/native_runtime.rs).
 
 ## Aura's two native build modes
 
@@ -226,9 +226,9 @@ not a second language-level cleanup mechanism.
 ## Files to study
 
 - [`native_codegen.rs`](../crates/aura-compiler/src/native_codegen.rs)
-- [`native_runtime.rs`](../crates/aura-compiler/src/native_runtime.rs)
+- [`native_runtime.rs`](../crates/aura-runtime/src/native_runtime.rs)
 - [`native_codegen_tests.rs`](../crates/aura-compiler/src/native_codegen_tests.rs)
-- [`native_runtime_tests.rs`](../crates/aura-compiler/src/native_runtime_tests.rs)
+- [`native_runtime_tests.rs`](../crates/aura-runtime/src/native_runtime_tests.rs)
 
 ## What comes next
 

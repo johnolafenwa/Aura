@@ -42,7 +42,7 @@ All references in this table are in
 ## Native runtime inventory
 
 All references in this table are in
-[`crates/aura-compiler/src/native_runtime.rs`](../crates/aura-compiler/src/native_runtime.rs).
+[`crates/aura-runtime/src/native_runtime.rs`](../crates/aura-runtime/src/native_runtime.rs).
 A runtime must still implement dynamic checks and host I/O. The goal is to make
 those operations specified and shared, not to move operating-system execution
 into compile time.

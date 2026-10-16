@@ -2,6 +2,18 @@
 
 Last updated: 2026-10-16
 
+## Private classes across modules on MIR (in review)
+
+- Target: fix `AU4001` "unknown MIR class" when an imported module uses its
+  own private class, as John reported against 0.4.1.
+- Done: MIR lowering registers every class an imported module declares,
+  not only its public ones. Two regression tests in
+  `crates/aura-compiler/tests/modules.rs` cover a direct import and a
+  transitive import with a private resource class and a private generic
+  class. Details are in `2026-10-16-private-class-mir-fix.md`.
+- Verification: hosted CI `38915135045` passed on Linux and macOS.
+- Remaining: review and merge.
+
 ## Batch 5: lean native binaries (in progress)
 
 - Target: implement the ratified
@@ -17,10 +29,21 @@ Last updated: 2026-10-16
   generated function. Linux hello world is 1,034,040 bytes; macOS arm64 is
   926,472 bytes.
 - Verification: see `2026-10-16-batch-5-step-0.md`.
-- Step 1 in review: `crates/aura-core` holds the shared type model,
+- Step 1 done, merged in PR #57: `crates/aura-core` holds the shared type model,
   diagnostics, integer helpers, operators, task stack bounds, and the type
   budget. `aura-compiler` re-exports them, so its paths are unchanged.
-- Remaining: steps 2 through 6 of the delivery plan, one PR per step.
+- Step 2a done locally: `crates/aura-runtime` holds the runtime. A static
+  table carries the dynamic host builtin ABI the runtime used to rebuild
+  from the checker registry.
+- Census for 2b: of 1,050 examples, benchmarks, and pass fixtures, 30 still
+  used the launcher. 27 are modules with no `main`. Three looked like
+  direct-backend gaps.
+- Step 2b done locally: two MIR union injection miscompiles fixed, and
+  `aura build` always emits directly. The third census program also fails
+  under `aura run`: the checker lets a shared match binding call a resource
+  method that MIR treats as mutating. That needs a language decision. See
+  `2026-10-16-batch-5-step-2b.md`.
+- Remaining: steps 2c through 6 of the delivery plan, one PR per step.
 
 ## Aura 0.4.1 preview release (complete)
 

@@ -116,15 +116,13 @@ The pool follows these rules:
 ## Building
 
 ```bash
-cargo run -p aura -- build --backend auto -o ./target/app app.au
-cargo run -p aura -- build --backend direct -o ./target/app app.au
+cargo run -p aura -- build -o ./target/app app.au
 ```
 
-`--backend auto` is the default. It first tries the maintained direct backend.
-When direct emission is unavailable, it may fall back to a native launcher that
-embeds serialized MIR and the MIR runtime. `--backend direct` forbids that
-fallback. Both forms produce standalone executables, and both must implement
-the same checked language behavior.
+`aura build` compiles the program to native code with the direct backend and
+links a standalone executable. `--backend auto` and `--backend direct` are
+accepted and select the same backend. A file without a `main` function or
+top-level statements fails with `AU2999`, because it has no entry point.
 
 An installed release archive finds its native runtime relative to `bin/aura`,
 under `lib/aura`. It needs only a host C compiler for the final link. A binary
@@ -145,7 +143,7 @@ The option follows these rules:
   normal stripping policy.
 - It is part of the native cache key, so profiling executables and normally
   stripped executables use separate cache entries.
-- It applies to both direct binaries and generated MIR launchers.
+- It applies to every built executable.
 - It changes symbol retention, not language behavior or source diagnostics.
 
 It does not restore symbols already removed from the runtime archive. To
@@ -161,7 +159,7 @@ the runtime's `extern "C-unwind"` boundaries. This profile reduces shipped
 compiler metadata. It does not strip the runtime archive's linkable symbols or
 change the default MIR execution mode.
 
-Direct builds and embedded-MIR launcher builds both request unused-section
+Every build requests unused-section
 removal: `-Wl,-dead_strip` on macOS and `-Wl,--gc-sections` on Linux. After a
 successful link, Aura runs `strip -S -x` on the user executable. This removes
 debug and local symbols but keeps globals for process-global FFI.
@@ -622,9 +620,8 @@ diagnostic information in their zero-based editor-coordinate shapes. There,
 
 `check` runs no program code. `run` executes checked MIR and forwards the
 arguments after `--` to `sys.args()`. `build` emits a standalone host
-executable. With `auto`, it tries the direct backend and may use the
-MIR-launcher fallback. With `direct`, failure to emit directly is an error.
-Both built forms must keep the checked language semantics.
+executable with the direct backend. A failure to emit directly is an error.
+The built program keeps the checked language semantics.
 
 Human-format `check` success writes exactly `ok` followed by a newline.
 JSON-format success writes a schema-version-1 object with an empty diagnostic
@@ -634,8 +631,7 @@ stream and status rules.
 ## Ownership And Evaluation Order
 
 The choice of CLI command or output format does not change Aura ownership,
-borrowing, cleanup, or evaluation order. `run`, a directly built program, and
-a MIR-launcher build must observe the same left-to-right source evaluation and
+borrowing, cleanup, or evaluation order. `run` and a built program must observe the same left-to-right source evaluation and
 the same resource cleanup rules.
 
 Tool-side writes are explicit:
@@ -728,9 +724,7 @@ and complete runtime diagnostic, including typed call frames and task
 ancestry.
 
 `aura run` defaults to `mir` for the interactive edit-run path. `aura build`
-defaults to `auto` for artifact production. `aura build --backend direct` uses
-native direct emission, and `--backend auto` may select the checked
-MIR-launcher fallback. Maintained measurements put a cold miss at about 1.3
+always uses native direct emission. Maintained measurements put a cold miss at about 1.3
 seconds. A stripped native hello-world executable is 1,586,968 bytes; the
 [Performance](/manual/performance#executable-size) chapter has the size table. Each cache hit reads, hashes, and privately materializes the
 artifact. Workloads dominated by programs seen once, including CI, still pay

@@ -8,8 +8,10 @@ The repo is not just a compiler crate. It is a language implementation monorepo.
 
 - `crates/aura-core`
   Data the compiler and the native runtime share: semantic types, diagnostics and spans, integer helpers, operator enums, and task limits. It has no parser, checker, or code generator.
+- `crates/aura-runtime`
+  The native runtime: runtime values, the task scheduler and I/O reactor, host builtins, the JSON and byte codecs, and the FFI bridge. It depends on `aura-core` and never on the compiler.
 - `crates/aura-compiler`
-  The main compiler library: lexer, parser, semantic analysis, MIR, runtimes, native backend, package resolver, and analysis output.
+  The main compiler library: lexer, parser, semantic analysis, MIR, the MIR runtime, native backend, package resolver, and analysis output.
 - `crates/aura`
   The CLI driver that exposes `check`, `run`, `build`, `ast`, `mir`, `analyze`, `complete`, and `deps update`.
 - `tools/aura-language-server`

@@ -2528,12 +2528,12 @@ fn retry_host_dispatch_rejects_inexact_runtime_argument_types() {
         Value::Duration(14)
     );
 }
-use crate::ast::ReceiverKind;
 use crate::diag::{Diagnostic, Span};
 use crate::integer::IntegerValue;
 use crate::runtime_config::BlockingIoPoolConfig;
 use crate::runtime_reactor::{RuntimeReactor, WaitKey};
-use crate::sema::{FunctionParamContract, Type};
+use aura_core::ops::ReceiverKind;
+use aura_core::types::{FunctionParamContract, Type};
 use rcgen::generate_simple_self_signed;
 use std::collections::BTreeMap;
 use std::ffi::{c_void, OsStr};
@@ -2865,14 +2865,14 @@ fn closure_environments_share_identity_and_enforce_capture_ownership() {
     let signature = Type::Closure {
         params: Box::new(Vec::new()),
         return_type: Box::new(capture_type.clone()),
-        captures: Box::new(vec![crate::sema::ClosureCapture {
+        captures: Box::new(vec![aura_core::types::ClosureCapture {
             name: "offset".to_string(),
             ty: capture_type.clone(),
-            mode: crate::sema::ClosureCaptureMode::Copy,
+            mode: aura_core::types::ClosureCaptureMode::Copy,
             span: Span::new(2, 41),
             mutated: false,
         }]),
-        call_kind: crate::sema::ClosureCallKind::Repeatable,
+        call_kind: aura_core::types::ClosureCallKind::Repeatable,
     };
     let function = |environment: Option<Arc<ClosureEnvironment>>| {
         Value::Function(Box::new(FunctionValue {
@@ -17838,7 +17838,7 @@ fn runtime_value_helpers_report_backoff_capture_and_array_bounds_errors() {
         embedded_nominal_runtime_type_name, next_retry_runtime_backoff, nominal_runtime_base_name,
         ArrayDType, ClosureCaptureValue, ClosureEnvironment,
     };
-    use crate::sema::Type;
+    use aura_core::types::Type;
 
     let doubled = next_retry_runtime_backoff(1_000).expect("small backoffs double");
     assert_eq!(doubled, 2_000);

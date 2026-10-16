@@ -3799,7 +3799,8 @@ fn union_argument_specializes(
     }
     true
 }
-const ENUM_PAYLOAD_PROJECTION_PREFIX: &str = "__variant_payload_";
+
+pub(crate) use aura_core::places::{enum_payload_projection, ENUM_PAYLOAD_PROJECTION_PREFIX};
 
 pub(crate) fn union_payload_projection_index(segment: &str) -> Option<usize> {
     let index = segment.strip_prefix(UNION_PAYLOAD_PROJECTION_PREFIX)?;
@@ -3808,16 +3809,6 @@ pub(crate) fn union_payload_projection_index(segment: &str) -> Option<usize> {
     }
     let parsed = index.parse::<usize>().ok()?;
     (parsed.to_string() == index).then_some(parsed)
-}
-
-pub(crate) fn enum_payload_projection(segment: &str) -> Option<(&str, usize)> {
-    let payload = segment.strip_prefix(ENUM_PAYLOAD_PROJECTION_PREFIX)?;
-    let (variant, index) = payload.rsplit_once('_')?;
-    if variant.is_empty() || index.is_empty() || !index.bytes().all(|byte| byte.is_ascii_digit()) {
-        return None;
-    }
-    let parsed = index.parse::<usize>().ok()?;
-    (parsed.to_string() == index).then_some((variant, parsed))
 }
 
 pub(crate) fn mir_place_paths_overlap(left: &str, right: &str) -> bool {
@@ -10038,7 +10029,15 @@ fn push_imported_module_classes_from_namespace(
     seen_function_names: &mut BTreeSet<String>,
     seen_class_names: &mut BTreeSet<String>,
 ) {
-    for class in namespace.classes.values() {
+    // A module's own functions can build and call its private classes, so the
+    // runtime needs every class the module declares, not only its exports.
+    // `all_classes` also lists classes the module imports; those register
+    // from their own namespace.
+    let private_classes = namespace
+        .all_classes
+        .values()
+        .filter(|class| class.module_name == namespace.path);
+    for class in namespace.classes.values().chain(private_classes) {
         let class_name = mir_runtime_class_name(program, class);
         if !seen_class_names.insert(class_name.clone()) {
             continue;
@@ -20023,6 +20022,9 @@ impl<'a> Lowerer<'a> {
         if let ExprKind::Group(inner) = &expr.kind {
             return self.lower_union_injection(inner, Some(expected), owned);
         }
+        if Self::injects_per_arm(expr) {
+            return None;
+        }
         let injection = self
             .program
             .union_injection(self.module_name, expr.span, expected)?;
@@ -20057,6 +20059,9 @@ impl<'a> Lowerer<'a> {
         if let ExprKind::Group(inner) = &expr.kind {
             return self.lower_borrowed_union_injection(inner, Some(expected));
         }
+        if Self::injects_per_arm(expr) {
+            return None;
+        }
         let injection = self
             .program
             .union_injection(self.module_name, expr.span, expected)?;
@@ -20073,6 +20078,16 @@ impl<'a> Lowerer<'a> {
             },
         });
         Some(Operand::Place(target))
+    }
+
+    /// The checker records union injections on each arm of a conditional or
+    /// match, never on the whole expression. A conditional starts at its
+    /// first arm's span, so looking it up would find that arm's injection.
+    fn injects_per_arm(expr: &Expr) -> bool {
+        matches!(
+            expr.kind,
+            ExprKind::Conditional { .. } | ExprKind::Match { .. }
+        )
     }
 
     fn is_contextual_none_expr(expr: &Expr) -> bool {
@@ -22374,6 +22389,11 @@ impl<'a> Lowerer<'a> {
                                 .or_else(|| Some(class_args[0].clone())),
                             _ => self.infer_expr_type(&argument.value),
                         }
+                    } else if let Some(element) = builtin_member
+                        .element_typed_argument(index)
+                        .and_then(|position| class_args.get(position))
+                    {
+                        Some(element.clone())
                     } else {
                         self.infer_expr_type(&argument.value)
                     };

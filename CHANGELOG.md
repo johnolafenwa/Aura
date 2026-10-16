@@ -16,6 +16,10 @@ in this file.
   parameter, or calling a method on an entry reached through `lookup`.
   Each of these used to deep-clone the field or entry on every call, so
   loops over a field were quadratic.
+- A module's private class works when another module calls that module's
+  public functions or methods on the MIR backend. Constructing or calling a
+  private class there used to fail with `AU4001` "unknown MIR class". The
+  native backend was not affected.
 
 ## VS Code extension 0.4.1 — 2026-10-16
 

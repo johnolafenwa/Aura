@@ -1,0 +1,35 @@
+def describe(item: int32 | None) -> str:
+    match item:
+        case int32 as n:
+            return f"number {n}"
+        case None:
+            return "none"
+
+def main():
+    mut items: list[int32 | None] = []
+    items.append(1)
+    items.append(None)
+    items.insert(0, None)
+    items.insert(1, 4)
+    items.set(3, 5)
+    for item in items:
+        print(describe(item))
+    print(items.contains(None))
+    print(items.contains(9))
+    print(items.index(4))
+    print(items.count(None))
+    items.remove(None)
+    print(items.len())
+
+    mut seen: set[int32 | None] = set[int32 | None]()
+    seen.add(2)
+    seen.add(None)
+    seen.discard(2)
+    seen.remove(None)
+    print(seen.len())
+
+    queue: Queue[int32 | None] = Queue[int32 | None](4)
+    queue.put(6)
+    queue.put(None)
+    print(describe(queue.get_or(7)))
+    print(describe(queue.get_or(None)))

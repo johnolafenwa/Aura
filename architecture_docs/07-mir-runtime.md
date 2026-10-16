@@ -27,7 +27,7 @@ The MIR runtime is not a toy leftover. It is one of the main maintained executio
 
 ## Runtime layering
 
-The MIR runtime uses the shared runtime value layer in [`runtime_value.rs`](../crates/aura-compiler/src/runtime_value.rs).
+The MIR runtime uses the shared runtime value layer in [`runtime_value.rs`](../crates/aura-runtime/src/runtime_value.rs).
 
 ![Aura runtime layering](assets/runtime-layering.svg)
 
@@ -395,7 +395,7 @@ But the tiny example shows the same basic interpreter pattern.
 ## Files to study
 
 - [`mir_runtime.rs`](../crates/aura-compiler/src/mir_runtime.rs)
-- [`runtime_value.rs`](../crates/aura-compiler/src/runtime_value.rs)
+- [`runtime_value.rs`](../crates/aura-runtime/src/runtime_value.rs)
 - [`mir_runtime_tests.rs`](../crates/aura-compiler/src/mir_runtime_tests.rs)
 
 ## What comes next
