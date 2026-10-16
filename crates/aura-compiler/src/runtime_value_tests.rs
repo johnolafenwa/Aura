@@ -18354,22 +18354,25 @@ fn representation_stats_count_report_and_parse_round_trip() {
     representation_stats::note_closure_environment();
     representation_stats::note_opaque_box();
     representation_stats::note_callable_overflow_allocation();
+    representation_stats::note_cloned_elements(3);
     let delta = representation_stats::snapshot().since(before);
     assert!(delta.union_payload_boxes >= 1);
     assert!(delta.closure_environments >= 1);
     assert!(delta.opaque_boxes >= 1);
     assert!(delta.callable_overflow_allocations >= 1);
+    assert!(delta.cloned_elements >= 3);
 
     let stats = RepresentationStats {
         union_payload_boxes: 2,
         closure_environments: 1,
         opaque_boxes: 10,
         callable_overflow_allocations: 0,
+        cloned_elements: 4,
     };
     let line = stats.report_line("direct");
     assert_eq!(
         line,
-        "aura runtime stats (direct): union_payload_boxes=2 closure_environments=1 opaque_boxes=10 callable_overflow_allocations=0"
+        "aura runtime stats (direct): union_payload_boxes=2 closure_environments=1 opaque_boxes=10 callable_overflow_allocations=0 cloned_elements=4"
     );
     assert_eq!(
         RepresentationStats::parse_report_line(&line),

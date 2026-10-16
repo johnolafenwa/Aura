@@ -1024,7 +1024,13 @@ fn qualify_imported_module_namespaces(
     dependency_aliases: &BTreeSet<String>,
 ) {
     for (name, namespace) in modules.iter_mut() {
-        if dependency_aliases.contains(name) {
+        // Dependency aliases already carry their own package prefix, and
+        // builtin modules such as `fs` have no package: their functions
+        // dispatch on the bare `fs::exists` name in every package.
+        if dependency_aliases.contains(name)
+            || builtin_modules::builtin_module_namespace(std::slice::from_ref(&namespace.path))
+                .is_some()
+        {
             continue;
         }
         qualify_namespace_path(namespace, prefix);

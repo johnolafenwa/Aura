@@ -7013,6 +7013,85 @@ pub extern "C-unwind" fn aura_direct_element_path_load(
     })
 }
 
+/// Checks that an element path reaches a value inside `collection` without
+/// copying it: the bounds or presence probe that begins an element or entry
+/// loan. A missing position or key traps at the index expression.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_element_path_probe(
+    collection: *mut OpaqueValue,
+    path_ptr: *const u8,
+    path_len: usize,
+    selectors_ptr: *const i64,
+    selector_count: usize,
+    line: i64,
+    column: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let path = decode_bytes(path_ptr, path_len);
+        let steps =
+            direct_element_path_steps(&path).unwrap_or_else(|message| runtime_error(message));
+        let mut selectors = DirectElementSelectors {
+            words: direct_element_selector_words(selectors_ptr, selector_count),
+            cursor: 0,
+            path: &path,
+        };
+        let result = unsafe {
+            with_value(collection, |value| {
+                let mut current = value;
+                for step in &steps {
+                    current = direct_element_step(current, step, &mut selectors)?;
+                }
+                selectors.finish()
+            })
+        };
+        match result {
+            Ok(()) => boxed_value(Value::Unit),
+            Err(error) => direct_element_path_failure(error, line, column),
+        }
+    })
+}
+
+/// Moves the value an element path reaches out of `collection`, leaving
+/// `Unit` in its slot until `aura_direct_element_path_store` puts a value
+/// back. The direct backend uses the pair to lend an element or entry to one
+/// call without cloning it; a missing position or key traps at the index
+/// expression, as a load would.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_element_path_take(
+    collection: *mut OpaqueValue,
+    path_ptr: *const u8,
+    path_len: usize,
+    selectors_ptr: *const i64,
+    selector_count: usize,
+    line: i64,
+    column: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let path = decode_bytes(path_ptr, path_len);
+        let steps =
+            direct_element_path_steps(&path).unwrap_or_else(|message| runtime_error(message));
+        let mut selectors = DirectElementSelectors {
+            words: direct_element_selector_words(selectors_ptr, selector_count),
+            cursor: 0,
+            path: &path,
+        };
+        let result = unsafe {
+            value_mut(collection, |value| {
+                let mut current = value;
+                for step in &steps {
+                    current = direct_element_step_mut(current, step, &mut selectors)?;
+                }
+                selectors.finish()?;
+                Ok(std::mem::replace(current, Value::Unit))
+            })
+        };
+        match result {
+            Ok(value) => boxed_value(value),
+            Err(error) => direct_element_path_failure(error, line, column),
+        }
+    })
+}
+
 /// Replaces the value an element path reaches inside `collection` in place:
 /// an element or entry loan's write-through on the direct backend. Neither
 /// the collection nor any element on the path is cloned, and a loan never
