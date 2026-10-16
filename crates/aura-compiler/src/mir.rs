@@ -3799,7 +3799,8 @@ fn union_argument_specializes(
     }
     true
 }
-const ENUM_PAYLOAD_PROJECTION_PREFIX: &str = "__variant_payload_";
+
+pub(crate) use aura_core::places::{enum_payload_projection, ENUM_PAYLOAD_PROJECTION_PREFIX};
 
 pub(crate) fn union_payload_projection_index(segment: &str) -> Option<usize> {
     let index = segment.strip_prefix(UNION_PAYLOAD_PROJECTION_PREFIX)?;
@@ -3808,16 +3809,6 @@ pub(crate) fn union_payload_projection_index(segment: &str) -> Option<usize> {
     }
     let parsed = index.parse::<usize>().ok()?;
     (parsed.to_string() == index).then_some(parsed)
-}
-
-pub(crate) fn enum_payload_projection(segment: &str) -> Option<(&str, usize)> {
-    let payload = segment.strip_prefix(ENUM_PAYLOAD_PROJECTION_PREFIX)?;
-    let (variant, index) = payload.rsplit_once('_')?;
-    if variant.is_empty() || index.is_empty() || !index.bytes().all(|byte| byte.is_ascii_digit()) {
-        return None;
-    }
-    let parsed = index.parse::<usize>().ok()?;
-    (parsed.to_string() == index).then_some((variant, parsed))
 }
 
 pub(crate) fn mir_place_paths_overlap(left: &str, right: &str) -> bool {

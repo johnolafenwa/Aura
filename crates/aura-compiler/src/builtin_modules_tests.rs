@@ -793,3 +793,44 @@ fn builtin_callable_type_refs_lower_to_callable_storage_types() {
         Type::named("Unknown")
     );
 }
+
+#[test]
+fn runtime_dynamic_host_abi_matches_builtin_signatures() {
+    let table = crate::native_runtime::DYNAMIC_HOST_ABI;
+    assert!(!table.is_empty());
+    for abi in table {
+        let metadata = host_builtin_metadata(abi.name)
+            .unwrap_or_else(|| panic!("`{}` has no builtin signature", abi.name));
+        let expected = metadata
+            .params
+            .iter()
+            .map(|param| (param.name.as_str(), param.passing))
+            .collect::<Vec<_>>();
+        let actual = abi
+            .params
+            .iter()
+            .map(|param| (param.name, param.passing))
+            .collect::<Vec<_>>();
+        assert_eq!(actual, expected, "runtime ABI for `{}`", abi.name);
+    }
+    let names = table
+        .iter()
+        .map(|abi| abi.name)
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(names.len(), table.len(), "runtime ABI names must be unique");
+    assert_eq!(
+        crate::native_runtime::dynamic_host_abi("bytes::find").map(|abi| abi.params.len()),
+        Some(2)
+    );
+    assert_eq!(
+        crate::native_runtime::dynamic_host_abi("toml::is_valid"),
+        None
+    );
+    assert_eq!(
+        ReceiverKind::Value,
+        crate::native_runtime::dynamic_host_abi("json::into_object")
+            .unwrap()
+            .params[0]
+            .passing
+    );
+}

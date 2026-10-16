@@ -103,6 +103,8 @@ Each component has its own README:
   tests.
 - `crates/aura-core`: semantic types, diagnostics, and integer helpers
   shared by the compiler and the native runtime.
+- `crates/aura-runtime`: the native runtime that executables link, with
+  runtime values, the scheduler, host builtins, codecs, and FFI.
 - `tools/vscode-aura`: the VS Code extension for syntax highlighting and the
   language client.
 - `tools/aura-language-server`: the Aura Language Server Protocol

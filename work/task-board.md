@@ -20,7 +20,14 @@ Last updated: 2026-10-16
 - Step 1 in review: `crates/aura-core` holds the shared type model,
   diagnostics, integer helpers, operators, task stack bounds, and the type
   budget. `aura-compiler` re-exports them, so its paths are unchanged.
-- Remaining: steps 2 through 6 of the delivery plan, one PR per step.
+- Step 2a in progress: `crates/aura-runtime` holds the runtime. A static
+  table carries the dynamic host builtin ABI the runtime used to rebuild
+  from the checker registry.
+- Census for 2b: of 1,050 examples, benchmarks, and pass fixtures, 30 still
+  use the launcher. 27 are modules with no `main`. Three are direct-backend
+  gaps: two `int64` literal coercions into optional unions and one MIR loan
+  validation failure.
+- Remaining: steps 2b through 6 of the delivery plan, one PR per step.
 
 ## Aura 0.4.1 preview release (complete)
 

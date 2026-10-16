@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/aura-core", "crates/aura-compiler", "crates/aura"]
+members = ["crates/aura-core", "crates/aura-runtime", "crates/aura-compiler", "crates/aura"]
 exclude = ["benchmarks/rust_baselines"]
 resolver = "2"
 

@@ -1774,10 +1774,7 @@ pub(super) fn unify_type_pattern(
 
 /// The canonical optional spelling `member | None` for a builtin result or
 /// parameter (ADR-0052): one normalized union whose second member is `None`.
-pub(crate) fn optional_type(member: Type) -> Type {
-    Type::normalize_union(vec![member, Type::Unit], "<builtin>", &BTreeMap::new())
-        .expect("builtin optional unions normalize")
-}
+pub(crate) use aura_core::types::optional_type;
 
 /// The result type of a `str` text-convenience method (Batch 4 section C),
 /// keyed by method name. Every backend and the analysis surface share it.

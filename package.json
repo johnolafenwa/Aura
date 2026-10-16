@@ -27,7 +27,7 @@
     "test:release-packaging": "python3 -m unittest scripts/test_release_packaging.py",
     "test:identity": "python3 -m unittest scripts/test_aura_identity.py",
     "check:format": "cargo fmt --all --check",
-    "check:clippy": "cargo clippy -p aura-core -p aura-compiler -p aura -- -D warnings",
+    "check:clippy": "cargo clippy -p aura-core -p aura-runtime -p aura-compiler -p aura -- -D warnings",
     "check:hygiene": "bash scripts/check-hygiene.sh",
     "check:audit": "npm audit --audit-level=moderate && cargo audit",
     "build:extension": "npm --prefix tools/vscode-aura run build",

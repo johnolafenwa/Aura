@@ -882,3 +882,9 @@ pub fn is_builtin_copy_named_type(name: &str, args: &[Type]) -> bool {
         }
     }
 }
+
+/// The optional type `member | ()`.
+pub fn optional_type(member: Type) -> Type {
+    Type::normalize_union(vec![member, Type::Unit], "<builtin>", &BTreeMap::new())
+        .expect("builtin optional unions normalize")
+}

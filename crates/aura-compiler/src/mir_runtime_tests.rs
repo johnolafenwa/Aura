@@ -23106,3 +23106,63 @@ fn optional_helpers_infer_lookup_and_poll_types_and_decode_bare_payloads() {
         Some("dir".to_string())
     );
 }
+
+#[test]
+fn native_runtime_entrypoint_guards_invalid_inputs() {
+    assert_eq!(
+        unsafe {
+            super::aura_native_run(
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                0,
+            )
+        },
+        1
+    );
+
+    let mir_json = b"{}";
+    let invalid_path = [0xff_u8];
+    let source = b"def main() -> int32:\n    return 0\n";
+    assert_eq!(
+        unsafe {
+            super::aura_native_run(
+                mir_json.as_ptr(),
+                mir_json.len(),
+                invalid_path.as_ptr(),
+                invalid_path.len(),
+                source.as_ptr(),
+                source.len(),
+            )
+        },
+        1
+    );
+
+    let source_path = b"/tmp/test.au";
+    let invalid_source = [0xff_u8];
+    assert_eq!(
+        unsafe {
+            super::aura_native_run(
+                mir_json.as_ptr(),
+                mir_json.len(),
+                source_path.as_ptr(),
+                source_path.len(),
+                invalid_source.as_ptr(),
+                invalid_source.len(),
+            )
+        },
+        1
+    );
+
+    // Another test in this binary may already have installed the process-wide
+    // program source, which appends a ` --> path` trailer to every rendering;
+    // only the bare prefix is order-independent.
+    let rendered =
+        crate::native_runtime::render_runtime_diagnostic(crate::diag::Diagnostic::new("oops"));
+    assert!(
+        rendered.starts_with("error[AU2999]: oops"),
+        "unexpected runtime diagnostic rendering: {rendered}"
+    );
+}

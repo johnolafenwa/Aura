@@ -4,13 +4,13 @@ use std::thread;
 
 use crate::diag::{Diagnostic, Result};
 
-pub(crate) const BLOCKING_WORKERS_ENV: &str = "AURA_BLOCKING_WORKERS";
-pub(crate) const BLOCKING_QUEUE_CAPACITY_ENV: &str = "AURA_BLOCKING_QUEUE_CAPACITY";
+pub const BLOCKING_WORKERS_ENV: &str = "AURA_BLOCKING_WORKERS";
+pub const BLOCKING_QUEUE_CAPACITY_ENV: &str = "AURA_BLOCKING_QUEUE_CAPACITY";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct BlockingIoPoolConfig {
-    pub(crate) worker_count: usize,
-    pub(crate) queue_capacity: Option<usize>,
+pub struct BlockingIoPoolConfig {
+    pub worker_count: usize,
+    pub queue_capacity: Option<usize>,
 }
 
 static BLOCKING_IO_POOL_CONFIG: OnceLock<Result<BlockingIoPoolConfig>> = OnceLock::new();
@@ -32,7 +32,7 @@ fn decode_positive_integer(name: &str, raw: &OsStr) -> Result<usize> {
     })
 }
 
-pub(crate) fn decode_blocking_io_pool_config(
+pub fn decode_blocking_io_pool_config(
     worker_override: Option<&OsStr>,
     queue_capacity_override: Option<&OsStr>,
     available_workers: Option<usize>,
@@ -58,13 +58,13 @@ fn read_blocking_io_pool_config() -> Result<BlockingIoPoolConfig> {
     )
 }
 
-pub(crate) fn blocking_io_pool_config() -> Result<BlockingIoPoolConfig> {
+pub fn blocking_io_pool_config() -> Result<BlockingIoPoolConfig> {
     BLOCKING_IO_POOL_CONFIG
         .get_or_init(read_blocking_io_pool_config)
         .clone()
 }
 
-pub(crate) fn validate_runtime_configuration() -> Result<()> {
+pub fn validate_runtime_configuration() -> Result<()> {
     blocking_io_pool_config().map(|_| ())
 }
 

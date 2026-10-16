@@ -30,14 +30,14 @@ const TIMER_HEAP_STALE_ALLOWANCE: usize = 16;
 /// Identifies one suspension of a task. A later epoch for the same task makes
 /// every source registered under an older key stale.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub(crate) struct WaitKey(pub(crate) u64, pub(crate) u64);
+pub struct WaitKey(pub u64, pub u64);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct IoInterest(u8);
+pub struct IoInterest(u8);
 
 impl IoInterest {
-    pub(crate) const READABLE: Self = Self(0b01);
-    pub(crate) const WRITABLE: Self = Self(0b10);
+    pub const READABLE: Self = Self(0b01);
+    pub const WRITABLE: Self = Self(0b10);
 
     fn contains(self, other: Self) -> bool {
         self.0 & other.0 != 0
@@ -83,33 +83,33 @@ struct ReactorInboxState {
 /// Cloneable, thread-safe completion path. Commands enter the durable queue
 /// before the wake syscall, so a reported wake failure never discards them.
 #[derive(Clone)]
-pub(crate) struct ReactorHandle {
+pub struct ReactorHandle {
     inbox: Arc<ReactorInbox>,
 }
 
 impl ReactorHandle {
-    pub(crate) fn wake(&self, key: WaitKey) -> io::Result<()> {
+    pub fn wake(&self, key: WaitKey) -> io::Result<()> {
         self.submit(InboxCommand::Wake(key))
     }
 
-    pub(crate) fn add_deadline(&self, key: WaitKey, deadline: Instant) -> io::Result<()> {
+    pub fn add_deadline(&self, key: WaitKey, deadline: Instant) -> io::Result<()> {
         self.submit(InboxCommand::Deadline(key, deadline))
     }
 
-    pub(crate) fn cancel_wait(&self, key: WaitKey) -> io::Result<()> {
+    pub fn cancel_wait(&self, key: WaitKey) -> io::Result<()> {
         self.submit(InboxCommand::Cancel(key))
     }
 
     /// Wakes the owning scheduler so it can inspect durable worker-control
     /// state such as new task admission or shutdown. Control notifications
     /// are coalesced independently of keyed wait commands.
-    pub(crate) fn notify_control(&self) -> io::Result<()> {
+    pub fn notify_control(&self) -> io::Result<()> {
         let mut state = lock_unpoisoned(&self.inbox.state);
         state.control_pending = true;
         self.wake_if_needed(&mut state)
     }
 
-    pub(crate) fn same_reactor(&self, other: &Self) -> bool {
+    pub fn same_reactor(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.inbox, &other.inbox)
     }
 
@@ -135,36 +135,36 @@ impl ReactorHandle {
 /// cancellation: several runtime sources can hold subscriptions for the same
 /// select, and dropping any one of them must not retire the whole wait.
 #[derive(Clone)]
-pub(crate) struct ReactorSubscription {
+pub struct ReactorSubscription {
     key: WaitKey,
     handle: ReactorHandle,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub(crate) struct ReactorSubscriptionKey(u64, WaitKey);
+pub struct ReactorSubscriptionKey(u64, WaitKey);
 
 impl ReactorSubscription {
-    pub(crate) fn new(key: WaitKey, handle: ReactorHandle) -> Self {
+    pub fn new(key: WaitKey, handle: ReactorHandle) -> Self {
         Self { key, handle }
     }
 
-    pub(crate) fn key(&self) -> WaitKey {
+    pub fn key(&self) -> WaitKey {
         self.key
     }
 
-    pub(crate) fn wake(&self) -> io::Result<()> {
+    pub fn wake(&self) -> io::Result<()> {
         self.handle.wake(self.key)
     }
 
-    pub(crate) fn cancel_wait(&self) -> io::Result<()> {
+    pub fn cancel_wait(&self) -> io::Result<()> {
         self.handle.cancel_wait(self.key)
     }
 
-    pub(crate) fn same_wait(&self, other: &Self) -> bool {
+    pub fn same_wait(&self, other: &Self) -> bool {
         self.key == other.key && self.handle.same_reactor(&other.handle)
     }
 
-    pub(crate) fn identity(&self) -> ReactorSubscriptionKey {
+    pub fn identity(&self) -> ReactorSubscriptionKey {
         ReactorSubscriptionKey(self.handle.inbox.id, self.key)
     }
 }
@@ -185,7 +185,7 @@ struct FdEntry {
 
 /// Single-owner persistent poller. Registration methods are called by the
 /// scheduler thread; other threads signal it through [`ReactorHandle`].
-pub(crate) struct RuntimeReactor {
+pub struct RuntimeReactor {
     poll: Poll,
     events: Events,
     inbox: Arc<ReactorInbox>,
@@ -206,7 +206,7 @@ pub(crate) struct RuntimeReactor {
 }
 
 impl RuntimeReactor {
-    pub(crate) fn new() -> io::Result<Self> {
+    pub fn new() -> io::Result<Self> {
         let poll = Poll::new()?;
         let inbox = Arc::new(ReactorInbox {
             id: NEXT_REACTOR_ID.fetch_add(1, Ordering::Relaxed),
@@ -238,7 +238,7 @@ impl RuntimeReactor {
         })
     }
 
-    pub(crate) fn handle(&self) -> ReactorHandle {
+    pub fn handle(&self) -> ReactorHandle {
         ReactorHandle {
             inbox: Arc::clone(&self.inbox),
         }
@@ -246,7 +246,7 @@ impl RuntimeReactor {
 
     /// Starts a new suspension and atomically retires the previous epoch for
     /// this task, including all of that suspension's losing sources.
-    pub(crate) fn begin_wait(&mut self, key: WaitKey) -> io::Result<()> {
+    pub fn begin_wait(&mut self, key: WaitKey) -> io::Result<()> {
         if let Some(old_epoch) = self.active_epochs.get(&key.0).copied() {
             let old_key = WaitKey(key.0, old_epoch);
             self.remove_from_ready(old_key);
@@ -256,13 +256,13 @@ impl RuntimeReactor {
         Ok(())
     }
 
-    pub(crate) fn is_waiting(&self, key: WaitKey) -> bool {
+    pub fn is_waiting(&self, key: WaitKey) -> bool {
         self.active_epochs.get(&key.0) == Some(&key.1)
     }
 
     /// Adds or replaces this suspension's timer. A heap entry is immutable;
     /// the version map makes the replaced entry cheap, safely stale garbage.
-    pub(crate) fn add_deadline(&mut self, key: WaitKey, deadline: Instant) -> io::Result<()> {
+    pub fn add_deadline(&mut self, key: WaitKey, deadline: Instant) -> io::Result<()> {
         if !self.is_waiting(key) {
             return Ok(());
         }
@@ -283,7 +283,7 @@ impl RuntimeReactor {
 
     /// Retires a suspension. This is also the select-loser cleanup operation:
     /// it removes the timer and every descriptor registration for this key.
-    pub(crate) fn cancel_wait(&mut self, key: WaitKey) -> io::Result<()> {
+    pub fn cancel_wait(&mut self, key: WaitKey) -> io::Result<()> {
         if self.is_waiting(key) {
             self.active_epochs.remove(&key.0);
         }
@@ -296,7 +296,7 @@ impl RuntimeReactor {
     /// Timer-update waker events continue polling rather than spuriously
     /// returning; a control notification intentionally returns an empty key
     /// list without disturbing any keyed waits.
-    pub(crate) fn poll(&mut self, max_wait: Option<Duration>) -> io::Result<Vec<WaitKey>> {
+    pub fn poll(&mut self, max_wait: Option<Duration>) -> io::Result<Vec<WaitKey>> {
         let caller_deadline = max_wait.and_then(|duration| Instant::now().checked_add(duration));
         loop {
             let control_notified = self.drain_inbox()?;
@@ -332,7 +332,7 @@ impl RuntimeReactor {
     /// thread. The zero-time poll is deliberately performed even when the
     /// inbox or timer heap has already produced work, so a perpetually nonempty
     /// scheduler ready queue cannot starve kernel events.
-    pub(crate) fn poll_nonblocking(&mut self) -> io::Result<Vec<WaitKey>> {
+    pub fn poll_nonblocking(&mut self) -> io::Result<Vec<WaitKey>> {
         self.drain_inbox()?;
         self.mark_expired_timers(Instant::now());
         self.poll_mio_once(Some(Duration::ZERO))?;
@@ -349,7 +349,7 @@ impl RuntimeReactor {
     /// entering the platform poller. The scheduler uses this cheap path while
     /// runnable tasks remain, interleaving less-frequent zero-time descriptor
     /// polls for fd fairness.
-    pub(crate) fn poll_local_nonblocking(&mut self) -> io::Result<Vec<WaitKey>> {
+    pub fn poll_local_nonblocking(&mut self) -> io::Result<Vec<WaitKey>> {
         self.drain_inbox()?;
         self.mark_expired_timers(Instant::now());
         if self.ready.is_empty() {
@@ -516,12 +516,7 @@ impl RuntimeReactor {
     }
 
     #[cfg(unix)]
-    pub(crate) fn add_fd(
-        &mut self,
-        key: WaitKey,
-        fd: RawFd,
-        interest: IoInterest,
-    ) -> io::Result<()> {
+    pub fn add_fd(&mut self, key: WaitKey, fd: RawFd, interest: IoInterest) -> io::Result<()> {
         if !self.is_waiting(key) {
             return Ok(());
         }

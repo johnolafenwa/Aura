@@ -17,11 +17,11 @@
 //! mismatched MIR still fails closed.
 
 use crate::runtime_value::Value;
-use crate::sema::{Type, UnionType};
+use aura_core::types::{Type, UnionType};
 
 /// How a value must change to take the layout of a target union.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum UnionAlignment {
+pub enum UnionAlignment {
     /// The value already carries the target union.
     Exact,
     /// The value is a union whose active member sits at this target index.
@@ -36,7 +36,7 @@ fn is_type_param(ty: &Type) -> bool {
 
 /// Backend-independent runtime type of a value, used to identify payloads
 /// stored behind a type-parameter member.
-pub(crate) fn runtime_member_type(value: &Value) -> Option<Type> {
+pub fn runtime_member_type(value: &Value) -> Option<Type> {
     match value {
         Value::Union(union) => member_identity(&Value::Union(union.clone())),
         Value::Int(value) => Some(Type::named(value.runtime_type_name().unwrap_or("int64"))),
@@ -72,7 +72,7 @@ pub(crate) fn runtime_member_type(value: &Value) -> Option<Type> {
 /// Active-member equality between two values of which at least one is a
 /// union: the active member identities must match and the payloads must be
 /// equal. Different tags are unequal even when the payloads coincide.
-pub(crate) fn union_values_equal(left: &Value, right: &Value) -> bool {
+pub fn union_values_equal(left: &Value, right: &Value) -> bool {
     let (Some(left_identity), Some(right_identity)) =
         (member_identity(left), member_identity(right))
     else {
@@ -91,12 +91,12 @@ pub(crate) fn union_values_equal(left: &Value, right: &Value) -> bool {
 }
 
 /// Whether a value is unit `None` or a union currently holding it.
-pub(crate) fn is_none_value(value: &Value) -> bool {
+pub fn is_none_value(value: &Value) -> bool {
     matches!(member_identity(value), Some(Type::Unit))
 }
 
 /// The concrete identity of the member a value currently holds.
-pub(crate) fn member_identity(value: &Value) -> Option<Type> {
+pub fn member_identity(value: &Value) -> Option<Type> {
     match value {
         Value::Union(union) => match union.union_type.union_members()?.get(union.member_index)? {
             Type::TypeParam(_) => runtime_member_type(&union.payload),
@@ -110,7 +110,7 @@ pub(crate) fn member_identity(value: &Value) -> Option<Type> {
 /// runtime class name is unqualified inside its own module while the member
 /// type may carry the module prefix, so nominal names compare by their final
 /// segment when exactly one side is qualified.
-pub(crate) fn member_matches(active: &Type, member: &Type) -> bool {
+pub fn member_matches(active: &Type, member: &Type) -> bool {
     if active == member {
         return true;
     }
@@ -139,7 +139,7 @@ pub(crate) fn member_matches(active: &Type, member: &Type) -> bool {
 
 /// Plans the alignment of `value` to `target`, or reports why the value's
 /// active member is not admissible there.
-pub(crate) fn plan_union_alignment(
+pub fn plan_union_alignment(
     value: &Value,
     target: &UnionType,
     operation: &str,
@@ -169,7 +169,7 @@ pub(crate) fn plan_union_alignment(
 
 /// The index the value's active member takes in `target`, without changing
 /// the value.
-pub(crate) fn aligned_member_index(
+pub fn aligned_member_index(
     value: &Value,
     target: &UnionType,
     operation: &str,
@@ -185,7 +185,7 @@ pub(crate) fn aligned_member_index(
 
 /// Retags `value` in place to the layout of `target`, lifting a bare member
 /// value into the union when needed.
-pub(crate) fn align_union_value(
+pub fn align_union_value(
     value: &mut Value,
     target: &UnionType,
     operation: &str,
@@ -218,7 +218,7 @@ pub(crate) fn align_union_value(
 /// Builds the union value for an injection. A union-typed payload behind a
 /// type-parameter member flattens into the destination layout instead of
 /// nesting.
-pub(crate) fn inject_union_member(
+pub fn inject_union_member(
     target: &UnionType,
     member_index: usize,
     payload: Value,
@@ -246,7 +246,7 @@ pub(crate) fn inject_union_member(
 /// whose active member is the expected non-union type unwraps to its payload.
 /// Values that cannot be related to the expected type are returned unchanged
 /// so the following operation reports the mismatch.
-pub(crate) fn coerce_union_boundary(value: Value, expected: &Type) -> Value {
+pub fn coerce_union_boundary(value: Value, expected: &Type) -> Value {
     match expected {
         Type::Union(target) => {
             let mut value = value;

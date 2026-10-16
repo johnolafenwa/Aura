@@ -11245,6 +11245,7 @@ fn random_resource_error_to_diagnostic(
     }
 }
 
+#[allow(clippy::result_large_err)]
 fn expect_process_optional_timeout(
     value: &Value,
     label: &str,
@@ -11261,6 +11262,7 @@ fn expect_process_optional_timeout(
     }
 }
 
+#[allow(clippy::result_large_err)]
 fn expect_duration_value(value: &Value, label: &str) -> std::result::Result<StdDuration, Value> {
     match value {
         Value::Duration(duration) => {
@@ -11273,6 +11275,7 @@ fn expect_duration_value(value: &Value, label: &str) -> std::result::Result<StdD
     }
 }
 
+#[allow(clippy::result_large_err)]
 fn expect_io_optional_timeout(
     value: Option<&Value>,
     label: &str,
@@ -11730,3 +11733,7 @@ fn checked_duration_floor_div(dividend: i128, divisor: i128) -> Option<i128> {
 #[cfg(test)]
 #[path = "mir_runtime_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "mir_runtime_task_stack_tests.rs"]
+mod task_stack_tests;
