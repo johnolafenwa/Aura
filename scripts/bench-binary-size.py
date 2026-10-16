@@ -84,7 +84,7 @@ def measure(ref, default_profile=False, *, allow_missing_reference_agent=False):
         build = ['cargo', '+1.95.0', 'build', '--release', '--locked', '-p', 'aura']
         print(f'Building {commit} ({"default" if default_profile else "release"} profile)', flush=True)
         run(build, cwd=checkout, env=env)
-        link_command = ['cargo', '+1.95.0', 'rustc', '--release', '--locked', '-p', 'aura-compiler',
+        link_command = ['cargo', '+1.95.0', 'rustc', '--release', '--locked', '-p', 'aura-runtime',
                         '--lib', '--', '--print', 'native-static-libs']
         link_output = run(link_command, cwd=checkout, env=env)
         lines = (link_output.stdout + link_output.stderr).splitlines()
@@ -95,7 +95,7 @@ def measure(ref, default_profile=False, *, allow_missing_reference_agent=False):
         runtime.mkdir(parents=True)
         compiler = package / 'bin/aura'
         shutil.copy2(target / 'release/aura', compiler)
-        shutil.copy2(target / 'release/libaura_compiler.a', runtime / 'libaura_compiler.a')
+        shutil.copy2(target / 'release/libaura_runtime.a', runtime / 'libaura_runtime.a')
         (runtime / 'native-link-args.json').write_text(json.dumps(args))
         records = {'aura': artifact(compiler)}
         smoke_env = dict(env, CARGO=str(target / 'missing-cargo'))

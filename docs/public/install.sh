@@ -56,14 +56,16 @@ main() {
   tar -xzf "$tmpdir/$archive" -C "$tmpdir" || fail "could not extract $archive"
   source_root="$tmpdir/$archive_root"
   test -x "$source_root/bin/aura" || fail "the archive does not contain bin/aura"
-  test -f "$source_root/lib/aura/libaura_compiler.a" || fail "the archive is missing the native runtime"
+  test -f "$source_root/lib/aura/libaura_runtime.a" || fail "the archive is missing the native runtime"
   test -f "$source_root/lib/aura/native-link-args.json" || fail "the archive is missing native-link-args.json"
 
   mkdir -p "$prefix/bin" "$prefix/lib/aura" "$prefix/share/aura"
   rm -f "$prefix/bin/aura"
   cp "$source_root/bin/aura" "$prefix/bin/aura"
   chmod 755 "$prefix/bin/aura"
-  cp "$source_root/lib/aura/libaura_compiler.a" "$prefix/lib/aura/libaura_compiler.a"
+  cp "$source_root/lib/aura/libaura_runtime.a" "$prefix/lib/aura/libaura_runtime.a"
+  # Earlier releases shipped the runtime as libaura_compiler.a.
+  rm -f "$prefix/lib/aura/libaura_compiler.a"
   cp "$source_root/lib/aura/native-link-args.json" "$prefix/lib/aura/native-link-args.json"
 
   if test -d "$source_root/examples"; then

@@ -43,7 +43,10 @@ Last updated: 2026-10-16
   under `aura run`: the checker lets a shared match binding call a resource
   method that MIR treats as mutating. That needs a language decision. See
   `2026-10-16-batch-5-step-2b.md`.
-- Remaining: steps 2c through 6 of the delivery plan, one PR per step.
+- Step 2c done locally: user executables link `libaura_runtime.a`, which
+  release archives ship in place of `libaura_compiler.a`. The runtime
+  archive is 61,888,200 bytes against the compiler archive's 132,235,406.
+- Remaining: steps 3 through 6 of the delivery plan, one PR per step.
 
 ## Aura 0.4.1 preview release (complete)
 

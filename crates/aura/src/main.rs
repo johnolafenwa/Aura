@@ -3037,7 +3037,7 @@ fn native_runtime_identity_material(identity: &NativeRuntimeIdentity) -> Option<
 // The compiler-owned semantic schema version is an additional, independent
 // key component, so checked-source changes do not require a cache-container
 // format change.
-const NATIVE_CACHE_FORMAT: &str = "aura-native-cache-v6";
+const NATIVE_CACHE_FORMAT: &str = "aura-native-cache-v7";
 
 /// The exact runtime inputs that a warm native-cache lookup may reuse.
 ///
@@ -4344,7 +4344,7 @@ fn build_native_runtime_staticlib() -> std::result::Result<Option<PathBuf>, Stri
         .arg("build")
         .arg("-q")
         .arg("-p")
-        .arg("aura-compiler")
+        .arg("aura-runtime")
         .arg("--lib")
         .arg("--message-format=json-render-diagnostics");
     if current_profile() == "release" {
@@ -4377,7 +4377,7 @@ fn query_native_runtime_link_args() -> std::result::Result<Vec<String>, String> 
         .arg("rustc")
         .arg("-q")
         .arg("-p")
-        .arg("aura-compiler")
+        .arg("aura-runtime")
         .arg("--lib");
     if current_profile() == "release" {
         command.arg("--release");
@@ -4442,7 +4442,7 @@ fn parse_static_library_artifact_path(stdout: &[u8]) -> Option<PathBuf> {
         let Some(target) = message.get("target") else {
             continue;
         };
-        if target.get("name").and_then(|value| value.as_str()) != Some("aura_compiler") {
+        if target.get("name").and_then(|value| value.as_str()) != Some("aura_runtime") {
             continue;
         }
         let Some(filenames) = message.get("filenames").and_then(|value| value.as_array()) else {
@@ -4456,7 +4456,7 @@ fn parse_static_library_artifact_path(stdout: &[u8]) -> Option<PathBuf> {
             let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
                 continue;
             };
-            if name.starts_with("libaura_compiler") && name.ends_with(".a") {
+            if name.starts_with("libaura_runtime") && name.ends_with(".a") {
                 candidate = Some(path);
             }
         }
@@ -4473,7 +4473,7 @@ fn current_profile() -> &'static str {
 }
 
 fn static_library_file_name() -> &'static str {
-    "libaura_compiler.a"
+    "libaura_runtime.a"
 }
 
 #[cfg(test)]
@@ -4517,7 +4517,7 @@ fn resolve_static_library_path_in_target_dir(
         .filter(|path| {
             path.file_name()
                 .and_then(|name| name.to_str())
-                .map(|name| name.starts_with("libaura_compiler-") && name.ends_with(".a"))
+                .map(|name| name.starts_with("libaura_runtime-") && name.ends_with(".a"))
                 .unwrap_or(false)
         })
         .collect::<Vec<_>>();
@@ -4834,9 +4834,9 @@ mod tests {
         let target = root.join("target").join("debug");
         let deps = target.join("deps");
         fs::create_dir_all(&deps).expect("deps dir should exist");
-        let primary = target.join("libaura_compiler.a");
+        let primary = target.join("libaura_runtime.a");
         fs::write(&primary, b"primary").expect("primary staticlib should write");
-        fs::write(deps.join("libaura_compiler-old.a"), b"stale hashed archive")
+        fs::write(deps.join("libaura_runtime-old.a"), b"stale hashed archive")
             .expect("hashed archive should write");
 
         let resolved = resolve_static_library_path(root.clone(), "debug")
@@ -4850,7 +4850,7 @@ mod tests {
     #[test]
     fn runtime_archive_memo_stamp_detects_same_size_same_mtime_replacement() {
         let root = unique_temp_dir("runtime-memo-stamp");
-        let archive = root.join("libaura_compiler.a");
+        let archive = root.join("libaura_runtime.a");
         let replacement = root.join("replacement.a");
         fs::write(&archive, b"archive-a").expect("first archive should write");
         let first_metadata = fs::metadata(&archive).expect("first metadata should exist");
@@ -4948,7 +4948,7 @@ mod tests {
             .expect("cache-key fixture should lower");
         let runtime_identity = NativeRuntimeIdentity {
             archive_sha256: "a".repeat(64),
-            native_link_args: vec!["-laura_compiler".to_string()],
+            native_link_args: vec!["-laura_runtime".to_string()],
         };
 
         let old_key = native_cache_key_for_semantic_schema(&mir, &runtime_identity, 1)
@@ -5617,7 +5617,7 @@ printf 'native-static-libs: -lc\\033[0m -lm\\n' >&2\n",
             .expect("bin dir should exist");
         fs::create_dir_all(&runtime_dir).expect("runtime dir should exist");
         fs::write(&executable, b"test executable").expect("test executable should write");
-        let staticlib = runtime_dir.join("libaura_compiler.a");
+        let staticlib = runtime_dir.join("libaura_runtime.a");
         fs::write(&staticlib, b"test runtime").expect("test runtime should write");
         fs::write(
             runtime_dir.join("native-link-args.json"),
@@ -5722,7 +5722,7 @@ printf 'native-static-libs: -lc\\033[0m -lm\\n' >&2\n",
         let root = unique_temp_dir("single-hashed");
         let deps = root.join("target").join("debug").join("deps");
         fs::create_dir_all(&deps).expect("deps dir should exist");
-        let archive = deps.join("libaura_compiler-only.a");
+        let archive = deps.join("libaura_runtime-only.a");
         fs::write(&archive, b"archive").expect("hashed archive should write");
 
         let resolved = resolve_static_library_path(root.clone(), "debug")
@@ -5737,10 +5737,10 @@ printf 'native-static-libs: -lc\\033[0m -lm\\n' >&2\n",
         let root = unique_temp_dir("ambiguous-hashed");
         let deps = root.join("target").join("debug").join("deps");
         fs::create_dir_all(&deps).expect("deps dir should exist");
-        let first = deps.join("libaura_compiler-first.a");
+        let first = deps.join("libaura_runtime-first.a");
         fs::write(&first, b"first").expect("first archive should write");
         thread::sleep(Duration::from_millis(10));
-        let second = deps.join("libaura_compiler-second.a");
+        let second = deps.join("libaura_runtime-second.a");
         fs::write(&second, b"second").expect("second archive should write");
 
         let error = resolve_static_library_path(root.clone(), "debug")
@@ -5756,10 +5756,10 @@ printf 'native-static-libs: -lc\\033[0m -lm\\n' >&2\n",
 
     #[test]
     fn parse_static_library_artifact_path_prefers_cargo_reported_archive() {
-        let stdout = br#"{"reason":"compiler-artifact","target":{"name":"aura_compiler"},"filenames":["/tmp/libaura_compiler-abc123.rlib","/tmp/libaura_compiler-abc123.a"]}
+        let stdout = br#"{"reason":"compiler-artifact","target":{"name":"aura_runtime"},"filenames":["/tmp/libaura_runtime-abc123.rlib","/tmp/libaura_runtime-abc123.a"]}
 {"reason":"compiler-artifact","target":{"name":"other"},"filenames":["/tmp/libother.a"]}"#;
         let resolved = parse_static_library_artifact_path(stdout)
             .expect("cargo artifact output should expose a static archive");
-        assert_eq!(resolved, PathBuf::from("/tmp/libaura_compiler-abc123.a"));
+        assert_eq!(resolved, PathBuf::from("/tmp/libaura_runtime-abc123.a"));
     }
 }

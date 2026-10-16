@@ -13,12 +13,12 @@ RUST_MIN_STACK=33554432 cargo llvm-cov \
   -- \
   --test-threads=1
 
-# `aura-compiler` also emits a static archive for packaged native builds. The
+# `aura-runtime` also emits a static archive for packaged native builds. The
 # archive has a different LLVM coverage map from the test-profile rlib, so it
 # must not be presented to llvm-cov when the test profiles are reported.
 rm -f \
-  target/llvm-cov-target/debug/libaura_compiler.a \
-  target/llvm-cov-target/debug/deps/libaura_compiler-*.a
+  target/llvm-cov-target/debug/libaura_runtime.a \
+  target/llvm-cov-target/debug/deps/libaura_runtime-*.a
 
 report_args=(
   report

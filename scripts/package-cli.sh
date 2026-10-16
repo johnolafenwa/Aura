@@ -12,11 +12,11 @@ if [[ ! "$archive_name" =~ ^aura-v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?-(x86_
   exit 2
 fi
 archive_root="release/$archive_name"
-native_static_libs="$(CARGO_TERM_COLOR=never cargo rustc -q -p aura-compiler --lib --release --locked -- --print native-static-libs 2>&1 >/dev/null)"
+native_static_libs="$(CARGO_TERM_COLOR=never cargo rustc -q -p aura-runtime --lib --release --locked -- --print native-static-libs 2>&1 >/dev/null)"
 rm -rf "$archive_root"
 mkdir -p "$archive_root/bin" "$archive_root/lib/aura" "$archive_root/examples/agents"
 cp target/release/aura "$archive_root/bin/aura"
-cp target/release/libaura_compiler.a "$archive_root/lib/aura/libaura_compiler.a"
+cp target/release/libaura_runtime.a "$archive_root/lib/aura/libaura_runtime.a"
 cp examples/basic_addition.au "$archive_root/examples/basic_addition.au"
 cp examples/agents/retrying_network_worker.au "$archive_root/examples/agents/retrying_network_worker.au"
 

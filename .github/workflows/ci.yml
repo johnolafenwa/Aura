@@ -102,7 +102,7 @@ jobs:
           toolchain: 1.95.0
 
       - name: Build release compiler and runtime
-        run: cargo build --release --locked -p aura -p aura-compiler
+        run: cargo build --release --locked -p aura -p aura-runtime
 
       - name: Check native executable contents and sizes
         run: python3 scripts/check-native-binaries.py

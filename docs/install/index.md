@@ -38,7 +38,7 @@ The default layout is:
 ~/.local/
 ├── bin/aura
 ├── lib/aura/
-│   ├── libaura_compiler.a
+│   ├── libaura_runtime.a
 │   └── native-link-args.json
 └── share/aura/
     ├── examples/

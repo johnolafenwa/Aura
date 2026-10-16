@@ -2139,8 +2139,8 @@ def compiler_runtime_inputs(aura: pathlib.Path) -> Dict[str, object]:
     artifacts = []
     release = ROOT / "target/release"
     if release.is_dir():
-        candidates = list(release.glob("libaura_compiler*.a"))
-        candidates.extend((release / "deps").glob("libaura_compiler*.a"))
+        candidates = list(release.glob("libaura_runtime*.a"))
+        candidates.extend((release / "deps").glob("libaura_runtime*.a"))
         for candidate in sorted(set(candidates)):
             artifacts.append(
                 {

@@ -97,7 +97,7 @@ fn packaged_test_aura(temp: &TempDir) -> PathBuf {
         .args([
             "rustc",
             "-p",
-            "aura-compiler",
+            "aura-runtime",
             "--lib",
             "--message-format=json",
             "--",
@@ -128,18 +128,18 @@ fn packaged_test_aura(temp: &TempDir) -> PathBuf {
         .iter()
         .rev()
         .find(|message| {
-            message["reason"] == "compiler-artifact" && message["target"]["name"] == "aura_compiler"
+            message["reason"] == "compiler-artifact" && message["target"]["name"] == "aura_runtime"
         })
         .and_then(|message| message["filenames"].as_array())
         .and_then(|filenames| {
             filenames.iter().find_map(|filename| {
                 let filename = filename.as_str()?;
                 filename
-                    .ends_with("libaura_compiler.a")
+                    .ends_with("libaura_runtime.a")
                     .then(|| PathBuf::from(filename))
             })
         })
-        .expect("Cargo should report the emitted aura-compiler static archive");
+        .expect("Cargo should report the emitted aura-runtime static archive");
 
     let prefix = temp.path.join("toolchain");
     let bin_dir = prefix.join("bin");
@@ -148,7 +148,7 @@ fn packaged_test_aura(temp: &TempDir) -> PathBuf {
     fs::create_dir_all(&runtime_dir).expect("packaged runtime dir should exist");
     let packaged = bin_dir.join("aura");
     fs::copy(aura_bin(), &packaged).expect("test aura should copy into package layout");
-    fs::copy(runtime_archive, runtime_dir.join("libaura_compiler.a"))
+    fs::copy(runtime_archive, runtime_dir.join("libaura_runtime.a"))
         .expect("debug native runtime should copy into package layout");
     fs::write(
         runtime_dir.join("native-link-args.json"),
@@ -165,7 +165,7 @@ fn packaged_parity_aura_uses_cargo_reported_runtime_archive() {
     assert!(packaged.is_file());
     assert!(
         temp.path
-            .join("toolchain/lib/aura/libaura_compiler.a")
+            .join("toolchain/lib/aura/libaura_runtime.a")
             .is_file(),
         "the Cargo-reported runtime archive should be copied into the test toolchain"
     );
