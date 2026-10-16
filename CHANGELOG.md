@@ -7,6 +7,11 @@ in this file.
 
 ## Unreleased
 
+- A module's private class works when another module calls that module's
+  public functions or methods on the MIR backend. Constructing or calling a
+  private class there used to fail with `AU4001` "unknown MIR class". The
+  native backend was not affected.
+
 ## VS Code extension 0.4.1 — 2026-10-16
 
 - Bundles language server 0.4.1. The semantic interface version stays 19.

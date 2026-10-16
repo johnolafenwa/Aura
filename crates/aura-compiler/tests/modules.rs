@@ -575,6 +575,91 @@ def main() -> int32:
 }
 
 #[test]
+fn imported_module_can_use_its_private_class_at_runtime() {
+    let temp = TempDir::new("aura-modules-private-class");
+    temp.write(
+        "store/db.au",
+        r#"class Collection:
+    count: int32
+
+    def insert(mut self) -> int32:
+        self.count = self.count + 1
+        return self.count
+
+public class Database:
+    collection: Collection
+
+    public def insert(mut self) -> int32:
+        return self.collection.insert()
+
+public def open() -> Database:
+    return Database(collection=Collection(count=0))
+"#,
+    );
+    let main_path = temp.write(
+        "main.au",
+        r#"from store.db import open
+
+def main() -> int32:
+    mut db = open()
+    db.insert()
+    print(db.insert())
+    return 0
+"#,
+    );
+
+    let output =
+        run_path(&main_path).expect("a module's private class should run behind its public API");
+    assert_eq!(output.stdout, "2\n");
+}
+
+#[test]
+fn transitively_imported_module_can_use_private_resource_and_generic_classes() {
+    let temp = TempDir::new("aura-modules-private-class-transitive");
+    temp.write(
+        "lib/inner.au",
+        r#"class Handle:
+    name: str
+
+    def close(mut self) -> None:
+        print("closed " + self.name)
+
+class Box[T]:
+    item: T
+
+    def get(own self) -> T:
+        return self.item
+
+public def use_handle() -> int32:
+    with Handle(name="h") as h:
+        print(h.name)
+    b = Box[int32](item=7)
+    return b.get()
+"#,
+    );
+    temp.write(
+        "lib/outer.au",
+        r#"import lib.inner
+
+public def go() -> int32:
+    return lib.inner.use_handle()
+"#,
+    );
+    let main_path = temp.write(
+        "main.au",
+        r#"from lib.outer import go
+
+def main() -> int32:
+    print(go())
+    return 0
+"#,
+    );
+
+    let output = run_path(&main_path).expect("private classes in a transitive import should run");
+    assert_eq!(output.stdout, "h\nclosed h\n7\n");
+}
+
+#[test]
 fn transitive_reexported_imports_run() {
     let temp = TempDir::new("aura-modules-transitive-reexport");
     temp.write(
