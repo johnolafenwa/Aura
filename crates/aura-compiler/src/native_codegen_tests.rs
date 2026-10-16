@@ -15979,3 +15979,31 @@ fn type_parameter_collection_walks_callable_and_closure_contracts() {
         BTreeSet::from(["P".to_string(), "Q".to_string()])
     );
 }
+
+#[test]
+fn direct_cleanup_of_a_known_resource_type_uses_its_own_close_entry() {
+    let source = r#"
+def worker(events: Queue[str]):
+    events.put("done")
+    events.close()
+
+def main() -> int32:
+    events = Queue[str]()
+    with TaskGroup() as group:
+        group.start(worker, events)
+        for event in events:
+            print(event)
+    return 0
+"#;
+    let mir = lower_source_to_mir(source).expect("task group source should lower to MIR");
+    let object = emit_host_object(&mir).expect("task group source should compile directly");
+    let referenced = object_referenced_symbols(&object);
+    assert!(
+        referenced.contains("aura_direct_close_task_group"),
+        "task group cleanup must call its own close entry: {referenced:?}"
+    );
+    assert!(
+        !referenced.contains("aura_direct_close_value"),
+        "a statically typed cleanup must not use the generic close dispatcher: {referenced:?}"
+    );
+}

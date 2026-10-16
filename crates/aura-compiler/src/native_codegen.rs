@@ -4257,9 +4257,22 @@ impl<'a> NativeCodegen<'a> {
                     )?;
                     builder.ins().return_(&[unit]);
                 } else {
-                    let close_value = self
-                        .object
-                        .declare_func_in_func(self.close_value, builder.func);
+                    // A resource whose static type is known closes through its
+                    // own entry, so the program links only that close path.
+                    let typed_close = match ty {
+                        Type::Named(name, _) => crate::native_runtime::typed_close_symbol(name),
+                        _ => None,
+                    };
+                    let close_id = match typed_close {
+                        Some(symbol) => declare_runtime_function(
+                            &mut self.object,
+                            symbol,
+                            &[types::I64, types::I64],
+                            Some(types::I64),
+                        )?,
+                        None => self.close_value,
+                    };
+                    let close_value = self.object.declare_func_in_func(close_id, builder.func);
                     let cancel_before = builder.ins().iconst(types::I64, 1);
                     let inst = builder.ins().call(close_value, &[raw, cancel_before]);
                     let result = builder.inst_results(inst)[0];

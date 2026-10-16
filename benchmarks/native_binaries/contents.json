@@ -91,10 +91,17 @@
         "analysis",
         "builtin_registry",
         "mir_interpreter",
-        "toml"
+        "toml",
+        "http",
+        "httparse"
       ],
       "present": [
         "serde_json"
+      ],
+      "known_present": [
+        "ring",
+        "rustls",
+        "tungstenite"
       ]
     },
     "json": {
@@ -120,7 +127,9 @@
         "parser",
         "analysis",
         "builtin_registry",
-        "mir_interpreter"
+        "mir_interpreter",
+        "http",
+        "httparse"
       ],
       "present": [
         "rustls",
@@ -146,9 +155,9 @@
   "baselines": {
     "linux-x86_64": {
       "hello_world": 941224,
-      "reference_agent": 2066192,
+      "reference_agent": 1687680,
       "json": 1488200,
-      "tls": 3528136,
+      "tls": 3434592,
       "websocket": 3723640
     },
     "darwin-arm64": {

@@ -3051,6 +3051,35 @@ fn direct_host_builtin_ffi_covers_success_and_diagnostic_boundaries() {
 }
 
 #[test]
+fn typed_close_entries_close_their_own_resource_and_reject_others() {
+    let queue = super::aura_direct_channel_new(std::ptr::null_mut());
+    expect_unit(super::aura_direct_close_queue(queue, 0));
+    unsafe { release_value(queue) };
+
+    for (type_name, entry) in super::TYPED_CLOSE_ENTRIES {
+        let entry = *entry;
+        assert_eq!(
+            super::typed_close_symbol(type_name)
+                .map(|symbol| symbol.starts_with("aura_direct_close_")),
+            Some(true)
+        );
+        let error = run_lightweight_root_task(move || {
+            super::with_task_runtime_error_capture(|| {
+                let value = int_value(1);
+                let _ = entry(value, 0);
+                Ok(Value::Unit)
+            })
+        })
+        .expect_err("a typed close entry must reject another value");
+        assert_eq!(
+            error.message,
+            format!("expected `{type_name}` for cleanup, found `integer`")
+        );
+    }
+    assert_eq!(super::typed_close_symbol("Point"), None);
+}
+
+#[test]
 fn every_host_builtin_entry_checks_its_argument_count() {
     for (name, entry) in super::HOST_BUILTIN_ENTRIES {
         let entry = *entry;

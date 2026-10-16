@@ -10456,6 +10456,70 @@ pub extern "C-unwind" fn aura_direct_close_value(
     })
 }
 
+/// Generates one close entry per resource type, so a cleanup whose static
+/// type is known links only that resource's close path.
+macro_rules! typed_close_entries {
+    ($cancel_before:ident; $($type_name:literal => $symbol:ident($variant:ident($binding:ident) => $close:expr);)*) => {
+        $(
+            #[cfg_attr(not(coverage), no_mangle)]
+            #[allow(unused_variables)]
+            pub extern "C-unwind" fn $symbol(
+                value: *mut OpaqueValue,
+                $cancel_before: i64,
+            ) -> *mut OpaqueValue {
+                task_runtime_boundary(|| {
+                    match unsafe { value_ref(value) } {
+                        Value::$variant($binding) => $close,
+                        other => runtime_error(format!(
+                            "expected `{}` for cleanup, found `{}`",
+                            $type_name,
+                            value_type_name(&other)
+                        )),
+                    }
+                    boxed_value(Value::Unit)
+                })
+            }
+        )*
+
+        /// Each resource type's close entry, for runtime tests.
+        #[cfg(test)]
+        pub(crate) const TYPED_CLOSE_ENTRIES: &[(
+            &str,
+            extern "C-unwind" fn(*mut OpaqueValue, i64) -> *mut OpaqueValue,
+        )] = &[$(($type_name, $symbol)),*];
+
+        /// The close entry for a resource's static type name, or `None` when
+        /// cleanup must dispatch on the runtime value.
+        pub fn typed_close_symbol(type_name: &str) -> Option<&'static str> {
+            match type_name {
+                $($type_name => Some(stringify!($symbol)),)*
+                _ => None,
+            }
+        }
+    };
+}
+
+typed_close_entries! {
+    cancel_before;
+    "Queue" => aura_direct_close_queue(Channel(channel) => channel.close());
+    "TaskGroup" => aura_direct_close_task_group(TaskGroup(group) => close_task_group(&group, cancel_before != 0));
+    "fs.File" => aura_direct_close_file(File(file) => file.close());
+    "net.TcpListener" => aura_direct_close_tcp_listener(TcpListener(listener) => listener.close());
+    "net.TcpStream" => aura_direct_close_tcp_stream(TcpStream(stream) => stream.close());
+    "net.UdpSocket" => aura_direct_close_udp_socket(UdpSocket(socket) => socket.close());
+    "net.HttpListener" => aura_direct_close_http_listener(HttpListener(listener) => listener.close());
+    "net.WebSocket" => aura_direct_close_websocket(WebSocket(socket) => {
+                    let _ = socket.close();
+                });
+    "process.Child" => aura_direct_close_process_child(ProcessChild(child) => child.close());
+    "process.Pipe" => aura_direct_close_process_pipe(ProcessPipe(pipe) => pipe.close());
+    "process.Supervisor" => aura_direct_close_process_supervisor(ProcessSupervisor(supervisor) => supervisor.close());
+    "net.UnixListener" => aura_direct_close_unix_listener(UnixListener(listener) => listener.close());
+    "net.UnixStream" => aura_direct_close_unix_stream(UnixStream(stream) => stream.close());
+    "net.TlsListener" => aura_direct_close_tls_listener(TlsListener(listener) => listener.close());
+    "net.TlsStream" => aura_direct_close_tls_stream(TlsStream(stream) => stream.close());
+}
+
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_io_write(text: *mut OpaqueValue) -> *mut OpaqueValue {
     task_runtime_boundary(|| match unsafe { value_ref(text) } {
