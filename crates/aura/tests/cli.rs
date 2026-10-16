@@ -5885,11 +5885,21 @@ fn direct_run_json_distinguishes_normal_nonzero_status_from_a_runtime_trap() {
 
     let warm = run();
     assert_eq!(warm.status.code(), Some(1));
-    assert!(
-        warm.stderr.is_empty(),
-        "a warm normal status 1 needs neither a diagnostic nor a progress document: {}",
-        String::from_utf8_lossy(&warm.stderr)
-    );
+    // Other tests in this binary build the shared native runtime in parallel,
+    // so a warm run may wait for that lock. It must not rebuild the program
+    // or report a diagnostic.
+    if !warm.stderr.is_empty() {
+        let warm_report = parse_single_json_stderr(&warm, "warm normal nonzero direct run");
+        assert!(
+            warm_report.get("diagnostics").is_none(),
+            "ordinary status 1 must not be classified as a diagnostic: {warm_report}"
+        );
+        assert_eq!(
+            warm_report["progress"],
+            serde_json::json!(["aura: waiting for a concurrent build..."]),
+            "a warm normal status 1 reports at most a lock wait: {warm_report}"
+        );
+    }
 }
 
 #[cfg(unix)]
