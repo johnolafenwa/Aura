@@ -127,7 +127,7 @@ order.
 
 | Crate | Kind | Contents | Depends on |
 | --- | --- | --- | --- |
-| `aura-core` | rlib | Types the runtime must see: `Type`, `UnionType`, `FunctionParamContract`, `ClosureCallKind`, integer bounds, `Diagnostic`, spans, runtime frames, limits, and the `BinaryOp`, `UnaryOp`, and `ReceiverKind` operator enums | `serde`, behind a feature only the compiler enables |
+| `aura-core` | rlib | Types the runtime must see: `Type`, `UnionType`, `FunctionParamContract`, `ClosureCallKind`, integer bounds, `Diagnostic`, spans, runtime frames, the type budget, task stack bounds, and the `BinaryOp`, `UnaryOp`, and `ReceiverKind` operator enums | `serde` and `serde_json`, which step 5 moves behind a feature only the compiler enables |
 | `aura-runtime` | staticlib and rlib | `native_runtime`, `runtime_value`, `runtime_reactor`, `union_runtime`, the JSON and byte codecs, text methods, randomness, runtime configuration, FFI, and task stacks | `aura-core` and the runtime dependencies |
 | `aura-compiler` | rlib | Lexer, parser, AST, checker, analysis, MIR, the MIR interpreter, native codegen, packages, formatter, and builtin module signatures | `aura-core`, `aura-runtime` as an rlib, Cranelift |
 
