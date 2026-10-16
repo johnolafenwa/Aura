@@ -398,18 +398,18 @@ const LOOKUP_ENTRY_METHODS: &str = r#"class Bucket:
     def size(self) -> int64:
         return self.items.len()
 
-    def push(mut self, value: int64):
+    def add(mut self, value: int64):
         self.items.append(value)
 
 class Registry:
     buckets: dict[str, Bucket] = {}
 
-    def push(mut self, name: str, value: int64):
+    def add(mut self, name: str, value: int64):
         if name not in self.buckets:
             self.buckets[name.clone()] = Bucket()
         match mut self.buckets.lookup(name):
             case Lookup.Found(bucket):
-                bucket.push(value)
+                bucket.add(value)
             case Lookup.Missing:
                 pass
 
@@ -424,7 +424,7 @@ def main():
     mut registry = Registry()
     mut i = 0
     while i < 200:
-        registry.push("a", i)
+        registry.add("a", i)
         i += 1
     mut total = 0
     i = 0
