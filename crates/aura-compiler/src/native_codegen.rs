@@ -1081,10 +1081,13 @@ impl<'a> NativeCodegen<'a> {
             try_or_string_error!(cranelift_native::builder(), "failed to detect host ISA: {}");
         let isa = try_or_string_error!(isa_builder.finish(flags), "failed to build host ISA: {}");
         let call_conv = isa.default_call_conv();
-        let builder = try_or_string_error!(
+        let mut builder = try_or_string_error!(
             ObjectBuilder::new(isa, "aura_direct".to_string(), default_libcall_names()),
             "failed to initialize object builder: {}"
         );
+        // One section per function lets ELF linkers drop unused generated
+        // functions with `--gc-sections`; Mach-O already strips per symbol.
+        builder.per_function_section(true);
         let mut object = ObjectModule::new(builder);
 
         declare_runtime_functions!(

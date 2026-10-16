@@ -10497,15 +10497,13 @@ fn websocket_set_nonblocking(socket: &mut WebSocketStateKind, enabled: bool) -> 
 }
 
 fn websocket_config() -> WebSocketConfig {
-    #[allow(deprecated)]
-    WebSocketConfig {
-        max_send_queue: None,
-        write_buffer_size: 128 * 1024,
-        max_write_buffer_size: MAX_WEBSOCKET_WRITE_BUFFER_BYTES,
-        max_message_size: Some(MAX_WEBSOCKET_MESSAGE_BYTES),
-        max_frame_size: Some(MAX_WEBSOCKET_FRAME_BYTES),
-        accept_unmasked_frames: false,
-    }
+    WebSocketConfig::default()
+        .read_buffer_size(128 * 1024)
+        .write_buffer_size(128 * 1024)
+        .max_write_buffer_size(MAX_WEBSOCKET_WRITE_BUFFER_BYTES)
+        .max_message_size(Some(MAX_WEBSOCKET_MESSAGE_BYTES))
+        .max_frame_size(Some(MAX_WEBSOCKET_FRAME_BYTES))
+        .accept_unmasked_frames(false)
 }
 
 fn websocket_client_key() -> io::Result<String> {
@@ -13705,11 +13703,11 @@ impl WebSocketValue {
     }
 
     pub(crate) fn send_text(&self, text: &str, timeout: Option<StdDuration>) -> io::Result<()> {
-        self.send_message(Message::Text(text.to_string()), timeout)
+        self.send_message(Message::Text(text.into()), timeout)
     }
 
     pub(crate) fn send_bytes(&self, bytes: &[u8], timeout: Option<StdDuration>) -> io::Result<()> {
-        self.send_message(Message::Binary(bytes.to_vec()), timeout)
+        self.send_message(Message::Binary(bytes.into()), timeout)
     }
 
     #[allow(clippy::result_large_err)]
@@ -13768,7 +13766,7 @@ impl WebSocketValue {
         };
         match message {
             Message::Text(text) => Ok(Some(text.to_string())),
-            Message::Binary(bytes) => Ok(Some(io_decode_utf8(bytes.as_ref())?)),
+            Message::Binary(bytes) => Ok(Some(io_decode_utf8(bytes.as_slice())?)),
             Message::Close(_) => Ok(None),
             _ => Ok(None),
         }
@@ -13780,8 +13778,8 @@ impl WebSocketValue {
             None => return Ok(None),
         };
         match message {
-            Message::Text(text) => Ok(Some(text.as_bytes().to_vec())),
-            Message::Binary(bytes) => Ok(Some(bytes.to_vec())),
+            Message::Text(text) => Ok(Some(text.as_str().as_bytes().to_vec())),
+            Message::Binary(bytes) => Ok(Some(bytes.as_slice().to_vec())),
             Message::Close(_) => Ok(None),
             _ => Ok(None),
         }
