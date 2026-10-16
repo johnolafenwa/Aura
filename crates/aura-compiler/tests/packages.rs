@@ -172,6 +172,54 @@ public service_name = initialize()
 }
 
 #[test]
+fn dependency_package_functions_can_call_builtin_modules() {
+    let temp = TempDir::new("aura-package-dependency-builtins");
+    temp.write(
+        "app/Aura.toml",
+        r#"[package]
+name = "app"
+version = "0.1.0"
+edition = "2026"
+
+[dependencies]
+depfs = { path = "../depfs" }
+"#,
+    );
+    let main_path = temp.write(
+        "app/src/main.au",
+        r#"import depfs.files
+
+def main():
+    print(depfs.files.file_exists("/aura-test-missing-path"))
+    print(depfs.files.render(7))
+"#,
+    );
+    temp.write(
+        "depfs/Aura.toml",
+        r#"[package]
+name = "depfs"
+version = "0.1.0"
+edition = "2026"
+"#,
+    );
+    temp.write(
+        "depfs/src/files.au",
+        r#"import fs
+import json
+
+public def file_exists(path: str) -> bool:
+    return fs.exists(path)
+
+public def render(value: int64) -> str:
+    return json.dumps(json.Value.Int(value))
+"#,
+    );
+
+    let output = run_path(&main_path).expect("dependency builtin module calls should resolve");
+    assert_eq!(output.stdout, "false\n7\n");
+}
+
+#[test]
 fn manifest_rooted_src_package_resolves_local_and_path_dependencies_and_writes_lockfile() {
     let temp = TempDir::new("aura-packages-manifest-path-deps");
     temp.write(

@@ -7,6 +7,15 @@ in this file.
 
 ## Unreleased
 
+- A function in a dependency package can call builtin modules such as `fs`
+  and `json`. It used to fail at run time with `AU4001` "unknown MIR
+  function `pkg.fs::exists`".
+- On the direct backend, a method call on a collection field, such as
+  `self.docs.get(i)` or `for doc in self.docs`, no longer copies the whole
+  field. Neither does passing a field such as `self.by_id` to a function
+  parameter, or calling a method on an entry reached through `lookup`.
+  Each of these used to deep-clone the field or entry on every call, so
+  loops over a field were quadratic.
 - A module's private class works when another module calls that module's
   public functions or methods on the MIR backend. Constructing or calling a
   private class there used to fail with `AU4001` "unknown MIR class". The

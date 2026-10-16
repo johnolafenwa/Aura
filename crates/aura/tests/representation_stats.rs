@@ -51,6 +51,7 @@ struct Stats {
     closure_environments: u64,
     opaque_boxes: u64,
     callable_overflow_allocations: u64,
+    cloned_elements: u64,
 }
 
 fn parse_stats(stderr: &str, backend: &str) -> Stats {
@@ -68,6 +69,7 @@ fn parse_stats(stderr: &str, backend: &str) -> Stats {
             "closure_environments" => stats.closure_environments = value,
             "opaque_boxes" => stats.opaque_boxes = value,
             "callable_overflow_allocations" => stats.callable_overflow_allocations = value,
+            "cloned_elements" => stats.cloned_elements = value,
             other => panic!("unexpected stats field `{other}`"),
         }
     }
@@ -300,4 +302,147 @@ fn direct_callable_boundaries_box_once_each() {
         "a list store and a task start each box the callable once at the boundary"
     );
     assert_eq!(direct.callable_overflow_allocations, 0);
+}
+
+/// A class whose collection fields are read, looped over, and appended to
+/// from methods and free functions. Each operation should copy only the
+/// elements it hands out, never the whole field.
+const COLLECTION_FIELD_ACCESS: &str = r#"class Store:
+    docs: list[dict[str, int64]] = []
+    by_id: dict[str, int64] = {}
+
+    def add(mut self, key: str, value: int64):
+        add_doc(self.docs, self.by_id, key, value)
+
+    def loop_total(self) -> int64:
+        mut total = 0
+        for doc in self.docs:
+            total += doc.len()
+        return total
+
+    def point_total(self) -> int64:
+        mut total = 0
+        mut i = 0
+        while i < self.docs.len():
+            match self.docs.get(i):
+                case Lookup.Found(doc):
+                    total += doc.len()
+                case Lookup.Missing:
+                    pass
+            if f"k{i}" in self.by_id:
+                total += 1
+            i += 1
+        return total
+
+    def position(self, key: str) -> int64:
+        return find_position(self.by_id, key)
+
+def add_doc(
+    docs: mut list[dict[str, int64]],
+    by_id: mut dict[str, int64],
+    key: str,
+    value: int64,
+):
+    mut doc: dict[str, int64] = {}
+    doc["a"] = value
+    doc["b"] = value
+    by_id[key.clone()] = docs.len()
+    docs.append(doc)
+
+def find_position(by_id: dict[str, int64], key: str) -> int64:
+    match by_id.get(key):
+        case Lookup.Found(position):
+            return position
+        case Lookup.Missing:
+            return -1
+
+def main():
+    mut store = Store()
+    mut i = 0
+    while i < 200:
+        store.add(f"k{i}", i)
+        i += 1
+    print(store.loop_total())
+    print(store.point_total())
+    mut found = 0
+    i = 0
+    while i < 200:
+        found += store.position(f"k{i}")
+        i += 1
+    print(found)
+"#;
+
+#[test]
+fn direct_collection_field_access_does_not_clone_the_whole_field() {
+    let (_, direct) = assert_both_backends(
+        "repr-field-access",
+        COLLECTION_FIELD_ACCESS,
+        "400\n600\n19900\n",
+    );
+    // The same work on local variables copies 2,400 elements: each
+    // appended document once, and each document handed out by the loop and
+    // by `get`. Cloning the whole `docs` or `by_id` field per access copied
+    // more than 580,000.
+    assert!(
+        direct.cloned_elements <= 2_400,
+        "collection field access cloned {} elements on the direct backend",
+        direct.cloned_elements
+    );
+}
+
+/// Instances stored in a dictionary field and reached through `lookup`,
+/// with shared and mutable methods called on the entry.
+const LOOKUP_ENTRY_METHODS: &str = r#"class Bucket:
+    items: list[int64] = []
+
+    def size(self) -> int64:
+        return self.items.len()
+
+    def add(mut self, value: int64):
+        self.items.append(value)
+
+class Registry:
+    buckets: dict[str, Bucket] = {}
+
+    def add(mut self, name: str, value: int64):
+        if name not in self.buckets:
+            self.buckets[name.clone()] = Bucket()
+        match mut self.buckets.lookup(name):
+            case Lookup.Found(bucket):
+                bucket.add(value)
+            case Lookup.Missing:
+                pass
+
+    def size(self, name: str) -> int64:
+        match self.buckets.lookup(name):
+            case Lookup.Found(bucket):
+                return bucket.size()
+            case Lookup.Missing:
+                return 0
+
+def main():
+    mut registry = Registry()
+    mut i = 0
+    while i < 200:
+        registry.add("a", i)
+        i += 1
+    mut total = 0
+    i = 0
+    while i < 200:
+        total += registry.size("a")
+        i += 1
+    print(total)
+"#;
+
+#[test]
+fn direct_lookup_entry_methods_do_not_clone_the_entry() {
+    let (_, direct) = assert_both_backends("repr-lookup-entry", LOOKUP_ENTRY_METHODS, "40000\n");
+    // Each call, and the presence probe that begins each `lookup`, used to
+    // copy the whole `Bucket`, up to 200 items, and the `in` test copied
+    // the whole dictionary: more than 260,000 elements in all.
+    assert!(
+        direct.cloned_elements <= 1_000,
+        "lookup entry methods cloned {} elements on the direct backend",
+        direct.cloned_elements
+    );
 }

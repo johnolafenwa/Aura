@@ -311,6 +311,7 @@ pub mod representation_stats {
     static CLOSURE_ENVIRONMENTS: AtomicU64 = AtomicU64::new(0);
     static OPAQUE_BOXES: AtomicU64 = AtomicU64::new(0);
     static CALLABLE_OVERFLOW_ALLOCATIONS: AtomicU64 = AtomicU64::new(0);
+    static CLONED_ELEMENTS: AtomicU64 = AtomicU64::new(0);
 
     /// The environment variable that requests the exit report.
     pub const ENV_VAR: &str = "AURA_RUNTIME_STATS";
@@ -322,6 +323,11 @@ pub mod representation_stats {
         pub closure_environments: u64,
         pub opaque_boxes: u64,
         pub callable_overflow_allocations: u64,
+        /// List elements, set members, dictionary entries, instance fields,
+        /// and JSON array or object members copied by deep clones. It grows
+        /// with the size of what is cloned, so a hidden clone of a whole
+        /// collection shows up in proportion to that collection.
+        pub cloned_elements: u64,
     }
 
     impl RepresentationStats {
@@ -333,17 +339,19 @@ pub mod representation_stats {
                 opaque_boxes: self.opaque_boxes - earlier.opaque_boxes,
                 callable_overflow_allocations: self.callable_overflow_allocations
                     - earlier.callable_overflow_allocations,
+                cloned_elements: self.cloned_elements - earlier.cloned_elements,
             }
         }
 
         /// The report line a backend prints at exit.
         pub fn report_line(self, backend: &str) -> String {
             format!(
-                "aura runtime stats ({backend}): union_payload_boxes={} closure_environments={} opaque_boxes={} callable_overflow_allocations={}",
+                "aura runtime stats ({backend}): union_payload_boxes={} closure_environments={} opaque_boxes={} callable_overflow_allocations={} cloned_elements={}",
                 self.union_payload_boxes,
                 self.closure_environments,
                 self.opaque_boxes,
-                self.callable_overflow_allocations
+                self.callable_overflow_allocations,
+                self.cloned_elements
             )
         }
 
@@ -360,6 +368,7 @@ pub mod representation_stats {
                     "closure_environments" => stats.closure_environments = value,
                     "opaque_boxes" => stats.opaque_boxes = value,
                     "callable_overflow_allocations" => stats.callable_overflow_allocations = value,
+                    "cloned_elements" => stats.cloned_elements = value,
                     _ => return None,
                 }
             }
@@ -383,6 +392,12 @@ pub mod representation_stats {
         CALLABLE_OVERFLOW_ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
     }
 
+    pub fn note_cloned_elements(count: usize) {
+        if count > 0 {
+            CLONED_ELEMENTS.fetch_add(count as u64, Ordering::Relaxed);
+        }
+    }
+
     /// The current totals.
     pub fn snapshot() -> RepresentationStats {
         RepresentationStats {
@@ -390,6 +405,7 @@ pub mod representation_stats {
             closure_environments: CLOSURE_ENVIRONMENTS.load(Ordering::Relaxed),
             opaque_boxes: OPAQUE_BOXES.load(Ordering::Relaxed),
             callable_overflow_allocations: CALLABLE_OVERFLOW_ALLOCATIONS.load(Ordering::Relaxed),
+            cloned_elements: CLONED_ELEMENTS.load(Ordering::Relaxed),
         }
     }
 
@@ -2283,6 +2299,7 @@ pub fn try_clone_array_containing_value(value: &Value) -> Result<Value> {
                     }
                 }
                 Value::Vec(vector) => {
+                    representation_stats::note_cloned_elements(vector.elements.len());
                     let elements =
                         try_array_buffer(vector.elements.len(), "Array-containing Vec copy")?;
                     if vector.elements.is_empty() {
@@ -2301,6 +2318,7 @@ pub fn try_clone_array_containing_value(value: &Value) -> Result<Value> {
                     }
                 }
                 Value::Set(set) => {
+                    representation_stats::note_cloned_elements(set.elements.len());
                     let elements =
                         try_array_buffer(set.elements.len(), "Array-containing Set copy")?;
                     if set.elements.is_empty() {
@@ -2319,6 +2337,7 @@ pub fn try_clone_array_containing_value(value: &Value) -> Result<Value> {
                     }
                 }
                 Value::Map(map) => {
+                    representation_stats::note_cloned_elements(map.entries.len());
                     let entries = try_array_buffer(map.entries.len(), "Array-containing Map copy")?;
                     if let Some((key, pending_value)) = map.entries.first() {
                         state.push_frame(CloneFrame::MapKey {
@@ -2338,6 +2357,7 @@ pub fn try_clone_array_containing_value(value: &Value) -> Result<Value> {
                     }
                 }
                 Value::Instance(instance) => {
+                    representation_stats::note_cloned_elements(instance.fields.len());
                     let mut remaining = instance.fields.iter();
                     if let Some((name, field_value)) = remaining.next() {
                         state.push_frame(CloneFrame::Instance {
@@ -6965,6 +6985,7 @@ fn clone_json_runtime_tree(root: &Value) -> Option<Value> {
                     Some(enum_value(variant, vec![Value::String(value.clone())]))
                 }
                 ("Array", [Value::Vec(vector)]) => {
+                    representation_stats::note_cloned_elements(vector.elements.len());
                     let elements = Vec::with_capacity(vector.elements.len());
                     if vector.elements.is_empty() {
                         Some(enum_value(
@@ -6986,6 +7007,7 @@ fn clone_json_runtime_tree(root: &Value) -> Option<Value> {
                     }
                 }
                 ("Object", [Value::Map(map)]) => {
+                    representation_stats::note_cloned_elements(map.entries.len());
                     let entries = Vec::with_capacity(map.entries.len());
                     if map.entries.is_empty() {
                         Some(enum_value(
@@ -7101,10 +7123,19 @@ impl Clone for Value {
             Self::Bool(value) => Self::Bool(*value),
             Self::String(value) => Self::String(value.clone()),
             Self::Tuple(value) => Self::Tuple(value.clone()),
-            Self::Vec(value) => Self::Vec(value.clone()),
+            Self::Vec(value) => {
+                representation_stats::note_cloned_elements(value.elements.len());
+                Self::Vec(value.clone())
+            }
             Self::Array(value) => Self::Array(value.clone()),
-            Self::Set(value) => Self::Set(value.clone()),
-            Self::Map(value) => Self::Map(value.clone()),
+            Self::Set(value) => {
+                representation_stats::note_cloned_elements(value.elements.len());
+                Self::Set(value.clone())
+            }
+            Self::Map(value) => {
+                representation_stats::note_cloned_elements(value.entries.len());
+                Self::Map(value.clone())
+            }
             Self::Duration(value) => Self::Duration(*value),
             Self::Rng(value) => Self::Rng(value.clone()),
             Self::Range(value) => Self::Range(value.clone()),
@@ -7112,7 +7143,10 @@ impl Clone for Value {
             Self::Function(value) => Self::Function(value.clone()),
             Self::Unit => Self::Unit,
             Self::FfiHandle(value) => Self::FfiHandle(value.clone()),
-            Self::Instance(value) => Self::Instance(value.clone()),
+            Self::Instance(value) => {
+                representation_stats::note_cloned_elements(value.fields.len());
+                Self::Instance(value.clone())
+            }
             Self::EnumVariant(value) => Self::EnumVariant(value.clone()),
             Self::Union(value) => Self::Union(value.clone()),
             Self::Channel(value) => Self::Channel(value.clone()),
