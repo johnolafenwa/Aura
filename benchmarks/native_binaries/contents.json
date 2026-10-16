@@ -66,10 +66,10 @@
         "aws_lc",
         "cranelift",
         "parser",
-        "analysis",
-        "libffi"
+        "analysis"
       ],
       "known_present": [
+        "libffi",
         "builtin_registry",
         "mir_interpreter",
         "rustls",
@@ -140,6 +140,13 @@
       "json": 5106864,
       "tls": 5493144,
       "websocket": 5382184
+    },
+    "darwin-arm64": {
+      "hello_world": 926472,
+      "reference_agent": 2694320,
+      "json": 2135576,
+      "tls": 3037696,
+      "websocket": 3236408
     }
   }
 }
