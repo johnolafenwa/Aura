@@ -2,19 +2,26 @@
 
 Last updated: 2026-10-16
 
-## Aura 0.4.1 fixes (in progress)
+## Aura 0.4.1 preview release (in progress)
+
+- Target: release 0.4.1 with the fixes below, as John asked on 2026-10-15.
+- Release preparation bumps every package to 0.4.1. Details are in
+  `2026-10-16-v0.4.1-preview-release.md`.
+- Remaining: green hosted CI on the release pull request, merge, and the
+  `v0.4.1-preview` tag, which John approves.
+- `VSCE_PAT` must be an org-scoped token before 2026-12-01.
+
+## Aura 0.4.1 fixes (complete)
 
 - Target: fix the defects left open after Batch 4 and remove the shared git
-  cache fallback from the 0.4.0 security review, then release 0.4.1, as
-  John asked on 2026-10-15.
+  cache fallback from the 0.4.0 security review.
 - Done: casts of call results, duplicate class patterns in an or-pattern
   over a union, module-alias unions on the MIR backend, enum payload arity
   in the MIR validator, and the git cache fallback, each with a regression
   test. Three reported defects no longer reproduce and gained regression
   tests. Details are in `2026-10-15-v0.4.1-fixes.md`.
-- Verification: fixtures and compiler library tests pass locally. Hosted CI
-  is pending on the pull request.
-- Remaining: green hosted CI and merge, then the 0.4.1 release.
+- Merged as PR #52 (`cb7e3472`) after hosted CI `38832731601` passed on
+  Linux and macOS.
 
 ## 0.4.0 preview security review (complete)
 

@@ -7,6 +7,15 @@ in this file.
 
 ## Unreleased
 
+## VS Code extension 0.4.1 — 2026-10-16
+
+- Bundles language server 0.4.1. The semantic interface version stays 19.
+
+## 0.4.1 — 2026-10-16 (technical preview)
+
+Aura 0.4.1 fixes defects found after 0.4.0 and removes a shared git cache
+location. It has no language or interface changes beyond these fixes.
+
 - A cast of a call result, such as `box.size() as float64`, converts the
   value the call returns. It used to report `AU2002` "result type mismatch".
   A conditional operand, such as `(n if n > 0 else 1) as float64`, also

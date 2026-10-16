@@ -27,7 +27,7 @@ curl -fsSL https://johnolafenwa.github.io/Aura/install.sh | sh
 aura --version
 ```
 
-The output begins with `aura 0.4.0-preview`. The rest of the line is the
+The output begins with `aura 0.4.1-preview`. The rest of the line is the
 source commit the binary was built from.
 
 ## What Gets Installed

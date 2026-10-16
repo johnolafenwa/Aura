@@ -33,7 +33,7 @@ To install by hand, download the archive for a supported host and extract it.
 Keep its directory layout intact:
 
 ```text
-aura-v0.4.0-preview-<target>/
+aura-v0.4.1-preview-<target>/
 ├── bin/aura
 ├── lib/aura/
 │   ├── libaura_compiler.a
@@ -103,8 +103,8 @@ aura --version
 On Unix shells, consider adding that export to your shell profile.
 
 Preview builds print their channel and source commit, for example
-`aura 0.4.0-preview (0123456789ab)`. Source-checkout builds print the channel
-as `aura 0.4.0-dev (0123456789ab)`.
+`aura 0.4.1-preview (0123456789ab)`. Source-checkout builds print the channel
+as `aura 0.4.1-dev (0123456789ab)`.
 
 ## Install The VS Code Extension
 
