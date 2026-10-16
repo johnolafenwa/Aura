@@ -1,29 +1,28 @@
 pub mod analysis;
 pub mod ast;
 mod builtin_modules;
-pub(crate) mod bytes_codec;
+pub(crate) use aura_runtime::bytes_codec;
 pub mod call;
 pub use aura_core::diag;
-pub mod ffi;
+pub use aura_runtime::ffi;
 pub mod format;
 pub use aura_core::integer;
-pub(crate) mod json_codec;
+pub(crate) use aura_runtime::json_codec;
 pub mod lexer;
 pub mod limits;
 pub mod mir;
 pub mod mir_runtime;
 mod native_codegen;
-mod native_runtime;
+use aura_runtime::native_runtime;
 mod package;
 pub mod parser;
-mod randomness;
-pub(crate) mod runtime_config;
-mod runtime_reactor;
-pub mod runtime_value;
+use aura_runtime::randomness;
+pub(crate) use aura_runtime::runtime_config;
+pub use aura_runtime::runtime_value;
 pub mod sema;
-pub(crate) mod text_methods;
+pub(crate) use aura_runtime::text_methods;
 pub mod union_layout;
-pub(crate) mod union_runtime;
+pub(crate) use aura_runtime::union_runtime;
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -77,13 +76,10 @@ pub(crate) fn hosted_ci_timing_limit(local_limit: std::time::Duration) -> std::t
 }
 
 #[doc(hidden)]
-pub const INTERNAL_DIAGNOSTIC_FD_ENV: &str = "AURA_INTERNAL_DIAGNOSTIC_FD";
-#[doc(hidden)]
-pub const INTERNAL_DIAGNOSTIC_SIGNAL_FD_ENV: &str = "AURA_INTERNAL_DIAGNOSTIC_SIGNAL_FD";
-#[doc(hidden)]
-pub const INTERNAL_DIAGNOSTIC_SIGNAL_MARKER: u8 = 0x01;
-#[doc(hidden)]
-pub const MAX_INTERNAL_DIAGNOSTIC_BYTES: usize = 1024 * 1024;
+pub use aura_runtime::{
+    INTERNAL_DIAGNOSTIC_FD_ENV, INTERNAL_DIAGNOSTIC_SIGNAL_FD_ENV,
+    INTERNAL_DIAGNOSTIC_SIGNAL_MARKER, MAX_INTERNAL_DIAGNOSTIC_BYTES,
+};
 
 /// Version of the compiler's exported semantic interface.
 ///
@@ -1933,5 +1929,4 @@ fn insert_aliased_namespace_import(
 mod tests;
 
 #[cfg(test)]
-#[path = "array_kernel_corpus_tests.rs"]
-mod array_kernel_corpus;
+use aura_runtime::array_kernel_corpus;

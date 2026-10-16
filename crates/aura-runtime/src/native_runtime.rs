@@ -1,4 +1,8 @@
 #![cfg_attr(coverage, allow(dead_code))]
+// These are the C ABI entry points generated code calls. Their pointer
+// contracts are fixed by native codegen, not by Rust callers, so the public
+// raw-pointer and safety-doc lints do not describe them.
+#![allow(clippy::not_unsafe_ptr_arg_deref, clippy::missing_safety_doc)]
 
 use std::borrow::Borrow;
 #[cfg(test)]
@@ -18,8 +22,6 @@ use std::sync::MutexGuard;
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::time::{Duration as StdDuration, Instant};
 
-use crate::ast::{BinaryOp, ReceiverKind, UnaryOp};
-use crate::builtin_modules::host_builtin_metadata;
 use crate::diag::{Diagnostic, RuntimeCallFrame, RuntimeSourceSpan, RuntimeTaskFrame, Span};
 use crate::ffi::{FfiError, FfiSignature, FfiType, FfiValue, OpaqueHandle};
 use crate::integer::{
@@ -68,15 +70,16 @@ use crate::runtime_value::{
     WebSocketListenerValue, WebSocketValue, DIRECT_RUNTIME_TYPE_FIELD,
     DIRECT_RUNTIME_TYPE_SEPARATOR,
 };
-use crate::sema::Type;
 use crate::text_methods;
+use aura_core::ops::{BinaryOp, ReceiverKind, UnaryOp};
+use aura_core::types::Type;
 
 const DIRECT_FFI_SPEC_MAGIC: &[u8; 4] = b"AUFI";
 #[doc(hidden)]
 pub const DIRECT_FFI_SPEC_VERSION: u8 = 1;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct DirectFfiType {
+pub struct DirectFfiType {
     pub ffi_type: FfiType,
     pub opaque_name: Option<String>,
     /// The declared `Handle | None` result union of a nullable handle
@@ -85,7 +88,7 @@ pub(crate) struct DirectFfiType {
 }
 
 impl DirectFfiType {
-    pub(crate) fn scalar(ffi_type: FfiType) -> Self {
+    pub fn scalar(ffi_type: FfiType) -> Self {
         debug_assert_ne!(ffi_type, FfiType::OpaqueHandle);
         debug_assert_ne!(ffi_type, FfiType::NullableOpaqueHandle);
         Self {
@@ -95,7 +98,7 @@ impl DirectFfiType {
         }
     }
 
-    pub(crate) fn opaque(name: impl Into<String>) -> Self {
+    pub fn opaque(name: impl Into<String>) -> Self {
         Self {
             ffi_type: FfiType::OpaqueHandle,
             opaque_name: Some(name.into()),
@@ -103,7 +106,7 @@ impl DirectFfiType {
         }
     }
 
-    pub(crate) fn nullable(name: impl Into<String>, union_type: Type) -> Self {
+    pub fn nullable(name: impl Into<String>, union_type: Type) -> Self {
         Self {
             ffi_type: FfiType::NullableOpaqueHandle,
             opaque_name: Some(name.into()),
@@ -113,13 +116,13 @@ impl DirectFfiType {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct DirectFfiParam {
+pub struct DirectFfiParam {
     pub passing: ReceiverKind,
     pub ty: DirectFfiType,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct DirectFfiCallSpec {
+pub struct DirectFfiCallSpec {
     pub symbol: String,
     pub params: Vec<DirectFfiParam>,
     pub result: DirectFfiType,
@@ -1316,7 +1319,7 @@ unsafe fn explicit_runtime_type_name(ptr: *mut OpaqueValue) -> Option<String> {
 
 const CANONICAL_RUNTIME_TYPE_PREFIX: &str = "__aura_type_json_v1__:";
 
-pub(crate) fn canonical_runtime_type_name(ty: &Type) -> String {
+pub fn canonical_runtime_type_name(ty: &Type) -> String {
     format!(
         "{CANONICAL_RUNTIME_TYPE_PREFIX}{}",
         serde_json::to_string(ty).expect("Aura semantic types must serialize")
@@ -1580,9 +1583,9 @@ fn runtime_type_pattern_matches(
         ),
         Type::Callable(pattern_callable) => {
             let (actual_params, actual_return, actual_kind): (
-                &[crate::sema::FunctionParamContract],
+                &[aura_core::types::FunctionParamContract],
                 &Type,
-                Option<crate::sema::ClosureCallKind>,
+                Option<aura_core::types::ClosureCallKind>,
             ) = match actual {
                 Type::Callable(actual_callable) => {
                     if actual_callable.task != pattern_callable.task
@@ -1835,6 +1838,126 @@ struct DirectHostArgBuffer {
     handles: Vec<i64>,
 }
 
+/// One parameter of a dynamic host builtin's ABI.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DynamicHostParam {
+    pub name: &'static str,
+    pub passing: ReceiverKind,
+}
+
+/// The argument ABI of a host builtin that generated code calls through
+/// `aura_direct_host_builtin` with one opaque handle per argument.
+///
+/// The compiler's builtin signatures are the source of truth; a compiler test
+/// checks that this table matches them exactly.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DynamicHostAbi {
+    pub name: &'static str,
+    pub params: &'static [DynamicHostParam],
+}
+
+const fn borrowed(name: &'static str) -> DynamicHostParam {
+    DynamicHostParam {
+        name,
+        passing: ReceiverKind::Borrow,
+    }
+}
+
+const fn owned(name: &'static str) -> DynamicHostParam {
+    DynamicHostParam {
+        name,
+        passing: ReceiverKind::Value,
+    }
+}
+
+pub const DYNAMIC_HOST_ABI: &[DynamicHostAbi] = &[
+    DynamicHostAbi {
+        name: "json::parse",
+        params: &[borrowed("text")],
+    },
+    DynamicHostAbi {
+        name: "json::dumps",
+        params: &[borrowed("value"), borrowed("indent")],
+    },
+    DynamicHostAbi {
+        name: "json::is_null",
+        params: &[borrowed("value")],
+    },
+    DynamicHostAbi {
+        name: "json::as_bool",
+        params: &[borrowed("value")],
+    },
+    DynamicHostAbi {
+        name: "json::as_int",
+        params: &[borrowed("value")],
+    },
+    DynamicHostAbi {
+        name: "json::as_float",
+        params: &[borrowed("value")],
+    },
+    DynamicHostAbi {
+        name: "json::into_string",
+        params: &[owned("value")],
+    },
+    DynamicHostAbi {
+        name: "json::into_array",
+        params: &[owned("value")],
+    },
+    DynamicHostAbi {
+        name: "json::into_object",
+        params: &[owned("value")],
+    },
+    DynamicHostAbi {
+        name: "bytes::hex_encode",
+        params: &[borrowed("value")],
+    },
+    DynamicHostAbi {
+        name: "bytes::hex_decode",
+        params: &[borrowed("text")],
+    },
+    DynamicHostAbi {
+        name: "bytes::base64_encode",
+        params: &[borrowed("value")],
+    },
+    DynamicHostAbi {
+        name: "bytes::base64_decode",
+        params: &[borrowed("text")],
+    },
+    DynamicHostAbi {
+        name: "bytes::sha256",
+        params: &[borrowed("value")],
+    },
+    DynamicHostAbi {
+        name: "bytes::sha256_string",
+        params: &[borrowed("text")],
+    },
+    DynamicHostAbi {
+        name: "bytes::starts_with",
+        params: &[borrowed("value"), borrowed("prefix")],
+    },
+    DynamicHostAbi {
+        name: "bytes::ends_with",
+        params: &[borrowed("value"), borrowed("suffix")],
+    },
+    DynamicHostAbi {
+        name: "bytes::find",
+        params: &[borrowed("value"), borrowed("needle")],
+    },
+    DynamicHostAbi {
+        name: "str.to_bytes",
+        params: &[borrowed("value")],
+    },
+    DynamicHostAbi {
+        name: "str.from_bytes",
+        params: &[borrowed("bytes")],
+    },
+];
+
+/// The ABI of a dynamic host builtin, or `None` for every other name.
+pub fn dynamic_host_abi(name: &str) -> Option<&'static DynamicHostAbi> {
+    DYNAMIC_HOST_ABI.iter().find(|abi| abi.name == name)
+}
+
 impl DirectHostArgBuffer {
     unsafe fn from_raw(buffer: *mut i64, count: usize) -> Self {
         Self {
@@ -1843,7 +1966,7 @@ impl DirectHostArgBuffer {
     }
 
     fn validate(&self, name: &str) -> std::result::Result<(), Diagnostic> {
-        let Some(metadata) = host_builtin_metadata(name) else {
+        let Some(metadata) = dynamic_host_abi(name) else {
             return Err(Diagnostic::coded(
                 "AU4001",
                 format!("unknown dynamic host builtin `{name}`"),
@@ -1868,7 +1991,7 @@ impl DirectHostArgBuffer {
         index: usize,
         expected_passing: ReceiverKind,
     ) -> std::result::Result<*mut OpaqueValue, Diagnostic> {
-        let metadata = host_builtin_metadata(name).ok_or_else(|| {
+        let metadata = dynamic_host_abi(name).ok_or_else(|| {
             Diagnostic::coded("AU4001", format!("unknown dynamic host builtin `{name}`"))
         })?;
         let parameter = metadata.params.get(index).ok_or_else(|| {
@@ -1943,32 +2066,11 @@ impl Drop for DirectHostArgBuffer {
 }
 
 fn is_dynamic_json_host_builtin(name: &str) -> bool {
-    matches!(
-        name,
-        "json::parse"
-            | "json::dumps"
-            | "json::is_null"
-            | "json::as_bool"
-            | "json::as_int"
-            | "json::as_float"
-            | "json::into_string"
-            | "json::into_array"
-            | "json::into_object"
-    )
+    name.starts_with("json::") && dynamic_host_abi(name).is_some()
 }
 
 fn is_dynamic_bytes_host_builtin(name: &str) -> bool {
-    matches!(
-        name,
-        "bytes::hex_encode"
-            | "bytes::hex_decode"
-            | "bytes::base64_encode"
-            | "bytes::base64_decode"
-            | "bytes::sha256"
-            | "bytes::sha256_string"
-            | "str.to_bytes"
-            | "str.from_bytes"
-    ) || text_methods::is_bytes_search_builtin(name)
+    !name.starts_with("json::") && dynamic_host_abi(name).is_some()
 }
 
 fn evaluate_direct_bytes_host_builtin(
@@ -2317,7 +2419,7 @@ fn append_direct_ffi_type(encoded: &mut Vec<u8>, ty: &DirectFfiType) {
     append_direct_ffi_text(encoded, &union_text);
 }
 
-pub(crate) fn encode_direct_ffi_call_spec(spec: &DirectFfiCallSpec) -> Vec<u8> {
+pub fn encode_direct_ffi_call_spec(spec: &DirectFfiCallSpec) -> Vec<u8> {
     let mut encoded = Vec::new();
     encoded.extend_from_slice(DIRECT_FFI_SPEC_MAGIC);
     encoded.push(DIRECT_FFI_SPEC_VERSION);
@@ -3048,7 +3150,7 @@ fn await_process_capture_task(task: Option<TaskValue>, label: &str) -> Vec<u8> {
     }
 }
 
-fn render_runtime_diagnostic(diagnostic: Diagnostic) -> String {
+pub fn render_runtime_diagnostic(diagnostic: Diagnostic) -> String {
     if let Some(context) = DIRECT_PROGRAM_SOURCE.get() {
         diagnostic.render_with_source(&context.path, &context.source)
     } else {
@@ -7844,7 +7946,7 @@ pub extern "C-unwind" fn aura_direct_union_tag_test(
 
 /// The direct backend's spelling for the active member payload of a union
 /// place, used only for trait-method receiver write-back.
-pub(crate) const DIRECT_UNION_ACTIVE_PAYLOAD_PROJECTION: &str = "__union_payload_active";
+pub const DIRECT_UNION_ACTIVE_PAYLOAD_PROJECTION: &str = "__union_payload_active";
 
 /// The active member payload of a union receiver for trait dispatch
 /// (ADR-0052 A8): a copy for shared and mutable receivers, or the payload
@@ -8429,7 +8531,7 @@ fn direct_enum_projection_index(
     variant: &crate::runtime_value::EnumVariantValue,
     segment: &str,
 ) -> std::result::Result<usize, String> {
-    let Some((name, index)) = crate::mir::enum_payload_projection(segment) else {
+    let Some((name, index)) = aura_core::places::enum_payload_projection(segment) else {
         return Err("invalid enum payload projection".to_string());
     };
     if name != variant.variant_name || index >= variant.payloads.len() {
@@ -13540,15 +13642,16 @@ unsafe fn start_direct_task_call(call: DirectTaskCall) -> *mut OpaqueValue {
         let cancellation = group.child_cancellation();
         let stack_size = match stack_size_present {
             0 => None,
-            1 if !(crate::call::MIN_TASK_STACK_BYTES..=crate::call::MAX_TASK_STACK_BYTES)
+            1 if !(aura_core::task::MIN_TASK_STACK_BYTES
+                ..=aura_core::task::MAX_TASK_STACK_BYTES)
                 .contains(&stack_size) =>
             {
                 runtime_diagnostic_error(Diagnostic::coded(
                     "AU4005",
                     format!(
                         "task stack size must be between {} and {} bytes, found {}",
-                        crate::call::MIN_TASK_STACK_BYTES,
-                        crate::call::MAX_TASK_STACK_BYTES,
+                        aura_core::task::MIN_TASK_STACK_BYTES,
+                        aura_core::task::MAX_TASK_STACK_BYTES,
                         stack_size
                     ),
                 ))

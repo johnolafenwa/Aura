@@ -1,0 +1,38 @@
+[package]
+name = "aura-runtime"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lib]
+crate-type = ["rlib", "staticlib"]
+
+[dependencies]
+aura-core = { path = "../aura-core" }
+base64 = "0.22"
+corosensei = "0.3.3"
+getrandom = "0.2"
+httparse = "1"
+libc = "0.2"
+libffi = "5.1.1"
+memchr = "2"
+mio = { version = "0.8", features = ["os-ext", "os-poll", "net"] }
+rustls = { version = "0.23", default-features = false, features = ["logging", "ring", "std", "tls12"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["arbitrary_precision", "unbounded_depth"] }
+sha2 = "0.10"
+toml = "0.8"
+tungstenite = { version = "0.25", features = ["rustls-tls-native-roots"] }
+url = "2"
+webpki-roots = "0.26"
+
+[features]
+# Test hooks and corpora that aura-compiler's tests also use.
+test-support = []
+
+[dev-dependencies]
+rcgen = "0.13"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage)'] }

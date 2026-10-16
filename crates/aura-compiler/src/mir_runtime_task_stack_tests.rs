@@ -5,12 +5,12 @@
 //! first-call headroom of the opt-in minimum stack, under every build profile
 //! the suite runs under.
 
-use super::{
-    task_stack_bounds, task_stack_observation, DefaultStack, Stack,
-    ROOT_LIGHTWEIGHT_TASK_STACK_SIZE,
-};
 use crate::mir_runtime::{MAX_CALL_DEPTH, MIR_RUNTIME_STACK_SIZE, TASK_STACK_HEADROOM_RESERVE};
+use crate::runtime_value::{
+    task_stack_bounds, task_stack_observation, ROOT_LIGHTWEIGHT_TASK_STACK_SIZE,
+};
 use crate::{lower_source_to_mir, run_mir};
+use corosensei::stack::{DefaultStack, Stack};
 use std::sync::Mutex;
 
 /// Serializes the tests that use the process-global observation recorder.
@@ -185,7 +185,7 @@ fn task_stack_bounds_exclude_the_allocator_guard_layout() {
     {
         assert_eq!(
             bounds.usable_limit - stack.limit().get(),
-            super::host_page_size(),
+            crate::runtime_value::host_page_size(),
             "Unix stacks carry exactly one guard page below the writable capacity"
         );
         assert_eq!(
@@ -223,7 +223,7 @@ fn interpreter_call_transitions_fit_inside_the_headroom_reserve() {
         worst.shape
     );
 
-    let minimum_stack = usize::try_from(crate::call::MIN_TASK_STACK_BYTES).expect("positive");
+    let minimum_stack = usize::try_from(aura_core::task::MIN_TASK_STACK_BYTES).expect("positive");
     let entry_overhead = measurements
         .iter()
         .map(|measurement| measurement.entry_overhead)

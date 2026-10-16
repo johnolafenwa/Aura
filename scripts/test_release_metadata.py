@@ -141,7 +141,7 @@ class ReleaseMetadataTests(unittest.TestCase):
         tsan = (ROOT / "scripts/sanitizer-scheduler-tsan.sh").read_text()
         asan = (ROOT / "scripts/sanitizer-native-runtime.sh").read_text()
         native_runtime = (
-            ROOT / "crates/aura-compiler/src/native_runtime.rs"
+            ROOT / "crates/aura-runtime/src/native_runtime.rs"
         ).read_text()
         native_runtime_exports = (ROOT / "crates/aura-compiler/src/lib.rs").read_text()
         ffi_tests = (

@@ -2642,6 +2642,34 @@ impl BuiltinMember {
         self.call_shape().variadic_passing
     }
 
+    /// The receiver type argument that the checker uses as the expected type
+    /// of argument `index`, such as `T` for `list[T].append(value)`. Lowering
+    /// passes the same expected type, so a union element type finds the
+    /// injection the checker recorded for the argument.
+    pub const fn element_typed_argument(self, index: usize) -> Option<usize> {
+        match (self, index) {
+            (
+                Self::VecPush
+                | Self::VecRemove
+                | Self::VecIndex
+                | Self::VecCount
+                | Self::VecContains
+                | Self::MapGet
+                | Self::MapRemove
+                | Self::SetInsert
+                | Self::SetRemove
+                | Self::SetDiscard
+                | Self::QueuePut
+                | Self::QueueTryPut
+                | Self::QueueGetOr
+                | Self::TaskResultOr,
+                0,
+            )
+            | (Self::VecSet | Self::VecInsert, 1) => Some(0),
+            _ => None,
+        }
+    }
+
     /// The audited receiver capability of a builtin method (ADR-0061 H1):
     /// `BorrowMut` for an operation that mutates its receiver's value or a
     /// non-Copy host resource, `Borrow` otherwise. Operations on Copy runtime

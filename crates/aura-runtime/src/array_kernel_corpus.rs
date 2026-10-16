@@ -6,7 +6,7 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 
 #[derive(Clone, Copy, Debug)]
-pub(crate) enum Kernel {
+pub enum Kernel {
     Binary {
         operation: i64,
         mode: i64,
@@ -141,9 +141,7 @@ fn fingerprint(result: Result<Value, Diagnostic>) -> String {
     format!("sha256: {:x}", digest.finalize())
 }
 
-pub(crate) fn verify(
-    mut evaluate: impl FnMut(Kernel, Value, Option<Value>) -> Result<Value, Diagnostic>,
-) {
+pub fn verify(mut evaluate: impl FnMut(Kernel, Value, Option<Value>) -> Result<Value, Diagnostic>) {
     let expected: BTreeMap<String, String> =
         serde_json::from_str(include_str!("array_kernel_expected.json")).unwrap();
     let mut actual = BTreeMap::new();

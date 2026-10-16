@@ -25,7 +25,7 @@ export CC="$repo_root/scripts/cc-tsan.sh"
 cargo "+$toolchain" test \
   -Zbuild-std \
   --target "$target" \
-  -p aura-compiler \
+  -p aura-runtime \
   --lib \
   'runtime_value::tests::' \
   -- --test-threads=1

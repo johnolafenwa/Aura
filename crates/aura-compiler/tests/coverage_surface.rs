@@ -755,31 +755,6 @@ fn public_serialized_mir_api_runs_safe_payloads_and_rejects_forged_ffi() {
 }
 
 #[test]
-fn native_runtime_abi_accepts_valid_embedded_buffers_and_returns_main_code() {
-    let source = "def main() -> int32:\n    return 7\n";
-    let module = lower_source_to_mir(source).expect("native ABI source should lower");
-    let mir_json = serde_json::to_vec(&module).expect("native ABI MIR should serialize");
-    let source_path = b"/virtual/native-abi.au";
-
-    // SAFETY: each pointer refers to the paired live byte slice for the
-    // duration of the call, exactly as the exported ABI requires.
-    let code = unsafe {
-        aura_compiler::mir_runtime::aura_native_run(
-            mir_json.as_ptr(),
-            mir_json.len(),
-            source_path.as_ptr(),
-            source_path.len(),
-            source.as_ptr(),
-            source.len(),
-        )
-    };
-    assert_eq!(
-        code, 7,
-        "the native runtime ABI must return main's int32 exit code"
-    );
-}
-
-#[test]
 fn public_from_imports_cover_builtin_module_export_resolution() {
     let import_source = r#"
 from fs import exists, File

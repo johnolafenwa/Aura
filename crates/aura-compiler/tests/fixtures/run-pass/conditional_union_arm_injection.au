@@ -1,0 +1,17 @@
+def choose_optional(ready: bool) -> int32 | None:
+    return None if ready else 7
+
+def describe(value: int32 | None) -> str:
+    match value:
+        case int32 as number:
+            return f"number {number}"
+        case None:
+            return "none"
+
+def main():
+    print(describe(choose_optional(true)))
+    print(describe(choose_optional(false)))
+    picked: int32 | None = 3 if false else None
+    print(describe(picked))
+    chosen: int32 | None = 3 if true else None
+    print(describe(chosen))

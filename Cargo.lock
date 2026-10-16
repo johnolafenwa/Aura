@@ -35,13 +35,37 @@ name = "aura-compiler"
 version = "0.4.1"
 dependencies = [
  "aura-core",
- "base64",
+ "aura-runtime",
  "corosensei",
  "cranelift-codegen",
  "cranelift-frontend",
  "cranelift-module",
  "cranelift-native",
  "cranelift-object",
+ "getrandom",
+ "libc",
+ "rcgen",
+ "serde",
+ "serde_json",
+ "sha2",
+ "toml",
+]
+
+[[package]]
+name = "aura-core"
+version = "0.4.1"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "aura-runtime"
+version = "0.4.1"
+dependencies = [
+ "aura-core",
+ "base64",
+ "corosensei",
  "getrandom",
  "httparse",
  "libc",
@@ -57,14 +81,6 @@ dependencies = [
  "tungstenite",
  "url",
  "webpki-roots 0.26.11",
-]
-
-[[package]]
-name = "aura-core"
-version = "0.4.1"
-dependencies = [
- "serde",
- "serde_json",
 ]
 
 [[package]]

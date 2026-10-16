@@ -23,27 +23,9 @@ struct Input {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum BuildBackend {
-    Auto,
-    Direct,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum SelectedBuildBackend {
-    Direct,
-    MirRuntime,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum DiagnosticFormat {
     Human,
     Json,
-}
-
-#[derive(Debug)]
-struct BuildOutcome {
-    selected: SelectedBuildBackend,
-    fallback_reason: Option<String>,
 }
 
 fn main() {
@@ -209,7 +191,7 @@ fn main() {
         "build" => {
             let remaining = args.collect::<Vec<_>>();
             let (diagnostic_format, remaining) = parse_diagnostic_format(remaining);
-            let (output_path, backend, input_args) = parse_build_args(remaining);
+            let (output_path, input_args) = parse_build_args(remaining);
             let input = read_input(&mut input_args.into_iter());
             let result = if input.from_stdin {
                 lower_path_with_source_to_mir(Path::new(&input.path), &input.source)
@@ -226,30 +208,15 @@ fn main() {
                             wait_reported: false,
                             rebuild_reported: false,
                         };
-                        build_binary_with_backend(
-                            &input.path,
-                            &input.source,
-                            &mir,
-                            &output_path,
-                            backend,
-                            || progress_reporter.wait(),
-                        )
+                        build_binary(&input.path, &input.source, &mir, &output_path, || {
+                            progress_reporter.wait()
+                        })
                     };
                     match build {
-                        Ok(outcome) => {
-                            if let Some(reason) = outcome.fallback_reason {
-                                eprintln!(
-                                    "aura: direct backend failed; using MIR runtime fallback:\n{}",
-                                    reason
-                                );
-                            }
+                        Ok(()) => {
                             eprintln!(
-                                "aura: built `{}` with {} backend",
-                                output_path.display(),
-                                match outcome.selected {
-                                    SelectedBuildBackend::Direct => "direct",
-                                    SelectedBuildBackend::MirRuntime => "MIR runtime",
-                                }
+                                "aura: built `{}` with direct backend",
+                                output_path.display()
                             );
                         }
                         Err(message) => {
@@ -3930,9 +3897,8 @@ fn temporary_run_binary_path(source_path: &str) -> PathBuf {
     std::env::temp_dir().join(unique)
 }
 
-fn parse_build_args(args: Vec<String>) -> (PathBuf, BuildBackend, Vec<String>) {
+fn parse_build_args(args: Vec<String>) -> (PathBuf, Vec<String>) {
     let mut output = None;
-    let mut backend = BuildBackend::Auto;
     let mut input_args = Vec::new();
     let mut index = 0;
 
@@ -3953,11 +3919,11 @@ fn parse_build_args(args: Vec<String>) -> (PathBuf, BuildBackend, Vec<String>) {
                     .get(index)
                     .cloned()
                     .unwrap_or_else(|| print_usage_and_exit(2));
-                backend = match value.as_str() {
-                    "auto" => BuildBackend::Auto,
-                    "direct" => BuildBackend::Direct,
-                    _ => print_usage_and_exit(2),
-                };
+                // Every build emits directly. `auto` and `direct` stay
+                // accepted spellings of that one backend.
+                if !matches!(value.as_str(), "auto" | "direct") {
+                    print_usage_and_exit(2);
+                }
                 index += 1;
             }
             _ => {
@@ -3972,7 +3938,7 @@ fn parse_build_args(args: Vec<String>) -> (PathBuf, BuildBackend, Vec<String>) {
         print_usage_and_exit(2);
     }
 
-    (output, backend, input_args)
+    (output, input_args)
 }
 
 fn read_input(args: &mut impl Iterator<Item = String>) -> Input {
@@ -4067,47 +4033,14 @@ fn render_error(path: &str, source: &str, error: &Diagnostic) -> String {
     error.render_with_source(path, source)
 }
 
-fn build_binary_with_backend(
+fn build_binary(
     path: &str,
     source: &str,
     mir: &MirModule,
     output_path: &Path,
-    backend: BuildBackend,
     mut on_wait: impl FnMut(),
-) -> std::result::Result<BuildOutcome, String> {
-    select_build_backend(
-        backend,
-        || build_direct_native_binary(path, source, mir, output_path, Some(&mut on_wait)),
-        || build_mir_runtime_binary(path, source, mir, output_path),
-    )
-}
-
-fn select_build_backend(
-    backend: BuildBackend,
-    direct: impl FnOnce() -> std::result::Result<(), String>,
-    mir_runtime: impl FnOnce() -> std::result::Result<(), String>,
-) -> std::result::Result<BuildOutcome, String> {
-    match backend {
-        BuildBackend::Direct => direct().map(|()| BuildOutcome {
-            selected: SelectedBuildBackend::Direct,
-            fallback_reason: None,
-        }),
-        BuildBackend::Auto => match direct() {
-            Ok(()) => Ok(BuildOutcome {
-                selected: SelectedBuildBackend::Direct,
-                fallback_reason: None,
-            }),
-            Err(direct_error) => match mir_runtime() {
-                Ok(()) => Ok(BuildOutcome {
-                    selected: SelectedBuildBackend::MirRuntime,
-                    fallback_reason: Some(direct_error),
-                }),
-                Err(mir_error) => Err(format!(
-                    "both native build backends failed\n\ndirect backend:\n{direct_error}\n\nMIR runtime backend:\n{mir_error}"
-                )),
-            },
-        },
-    }
+) -> std::result::Result<(), String> {
+    build_direct_native_binary(path, source, mir, output_path, Some(&mut on_wait))
 }
 
 fn build_direct_native_binary(
@@ -4224,85 +4157,6 @@ fn build_direct_native_binary_with_identity(
     Ok(runtime_identity)
 }
 
-fn build_mir_runtime_binary(
-    path: &str,
-    source: &str,
-    mir: &MirModule,
-    output_path: &Path,
-) -> std::result::Result<(), String> {
-    if let Some(parent) = output_path.parent() {
-        fs::create_dir_all(parent).map_err(|error| {
-            format!(
-                "failed to create output directory `{}`: {}",
-                parent.display(),
-                error
-            )
-        })?;
-    }
-
-    let native_runtime = ensure_native_runtime_artifacts()?;
-    let mir_json =
-        serde_json::to_vec(mir).map_err(|error| format!("failed to serialize MIR: {}", error))?;
-    let launcher_source =
-        emit_mir_runtime_launcher_source(&mir_json, path.as_bytes(), source.as_bytes());
-    let temp_source = temporary_mir_runtime_source_path(output_path);
-    let temp_staticlib = temporary_direct_staticlib_path(output_path);
-    write_unique_temp_file(
-        &temp_source,
-        launcher_source.as_bytes(),
-        "MIR runtime launcher source",
-    )?;
-    let staticlib_bytes = fs::read(&native_runtime.staticlib).or_else(|_| {
-        resolve_static_library_path_in_target_dir(native_runtime_target_dir(), current_profile())
-            .and_then(|refreshed| {
-                fs::read(&refreshed).map_err(|error| {
-                    format!(
-                        "failed to read Aura runtime library `{}`: {}",
-                        refreshed.display(),
-                        error
-                    )
-                })
-            })
-    })?;
-    write_unique_temp_file(
-        &temp_staticlib,
-        &staticlib_bytes,
-        "staged Aura runtime library",
-    )?;
-
-    let cc = std::env::var_os("CC").unwrap_or_else(|| "cc".into());
-    let mut command = Command::new(cc);
-    command
-        .arg(&temp_source)
-        .arg(&temp_staticlib)
-        .arg("-o")
-        .arg(output_path);
-    for arg in &native_runtime.native_link_args {
-        command.arg(arg);
-    }
-    command.args(user_binary_link_args(std::env::consts::OS));
-
-    let result = command.output().map_err(|error| {
-        format!(
-            "failed to run native linker for MIR runtime backend: {}",
-            error
-        )
-    });
-
-    let _ = fs::remove_file(&temp_source);
-    let _ = fs::remove_file(&temp_staticlib);
-
-    let output = result?;
-    if !output.status.success() {
-        return Err(format!(
-            "MIR runtime backend link failed:\n{}",
-            String::from_utf8_lossy(&output.stderr)
-        ));
-    }
-    strip_user_binary(output_path)?;
-    Ok(())
-}
-
 fn user_binary_strip_command(path: &Path) -> Command {
     let mut command = Command::new("strip");
     // Keep globals: package-authorized FFI may resolve process-global symbols.
@@ -4352,20 +4206,6 @@ fn temporary_direct_object_path(output_path: &Path) -> PathBuf {
     std::env::temp_dir().join(unique)
 }
 
-fn temporary_mir_runtime_source_path(output_path: &Path) -> PathBuf {
-    let file_name = output_path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("aura-output");
-    let unique = format!(
-        "aura-mir-runtime-{}-{}-{}.c",
-        file_name,
-        std::process::id(),
-        system_time_nanos()
-    );
-    std::env::temp_dir().join(unique)
-}
-
 fn temporary_direct_staticlib_path(output_path: &Path) -> PathBuf {
     let file_name = output_path
         .file_name()
@@ -4378,85 +4218,6 @@ fn temporary_direct_staticlib_path(output_path: &Path) -> PathBuf {
         system_time_nanos()
     );
     std::env::temp_dir().join(unique)
-}
-
-fn write_unique_temp_file(path: &Path, contents: &[u8], description: &str) -> Result<(), String> {
-    write_unique_temp_file_with_writer(path, description, |file| file.write_all(contents))
-}
-
-fn write_unique_temp_file_with_writer(
-    path: &Path,
-    description: &str,
-    writer: impl FnOnce(&mut fs::File) -> io::Result<()>,
-) -> Result<(), String> {
-    let mut file = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path)
-        .map_err(|error| {
-            format!(
-                "failed to create {} `{}`: {}",
-                description,
-                path.display(),
-                error
-            )
-        })?;
-
-    let write_result = writer(&mut file).map_err(|error| {
-        format!(
-            "failed to write {} `{}`: {}",
-            description,
-            path.display(),
-            error
-        )
-    });
-    let flush_result = if write_result.is_ok() {
-        file.flush().map_err(|error| {
-            format!(
-                "failed to flush {} `{}`: {}",
-                description,
-                path.display(),
-                error
-            )
-        })
-    } else {
-        Ok(())
-    };
-
-    let result = write_result.and(flush_result);
-    if result.is_err() {
-        let _ = fs::remove_file(path);
-    }
-    result
-}
-
-fn emit_mir_runtime_launcher_source(mir_json: &[u8], source_path: &[u8], source: &[u8]) -> String {
-    fn render_bytes(name: &str, bytes: &[u8]) -> String {
-        let mut rendered = String::new();
-        rendered.push_str(&format!("static const uint8_t {}[] = {{", name));
-        if bytes.is_empty() {
-            rendered.push('0');
-        } else {
-            for (index, byte) in bytes.iter().enumerate() {
-                if index > 0 {
-                    rendered.push_str(", ");
-                }
-                rendered.push_str(&byte.to_string());
-            }
-        }
-        rendered.push_str("};\n");
-        rendered
-    }
-
-    format!(
-        "#include <stddef.h>\n#include <stdint.h>\n\nextern int aura_native_run(const uint8_t*, size_t, const uint8_t*, size_t, const uint8_t*, size_t);\n\n{}{}{}int main(void) {{\n    return aura_native_run(AURA_MIR, {mir_len}, AURA_SOURCE_PATH, {path_len}, AURA_SOURCE, {source_len});\n}}\n",
-        render_bytes("AURA_MIR", mir_json),
-        render_bytes("AURA_SOURCE_PATH", source_path),
-        render_bytes("AURA_SOURCE", source),
-        mir_len = mir_json.len(),
-        path_len = source_path.len(),
-        source_len = source.len(),
-    )
 }
 
 fn repo_root() -> PathBuf {
@@ -4995,11 +4756,9 @@ mod tests {
         parse_native_static_libs, parse_run_backend, parse_static_library_artifact_path,
         query_native_runtime_link_args, remove_native_cache_entry_if_unchanged,
         resolve_installed_runtime_artifacts_from_executable, resolve_static_library_path,
-        runtime_archive_memo_stamp, select_build_backend, select_run_outcome,
-        verified_native_execution_failure, write_unique_temp_file,
-        write_unique_temp_file_with_writer, BuildBackend, NativeExecutionError, NativeRunOutcome,
-        NativeRuntimeIdentity, RunBackend, SelectedBuildBackend, VerifiedNativeLaunchError,
-        NATIVE_CACHE_ENTRY_ID,
+        runtime_archive_memo_stamp, select_run_outcome, verified_native_execution_failure,
+        NativeExecutionError, NativeRunOutcome, NativeRuntimeIdentity, RunBackend,
+        VerifiedNativeLaunchError, NATIVE_CACHE_ENTRY_ID,
     };
 
     fn unique_temp_dir(name: &str) -> PathBuf {
@@ -5038,46 +4797,34 @@ mod tests {
     }
 
     #[test]
-    fn stripped_direct_and_mir_launchers_keep_source_frames_without_source_files() {
+    fn stripped_direct_binaries_keep_source_frames_without_source_files() {
         let root = unique_temp_dir("stripped-runtime-frames");
         let source =
             "def fail():\n    assert false, \"kept diagnostic\"\n\ndef main():\n    fail()\n";
         let source_path = root.join("removed.au");
         let mir = aura_compiler::lower_source_to_mir(source).unwrap();
-        for direct in [true, false] {
-            let binary = root.join(if direct { "direct" } else { "mir-launcher" });
-            if direct {
-                super::build_direct_native_binary(
-                    source_path.to_str().unwrap(),
-                    source,
-                    &mir,
-                    &binary,
-                    None,
-                )
-                .unwrap();
-            } else {
-                super::build_mir_runtime_binary(
-                    source_path.to_str().unwrap(),
-                    source,
-                    &mir,
-                    &binary,
-                )
-                .unwrap();
-            }
-            assert!(!source_path.exists());
-            let output = Command::new(&binary)
-                .current_dir(&root)
-                .env("CARGO", root.join("no-cargo"))
-                .output()
-                .unwrap();
-            assert!(!output.status.success());
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            assert!(stderr.contains("AU4001"), "{stderr}");
-            assert!(stderr.contains("kept diagnostic"), "{stderr}");
-            assert!(stderr.contains("fail"), "{stderr}");
-            assert!(stderr.contains("main"), "{stderr}");
-            assert!(stderr.contains("removed.au"), "{stderr}");
-        }
+        let binary = root.join("direct");
+        super::build_direct_native_binary(
+            source_path.to_str().unwrap(),
+            source,
+            &mir,
+            &binary,
+            None,
+        )
+        .unwrap();
+        assert!(!source_path.exists());
+        let output = Command::new(&binary)
+            .current_dir(&root)
+            .env("CARGO", root.join("no-cargo"))
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("AU4001"), "{stderr}");
+        assert!(stderr.contains("kept diagnostic"), "{stderr}");
+        assert!(stderr.contains("fail"), "{stderr}");
+        assert!(stderr.contains("main"), "{stderr}");
+        assert!(stderr.contains("removed.au"), "{stderr}");
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -5971,39 +5718,6 @@ printf 'native-static-libs: -lc\\033[0m -lm\\n' >&2\n",
     }
 
     #[test]
-    fn auto_backend_reports_direct_failure_when_falling_back() {
-        let outcome = select_build_backend(
-            BuildBackend::Auto,
-            || Err("direct failed".to_string()),
-            || Ok(()),
-        )
-        .expect("MIR fallback should succeed");
-        assert_eq!(outcome.selected, SelectedBuildBackend::MirRuntime);
-        assert_eq!(outcome.fallback_reason.as_deref(), Some("direct failed"));
-
-        let error = select_build_backend(
-            BuildBackend::Auto,
-            || Err("direct failed".to_string()),
-            || Err("MIR failed".to_string()),
-        )
-        .expect_err("both backend failures should be preserved");
-        assert!(error.contains("direct failed"));
-        assert!(error.contains("MIR failed"));
-    }
-
-    #[test]
-    fn forced_direct_backend_never_invokes_fallback() {
-        let outcome = select_build_backend(
-            BuildBackend::Direct,
-            || Ok(()),
-            || panic!("forced direct mode must not invoke MIR fallback"),
-        )
-        .expect("direct backend should succeed");
-        assert_eq!(outcome.selected, SelectedBuildBackend::Direct);
-        assert!(outcome.fallback_reason.is_none());
-    }
-
-    #[test]
     fn resolve_static_library_path_uses_single_hashed_archive_when_primary_missing() {
         let root = unique_temp_dir("single-hashed");
         let deps = root.join("target").join("debug").join("deps");
@@ -6047,40 +5761,5 @@ printf 'native-static-libs: -lc\\033[0m -lm\\n' >&2\n",
         let resolved = parse_static_library_artifact_path(stdout)
             .expect("cargo artifact output should expose a static archive");
         assert_eq!(resolved, PathBuf::from("/tmp/libaura_compiler-abc123.a"));
-    }
-
-    #[test]
-    fn write_unique_temp_file_rejects_existing_paths() {
-        let root = unique_temp_dir("unique-temp-file");
-        let path = root.join("launcher.c");
-
-        write_unique_temp_file(&path, b"first", "test temp file")
-            .expect("first write should create the temp file");
-        let error = write_unique_temp_file(&path, b"second", "test temp file")
-            .expect_err("existing temp paths should be rejected");
-        assert!(error.contains("failed to create"));
-
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn write_unique_temp_file_removes_partial_file_when_write_fails() {
-        let root = unique_temp_dir("unique-temp-file-cleanup");
-        let path = root.join("launcher.c");
-
-        let error = write_unique_temp_file_with_writer(&path, "test temp file", |file| {
-            use std::io::Write;
-
-            file.write_all(b"partial")?;
-            Err(io::Error::other("simulated write failure"))
-        })
-        .expect_err("partial temp files should be cleaned up after write failures");
-        assert!(error.contains("failed to write"));
-        assert!(
-            !path.exists(),
-            "failed unique-temp writes should not leave a stale partial file behind"
-        );
-
-        let _ = fs::remove_dir_all(root);
     }
 }

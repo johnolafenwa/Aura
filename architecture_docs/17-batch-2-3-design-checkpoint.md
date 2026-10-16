@@ -1397,7 +1397,7 @@ expresses resource cleanup as `PushCleanup`/`PopCleanup` on a place
 ([mir.rs:780–786](../crates/aura-compiler/src/mir.rs)), the interpreter
 keeps a `cleanup_stack` of places ([mir_runtime.rs:3278–3345](../crates/aura-compiler/src/mir_runtime.rs)),
 and the direct backend registers thunks through
-`aura_direct_register_cleanup`/`unregister` ([native_runtime.rs:8229–8253](../crates/aura-compiler/src/native_runtime.rs),
+`aura_direct_register_cleanup`/`unregister` ([native_runtime.rs:8229–8253](../crates/aura-runtime/src/native_runtime.rs),
 [native_codegen.rs:1981–2010](../crates/aura-compiler/src/native_codegen.rs)).
 
 **Recommend generalizing the cleanup instructions to typed exit actions and
@@ -1464,7 +1464,7 @@ runtime cells, and ledger registrations exactly once, but it must not
 execute arbitrary Aura cleanup, reconstruction, or writeback against a
 destroyed frame" ([ADR-0038:562–569](decisions/0038-place-based-loans-and-views.md)).
 The direct runtime's forced-exit callback is documented the same way
-([native_runtime.rs:3760–3768](../crates/aura-compiler/src/native_runtime.rs)),
+([native_runtime.rs:3760–3768](../crates/aura-runtime/src/native_runtime.rs)),
 and the Manual describes scheduler abandonment as a containment path that
 "does not invoke arbitrary Aura cleanup thunks" ([execution-model.md:410–419](../docs/manual/execution-model.md)).
 The Batch 1 checkpoint left this conflict open ([16-batch-1-design-checkpoint.md:1673](16-batch-1-design-checkpoint.md)).
@@ -1483,7 +1483,7 @@ after the scheduler has stopped. Concretely:
    and it is the only cancellation an Aura program can observe.
 2. Scheduler abandonment after a forced reset releases *runtime-owned*
    state exactly once: registered cleanup thunks are dropped, not invoked
-   (`DirectCleanupRegistration`'s drop, [native_runtime.rs:145](../crates/aura-compiler/src/native_runtime.rs));
+   (`DirectCleanupRegistration`'s drop, [native_runtime.rs:145](../crates/aura-runtime/src/native_runtime.rs));
    loan descriptors and ledger entries are released; host handles owned by
    runtime values are closed by their runtime drop. No `__exit__`, `close`,
    or field drop written in Aura runs. Static lowering must have arranged

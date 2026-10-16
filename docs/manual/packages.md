@@ -426,9 +426,8 @@ MIR runtime and the direct native backend receive the same resolved
 declarations and module identities. Backend parity covers imported function
 behavior and cross-package trait dispatch.
 
-Built executables do not resolve source packages at runtime. Direct builds
-contain emitted program code. MIR-launcher builds contain serialized checked
-MIR and the runtime launcher. Package sources and the git cache are compiler
+Built executables do not resolve source packages at runtime. They contain
+emitted program code. Package sources and the git cache are compiler
 inputs, not runtime dependencies of the built program.
 
 ## Limits And Implementation-Defined Behavior

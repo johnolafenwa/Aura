@@ -209,11 +209,9 @@ aura build -o ./hello hello.au
 ./hello
 ```
 
-`aura build` defaults to `auto`. It first tries direct native emission. It may
-fall back to a standalone launcher that contains embedded MIR and the MIR
-runtime. The resulting binary does not need the original `.au` source at run
-time. Producing the binary still needs the host C compiler. Use
-`--backend direct` when fallback is unacceptable.
+`aura build` compiles the program to native code. The resulting binary does
+not need the original `.au` source at run time. Producing the binary still
+needs the host C compiler.
 
 The [Running And Shipping](/learn/native-builds) chapter explains when to pick
 `run` or `build` and what each path gives you.

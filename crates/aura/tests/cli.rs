@@ -8775,6 +8775,39 @@ fn build_with_direct_backend_rejects_unsupported_programs() {
 }
 
 #[test]
+fn default_build_emits_directly_with_no_mir_launcher_fallback() {
+    let fixture = repo_root().join("examples/modules/helpers/math.au");
+    let output_dir = TempDir::new("aura-build-default-no-launcher");
+    let output_path = output_dir.path().join("helper-module-default");
+
+    let build = Command::new(aura_bin())
+        .arg("build")
+        .arg("-o")
+        .arg(&output_path)
+        .arg(&fixture)
+        .output()
+        .expect("failed to run aura build on non-entry module");
+
+    let stderr = String::from_utf8_lossy(&build.stderr);
+    assert!(
+        !build.status.success(),
+        "the default build should reject non-entry modules, stderr was:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("requires a `main` function or top-level script"),
+        "the default build should report the direct error, stderr was:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("MIR runtime"),
+        "the default build must not fall back to a MIR launcher, stderr was:\n{stderr}"
+    );
+    assert!(
+        !output_path.exists(),
+        "a failed build must not create output"
+    );
+}
+
+#[test]
 fn build_rejects_removed_mir_runtime_backend_option() {
     let fixture = repo_root().join("examples/point.au");
     let output_dir = TempDir::new("aura-build-removed-backend");

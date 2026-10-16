@@ -9,14 +9,14 @@ use serde::de::{self, DeserializeSeed, IgnoredAny, MapAccess, SeqAccess, Visitor
 use serde::{Deserialize, Deserializer};
 use serde_json::ser::{CompactFormatter, Formatter};
 
-pub(crate) const MAX_JSON_INPUT_BYTES: usize = 64 * 1024 * 1024;
-pub(crate) const MAX_JSON_OUTPUT_BYTES: usize = 64 * 1024 * 1024;
-pub(crate) const MAX_JSON_DEPTH: usize = 128;
-pub(crate) const MAX_JSON_INDENT: i64 = 16;
-pub(crate) const MAX_JSON_VALUE_NODES: usize = 262_144;
+pub const MAX_JSON_INPUT_BYTES: usize = 64 * 1024 * 1024;
+pub const MAX_JSON_OUTPUT_BYTES: usize = 64 * 1024 * 1024;
+pub const MAX_JSON_DEPTH: usize = 128;
+pub const MAX_JSON_INDENT: i64 = 16;
+pub const MAX_JSON_VALUE_NODES: usize = 262_144;
 
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) enum JsonValue {
+pub enum JsonValue {
     Null,
     Bool(bool),
     Int(i64),
@@ -27,7 +27,7 @@ pub(crate) enum JsonValue {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum JsonCodecError {
+pub enum JsonCodecError {
     Syntax {
         message: String,
         line: usize,
@@ -125,7 +125,7 @@ impl fmt::Display for JsonCodecError {
 
 impl std::error::Error for JsonCodecError {}
 
-pub(crate) fn check_input_len(length: usize) -> Result<(), JsonCodecError> {
+pub fn check_input_len(length: usize) -> Result<(), JsonCodecError> {
     if length <= MAX_JSON_INPUT_BYTES {
         Ok(())
     } else {
@@ -136,7 +136,7 @@ pub(crate) fn check_input_len(length: usize) -> Result<(), JsonCodecError> {
     }
 }
 
-pub(crate) fn check_output_len(current: usize, added: usize) -> Result<(), JsonCodecError> {
+pub fn check_output_len(current: usize, added: usize) -> Result<(), JsonCodecError> {
     match current.checked_add(added) {
         Some(total) if total <= MAX_JSON_OUTPUT_BYTES => Ok(()),
         _ => Err(JsonCodecError::OutputTooLarge {
@@ -145,7 +145,7 @@ pub(crate) fn check_output_len(current: usize, added: usize) -> Result<(), JsonC
     }
 }
 
-pub(crate) fn parse(source: &str) -> Result<JsonValue, JsonCodecError> {
+pub fn parse(source: &str) -> Result<JsonValue, JsonCodecError> {
     check_input_len(source.len())?;
     validate_source_depth(source)?;
     validate_syntax(source)?;
@@ -161,7 +161,7 @@ pub(crate) fn parse(source: &str) -> Result<JsonValue, JsonCodecError> {
         .map_err(|error| deserialize_error(source, error))
 }
 
-pub(crate) fn dumps(value: &JsonValue, indent: Option<i64>) -> Result<String, JsonCodecError> {
+pub fn dumps(value: &JsonValue, indent: Option<i64>) -> Result<String, JsonCodecError> {
     if let Some(indent) = indent {
         if !(0..=MAX_JSON_INDENT).contains(&indent) {
             return Err(JsonCodecError::InvalidIndent {
@@ -178,7 +178,7 @@ pub(crate) fn dumps(value: &JsonValue, indent: Option<i64>) -> Result<String, Js
 
 #[cfg(test)]
 impl JsonValue {
-    pub(crate) fn object(entries: Vec<(String, JsonValue)>) -> Self {
+    pub fn object(entries: Vec<(String, JsonValue)>) -> Self {
         let mut unique = ObjectBuilder::try_with_capacity(entries.len())
             .expect("test JSON object allocation should succeed");
         for (key, value) in entries {

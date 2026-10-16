@@ -5,18 +5,18 @@ const SPLITMIX64_INCREMENT: u64 = 0x9e37_79b9_7f4a_7c15;
 const SPLITMIX64_MIX_1: u64 = 0xbf58_476d_1ce4_e5b9;
 const SPLITMIX64_MIX_2: u64 = 0x94d0_49bb_1331_11eb;
 const UNIT_FLOAT_SCALE: f64 = 1.0 / ((1_u64 << 53) as f64);
-pub(crate) const MAX_SECURE_BYTES_LEN: usize = i32::MAX as usize;
+pub const MAX_SECURE_BYTES_LEN: usize = i32::MAX as usize;
 
 #[derive(Clone, Debug)]
-pub(crate) struct DeterministicRng {
+pub struct DeterministicRng {
     state: [u64; 4],
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub(crate) struct InvalidRandomRange;
+pub struct InvalidRandomRange;
 
 #[derive(Debug)]
-pub(crate) enum SecureRandomError {
+pub enum SecureRandomError {
     InvalidRange,
     RequestExceedsCeiling { requested: usize, maximum: usize },
     Allocation(TryReserveError),
@@ -42,14 +42,14 @@ impl fmt::Display for SecureRandomError {
 }
 
 impl DeterministicRng {
-    pub(crate) fn from_seed(seed: i64) -> Self {
+    pub fn from_seed(seed: i64) -> Self {
         let mut splitmix_state = seed as u64;
         Self {
             state: std::array::from_fn(|_| splitmix64_next(&mut splitmix_state)),
         }
     }
 
-    pub(crate) fn next_u64(&mut self) -> u64 {
+    pub fn next_u64(&mut self) -> u64 {
         let result = self.state[1].wrapping_mul(5).rotate_left(7).wrapping_mul(9);
         let shifted = self.state[1] << 17;
 
@@ -63,17 +63,17 @@ impl DeterministicRng {
         result
     }
 
-    pub(crate) fn next_int(&mut self, lower: i64, upper: i64) -> Result<i64, InvalidRandomRange> {
+    pub fn next_int(&mut self, lower: i64, upper: i64) -> Result<i64, InvalidRandomRange> {
         let span = checked_span(lower, upper).ok_or(InvalidRandomRange)?;
         let offset = sample_bounded_with(span, || self.next_u64());
         Ok(add_offset(lower, offset))
     }
 
-    pub(crate) fn next_float(&mut self) -> f64 {
+    pub fn next_float(&mut self) -> f64 {
         unit_float_from_u64(self.next_u64())
     }
 
-    pub(crate) fn shuffle<T>(&mut self, values: &mut [T]) {
+    pub fn shuffle<T>(&mut self, values: &mut [T]) {
         for upper in (1..values.len()).rev() {
             let selected = sample_bounded_with((upper as u64) + 1, || self.next_u64());
             values.swap(upper, selected as usize);
@@ -81,11 +81,11 @@ impl DeterministicRng {
     }
 }
 
-pub(crate) fn secure_int(lower: i64, upper: i64) -> Result<i64, SecureRandomError> {
+pub fn secure_int(lower: i64, upper: i64) -> Result<i64, SecureRandomError> {
     secure_int_with(lower, upper, getrandom::getrandom)
 }
 
-pub(crate) fn secure_bytes(length: usize) -> Result<Vec<u8>, SecureRandomError> {
+pub fn secure_bytes(length: usize) -> Result<Vec<u8>, SecureRandomError> {
     secure_bytes_with(length, getrandom::getrandom)
 }
 

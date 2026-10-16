@@ -938,12 +938,7 @@ fn split_field_path_segments<'a>(
 /// The opcode the direct runtime's text dispatcher expects for one
 /// `str` text-convenience method. It must match
 /// `native_runtime::aura_direct_string_text_method`.
-pub(crate) fn text_method_opcode(field: &str) -> Option<i64> {
-    crate::text_methods::TEXT_METHOD_NAMES
-        .iter()
-        .position(|name| *name == field)
-        .map(|index| index as i64)
-}
+pub(crate) use crate::text_methods::text_method_opcode;
 
 fn ordered_named_args<'a>(
     expected_names: &[&str],

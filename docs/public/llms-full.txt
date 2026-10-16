@@ -107,6 +107,10 @@ Each component has its own README:
   binary directly.
 - [crates/aura-compiler](crates/aura-compiler/README.md): compiler library
   tests.
+- `crates/aura-core`: semantic types, diagnostics, and integer helpers
+  shared by the compiler and the native runtime.
+- `crates/aura-runtime`: the native runtime that executables link, with
+  runtime values, the scheduler, host builtins, codecs, and FFI.
 - `tools/vscode-aura`: the VS Code extension for syntax highlighting and the
   language client.
 - `tools/aura-language-server`: the Aura Language Server Protocol
@@ -2914,15 +2918,13 @@ The pool follows these rules:
 ## Building
 
 ```bash
-cargo run -p aura -- build --backend auto -o ./target/app app.au
-cargo run -p aura -- build --backend direct -o ./target/app app.au
+cargo run -p aura -- build -o ./target/app app.au
 ```
 
-`--backend auto` is the default. It first tries the maintained direct backend.
-When direct emission is unavailable, it may fall back to a native launcher that
-embeds serialized MIR and the MIR runtime. `--backend direct` forbids that
-fallback. Both forms produce standalone executables, and both must implement
-the same checked language behavior.
+`aura build` compiles the program to native code with the direct backend and
+links a standalone executable. `--backend auto` and `--backend direct` are
+accepted and select the same backend. A file without a `main` function or
+top-level statements fails with `AU2999`, because it has no entry point.
 
 An installed release archive finds its native runtime relative to `bin/aura`,
 under `lib/aura`. It needs only a host C compiler for the final link. A binary
@@ -2943,7 +2945,7 @@ The option follows these rules:
   normal stripping policy.
 - It is part of the native cache key, so profiling executables and normally
   stripped executables use separate cache entries.
-- It applies to both direct binaries and generated MIR launchers.
+- It applies to every built executable.
 - It changes symbol retention, not language behavior or source diagnostics.
 
 It does not restore symbols already removed from the runtime archive. To
@@ -2959,7 +2961,7 @@ the runtime's `extern "C-unwind"` boundaries. This profile reduces shipped
 compiler metadata. It does not strip the runtime archive's linkable symbols or
 change the default MIR execution mode.
 
-Direct builds and embedded-MIR launcher builds both request unused-section
+Every build requests unused-section
 removal: `-Wl,-dead_strip` on macOS and `-Wl,--gc-sections` on Linux. After a
 successful link, Aura runs `strip -S -x` on the user executable. This removes
 debug and local symbols but keeps globals for process-global FFI.
@@ -3419,9 +3421,8 @@ diagnostic information in their zero-based editor-coordinate shapes. There,
 
 `check` runs no program code. `run` executes checked MIR and forwards the
 arguments after `--` to `sys.args()`. `build` emits a standalone host
-executable. With `auto`, it tries the direct backend and may use the
-MIR-launcher fallback. With `direct`, failure to emit directly is an error.
-Both built forms must keep the checked language semantics.
+executable with the direct backend. A failure to emit directly is an error.
+The built program keeps the checked language semantics.
 
 Human-format `check` success writes exactly `ok` followed by a newline.
 JSON-format success writes a schema-version-1 object with an empty diagnostic
@@ -3431,8 +3432,7 @@ stream and status rules.
 ## Ownership And Evaluation Order
 
 The choice of CLI command or output format does not change Aura ownership,
-borrowing, cleanup, or evaluation order. `run`, a directly built program, and
-a MIR-launcher build must observe the same left-to-right source evaluation and
+borrowing, cleanup, or evaluation order. `run` and a built program must observe the same left-to-right source evaluation and
 the same resource cleanup rules.
 
 Tool-side writes are explicit:
@@ -3525,9 +3525,7 @@ and complete runtime diagnostic, including typed call frames and task
 ancestry.
 
 `aura run` defaults to `mir` for the interactive edit-run path. `aura build`
-defaults to `auto` for artifact production. `aura build --backend direct` uses
-native direct emission, and `--backend auto` may select the checked
-MIR-launcher fallback. Maintained measurements put a cold miss at about 1.3
+always uses native direct emission. Maintained measurements put a cold miss at about 1.3
 seconds. A stripped native hello-world executable is 1,586,968 bytes; the
 [Performance](/manual/performance#executable-size) chapter has the size table. Each cache hit reads, hashes, and privately materializes the
 artifact. Workloads dominated by programs seen once, including CI, still pay
@@ -5685,8 +5683,7 @@ Regression tests supplement fixtures when a case needs multiple files, temporary
 Aura 0.4 has two maintained semantic runtime representations:
 
 - `aura run` lowers checked source to MIR and executes it in the MIR runtime.
-- `aura build --backend direct` lowers checked source to native code through the direct backend and links the native runtime.
-- The default `aura build --backend auto` first attempts direct emission. It may instead build a native launcher that contains serialized MIR plus the MIR runtime.
+- `aura build` lowers checked source to native code through the direct backend and links the native runtime.
 
 For the maintained source subset, the two paths MUST agree on:
 
@@ -6431,7 +6428,7 @@ These figures come from the clean Mac14,9 measurement at `181204b`.
 - `build` requires a host C compiler. Source-checkout builds may use Cargo to refresh the native runtime. Release archives carry that runtime and do not require Rust or the source checkout.
 - Native `run` cache entries larger than 512 MiB are not retained. The just-built program still runs, but a later invocation rebuilds it instead of using the cache.
 - The direct backend is the maintained native backend for the implemented language surface.
-- The default `--backend auto` first tries direct emission. It may package an embedded-MIR launcher when direct emission is unavailable. Use `--backend direct` when fallback is unacceptable.
+- `aura build` always emits directly. A file with no entry point fails with `AU2999` instead of producing an executable.
 - Editor tooling uses a persistent compiler service. If that process is unavailable, recovery is lexical only, with no semantic diagnostics or member inference.
 - `aura fmt` has one fixed style with an 88-column width and no configuration. A statement without brackets cannot break, so it may stay longer than 88 columns.
 - `aura test` discovers each parameterless `def test_*()` function as a separate result. A file with no such function still runs as one file-level test.
@@ -6446,7 +6443,7 @@ These figures come from the clean Mac14,9 measurement at `181204b`.
 
 - The workspace release profile builds the shipped compiler executable with optimization level 3, fat link-time optimization (LTO), one codegen unit, no debug data, and symbol stripping.
 - Panic unwinding stays enabled. The runtime archive keeps linkable symbols.
-- Direct and embedded-MIR user executables link with `-Wl,-dead_strip` on macOS or `-Wl,--gc-sections` on Linux.
+- Built user executables link with `-Wl,-dead_strip` on macOS or `-Wl,--gc-sections` on Linux.
 - After linking, `strip -S -x` removes debug and local symbols while keeping the globals that process-global FFI needs.
 - Source locations, typed Aura call frames, and task ancestry are embedded runtime metadata and stay available. Native symbol and debugger information is reduced.
 - The host toolchain must provide `strip` as well as `cc`.
@@ -8300,14 +8297,7 @@ Aura 0.4 has one checked source language and two runtime representations:
 - `aura run` lowers the entry package to MIR, Aura's mid-level intermediate representation, and executes it in the MIR runtime.
 - A native direct build lowers MIR-compatible program structure to native code linked with the direct runtime.
 
-`aura build` selects the representation with `--backend`:
-
-| Option | Behavior |
-| --- | --- |
-| `--backend direct` | Requires direct emission. The build fails if the program cannot be emitted. |
-| `--backend auto` | The default. Tries direct emission first. If that fails, it may fall back to a native launcher that contains serialized MIR plus the MIR runtime. |
-
-The fallback is a packaging choice. It is not a third language semantics.
+`aura build` always uses direct emission. The build fails if the program cannot be emitted. `--backend auto` and `--backend direct` are accepted and select the same backend.
 
 Both runtime representations MUST agree on maintained observable behavior. Backend parity tests compare the eligible runtime fixture corpus.
 
@@ -16925,9 +16915,8 @@ MIR runtime and the direct native backend receive the same resolved
 declarations and module identities. Backend parity covers imported function
 behavior and cross-package trait dispatch.
 
-Built executables do not resolve source packages at runtime. Direct builds
-contain emitted program code. MIR-launcher builds contain serialized checked
-MIR and the runtime launcher. Package sources and the git cache are compiler
+Built executables do not resolve source packages at runtime. They contain
+emitted program code. Package sources and the git cache are compiler
 inputs, not runtime dependencies of the built program.
 
 ## Limits And Implementation-Defined Behavior
@@ -22308,11 +22297,9 @@ aura build -o ./hello hello.au
 ./hello
 ```
 
-`aura build` defaults to `auto`. It first tries direct native emission. It may
-fall back to a standalone launcher that contains embedded MIR and the MIR
-runtime. The resulting binary does not need the original `.au` source at run
-time. Producing the binary still needs the host C compiler. Use
-`--backend direct` when fallback is unacceptable.
+`aura build` compiles the program to native code. The resulting binary does
+not need the original `.au` source at run time. Producing the binary still
+needs the host C compiler.
 
 The [Running And Shipping](/learn/native-builds) chapter explains when to pick
 `run` or `build` and what each path gives you.
@@ -22888,15 +22875,10 @@ Use `build` when:
 
 ## Backends
 
-```bash
-aura build --backend auto -o ./app app.au
-aura build --backend direct -o ./app app.au
-```
-
-`auto` is the default. It first tries the direct native backend. It may fall
-back to a standalone launcher that embeds checked MIR and the MIR runtime.
-`direct` forbids fallback. Use it when CI must prove that direct emission
-still works.
+`aura build` always uses the direct native backend. `--backend auto` and
+`--backend direct` are accepted and select the same backend. A file with no
+`main` function and no top-level statements has no entry point, so the build
+fails with `AU2999`.
 
 ## Runtime Diagnostics
 
@@ -24056,15 +24038,9 @@ cargo run -p aura -- build -o ./target/aura-point examples/point.au
 
 ## Build Backends
 
-The `build` command accepts a `--backend` flag:
-
-| Flag | Behavior |
-|------|----------|
-| `--backend auto` | The default. Tries direct native emission first. It may fall back to a standalone launcher with embedded MIR. |
-| `--backend direct` | Requires direct native emission. Rejects programs that cannot use it. |
-
-The default is usually what you want. Use `direct` for backend testing, or
-when an embedded-MIR fallback is not acceptable.
+The `build` command compiles the program to native code with the direct
+backend. It accepts `--backend auto` and `--backend direct`, and both select
+that backend.
 
 Building requires a host C compiler. A CLI run from a source checkout may use
 Cargo to refresh the native runtime. Installed release archives carry that

@@ -9,14 +9,7 @@ Aura 0.4 has one checked source language and two runtime representations:
 - `aura run` lowers the entry package to MIR, Aura's mid-level intermediate representation, and executes it in the MIR runtime.
 - A native direct build lowers MIR-compatible program structure to native code linked with the direct runtime.
 
-`aura build` selects the representation with `--backend`:
-
-| Option | Behavior |
-| --- | --- |
-| `--backend direct` | Requires direct emission. The build fails if the program cannot be emitted. |
-| `--backend auto` | The default. Tries direct emission first. If that fails, it may fall back to a native launcher that contains serialized MIR plus the MIR runtime. |
-
-The fallback is a packaging choice. It is not a third language semantics.
+`aura build` always uses direct emission. The build fails if the program cannot be emitted. `--backend auto` and `--backend direct` are accepted and select the same backend.
 
 Both runtime representations MUST agree on maintained observable behavior. Backend parity tests compare the eligible runtime fixture corpus.
 
