@@ -8998,10 +8998,11 @@ impl<'a> FunctionCompiler<'a> {
             let Some((root, _)) = alternative.place.split_once('.') else {
                 continue;
             };
-            let is_instance = matches!(
-                self.variable_types.get(root),
-                Some(DirectType::Opaque(Type::Named(class, _))) if self.classes.contains_key(class)
-            );
+            let is_instance = is_plain_field_path(&alternative.place)
+                && matches!(
+                    self.variable_types.get(root),
+                    Some(DirectType::Opaque(Type::Named(class, _))) if self.classes.contains_key(class)
+                );
             let overlaps = places.iter().enumerate().any(|(other, entry)| {
                 other != index
                     && entry.as_ref().is_some_and(|(other_resolved, _)| {
@@ -9714,6 +9715,9 @@ impl<'a> FunctionCompiler<'a> {
         let Operand::Place(place) = object else {
             return Ok(None);
         };
+        if !is_plain_field_path(place) {
+            return Ok(None);
+        }
         let Ok(resolved) = self.resolve_view_place(place) else {
             return Ok(None);
         };
@@ -9735,7 +9739,10 @@ impl<'a> FunctionCompiler<'a> {
             // the field can be moved out of it by name.
             let is_instance =
                 matches!(root_ty, Type::Named(name, _) if self.classes.contains_key(name));
-            if !is_instance || !alternative.place.contains('.') {
+            if !is_instance
+                || !alternative.place.contains('.')
+                || !is_plain_field_path(&alternative.place)
+            {
                 return Ok(None);
             }
         }
@@ -18417,6 +18424,14 @@ fn find_concrete_impl_method<'a>(
 }
 
 /// Whether one dotted place contains the other, or both are the same.
+/// A dotted place whose every segment is a declared field. A narrowed union
+/// local reaches its fields through compiler segments such as
+/// `__union_payload_0`, and its slot holds the union, not the instance, so
+/// the field cannot be moved out of it by name.
+fn is_plain_field_path(place: &str) -> bool {
+    !place.split('.').any(|segment| segment.starts_with("__"))
+}
+
 fn places_overlap(left: &str, right: &str) -> bool {
     let contains = |outer: &str, inner: &str| {
         inner == outer
