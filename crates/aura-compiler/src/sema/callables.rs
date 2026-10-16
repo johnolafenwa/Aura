@@ -5,10 +5,13 @@ use super::{
     has_unresolved_type_params, lower_type_with_self, resolve_param_passing,
     substitute_trait_bound, substitute_type, substitutions_from_decl_type_args,
     type_contains_closure_value, type_contains_loan_closure, unify_type_pattern, Argument,
-    BTreeMap, BTreeSet, BorrowedCallPlace, CallConvention, ComprehensionOutput, Deserialize,
-    Diagnostic, Expr, ExprKind, FunctionChecker, FunctionDecl, FunctionInfo, FunctionSignature,
-    HashMap, LambdaParam, LocalBinding, Param, ParamMode, PlacePath, ReceiverKind, Result,
-    Serialize, TraitBound, Type, TypeRef,
+    BTreeMap, BTreeSet, BorrowedCallPlace, CallConvention, ComprehensionOutput, Diagnostic, Expr,
+    ExprKind, FunctionChecker, FunctionDecl, FunctionInfo, FunctionSignature, HashMap, LambdaParam,
+    LocalBinding, Param, ParamMode, PlacePath, ReceiverKind, Result, TraitBound, Type, TypeRef,
+};
+use aura_core::types::{
+    ClosureCallKind, ClosureCapture, ClosureCaptureMode, ClosureId, ClosureInfo,
+    FunctionParamContract,
 };
 
 /// A `Span[T]` parameter carries a hidden range at each direct call, so a
@@ -58,181 +61,6 @@ pub(super) struct LambdaTypingRequest<'a> {
     pub(super) span: crate::diag::Span,
     pub(super) expected: Option<&'a Type>,
     pub(super) callable_context: Option<LambdaCallableContext<'a>>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct FunctionParamContract {
-    pub keyword_only: bool,
-    /// Empty for an explicit positional-only slot of a written
-    /// `def(T) -> R` type; a named slot or an inferred value carries the
-    /// exposed name. Names, the keyword-only boundary, and default
-    /// availability are part of the complete callable contract (Q17 A,
-    /// Q19 A); ABI equality of `Type` ignores them.
-    pub name: String,
-    pub ty: Type,
-    pub passing: ReceiverKind,
-    /// True when the contract promises a default for this slot (`= ...` in
-    /// a written type, or a declaration default). Only the selected target
-    /// supplies the default expression.
-    pub has_default: bool,
-}
-
-/// The callable body that lexically owns a lambda expression.
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
-pub enum ClosureOwner {
-    Function(String),
-    ClassMethod {
-        class_name: String,
-        method_name: String,
-    },
-    TraitMethod {
-        trait_name: String,
-        method_name: String,
-    },
-    TraitImplMethod {
-        trait_name: String,
-        for_type: String,
-        method_name: String,
-    },
-    TopLevel,
-}
-
-/// Stable semantic identity for one lambda expression.
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
-pub struct ClosureId {
-    pub module_name: String,
-    pub owner: ClosureOwner,
-    pub line: usize,
-    pub column: usize,
-}
-
-impl ClosureId {
-    pub(super) fn new(module_name: &str, owner: ClosureOwner, span: crate::diag::Span) -> Self {
-        Self {
-            module_name: module_name.to_string(),
-            owner,
-            line: span.line,
-            column: span.column,
-        }
-    }
-}
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub enum ClosureCaptureMode {
-    Copy,
-    Move,
-    SharedView,
-    MutableView,
-}
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub enum ClosureCallKind {
-    Repeatable,
-    MutableRepeatable,
-    Consuming,
-}
-
-impl ClosureCallKind {
-    /// Shared < Mutable < Consuming: a value may be packed into a callable
-    /// type of the same or a weaker kind, never a stronger one (C2).
-    pub(crate) fn rank(self) -> u8 {
-        match self {
-            Self::Repeatable => 0,
-            Self::MutableRepeatable => 1,
-            Self::Consuming => 2,
-        }
-    }
-
-    pub(crate) fn admits(self, source: Self) -> bool {
-        source.rank() <= self.rank()
-    }
-
-    pub(crate) fn label(self) -> &'static str {
-        match self {
-            Self::Repeatable => "Shared",
-            Self::MutableRepeatable => "Mutable",
-            Self::Consuming => "Consuming",
-        }
-    }
-
-    pub(crate) fn spelling(self) -> &'static str {
-        match self {
-            Self::Repeatable => "",
-            Self::MutableRepeatable => "mut ",
-            Self::Consuming => "own ",
-        }
-    }
-}
-
-/// An owned, environment-erased callable storage type (C1, Q13 A): the
-/// complete call contract plus the call kind, with the capture set erased.
-/// Non-Copy and non-cloneable; Transfer only as a checked `TaskCallable`.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct CallableType {
-    pub task: bool,
-    pub call_kind: ClosureCallKind,
-    pub params: Vec<FunctionParamContract>,
-    pub return_type: Type,
-}
-
-impl CallableType {
-    /// The thin contract every packed value must meet.
-    pub(crate) fn contract(&self) -> Type {
-        Type::Function {
-            params: self.params.clone(),
-            return_type: Box::new(self.return_type.clone()),
-        }
-    }
-
-    pub(crate) fn constructor_name(&self) -> &'static str {
-        if self.task {
-            "TaskCallable"
-        } else {
-            "Callable"
-        }
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct ClosureCapture {
-    pub name: String,
-    pub ty: Type,
-    pub mode: ClosureCaptureMode,
-    pub span: crate::diag::Span,
-    /// An owned (`Copy`/`Move`) capture the body mutates in place (C2):
-    /// the closure is Mutable and the environment keeps the updated value.
-    #[serde(default)]
-    pub mutated: bool,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct ClosureInfo {
-    pub id: ClosureId,
-    pub span: crate::diag::Span,
-    pub params: Vec<FunctionParamContract>,
-    pub return_type: Type,
-    /// Explicit lists preserve source order; implicit captures use lexical
-    /// first-use order.
-    pub captures: Vec<ClosureCapture>,
-    pub call_kind: ClosureCallKind,
-}
-
-impl ClosureInfo {
-    pub fn ty(&self) -> Type {
-        if self.captures.is_empty() {
-            Type::Function {
-                params: self.params.clone(),
-                return_type: Box::new(self.return_type.clone()),
-            }
-        } else {
-            Type::Closure {
-                params: Box::new(self.params.clone()),
-                return_type: Box::new(self.return_type.clone()),
-                captures: Box::new(self.captures.clone()),
-                call_kind: self.call_kind,
-            }
-        }
-    }
 }
 
 pub(super) fn default_argument_references_param(

@@ -2,7 +2,7 @@ use super::{
     integer_type_bounds, minimal_signed_type_for_negative_literal, IntegerBounds, IntegerKind,
     IntegerPowerError, IntegerRepresentation, IntegerShiftError, IntegerSign, IntegerValue,
 };
-use crate::sema::Type;
+use crate::types::Type;
 use std::cmp::Ordering;
 
 #[test]
@@ -850,7 +850,7 @@ fn integer_value_helpers_cover_division_remainder_comparisons_and_bounds() {
 
 #[test]
 fn returned_view_types_have_no_integer_bounds() {
-    let view = Type::ReturnedView(Box::new(crate::sema::ReturnedViewType {
+    let view = Type::ReturnedView(Box::new(crate::types::ReturnedViewType {
         mutable: false,
         pointee: Type::named("int64"),
         origin: 0,

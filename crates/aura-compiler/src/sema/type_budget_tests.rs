@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use super::type_budget::ExpansionBudget;
 use super::Type;
+use super::TypeSourceRef;
 use crate::diag::Span;
 
 const TEST_SPAN: Span = Span {
@@ -238,7 +239,7 @@ fn canonical_key_preflight_accepts_bounded_callable_metadata() {
 
 #[test]
 fn union_key_preflight_uses_the_union_provenance_and_canonical_members() {
-    use super::types::UnionType;
+    use super::UnionType;
 
     let ty = Type::Union(Box::new(UnionType {
         members: vec![Type::Named("Alias".to_string(), Vec::new()), Type::Unit],
@@ -437,9 +438,7 @@ fn checked_lowering_view_keeps_limits_without_recharging_semantic_aggregate() {
 
 #[test]
 fn canonical_key_shape_counts_closure_parameters_and_captures() {
-    use super::callables::{
-        ClosureCallKind, ClosureCapture, ClosureCaptureMode, FunctionParamContract,
-    };
+    use super::{ClosureCallKind, ClosureCapture, ClosureCaptureMode, FunctionParamContract};
     use crate::ast::ReceiverKind;
     use std::collections::BTreeMap;
 
@@ -531,7 +530,7 @@ fn contract_param(
 }
 
 fn sample_callable() -> Type {
-    Type::Callable(Box::new(super::callables::CallableType {
+    Type::Callable(Box::new(super::CallableType {
         task: true,
         call_kind: super::ClosureCallKind::Consuming,
         params: vec![
@@ -565,7 +564,7 @@ fn sample_closure() -> Type {
 }
 
 fn sample_returned_view() -> Type {
-    Type::ReturnedView(Box::new(super::types::ReturnedViewType {
+    Type::ReturnedView(Box::new(super::ReturnedViewType {
         mutable: true,
         pointee: Type::named("str"),
         origin: 1,
@@ -641,7 +640,7 @@ fn byte_limit_sweep_rejects_every_prefix_of_each_key_shape() {
         ],
     );
     let callable_with = |params: Vec<super::FunctionParamContract>| {
-        Type::Callable(Box::new(super::callables::CallableType {
+        Type::Callable(Box::new(super::CallableType {
             task: false,
             call_kind: super::ClosureCallKind::Repeatable,
             params,
@@ -661,7 +660,7 @@ fn byte_limit_sweep_rejects_every_prefix_of_each_key_shape() {
         )]),
         sample_closure(),
         sample_returned_view(),
-        Type::ReturnedView(Box::new(super::types::ReturnedViewType {
+        Type::ReturnedView(Box::new(super::ReturnedViewType {
             mutable: false,
             pointee: Type::Tuple(vec![Type::named("int64"), Type::Unit]),
             origin: 12,
@@ -716,7 +715,7 @@ fn key_estimator_matches_the_exact_returned_view_key_length() {
     for mutable in [true, false] {
         for origin in [0usize, 1, 9, 10, 255, 65_535] {
             for pointee in &pointees {
-                let view = Type::ReturnedView(Box::new(super::types::ReturnedViewType {
+                let view = Type::ReturnedView(Box::new(super::ReturnedViewType {
                     mutable,
                     pointee: pointee.clone(),
                     origin,
@@ -832,7 +831,7 @@ fn type_parameter_collection_walks_union_callable_closure_and_view_arms() {
     collect_type_params_from_type(&union, &mut collected);
     assert_eq!(collected, BTreeSet::from(["U".to_string()]));
 
-    let callable = Type::Callable(Box::new(super::callables::CallableType {
+    let callable = Type::Callable(Box::new(super::CallableType {
         task: false,
         call_kind: super::ClosureCallKind::Repeatable,
         params: vec![contract_param(
@@ -865,7 +864,7 @@ fn type_parameter_collection_walks_union_callable_closure_and_view_arms() {
     collect_type_params_from_type(&closure, &mut collected);
     assert_eq!(collected, BTreeSet::from(["P".to_string()]));
 
-    let view = Type::ReturnedView(Box::new(super::types::ReturnedViewType {
+    let view = Type::ReturnedView(Box::new(super::ReturnedViewType {
         mutable: false,
         pointee: Type::TypeParam("V".to_string()),
         origin: 0,

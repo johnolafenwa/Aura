@@ -2,6 +2,10 @@ mod capabilities;
 use capabilities::resolve_param_passings;
 pub(crate) use capabilities::{assertion_dispatch_is_non_consuming, resolve_param_passing};
 mod callables;
+pub use aura_core::types::{
+    CallableType, ClosureCallKind, ClosureCapture, ClosureCaptureMode, ClosureId, ClosureInfo,
+    ClosureOwner, FunctionParamContract,
+};
 pub(crate) use callables::callable_slot_admission;
 pub(crate) use callables::BOUND_RECEIVER_CAPTURE;
 use callables::{
@@ -10,10 +14,6 @@ use callables::{
     closure_signature_matches_function, default_argument_references_param,
     function_type_mismatch_message, required_ordered_arg, same_callable_contracts,
     ClosureArgumentPolicy, LambdaTypingRequest,
-};
-pub use callables::{
-    CallableType, ClosureCallKind, ClosureCapture, ClosureCaptureMode, ClosureId, ClosureInfo,
-    ClosureOwner, FunctionParamContract,
 };
 pub(crate) use loans::{synthetic_returned_view_decl, SYNTHETIC_CALLABLE_DECL};
 pub(crate) use types::closure_call_kind_for;
@@ -73,9 +73,9 @@ mod structural_patterns;
 mod unions;
 #[cfg(test)]
 mod unions_security_tests;
+use aura_core::type_budget;
 pub(crate) use unions::narrowed_read_place;
 pub use unions::{NarrowedRead, NarrowedReadId, UnionInjection, UnionInjectionId};
-mod type_budget;
 #[cfg(test)]
 mod type_budget_tests;
 mod types;
@@ -91,7 +91,7 @@ fn type_admits_none(ty: &Type) -> bool {
         _ => false,
     }
 }
-pub(crate) use types::UnionType;
+pub(crate) use aura_core::types::UnionType;
 
 /// The one contract a union receiver's trait method resolves to across
 /// every member (ADR-0052 A8).
@@ -107,6 +107,9 @@ struct UnionTraitMethod {
     array_equality_safe_type_params: BTreeSet<String>,
     substitutions: HashMap<String, Type>,
 }
+pub use aura_core::types::{ReturnedViewType, TraitBound, Type};
+pub use types::TypeDefinitions;
+pub(crate) use types::TypeSourceRef;
 use types::{
     collect_type_params_from_type, collect_type_ref_type_params, lower_type, lower_type_with_self,
     merged_type_param_scope, substitute_trait_bounds, type_param_scope, unify_type_pattern,
@@ -116,18 +119,18 @@ pub(crate) use types::{
     substitute_trait_bound, substitute_type, substitutions_from_decl_type_args,
     trait_impl_specificity, trait_impl_specificity_parts, type_pattern_matches, wrap_returned_view,
 };
-pub use types::{ReturnedViewType, TraitBound, Type, TypeDefinitions};
 mod properties;
 pub(crate) use properties::integer_type_bounds;
+#[cfg(test)]
+use properties::is_builtin_copy_named_type;
 pub(crate) use properties::is_builtin_io_resource_type;
 use properties::{
-    array_element_type, is_array_dtype, is_builtin_copy_named_type, is_builtin_type, is_float_type,
-    is_integer_type, is_numeric_type, is_string_type, map_key_value_types,
-    preserves_qualified_builtin_type_name, rng_clone_obligation_params_in_context_with_modules,
-    rng_clone_safety_in_context_with_modules, set_element_type, type_contains_closure_value,
-    type_contains_loan_closure, type_contains_named, type_is_copy_in_context_with_modules,
-    type_reaches_class_through_non_indirect_fields, vec_element_type, RngCloneSafety,
-    TaskObservationSummary,
+    array_element_type, is_array_dtype, is_builtin_type, is_float_type, is_integer_type,
+    is_numeric_type, is_string_type, map_key_value_types, preserves_qualified_builtin_type_name,
+    rng_clone_obligation_params_in_context_with_modules, rng_clone_safety_in_context_with_modules,
+    set_element_type, type_contains_closure_value, type_contains_loan_closure, type_contains_named,
+    type_is_copy_in_context_with_modules, type_reaches_class_through_non_indirect_fields,
+    vec_element_type, RngCloneSafety, TaskObservationSummary,
 };
 
 use std::cell::RefCell;

@@ -6,7 +6,7 @@ use std::rc::Rc;
 
 use crate::diag::{Diagnostic, Result, Span};
 
-use super::Type;
+use crate::types::Type;
 
 const DEFAULT_RESULT_NODE_LIMIT: usize = 65_536;
 const DEFAULT_RECURSION_DEPTH_LIMIT: usize = 128;
@@ -33,7 +33,7 @@ struct ExpansionState {
 
 /// Shared, local accounting for alias-template expansion and substitution.
 #[derive(Clone, Debug)]
-pub(crate) struct ExpansionBudget {
+pub struct ExpansionBudget {
     limits: ExpansionLimits,
     state: Rc<RefCell<ExpansionState>>,
     charge_aggregate: bool,
@@ -58,7 +58,7 @@ impl Default for ExpansionBudget {
 
 impl ExpansionBudget {
     /// Enters one alias-expansion frame. Dropping the guard restores the depth.
-    pub(super) fn enter(&self, span: Span) -> Result<DepthGuard> {
+    pub fn enter(&self, span: Span) -> Result<DepthGuard> {
         let mut state = self.state.borrow_mut();
         let next = state.depth.checked_add(1).ok_or_else(|| {
             capacity_error(
@@ -90,7 +90,7 @@ impl ExpansionBudget {
     /// A substituted type parameter contributes its replacement tree at the
     /// parameter's position. The replacement is not substituted again, which
     /// mirrors `substitute_type` and avoids both cloning and Rust recursion.
-    pub(super) fn check_substitution(
+    pub fn check_substitution(
         &self,
         template: &Type,
         substitutions: &HashMap<String, Type>,
@@ -122,7 +122,7 @@ impl ExpansionBudget {
 
     /// Checks the canonical key of the prospective substituted tree before
     /// either the tree or its key is allocated.
-    pub(super) fn check_substitution_key(
+    pub fn check_substitution_key(
         &self,
         template: &Type,
         substitutions: &HashMap<String, Type>,
@@ -141,7 +141,7 @@ impl ExpansionBudget {
     }
 
     /// Checks the structural canonical-key encoding before it is allocated.
-    pub(super) fn check_canonical_key(
+    pub fn check_canonical_key(
         &self,
         ty: &Type,
         module_name: &str,
@@ -153,7 +153,7 @@ impl ExpansionBudget {
 
     /// Retains per-expansion limits for MIR lowering after semantic checking,
     /// without charging the semantic compilation aggregate a second time.
-    pub(crate) fn for_checked_lowering(&self) -> Self {
+    pub fn for_checked_lowering(&self) -> Self {
         Self {
             limits: self.limits,
             state: Rc::new(RefCell::new(ExpansionState::default())),
@@ -161,8 +161,9 @@ impl ExpansionBudget {
         }
     }
 
-    #[cfg(test)]
-    pub(super) fn with_limits(
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn with_limits(
         result_nodes: usize,
         recursion_depth: usize,
         aggregate_nodes: usize,
@@ -181,13 +182,15 @@ impl ExpansionBudget {
         }
     }
 
-    #[cfg(test)]
-    pub(super) fn aggregate_nodes(&self) -> usize {
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn aggregate_nodes(&self) -> usize {
         self.state.borrow().aggregate_nodes
     }
 
-    #[cfg(test)]
-    pub(super) fn with_key_limits(key_nodes: usize, key_depth: usize, key_bytes: usize) -> Self {
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn with_key_limits(key_nodes: usize, key_depth: usize, key_bytes: usize) -> Self {
         Self {
             limits: ExpansionLimits {
                 result_nodes: DEFAULT_RESULT_NODE_LIMIT,
@@ -205,7 +208,7 @@ impl ExpansionBudget {
 
 /// RAII token for one active alias-expansion frame.
 #[must_use = "the depth guard must remain alive for the expansion frame"]
-pub(super) struct DepthGuard {
+pub struct DepthGuard {
     state: Rc<RefCell<ExpansionState>>,
 }
 
@@ -427,7 +430,10 @@ fn check_key_shape(
                 } else {
                     name
                 };
-                if super::is_builtin_type(resolved) || resolved.contains('.') || module.is_empty() {
+                if crate::types::is_builtin_type(resolved)
+                    || resolved.contains('.')
+                    || module.is_empty()
+                {
                     add_json_string(&mut bytes, resolved, byte_limit, span)?;
                 } else {
                     let content = escaped_json_content_len(module)
@@ -668,28 +674,28 @@ fn reserve_key_stack<'a>(
     })
 }
 
-fn receiver_kind_json_len(kind: crate::ast::ReceiverKind) -> usize {
+fn receiver_kind_json_len(kind: crate::ops::ReceiverKind) -> usize {
     match kind {
-        crate::ast::ReceiverKind::Value => 7,
-        crate::ast::ReceiverKind::Borrow => 8,
-        crate::ast::ReceiverKind::BorrowMut => 11,
+        crate::ops::ReceiverKind::Value => 7,
+        crate::ops::ReceiverKind::Borrow => 8,
+        crate::ops::ReceiverKind::BorrowMut => 11,
     }
 }
 
-fn closure_call_kind_json_len(kind: super::ClosureCallKind) -> usize {
+fn closure_call_kind_json_len(kind: crate::types::ClosureCallKind) -> usize {
     match kind {
-        super::ClosureCallKind::Repeatable => 12,
-        super::ClosureCallKind::MutableRepeatable => 19,
-        super::ClosureCallKind::Consuming => 11,
+        crate::types::ClosureCallKind::Repeatable => 12,
+        crate::types::ClosureCallKind::MutableRepeatable => 19,
+        crate::types::ClosureCallKind::Consuming => 11,
     }
 }
 
-fn capture_mode_json_len(mode: super::ClosureCaptureMode) -> usize {
+fn capture_mode_json_len(mode: crate::types::ClosureCaptureMode) -> usize {
     match mode {
-        super::ClosureCaptureMode::Copy => 6,
-        super::ClosureCaptureMode::Move => 6,
-        super::ClosureCaptureMode::SharedView => 12,
-        super::ClosureCaptureMode::MutableView => 13,
+        crate::types::ClosureCaptureMode::Copy => 6,
+        crate::types::ClosureCaptureMode::Move => 6,
+        crate::types::ClosureCaptureMode::SharedView => 12,
+        crate::types::ClosureCaptureMode::MutableView => 13,
     }
 }
 

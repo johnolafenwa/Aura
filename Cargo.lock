@@ -34,6 +34,7 @@ dependencies = [
 name = "aura-compiler"
 version = "0.4.1"
 dependencies = [
+ "aura-core",
  "base64",
  "corosensei",
  "cranelift-codegen",
@@ -56,6 +57,14 @@ dependencies = [
  "tungstenite",
  "url",
  "webpki-roots 0.26.11",
+]
+
+[[package]]
+name = "aura-core"
+version = "0.4.1"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

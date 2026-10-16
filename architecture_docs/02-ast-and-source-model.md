@@ -43,7 +43,7 @@ Aura's most important AST types are:
 | `Pattern` | A `match` pattern such as a binding, wildcard, literal, or enum variant pattern |
 | `TypeRef` | A syntactic type reference before semantic lowering |
 
-The AST also carries `Span` values from [`diag.rs`](../crates/aura-compiler/src/diag.rs), which lets later stages report useful diagnostics.
+The AST also carries `Span` values from [`diag.rs`](../crates/aura-core/src/diag.rs), which lets later stages report useful diagnostics.
 
 ## The tree shape
 

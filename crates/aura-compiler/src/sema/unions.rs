@@ -166,7 +166,7 @@ impl FunctionChecker<'_> {
         &self,
         expr: &Expr,
         locals: &mut HashMap<String, LocalBinding>,
-        union: &types::UnionType,
+        union: &super::UnionType,
     ) -> Result<Type> {
         let expected = Type::Union(Box::new(union.clone()));
         let contextual = Self::is_union_contextual_literal(expr);

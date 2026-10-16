@@ -32,38 +32,12 @@ pub(super) struct TaskObservationSummary {
     pub(super) noncopy_requirements: Vec<(usize, Type)>,
 }
 
+pub(super) use aura_core::types::{is_builtin_copy_named_type, is_builtin_type};
+
 #[derive(Clone, Debug, Default)]
 pub(super) struct SymbolicCopyShape {
     pub(super) intrinsic_noncopy: bool,
     pub(super) noncopy_formals: Vec<usize>,
-}
-
-pub(super) fn is_builtin_copy_named_type(name: &str, args: &[Type]) -> bool {
-    match name {
-        "Queue" => args.len() == 1,
-        _ => {
-            args.is_empty()
-                && matches!(
-                    name,
-                    "bool"
-                        | "int8"
-                        | "int16"
-                        | "int32"
-                        | "int64"
-                        | "int128"
-                        | "intsize"
-                        | "uint8"
-                        | "uint16"
-                        | "uint32"
-                        | "uint64"
-                        | "uint128"
-                        | "uintsize"
-                        | "float32"
-                        | "float64"
-                        | "Duration"
-                )
-        }
-    }
 }
 
 #[cfg(test)]
@@ -869,48 +843,6 @@ pub(super) fn type_reaches_class_through_non_indirect_fields(
             type_reaches_class_through_non_indirect_fields(&capture.ty, target, classes, visiting)
         }),
     }
-}
-
-pub(super) fn is_builtin_type(name: &str) -> bool {
-    matches!(
-        name,
-        "bool"
-            | "int"
-            | "int8"
-            | "int16"
-            | "int32"
-            | "int64"
-            | "int128"
-            | "intsize"
-            | "uint8"
-            | "uint16"
-            | "uint32"
-            | "uint64"
-            | "uint128"
-            | "uintsize"
-            | "float32"
-            | "float64"
-            | "str"
-            | "Array"
-            | "list"
-            | "set"
-            | "dict"
-            | "Range"
-            | "Queue"
-            | "Task"
-            | "Lookup"
-            | "Poll"
-            | "Result"
-            | "SendError"
-            | "QueueReceive"
-            | "TaskResult"
-            | "WaitAny"
-            | "WaitAll"
-            | "SelectOutcome"
-            | "TaskGroup"
-            | "Duration"
-            | "Span"
-    )
 }
 
 pub(super) fn preserves_qualified_builtin_type_name(type_name: &str) -> bool {

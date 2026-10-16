@@ -1,5 +1,6 @@
 //! Checked declarations, module inventory, and program checking.
 
+use super::TypeSourceRef;
 use super::{
     collect_type_ref_type_params, lower_supertraits, lower_trait_bounds,
     lower_trait_bounds_with_self, lower_type, lower_type_with_self, merge_trait_bounds,

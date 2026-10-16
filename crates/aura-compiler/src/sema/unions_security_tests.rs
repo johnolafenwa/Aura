@@ -41,7 +41,7 @@ fn nested_candidate_probes_share_nonrollback_compilation_work() {
         &BTreeMap::new(),
     )
     .expect("two numeric members form a union");
-    let outer = types::UnionType {
+    let outer = super::UnionType {
         members: vec![
             Type::Tuple(vec![inner]),
             Type::Tuple(vec![Type::normalize_union(

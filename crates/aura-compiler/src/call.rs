@@ -3,8 +3,7 @@ use std::collections::HashMap;
 use crate::ast::{Argument, Param, ReceiverKind};
 use crate::diag::{Diagnostic, Result, Span};
 
-pub(crate) const MIN_TASK_STACK_BYTES: i64 = 256 * 1024;
-pub(crate) const MAX_TASK_STACK_BYTES: i64 = 64 * 1024 * 1024;
+pub(crate) use aura_core::task::{MAX_TASK_STACK_BYTES, MIN_TASK_STACK_BYTES};
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum CallConvention {

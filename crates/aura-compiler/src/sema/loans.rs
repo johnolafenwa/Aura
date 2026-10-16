@@ -1,5 +1,6 @@
 //! Loan provenance, returned-view footprints, last use, reborrows, and access conflicts.
 
+use super::TypeSourceRef;
 use super::{
     bind_call_arguments, block_references_name, callable_params_from_decl, expr_references_name,
     grouped_expr, grouped_specialized_expr, resolve_param_passing, statement_span,
