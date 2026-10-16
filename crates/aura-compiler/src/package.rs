@@ -1297,61 +1297,42 @@ fn parse_ls_remote_revision(source: &str, reference: &str, output: &str) -> Resu
 }
 
 fn ensure_git_checkout(source: &str, rev: &str) -> Result<PathBuf> {
-    let mut permission_denied: Option<(PathBuf, std::io::Error)> = None;
-    for cache_root in git_cache_roots() {
-        let checkout_dir = cache_root.join(hash_source_key(source)).join(rev);
-        if let Ok(metadata) = fs::symlink_metadata(&checkout_dir) {
-            let file_type = metadata.file_type();
-            if file_type.is_symlink() || !file_type.is_dir() {
-                return Err(Diagnostic::new(format!(
-                    "refusing to use git checkout cache path `{}` because it is not a real directory",
-                    checkout_dir.display()
-                )));
-            }
+    let checkout_dir = git_cache_root()?.join(hash_source_key(source)).join(rev);
+    if let Ok(metadata) = fs::symlink_metadata(&checkout_dir) {
+        let file_type = metadata.file_type();
+        if file_type.is_symlink() || !file_type.is_dir() {
+            return Err(Diagnostic::new(format!(
+                "refusing to use git checkout cache path `{}` because it is not a real directory",
+                checkout_dir.display()
+            )));
         }
-        if cached_git_checkout_matches_rev(&checkout_dir, rev)? {
-            reject_symlinks_in_tree(&checkout_dir)?;
-            return Ok(checkout_dir);
-        }
+    }
+    if cached_git_checkout_matches_rev(&checkout_dir, rev)? {
+        reject_symlinks_in_tree(&checkout_dir)?;
+        return Ok(checkout_dir);
+    }
 
-        if checkout_dir.exists() {
-            if let Err(error) = fs::remove_dir_all(&checkout_dir) {
-                return Err(Diagnostic::new(format!(
-                    "failed to reset git checkout cache `{}`: {}",
-                    checkout_dir.display(),
-                    error
-                )));
-            }
-        }
-
-        let parent = checkout_dir
-            .parent()
-            .expect("git checkout cache paths should have parent directories");
-        match fs::create_dir_all(parent) {
-            Ok(()) => return materialize_git_checkout(source, rev, &checkout_dir),
-            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
-                permission_denied = Some((parent.to_path_buf(), error));
-            }
-            Err(error) => {
-                return Err(Diagnostic::new(format!(
-                    "failed to create git cache directory `{}`: {}",
-                    parent.display(),
-                    error
-                )));
-            }
+    if checkout_dir.exists() {
+        if let Err(error) = fs::remove_dir_all(&checkout_dir) {
+            return Err(Diagnostic::new(format!(
+                "failed to reset git checkout cache `{}`: {}",
+                checkout_dir.display(),
+                error
+            )));
         }
     }
 
-    let Some((path, error)) = permission_denied else {
-        return Err(Diagnostic::new(
-            "internal error: git cache root resolution produced no writable candidates",
-        ));
-    };
-    Err(Diagnostic::new(format!(
-        "failed to create git cache directory `{}`: {}",
-        path.display(),
-        error
-    )))
+    let parent = checkout_dir
+        .parent()
+        .expect("git checkout cache paths should have parent directories");
+    if let Err(error) = fs::create_dir_all(parent) {
+        return Err(Diagnostic::new(format!(
+            "failed to create git cache directory `{}`: {}",
+            parent.display(),
+            error
+        )));
+    }
+    materialize_git_checkout(source, rev, &checkout_dir)
 }
 
 fn materialize_git_checkout(source: &str, rev: &str, checkout_dir: &Path) -> Result<PathBuf> {
@@ -1407,16 +1388,6 @@ fn materialize_git_checkout(source: &str, rev: &str, checkout_dir: &Path) -> Res
             checkout_dir.display(),
             error
         ))),
-    }
-}
-
-fn git_cache_roots() -> Vec<PathBuf> {
-    let primary = git_cache_root();
-    let fallback = env::temp_dir().join("aura").join("git");
-    if primary == fallback {
-        vec![primary]
-    } else {
-        vec![primary, fallback]
     }
 }
 
@@ -1606,14 +1577,18 @@ fn reject_symlinks_in_tree(root: &Path) -> Result<()> {
     Ok(())
 }
 
-fn git_cache_root() -> PathBuf {
+/// The per-user git checkout cache. A shared temporary directory is never
+/// used: another local user could pre-seed a checkout there.
+fn git_cache_root() -> Result<PathBuf> {
     if let Some(cache_home) = env::var_os("XDG_CACHE_HOME") {
-        return PathBuf::from(cache_home).join("aura").join("git");
+        return Ok(PathBuf::from(cache_home).join("aura").join("git"));
     }
     if let Some(home) = env::var_os("HOME") {
-        return PathBuf::from(home).join(".cache").join("aura").join("git");
+        return Ok(PathBuf::from(home).join(".cache").join("aura").join("git"));
     }
-    env::temp_dir().join("aura").join("git")
+    Err(Diagnostic::new(
+        "cannot locate the git dependency cache: set `XDG_CACHE_HOME` or `HOME` to a directory you own",
+    ))
 }
 
 fn normalize_git_source(manifest_dir: &Path, source: &str) -> Result<String> {

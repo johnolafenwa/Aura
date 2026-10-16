@@ -1,0 +1,28 @@
+class Profile:
+    name: str
+    visits: int64
+    def count(mut self) -> view mut int64 from self:
+        return view mut self.visits
+    def peek(self) -> view int64 from self:
+        return view self.visits
+    def count2(mut self) -> view mut int64 from self:
+        view mut v = self.count()
+        return view mut v
+    def peek2(self) -> view int64 from self:
+        view v = self.peek()
+        return view v
+
+def main():
+    mut p = Profile(name="a", visits=1)
+    view mut w = p.count2()
+    w += 1
+    print(p.peek2())
+    mut users = [Profile(name="b", visits=5)]
+    view mut u = users[0]
+    view mut c = u.count()
+    view mut d = c
+    d += 1
+    print(users[0].visits)
+    view e = users[0].peek()
+    view f = e
+    print(f)

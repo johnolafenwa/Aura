@@ -255,8 +255,9 @@ default timeout. Set `AURA_GIT_TIMEOUT_MS` to a positive millisecond value to
 override it.
 
 Resolved revisions live in a content-addressed cache under
-`$XDG_CACHE_HOME/aura/git`, otherwise `$HOME/.cache/aura/git`. Aura falls back
-to a temporary directory when needed.
+`$XDG_CACHE_HOME/aura/git`, otherwise `$HOME/.cache/aura/git`. When neither
+variable is set, resolving a git dependency fails. Aura never caches checkouts
+in a shared temporary directory, where another local user could plant one.
 
 - Cached entries are validated against their recorded revision.
 - Aura refuses symlinked cache paths, symlinked manifests, and symlinked

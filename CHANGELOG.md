@@ -7,6 +7,25 @@ in this file.
 
 ## Unreleased
 
+- A cast of a call result, such as `box.size() as float64`, converts the
+  value the call returns. It used to report `AU2002` "result type mismatch".
+  A conditional operand, such as `(n if n > 0 else 1) as float64`, also
+  works.
+- A `match` over a union reports `AU2999` for an or-pattern whose class
+  pattern repeats or is covered by an earlier alternative, such as
+  `case Circle() | Circle(radius=2):`.
+- A union written through a module alias, such as `geometry.Point | None`
+  after `import shapes.geometry as geometry`, works in local annotations on
+  the MIR backend. `is not None` tests and member access on it no longer
+  fail with `AU4001`.
+- Git dependencies are cached only under `$XDG_CACHE_HOME/aura/git` or
+  `$HOME/.cache/aura/git`. The shared temporary directory fallback is
+  removed, because another local user could plant a checkout there. With
+  neither variable set, resolving a git dependency fails with a message that
+  names them.
+- The MIR validator rejects an enum construction whose variant is not
+  declared or whose payload count differs from the declaration.
+
 ## VS Code extension 0.4.0 — 2026-10-15
 
 - Bundles language server 0.4.0, which speaks semantic interface version 19.

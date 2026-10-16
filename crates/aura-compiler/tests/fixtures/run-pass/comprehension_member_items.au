@@ -1,0 +1,15 @@
+class Reg:
+    groups: dict[str, list[int64]]
+    def flat(self) -> list[int64]:
+        return [x for k, vs in self.groups.items() for x in vs]
+    def above(self, limit: int64) -> list[str]:
+        return [k.clone() for k, vs in self.groups.items() if vs.len() > limit]
+
+def main():
+    r = Reg(groups={"a": [1, 2], "b": [3]})
+    print(r.flat().len())
+    print(r.above(1).len())
+    s = {k.clone() for k, v in r.groups.items()}
+    print(s.len())
+    lens = {k.clone(): vs.len() for k, vs in r.groups.items()}
+    print(lens["a"])

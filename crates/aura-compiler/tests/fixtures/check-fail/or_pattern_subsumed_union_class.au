@@ -1,0 +1,15 @@
+class Circle:
+    radius: int64
+
+class Square:
+    side: int64
+
+def describe(shape: Circle | Square):
+    match shape:
+        case Circle() | Circle(radius=2):
+            print("circle")
+        case Square():
+            print("square")
+
+def main():
+    describe(Circle(radius=1))

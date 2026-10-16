@@ -903,7 +903,9 @@ impl FunctionChecker<'_> {
                 }
             }
             Pattern::Or(pattern) => {
-                if pattern.alternatives.iter().any(pattern_contains_type_arm) {
+                if matches!(expected_ty, Type::Union(_))
+                    || pattern.alternatives.iter().any(pattern_contains_type_arm)
+                {
                     self.validate_or_pattern_alternatives(pattern, expected_ty)?;
                 }
                 let original = locals.clone();

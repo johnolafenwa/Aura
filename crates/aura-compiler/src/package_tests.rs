@@ -1382,6 +1382,7 @@ fn package_git_dependency_resolution_uses_cached_revision_selectors() {
     let original_cache_home = std::env::var_os("XDG_CACHE_HOME");
     std::env::set_var("XDG_CACHE_HOME", temp.path.join("cache"));
     let checkout = git_cache_root()
+        .expect("the test environment names a cache directory")
         .join(hash_source_key(&source))
         .join("abcdef0");
     fs::create_dir_all(&checkout).expect("failed to create cached checkout");
@@ -1431,6 +1432,7 @@ fn package_git_dependency_resolution_reuses_the_locked_branch_revision() {
 
     let _cache_home = EnvVarGuard::set("XDG_CACHE_HOME", temp.path.join("cache"));
     let checkout = git_cache_root()
+        .expect("the test environment names a cache directory")
         .join(hash_source_key(&source))
         .join("abcdef0");
     fs::create_dir_all(&checkout).expect("failed to create cached checkout");
@@ -1477,6 +1479,7 @@ fn package_resolver_reports_git_dependency_resolution_and_package_name_errors() 
         .to_string_lossy()
         .to_string();
     let checkout = git_cache_root()
+        .expect("the test environment names a cache directory")
         .join(hash_source_key(&source))
         .join("abcdef0");
     fs::create_dir_all(checkout.join("src")).expect("failed to create cached checkout");
@@ -1711,6 +1714,7 @@ fn package_git_resolution_and_checkout_helpers_cover_live_git_edges() {
     {
         let _cache_home = EnvVarGuard::set("XDG_CACHE_HOME", temp.path.join("cache-file"));
         let checkout = git_cache_root()
+            .expect("the test environment names a cache directory")
             .join(hash_source_key(&source))
             .join(&main_rev);
         fs::create_dir_all(checkout.parent().expect("checkout should have a parent"))
@@ -1724,6 +1728,7 @@ fn package_git_resolution_and_checkout_helpers_cover_live_git_edges() {
     {
         let _cache_home = EnvVarGuard::set("XDG_CACHE_HOME", temp.path.join("cache-stale"));
         let checkout = git_cache_root()
+            .expect("the test environment names a cache directory")
             .join(hash_source_key(&non_repo_source))
             .join("abcdef0");
         fs::create_dir_all(&checkout).expect("failed to create stale checkout");
@@ -2118,33 +2123,32 @@ fn package_io_helpers_cover_local_error_paths() {
         None => std::env::remove_var("AURA_GIT_TIMEOUT_MS"),
     }
 
-    let original_cache_home = std::env::var_os("XDG_CACHE_HOME");
-    std::env::set_var("XDG_CACHE_HOME", std::env::temp_dir());
-    assert_eq!(
-        git_cache_root(),
-        std::env::temp_dir().join("aura").join("git")
-    );
-    assert_eq!(git_cache_roots().len(), 1);
     let distinct_cache_home = temp.path.join("xdg-cache-home");
-    std::env::set_var("XDG_CACHE_HOME", &distinct_cache_home);
-    assert_eq!(
-        git_cache_roots(),
-        vec![
-            distinct_cache_home.join("aura").join("git"),
-            std::env::temp_dir().join("aura").join("git")
-        ]
-    );
-    match original_cache_home {
-        Some(value) => std::env::set_var("XDG_CACHE_HOME", value),
-        None => std::env::remove_var("XDG_CACHE_HOME"),
+    {
+        let _cache_home = EnvVarGuard::set("XDG_CACHE_HOME", &distinct_cache_home);
+        assert_eq!(
+            git_cache_root().expect("XDG_CACHE_HOME names the cache"),
+            distinct_cache_home.join("aura").join("git")
+        );
     }
 
     {
+        // A shared temporary directory is never a cache root: another local
+        // user could pre-seed a checkout there.
         let _xdg_home = EnvVarGuard::remove("XDG_CACHE_HOME");
         let _home = EnvVarGuard::remove("HOME");
-        assert_eq!(
-            git_cache_root(),
-            std::env::temp_dir().join("aura").join("git")
+        let error = git_cache_root().expect_err("no per-user cache directory is known");
+        assert!(
+            error.message.contains("XDG_CACHE_HOME") && error.message.contains("HOME"),
+            "{}",
+            error.message
+        );
+        let error = ensure_git_checkout("https://example.com/aura-test.git", "abcdef0")
+            .expect_err("git checkouts need a per-user cache directory");
+        assert!(
+            error.message.contains("XDG_CACHE_HOME"),
+            "{}",
+            error.message
         );
     }
 

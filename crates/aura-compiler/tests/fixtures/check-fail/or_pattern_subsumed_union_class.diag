@@ -1,0 +1,5 @@
+error[AU2999]: duplicate or subsumed alternative in or-pattern
+ --> crates/aura-compiler/tests/fixtures/check-fail/or_pattern_subsumed_union_class.au:9:25
+  |
+9 |         case Circle() | Circle(radius=2):
+  |                         ^
