@@ -11,7 +11,25 @@ Last updated: 2026-10-16
   `crates/aura-compiler/tests/modules.rs` cover a direct import and a
   transitive import with a private resource class and a private generic
   class. Details are in `2026-10-16-private-class-mir-fix.md`.
-- Remaining: hosted CI on the PR, then merge.
+- Verification: hosted CI `38915135045` passed on Linux and macOS.
+- Remaining: review and merge.
+
+## Batch 5: lean native binaries (in progress)
+
+- Target: implement the ratified
+  [Batch 5 design checkpoint](../architecture_docs/19-batch-5-design-checkpoint.md).
+  John approved all four recommendations on 2026-10-16.
+- Done: measured hello world (5,057,904 bytes) and the reference agent
+  (5,384,768 bytes) on Linux x86-64 at `b516bd5`, attributed their
+  contents, traced six causes that keep unused TLS, TOML, WebSocket, and
+  JSON code reachable, and wrote
+  `architecture_docs/19-batch-5-design-checkpoint.md`.
+- Step 0 done: contents and size gates on Linux and macOS, the `rustls`
+  feature trim, removal of `mir.rs.orig`, and one object section per
+  generated function. Linux hello world is 1,034,040 bytes; macOS arm64 is
+  926,472 bytes.
+- Verification: see `2026-10-16-batch-5-step-0.md`.
+- Remaining: steps 1 through 6 of the delivery plan, one PR per step.
 
 ## Aura 0.4.1 preview release (complete)
 

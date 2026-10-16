@@ -20,14 +20,14 @@ httparse = "1"
 libc = "0.2"
 libffi = "5.1.1"
 mio = { version = "0.8", features = ["os-ext", "os-poll", "net"] }
-rustls = { version = "0.23", features = ["ring"] }
+rustls = { version = "0.23", default-features = false, features = ["logging", "ring", "std", "tls12"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["arbitrary_precision", "unbounded_depth"] }
 corosensei = "0.3.3"
 memchr = "2"
 sha2 = "0.10"
 toml = "0.8"
-tungstenite = { version = "0.24", features = ["rustls-tls-native-roots"] }
+tungstenite = { version = "0.25", features = ["rustls-tls-native-roots"] }
 url = "2"
 webpki-roots = "0.26"
 

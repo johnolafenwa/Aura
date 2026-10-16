@@ -1,0 +1,152 @@
+{
+  "budget_percent": 10,
+  "components": {
+    "aws_lc": [
+      "aws_lc"
+    ],
+    "cranelift": [
+      "cranelift"
+    ],
+    "parser": [
+      "aura_compiler::parser::",
+      "aura_compiler::lexer::"
+    ],
+    "analysis": [
+      "aura_compiler::analysis::",
+      "aura_compiler::format::",
+      "aura_compiler::package::"
+    ],
+    "libffi": [
+      "libffi::",
+      "ffi_call",
+      "ffi_prep_cif"
+    ],
+    "builtin_registry": [
+      "aura_compiler::builtin_modules::"
+    ],
+    "mir_interpreter": [
+      "aura_compiler::mir_runtime::"
+    ],
+    "rustls": [
+      "rustls::",
+      "rustls_pki_types::",
+      "webpki::"
+    ],
+    "ring": [
+      "ring::",
+      "ring_core_"
+    ],
+    "tungstenite": [
+      "tungstenite::"
+    ],
+    "http": [
+      "http::"
+    ],
+    "toml": [
+      "toml::",
+      "toml_edit::",
+      "toml_datetime::",
+      "winnow::"
+    ],
+    "url": [
+      "url::",
+      "idna::"
+    ],
+    "httparse": [
+      "httparse::"
+    ],
+    "serde_json": [
+      "serde_json::"
+    ]
+  },
+  "subjects": {
+    "hello_world": {
+      "source": "examples/basics/hello_world.au",
+      "absent": [
+        "aws_lc",
+        "cranelift",
+        "parser",
+        "analysis",
+        "builtin_registry",
+        "mir_interpreter",
+        "toml",
+        "http",
+        "httparse",
+        "url"
+      ],
+      "known_present": [
+        "libffi",
+        "rustls",
+        "ring",
+        "tungstenite",
+        "serde_json"
+      ]
+    },
+    "reference_agent": {
+      "source": "examples/agents/tool_runner/src/main.au",
+      "absent": [
+        "aws_lc",
+        "cranelift",
+        "parser",
+        "analysis"
+      ],
+      "present": [
+        "serde_json"
+      ]
+    },
+    "json": {
+      "source": "examples/json/dynamic_values.au",
+      "absent": [
+        "aws_lc",
+        "cranelift",
+        "parser",
+        "analysis"
+      ],
+      "present": [
+        "serde_json"
+      ]
+    },
+    "tls": {
+      "source": "examples/io/unix_tls_roundtrip.au",
+      "absent": [
+        "aws_lc",
+        "cranelift",
+        "parser",
+        "analysis"
+      ],
+      "present": [
+        "rustls",
+        "ring"
+      ]
+    },
+    "websocket": {
+      "source": "examples/io/websocket_roundtrip.au",
+      "absent": [
+        "aws_lc",
+        "cranelift",
+        "parser",
+        "analysis"
+      ],
+      "present": [
+        "tungstenite",
+        "rustls"
+      ]
+    }
+  },
+  "baselines": {
+    "linux-x86_64": {
+      "hello_world": 1034040,
+      "reference_agent": 3174656,
+      "json": 2560288,
+      "tls": 3602824,
+      "websocket": 3798424
+    },
+    "darwin-arm64": {
+      "hello_world": 926472,
+      "reference_agent": 2694320,
+      "json": 2135576,
+      "tls": 3037696,
+      "websocket": 3236408
+    }
+  }
+}
