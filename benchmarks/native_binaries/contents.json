@@ -90,7 +90,8 @@
         "parser",
         "analysis",
         "builtin_registry",
-        "mir_interpreter"
+        "mir_interpreter",
+        "toml"
       ],
       "present": [
         "serde_json"
@@ -104,7 +105,8 @@
         "parser",
         "analysis",
         "builtin_registry",
-        "mir_interpreter"
+        "mir_interpreter",
+        "toml"
       ],
       "present": [
         "serde_json"
@@ -144,8 +146,8 @@
   "baselines": {
     "linux-x86_64": {
       "hello_world": 941224,
-      "reference_agent": 2610712,
-      "json": 1984592,
+      "reference_agent": 2066192,
+      "json": 1488200,
       "tls": 3528136,
       "websocket": 3723640
     },

@@ -83,8 +83,8 @@ fn public_object_codegen_infers_host_and_wait_result_types() {
     let object =
         emit_host_native_object(&module).expect("valid inferred calls should emit an object");
     assert!(
-        object_mentions(&object, "aura_direct_host_builtin"),
-        "the host builtin call must lower through the runtime adapter"
+        object_mentions(&object, "aura_host_sys_args"),
+        "the host builtin call must lower through its own runtime entry"
     );
     assert!(
         object_mentions(&object, "aura_direct_wait_any"),

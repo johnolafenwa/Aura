@@ -2920,7 +2920,15 @@ fn direct_host_builtin_call(name: &str, arguments: &[*mut OpaqueValue]) -> *mut 
     for (index, argument) in arguments.iter().copied().enumerate() {
         super::aura_direct_arg_buffer_store(buffer, index as i64, argument as i64);
     }
-    super::aura_direct_host_builtin(name.as_ptr(), name.len(), buffer, arguments.len() as i64)
+    host_builtin_entry(name)(buffer, arguments.len() as i64)
+}
+
+fn host_builtin_entry(name: &str) -> extern "C-unwind" fn(*mut i64, i64) -> *mut OpaqueValue {
+    super::HOST_BUILTIN_ENTRIES
+        .iter()
+        .find(|(entry, _)| *entry == name)
+        .map(|(_, entry)| *entry)
+        .unwrap_or_else(|| panic!("`{name}` has no native host builtin entry"))
 }
 
 fn direct_json_host_builtin_call(name: &str, arguments: &[*mut OpaqueValue]) -> *mut OpaqueValue {
@@ -2985,8 +2993,7 @@ fn direct_option_int(value: Option<i64>) -> *mut OpaqueValue {
 #[test]
 fn direct_host_builtin_ffi_covers_success_and_diagnostic_boundaries() {
     let empty_args = super::aura_direct_arg_buffer_new(0);
-    let value =
-        super::aura_direct_host_builtin(b"sys::args".as_ptr(), "sys::args".len(), empty_args, 0);
+    let value = super::aura_host_sys_args(empty_args, 0);
     assert!(matches!(unsafe { take_value(value) }, Value::Vec(_)));
 
     let base = string_value("root");
@@ -2994,8 +3001,7 @@ fn direct_host_builtin_ffi_covers_success_and_diagnostic_boundaries() {
     let join_args = super::aura_direct_arg_buffer_new(2);
     super::aura_direct_arg_buffer_store(join_args, 0, base as i64);
     super::aura_direct_arg_buffer_store(join_args, 1, child as i64);
-    let joined =
-        super::aura_direct_host_builtin(b"path::join".as_ptr(), "path::join".len(), join_args, 2);
+    let joined = super::aura_host_path_join(join_args, 2);
     assert_eq!(
         unsafe { take_value(joined) },
         Value::String(format!("root{}leaf", std::path::MAIN_SEPARATOR))
@@ -3013,29 +3019,28 @@ fn direct_host_builtin_ffi_covers_success_and_diagnostic_boundaries() {
         release_value(value);
     }
 
-    let unknown = run_lightweight_root_task(|| {
-        super::with_task_runtime_error_capture(|| {
-            let empty_args = super::aura_direct_arg_buffer_new(0);
-            let _ = super::aura_direct_host_builtin(
-                b"missing::call".as_ptr(),
-                "missing::call".len(),
-                empty_args,
-                0,
-            );
-            Ok(Value::Unit)
-        })
-    })
-    .expect_err("unknown host builtins should fail the active task");
-    assert!(unknown.message.contains("unknown host builtin"));
+    assert_eq!(super::host_builtin_symbol("missing::call"), None);
+    assert_eq!(
+        super::host_builtin_symbol("path::join"),
+        Some("aura_host_path_join")
+    );
+    assert_eq!(
+        super::HOST_BUILTIN_ENTRIES.len(),
+        super::HOST_BUILTIN_SYMBOLS.len()
+    );
+    for (name, _) in super::HOST_BUILTIN_SYMBOLS {
+        assert!(
+            crate::runtime_value::host_builtins::host_builtin_function(name).is_some()
+                || crate::runtime_value::evaluate_bytes_host_builtin_ref(name, &Value::Unit)
+                    .is_some()
+                || crate::text_methods::is_bytes_search_builtin(name),
+            "`{name}` must also reach the MIR interpreter"
+        );
+    }
 
     let invalid_count = run_lightweight_root_task(|| {
         super::with_task_runtime_error_capture(|| {
-            let _ = super::aura_direct_host_builtin(
-                b"sys::args".as_ptr(),
-                "sys::args".len(),
-                std::ptr::null_mut(),
-                -1,
-            );
+            let _ = super::aura_host_sys_args(std::ptr::null_mut(), -1);
             Ok(Value::Unit)
         })
     })
@@ -3043,6 +3048,41 @@ fn direct_host_builtin_ffi_covers_success_and_diagnostic_boundaries() {
     assert!(invalid_count
         .message
         .contains("invalid host builtin argument count"));
+}
+
+#[test]
+fn every_host_builtin_entry_checks_its_argument_count() {
+    for (name, entry) in super::HOST_BUILTIN_ENTRIES {
+        let entry = *entry;
+        let result = run_lightweight_root_task(move || {
+            super::with_task_runtime_error_capture(|| {
+                let empty_args = super::aura_direct_arg_buffer_new(0);
+                let value = entry(empty_args, 0);
+                unsafe { release_value(value) };
+                Ok(Value::Unit)
+            })
+        });
+        let takes_arguments = !matches!(
+            *name,
+            "sys::args"
+                | "sys::current_dir"
+                | "sys::unix_time_ms"
+                | "sys::monotonic_time_ms"
+                | "metrics::reset"
+                | "control::__retry_cancel_if_requested"
+        );
+        match result {
+            Ok(_) => assert!(!takes_arguments, "`{name}` accepted no arguments"),
+            Err(error) => {
+                assert!(takes_arguments, "`{name}` failed: {}", error.message);
+                assert!(
+                    error.message.contains("expects") || error.message.contains("argument"),
+                    "`{name}` reported `{}`",
+                    error.message
+                );
+            }
+        }
+    }
 }
 
 #[test]
@@ -3534,7 +3574,7 @@ fn direct_json_parse_reserves_capacity_before_borrowing_and_copying_the_source()
             let args = super::DirectHostArgBuffer {
                 handles: vec![source_address as i64],
             };
-            super::evaluate_direct_json_host_builtin("json::parse", &args)
+            super::direct_json_parse(&args)
         })?;
         crate::runtime_value::yield_now_with_runtime_scheduler();
 
@@ -3613,7 +3653,11 @@ fn direct_bytes_adapter_propagates_materialization_allocation_failure_as_au4005(
     };
 
     let error = crate::runtime_value::with_bytes_runtime_allocation_budget(0, || {
-        super::evaluate_direct_bytes_host_builtin("bytes::hex_encode", &args)
+        super::direct_bytes_unary(
+            "bytes::hex_encode",
+            &args,
+            crate::runtime_value::host_builtins::host_bytes_hex_encode_ref,
+        )
     })
     .expect_err("direct byte materialization allocation failure should trap");
 
@@ -21210,11 +21254,12 @@ fn coverage_native_runtime_dynamic_json_and_process_stdio_errors_stay_structured
     let json_args = super::DirectHostArgBuffer {
         handles: vec![json_source as i64],
     };
-    let unknown = super::evaluate_direct_json_host_builtin("json::is_valid", &json_args)
-        .expect_err("an unclassified JSON name must not fall through to another host API");
+    let unknown = json_args
+        .validate("json::is_valid")
+        .expect_err("an unclassified JSON name must not pass dynamic ABI validation");
     assert_eq!(unknown.code, "AU4001");
     // `json::is_valid` is not in the dynamic host ABI table, so argument
-    // validation rejects it before any JSON evaluator arm can run.
+    // validation rejects it.
     assert_eq!(
         unknown.message,
         "unknown dynamic host builtin `json::is_valid`"

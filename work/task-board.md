@@ -62,7 +62,13 @@ Last updated: 2026-10-16
 - Step 2c in review: user executables link `libaura_runtime.a`, which
   release archives ship in place of `libaura_compiler.a`. The runtime
   archive is 61,888,200 bytes against the compiler archive's 132,235,406.
-- Remaining: steps 3 through 6 of the delivery plan, one PR per step.
+- Step 4 done locally: each host builtin has its own runtime entry, so
+  programs link only the builtins they call. The JSON example drops from
+  1,984,592 to 1,488,200 bytes and the reference agent from 2,610,712 to
+  2,066,192. Neither links `toml`. See `2026-10-16-batch-5-step-4.md`.
+- Step 3 measured at about 10 KB of drop glue in hello world, so step 4 went
+  first. Whether step 3 still lands is an open question for John.
+- Remaining: steps 3, 5, and 6 of the delivery plan, one PR per step.
 
 ## Aura 0.4.1 preview release (complete)
 

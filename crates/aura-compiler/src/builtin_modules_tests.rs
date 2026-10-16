@@ -834,3 +834,47 @@ fn runtime_dynamic_host_abi_matches_builtin_signatures() {
             .passing
     );
 }
+
+#[test]
+fn every_host_builtin_has_its_own_native_entry_symbol() {
+    let metadata = super::build_host_builtin_metadata();
+    let table = crate::native_runtime::HOST_BUILTIN_SYMBOLS;
+    let table_names = table
+        .iter()
+        .map(|(name, _)| *name)
+        .collect::<std::collections::BTreeSet<_>>();
+    // Secure randomness lowers to its own scalar runtime ABI instead.
+    let metadata_names = metadata
+        .keys()
+        .map(String::as_str)
+        .filter(|name| !matches!(*name, "random::secure_int" | "random::secure_bytes"))
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(table_names, metadata_names);
+    let symbols = table
+        .iter()
+        .map(|(_, symbol)| *symbol)
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        symbols.len(),
+        table.len(),
+        "native entry symbols must be unique"
+    );
+    for (name, symbol) in table {
+        assert!(
+            symbol.starts_with("aura_host_"),
+            "`{name}` symbol `{symbol}`"
+        );
+        assert_eq!(
+            crate::native_runtime::host_builtin_symbol(name),
+            Some(*symbol)
+        );
+    }
+    assert_eq!(
+        crate::native_runtime::host_builtin_symbol("toml::is_valid"),
+        Some("aura_host_toml_is_valid")
+    );
+    assert_eq!(
+        crate::native_runtime::host_builtin_symbol("io::print"),
+        None
+    );
+}
