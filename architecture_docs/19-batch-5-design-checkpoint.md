@@ -245,9 +245,11 @@ of it may bring into an executable.
 **Rule.** Size work is measured on both maintained platforms and guarded
 in CI.
 
-- `scripts/bench-binary-size.py` gains a component attribution mode. It
-  builds each subject with `AURA_NATIVE_KEEP_SYMBOLS=1` and groups symbol
-  bytes as the table above does.
+- `scripts/check-native-binaries.py` builds each subject listed in
+  `benchmarks/native_binaries/contents.json` and enforces the gates below.
+  Its `--attribute` mode builds with `AURA_NATIVE_KEEP_SYMBOLS=1` and
+  groups symbol bytes as the table above does. A `native-binaries` CI job
+  runs it on both platforms against a release build.
 - An absence gate in the CLI tests builds hello world with symbols kept
   and fails if it contains symbols from `rustls`, `ring`, `aws_lc`,
   `tungstenite`, `toml`, `toml_edit`, `url`, `idna`, `httparse`, `libffi`,

@@ -1,0 +1,145 @@
+{
+  "budget_percent": 10,
+  "components": {
+    "aws_lc": [
+      "aws_lc"
+    ],
+    "cranelift": [
+      "cranelift"
+    ],
+    "parser": [
+      "aura_compiler::parser::",
+      "aura_compiler::lexer::"
+    ],
+    "analysis": [
+      "aura_compiler::analysis::",
+      "aura_compiler::format::",
+      "aura_compiler::package::"
+    ],
+    "libffi": [
+      "libffi::",
+      "ffi_call",
+      "ffi_prep_cif"
+    ],
+    "builtin_registry": [
+      "aura_compiler::builtin_modules::"
+    ],
+    "mir_interpreter": [
+      "aura_compiler::mir_runtime::"
+    ],
+    "rustls": [
+      "rustls::",
+      "rustls_pki_types::",
+      "webpki::"
+    ],
+    "ring": [
+      "ring::",
+      "ring_core_"
+    ],
+    "tungstenite": [
+      "tungstenite::"
+    ],
+    "http": [
+      "http::"
+    ],
+    "toml": [
+      "toml::",
+      "toml_edit::",
+      "toml_datetime::",
+      "winnow::"
+    ],
+    "url": [
+      "url::",
+      "idna::"
+    ],
+    "httparse": [
+      "httparse::"
+    ],
+    "serde_json": [
+      "serde_json::"
+    ]
+  },
+  "subjects": {
+    "hello_world": {
+      "source": "examples/basics/hello_world.au",
+      "absent": [
+        "aws_lc",
+        "cranelift",
+        "parser",
+        "analysis",
+        "libffi"
+      ],
+      "known_present": [
+        "builtin_registry",
+        "mir_interpreter",
+        "rustls",
+        "ring",
+        "tungstenite",
+        "http",
+        "toml",
+        "url",
+        "httparse",
+        "serde_json"
+      ]
+    },
+    "reference_agent": {
+      "source": "examples/agents/tool_runner/src/main.au",
+      "absent": [
+        "aws_lc",
+        "cranelift",
+        "parser",
+        "analysis"
+      ],
+      "present": [
+        "serde_json"
+      ]
+    },
+    "json": {
+      "source": "examples/json/dynamic_values.au",
+      "absent": [
+        "aws_lc",
+        "cranelift",
+        "parser",
+        "analysis"
+      ],
+      "present": [
+        "serde_json"
+      ]
+    },
+    "tls": {
+      "source": "examples/io/unix_tls_roundtrip.au",
+      "absent": [
+        "aws_lc",
+        "cranelift",
+        "parser",
+        "analysis"
+      ],
+      "present": [
+        "rustls",
+        "ring"
+      ]
+    },
+    "websocket": {
+      "source": "examples/io/websocket_roundtrip.au",
+      "absent": [
+        "aws_lc",
+        "cranelift",
+        "parser",
+        "analysis"
+      ],
+      "present": [
+        "tungstenite",
+        "rustls"
+      ]
+    }
+  },
+  "baselines": {
+    "linux-x86_64": {
+      "hello_world": 5060568,
+      "reference_agent": 5383504,
+      "json": 5106864,
+      "tls": 5493144,
+      "websocket": 5382184
+    }
+  }
+}
