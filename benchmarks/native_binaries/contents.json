@@ -66,19 +66,19 @@
         "aws_lc",
         "cranelift",
         "parser",
-        "analysis"
+        "analysis",
+        "builtin_registry",
+        "mir_interpreter",
+        "toml",
+        "http",
+        "httparse",
+        "url"
       ],
       "known_present": [
         "libffi",
-        "builtin_registry",
-        "mir_interpreter",
         "rustls",
         "ring",
         "tungstenite",
-        "http",
-        "toml",
-        "url",
-        "httparse",
         "serde_json"
       ]
     },
@@ -135,11 +135,11 @@
   },
   "baselines": {
     "linux-x86_64": {
-      "hello_world": 5060568,
-      "reference_agent": 5383504,
-      "json": 5106864,
-      "tls": 5493144,
-      "websocket": 5382184
+      "hello_world": 1034040,
+      "reference_agent": 3174656,
+      "json": 2560288,
+      "tls": 3602824,
+      "websocket": 3798424
     },
     "darwin-arm64": {
       "hello_world": 926472,

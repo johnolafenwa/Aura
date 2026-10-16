@@ -12,9 +12,12 @@ Last updated: 2026-10-16
   contents, traced six causes that keep unused TLS, TOML, WebSocket, and
   JSON code reachable, and wrote
   `architecture_docs/19-batch-5-design-checkpoint.md`.
-- Verification: documentation only. Measurements and commands are in
-  `2026-10-16-batch-5-design-checkpoint.md`.
-- Remaining: the six-step delivery plan, one PR per step.
+- Step 0 done: contents and size gates on Linux and macOS, the `rustls`
+  feature trim, removal of `mir.rs.orig`, and one object section per
+  generated function. Linux hello world is 1,034,040 bytes; macOS arm64 is
+  926,472 bytes.
+- Verification: see `2026-10-16-batch-5-step-0.md`.
+- Remaining: steps 1 through 6 of the delivery plan, one PR per step.
 
 ## Aura 0.4.1 preview release (complete)
 

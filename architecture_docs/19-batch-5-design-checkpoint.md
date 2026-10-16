@@ -76,9 +76,18 @@ User executables already link with `--gc-sections` on Linux and
 refers to. Today, six structural links make almost the whole runtime
 reachable from `main`.
 
+On Linux, R3 was the dominant link. Cranelift placed every generated
+function in one `.text` section, so `--gc-sections` kept the section, and
+everything any wrapper referenced, as soon as `main` was live. macOS
+`-dead_strip` removes unused symbols inside a section, which is why macOS
+hello world was 926,472 bytes against 5,060,568 on Linux. Step 0 emits one
+section per generated function. Linux hello world drops to 1,034,040
+bytes and no longer links the builtin registry, the MIR interpreter, TOML,
+HTTP, or URL code.
+
 | ID | Cause | Evidence |
 | --- | --- | --- |
-| R1 | One `Value` enum holds every resource inline: `TlsStream`, `WebSocket`, `ProcessChild`, `FfiHandle`, and more. Any `Value` drop, clone, or format reaches the drop glue for all of them. | The call graph of hello world has the direct edge `main` → `aura_direct_run_root` → `drop_in_place<Box<dyn rustls::State<ClientConnectionData>>>`. |
+| R1 | One `Value` enum holds every resource inline: `TlsStream`, `WebSocket`, `ProcessChild`, `FfiHandle`, and more. Any `Value` drop, clone, or format reaches the drop glue for all of them. | Hello world links `drop_in_place<Box<dyn rustls::State<ClientConnectionData>>>` under `aura_direct_run_root`. That edge goes through a vtable, so R1 is a weaker link than first measured. Steps 3 and 5 confirm what it still keeps. |
 | R2 | Host builtins dispatch through one string-keyed function, `evaluate_host_builtin_with_args`, a 23,862-byte `match` over names such as `"toml::is_valid"`. Calling any host builtin keeps every builtin. | `runtime_value.rs`, 70 string arms. |
 | R3 | Codegen emits a wrapper, a thunk, and a default-argument binder for every builtin-module function, used or not. | Hello world contains 110 `aura_fn_*` functions, including `process.start`, `net`, `fs`, and `json` wrappers. |
 | R4 | The runtime rebuilds the checker's builtin namespace registry at startup to find host metadata. This pulls checker type construction into every program. | `native_runtime.rs` calls `builtin_modules::host_builtin_metadata`, which builds every `*_namespace` table. |
@@ -305,7 +314,7 @@ Each step is one pull request with a green hosted run on Linux and macOS.
 
 | Step | Change | Behavior change |
 | --- | --- | --- |
-| 0 | Baseline and gates: attribution mode, absence and presence tests recorded against today's output, dependency feature trim from section C, and removal of the tracked 1 MB `crates/aura-compiler/src/mir.rs.orig` | none |
+| 0 | Baseline and gates: attribution mode, absence and presence tests recorded against today's output, dependency feature trim from section C, one object section per generated function, and removal of the tracked 1 MB `crates/aura-compiler/src/mir.rs.orig` | none |
 | 1 | Extract `aura-core` | none |
 | 2 | Create `aura-runtime`, ship `libaura_runtime.a`, update packaging, installer, smoke tests, and cache format | archive name |
 | 3 | Resources behind handles, B1 | none |
