@@ -787,8 +787,12 @@ fn generic_signatures_collect_type_parameters_from_callables_and_unions() {
 #[test]
 fn or_patterns_over_a_union_scrutinee_contribute_their_typed_members() {
     runs(
+        "class A:\n    n: int64\nclass B:\n    n: int64\ndef main():\n    value: A | B | None = A(n=1)\n    match value:\n        case A() | None:\n            print(\"a or none\")\n        case B():\n            print(\"b\")\n",
+        "a or none\n",
+    );
+    rejects(
         "def main():\n    value: int64 | str | None = 1\n    match value:\n        case int64 as n:\n            print(n)\n        case str as s:\n            print(s)\n        case None | None:\n            print(\"none\")\n",
-        "1\n",
+        "duplicate or subsumed alternative in or-pattern",
     );
 }
 
