@@ -33,7 +33,10 @@ were built with `aura build --backend direct`.
 | Rust hello world, same profile, for scale | 305,880 |
 
 The agent is only 6% larger than hello world. Nearly all of a native
-executable is fixed runtime cost that every program pays.
+executable is fixed runtime cost that every program pays. All 142
+single-file programs under `examples/`, outside the package, module, and
+agent directories, build with the direct backend at between 5,049,488 and
+5,494,408 bytes.
 
 The published macOS arm64 table in the
 [Performance chapter](../docs/manual/performance.md#executable-size) records
@@ -285,7 +288,9 @@ example, tutorial program, fixture, and benchmark input with `auto`. Any
 program that falls back is either fixed in the direct backend in an
 earlier PR or proven unreachable from checked programs. The direct backend
 still has explicit "does not support" paths, such as some wide-integer
-operations, so this census is real work.
+operations. The first census pass found no fallback in the 142
+single-file examples; tutorials, fixtures, packages, and benchmark inputs
+remain to be checked.
 
 **Alternative.** Keep the launcher and ship a second archive that holds
 the compiler and runtime together, used only for fallback executables.

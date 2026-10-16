@@ -29,6 +29,10 @@ implementation code changes.
   world, the runtime's use of `builtin_modules::host_builtin_metadata`, JSON
   type text decoded with `serde_json`, and `rustls` default features
   building `aws-lc-rs`.
+- Built all 142 single-file programs under `examples/`, outside the
+  package, module, and agent directories, with `aura build --backend auto`.
+  None fell back to the MIR launcher. Sizes ranged from 5,049,488 to
+  5,494,408 bytes.
 - Found a tracked 1,001,545-byte `crates/aura-compiler/src/mir.rs.orig`
   left from commit `a01a2a3`. The checkpoint schedules its removal in
   step 0.
