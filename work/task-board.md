@@ -17,7 +17,7 @@ Last updated: 2026-10-16
   generated function. Linux hello world is 1,034,040 bytes; macOS arm64 is
   926,472 bytes.
 - Verification: see `2026-10-16-batch-5-step-0.md`.
-- Step 1 in review: `crates/aura-core` holds the shared type model,
+- Step 1 done, merged in PR #57: `crates/aura-core` holds the shared type model,
   diagnostics, integer helpers, operators, task stack bounds, and the type
   budget. `aura-compiler` re-exports them, so its paths are unchanged.
 - Step 2a done locally: `crates/aura-runtime` holds the runtime. A static
