@@ -1,6 +1,6 @@
 # Batch 5 design checkpoint: lean native binaries
 
-Status: **Proposed 2026-10-16, awaiting owner ratification**
+Status: **Ratified 2026-10-16 by the owner**
 
 Date: 2026-10-16. Source baseline: `b516bd5` (main after
 [PR #54](https://github.com/johnolafenwa/Aura/pull/54)).
@@ -332,5 +332,13 @@ steps 3 through 5 land. It reaches the full list in step 5.
 
 ## Ratification Record
 
-Pending. The owner's rulings on the questions above will be recorded here,
-and the status line will change to Ratified.
+The owner ratified this checkpoint on 2026-10-16 and approved all four
+recommendations:
+
+1. Three crates: `aura-core`, `aura-runtime`, and `aura-compiler`.
+2. Retire the MIR-runtime launcher after the fallback census.
+3. Absence and presence gates plus a 10% regression budget, with no hard
+   byte target.
+4. Binary type descriptors in Batch 5.
+
+Every other rule above is the ratified default.

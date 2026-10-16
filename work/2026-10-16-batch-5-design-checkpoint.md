@@ -46,5 +46,6 @@ Documentation only. No compiler, CLI, or runtime code changed.
 
 ## Follow-Up
 
-- John's rulings on the four owner questions in the checkpoint.
-- After ratification, the six-step delivery plan in the checkpoint.
+- John ratified the checkpoint on 2026-10-16 and approved all four
+  recommendations.
+- Next: the six-step delivery plan in the checkpoint.
