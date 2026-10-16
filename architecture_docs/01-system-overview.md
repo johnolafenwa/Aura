@@ -6,6 +6,8 @@ This chapter answers the question "what are the moving parts of Aura, and how do
 
 The repo is not just a compiler crate. It is a language implementation monorepo.
 
+- `crates/aura-core`
+  Data the compiler and the native runtime share: semantic types, diagnostics and spans, integer helpers, operator enums, and task limits. It has no parser, checker, or code generator.
 - `crates/aura-compiler`
   The main compiler library: lexer, parser, semantic analysis, MIR, runtimes, native backend, package resolver, and analysis output.
 - `crates/aura`

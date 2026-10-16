@@ -9,6 +9,7 @@ rust-version.workspace = true
 crate-type = ["rlib", "staticlib"]
 
 [dependencies]
+aura-core = { path = "../aura-core" }
 base64 = "0.22"
 cranelift-codegen = "0.118"
 cranelift-frontend = "0.118"
@@ -32,6 +33,7 @@ url = "2"
 webpki-roots = "0.26"
 
 [dev-dependencies]
+aura-core = { path = "../aura-core", features = ["test-support"] }
 rcgen = "0.13"
 
 [[bench]]

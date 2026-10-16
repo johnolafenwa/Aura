@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-IGNORE_REGEX='crates/aura-compiler/src/.*_tests\.rs$|crates/aura/.*'
+IGNORE_REGEX='crates/aura-(compiler|core)/src/.*_tests\.rs$|crates/aura/.*'
 
 cargo llvm-cov clean --workspace
 RUST_MIN_STACK=33554432 cargo llvm-cov \

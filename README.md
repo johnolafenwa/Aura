@@ -101,6 +101,8 @@ Each component has its own README:
   binary directly.
 - [crates/aura-compiler](crates/aura-compiler/README.md): compiler library
   tests.
+- `crates/aura-core`: semantic types, diagnostics, and integer helpers
+  shared by the compiler and the native runtime.
 - `tools/vscode-aura`: the VS Code extension for syntax highlighting and the
   language client.
 - `tools/aura-language-server`: the Aura Language Server Protocol

@@ -1,5 +1,6 @@
 use crate::diag::Span;
 use crate::integer::IntegerValue;
+pub use aura_core::ops::{BinaryOp, ReceiverKind, UnaryOp};
 use serde::ser::SerializeStruct;
 use serde::{Deserialize, Serialize, Serializer};
 use std::collections::BTreeMap;
@@ -348,13 +349,6 @@ pub struct ImplDecl {
     pub for_type: TypeRef,
     pub methods: Vec<FunctionDecl>,
     pub span: Span,
-}
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub enum ReceiverKind {
-    Value,
-    Borrow,
-    BorrowMut,
 }
 
 /// Source-level ownership spelling for an ordinary parameter.
@@ -885,37 +879,6 @@ impl CompareOp {
 pub struct MapEntryExpr {
     pub key: Expr,
     pub value: Expr,
-}
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub enum UnaryOp {
-    Neg,
-    Not,
-    BitNot,
-}
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub enum BinaryOp {
-    And,
-    Or,
-    Add,
-    Sub,
-    Mul,
-    Div,
-    FloorDiv,
-    Mod,
-    Pow,
-    BitAnd,
-    BitOr,
-    BitXor,
-    Shl,
-    Shr,
-    Eq,
-    NotEq,
-    Less,
-    LessEq,
-    Greater,
-    GreaterEq,
 }
 
 #[derive(Clone, Debug, Serialize)]

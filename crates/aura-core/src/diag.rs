@@ -536,13 +536,13 @@ impl Diagnostic {
     /// Internal control flow for speculative checking. AU2999 also covers
     /// legacy unsupported typing cases, so its public code alone cannot say
     /// whether another candidate may safely be tried.
-    pub(crate) fn capacity_at(span: Span, message: impl Into<String>) -> Self {
+    pub fn capacity_at(span: Span, message: impl Into<String>) -> Self {
         let mut diagnostic = Self::coded_at("AU2999", span, message);
         diagnostic.details.compile_time_capacity = true;
         diagnostic
     }
 
-    pub(crate) fn is_compile_time_capacity(&self) -> bool {
+    pub fn is_compile_time_capacity(&self) -> bool {
         self.details.compile_time_capacity
     }
 
@@ -550,7 +550,7 @@ impl Diagnostic {
     /// still use message-classified constructors in places; once execution has
     /// begun, no lexical, parse, type, or ownership code may leak through that
     /// compatibility path. Precise explicit AU40xx codes are preserved.
-    pub(crate) fn into_runtime_trap(mut self) -> Self {
+    pub fn into_runtime_trap(mut self) -> Self {
         if !self.code.starts_with("AU4") {
             self.code = "AU4001".to_string();
         }
