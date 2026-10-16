@@ -446,3 +446,33 @@ fn direct_lookup_entry_methods_do_not_clone_the_entry() {
         direct.cloned_elements
     );
 }
+
+const NARROWED_UNION_FIELDS: &str = r#"class Bag:
+    items: list[int64]
+    tags: dict[str, int64]
+
+class Shelf:
+    bag: Bag | None
+
+def main():
+    mut shelf = Shelf(bag=Bag(items=[1], tags={"a": 1}))
+    if shelf.bag is not None:
+        shelf.bag.items.append(2)
+        print(shelf.bag.items.len())
+        print(len(shelf.bag.tags))
+    mut bag: Bag | None = Bag(items=[3], tags={})
+    if bag is not None:
+        bag.items.append(4)
+        print(bag.items)
+"#;
+
+#[test]
+fn direct_collection_methods_on_narrowed_union_fields_run() {
+    // A narrowed `Bag | None` stores its fields behind a union payload, so
+    // the direct backend must not move them out of the slot by field name.
+    assert_both_backends(
+        "repr-narrowed-union-fields",
+        NARROWED_UNION_FIELDS,
+        "2\n1\n[3, 4]\n",
+    );
+}

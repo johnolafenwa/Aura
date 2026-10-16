@@ -2,7 +2,7 @@
 
 Last updated: 2026-10-16
 
-## AuraDB benchmark fixes (in review)
+## AuraDB benchmark fixes (complete)
 
 - Target: fix the defects John's AuraDB benchmark exposed and put the
   remaining runtime work on the roadmap. John approved this on 2026-10-16.
@@ -13,7 +13,10 @@ Last updated: 2026-10-16
   which owns hash-indexed `dict` and `set`, the value representation, and
   `fs.rename`.
   Details are in `2026-10-16-auradb-benchmark-fixes.md`.
-- Remaining: hosted CI, review, and merge.
+- Merged as PR #60. The forced MIR and direct parity matrix then caught a
+  regression: a collection method on a field of a narrowed `X | None`
+  local failed with `AU4001`. The follow-up PR fixes it with a regression
+  test.
 
 ## Private classes across modules on MIR (in review)
 
