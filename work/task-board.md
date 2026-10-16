@@ -2,13 +2,17 @@
 
 Last updated: 2026-10-16
 
-## Aura 0.4.1 preview release (in progress)
+## Aura 0.4.1 preview release (complete)
 
-- Target: release 0.4.1 with the fixes below, as John asked on 2026-10-15.
-- Release preparation bumps every package to 0.4.1. Details are in
+- Released 2026-10-16 from `main` at `1665d4d2` (PR #53) as
+  `v0.4.1-preview`: CLI, compiler, language server, and VS Code extension
+  0.4.1. It ships the fixes from PR #52.
+- Hosted CI `38867459789` passed on PR #53 on both platforms. The
+  annotated, unsigned tag on `1665d4d2` ran Release `38884366924`, which
+  published the GitHub Release with three CLI archives, the docs archive,
+  and the VSIX, and published extension 0.4.1 to the Visual Studio
+  Marketplace and Open VSX. Details are in
   `2026-10-16-v0.4.1-preview-release.md`.
-- Remaining: green hosted CI on the release pull request, merge, and the
-  `v0.4.1-preview` tag, which John approves.
 - `VSCE_PAT` must be an org-scoped token before 2026-12-01.
 
 ## Aura 0.4.1 fixes (complete)
