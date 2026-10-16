@@ -10038,7 +10038,15 @@ fn push_imported_module_classes_from_namespace(
     seen_function_names: &mut BTreeSet<String>,
     seen_class_names: &mut BTreeSet<String>,
 ) {
-    for class in namespace.classes.values() {
+    // A module's own functions can build and call its private classes, so the
+    // runtime needs every class the module declares, not only its exports.
+    // `all_classes` also lists classes the module imports; those register
+    // from their own namespace.
+    let private_classes = namespace
+        .all_classes
+        .values()
+        .filter(|class| class.module_name == namespace.path);
+    for class in namespace.classes.values().chain(private_classes) {
         let class_name = mir_runtime_class_name(program, class);
         if !seen_class_names.insert(class_name.clone()) {
             continue;

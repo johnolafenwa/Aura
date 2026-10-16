@@ -2,6 +2,17 @@
 
 Last updated: 2026-10-16
 
+## Private classes across modules on MIR (in review)
+
+- Target: fix `AU4001` "unknown MIR class" when an imported module uses its
+  own private class, as John reported against 0.4.1.
+- Done: MIR lowering registers every class an imported module declares,
+  not only its public ones. Two regression tests in
+  `crates/aura-compiler/tests/modules.rs` cover a direct import and a
+  transitive import with a private resource class and a private generic
+  class. Details are in `2026-10-16-private-class-mir-fix.md`.
+- Remaining: hosted CI on the PR, then merge.
+
 ## Aura 0.4.1 preview release (complete)
 
 - Released 2026-10-16 from `main` at `1665d4d2` (PR #53) as
