@@ -2,6 +2,20 @@
 
 Last updated: 2026-10-16
 
+## Batch 5: lean native binaries (design checkpoint, awaiting ratification)
+
+- Target: the Batch 5 design checkpoint, brought to John for his call
+  before any implementation code, as he asked on 2026-10-16.
+- Done: measured hello world (5,057,904 bytes) and the reference agent
+  (5,384,768 bytes) on Linux x86-64 at `b516bd5`, attributed their
+  contents, traced six causes that keep unused TLS, TOML, WebSocket, and
+  JSON code reachable, and wrote
+  `architecture_docs/19-batch-5-design-checkpoint.md`.
+- Verification: documentation only. Measurements and commands are in
+  `2026-10-16-batch-5-design-checkpoint.md`.
+- Remaining: owner rulings on the four questions in the checkpoint, then
+  the six-step delivery plan.
+
 ## Aura 0.4.1 preview release (complete)
 
 - Released 2026-10-16 from `main` at `1665d4d2` (PR #53) as
