@@ -312,11 +312,7 @@ const COLLECTION_FIELD_ACCESS: &str = r#"class Store:
     by_id: dict[str, int64] = {}
 
     def add(mut self, key: str, value: int64):
-        mut doc: dict[str, int64] = {}
-        doc["a"] = value
-        doc["b"] = value
-        self.by_id[key.clone()] = self.docs.len()
-        self.docs.append(doc)
+        add_doc(self.docs, self.by_id, key, value)
 
     def loop_total(self) -> int64:
         mut total = 0
@@ -340,6 +336,18 @@ const COLLECTION_FIELD_ACCESS: &str = r#"class Store:
 
     def position(self, key: str) -> int64:
         return find_position(self.by_id, key)
+
+def add_doc(
+    docs: mut list[dict[str, int64]],
+    by_id: mut dict[str, int64],
+    key: str,
+    value: int64,
+):
+    mut doc: dict[str, int64] = {}
+    doc["a"] = value
+    doc["b"] = value
+    by_id[key.clone()] = docs.len()
+    docs.append(doc)
 
 def find_position(by_id: dict[str, int64], key: str) -> int64:
     match by_id.get(key):

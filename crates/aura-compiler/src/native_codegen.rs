@@ -4397,6 +4397,15 @@ struct DirectViewPlace {
     alternatives: Vec<DirectViewAlternative>,
 }
 
+/// A call argument moved out of its owner for one call instead of cloned
+/// (see `FunctionCompiler::lendable_arguments`).
+struct LentArgument {
+    place: String,
+    /// Shared arguments are moved back after the call; `mut` arguments come
+    /// back through the call's writeback.
+    restore: bool,
+}
+
 /// A member-call receiver moved out of its owner for one call instead of
 /// cloned (see `FunctionCompiler::lendable_receiver`).
 struct LentReceiver {
@@ -8870,10 +8879,15 @@ impl<'a> FunctionCompiler<'a> {
                     )
                 })
                 .transpose()?;
-            let loaded = if let Some(place) = lendable.get(index).and_then(Option::as_ref) {
-                let value = self.take_place(place)?;
-                self.clear_temporary_opaque_owned(&value);
-                lent.push((place.clone(), value.clone()));
+            let loaded = if let Some(lent_argument) = lendable.get(index).and_then(Option::as_ref) {
+                // A shared argument stays owned here and is moved back after
+                // the call; a `mut` argument is handed over and comes back
+                // through the writeback, as a cloned one would.
+                let value = self.take_place(&lent_argument.place)?;
+                if lent_argument.restore {
+                    self.clear_temporary_opaque_owned(&value);
+                    lent.push((lent_argument.place.clone(), value.clone()));
+                }
                 value
             } else if let Some(expected_ty) = semantic_expected.as_ref() {
                 self.load_operand_for_target(&argument.value, expected_ty)?
@@ -8925,27 +8939,29 @@ impl<'a> FunctionCompiler<'a> {
     }
 
     /// The arguments of a direct call to `name` that can be lent instead of
-    /// cloned: a shared-borrow parameter given a collection field such as
-    /// `self.by_id`. The field is moved out of its instance for the call and
-    /// moved back afterwards (see `lendable_receiver`). Lending is refused
-    /// for the whole call when another argument could reach the same
-    /// instance.
+    /// cloned: a collection field such as `self.by_id` given to a shared or
+    /// `mut` parameter. The field is moved out of its instance for the call
+    /// (see `lendable_receiver`). A shared argument is moved back afterwards;
+    /// a `mut` argument comes back through the call's writeback. An argument
+    /// is not lent when another argument overlaps its place, and nothing is
+    /// lent when an argument could hold an instance or callable that
+    /// aliases the owner.
     fn lendable_arguments(
         &self,
         name: &str,
         args: &[MirArg],
         expected: &[DirectType],
-    ) -> Vec<Option<String>> {
-        let mut lendable = vec![None; args.len()];
+    ) -> Vec<Option<LentArgument>> {
+        let mut lendable = (0..args.len()).map(|_| None).collect::<Vec<_>>();
         let Some(passing) = self.function_param_passing.get(name) else {
             return lendable;
         };
-        let mut roots = Vec::with_capacity(args.len());
+        let mut places = Vec::with_capacity(args.len());
         for argument in args {
             let place = match &argument.value {
                 Operand::Place(place) | Operand::MovePlace(place) => place,
                 _ => {
-                    roots.push(None);
+                    places.push(None);
                     continue;
                 }
             };
@@ -8958,31 +8974,21 @@ impl<'a> FunctionCompiler<'a> {
             if self.type_may_alias_instance(&direct_type_to_type(&argument_ty)) {
                 return lendable;
             }
-            let resolved_roots = resolved
-                .alternatives
-                .iter()
-                .map(|alternative| {
-                    alternative
-                        .place
-                        .split_once('.')
-                        .map_or(alternative.place.as_str(), |(root, _)| root)
-                        .to_string()
-                })
-                .collect::<Vec<_>>();
-            roots.push(Some((resolved, resolved_roots, argument_ty)));
+            places.push(Some((resolved, argument_ty)));
         }
         for (index, argument) in args.iter().enumerate() {
-            let (Some(MirReceiverKind::Borrow), Some(DirectType::Opaque(_)), None) = (
-                passing.get(index).copied(),
-                expected.get(index),
-                &argument.writeback_place,
-            ) else {
+            let Operand::Place(place) = &argument.value else {
                 continue;
             };
-            if !matches!(argument.value, Operand::Place(_)) {
+            let restore = match (passing.get(index), &argument.writeback_place) {
+                (Some(MirReceiverKind::Borrow), None) => true,
+                (Some(MirReceiverKind::BorrowMut), Some(writeback)) if writeback == place => false,
+                _ => continue,
+            };
+            if !matches!(expected.get(index), Some(DirectType::Opaque(_))) {
                 continue;
             }
-            let Some((resolved, resolved_roots, DirectType::Opaque(_))) = &roots[index] else {
+            let Some((resolved, DirectType::Opaque(_))) = &places[index] else {
                 continue;
             };
             let [alternative] = resolved.alternatives.as_slice() else {
@@ -8991,23 +8997,30 @@ impl<'a> FunctionCompiler<'a> {
             if !alternative.conditions.is_empty()
                 || !alternative.union_payloads.is_empty()
                 || !alternative.elements.is_empty()
-                || !alternative.place.contains('.')
             {
                 continue;
             }
-            let root = &resolved_roots[0];
+            let Some((root, _)) = alternative.place.split_once('.') else {
+                continue;
+            };
             let is_instance = matches!(
-                self.variable_types.get(root.as_str()),
+                self.variable_types.get(root),
                 Some(DirectType::Opaque(Type::Named(class, _))) if self.classes.contains_key(class)
             );
-            let shared = roots.iter().enumerate().any(|(other, entry)| {
+            let overlaps = places.iter().enumerate().any(|(other, entry)| {
                 other != index
-                    && entry
-                        .as_ref()
-                        .is_some_and(|(_, other_roots, _)| other_roots.contains(root))
+                    && entry.as_ref().is_some_and(|(other_resolved, _)| {
+                        other_resolved
+                            .alternatives
+                            .iter()
+                            .any(|candidate| places_overlap(&candidate.place, &alternative.place))
+                    })
             });
-            if is_instance && !shared {
-                lendable[index] = Some(alternative.place.clone());
+            if is_instance && !overlaps {
+                lendable[index] = Some(LentArgument {
+                    place: alternative.place.clone(),
+                    restore,
+                });
             }
         }
         lendable
@@ -9767,16 +9780,11 @@ impl<'a> FunctionCompiler<'a> {
             let Ok(argument_resolved) = self.resolve_view_place(argument_place) else {
                 return Ok(None);
             };
-            let shares_root = argument_resolved.alternatives.iter().any(|candidate| {
-                candidate
-                    .place
-                    .split_once('.')
-                    .map_or(candidate.place.as_str(), |(candidate_root, _)| {
-                        candidate_root
-                    })
-                    == root
-            });
-            if shares_root {
+            let overlaps = argument_resolved
+                .alternatives
+                .iter()
+                .any(|candidate| places_overlap(&candidate.place, &alternative.place));
+            if overlaps {
                 return Ok(None);
             }
             let Ok(argument_ty) = self.type_of_place(argument_place) else {
@@ -18411,6 +18419,17 @@ fn find_concrete_impl_method<'a>(
             matches!(&trait_impl.for_type, Type::Named(name, args) if name == class_name && args.is_empty())
         })
         .find_map(|trait_impl| trait_impl.methods.iter().find(|method| method.name == field))
+}
+
+/// Whether one dotted place contains the other, or both are the same.
+fn places_overlap(left: &str, right: &str) -> bool {
+    let contains = |outer: &str, inner: &str| {
+        inner == outer
+            || inner
+                .strip_prefix(outer)
+                .is_some_and(|rest| rest.starts_with('.'))
+    };
+    contains(left, right) || contains(right, left)
 }
 
 fn find_method<'a>(class: Option<&'a MirClass>, field: &str) -> Option<&'a MirMethod> {
