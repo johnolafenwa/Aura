@@ -2,6 +2,7 @@ use std::error::Error;
 use std::fmt;
 use std::ops::{Deref, DerefMut};
 
+use crate::json_text;
 use serde::{Deserialize, Serialize};
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -480,6 +481,127 @@ pub struct StructuredDiagnostic {
     pub call_frames: Vec<StructuredRuntimeCallFrame>,
     #[serde(default)]
     pub task_ancestry: Vec<StructuredRuntimeTaskFrame>,
+}
+
+impl Span {
+    fn push_json(&self, out: &mut String) {
+        let mut object = json_text::ObjectWriter::new(out);
+        json_text::push_number(object.field("line"), self.line);
+        json_text::push_number(object.field("column"), self.column);
+        object.finish();
+    }
+}
+
+impl DiagnosticSeverity {
+    fn json_name(self) -> &'static str {
+        match self {
+            Self::Error => "error",
+            Self::Warning => "warning",
+            Self::Information => "information",
+            Self::Hint => "hint",
+        }
+    }
+}
+
+impl StructuredSpan {
+    fn push_json(&self, out: &mut String) {
+        let mut object = json_text::ObjectWriter::new(out);
+        json_text::push_string(object.field("path"), &self.path);
+        self.start.push_json(object.field("start"));
+        self.end.push_json(object.field("end"));
+        if let Some(label) = &self.label {
+            json_text::push_string(object.field("label"), label);
+        }
+        object.finish();
+    }
+}
+
+impl StructuredRuntimeSourceSpan {
+    fn push_json(&self, out: &mut String) {
+        let mut object = json_text::ObjectWriter::new(out);
+        json_text::push_string(object.field("path"), &self.path);
+        self.start.push_json(object.field("start"));
+        self.end.push_json(object.field("end"));
+        object.finish();
+    }
+}
+
+impl StructuredDiagnostic {
+    /// The compact JSON form of this record, identical to `serde_json`'s.
+    ///
+    /// The native runtime sends this record to `aura run` without linking
+    /// `serde_json`.
+    pub fn to_json(&self) -> String {
+        let mut out = String::new();
+        let mut object = json_text::ObjectWriter::new(&mut out);
+        json_text::push_string(object.field("code"), &self.code);
+        json_text::push_string(object.field("severity"), self.severity.json_name());
+        json_text::push_string(object.field("message"), &self.message);
+        match &self.primary_span {
+            Some(span) => span.push_json(object.field("primary_span")),
+            None => object.field("primary_span").push_str("null"),
+        }
+        json_text::push_array(
+            object.field("secondary_spans"),
+            &self.secondary_spans,
+            |out, span| span.push_json(out),
+        );
+        json_text::push_array(object.field("notes"), &self.notes, |out, note| {
+            json_text::push_string(out, note)
+        });
+        if !self.assertion_operands.is_empty() {
+            json_text::push_array(
+                object.field("assertion_operands"),
+                &self.assertion_operands,
+                |out, operand| {
+                    let mut item = json_text::ObjectWriter::new(out);
+                    json_text::push_string(item.field("label"), &operand.label);
+                    json_text::push_string(item.field("type"), &operand.r#type);
+                    json_text::push_string(item.field("value"), &operand.value);
+                    json_text::push_bool(item.field("truncated"), operand.truncated);
+                    item.finish();
+                },
+            );
+        }
+        json_text::push_array(object.field("help"), &self.help, |out, help| {
+            json_text::push_string(out, help)
+        });
+        json_text::push_array(object.field("edits"), &self.edits, |out, edit| {
+            let mut item = json_text::ObjectWriter::new(out);
+            json_text::push_string(item.field("path"), &edit.path);
+            edit.start.push_json(item.field("start"));
+            edit.end.push_json(item.field("end"));
+            json_text::push_string(item.field("replacement"), &edit.replacement);
+            json_text::push_string(item.field("applicability"), &edit.applicability);
+            item.finish();
+        });
+        json_text::push_array(
+            object.field("call_frames"),
+            &self.call_frames,
+            |out, frame| {
+                let mut item = json_text::ObjectWriter::new(out);
+                json_text::push_string(item.field("function"), &frame.function);
+                frame.span.push_json(item.field("span"));
+                item.finish();
+            },
+        );
+        json_text::push_array(
+            object.field("task_ancestry"),
+            &self.task_ancestry,
+            |out, frame| {
+                let mut item = json_text::ObjectWriter::new(out);
+                json_text::push_string(item.field("task_function"), &frame.task_function);
+                frame
+                    .task_entry_span
+                    .push_json(item.field("task_entry_span"));
+                json_text::push_string(item.field("parent_function"), &frame.parent_function);
+                frame.spawn_span.push_json(item.field("spawn_span"));
+                item.finish();
+            },
+        );
+        object.finish();
+        out
+    }
 }
 
 impl Diagnostic {

@@ -672,12 +672,8 @@ impl NativeCodegen<'_> {
         let binder_ref = self.object.declare_func_in_func(binder_id, builder.func);
         let thunk_ptr = builder.ins().func_addr(types::I64, thunk_ref);
         let binder_ptr = builder.ins().func_addr(types::I64, binder_ref);
-        let signature_json = serde_json::to_vec(&shape.signature).map_err(|error| {
-            format!(
-                "failed to serialize function signature for `{}`: {error}",
-                key.function
-            )
-        })?;
+        let signature_json =
+            crate::native_runtime::canonical_runtime_type_name(&shape.signature).into_bytes();
         let path = function
             .source_path
             .clone()

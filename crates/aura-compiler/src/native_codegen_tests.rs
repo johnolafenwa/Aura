@@ -1331,12 +1331,13 @@ fn tuple_native_ownership_gates_separate_public_projection_from_private_destruct
     ])));
     for ty in [Type::Tuple(vec![Type::named("int64")]), tuple_type.clone()] {
         let encoded = crate::native_runtime::canonical_runtime_type_name(&ty);
-        let payload = encoded
-            .strip_prefix("__aura_type_json_v1__:")
-            .expect("runtime structural types use the canonical tagged encoding");
+        assert!(
+            encoded.starts_with(aura_core::type_descriptor::DESCRIPTOR_PREFIX),
+            "runtime structural types use the type descriptor encoding"
+        );
         assert_eq!(
-            serde_json::from_str::<Type>(payload)
-                .expect("canonical runtime type payload should decode"),
+            aura_core::type_descriptor::decode(&encoded)
+                .expect("canonical runtime type descriptor should decode"),
             ty
         );
     }
@@ -1626,7 +1627,7 @@ def main():
     };
     let tuple_payload = |elements| {
         crate::native_runtime::canonical_runtime_type_name(&Type::Tuple(elements))
-            .strip_prefix("__aura_type_json_v1__:")
+            .strip_prefix(aura_core::type_descriptor::DESCRIPTOR_PREFIX)
             .expect("canonical structural runtime type tag")
             .to_string()
     };

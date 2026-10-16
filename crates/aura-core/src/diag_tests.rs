@@ -392,3 +392,41 @@ fn an_empty_runtime_frame_snapshot_is_still_complete() {
     assert!(diagnostic.call_frames.is_empty());
     assert!(diagnostic.task_ancestry.is_empty());
 }
+
+#[test]
+fn structured_json_matches_serde_json_byte_for_byte() {
+    let mut diagnostic = super::Diagnostic::coded_at(
+        "AU4001",
+        super::Span::new(3, 4),
+        "bad \"value\" \\ with\ttab\nand \u{1} \u{8}\u{c}\r \u{7f} café / end",
+    )
+    .with_secondary(super::Span::new(2, 1), "defined here")
+    .with_note("a note")
+    .with_help("try `x`")
+    .with_edit(super::Span::new(3, 4), super::Span::new(3, 9), "fixed")
+    .with_assertion_operand("left", "int32", "1");
+    diagnostic.capture_runtime_frames_once(
+        vec![super::RuntimeCallFrame {
+            function: "main".to_string(),
+            span: super::RuntimeSourceSpan::point(None, super::Span::new(1, 2)),
+        }],
+        vec![super::RuntimeTaskFrame {
+            task_function: "worker".to_string(),
+            task_entry_span: super::RuntimeSourceSpan::point(
+                Some("w.au".to_string()),
+                super::Span::new(5, 1),
+            ),
+            parent_function: "main".to_string(),
+            spawn_span: super::RuntimeSourceSpan::point(None, super::Span::new(9, 3)),
+        }],
+    );
+    for structured in [
+        diagnostic.structured("examples/main.au"),
+        super::Diagnostic::new("plain").structured("p.au"),
+    ] {
+        assert_eq!(
+            structured.to_json(),
+            serde_json::to_string(&structured).expect("structured diagnostics serialize")
+        );
+    }
+}
