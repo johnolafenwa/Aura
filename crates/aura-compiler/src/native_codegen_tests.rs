@@ -16014,3 +16014,104 @@ def main() -> int32:
         "a statically typed cleanup must not use the generic close dispatcher: {referenced:?}"
     );
 }
+
+fn object_defined_aura_functions(bytes: &[u8]) -> BTreeSet<String> {
+    let object = cranelift_object::object::File::parse(bytes)
+        .expect("direct backend output should be a readable host object");
+    object
+        .symbols()
+        .filter(|symbol| symbol.section_index().is_some())
+        .filter_map(|symbol| {
+            symbol
+                .name()
+                .ok()
+                .map(|name| name.trim_start_matches('_').to_string())
+        })
+        .filter(|name| name.starts_with("aura_fn_"))
+        .collect()
+}
+
+#[test]
+fn direct_object_emits_only_the_builtin_wrappers_the_program_reaches() {
+    let source = r#"
+import toml
+
+def unused() -> int32:
+    return 1
+
+def main() -> int32:
+    print(toml.is_valid("a = 1"))
+    return 0
+"#;
+    let mir = lower_source_to_mir(source).expect("toml source should lower to MIR");
+    assert!(
+        mir.functions
+            .iter()
+            .any(|function| function.name == "toml::parse_string_map"),
+        "the lowered module should carry every toml wrapper"
+    );
+    let object = emit_host_object(&mir).expect("toml source should compile directly");
+    let defined = object_defined_aura_functions(&object);
+    assert!(defined.contains("aura_fn_main"), "{defined:?}");
+    assert!(
+        defined.contains("aura_fn_unused"),
+        "program functions are always compiled so codegen checks them: {defined:?}"
+    );
+    assert!(
+        defined
+            .iter()
+            .all(|name| !name.starts_with("aura_fn_json__")),
+        "wrappers of modules the program never calls must not be emitted: {defined:?}"
+    );
+    assert!(
+        !defined.contains("aura_fn_toml__parse_string_map"),
+        "an uncalled wrapper of an imported module must not be emitted: {defined:?}"
+    );
+}
+
+#[test]
+fn reachability_keeps_builtin_wrappers_named_by_function_values() {
+    let source = r#"
+import toml
+
+def main() -> int32:
+    check = toml.is_valid
+    print(check("a = 1"))
+    return 0
+"#;
+    let mir = lower_source_to_mir(source).expect("function value source should lower");
+    let pruned = super::reachability::prune_unreachable_functions(&mir);
+    let names = pruned
+        .functions
+        .iter()
+        .map(|function| function.name.as_str())
+        .collect::<BTreeSet<_>>();
+    assert!(names.contains("main"), "{names:?}");
+    assert!(names.contains("toml::is_valid"), "{names:?}");
+    assert!(!names.contains("toml::parse_string_map"), "{names:?}");
+    emit_host_object(&mir).expect("pruned module should still compile");
+}
+
+#[test]
+fn reachability_keeps_builtin_constant_initializers() {
+    let source = r#"
+import math
+
+def main() -> int32:
+    print(math.e)
+    return 0
+"#;
+    let mir = lower_source_to_mir(source).expect("builtin constant source should lower");
+    let pruned = super::reachability::prune_unreachable_functions(&mir);
+    for constant in &pruned.constants {
+        assert!(
+            pruned
+                .functions
+                .iter()
+                .any(|function| function.name == constant.initializer),
+            "constant initializer `{}` must be kept",
+            constant.initializer
+        );
+    }
+    emit_host_object(&mir).expect("builtin constant source should compile directly");
+}
