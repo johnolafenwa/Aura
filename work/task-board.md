@@ -73,7 +73,7 @@ Last updated: 2026-10-16
   descriptors, so hello world, the agent, and the TLS example no longer
   link `serde_json`. Codegen skips builtin module wrappers the program never reaches, so
   hello world's object file drops from 172,448 to 21,840 bytes. Hello world
-  is 927,776 bytes and the agent 1,520,248. See
+  is 927,888 bytes and the agent 1,520,368. See
   `2026-10-16-batch-5-step-5.md`.
 - Remaining: step 6 of the delivery plan, final measurements and docs.
 

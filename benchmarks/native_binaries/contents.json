@@ -154,11 +154,11 @@
   },
   "baselines": {
     "linux-x86_64": {
-      "hello_world": 927776,
-      "reference_agent": 1520248,
-      "json": 1364848,
-      "tls": 3258720,
-      "websocket": 3556360
+      "hello_world": 927888,
+      "reference_agent": 1520368,
+      "json": 1364960,
+      "tls": 3258840,
+      "websocket": 3556472
     },
     "darwin-arm64": {
       "hello_world": 926472,
