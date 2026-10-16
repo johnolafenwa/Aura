@@ -23464,6 +23464,116 @@ fn element_store_trap(collection: usize, path: &'static str, selectors: Vec<i64>
 }
 
 #[test]
+fn direct_element_path_take_and_probe_lend_entries_without_cloning() {
+    fn bucket(items: &[i64]) -> Value {
+        Value::Vec(VecValue {
+            element_type: Type::named("int64"),
+            elements: items
+                .iter()
+                .map(|item| Value::Int(IntegerValue::from_i64(*item)))
+                .collect(),
+        })
+    }
+    let table = boxed_value(Value::Map(MapValue {
+        key_type: Type::named("str"),
+        value_type: Type::Named("list".to_string(), vec![Type::named("int64")]),
+        entries: vec![(Value::String("a".to_string()), bucket(&[1, 2, 3]))],
+    })) as usize;
+    let key = string_value("a") as usize;
+    let path = "[k]";
+    let probe = |selectors: Vec<i64>| {
+        super::aura_direct_element_path_probe(
+            table as *mut OpaqueValue,
+            path.as_ptr(),
+            path.len(),
+            selectors.as_ptr(),
+            selectors.len(),
+            3,
+            9,
+        )
+    };
+
+    // A probe only checks that the entry exists.
+    expect_unit(probe(vec![key as i64]));
+
+    // Taking moves the entry out and leaves `Unit` until a store puts it
+    // back.
+    let taken = super::aura_direct_element_path_take(
+        table as *mut OpaqueValue,
+        path.as_ptr(),
+        path.len(),
+        [key as i64].as_ptr(),
+        1,
+        3,
+        9,
+    );
+    assert_eq!(unsafe { take_value(taken) }.render(), "[1, 2, 3]");
+    assert_eq!(
+        element_path_load(table, "[k]", &[key as i64]).render(),
+        Value::Unit.render()
+    );
+    element_path_store(table, "[k]", &[key as i64], bucket(&[1, 2, 3, 4]));
+    assert_eq!(
+        element_path_load(table, "[k]", &[key as i64]).render(),
+        "[1, 2, 3, 4]"
+    );
+
+    // A missing key traps at the index expression for both helpers.
+    let missing = string_value("missing") as usize;
+    let missing_probe = element_trap(move || {
+        let selectors = [missing as i64];
+        let _ = super::aura_direct_element_path_probe(
+            table as *mut OpaqueValue,
+            "[k]".as_ptr(),
+            3,
+            selectors.as_ptr(),
+            1,
+            3,
+            9,
+        );
+    });
+    assert_eq!(missing_probe.code, "AU4003");
+    assert_eq!(missing_probe.span, Some(Span::new(3, 9)));
+    let missing_take = element_trap(move || {
+        let selectors = [missing as i64];
+        let _ = super::aura_direct_element_path_take(
+            table as *mut OpaqueValue,
+            "[k]".as_ptr(),
+            3,
+            selectors.as_ptr(),
+            1,
+            3,
+            9,
+        );
+    });
+    assert_eq!(missing_take.code, "AU4003");
+    let bad_path = element_trap_message(move || {
+        let _ = super::aura_direct_element_path_take(
+            table as *mut OpaqueValue,
+            "".as_ptr(),
+            0,
+            std::ptr::null(),
+            0,
+            3,
+            9,
+        );
+    });
+    assert!(bad_path.contains("empty element path"), "{bad_path}");
+    let bad_probe = element_trap_message(move || {
+        let _ = super::aura_direct_element_path_probe(
+            table as *mut OpaqueValue,
+            "".as_ptr(),
+            0,
+            std::ptr::null(),
+            0,
+            3,
+            9,
+        );
+    });
+    assert!(bad_probe.contains("empty element path"), "{bad_probe}");
+}
+
+#[test]
 fn adr0061_direct_element_path_helpers_read_and_write_inside_elements() {
     fn profile(name: &str, visits: i64) -> Value {
         Value::Instance(InstanceValue {

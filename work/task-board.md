@@ -2,6 +2,19 @@
 
 Last updated: 2026-10-16
 
+## AuraDB benchmark fixes (in review)
+
+- Target: fix the defects John's AuraDB benchmark exposed and put the
+  remaining runtime work on the roadmap. John approved this on 2026-10-16.
+- Done: dependency packages can call builtin modules. The direct backend
+  lends collection fields, field arguments, and `lookup` entries instead of
+  deep-cloning them. AuraDB `get` by id went from 16,240 to 35 µs/op at
+  n=1,000. John moved Batch 7's runtime work ahead of Batch 6 as Batch 7a,
+  which owns hash-indexed `dict` and `set`, the value representation, and
+  `fs.rename`.
+  Details are in `2026-10-16-auradb-benchmark-fixes.md`.
+- Remaining: hosted CI, review, and merge.
+
 ## Private classes across modules on MIR (in review)
 
 - Target: fix `AU4001` "unknown MIR class" when an imported module uses its

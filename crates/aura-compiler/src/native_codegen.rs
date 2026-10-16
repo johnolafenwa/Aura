@@ -538,6 +538,9 @@ struct NativeCodegen<'a> {
     trait_impls: Vec<MirTraitImpl>,
     function_return_types: HashMap<String, DirectType>,
     function_param_types: HashMap<String, Vec<DirectType>>,
+    /// Each parameter's passing mode, the receiver first, parallel to
+    /// `function_param_types`.
+    function_param_passing: HashMap<String, Vec<MirReceiverKind>>,
     function_writeback_types: HashMap<String, Vec<DirectType>>,
     call_conv: CallConv,
     runtime_init: FuncId,
@@ -651,6 +654,8 @@ struct NativeCodegen<'a> {
     vec_set_index_in_place: FuncId,
     element_path_load: FuncId,
     element_path_store: FuncId,
+    element_path_take: FuncId,
+    element_path_probe: FuncId,
     array_zeros: FuncId,
     array_full: FuncId,
     array_from_vec: FuncId,
@@ -1198,6 +1203,8 @@ impl<'a> NativeCodegen<'a> {
             vec_set_index_in_place => ("aura_direct_vec_set_index_in_place", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             element_path_load => ("aura_direct_element_path_load", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             element_path_store => ("aura_direct_element_path_store", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
+            element_path_take => ("aura_direct_element_path_take", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
+            element_path_probe => ("aura_direct_element_path_probe", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             array_zeros => ("aura_direct_array_zeros", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             array_full => ("aura_direct_array_full", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             array_from_vec => ("aura_direct_array_from_vec", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
@@ -1461,6 +1468,7 @@ impl<'a> NativeCodegen<'a> {
         let mut cleanup_thunks = HashMap::new();
         let mut function_return_types = HashMap::new();
         let mut function_param_types = HashMap::new();
+        let mut function_param_passing = HashMap::new();
         let mut function_writeback_types = HashMap::new();
         for function in module.functions.iter().chain(module.top_level.iter()) {
             let function_reachable = reachable_blocks.get(&function.name).ok_or_else(|| {
@@ -1545,6 +1553,15 @@ impl<'a> NativeCodegen<'a> {
                 )?);
             }
             function_param_types.insert(function.name.clone(), params);
+            function_param_passing.insert(
+                function.name.clone(),
+                function
+                    .receiver
+                    .iter()
+                    .copied()
+                    .chain(function.params.iter().map(|param| param.passing))
+                    .collect::<Vec<_>>(),
+            );
             function_writeback_types.insert(function.name.clone(), writebacks);
         }
 
@@ -1587,6 +1604,7 @@ impl<'a> NativeCodegen<'a> {
             trait_impls,
             function_return_types,
             function_param_types,
+            function_param_passing,
             function_writeback_types,
             call_conv,
             runtime_init,
@@ -1700,6 +1718,8 @@ impl<'a> NativeCodegen<'a> {
             vec_set_index_in_place,
             element_path_load,
             element_path_store,
+            element_path_take,
+            element_path_probe,
             array_zeros,
             array_full,
             array_from_vec,
@@ -2634,6 +2654,12 @@ impl<'a> NativeCodegen<'a> {
         let element_path_store = self
             .object
             .declare_func_in_func(self.element_path_store, builder.func);
+        let element_path_take = self
+            .object
+            .declare_func_in_func(self.element_path_take, builder.func);
+        let element_path_probe = self
+            .object
+            .declare_func_in_func(self.element_path_probe, builder.func);
         let array_zeros = self
             .object
             .declare_func_in_func(self.array_zeros, builder.func);
@@ -3397,6 +3423,7 @@ impl<'a> NativeCodegen<'a> {
             cleanup_thunk_refs,
             function_return_types: self.function_return_types.clone(),
             function_param_types: self.function_param_types.clone(),
+            function_param_passing: self.function_param_passing.clone(),
             function_writeback_types: self.function_writeback_types.clone(),
             current_function_name,
             current_function_path,
@@ -3527,6 +3554,8 @@ impl<'a> NativeCodegen<'a> {
             vec_set_index_in_place,
             element_path_load,
             element_path_store,
+            element_path_take,
+            element_path_probe,
             array_zeros,
             array_full,
             array_from_vec,
@@ -4363,6 +4392,30 @@ struct DirectViewPlace {
     alternatives: Vec<DirectViewAlternative>,
 }
 
+/// A call argument moved out of its owner for one call instead of cloned
+/// (see `FunctionCompiler::lendable_arguments`).
+struct LentArgument {
+    place: String,
+    /// Shared arguments are moved back after the call; `mut` arguments come
+    /// back through the call's writeback.
+    restore: bool,
+}
+
+/// A member-call receiver moved out of its owner for one call instead of
+/// cloned (see `FunctionCompiler::lendable_receiver`).
+struct LentReceiver {
+    place: String,
+    alternative: DirectViewAlternative,
+    kind: LentReceiverKind,
+}
+
+enum LentReceiverKind {
+    /// The call only borrows the receiver: it is moved back afterwards.
+    Shared,
+    /// A `mut self` method: its writeback stores the receiver back.
+    MutableWriteback,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct DirectViewAlternative {
     place: String,
@@ -4791,6 +4844,9 @@ struct FunctionCompiler<'a> {
     cleanup_thunk_refs: HashMap<String, cranelift_codegen::ir::FuncRef>,
     function_return_types: HashMap<String, DirectType>,
     function_param_types: HashMap<String, Vec<DirectType>>,
+    /// Each parameter's passing mode, the receiver first, parallel to
+    /// `function_param_types`.
+    function_param_passing: HashMap<String, Vec<MirReceiverKind>>,
     function_writeback_types: HashMap<String, Vec<DirectType>>,
     current_function_name: String,
     current_function_path: String,
@@ -4925,6 +4981,8 @@ struct FunctionCompiler<'a> {
     vec_set_index_in_place: cranelift_codegen::ir::FuncRef,
     element_path_load: cranelift_codegen::ir::FuncRef,
     element_path_store: cranelift_codegen::ir::FuncRef,
+    element_path_take: cranelift_codegen::ir::FuncRef,
+    element_path_probe: cranelift_codegen::ir::FuncRef,
     array_zeros: cranelift_codegen::ir::FuncRef,
     array_full: cranelift_codegen::ir::FuncRef,
     array_from_vec: cranelift_codegen::ir::FuncRef,
@@ -8801,6 +8859,8 @@ impl<'a> FunctionCompiler<'a> {
         }
         let mut writeback_places = Vec::new();
         let mut mutable_sink_places = vec![None; expected.len()];
+        let lendable = self.lendable_arguments(name, args, &expected);
+        let mut lent = Vec::new();
         for (index, argument) in args.iter().enumerate() {
             let semantic_expected = expected
                 .get(index)
@@ -8814,7 +8874,17 @@ impl<'a> FunctionCompiler<'a> {
                     )
                 })
                 .transpose()?;
-            let loaded = if let Some(expected_ty) = semantic_expected.as_ref() {
+            let loaded = if let Some(lent_argument) = lendable.get(index).and_then(Option::as_ref) {
+                // A shared argument stays owned here and is moved back after
+                // the call; a `mut` argument is handed over and comes back
+                // through the writeback, as a cloned one would.
+                let value = self.take_place(&lent_argument.place)?;
+                if lent_argument.restore {
+                    self.clear_temporary_opaque_owned(&value);
+                    lent.push((lent_argument.place.clone(), value.clone()));
+                }
+                value
+            } else if let Some(expected_ty) = semantic_expected.as_ref() {
                 self.load_operand_for_target(&argument.value, expected_ty)?
             } else {
                 self.load_operand(&argument.value)?
@@ -8856,7 +8926,99 @@ impl<'a> FunctionCompiler<'a> {
         self.release_mutable_sinks(mutable_sinks);
         let (result, writebacks) = self.split_call_results(name, results)?;
         self.apply_writeback_places(&writeback_places, writebacks)?;
+        for (place, value) in lent {
+            self.mark_temporary_opaque_owned(&value);
+            self.store_place(&place, value)?;
+        }
         Ok(result)
+    }
+
+    /// The arguments of a direct call to `name` that can be lent instead of
+    /// cloned: a collection field such as `self.by_id` given to a shared or
+    /// `mut` parameter. The field is moved out of its instance for the call
+    /// (see `lendable_receiver`). A shared argument is moved back afterwards;
+    /// a `mut` argument comes back through the call's writeback. An argument
+    /// is not lent when another argument overlaps its place, and nothing is
+    /// lent when an argument could hold an instance or callable that
+    /// aliases the owner.
+    fn lendable_arguments(
+        &self,
+        name: &str,
+        args: &[MirArg],
+        expected: &[DirectType],
+    ) -> Vec<Option<LentArgument>> {
+        let mut lendable = (0..args.len()).map(|_| None).collect::<Vec<_>>();
+        let Some(passing) = self.function_param_passing.get(name) else {
+            return lendable;
+        };
+        let mut places = Vec::with_capacity(args.len());
+        for argument in args {
+            let place = match &argument.value {
+                Operand::Place(place) | Operand::MovePlace(place) => place,
+                _ => {
+                    places.push(None);
+                    continue;
+                }
+            };
+            let Ok(resolved) = self.resolve_view_place(place) else {
+                return lendable;
+            };
+            let Ok(argument_ty) = self.type_of_place(place) else {
+                return lendable;
+            };
+            if self.type_may_alias_instance(&direct_type_to_type(&argument_ty)) {
+                return lendable;
+            }
+            places.push(Some((resolved, argument_ty)));
+        }
+        for (index, argument) in args.iter().enumerate() {
+            let Operand::Place(place) = &argument.value else {
+                continue;
+            };
+            let restore = match (passing.get(index), &argument.writeback_place) {
+                (Some(MirReceiverKind::Borrow), None) => true,
+                (Some(MirReceiverKind::BorrowMut), Some(writeback)) if writeback == place => false,
+                _ => continue,
+            };
+            if !matches!(expected.get(index), Some(DirectType::Opaque(_))) {
+                continue;
+            }
+            let Some((resolved, DirectType::Opaque(_))) = &places[index] else {
+                continue;
+            };
+            let [alternative] = resolved.alternatives.as_slice() else {
+                continue;
+            };
+            if !alternative.conditions.is_empty()
+                || !alternative.union_payloads.is_empty()
+                || !alternative.elements.is_empty()
+            {
+                continue;
+            }
+            let Some((root, _)) = alternative.place.split_once('.') else {
+                continue;
+            };
+            let is_instance = matches!(
+                self.variable_types.get(root),
+                Some(DirectType::Opaque(Type::Named(class, _))) if self.classes.contains_key(class)
+            );
+            let overlaps = places.iter().enumerate().any(|(other, entry)| {
+                other != index
+                    && entry.as_ref().is_some_and(|(other_resolved, _)| {
+                        other_resolved
+                            .alternatives
+                            .iter()
+                            .any(|candidate| places_overlap(&candidate.place, &alternative.place))
+                    })
+            });
+            if is_instance && !overlaps {
+                lendable[index] = Some(LentArgument {
+                    place: alternative.place.clone(),
+                    restore,
+                });
+            }
+        }
+        lendable
     }
 
     /// Lowers one `str` text-convenience method to the shared runtime
@@ -9523,8 +9685,199 @@ impl<'a> FunctionCompiler<'a> {
         receiver_place: Option<&str>,
         args: &[MirArg],
     ) -> std::result::Result<ValueRef, String> {
+        if let Some(lent) = self.lendable_receiver(object, field, args)? {
+            return self.compile_lent_member_call(lent, field, receiver_place, args);
+        }
         let object = self.load_operand(object)?;
+        self.compile_member_call_on_receiver(object, field, receiver_place, args)
+    }
 
+    /// Decides whether a member call's receiver can be lent out of its
+    /// owner instead of cloned. A collection field such as `self.docs`, or
+    /// an element or entry reached through a loan such as the `bucket` of
+    /// `match self.buckets.lookup(name)`, otherwise costs a deep clone of
+    /// the whole receiver on every call. Lending moves the receiver out of
+    /// its slot for the one call and moves it back afterwards, so the call
+    /// sees the same value without a copy (execution model: no backend
+    /// inserts a hidden deep clone).
+    ///
+    /// The slot is empty while the call runs, so lending is refused when
+    /// anything else the call can reach might read it: an argument rooted at
+    /// the same place, an argument whose type can hold a class instance or
+    /// a callable (it could alias the owner), or a mutable argument.
+    fn lendable_receiver(
+        &self,
+        object: &Operand,
+        field: &str,
+        args: &[MirArg],
+    ) -> std::result::Result<Option<LentReceiver>, String> {
+        let Operand::Place(place) = object else {
+            return Ok(None);
+        };
+        let Ok(resolved) = self.resolve_view_place(place) else {
+            return Ok(None);
+        };
+        let [alternative] = resolved.alternatives.as_slice() else {
+            return Ok(None);
+        };
+        if !alternative.conditions.is_empty() || !alternative.union_payloads.is_empty() {
+            return Ok(None);
+        }
+        let root = alternative
+            .place
+            .split_once('.')
+            .map_or(alternative.place.as_str(), |(root, _)| root);
+        let Some(DirectType::Opaque(root_ty)) = self.variable_types.get(root) else {
+            return Ok(None);
+        };
+        if alternative.elements.is_empty() {
+            // A plain field place: the owner must be a class instance, so
+            // the field can be moved out of it by name.
+            let is_instance =
+                matches!(root_ty, Type::Named(name, _) if self.classes.contains_key(name));
+            if !is_instance || !alternative.place.contains('.') {
+                return Ok(None);
+            }
+        }
+        let Ok(DirectType::Opaque(receiver_ty)) = self.type_of_place(place) else {
+            return Ok(None);
+        };
+        let Type::Named(receiver_name, _) = &receiver_ty else {
+            return Ok(None);
+        };
+        let kind = if matches!(receiver_name.as_str(), "list" | "dict" | "set") {
+            if field == "__take_index_option"
+                || field.starts_with("__span_")
+                || self.find_trait_method(&receiver_ty, field).is_some()
+            {
+                return Ok(None);
+            }
+            LentReceiverKind::Shared
+        } else if !alternative.elements.is_empty() && self.classes.contains_key(receiver_name) {
+            match find_method(self.classes.get(receiver_name), field).map(|method| method.receiver)
+            {
+                Some(Some(MirReceiverKind::Borrow)) => LentReceiverKind::Shared,
+                Some(Some(MirReceiverKind::BorrowMut)) => LentReceiverKind::MutableWriteback,
+                _ => return Ok(None),
+            }
+        } else {
+            return Ok(None);
+        };
+        for argument in args {
+            if argument.writeback_place.is_some() {
+                return Ok(None);
+            }
+            let (Operand::Place(argument_place) | Operand::MovePlace(argument_place)) =
+                &argument.value
+            else {
+                continue;
+            };
+            let Ok(argument_resolved) = self.resolve_view_place(argument_place) else {
+                return Ok(None);
+            };
+            let overlaps = argument_resolved
+                .alternatives
+                .iter()
+                .any(|candidate| places_overlap(&candidate.place, &alternative.place));
+            if overlaps {
+                return Ok(None);
+            }
+            let Ok(argument_ty) = self.type_of_place(argument_place) else {
+                return Ok(None);
+            };
+            if self.type_may_alias_instance(&direct_type_to_type(&argument_ty)) {
+                return Ok(None);
+            }
+        }
+        Ok(Some(LentReceiver {
+            place: place.clone(),
+            alternative: alternative.clone(),
+            kind,
+        }))
+    }
+
+    /// Whether a value of `ty` can hold a handle to a class instance or a
+    /// callable environment, and so might alias a lent receiver's owner.
+    fn type_may_alias_instance(&self, ty: &Type) -> bool {
+        match ty {
+            Type::Named(name, args) => {
+                self.classes.contains_key(name)
+                    || args.iter().any(|arg| self.type_may_alias_instance(arg))
+            }
+            Type::Tuple(items) => items.iter().any(|item| self.type_may_alias_instance(item)),
+            Type::Union(union) => union
+                .members
+                .iter()
+                .any(|member| self.type_may_alias_instance(member)),
+            Type::Unit | Type::Module(_) => false,
+            _ => true,
+        }
+    }
+
+    /// Moves a lent receiver out of its slot (see `lendable_receiver`). The
+    /// result is an owned temporary.
+    fn take_lent_receiver(&mut self, lent: &LentReceiver) -> std::result::Result<ValueRef, String> {
+        if lent.alternative.elements.is_empty() {
+            return self.take_place(&lent.alternative.place);
+        }
+        let element_type = lent
+            .alternative
+            .elements
+            .last()
+            .map(|selector| selector.element_type.clone())
+            .ok_or("direct backend lent an element view without a selection")?;
+        let (collection, projection) = self.load_element_path_root(&lent.alternative.place)?;
+        let path = self.element_path_operands(&projection, &lent.alternative.elements)?;
+        let inst = self.builder.ins().call(
+            self.element_path_take,
+            &[
+                collection.values[0],
+                path.path_ptr,
+                path.path_len,
+                path.selectors_ptr,
+                path.count,
+                path.line,
+                path.column,
+            ],
+        );
+        Ok(self.owned_opaque_result(self.builder.inst_results(inst).to_vec(), element_type))
+    }
+
+    fn compile_lent_member_call(
+        &mut self,
+        lent: LentReceiver,
+        field: &str,
+        receiver_place: Option<&str>,
+        args: &[MirArg],
+    ) -> std::result::Result<ValueRef, String> {
+        let receiver = self.take_lent_receiver(&lent)?;
+        match lent.kind {
+            LentReceiverKind::Shared => {
+                // The call borrows the receiver; ownership stays here so it
+                // can be moved back into its slot afterwards. Without a
+                // writeback place, a mutating builtin changes the lent value
+                // in place and the move back publishes the change.
+                self.clear_temporary_opaque_owned(&receiver);
+                let result =
+                    self.compile_member_call_on_receiver(receiver.clone(), field, None, args)?;
+                self.mark_temporary_opaque_owned(&receiver);
+                self.store_place(&lent.place, receiver)?;
+                Ok(result)
+            }
+            // A `mut self` method's writeback stores the receiver back.
+            LentReceiverKind::MutableWriteback => {
+                self.compile_member_call_on_receiver(receiver, field, receiver_place, args)
+            }
+        }
+    }
+
+    fn compile_member_call_on_receiver(
+        &mut self,
+        object: ValueRef,
+        field: &str,
+        receiver_place: Option<&str>,
+        args: &[MirArg],
+    ) -> std::result::Result<ValueRef, String> {
         if let DirectType::Opaque(Type::Named(name, _)) = &object.ty {
             if let Some(
                 member @ (BuiltinMember::DurationToMilliseconds | BuiltinMember::DurationToSeconds),
@@ -10125,8 +10478,30 @@ impl<'a> FunctionCompiler<'a> {
             alternative.elements.push(selector.clone());
         }
         self.view_places.insert(loan.to_string(), resolved);
-        // Bounds or presence are checked once at creation: probe the
+        // Bounds or presence are checked once at creation. A single
+        // unconditional selection is probed in place; otherwise probe the
         // selected slot through the loan and drop the copy.
+        let resolved = self.resolve_view_place(loan)?;
+        if let [alternative] = resolved.alternatives.as_slice() {
+            if alternative.conditions.is_empty() && !alternative.elements.is_empty() {
+                let (collection, projection) = self.load_element_path_root(&alternative.place)?;
+                let path = self.element_path_operands(&projection, &alternative.elements)?;
+                let inst = self.builder.ins().call(
+                    self.element_path_probe,
+                    &[
+                        collection.values[0],
+                        path.path_ptr,
+                        path.path_len,
+                        path.selectors_ptr,
+                        path.count,
+                        path.line,
+                        path.column,
+                    ],
+                );
+                self.release_opaque_handle(self.builder.inst_results(inst)[0]);
+                return Ok(());
+            }
+        }
         let baseline = self.owned_opaque_temporaries.clone();
         let probe = self.load_place(loan)?;
         drop(probe);
@@ -18039,6 +18414,17 @@ fn find_concrete_impl_method<'a>(
             matches!(&trait_impl.for_type, Type::Named(name, args) if name == class_name && args.is_empty())
         })
         .find_map(|trait_impl| trait_impl.methods.iter().find(|method| method.name == field))
+}
+
+/// Whether one dotted place contains the other, or both are the same.
+fn places_overlap(left: &str, right: &str) -> bool {
+    let contains = |outer: &str, inner: &str| {
+        inner == outer
+            || inner
+                .strip_prefix(outer)
+                .is_some_and(|rest| rest.starts_with('.'))
+    };
+    contains(left, right) || contains(right, left)
 }
 
 fn find_method<'a>(class: Option<&'a MirClass>, field: &str) -> Option<&'a MirMethod> {
