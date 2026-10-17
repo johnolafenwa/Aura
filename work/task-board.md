@@ -30,52 +30,29 @@ Last updated: 2026-10-16
 - Verification: hosted CI `38915135045` passed on Linux and macOS.
 - Remaining: review and merge.
 
-## Batch 5: lean native binaries (in progress)
+## Batch 5: lean native binaries (complete)
 
 - Target: implement the ratified
   [Batch 5 design checkpoint](../architecture_docs/19-batch-5-design-checkpoint.md).
   John approved all four recommendations on 2026-10-16.
-- Done: measured hello world (5,057,904 bytes) and the reference agent
-  (5,384,768 bytes) on Linux x86-64 at `b516bd5`, attributed their
-  contents, traced six causes that keep unused TLS, TOML, WebSocket, and
-  JSON code reachable, and wrote
-  `architecture_docs/19-batch-5-design-checkpoint.md`.
-- Step 0 done: contents and size gates on Linux and macOS, the `rustls`
-  feature trim, removal of `mir.rs.orig`, and one object section per
-  generated function. Linux hello world is 1,034,040 bytes; macOS arm64 is
-  926,472 bytes.
-- Verification: see `2026-10-16-batch-5-step-0.md`.
-- Step 1 done, merged in PR #57: `crates/aura-core` holds the shared type model,
-  diagnostics, integer helpers, operators, task stack bounds, and the type
-  budget. `aura-compiler` re-exports them, so its paths are unchanged.
-- Step 2a done, merged in PR #58: `crates/aura-runtime` holds the runtime. A static
-  table carries the dynamic host builtin ABI the runtime used to rebuild
-  from the checker registry.
-- Census for 2b: of 1,050 examples, benchmarks, and pass fixtures, 30 still
-  used the launcher. 27 are modules with no `main`. Three looked like
-  direct-backend gaps.
-- Step 2b done, merged in PR #58: two MIR union injection miscompiles fixed, and
-  `aura build` always emits directly. The third census program also fails
-  under `aura run`: the checker lets a shared match binding call a resource
-  method that MIR treats as mutating. That needs a language decision. See
+- Done: steps 0, 1, 2a, 2b, 2c, 4, and 5 merged in PRs #55, #57, #58, #59,
+  #62, and #63. Step 3 was dropped on 2026-10-16 after it measured at about
+  10 KB of drop glue. Step 6 records the final measurements, the
+  Performance chapter table, the roadmap row, and this entry.
+- Result on Linux x86-64: hello world went from 5,057,904 to 927,888 bytes
+  and the reference agent from 5,384,768 to 1,520,368. User programs link
+  `libaura_runtime.a`, 61,530,080 bytes, in place of the 132,235,406-byte
+  compiler archive. On macOS arm64, hello world is 922,344 bytes and the
+  agent 1,446,128.
+- Hello world contains no compiler, TOML, HTTP, URL, or JSON code. About
+  11 KB of `rustls`, `ring`, and `tungstenite` drop glue remains, reached
+  through the runtime value type.
+- Verification: the `native-binaries` CI job enforces the absence,
+  presence, and 10% size gates on both platforms. Step 6 moves the macOS
+  baselines to the step 5 sizes. See `2026-10-17-batch-5-step-6.md`.
+- Open: the checker lets a shared match binding call a resource method
+  that MIR treats as mutating. It needs a language decision. See
   `2026-10-16-batch-5-step-2b.md`.
-- Step 2c in review: user executables link `libaura_runtime.a`, which
-  release archives ship in place of `libaura_compiler.a`. The runtime
-  archive is 61,888,200 bytes against the compiler archive's 132,235,406.
-- Step 4 done locally: each host builtin has its own runtime entry, and
-  cleanup of a known resource type calls that resource's own close entry.
-  The JSON example drops from 1,984,592 to 1,488,200 bytes and the reference
-  agent from 2,610,712 to 1,687,680. Neither links `toml`, and the agent no
-  longer links the TLS handshake. See `2026-10-16-batch-5-step-4.md`.
-- Step 3 is dropped: John chose to skip it on 2026-10-16 after it measured
-  at about 10 KB of drop glue.
-- Step 5 done locally: types cross to the runtime as compact text
-  descriptors, so hello world, the agent, and the TLS example no longer
-  link `serde_json`. Codegen skips builtin module wrappers the program never reaches, so
-  hello world's object file drops from 172,448 to 21,840 bytes. Hello world
-  is 927,888 bytes and the agent 1,520,368. See
-  `2026-10-16-batch-5-step-5.md`.
-- Remaining: step 6 of the delivery plan, final measurements and docs.
 
 ## Aura 0.4.1 preview release (complete)
 

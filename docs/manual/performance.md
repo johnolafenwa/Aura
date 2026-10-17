@@ -373,38 +373,55 @@ Design record:
 
 ## Executable Size
 
-The current counts are exact executable bytes from a clean detached release
-build at `d9fc79921ba9fed1116634ec9994bcb599aa9f90`. They include the
-maintained reference agent as it was at that commit: version 0,
-`examples/agents/tool_runner/`, initial source commit
-`fc0361bc76b8b47d300a3089b1b4bb7c2b739dfc`.
+A native executable contains the Aura runtime code its program can reach.
+A program that never uses TLS, WebSocket, TOML, or JSON does not carry their
+libraries. The counts below are exact bytes from release builds of
+`bdf9265972dd8baf4dbd2ab4008b49bdaf546b22`.
 
-The package is at version 1, an owned-callable registry with a factory closure
-and a packed bound method. The table row below is still the version-0
-measurement. The same bench re-measures the version-1 release size later.
+| Executable | Linux x86-64 | macOS arm64 |
+| --- | ---: | ---: |
+| Native hello world | 927,888 | 922,344 |
+| Reference agent (`tool_runner`) | 1,520,368 | 1,446,128 |
+| JSON example | 1,364,960 | 1,307,576 |
+| TLS example | 3,258,840 | 2,823,168 |
+| WebSocket example | 3,556,472 | 3,100,648 |
 
-| Executable | Tuned release bytes |
-| --- | ---: |
-| `aura` compiler | 10,897,408 |
-| Native hello world | 1,586,968 |
-| Reference agent version 0 (`tool_runner`) | 3,199,712 |
+On Linux x86-64, the `aura` compiler is 16,825,120 bytes and the runtime
+archive `libaura_runtime.a` is 61,530,080 bytes. User executables link the
+runtime archive. It contains no compiler code.
+
+The JSON example is `examples/json/dynamic_values.au`. The TLS example is
+`examples/io/unix_tls_roundtrip.au`, and the WebSocket example is
+`examples/io/websocket_roundtrip.au`. Each links only the libraries it uses:
+
+| Executable | Links | Does not link |
+| --- | --- | --- |
+| Hello world, reference agent | runtime core | `serde_json`, `toml`, `http`, `httparse` |
+| JSON example | runtime core, `serde_json` | `toml` |
+| TLS example | runtime core, `rustls`, `ring` | `serde_json`, `http`, `httparse` |
+| WebSocket example | runtime core, `rustls`, `ring`, `tungstenite`, `http`, `httparse`, `url` | `serde_json` |
+
+Hello world still holds about 11 KB of `rustls`, `ring`, and `tungstenite`
+cleanup code. The runtime's value type can hold a TLS or WebSocket
+connection, so the code that drops one stays reachable.
 
 The compiler profile uses level 3, fat LTO, one codegen unit, and no debug
 data, and strips compiler symbols. It keeps unwinding and Aura diagnostic
 metadata. User executables use unused-section removal and debug and
-local-symbol stripping. The separately installed runtime archive keeps its
-linkable symbols.
+local-symbol stripping. Each generated function has its own object section,
+so the linker drops runtime code no function calls.
 
-Both programs ran with Cargo unavailable. Hello world matched its single-print
-output. The agent matched every byte of its package's pinned stdout.
+Hello world and the reference agent ran with Cargo unavailable. Hello world
+matched its single-print output. The agent matched every byte of its
+package's pinned stdout.
 
-[Size provenance](https://github.com/johnolafenwa/Aura/blob/main/work/2026-09-08-pre-batch-1-items-6-7/executable-sizes.json)
-records the exact commit, commands, profile settings, source and package
-identities, compiler and executable SHA-256 hashes, toolchain, and standalone
-output. The final pull request head was rebuilt and checked against this table
-after the publication commits. That exact-head report is kept in the
-completion evidence. The clean size checkout and target are removed after
-hashing.
+[Linux size provenance](https://github.com/johnolafenwa/Aura/blob/main/work/2026-10-17-batch-5-step-6/executable-sizes-linux.json)
+records the commit, commands, toolchain, linker, source identities, and
+executable SHA-256 hashes. The macOS counts come from the `native-binaries`
+CI job on the same tree. That job builds every subject in
+`benchmarks/native_binaries/contents.json` on both platforms. It fails when
+a library appears in a program that should not link it, or when hello world
+or another subject grows more than 10% over its recorded size.
 
 ### Foundations Size Comparison
 
@@ -433,13 +450,23 @@ Both size sessions use:
 
 ### Reproducing The Size Table
 
-Reproduce the current table from the desired final ref:
+Reproduce the hello world, reference agent, and compiler sizes from a clean
+checkout of the desired ref:
 
 ```bash
 python3 scripts/bench-binary-size.py \
   --after-ref "$(git rev-parse HEAD)" --after-only \
   --output /tmp/aura-executable-sizes.json
 ```
+
+Measure every subject and check its contents against a local release build:
+
+```bash
+cargo build --release -p aura
+python3 scripts/check-native-binaries.py
+```
+
+Add `--attribute` to print the symbol bytes for each library.
 
 To collect the before, default, and tuned profile comparison, omit
 `--after-only` and pass `--before-ref v0.3.3-preview`. The script records that

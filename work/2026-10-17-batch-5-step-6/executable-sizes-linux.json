@@ -1,0 +1,121 @@
+{
+  "schema_version": 2,
+  "generated_at": "2026-10-17T19:59:38.792541+00:00",
+  "host": "Linux-6.18.44-fc-v139-x86_64-with-glibc2.39",
+  "machine": "x86_64",
+  "runner_sha256": "4284757a875936c670e6c913327256ad59a3dc6e5a5f6caca3010b56c5ee97d6",
+  "measurements": [
+    {
+      "ref": "bdf9265972dd8baf4dbd2ab4008b49bdaf546b22",
+      "commit": "bdf9265972dd8baf4dbd2ab4008b49bdaf546b22",
+      "profile": "release",
+      "profile_overrides": {
+        "CARGO_PROFILE_RELEASE_PANIC": "unwind"
+      },
+      "build_command": [
+        "cargo",
+        "+1.95.0",
+        "build",
+        "--release",
+        "--locked",
+        "-p",
+        "aura"
+      ],
+      "link_query_command": [
+        "cargo",
+        "+1.95.0",
+        "rustc",
+        "--release",
+        "--locked",
+        "-p",
+        "aura-runtime",
+        "--lib",
+        "--",
+        "--print",
+        "native-static-libs"
+      ],
+      "program_builds": [
+        [
+          "/tmp/aura-size-vr_ra0wc/checkout/target-measured/installed/bin/aura",
+          "build",
+          "--backend",
+          "direct",
+          "-o",
+          "/tmp/aura-size-vr_ra0wc/checkout/target-measured/hello_world",
+          "/tmp/aura-size-vr_ra0wc/checkout/examples/basics/hello_world.au"
+        ],
+        [
+          "/tmp/aura-size-vr_ra0wc/checkout/target-measured/installed/bin/aura",
+          "build",
+          "--backend",
+          "direct",
+          "-o",
+          "/tmp/aura-size-vr_ra0wc/checkout/target-measured/reference_agent",
+          "/tmp/aura-size-vr_ra0wc/checkout/examples/agents/tool_runner/src/main.au"
+        ]
+      ],
+      "subjects": {
+        "aura": {
+          "bytes": 16825120,
+          "sha256": "dfc594bc61887bc370407ddad03efbd6218cec4e56c27c1319abd529a7440ab1"
+        },
+        "hello_world": {
+          "bytes": 927888,
+          "sha256": "976fe64b437f038db421a42ead03e71d69320a1d17b1dadfcb909a6e80e56823"
+        },
+        "reference_agent": {
+          "bytes": 1520368,
+          "sha256": "48df7537e3bbb6dfe3aea594d6b5f91bbaf1faea16a694df7893ffa382d148f2"
+        }
+      },
+      "sources": {
+        "hello_world": {
+          "path": "examples/basics/hello_world.au",
+          "bytes": 23,
+          "sha256": "51d2693342000ac090e8817796032592050e0f0b88d4d3a7ab1112058a169673"
+        },
+        "reference_agent": {
+          "path": "examples/agents/tool_runner/src/main.au",
+          "bytes": 4973,
+          "sha256": "e8401500c3cb819d385195ed4910c5b5bb8ed264eea28b66191548c270303f30",
+          "package_files": {
+            "examples/agents/tool_runner/Aura.toml": {
+              "bytes": 66,
+              "sha256": "42cf9f584113408197cae0d66f8f1efee826b45bdd34c95447a3aeb071f254f2"
+            },
+            "examples/agents/tool_runner/Aura.lock": {
+              "bytes": 91,
+              "sha256": "d9a047c28931b0bfb67446f65713e6e3b1835916a36dc751d918f56d019201fb"
+            },
+            "examples/agents/tool_runner/stdout.txt": {
+              "bytes": 277,
+              "sha256": "2bf6941bd4a5f00ab4ff8dd01c15291030dbabb0e21070399a5fdb9ce58a6faf"
+            },
+            "examples/agents/tool_runner/src/main.au": {
+              "bytes": 4973,
+              "sha256": "e8401500c3cb819d385195ed4910c5b5bb8ed264eea28b66191548c270303f30"
+            }
+          }
+        }
+      },
+      "standalone_verification": {
+        "hello_world": {
+          "returncode": 0,
+          "stdout": "Hello, world!\n",
+          "cargo_unavailable": true
+        },
+        "reference_agent": {
+          "returncode": 0,
+          "stdout": "tool-runner version 1\nrequest {\"tool\":\"double\",\"value\":21}\nresult {\"tool\":\"double\",\"value\":42}\nresult {\"tool\":\"increment\",\"value\":43}\nrejected invalid request\nunknown tool missing\nready after 3 attempts\nstream started\ntoken tools\ntoken ready\nstream finished\nclosed tool-runner\n",
+          "cargo_unavailable": true
+        }
+      },
+      "toolchain": "rustc 1.95.0 (59807616e 2026-04-14)\nbinary: rustc\ncommit-hash: 59807616e1fa2540724bfbac14d7976d7e4a3860\ncommit-date: 2026-04-14\nhost: x86_64-unknown-linux-gnu\nrelease: 1.95.0\nLLVM version: 22.1.2\n",
+      "linker": "cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0\nCopyright (C) 2023 Free Software Foundation, Inc.\nThis is free software; see the source for copying conditions.  There is NO\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.\n\n",
+      "hello_before_input_policy": "identical single-print bytes staged outside the before source tree",
+      "reference_agent": "maintained tool_runner package, reference agent version 1",
+      "omitted_subjects": {}
+    }
+  ],
+  "process_helper_sha256": "bbf4bca940b38bc84101ba4eaf93e568b16edafd91dc298d071ea96be52330de"
+}
