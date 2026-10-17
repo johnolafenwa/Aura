@@ -2554,10 +2554,13 @@ def main() -> int32:
     );
     let parse = object_function_referenced_symbols(&object, "aura_fn_json__parse");
     assert!(
-        parse.iter().any(|symbol| symbol == "aura_host_json_parse")
-            && parse
-                .iter()
-                .all(|symbol| !symbol.starts_with("aura_host_") || symbol == "aura_host_json_parse"),
+        parse
+            .iter()
+            .any(|symbol| symbol.trim_start_matches('_') == "aura_host_json_parse")
+            && parse.iter().all(|symbol| {
+                let symbol = symbol.trim_start_matches('_');
+                !symbol.starts_with("aura_host_") || symbol == "aura_host_json_parse"
+            }),
         "`json.parse` must call only its own entry: {parse:?}"
     );
 }
@@ -15997,7 +16000,10 @@ def main() -> int32:
 "#;
     let mir = lower_source_to_mir(source).expect("task group source should lower to MIR");
     let object = emit_host_object(&mir).expect("task group source should compile directly");
-    let referenced = object_referenced_symbols(&object);
+    let referenced: BTreeSet<String> = object_referenced_symbols(&object)
+        .into_iter()
+        .map(|symbol| symbol.trim_start_matches('_').to_string())
+        .collect();
     assert!(
         referenced.contains("aura_direct_close_task_group"),
         "task group cleanup must call its own close entry: {referenced:?}"
