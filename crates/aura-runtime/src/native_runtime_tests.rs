@@ -5386,6 +5386,138 @@ fn direct_uint64_boxing_helpers_preserve_the_full_range() {
 }
 
 #[test]
+fn direct_runtime_type_tags_are_interned_and_retagging_is_idempotent() {
+    // The same descriptor from different buffers, and from other OS threads,
+    // resolves to one shared interned tag with the parsed type cached.
+    let first = super::interned_runtime_type_tag(b"list[int64]");
+    let heap_copy = b"list[int64]".to_vec();
+    let second = super::interned_runtime_type_tag(&heap_copy);
+    assert!(Arc::ptr_eq(&first, &second));
+    assert_eq!(&*first.name, "list[int64]");
+    assert_eq!(
+        first.parsed,
+        Type::Named("list".to_string(), vec![Type::named("int64")])
+    );
+    assert_eq!(first.integer_kind, None);
+    assert_eq!(
+        super::interned_runtime_type_tag(b"int32").integer_kind,
+        Some(IntegerKind::Int32)
+    );
+    let from_threads = (0..4)
+        .map(|_| thread::spawn(|| super::interned_runtime_type_tag(b"list[int64]")))
+        .collect::<Vec<_>>()
+        .into_iter()
+        .map(|handle| handle.join().expect("tagging thread"))
+        .collect::<Vec<_>>();
+    for tag in &from_threads {
+        assert!(Arc::ptr_eq(&first, tag));
+    }
+    // A (ptr, len) cache hit must still check the bytes: a reused buffer with
+    // new contents resolves to the new descriptor.
+    let mut buffer = b"set[int32]".to_vec();
+    assert_eq!(
+        &*super::interned_runtime_type_tag(&buffer).name,
+        "set[int32]"
+    );
+    buffer.copy_from_slice(b"set[int64]");
+    assert_eq!(
+        &*super::interned_runtime_type_tag(&buffer).name,
+        "set[int64]"
+    );
+
+    // Retagging an enum variant with the same descriptor keeps one suffix.
+    let variant = boxed_value(Value::EnumVariant(EnumVariantValue {
+        enum_name: "Lookup".to_string(),
+        variant_name: "Found".to_string(),
+        payloads: vec![Value::Int(IntegerValue::from_i32(7))],
+    }));
+    for _ in 0..3 {
+        super::aura_direct_tag_value_type(variant, b"Lookup[int32]".as_ptr(), 13);
+    }
+    let tagged_name = match unsafe { value_ref(variant) } {
+        Value::EnumVariant(variant) => variant.enum_name,
+        other => panic!("expected tagged variant, found {other:?}"),
+    };
+    assert_eq!(
+        crate::runtime_value::embedded_nominal_runtime_type_name(&tagged_name),
+        Some("Lookup[int32]")
+    );
+    assert_eq!(
+        crate::runtime_value::nominal_runtime_base_name(&tagged_name),
+        "Lookup"
+    );
+    assert_eq!(
+        unsafe { super::explicit_runtime_type_name(variant) }.as_deref(),
+        Some("Lookup[int32]")
+    );
+    // A different descriptor replaces the tag.
+    super::aura_direct_tag_value_type(variant, b"Lookup[int64]".as_ptr(), 13);
+    match unsafe { value_ref(variant) } {
+        Value::EnumVariant(variant) => assert_eq!(
+            crate::runtime_value::embedded_nominal_runtime_type_name(&variant.enum_name),
+            Some("Lookup[int64]")
+        ),
+        other => panic!("expected retagged variant, found {other:?}"),
+    }
+    assert_eq!(
+        unsafe { super::explicit_runtime_type_name(variant) }.as_deref(),
+        Some("Lookup[int64]")
+    );
+
+    // Lists, maps, and integers pick up the tagged types on every retag.
+    let vector = boxed_value(Value::Vec(VecValue {
+        element_type: Type::named("Unknown"),
+        elements: Vec::new(),
+    }));
+    super::aura_direct_tag_value_type(vector, b"list[int64]".as_ptr(), 11);
+    super::aura_direct_tag_value_type(vector, b"list[int64]".as_ptr(), 11);
+    match unsafe { value_ref(vector) } {
+        Value::Vec(vector) => assert_eq!(vector.element_type, Type::named("int64")),
+        other => panic!("expected tagged vector, found {other:?}"),
+    }
+    unsafe {
+        value_mut(vector, |value| match value {
+            Value::Vec(vector) => vector.element_type = Type::named("Unknown"),
+            other => panic!("expected vector, found {other:?}"),
+        });
+    }
+    super::aura_direct_tag_value_type(vector, b"list[int64]".as_ptr(), 11);
+    match unsafe { value_ref(vector) } {
+        Value::Vec(vector) => assert_eq!(vector.element_type, Type::named("int64")),
+        other => panic!("expected retagged vector, found {other:?}"),
+    }
+
+    let map = boxed_value(Value::Map(MapValue {
+        key_type: Type::named("Unknown"),
+        value_type: Type::named("Unknown"),
+        entries: Vec::new().into(),
+    }));
+    super::aura_direct_tag_value_type(map, b"dict[str, int32]".as_ptr(), 16);
+    super::aura_direct_tag_value_type(map, b"dict[str, int32]".as_ptr(), 16);
+    match unsafe { value_ref(map) } {
+        Value::Map(map) => {
+            assert_eq!(map.key_type, Type::named("str"));
+            assert_eq!(map.value_type, Type::named("int32"));
+        }
+        other => panic!("expected tagged map, found {other:?}"),
+    }
+
+    let integer = boxed_value(Value::Int(IntegerValue::from_i32(5)));
+    super::aura_direct_tag_value_type(integer, b"int64".as_ptr(), 5);
+    super::aura_direct_tag_value_type(integer, b"int64".as_ptr(), 5);
+    match unsafe { value_ref(integer) } {
+        Value::Int(integer) => assert_eq!(integer.runtime_type_name(), Some("int64")),
+        other => panic!("expected tagged integer, found {other:?}"),
+    }
+    unsafe {
+        release_value(variant);
+        release_value(vector);
+        release_value(map);
+        release_value(integer);
+    }
+}
+
+#[test]
 fn direct_runtime_type_tags_preserve_generic_identity_through_clone() {
     let value = boxed_value(Value::EnumVariant(EnumVariantValue {
         enum_name: "Lookup".to_string(),
