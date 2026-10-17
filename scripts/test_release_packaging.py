@@ -227,7 +227,7 @@ class LandingAndInstallerTests(unittest.TestCase):
             binary = archive_root / "bin" / "aura"
             binary.write_text("#!/bin/sh\necho aura-installer-test\n", encoding="utf-8")
             binary.chmod(0o755)
-            (archive_root / "lib" / "aura" / "libaura_compiler.a").write_bytes(
+            (archive_root / "lib" / "aura" / "libaura_runtime.a").write_bytes(
                 b"runtime"
             )
             (archive_root / "lib" / "aura" / "native-link-args.json").write_text(
@@ -248,6 +248,10 @@ class LandingAndInstallerTests(unittest.TestCase):
             )
 
             prefix = root / "prefix"
+            # An upgrade must not leave an earlier release's runtime archive.
+            stale_runtime = prefix / "lib" / "aura" / "libaura_compiler.a"
+            stale_runtime.parent.mkdir(parents=True)
+            stale_runtime.write_bytes(b"stale")
             result = subprocess.run(
                 ["sh", str(INSTALL_SCRIPT)],
                 cwd=root,
@@ -276,10 +280,11 @@ class LandingAndInstallerTests(unittest.TestCase):
                 "aura-installer-test\n",
             )
             self.assertEqual(
-                (prefix / "lib" / "aura" / "libaura_compiler.a").read_bytes(),
+                (prefix / "lib" / "aura" / "libaura_runtime.a").read_bytes(),
                 b"runtime",
             )
             self.assertTrue((prefix / "share" / "aura" / "examples" / "hello.au").is_file())
+            self.assertFalse(stale_runtime.exists())
 
 
 class ReleaseWorkflowTests(unittest.TestCase):
@@ -502,8 +507,8 @@ class ArchiveLayoutTests(unittest.TestCase):
             'mkdir -p "$archive_root/bin" "$archive_root/lib/aura" '
             '"$archive_root/examples/agents"',
             'cp target/release/aura "$archive_root/bin/aura"',
-            'cp target/release/libaura_compiler.a '
-            '"$archive_root/lib/aura/libaura_compiler.a"',
+            'cp target/release/libaura_runtime.a '
+            '"$archive_root/lib/aura/libaura_runtime.a"',
             'cp examples/basic_addition.au "$archive_root/examples/basic_addition.au"',
             'cp examples/agents/retrying_network_worker.au '
             '"$archive_root/examples/agents/retrying_network_worker.au"',

@@ -293,7 +293,7 @@ These figures come from the clean Mac14,9 measurement at `181204b`.
 - After linking, `strip -S -x` removes debug and local symbols while keeping the globals that process-global FFI needs.
 - Source locations, typed Aura call frames, and task ancestry are embedded runtime metadata and stay available. Native symbol and debugger information is reduced.
 - The host toolchain must provide `strip` as well as `cc`.
-- The compiler and runtime share one static archive.
+- User executables link `libaura_runtime.a`, which contains the runtime and none of the compiler.
 
 ## Design Record
 

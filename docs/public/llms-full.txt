@@ -499,7 +499,7 @@ The default layout is:
 ~/.local/
 ├── bin/aura
 ├── lib/aura/
-│   ├── libaura_compiler.a
+│   ├── libaura_runtime.a
 │   └── native-link-args.json
 └── share/aura/
     ├── examples/
@@ -3556,7 +3556,7 @@ The native path is content-addressed. A successful direct build atomically
 publishes three things into the cache: its binary, that artifact's SHA-256,
 and a key-bound unique entry identity. The cache key covers:
 
-- native cache format `v6`
+- native cache format `v7`
 - compiler-owned semantic-interface schema version `19`
 - this compiler's version
 - the host target
@@ -6447,7 +6447,7 @@ These figures come from the clean Mac14,9 measurement at `181204b`.
 - After linking, `strip -S -x` removes debug and local symbols while keeping the globals that process-global FFI needs.
 - Source locations, typed Aura call frames, and task ancestry are embedded runtime metadata and stay available. Native symbol and debugger information is reduced.
 - The host toolchain must provide `strip` as well as `cc`.
-- The compiler and runtime share one static archive.
+- User executables link `libaura_runtime.a`, which contains the runtime and none of the compiler.
 
 ## Design Record
 
@@ -22124,7 +22124,7 @@ Keep its directory layout intact:
 aura-v0.4.1-preview-<target>/
 ├── bin/aura
 ├── lib/aura/
-│   ├── libaura_compiler.a
+│   ├── libaura_runtime.a
 │   └── native-link-args.json
 └── examples/
     ├── basic_addition.au

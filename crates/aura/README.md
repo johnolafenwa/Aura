@@ -226,7 +226,7 @@ Successful native builds from `aura run` are cached by content under
 - The cache directory is a trust boundary. Use only a location private to the
   current OS account. On the maintained Unix hosts, Aura rejects roots owned
   by another user or writable by group or other.
-- Cache keys include the native cache format `v6`, the semantic-interface
+- Cache keys include the native cache format `v7`, the semantic-interface
   schema `v19`, the exact linked runtime archive, and the ordered native link
   arguments, each as a separate component.
 - Inherited launch leases and owner-aware staging cleanup stop an interrupted

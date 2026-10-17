@@ -36,7 +36,7 @@ Keep its directory layout intact:
 aura-v0.4.1-preview-<target>/
 ├── bin/aura
 ├── lib/aura/
-│   ├── libaura_compiler.a
+│   ├── libaura_runtime.a
 │   └── native-link-args.json
 └── examples/
     ├── basic_addition.au

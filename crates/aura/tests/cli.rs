@@ -289,7 +289,7 @@ fn native_runtime_archive() -> PathBuf {
         } else {
             "release"
         })
-        .join("libaura_compiler.a")
+        .join("libaura_runtime.a")
 }
 
 struct TempDir {
@@ -4825,7 +4825,7 @@ impl NativeCacheFixture {
         fs::copy(aura_bin(), &installed_aura).expect("aura executable should be installable");
         fs::copy(
             native_runtime_archive(),
-            runtime_dir.join("libaura_compiler.a"),
+            runtime_dir.join("libaura_runtime.a"),
         )
         .expect("native runtime archive should be installable");
         let runtime_memo = fs::read_to_string(cache.path().join("runtime-identity"))
@@ -6218,7 +6218,7 @@ fn installed_direct_run_keeps_native_cache_optional_for_build_locking() {
     fs::copy(aura_bin(), &installed_aura).expect("aura executable should be installable");
     fs::copy(
         native_runtime_archive(),
-        runtime_dir.join("libaura_compiler.a"),
+        runtime_dir.join("libaura_runtime.a"),
     )
     .expect("native runtime archive should be installable");
     let runtime_memo = fs::read_to_string(bootstrap_cache.path().join("runtime-identity"))
@@ -15011,14 +15011,14 @@ fn aura_test_registration_timeout_retains_stdout_in_the_single_json_document() {
 }
 
 #[test]
-fn native_cache_format_carries_the_link_and_strip_construction_epoch() {
+fn native_cache_format_carries_the_runtime_archive_epoch() {
     let main = include_str!("../src/main.rs");
     assert!(
-        main.contains(r#"const NATIVE_CACHE_FORMAT: &str = "aura-native-cache-v6";"#),
-        "native cache format must invalidate artifacts built before link and strip changes"
+        main.contains(r#"const NATIVE_CACHE_FORMAT: &str = "aura-native-cache-v7";"#),
+        "native cache format must invalidate artifacts linked against the compiler archive"
     );
     assert!(
-        !main.contains("aura-native-cache-v5"),
+        !main.contains("aura-native-cache-v6"),
         "the prior cache format must not linger in key material"
     );
 }

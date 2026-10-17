@@ -48,18 +48,21 @@ Last updated: 2026-10-16
 - Step 1 done, merged in PR #57: `crates/aura-core` holds the shared type model,
   diagnostics, integer helpers, operators, task stack bounds, and the type
   budget. `aura-compiler` re-exports them, so its paths are unchanged.
-- Step 2a done locally: `crates/aura-runtime` holds the runtime. A static
+- Step 2a done, merged in PR #58: `crates/aura-runtime` holds the runtime. A static
   table carries the dynamic host builtin ABI the runtime used to rebuild
   from the checker registry.
 - Census for 2b: of 1,050 examples, benchmarks, and pass fixtures, 30 still
   used the launcher. 27 are modules with no `main`. Three looked like
   direct-backend gaps.
-- Step 2b done locally: two MIR union injection miscompiles fixed, and
+- Step 2b done, merged in PR #58: two MIR union injection miscompiles fixed, and
   `aura build` always emits directly. The third census program also fails
   under `aura run`: the checker lets a shared match binding call a resource
   method that MIR treats as mutating. That needs a language decision. See
   `2026-10-16-batch-5-step-2b.md`.
-- Remaining: steps 2c through 6 of the delivery plan, one PR per step.
+- Step 2c in review: user executables link `libaura_runtime.a`, which
+  release archives ship in place of `libaura_compiler.a`. The runtime
+  archive is 61,888,200 bytes against the compiler archive's 132,235,406.
+- Remaining: steps 3 through 6 of the delivery plan, one PR per step.
 
 ## Aura 0.4.1 preview release (complete)
 

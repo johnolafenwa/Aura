@@ -755,7 +755,7 @@ The native path is content-addressed. A successful direct build atomically
 publishes three things into the cache: its binary, that artifact's SHA-256,
 and a key-bound unique entry identity. The cache key covers:
 
-- native cache format `v6`
+- native cache format `v7`
 - compiler-owned semantic-interface schema version `19`
 - this compiler's version
 - the host target
