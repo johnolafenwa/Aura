@@ -556,8 +556,7 @@ fn direct_callable_ffi_symbols_preserve_the_public_runtime_contract() {
         ],
         return_type: Box::new(Type::named("int64")),
     };
-    let encoded_signature =
-        serde_json::to_vec(&signature).expect("function signature should serialize");
+    let encoded_signature = aura_core::type_descriptor::encode(&signature).into_bytes();
     let name = b"read_into";
     let path = b"/workspace/io.au";
 
@@ -1176,8 +1175,7 @@ fn direct_runtime_exported_array_symbols_execute_typed_kernels_through_the_libra
             }],
             return_type: Box::new(Type::named("int32")),
         };
-        let callback_type =
-            serde_json::to_vec(&callback_type).expect("callback type should serialize");
+        let callback_type = aura_core::type_descriptor::encode(&callback_type).into_bytes();
         let callback = aura_direct_function_value(
             coverage_array_double_thunk as *const () as usize as i64,
             1,
@@ -1311,8 +1309,7 @@ fn direct_runtime_exported_array_kernels_cover_int64_float32_and_float64() {
             }],
             return_type: Box::new(Type::named("float64")),
         };
-        let callback_type =
-            serde_json::to_vec(&callback_type).expect("callback type should serialize");
+        let callback_type = aura_core::type_descriptor::encode(&callback_type).into_bytes();
         let callback = aura_direct_function_value(
             coverage_array_half_float64_thunk as *const () as usize as i64,
             1,
