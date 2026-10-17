@@ -11,6 +11,7 @@ pub use aura_core::{diag, integer};
 #[doc(hidden)]
 pub mod array_kernel_corpus;
 pub mod bytes_codec;
+pub mod collection_index;
 pub mod ffi;
 pub mod json_codec;
 pub mod native_runtime;

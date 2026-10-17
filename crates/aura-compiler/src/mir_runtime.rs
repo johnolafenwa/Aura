@@ -58,11 +58,11 @@ use crate::runtime_value::{
     yield_now_with_runtime_scheduler, ArrayBinaryOp, ArrayDType, ArrayReduction, ArrayValue,
     CancellationContext, ChannelValue, ClosureCaptureValue, ClosureEnvironment, EnumVariantValue,
     FfiHandleValue, FileValue, FloatPowerWidth, FunctionValue, HttpExchangeValue,
-    HttpListenerValue, HttpResponseValue, InstanceValue, IntegerArithmeticMode, MapValue,
-    ProcessChildValue, ProcessChildWaitStatus, ProcessCompletedValue, ProcessPipeValue,
+    HttpListenerValue, HttpResponseValue, InstanceValue, IntegerArithmeticMode, MapEntries,
+    MapValue, ProcessChildValue, ProcessChildWaitStatus, ProcessCompletedValue, ProcessPipeValue,
     ProcessRestartPolicy, ProcessSupervisorValue, ProcessSupervisorWaitStatus, RangeValue,
-    RecvValueResult, RngValue, RunOutput, RuntimeSchedulerWakeReason, SendValueError, SetValue,
-    TaskCancelledSignal, TaskGroupValue, TaskValue, TaskWaitStatus, TcpListenerValue,
+    RecvValueResult, RngValue, RunOutput, RuntimeSchedulerWakeReason, SendValueError, SetElements,
+    SetValue, TaskCancelledSignal, TaskGroupValue, TaskValue, TaskWaitStatus, TcpListenerValue,
     TcpStreamValue, TlsListenerValue, TlsStreamValue, TupleValue, UdpDatagramValue, UdpSocketValue,
     UnixListenerValue, UnixStreamValue, Value, VecValue, WebSocketListenerValue, WebSocketValue,
     NANOS_PER_MILLISECOND, NANOS_PER_MINUTE, NANOS_PER_SECOND,
@@ -922,11 +922,7 @@ impl Env {
             Value::Map(map) => {
                 // The stored key names the entry, so a later lookup by its
                 // encoding finds exactly this entry.
-                let Some((stored, _)) = map
-                    .entries
-                    .iter()
-                    .find(|(candidate, _)| *candidate == selector)
-                else {
+                let Some((stored, _)) = map.entries.find(&selector) else {
                     return Err(Diagnostic::coded_at(
                         "AU4003",
                         span,
@@ -1148,10 +1144,8 @@ impl Env {
                 }
                 Value::Map(map) if segment.starts_with('[') => {
                     let key = parse_entry_key_segment(segment, place)?;
-                    map.entries
-                        .iter()
-                        .find(|(candidate, _)| key.matches(candidate))
-                        .map(|(_, value)| value)
+                    entry_key_position(&map.entries, &key)
+                        .map(|position| &map.entries[position].1)
                         .ok_or_else(|| {
                             Diagnostic::new(format!(
                                 "dict MIR place `{place}` has no entry for the loaned key"
@@ -1602,6 +1596,17 @@ enum EntryKeySelector {
     Encoded(String),
 }
 
+/// The position of the entry `key` selects. A key selector uses the hash
+/// index; an encoded selector compares each key's encoding.
+fn entry_key_position(entries: &MapEntries, key: &EntryKeySelector) -> Option<usize> {
+    match key {
+        EntryKeySelector::Key(key) => entries.position(key),
+        EntryKeySelector::Encoded(_) => entries
+            .iter()
+            .position(|(candidate, _)| key.matches(candidate)),
+    }
+}
+
 impl EntryKeySelector {
     fn matches(&self, candidate: &Value) -> bool {
         match self {
@@ -1806,11 +1811,8 @@ fn write_nested_place(
         }
         Value::Map(map) if segment.starts_with('[') => {
             let key = parse_entry_key_segment(segment, full_place)?;
-            let slot = map
-                .entries
-                .iter_mut()
-                .find(|(candidate, _)| key.matches(candidate))
-                .map(|(_, value)| value)
+            let slot = entry_key_position(&map.entries, &key)
+                .map(|position| map.entries.value_at_mut(position))
                 .ok_or_else(|| {
                     Diagnostic::new(format!(
                         "dict MIR place `{full_place}` has no entry for the loaned key"
@@ -4485,12 +4487,10 @@ impl MirRuntime {
                 elements,
                 element_type,
             } => {
-                let mut values = Vec::new();
+                let mut values = SetElements::new();
                 for operand in elements {
                     let value = self.evaluate_owned_operand(operand, env)?;
-                    if !values.contains(&value) {
-                        values.push(value);
-                    }
+                    values.insert(value);
                 }
                 Ok(RvalueOutcome::Value(Value::Set(SetValue {
                     element_type: element_type.clone(),
@@ -4502,18 +4502,11 @@ impl MirRuntime {
                 key_type,
                 value_type,
             } => {
-                let mut values = Vec::new();
+                let mut values = MapEntries::new();
                 for entry in entries {
                     let key = self.evaluate_owned_operand(&entry.key, env)?;
                     let value = self.evaluate_owned_operand(&entry.value, env)?;
-                    if let Some(index) = values
-                        .iter()
-                        .position(|(candidate_key, _)| *candidate_key == key)
-                    {
-                        values[index].1 = value;
-                    } else {
-                        values.push((key, value));
-                    }
+                    values.insert(key, value);
                 }
                 Ok(RvalueOutcome::Value(Value::Map(MapValue {
                     key_type: key_type.clone(),
@@ -4766,7 +4759,7 @@ impl MirRuntime {
                     bind_builtin_args(&[], values)?;
                     return Ok(Value::Set(SetValue {
                         element_type: Type::named("Unknown"),
-                        elements: Vec::new(),
+                        elements: SetElements::new(),
                     }));
                 }
 
@@ -4776,7 +4769,7 @@ impl MirRuntime {
                     return Ok(Value::Map(MapValue {
                         key_type: Type::named("Unknown"),
                         value_type: Type::named("Unknown"),
-                        entries: Vec::new(),
+                        entries: MapEntries::new(),
                     }));
                 }
 
@@ -4916,7 +4909,7 @@ impl MirRuntime {
                             }))
                         }
                         ("dict", Some(Type::Named(_, args))) if args.len() == 2 => {
-                            let mut entries = Vec::new();
+                            let mut entries = MapEntries::new();
                             entries.try_reserve(minimum).map_err(|_| {
                                 Diagnostic::coded("AU4005", "dictionary capacity allocation failed")
                             })?;
@@ -4927,7 +4920,7 @@ impl MirRuntime {
                             }))
                         }
                         ("set", Some(Type::Named(_, args))) if args.len() == 1 => {
-                            let mut elements = Vec::new();
+                            let mut elements = SetElements::new();
                             elements.try_reserve(minimum).map_err(|_| {
                                 Diagnostic::coded("AU4005", "set capacity allocation failed")
                             })?;
@@ -7017,12 +7010,8 @@ impl MirRuntime {
             "get" => {
                 let values = evaluate_named_args(args, env)?;
                 let bound = bind_builtin_args(&["key"], values)?;
-                match map
-                    .entries
-                    .iter()
-                    .find(|(candidate_key, _)| *candidate_key == bound[0].value)
-                {
-                    Some((_, value)) => try_clone_mir_value(value).map(lookup_found),
+                match map.entries.value_of(&bound[0].value) {
+                    Some(value) => try_clone_mir_value(value).map(lookup_found),
                     None => Ok(lookup_missing()),
                 }
             }
@@ -7059,16 +7048,7 @@ impl MirRuntime {
                     .expect("bound Map.set value should exist")
                     .value;
                 let mut updated = map;
-                let previous = if let Some(index) = updated
-                    .entries
-                    .iter()
-                    .position(|(candidate_key, _)| *candidate_key == key)
-                {
-                    Some(std::mem::replace(&mut updated.entries[index].1, value))
-                } else {
-                    updated.entries.push((key, value));
-                    None
-                };
+                let previous = updated.entries.insert(key, value);
                 let Some(place) = receiver_place else {
                     return Err(Diagnostic::new(
                         "indexed assignment requires a mutable dict place",
@@ -7088,15 +7068,7 @@ impl MirRuntime {
                 let mut updated = map;
                 let key = values.next().expect("map key should exist").value;
                 let value = values.next().expect("map value should exist").value;
-                if let Some(index) = updated
-                    .entries
-                    .iter()
-                    .position(|(candidate_key, _)| *candidate_key == key)
-                {
-                    updated.entries[index].1 = value;
-                } else {
-                    updated.entries.push((key, value));
-                }
+                updated.entries.insert(key, value);
                 let Some(place) = receiver_place else {
                     return Err(Diagnostic::new(
                         "indexed assignment requires a mutable dict place",
@@ -7109,15 +7081,10 @@ impl MirRuntime {
                 let values = evaluate_named_args(args, env)?;
                 let bound = bind_builtin_args(&["key"], values)?;
                 let mut updated = map;
-                let removed = if let Some(index) = updated
+                let removed = updated
                     .entries
-                    .iter()
-                    .position(|(candidate_key, _)| *candidate_key == bound[0].value)
-                {
-                    Some(updated.entries.remove(index).1)
-                } else {
-                    None
-                };
+                    .shift_remove(&bound[0].value)
+                    .map(|(_, value)| value);
                 let Some(place) = receiver_place else {
                     return Err(Diagnostic::new("`remove` requires a mutable dict place"));
                 };
@@ -7127,9 +7094,7 @@ impl MirRuntime {
             "contains_key" => {
                 let values = evaluate_named_args(args, env)?;
                 let bound = bind_builtin_args(&["key"], values)?;
-                Ok(Value::Bool(map.entries.iter().any(|(candidate_key, _)| {
-                    *candidate_key == bound[0].value
-                })))
+                Ok(Value::Bool(map.entries.contains_key(&bound[0].value)))
             }
             "keys" => {
                 if !args.is_empty() {
@@ -7206,15 +7171,7 @@ impl MirRuntime {
                 };
                 let mut updated = map;
                 for (key, value) in other.entries {
-                    if let Some(index) = updated
-                        .entries
-                        .iter()
-                        .position(|(candidate_key, _)| *candidate_key == key)
-                    {
-                        updated.entries[index].1 = value;
-                    } else {
-                        updated.entries.push((key, value));
-                    }
+                    updated.entries.insert(key, value);
                 }
                 let Some(place) = receiver_place else {
                     return Err(Diagnostic::new("`update` requires a mutable dict place"));
@@ -7459,11 +7416,7 @@ impl MirRuntime {
             "contains" => {
                 let values = evaluate_named_args(args, env)?;
                 let bound = bind_builtin_args(&["value"], values)?;
-                Ok(Value::Bool(
-                    set.elements
-                        .iter()
-                        .any(|candidate| *candidate == bound[0].value),
-                ))
+                Ok(Value::Bool(set.elements.contains_key(&bound[0].value)))
             }
             "add" => {
                 let values = evaluate_named_args(args, env)?;
@@ -7473,12 +7426,7 @@ impl MirRuntime {
                     .expect("bound set.add value should exist")
                     .value;
                 let mut updated = set;
-                let inserted = if updated.elements.contains(&value) {
-                    false
-                } else {
-                    updated.elements.push(value);
-                    true
-                };
+                let inserted = updated.elements.insert(value);
                 let Some(place) = receiver_place else {
                     return Err(Diagnostic::new("`add` requires a mutable set place"));
                 };
@@ -7490,16 +7438,7 @@ impl MirRuntime {
                 let values = evaluate_named_args(args, env)?;
                 let bound = bind_builtin_args(&["value"], values)?;
                 let mut updated = set;
-                let removed = if let Some(index) = updated
-                    .elements
-                    .iter()
-                    .position(|candidate| *candidate == bound[0].value)
-                {
-                    updated.elements.remove(index);
-                    true
-                } else {
-                    false
-                };
+                let removed = updated.elements.shift_remove(&bound[0].value).is_some();
                 if !removed && field == "remove" {
                     return Err(
                         Diagnostic::coded("AU4008", "collection value was not found").with_help(
@@ -7557,8 +7496,8 @@ impl MirRuntime {
                 let bound = bind_builtin_args(&["index"], values)?;
                 let index = self.mir_index_from_value(bound[0].value.clone())?;
                 let mut updated = set;
-                let value =
-                    (index < updated.elements.len()).then(|| updated.elements.remove(index));
+                let value = (index < updated.elements.len())
+                    .then(|| updated.elements.shift_remove_at(index));
                 let Some(place) = receiver_place else {
                     return Err(Diagnostic::new(
                         "owned set iteration requires its private source place",

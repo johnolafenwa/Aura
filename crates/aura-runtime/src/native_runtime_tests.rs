@@ -1490,7 +1490,7 @@ fn direct_nested_array_collection_reads_and_clones_use_fallible_copy() {
     let map = boxed_value(Value::Map(MapValue {
         key_type: Type::named("str"),
         value_type: Type::Named("Array".to_string(), vec![Type::named("int32")]),
-        entries: vec![(Value::String("item".to_string()), array_value(11))],
+        entries: vec![(Value::String("item".to_string()), array_value(11))].into(),
     }));
     let map_address = map as usize;
     let key = string_value("item");
@@ -5478,7 +5478,7 @@ fn direct_runtime_type_tags_preserve_generic_identity_through_clone() {
     let mixed_map = boxed_value(Value::Map(MapValue {
         key_type: Type::named("Unknown"),
         value_type: Type::named("Unknown"),
-        entries: Vec::new(),
+        entries: Vec::new().into(),
     }));
     super::aura_direct_tag_value_type(
         mixed_map,
@@ -5532,7 +5532,7 @@ fn direct_runtime_type_tags_preserve_generic_identity_through_clone() {
 
     let set = boxed_value(Value::Set(SetValue {
         element_type: Type::named("Unknown"),
-        elements: Vec::new(),
+        elements: Vec::new().into(),
     }));
     super::aura_direct_tag_value_type(set, b"set[int64]".as_ptr(), "set[int64]".len());
     match unsafe { value_ref(set) } {
@@ -10621,7 +10621,7 @@ fn direct_enum_owned_payload_buffer_moves_string_vec_and_map_allocations() {
             Value::Map(MapValue {
                 key_type: Type::named("str"),
                 value_type: Type::named("json.Value"),
-                entries,
+                entries: entries.into(),
             }),
             Allocation::Map(entries_ptr),
         ),
@@ -11409,7 +11409,7 @@ fn direct_json_rejects_inexact_int_array_object_and_indent_metadata() {
         payloads: vec![Value::Map(MapValue {
             key_type: Type::named("str"),
             value_type: Type::named("Unknown"),
-            entries: vec![],
+            entries: vec![].into(),
         })],
     }));
     assert!(malformed_json_call("json::into_object", vec![object])
@@ -12102,7 +12102,8 @@ fn native_runtime_private_value_decoders_cover_success_paths() {
                 entries: vec![(
                     Value::String("content-type".to_string()),
                     Value::String("text/plain".to_string()),
-                )],
+                )]
+                .into(),
             }),
             "headers",
         ),
@@ -12240,7 +12241,8 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
                         entries: vec![(
                             Value::Int(IntegerValue::from_signed(1)),
                             Value::String("value".to_string()),
-                        )],
+                        )]
+                        .into(),
                     }),
                     "headers",
                 );
@@ -14695,7 +14697,7 @@ fn native_runtime_scalar_helpers_cover_comparisons_unary_ops_and_metadata() {
     assert_eq!(
         value_type_name(Value::Set(SetValue {
             element_type: aura_core::types::Type::named("str"),
-            elements: Vec::new(),
+            elements: Vec::new().into(),
         })),
         "set"
     );
@@ -14703,7 +14705,7 @@ fn native_runtime_scalar_helpers_cover_comparisons_unary_ops_and_metadata() {
         value_type_name(Value::Map(MapValue {
             key_type: aura_core::types::Type::named("str"),
             value_type: aura_core::types::Type::named("int32"),
-            entries: Vec::new(),
+            entries: Vec::new().into(),
         })),
         "dict"
     );
@@ -14766,7 +14768,7 @@ fn native_runtime_scalar_helpers_cover_comparisons_unary_ops_and_metadata() {
     assert_eq!(
         inferred_collection_type(&Value::Set(SetValue {
             element_type: aura_core::types::Type::named("str"),
-            elements: Vec::new(),
+            elements: Vec::new().into(),
         })),
         aura_core::types::Type::Named(
             "set".to_string(),
@@ -14777,7 +14779,7 @@ fn native_runtime_scalar_helpers_cover_comparisons_unary_ops_and_metadata() {
         inferred_collection_type(&Value::Map(MapValue {
             key_type: aura_core::types::Type::named("str"),
             value_type: aura_core::types::Type::named("int32"),
-            entries: Vec::new(),
+            entries: Vec::new().into(),
         })),
         aura_core::types::Type::Named(
             "dict".to_string(),
@@ -15741,7 +15743,7 @@ fn native_runtime_thread_local_and_pointer_helpers_cover_remaining_paths() {
     ));
     assert_eq!(super::with_map(map, |map| map.entries.len()), 1);
     super::with_map_mut(map, |map| {
-        map.entries.push((
+        map.entries.push_new((
             Value::String("other".to_string()),
             Value::Int(IntegerValue::from_signed(2)),
         ));
@@ -15758,7 +15760,7 @@ fn native_runtime_thread_local_and_pointer_helpers_cover_remaining_paths() {
     );
     assert_eq!(super::with_set(set, |set| set.elements.len()), 1);
     super::with_set_mut(set, |set| {
-        set.elements.push(Value::String("go".to_string()));
+        set.elements.push_new(Value::String("go".to_string()));
     });
     assert_eq!(super::aura_direct_set_len(set), 2);
 
@@ -23548,7 +23550,7 @@ fn direct_element_path_take_and_probe_lend_entries_without_cloning() {
     let table = boxed_value(Value::Map(MapValue {
         key_type: Type::named("str"),
         value_type: Type::Named("list".to_string(), vec![Type::named("int64")]),
-        entries: vec![(Value::String("a".to_string()), bucket(&[1, 2, 3]))],
+        entries: vec![(Value::String("a".to_string()), bucket(&[1, 2, 3]))].into(),
     })) as usize;
     let key = string_value("a") as usize;
     let path = "[k]";
@@ -23787,7 +23789,8 @@ fn adr0061_direct_element_path_helpers_read_and_write_inside_elements() {
                     Value::Int(IntegerValue::from_i64(6)),
                 ],
             }),
-        )],
+        )]
+        .into(),
     })) as usize;
     let key = string_value("a") as usize;
     assert_eq!(
@@ -23925,7 +23928,8 @@ fn adr0061_direct_entry_paths_borrow_keys_and_check_selector_counts() {
         entries: vec![(
             Value::String("ready".to_string()),
             Value::Int(IntegerValue::from_i64(1)),
-        )],
+        )]
+        .into(),
     })) as usize;
     let key = string_value("ready") as usize;
     for expected in [2, 3] {

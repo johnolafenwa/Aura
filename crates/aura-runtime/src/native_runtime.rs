@@ -62,12 +62,12 @@ use crate::runtime_value::{
     CancellationContext, ChannelValue, ClosureCaptureValue, ClosureEnvironment, EnumVariantValue,
     FfiHandleValue, FileValue, FloatPowerWidth, FunctionValue, HttpListenerValue,
     HttpResponseValue, InstanceValue, IntegerArithmeticMode, LightweightTaskFailureSignal,
-    MapValue, ProcessChildValue, ProcessChildWaitStatus, ProcessCompletedValue,
+    MapEntries, MapValue, ProcessChildValue, ProcessChildWaitStatus, ProcessCompletedValue,
     ProcessSupervisorValue, ProcessSupervisorWaitStatus, RangeValue, RecvValueResult, RngValue,
-    RuntimeSchedulerWakeReason, SendValueError, SetValue, TaskCancelledSignal, TaskGroupValue,
-    TaskValue, TaskWaitStatus, TcpListenerValue, TcpStreamValue, TlsListenerValue, TlsStreamValue,
-    TupleValue, UdpSocketValue, UnixListenerValue, UnixStreamValue, Value, VecValue,
-    WebSocketListenerValue, WebSocketValue, DIRECT_RUNTIME_TYPE_FIELD,
+    RuntimeSchedulerWakeReason, SendValueError, SetElements, SetValue, TaskCancelledSignal,
+    TaskGroupValue, TaskValue, TaskWaitStatus, TcpListenerValue, TcpStreamValue, TlsListenerValue,
+    TlsStreamValue, TupleValue, UdpSocketValue, UnixListenerValue, UnixStreamValue, Value,
+    VecValue, WebSocketListenerValue, WebSocketValue, DIRECT_RUNTIME_TYPE_FIELD,
     DIRECT_RUNTIME_TYPE_SEPARATOR,
 };
 use crate::text_methods;
@@ -5924,11 +5924,7 @@ pub extern "C-unwind" fn aura_direct_collection_operation(
         5 | 6 => {
             let needle = unsafe { value_ref(arg) };
             let removed = with_set_mut(collection, |set| {
-                set.elements
-                    .iter()
-                    .position(|candidate| *candidate == needle)
-                    .map(|index| set.elements.remove(index))
-                    .is_some()
+                set.elements.shift_remove(&needle).is_some()
             });
             if opcode == 5 && !removed {
                 runtime_diagnostic_error(
@@ -6559,7 +6555,7 @@ pub extern "C-unwind" fn aura_direct_map_empty() -> *mut OpaqueValue {
         boxed_value(Value::Map(MapValue {
             key_type: Type::named("Unknown"),
             value_type: Type::named("Unknown"),
-            entries: Vec::new(),
+            entries: MapEntries::new(),
         }))
     })
 }
@@ -6585,13 +6581,13 @@ pub extern "C-unwind" fn aura_direct_map_get(
     key: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
-        let key = unsafe { take_value(key) };
-        let value = with_map(map, |map| {
-            map.entries
-                .iter()
-                .find(|(candidate_key, _)| *candidate_key == key)
-                .map(|(_, value)| try_clone_array_containing_value(value))
-                .transpose()
+        let value = with_map(map, |map| unsafe {
+            with_value(key, |key| {
+                map.entries
+                    .value_of(key)
+                    .map(try_clone_array_containing_value)
+                    .transpose()
+            })
         });
         let value = direct_array_result(value, 0, 0);
         boxed_value(value.map(lookup_found).unwrap_or_else(lookup_missing))
@@ -6619,16 +6615,7 @@ pub extern "C-unwind" fn aura_direct_map_set_in_place(
             {
                 map.value_type = inferred_value_type.clone();
             }
-            if let Some(index) = map
-                .entries
-                .iter()
-                .position(|(candidate_key, _)| *candidate_key == key)
-            {
-                Some(std::mem::replace(&mut map.entries[index].1, value))
-            } else {
-                map.entries.push((key, value));
-                None
-            }
+            map.entries.insert(key, value)
         });
         boxed_value(previous.map(lookup_found).unwrap_or_else(lookup_missing))
     })
@@ -6640,17 +6627,10 @@ pub extern "C-unwind" fn aura_direct_map_remove_in_place(
     key: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
-        let key = unsafe { take_value(key) };
-        let previous = with_map_mut(map, |map| {
-            if let Some(index) = map
-                .entries
-                .iter()
-                .position(|(candidate_key, _)| *candidate_key == key)
-            {
-                Some(map.entries.remove(index).1)
-            } else {
-                None
-            }
+        let previous = with_map_mut(map, |map| unsafe {
+            with_value(key, |key| {
+                map.entries.shift_remove(key).map(|(_, value)| value)
+            })
         });
         boxed_value(previous.map(lookup_found).unwrap_or_else(lookup_missing))
     })
@@ -6662,11 +6642,8 @@ pub extern "C-unwind" fn aura_direct_map_contains_key(
     key: *mut OpaqueValue,
 ) -> i64 {
     task_runtime_boundary(|| {
-        let key = unsafe { take_value(key) };
-        i64::from(with_map(map, |map| {
-            map.entries
-                .iter()
-                .any(|(candidate_key, _)| *candidate_key == key)
+        i64::from(with_map(map, |map| unsafe {
+            with_value(key, |key| map.entries.contains_key(key))
         }))
     })
 }
@@ -6743,20 +6720,24 @@ pub extern "C-unwind" fn aura_direct_map_index(
     column: i64,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
-        let key = unsafe { take_value(key) };
-        let value = with_map(map, |map| {
-            map.entries
-                .iter()
-                .find(|(candidate_key, _)| *candidate_key == key)
-                .map(|(_, value)| try_clone_array_containing_value(value))
+        let value = with_map(map, |map| unsafe {
+            with_value(key, |key| {
+                map.entries
+                    .value_of(key)
+                    .map(try_clone_array_containing_value)
+                    .ok_or_else(|| key.render())
+            })
         });
-        let Some(value) = value else {
-            let message = format!("dict key `{}` was not present", key.render());
-            match runtime_span(line, column) {
-                Some(span) => {
-                    runtime_diagnostic_error(Diagnostic::coded_at("AU4003", span, message))
+        let value = match value {
+            Ok(value) => value,
+            Err(rendered_key) => {
+                let message = format!("dict key `{rendered_key}` was not present");
+                match runtime_span(line, column) {
+                    Some(span) => {
+                        runtime_diagnostic_error(Diagnostic::coded_at("AU4003", span, message))
+                    }
+                    None => runtime_diagnostic_error(Diagnostic::coded("AU4003", message)),
                 }
-                None => runtime_diagnostic_error(Diagnostic::coded("AU4003", message)),
             }
         };
         boxed_value(direct_array_result(value, line, column))
@@ -6775,15 +6756,7 @@ pub extern "C-unwind" fn aura_direct_map_set_index_in_place(
         let key = unsafe { consume_owned_value(key) };
         let value = unsafe { consume_owned_value(value) };
         with_map_mut(map, |map| {
-            if let Some(index) = map
-                .entries
-                .iter()
-                .position(|(candidate_key, _)| *candidate_key == key)
-            {
-                map.entries[index].1 = value;
-            } else {
-                map.entries.push((key, value));
-            }
+            map.entries.insert(key, value);
         });
         boxed_value(Value::Unit)
     })
@@ -7014,9 +6987,7 @@ fn direct_element_step<'a>(
             };
             let key = unsafe { take_value(selectors.next()? as *mut OpaqueValue) };
             map.entries
-                .iter()
-                .find(|(candidate, _)| *candidate == key)
-                .map(|(_, entry)| entry)
+                .value_of(&key)
                 .ok_or_else(|| DirectElementPathError::MissingKey(Box::new(key)))
         }
         DirectElementPathStep::Projection(projection) => {
@@ -7055,11 +7026,10 @@ fn direct_element_step_mut<'a>(
                 )));
             };
             let key = unsafe { take_value(selectors.next()? as *mut OpaqueValue) };
-            map.entries
-                .iter_mut()
-                .find(|(candidate, _)| *candidate == key)
-                .map(|(_, entry)| entry)
-                .ok_or_else(|| DirectElementPathError::MissingKey(Box::new(key)))
+            match map.entries.position(&key) {
+                Some(position) => Ok(map.entries.value_at_mut(position)),
+                None => Err(DirectElementPathError::MissingKey(Box::new(key))),
+            }
         }
         DirectElementPathStep::Projection(projection) => {
             direct_value_at_path_mut(value, &[projection], selectors.path)
@@ -7259,15 +7229,7 @@ pub extern "C-unwind" fn aura_direct_map_extend_in_place(
         };
         with_map_mut(map, |map| {
             for (key, value) in other.entries {
-                if let Some(index) = map
-                    .entries
-                    .iter()
-                    .position(|(candidate_key, _)| *candidate_key == key)
-                {
-                    map.entries[index].1 = value;
-                } else {
-                    map.entries.push((key, value));
-                }
+                map.entries.insert(key, value);
             }
         });
         boxed_value(Value::Unit)
@@ -7279,7 +7241,7 @@ pub extern "C-unwind" fn aura_direct_set_empty() -> *mut OpaqueValue {
     task_runtime_boundary(|| {
         boxed_value(Value::Set(SetValue {
             element_type: Type::named("Unknown"),
-            elements: Vec::new(),
+            elements: SetElements::new(),
         }))
     })
 }
@@ -7305,8 +7267,9 @@ pub extern "C-unwind" fn aura_direct_set_contains(
     value: *mut OpaqueValue,
 ) -> i64 {
     task_runtime_boundary(|| {
-        let needle = unsafe { take_value(value) };
-        i64::from(with_set(set, |set| set.elements.contains(&needle)))
+        i64::from(with_set(set, |set| unsafe {
+            with_value(value, |needle| set.elements.contains_key(needle))
+        }))
     })
 }
 
@@ -7322,12 +7285,7 @@ pub extern "C-unwind" fn aura_direct_set_insert_in_place(
             if set.element_type == Type::named("Unknown") && inferred != Type::named("Unknown") {
                 set.element_type = inferred.clone();
             }
-            if set.elements.contains(&value) {
-                false
-            } else {
-                set.elements.push(value);
-                true
-            }
+            set.elements.insert(value)
         });
         i64::from(inserted)
     })
@@ -7339,18 +7297,8 @@ pub extern "C-unwind" fn aura_direct_set_remove_in_place(
     value: *mut OpaqueValue,
 ) -> i64 {
     task_runtime_boundary(|| {
-        let value = unsafe { take_value(value) };
-        let removed = with_set_mut(set, |set| {
-            if let Some(index) = set
-                .elements
-                .iter()
-                .position(|candidate| *candidate == value)
-            {
-                set.elements.remove(index);
-                true
-            } else {
-                false
-            }
+        let removed = with_set_mut(set, |set| unsafe {
+            with_value(value, |value| set.elements.shift_remove(value).is_some())
         });
         i64::from(removed)
     })
@@ -7392,7 +7340,7 @@ pub extern "C-unwind" fn aura_direct_set_take_index_in_place(
         // non-negative int64 index always fits usize.
         let index = index as usize;
         let value = with_set_mut(set, |set| {
-            (index < set.elements.len()).then(|| set.elements.remove(index))
+            (index < set.elements.len()).then(|| set.elements.shift_remove_at(index))
         });
         boxed_value(value.map(lookup_found).unwrap_or_else(lookup_missing))
     })

@@ -333,8 +333,11 @@ A span is a view, so it cannot be stored or moved:
 
 ## dict[K, V]
 
-Dictionaries keep insertion order for iteration and snapshots. Indexing,
-assignment, and membership are the main ways to look up and store entries:
+Dictionaries keep insertion order for iteration and snapshots. A hash index
+over the keys makes indexing, assignment, `get`, and membership take expected
+constant time. `remove` keeps the order of the remaining entries, so it takes
+time proportional to the dictionary's size. Indexing, assignment, and
+membership are the main ways to look up and store entries:
 
     value = table[key]
     table[key] = value
@@ -397,8 +400,10 @@ rule.
 
 ## set[T]
 
-A set stores one value per equality class. Test membership with `in` and
-`not in`.
+A set stores one value per equality class and keeps insertion order. Test
+membership with `in` and `not in`. Membership and `add` take expected
+constant time. `remove` and `discard` keep the order of the remaining values,
+so they take time proportional to the set's size.
 
 | Method | Signature | Contract |
 | --- | --- | --- |
