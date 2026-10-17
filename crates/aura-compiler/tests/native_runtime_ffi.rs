@@ -892,13 +892,7 @@ fn direct_runtime_exported_ffi_symbols_execute_through_the_library_copy() {
         assert_eq!(aura_direct_map_is_empty(map), 1);
         release(map);
 
-        let sys_args_name = b"sys::args";
-        let sys_args = aura_direct_host_builtin(
-            sys_args_name.as_ptr(),
-            sys_args_name.len(),
-            aura_direct_arg_buffer_new(0),
-            0,
-        );
+        let sys_args = aura_host_sys_args(aura_direct_arg_buffer_new(0), 0);
         let expected_args = std::env::args().skip(1).collect::<Vec<_>>();
         let actual_args = match cloned_value(sys_args) {
             Value::Vec(values) => values

@@ -127,7 +127,7 @@ pub mod native_runtime_coverage {
         aura_direct_file_read_all, aura_direct_file_write_all, aura_direct_fs_append_string,
         aura_direct_fs_create, aura_direct_fs_create_dir, aura_direct_fs_open,
         aura_direct_fs_read_dir, aura_direct_function_default_binder, aura_direct_function_thunk,
-        aura_direct_function_value, aura_direct_host_builtin, aura_direct_http_listener_accept,
+        aura_direct_function_value, aura_direct_http_listener_accept,
         aura_direct_http_listener_close, aura_direct_http_listener_local_addr,
         aura_direct_http_response_bytes, aura_direct_http_response_headers,
         aura_direct_http_response_reason, aura_direct_http_response_status,
@@ -190,7 +190,7 @@ pub mod native_runtime_coverage {
         aura_direct_websocket_listener_accept, aura_direct_websocket_listener_local_addr,
         aura_direct_websocket_recv_bytes, aura_direct_websocket_recv_text,
         aura_direct_websocket_send_bytes, aura_direct_websocket_send_text, aura_direct_yield_now,
-        OpaqueValue,
+        aura_host_sys_args, OpaqueValue,
     };
     pub use super::native_runtime::{
         aura_direct_format_value, aura_direct_instance_empty, aura_direct_register_display,

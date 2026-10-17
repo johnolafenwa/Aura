@@ -332,6 +332,11 @@ meantime.
 The absence gate starts by recording today's contents and tightens as
 steps 3 through 5 land. It reaches the full list in step 5.
 
+Step 3 was dropped on 2026-10-16. Measured before it started, resource drop
+glue was about 10 KB of a 941 KB hello world. Step 4 instead gives each
+resource type its own cleanup close entry, which removed the TLS handshake
+code a shared close dispatcher kept in programs that never use TLS.
+
 ## Owner Questions
 
 1. **Crate layout.** Three crates as in [section A](#a-crate-layout).

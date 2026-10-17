@@ -1740,7 +1740,7 @@ fn direct_select_packages_variadic_sources_into_the_owned_tuple_abi() {
     assert!(
         referenced
             .iter()
-            .all(|symbol| !symbol.contains("aura_direct_host_builtin")),
+            .all(|symbol| !symbol.contains("aura_host_")),
         "select must use its internal tuple ABI rather than generic host dispatch: {referenced:?}"
     );
 
@@ -1975,7 +1975,7 @@ def main() -> int32:
         "direct monotonic clock calls must use the scalar runtime ABI: {referenced:?}"
     );
     for generic_symbol in [
-        "aura_direct_host_builtin",
+        "aura_host_sys_monotonic_time_ms",
         "aura_direct_arg_buffer_new",
         "aura_direct_box_i64",
         "aura_direct_unbox_int64",
@@ -2530,11 +2530,38 @@ def main() -> int32:
     let mir = lower_source_to_mir(source).expect("dynamic JSON source should lower to MIR");
     let object = emit_host_object(&mir).expect("dynamic JSON source should compile directly");
     let referenced = object_referenced_symbols(&object);
+    for entry in [
+        "aura_host_json_parse",
+        "aura_host_json_dumps",
+        "aura_host_json_is_null",
+        "aura_host_json_as_bool",
+        "aura_host_json_as_int",
+        "aura_host_json_as_float",
+        "aura_host_json_into_string",
+        "aura_host_json_into_array",
+        "aura_host_json_into_object",
+    ] {
+        assert!(
+            referenced.iter().any(|symbol| symbol.contains(entry)),
+            "dynamic JSON direct code must call its own entry `{entry}`: {referenced:?}"
+        );
+    }
     assert!(
         referenced
             .iter()
-            .any(|symbol| symbol.contains("aura_direct_host_builtin")),
-        "dynamic JSON direct code must use the host builtin ABI: {referenced:?}"
+            .all(|symbol| !symbol.contains("aura_direct_host_builtin")),
+        "dynamic JSON direct code must not use a shared name dispatcher: {referenced:?}"
+    );
+    let parse = object_function_referenced_symbols(&object, "aura_fn_json__parse");
+    assert!(
+        parse
+            .iter()
+            .any(|symbol| symbol.trim_start_matches('_') == "aura_host_json_parse")
+            && parse.iter().all(|symbol| {
+                let symbol = symbol.trim_start_matches('_');
+                !symbol.starts_with("aura_host_") || symbol == "aura_host_json_parse"
+            }),
+        "`json.parse` must call only its own entry: {parse:?}"
     );
 }
 
@@ -9226,20 +9253,20 @@ def main() -> int32:
     assert!(
         referenced
             .iter()
-            .any(|symbol| symbol.contains("aura_direct_host_builtin")),
-        "str.to_bytes must use the registered host-builtin ABI: {referenced:?}"
+            .any(|symbol| symbol.contains("aura_host_str_to_bytes")),
+        "str.to_bytes must call its own host builtin entry: {referenced:?}"
     );
 
     let object = cranelift_object::object::File::parse(bytes.as_slice())
         .expect("str.to_bytes direct output should be a readable host object");
     assert!(
-        object
+        !object
             .sections()
             .filter_map(|section| section.data().ok())
             .any(|data| data
                 .windows(b"str.to_bytes".len())
                 .any(|window| window == b"str.to_bytes")),
-        "direct code must identify the canonical str.to_bytes host operation"
+        "direct code must not carry the builtin name for a runtime lookup"
     );
 }
 
@@ -15953,5 +15980,36 @@ fn type_parameter_collection_walks_callable_and_closure_contracts() {
     assert_eq!(
         collected,
         BTreeSet::from(["P".to_string(), "Q".to_string()])
+    );
+}
+
+#[test]
+fn direct_cleanup_of_a_known_resource_type_uses_its_own_close_entry() {
+    let source = r#"
+def worker(events: Queue[str]):
+    events.put("done")
+    events.close()
+
+def main() -> int32:
+    events = Queue[str]()
+    with TaskGroup() as group:
+        group.start(worker, events)
+        for event in events:
+            print(event)
+    return 0
+"#;
+    let mir = lower_source_to_mir(source).expect("task group source should lower to MIR");
+    let object = emit_host_object(&mir).expect("task group source should compile directly");
+    let referenced: BTreeSet<String> = object_referenced_symbols(&object)
+        .into_iter()
+        .map(|symbol| symbol.trim_start_matches('_').to_string())
+        .collect();
+    assert!(
+        referenced.contains("aura_direct_close_task_group"),
+        "task group cleanup must call its own close entry: {referenced:?}"
+    );
+    assert!(
+        !referenced.contains("aura_direct_close_value"),
+        "a statically typed cleanup must not use the generic close dispatcher: {referenced:?}"
     );
 }

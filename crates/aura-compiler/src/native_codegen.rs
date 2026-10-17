@@ -741,7 +741,6 @@ struct NativeCodegen<'a> {
     arg_buffer_store_owned: FuncId,
     task_arg_buffer_guard: FuncId,
     task_arg_buffer_disarm: FuncId,
-    host_builtin: FuncId,
     ffi_call: FuncId,
     monotonic_time_ms: FuncId,
     channel_new: FuncId,
@@ -1290,7 +1289,6 @@ impl<'a> NativeCodegen<'a> {
             arg_buffer_store_owned => ("aura_direct_arg_buffer_store_owned", [types::I64, types::I64, types::I64], None),
             task_arg_buffer_guard => ("aura_direct_task_arg_buffer_guard", [types::I64, types::I64], Some(types::I64)),
             task_arg_buffer_disarm => ("aura_direct_task_arg_buffer_disarm", [types::I64], None),
-            host_builtin => ("aura_direct_host_builtin", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             ffi_call => ("aura_direct_ffi_call", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             monotonic_time_ms => ("aura_direct_monotonic_time_ms", [], Some(types::I64)),
             channel_new => ("aura_direct_channel_new", [types::I64], Some(types::I64)),
@@ -1805,7 +1803,6 @@ impl<'a> NativeCodegen<'a> {
             arg_buffer_store_owned,
             task_arg_buffer_guard,
             task_arg_buffer_disarm,
-            host_builtin,
             ffi_call,
             monotonic_time_ms,
             channel_new,
@@ -2900,9 +2897,6 @@ impl<'a> NativeCodegen<'a> {
         let task_arg_buffer_disarm = self
             .object
             .declare_func_in_func(self.task_arg_buffer_disarm, builder.func);
-        let host_builtin = self
-            .object
-            .declare_func_in_func(self.host_builtin, builder.func);
         let ffi_call = self
             .object
             .declare_func_in_func(self.ffi_call, builder.func);
@@ -3443,6 +3437,7 @@ impl<'a> NativeCodegen<'a> {
             closure_selector_tags,
             closure_capture_writebacks: HashMap::new(),
             object: &mut self.object,
+            host_builtin_refs: HashMap::new(),
             string_data: &mut self.string_data,
             callable_shapes: &self.callable_shapes,
             contract_descriptors: &mut self.contract_descriptors,
@@ -3638,7 +3633,6 @@ impl<'a> NativeCodegen<'a> {
             arg_buffer_store_owned,
             task_arg_buffer_guard,
             task_arg_buffer_disarm,
-            host_builtin,
             ffi_call,
             monotonic_time_ms,
             channel_new,
@@ -4263,9 +4257,22 @@ impl<'a> NativeCodegen<'a> {
                     )?;
                     builder.ins().return_(&[unit]);
                 } else {
-                    let close_value = self
-                        .object
-                        .declare_func_in_func(self.close_value, builder.func);
+                    // A resource whose static type is known closes through its
+                    // own entry, so the program links only that close path.
+                    let typed_close = match ty {
+                        Type::Named(name, _) => crate::native_runtime::typed_close_symbol(name),
+                        _ => None,
+                    };
+                    let close_id = match typed_close {
+                        Some(symbol) => declare_runtime_function(
+                            &mut self.object,
+                            symbol,
+                            &[types::I64, types::I64],
+                            Some(types::I64),
+                        )?,
+                        None => self.close_value,
+                    };
+                    let close_value = self.object.declare_func_in_func(close_id, builder.func);
                     let cancel_before = builder.ins().iconst(types::I64, 1);
                     let inst = builder.ins().call(close_value, &[raw, cancel_before]);
                     let result = builder.inst_results(inst)[0];
@@ -4867,6 +4874,9 @@ struct FunctionCompiler<'a> {
     closure_selector_tags: HashMap<(String, usize), i64>,
     closure_capture_writebacks: HashMap<String, Vec<DirectClosureCaptureWriteback>>,
     object: &'a mut ObjectModule,
+    /// Host builtin entries this function calls, declared on first use so the
+    /// object imports only the builtins the program calls.
+    host_builtin_refs: HashMap<&'static str, cranelift_codegen::ir::FuncRef>,
     string_data: &'a mut HashMap<Vec<u8>, DataId>,
     callable_shapes: &'a HashMap<CallableShapeKey, CallableShape>,
     contract_descriptors: &'a mut HashMap<String, callables::ContractDescriptor>,
@@ -5066,7 +5076,6 @@ struct FunctionCompiler<'a> {
     arg_buffer_store_owned: cranelift_codegen::ir::FuncRef,
     task_arg_buffer_guard: cranelift_codegen::ir::FuncRef,
     task_arg_buffer_disarm: cranelift_codegen::ir::FuncRef,
-    host_builtin: cranelift_codegen::ir::FuncRef,
     ffi_call: cranelift_codegen::ir::FuncRef,
     monotonic_time_ms: cranelift_codegen::ir::FuncRef,
     channel_new: cranelift_codegen::ir::FuncRef,
@@ -9119,6 +9128,27 @@ impl<'a> FunctionCompiler<'a> {
         self.compile_host_builtin_loaded_call(name, &loaded_args)
     }
 
+    /// The runtime entry for one host builtin, imported on first use.
+    fn host_builtin_ref(
+        &mut self,
+        name: &str,
+    ) -> std::result::Result<cranelift_codegen::ir::FuncRef, String> {
+        let symbol = crate::native_runtime::host_builtin_symbol(name)
+            .ok_or_else(|| format!("direct backend has no runtime entry for `{name}`"))?;
+        if let Some(entry) = self.host_builtin_refs.get(symbol) {
+            return Ok(*entry);
+        }
+        let id = declare_runtime_function(
+            self.object,
+            symbol,
+            &[types::I64, types::I64],
+            Some(types::I64),
+        )?;
+        let entry = self.object.declare_func_in_func(id, self.builder.func);
+        self.host_builtin_refs.insert(symbol, entry);
+        Ok(entry)
+    }
+
     fn compile_host_builtin_loaded_call(
         &mut self,
         name: &str,
@@ -9142,11 +9172,8 @@ impl<'a> FunctionCompiler<'a> {
                 .ins()
                 .call(self.arg_buffer_store, &[buffer, index, loaded.values[0]]);
         }
-        let (name_ptr, name_len) = self.string_constant(metadata.qualified_name.as_bytes())?;
-        let call = self
-            .builder
-            .ins()
-            .call(self.host_builtin, &[name_ptr, name_len, buffer, count]);
+        let entry = self.host_builtin_ref(name)?;
+        let call = self.builder.ins().call(entry, &[buffer, count]);
 
         let semantic_type = metadata.return_type.clone();
         let result = self.owned_opaque_result(

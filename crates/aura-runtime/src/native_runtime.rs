@@ -34,15 +34,15 @@ use crate::runtime_value::{
     clone_json_codec_source, collect_queue_values, concat_strings_checked,
     current_lightweight_task_cancellation, current_lightweight_task_id,
     decode_process_restart_policy, decode_process_stdio, divmod_numeric_values,
-    embedded_nominal_runtime_type_name, evaluate_bytes_host_builtin_ref, evaluate_host_builtin,
-    fail_current_lightweight_task, float_floor_divmod, float_power, format_runtime_value_with,
-    io_error, io_read_line, json_array_metadata_is_exact, json_dump_error_to_diagnostic,
-    json_int_metadata_is_exact, json_object_metadata_is_exact, json_parse_owned_to_runtime,
-    lookup_found, lookup_missing, nominal_runtime_base_name, optional_absent, optional_bytes_value,
-    optional_present, optional_str_value, optional_value, poll_cancellation, poll_ready,
-    poll_unavailable, prepare_json_codec_source, process_error_cancelled, process_error_io,
-    process_error_no_command, process_error_spawn, process_error_timed_out, process_exit_status,
-    process_stdio_inherit, process_stdio_null, process_stdio_pipe, process_supervisor_event_failed,
+    embedded_nominal_runtime_type_name, fail_current_lightweight_task, float_floor_divmod,
+    float_power, format_runtime_value_with, host_builtins, io_error, io_read_line,
+    json_array_metadata_is_exact, json_dump_error_to_diagnostic, json_int_metadata_is_exact,
+    json_object_metadata_is_exact, json_parse_owned_to_runtime, lookup_found, lookup_missing,
+    nominal_runtime_base_name, optional_absent, optional_bytes_value, optional_present,
+    optional_str_value, optional_value, poll_cancellation, poll_ready, poll_unavailable,
+    prepare_json_codec_source, process_error_cancelled, process_error_io, process_error_no_command,
+    process_error_spawn, process_error_timed_out, process_exit_status, process_stdio_inherit,
+    process_stdio_null, process_stdio_pipe, process_supervisor_event_failed,
     process_supervisor_wait_cancelled, process_supervisor_wait_event,
     process_supervisor_wait_timed_out, process_wait_cancelled, process_wait_exited,
     process_wait_failed, process_wait_timed_out, queue_receive_cancelled, queue_receive_closed,
@@ -1846,7 +1846,7 @@ pub struct DynamicHostParam {
 }
 
 /// The argument ABI of a host builtin that generated code calls through
-/// `aura_direct_host_builtin` with one opaque handle per argument.
+/// its own `aura_host_*` entry with one opaque handle per argument.
 ///
 /// The compiler's builtin signatures are the source of truth; a compiler test
 /// checks that this table matches them exactly.
@@ -2065,33 +2065,27 @@ impl Drop for DirectHostArgBuffer {
     }
 }
 
-fn is_dynamic_json_host_builtin(name: &str) -> bool {
-    name.starts_with("json::") && dynamic_host_abi(name).is_some()
+/// Evaluates a one-argument byte builtin over its borrowed argument.
+fn direct_bytes_unary(
+    name: &str,
+    args: &DirectHostArgBuffer,
+    evaluate: fn(&Value) -> crate::diag::Result<Value>,
+) -> std::result::Result<Value, Diagnostic> {
+    args.with_borrow(name, 0, evaluate)
 }
 
-fn is_dynamic_bytes_host_builtin(name: &str) -> bool {
-    !name.starts_with("json::") && dynamic_host_abi(name).is_some()
-}
-
-fn evaluate_direct_bytes_host_builtin(
+/// Evaluates a byte search builtin over its two borrowed operands.
+fn direct_bytes_search(
     name: &str,
     args: &DirectHostArgBuffer,
 ) -> std::result::Result<Value, Diagnostic> {
-    debug_assert!(is_dynamic_bytes_host_builtin(name));
-    args.validate(name)?;
-    if text_methods::is_bytes_search_builtin(name) {
-        let value = args.with_borrow(name, 0, |value| {
-            text_methods::bytes_search_operand(name, value)
-        })?;
-        let pattern = args.with_borrow(name, 1, |pattern| {
-            text_methods::bytes_search_operand(name, pattern)
-        })?;
-        return Ok(text_methods::evaluate_bytes_search(name, &value, &pattern));
-    }
-    args.with_borrow(name, 0, |value| {
-        evaluate_bytes_host_builtin_ref(name, value)
-            .expect("classified byte host builtins are registered with the shared adapter")
-    })
+    let value = args.with_borrow(name, 0, |value| {
+        text_methods::bytes_search_operand(name, value)
+    })?;
+    let pattern = args.with_borrow(name, 1, |pattern| {
+        text_methods::bytes_search_operand(name, pattern)
+    })?;
+    Ok(text_methods::evaluate_bytes_search(name, &value, &pattern))
 }
 
 fn direct_json_variant<'a>(
@@ -2194,141 +2188,152 @@ fn direct_json_indent(value: &Value) -> std::result::Result<Option<i64>, Diagnos
     }
 }
 
-fn evaluate_direct_json_host_builtin(
-    name: &str,
-    args: &DirectHostArgBuffer,
-) -> std::result::Result<Value, Diagnostic> {
-    args.validate(name)?;
-    match name {
-        "json::parse" => {
-            let (source, reservation) = prepare_json_codec_source(|| {
-                args.with_borrow(name, 0, |value| {
-                    let Value::String(text) = value else {
-                        return Err(Diagnostic::coded(
-                            "AU4001",
-                            format!("`{name}` expects argument 1 to be `str`"),
-                        ));
-                    };
-                    clone_json_codec_source(text)
-                })
-            })?;
-            json_parse_owned_to_runtime(source, reservation)
-        }
-        "json::dumps" => {
-            let indent = args.with_copy(name, 1, direct_json_indent)?;
-            args.with_borrow(name, 0, |value| {
-                let value = runtime_value_to_json(value)?;
-                json_codec::dumps(&value, indent)
-                    .map(Value::String)
-                    .map_err(json_dump_error_to_diagnostic)
-            })
-        }
-        "json::is_null" => args.with_borrow(name, 0, |value| {
-            let variant = direct_json_variant(value, name)?;
-            if variant.variant_name == "Null" && !variant.payloads.is_empty() {
+fn direct_json_parse(args: &DirectHostArgBuffer) -> std::result::Result<Value, Diagnostic> {
+    let name = "json::parse";
+    let (source, reservation) = prepare_json_codec_source(|| {
+        args.with_borrow(name, 0, |value| {
+            let Value::String(text) = value else {
                 return Err(Diagnostic::coded(
                     "AU4001",
-                    "malformed runtime `json.Value.Null` payload in `json::is_null`",
+                    format!("`{name}` expects argument 1 to be `str`"),
                 ));
+            };
+            clone_json_codec_source(text)
+        })
+    })?;
+    json_parse_owned_to_runtime(source, reservation)
+}
+
+fn direct_json_dumps(args: &DirectHostArgBuffer) -> std::result::Result<Value, Diagnostic> {
+    let name = "json::dumps";
+    let indent = args.with_copy(name, 1, direct_json_indent)?;
+    args.with_borrow(name, 0, |value| {
+        let value = runtime_value_to_json(value)?;
+        json_codec::dumps(&value, indent)
+            .map(Value::String)
+            .map_err(json_dump_error_to_diagnostic)
+    })
+}
+
+fn direct_json_is_null(args: &DirectHostArgBuffer) -> std::result::Result<Value, Diagnostic> {
+    let name = "json::is_null";
+    args.with_borrow(name, 0, |value| {
+        let variant = direct_json_variant(value, name)?;
+        if variant.variant_name == "Null" && !variant.payloads.is_empty() {
+            return Err(Diagnostic::coded(
+                "AU4001",
+                "malformed runtime `json.Value.Null` payload in `json::is_null`",
+            ));
+        }
+        Ok(Value::Bool(variant.variant_name == "Null"))
+    })
+}
+
+fn direct_json_as_bool(args: &DirectHostArgBuffer) -> std::result::Result<Value, Diagnostic> {
+    let name = "json::as_bool";
+    args.with_borrow(name, 0, |value| {
+        Ok(match direct_json_exact_payload(value, "Bool", name)? {
+            Some(Value::Bool(value)) => optional_present(Type::named("bool"), Value::Bool(*value)),
+            Some(_) => {
+                return Err(Diagnostic::coded(
+                    "AU4001",
+                    "malformed runtime `json.Value.Bool` payload in `json::as_bool`",
+                ))
             }
-            Ok(Value::Bool(variant.variant_name == "Null"))
-        }),
-        "json::as_bool" => args.with_borrow(name, 0, |value| {
-            Ok(match direct_json_exact_payload(value, "Bool", name)? {
-                Some(Value::Bool(value)) => {
-                    optional_present(Type::named("bool"), Value::Bool(*value))
-                }
-                Some(_) => {
-                    return Err(Diagnostic::coded(
-                        "AU4001",
-                        "malformed runtime `json.Value.Bool` payload in `json::as_bool`",
-                    ))
-                }
-                None => optional_absent(Type::named("bool")),
-            })
-        }),
-        "json::as_int" => args.with_borrow(name, 0, |value| {
-            Ok(match direct_json_exact_payload(value, "Int", name)? {
-                Some(Value::Int(value)) if json_int_metadata_is_exact(value) => {
-                    optional_present(Type::named("int64"), Value::Int(*value))
-                }
-                Some(_) => {
-                    return Err(Diagnostic::coded(
-                        "AU4001",
-                        "malformed runtime `json.Value.Int` payload in `json::as_int`",
-                    ))
-                }
-                None => optional_absent(Type::named("int64")),
-            })
-        }),
-        "json::as_float" => args.with_borrow(name, 0, |value| {
-            Ok(match direct_json_exact_payload(value, "Float", name)? {
-                Some(Value::Float(value)) => {
-                    optional_present(Type::named("float64"), Value::Float(*value))
-                }
-                Some(_) => {
-                    return Err(Diagnostic::coded(
-                        "AU4001",
-                        "malformed runtime `json.Value.Float` payload in `json::as_float`",
-                    ))
-                }
-                None => optional_absent(Type::named("float64")),
-            })
-        }),
-        "json::into_string" => Ok(
-            match direct_json_into_exact_payload(args.take_value(name, 0)?, "String", name)? {
-                Some(Value::String(value)) => optional_present(
-                    crate::runtime_value::json_into_member_type("String"),
-                    Value::String(value),
-                ),
-                Some(_) => {
-                    return Err(Diagnostic::coded(
-                        "AU4001",
-                        "malformed runtime `json.Value.String` payload in `json::into_string`",
-                    ))
-                }
-                None => optional_absent(crate::runtime_value::json_into_member_type("String")),
-            },
-        ),
-        "json::into_array" => Ok(
-            match direct_json_into_exact_payload(args.take_value(name, 0)?, "Array", name)? {
-                Some(Value::Vec(value)) if json_array_metadata_is_exact(&value) => {
-                    optional_present(
-                        crate::runtime_value::json_into_member_type("Array"),
-                        Value::Vec(value),
-                    )
-                }
-                Some(_) => {
-                    return Err(Diagnostic::coded(
-                        "AU4001",
-                        "malformed runtime `json.Value.Array` payload in `json::into_array`",
-                    ))
-                }
-                None => optional_absent(crate::runtime_value::json_into_member_type("Array")),
-            },
-        ),
-        "json::into_object" => Ok(
-            match direct_json_into_exact_payload(args.take_value(name, 0)?, "Object", name)? {
-                Some(Value::Map(value)) if json_object_metadata_is_exact(&value) => {
-                    optional_present(
-                        crate::runtime_value::json_into_member_type("Object"),
-                        Value::Map(value),
-                    )
-                }
-                Some(_) => {
-                    return Err(Diagnostic::coded(
-                        "AU4001",
-                        "malformed runtime `json.Value.Object` payload in `json::into_object`",
-                    ))
-                }
-                None => optional_absent(crate::runtime_value::json_into_member_type("Object")),
-            },
-        ),
-        _ => Err(Diagnostic::coded(
-            "AU4001",
-            format!("unknown dynamic JSON host builtin `{name}`"),
-        )),
-    }
+            None => optional_absent(Type::named("bool")),
+        })
+    })
+}
+
+fn direct_json_as_int(args: &DirectHostArgBuffer) -> std::result::Result<Value, Diagnostic> {
+    let name = "json::as_int";
+    args.with_borrow(name, 0, |value| {
+        Ok(match direct_json_exact_payload(value, "Int", name)? {
+            Some(Value::Int(value)) if json_int_metadata_is_exact(value) => {
+                optional_present(Type::named("int64"), Value::Int(*value))
+            }
+            Some(_) => {
+                return Err(Diagnostic::coded(
+                    "AU4001",
+                    "malformed runtime `json.Value.Int` payload in `json::as_int`",
+                ))
+            }
+            None => optional_absent(Type::named("int64")),
+        })
+    })
+}
+
+fn direct_json_as_float(args: &DirectHostArgBuffer) -> std::result::Result<Value, Diagnostic> {
+    let name = "json::as_float";
+    args.with_borrow(name, 0, |value| {
+        Ok(match direct_json_exact_payload(value, "Float", name)? {
+            Some(Value::Float(value)) => {
+                optional_present(Type::named("float64"), Value::Float(*value))
+            }
+            Some(_) => {
+                return Err(Diagnostic::coded(
+                    "AU4001",
+                    "malformed runtime `json.Value.Float` payload in `json::as_float`",
+                ))
+            }
+            None => optional_absent(Type::named("float64")),
+        })
+    })
+}
+
+fn direct_json_into_string(args: &DirectHostArgBuffer) -> std::result::Result<Value, Diagnostic> {
+    let name = "json::into_string";
+    let member = crate::runtime_value::json_into_member_type("String");
+    Ok(
+        match direct_json_into_exact_payload(args.take_value(name, 0)?, "String", name)? {
+            Some(Value::String(value)) => optional_present(member, Value::String(value)),
+            Some(_) => {
+                return Err(Diagnostic::coded(
+                    "AU4001",
+                    "malformed runtime `json.Value.String` payload in `json::into_string`",
+                ))
+            }
+            None => optional_absent(member),
+        },
+    )
+}
+
+fn direct_json_into_array(args: &DirectHostArgBuffer) -> std::result::Result<Value, Diagnostic> {
+    let name = "json::into_array";
+    let member = crate::runtime_value::json_into_member_type("Array");
+    Ok(
+        match direct_json_into_exact_payload(args.take_value(name, 0)?, "Array", name)? {
+            Some(Value::Vec(value)) if json_array_metadata_is_exact(&value) => {
+                optional_present(member, Value::Vec(value))
+            }
+            Some(_) => {
+                return Err(Diagnostic::coded(
+                    "AU4001",
+                    "malformed runtime `json.Value.Array` payload in `json::into_array`",
+                ))
+            }
+            None => optional_absent(member),
+        },
+    )
+}
+
+fn direct_json_into_object(args: &DirectHostArgBuffer) -> std::result::Result<Value, Diagnostic> {
+    let name = "json::into_object";
+    let member = crate::runtime_value::json_into_member_type("Object");
+    Ok(
+        match direct_json_into_exact_payload(args.take_value(name, 0)?, "Object", name)? {
+            Some(Value::Map(value)) if json_object_metadata_is_exact(&value) => {
+                optional_present(member, Value::Map(value))
+            }
+            Some(_) => {
+                return Err(Diagnostic::coded(
+                    "AU4001",
+                    "malformed runtime `json.Value.Object` payload in `json::into_object`",
+                ))
+            }
+            None => optional_absent(member),
+        },
+    )
 }
 
 fn decode_bytes(ptr: *const u8, len: usize) -> String {
@@ -8854,36 +8859,143 @@ pub extern "C-unwind" fn aura_direct_task_arg_buffer_disarm(id: i64) {
     })
 }
 
-#[cfg_attr(not(coverage), no_mangle)]
-pub extern "C-unwind" fn aura_direct_host_builtin(
-    name_ptr: *const u8,
-    name_len: usize,
+/// Runs a host builtin that takes owned arguments from generated code.
+fn run_owned_host_builtin(
     args_ptr: *mut i64,
     arg_count: i64,
+    evaluate: host_builtins::HostBuiltinFn,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
-        let name = decode_bytes(name_ptr, name_len);
         let arg_count = usize::try_from(arg_count)
             .unwrap_or_else(|_| runtime_error("invalid host builtin argument count"));
-        if is_dynamic_json_host_builtin(&name) || is_dynamic_bytes_host_builtin(&name) {
-            let args = unsafe { DirectHostArgBuffer::from_raw(args_ptr, arg_count) };
-            let result = if is_dynamic_json_host_builtin(&name) {
-                evaluate_direct_json_host_builtin(&name, &args)
-            } else {
-                evaluate_direct_bytes_host_builtin(&name, &args)
-            };
-            drop(args);
-            return match result {
-                Ok(value) => boxed_value(value),
-                Err(error) => runtime_diagnostic_error(error),
-            };
-        }
         let args = unsafe { consume_opaque_buffer(args_ptr, arg_count) };
-        match evaluate_host_builtin(&name, args) {
+        match evaluate(args, None) {
             Ok(value) => boxed_value(value),
             Err(error) => runtime_diagnostic_error(error),
         }
     })
+}
+
+/// Runs a host builtin that reads one opaque handle per argument, as
+/// `DYNAMIC_HOST_ABI` declares.
+fn run_borrowed_host_builtin(
+    name: &'static str,
+    args_ptr: *mut i64,
+    arg_count: i64,
+    evaluate: fn(&DirectHostArgBuffer) -> std::result::Result<Value, Diagnostic>,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let arg_count = usize::try_from(arg_count)
+            .unwrap_or_else(|_| runtime_error("invalid host builtin argument count"));
+        let args = unsafe { DirectHostArgBuffer::from_raw(args_ptr, arg_count) };
+        let result = args.validate(name).and_then(|()| evaluate(&args));
+        drop(args);
+        match result {
+            Ok(value) => boxed_value(value),
+            Err(error) => runtime_diagnostic_error(error),
+        }
+    })
+}
+
+macro_rules! host_builtin_entry {
+    (owned $name:literal, $evaluate:expr, $args_ptr:ident, $arg_count:ident) => {
+        run_owned_host_builtin($args_ptr, $arg_count, $evaluate)
+    };
+    (borrowed $name:literal, $evaluate:expr, $args_ptr:ident, $arg_count:ident) => {
+        run_borrowed_host_builtin($name, $args_ptr, $arg_count, $evaluate)
+    };
+}
+
+macro_rules! host_builtin_entries {
+    ($($passing:ident $name:literal => $symbol:ident($evaluate:expr);)*) => {
+        $(
+            #[cfg_attr(not(coverage), no_mangle)]
+            pub extern "C-unwind" fn $symbol(args_ptr: *mut i64, arg_count: i64) -> *mut OpaqueValue {
+                host_builtin_entry!($passing $name, $evaluate, args_ptr, arg_count)
+            }
+        )*
+
+        /// Each host builtin's qualified name and the exported entry generated
+        /// code calls for it. Every builtin has its own entry, so a program
+        /// links only the builtins it calls.
+        pub const HOST_BUILTIN_SYMBOLS: &[(&str, &str)] = &[$(($name, stringify!($symbol))),*];
+
+        /// Each host builtin's exported entry, for runtime tests.
+        #[cfg(test)]
+        pub(crate) const HOST_BUILTIN_ENTRIES: &[(
+            &str,
+            extern "C-unwind" fn(*mut i64, i64) -> *mut OpaqueValue,
+        )] = &[$(($name, $symbol)),*];
+    };
+}
+
+host_builtin_entries! {
+    owned "math::floor" => aura_host_math_floor(host_builtins::host_math_floor);
+    owned "math::ceil" => aura_host_math_ceil(host_builtins::host_math_ceil);
+    owned "math::trunc" => aura_host_math_trunc(host_builtins::host_math_trunc);
+    owned "math::pow" => aura_host_math_pow(host_builtins::host_math_pow);
+    owned "math::exp" => aura_host_math_exp(host_builtins::host_math_exp);
+    owned "math::log" => aura_host_math_log(host_builtins::host_math_log);
+    owned "math::log2" => aura_host_math_log2(host_builtins::host_math_log2);
+    owned "math::log10" => aura_host_math_log10(host_builtins::host_math_log10);
+    owned "math::sin" => aura_host_math_sin(host_builtins::host_math_sin);
+    owned "math::cos" => aura_host_math_cos(host_builtins::host_math_cos);
+    owned "math::tan" => aura_host_math_tan(host_builtins::host_math_tan);
+    owned "control::__retry_validate" => aura_host_control_retry_validate(host_builtins::host_control_retry_validate);
+    owned "control::__retry_next_backoff" => aura_host_control_retry_next_backoff(host_builtins::host_control_retry_next_backoff);
+    owned "control::__retry_cancel_if_requested" => aura_host_control_retry_cancel_if_requested(host_builtins::host_control_retry_cancel_if_requested);
+    owned "sys::args" => aura_host_sys_args(host_builtins::host_sys_args);
+    owned "sys::env" => aura_host_sys_env(host_builtins::host_sys_env);
+    owned "sys::current_dir" => aura_host_sys_current_dir(host_builtins::host_sys_current_dir);
+    owned "sys::unix_time_ms" => aura_host_sys_unix_time_ms(host_builtins::host_sys_unix_time_ms);
+    owned "sys::monotonic_time_ms" => aura_host_sys_monotonic_time_ms(host_builtins::host_sys_monotonic_time_ms);
+    owned "path::join" => aura_host_path_join(host_builtins::host_path_join);
+    owned "path::parent" => aura_host_path_parent(host_builtins::host_path_parent);
+    owned "path::file_name" => aura_host_path_file_name(host_builtins::host_path_file_name);
+    owned "path::extension" => aura_host_path_extension(host_builtins::host_path_extension);
+    owned "path::is_absolute" => aura_host_path_is_absolute(host_builtins::host_path_is_absolute);
+    owned "json::is_valid" => aura_host_json_is_valid(host_builtins::host_json_is_valid);
+    owned "json::stringify_map" => aura_host_json_stringify_map(host_builtins::host_json_stringify_map);
+    owned "json::parse_string_map" => aura_host_json_parse_string_map(host_builtins::host_json_parse_string_map);
+    owned "toml::is_valid" => aura_host_toml_is_valid(host_builtins::host_toml_is_valid);
+    owned "toml::stringify_map" => aura_host_toml_stringify_map(host_builtins::host_toml_stringify_map);
+    owned "toml::parse_string_map" => aura_host_toml_parse_string_map(host_builtins::host_toml_parse_string_map);
+    owned "metrics::increment" => aura_host_metrics_increment(host_builtins::host_metrics_increment);
+    owned "metrics::get" => aura_host_metrics_get(host_builtins::host_metrics_get);
+    owned "metrics::reset" => aura_host_metrics_reset(host_builtins::host_metrics_reset);
+    owned "log::debug" => aura_host_log_debug(host_builtins::host_log_debug);
+    owned "log::info" => aura_host_log_info(host_builtins::host_log_info);
+    owned "log::warn" => aura_host_log_warn(host_builtins::host_log_warn);
+    owned "log::error" => aura_host_log_error(host_builtins::host_log_error);
+    owned "trace::event" => aura_host_trace_event(host_builtins::host_trace_event);
+    borrowed "json::parse" => aura_host_json_parse(direct_json_parse);
+    borrowed "json::dumps" => aura_host_json_dumps(direct_json_dumps);
+    borrowed "json::is_null" => aura_host_json_is_null(direct_json_is_null);
+    borrowed "json::as_bool" => aura_host_json_as_bool(direct_json_as_bool);
+    borrowed "json::as_int" => aura_host_json_as_int(direct_json_as_int);
+    borrowed "json::as_float" => aura_host_json_as_float(direct_json_as_float);
+    borrowed "json::into_string" => aura_host_json_into_string(direct_json_into_string);
+    borrowed "json::into_array" => aura_host_json_into_array(direct_json_into_array);
+    borrowed "json::into_object" => aura_host_json_into_object(direct_json_into_object);
+    borrowed "bytes::hex_encode" => aura_host_bytes_hex_encode(|args| direct_bytes_unary("bytes::hex_encode", args, host_builtins::host_bytes_hex_encode_ref));
+    borrowed "bytes::hex_decode" => aura_host_bytes_hex_decode(|args| direct_bytes_unary("bytes::hex_decode", args, host_builtins::host_bytes_hex_decode_ref));
+    borrowed "bytes::base64_encode" => aura_host_bytes_base64_encode(|args| direct_bytes_unary("bytes::base64_encode", args, host_builtins::host_bytes_base64_encode_ref));
+    borrowed "bytes::base64_decode" => aura_host_bytes_base64_decode(|args| direct_bytes_unary("bytes::base64_decode", args, host_builtins::host_bytes_base64_decode_ref));
+    borrowed "bytes::sha256" => aura_host_bytes_sha256(|args| direct_bytes_unary("bytes::sha256", args, host_builtins::host_bytes_sha256_ref));
+    borrowed "bytes::sha256_string" => aura_host_bytes_sha256_string(|args| direct_bytes_unary("bytes::sha256_string", args, host_builtins::host_bytes_sha256_string_ref));
+    borrowed "str.to_bytes" => aura_host_str_to_bytes(|args| direct_bytes_unary("str.to_bytes", args, host_builtins::host_str_to_bytes_ref));
+    borrowed "str.from_bytes" => aura_host_str_from_bytes(|args| direct_bytes_unary("str.from_bytes", args, host_builtins::host_str_from_bytes_ref));
+    borrowed "bytes::starts_with" => aura_host_bytes_starts_with(|args| direct_bytes_search("bytes::starts_with", args));
+    borrowed "bytes::ends_with" => aura_host_bytes_ends_with(|args| direct_bytes_search("bytes::ends_with", args));
+    borrowed "bytes::find" => aura_host_bytes_find(|args| direct_bytes_search("bytes::find", args));
+}
+
+/// The exported entry generated code calls for a host builtin.
+pub fn host_builtin_symbol(name: &str) -> Option<&'static str> {
+    HOST_BUILTIN_SYMBOLS
+        .iter()
+        .find(|(entry, _)| *entry == name)
+        .map(|(_, symbol)| *symbol)
 }
 
 #[cfg_attr(not(coverage), no_mangle)]
@@ -10342,6 +10454,70 @@ pub extern "C-unwind" fn aura_direct_close_value(
         }
         boxed_value(Value::Unit)
     })
+}
+
+/// Generates one close entry per resource type, so a cleanup whose static
+/// type is known links only that resource's close path.
+macro_rules! typed_close_entries {
+    ($cancel_before:ident; $($type_name:literal => $symbol:ident($variant:ident($binding:ident) => $close:expr);)*) => {
+        $(
+            #[cfg_attr(not(coverage), no_mangle)]
+            #[allow(unused_variables)]
+            pub extern "C-unwind" fn $symbol(
+                value: *mut OpaqueValue,
+                $cancel_before: i64,
+            ) -> *mut OpaqueValue {
+                task_runtime_boundary(|| {
+                    match unsafe { value_ref(value) } {
+                        Value::$variant($binding) => $close,
+                        other => runtime_error(format!(
+                            "expected `{}` for cleanup, found `{}`",
+                            $type_name,
+                            value_type_name(&other)
+                        )),
+                    }
+                    boxed_value(Value::Unit)
+                })
+            }
+        )*
+
+        /// Each resource type's close entry, for runtime tests.
+        #[cfg(test)]
+        pub(crate) const TYPED_CLOSE_ENTRIES: &[(
+            &str,
+            extern "C-unwind" fn(*mut OpaqueValue, i64) -> *mut OpaqueValue,
+        )] = &[$(($type_name, $symbol)),*];
+
+        /// The close entry for a resource's static type name, or `None` when
+        /// cleanup must dispatch on the runtime value.
+        pub fn typed_close_symbol(type_name: &str) -> Option<&'static str> {
+            match type_name {
+                $($type_name => Some(stringify!($symbol)),)*
+                _ => None,
+            }
+        }
+    };
+}
+
+typed_close_entries! {
+    cancel_before;
+    "Queue" => aura_direct_close_queue(Channel(channel) => channel.close());
+    "TaskGroup" => aura_direct_close_task_group(TaskGroup(group) => close_task_group(&group, cancel_before != 0));
+    "fs.File" => aura_direct_close_file(File(file) => file.close());
+    "net.TcpListener" => aura_direct_close_tcp_listener(TcpListener(listener) => listener.close());
+    "net.TcpStream" => aura_direct_close_tcp_stream(TcpStream(stream) => stream.close());
+    "net.UdpSocket" => aura_direct_close_udp_socket(UdpSocket(socket) => socket.close());
+    "net.HttpListener" => aura_direct_close_http_listener(HttpListener(listener) => listener.close());
+    "net.WebSocket" => aura_direct_close_websocket(WebSocket(socket) => {
+                    let _ = socket.close();
+                });
+    "process.Child" => aura_direct_close_process_child(ProcessChild(child) => child.close());
+    "process.Pipe" => aura_direct_close_process_pipe(ProcessPipe(pipe) => pipe.close());
+    "process.Supervisor" => aura_direct_close_process_supervisor(ProcessSupervisor(supervisor) => supervisor.close());
+    "net.UnixListener" => aura_direct_close_unix_listener(UnixListener(listener) => listener.close());
+    "net.UnixStream" => aura_direct_close_unix_stream(UnixStream(stream) => stream.close());
+    "net.TlsListener" => aura_direct_close_tls_listener(TlsListener(listener) => listener.close());
+    "net.TlsStream" => aura_direct_close_tls_stream(TlsStream(stream) => stream.close());
 }
 
 #[cfg_attr(not(coverage), no_mangle)]
