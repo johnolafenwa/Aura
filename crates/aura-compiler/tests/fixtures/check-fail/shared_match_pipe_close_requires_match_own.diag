@@ -1,0 +1,7 @@
+error[AU3003]: method `close` requires a mutable receiver, but `stdin_pipe` is bound by a shared match on `child.stdin()`
+ --> crates/aura-compiler/tests/fixtures/check-fail/shared_match_pipe_close_requires_match_own.au:7:28
+  |
+7 |                 stdin_pipe.close()
+  |                            ^
+  = related crates/aura-compiler/tests/fixtures/check-fail/shared_match_pipe_close_requires_match_own.au:6:34: shared match binding is declared here
+  = help: write `match own child.stdin()` to own the matched value

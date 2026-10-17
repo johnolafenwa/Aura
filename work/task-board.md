@@ -1,6 +1,19 @@
 # Task Board
 
-Last updated: 2026-10-16
+Last updated: 2026-10-17
+
+## Batch 7a: fs.rename, File.sync, and resource receivers (in review)
+
+- Target: add `fs.rename` and `fs.File.sync()`, and make the checker
+  require a mutable receiver for every writing or closing resource method,
+  with a `match own` hint for bare-match bindings. John chose this on
+  2026-10-17. Hash `dict`, `set`, and value representation are a separate
+  Batch 7a item.
+- Done: both backends implement the two calls. `examples/io/atomic_save.au`
+  shows an atomic save. The checker enforces the receiver table, and
+  `check-pass/pythonic_convenience_methods.au` uses `match own`. Details are
+  in `2026-10-17-batch-7a-fs-and-resource-receivers.md`.
+- Remaining: hosted CI, review, and merge.
 
 ## AuraDB benchmark fixes (complete)
 
@@ -50,9 +63,8 @@ Last updated: 2026-10-16
 - Verification: the `native-binaries` CI job enforces the absence,
   presence, and 10% size gates on both platforms. Step 6 moves the macOS
   baselines to the step 5 sizes. See `2026-10-17-batch-5-step-6.md`.
-- Open: the checker lets a shared match binding call a resource method
-  that MIR treats as mutating. It needs a language decision. See
-  `2026-10-16-batch-5-step-2b.md`.
+- The open item on resource methods through a shared match binding was
+  decided on 2026-10-17 and moved to Batch 7a below.
 
 ## Aura 0.4.1 preview release (complete)
 

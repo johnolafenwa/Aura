@@ -195,7 +195,7 @@ impl FunctionChecker<'_> {
             })
             .collect::<BTreeMap<_, _>>();
         let shared_scrutinee =
-            self.shared_match_scrutinee_name(&match_stmt.scrutinee, match_stmt.capability);
+            self.shared_match_scrutinee_name(&match_stmt.scrutinee, match_stmt.capability, locals);
         let shared_match_place = (match_stmt.capability == ReceiverKind::Borrow)
             .then(|| self.shared_match_place(&match_stmt.scrutinee, locals))
             .flatten();
@@ -1173,7 +1173,7 @@ impl FunctionChecker<'_> {
             arms,
             span,
         } = parts;
-        let shared_scrutinee = self.shared_match_scrutinee_name(scrutinee, borrow_mode);
+        let shared_scrutinee = self.shared_match_scrutinee_name(scrutinee, borrow_mode, locals);
         let shared_match_place = (borrow_mode == ReceiverKind::Borrow)
             .then(|| self.shared_match_place(scrutinee, locals))
             .flatten();

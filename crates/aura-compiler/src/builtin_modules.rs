@@ -1123,6 +1123,15 @@ fn fs_namespace() -> ModuleNamespace {
         ),
         function_info(
             "fs",
+            "rename",
+            vec![
+                value_param("source", type_ref("str", Vec::new())),
+                value_param("target", type_ref("str", Vec::new())),
+            ],
+            result_none.clone(),
+        ),
+        function_info(
+            "fs",
             "open",
             vec![value_param("path", type_ref("str", Vec::new()))],
             result_file.clone(),

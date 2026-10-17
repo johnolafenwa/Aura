@@ -42,6 +42,7 @@ This prints `42` twice.
 ### Capabilities
 
 - A bare `match` borrows non-Copy payloads and exposes Copy values as ordinary values.
+- A bare `match` binding is shared, so it cannot call a method that needs a mutable receiver, such as `close()` on a file, pipe, or socket. The checker reports `AU3003` and names the fix: `match mut` to update a place in place, or `match own` to take ownership.
 - `match mut` gives mutable payload bindings without another `mut` after `as`. A replacement must keep the member type.
 - `match own` consumes the union and moves the selected payload only after its guard succeeds.
 - Failed patterns and guards release their temporary views.

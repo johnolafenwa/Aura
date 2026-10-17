@@ -4382,6 +4382,7 @@ test("compiler bridge includes builtin io/fs/net module and resource members", a
     assert.ok(fsNames.has("write_string"));
     assert.ok(fsNames.has("write_bytes"));
     assert.ok(fsNames.has("append_bytes"));
+    assert.ok(fsNames.has("rename"));
     assert.ok(fsNames.has("File"));
 
     const fileNames = await completionsForLine("    file.");
@@ -4390,6 +4391,7 @@ test("compiler bridge includes builtin io/fs/net module and resource members", a
     assert.ok(fileNames.has("write_all"));
     assert.ok(fileNames.has("write_bytes"));
     assert.ok(fileNames.has("flush"));
+    assert.ok(fileNames.has("sync"));
     assert.ok(fileNames.has("close"));
 
     const netNames = await completionsForLine("    net.");

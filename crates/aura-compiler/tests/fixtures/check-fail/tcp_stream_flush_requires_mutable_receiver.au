@@ -1,0 +1,9 @@
+import io
+import net
+
+def send(stream: net.TcpStream) -> Result[None, io.Error]:
+    try stream.flush()
+    return Result.Ok(None)
+
+def main() -> int32:
+    return 0

@@ -332,6 +332,7 @@ whose shallow stack use you have measured. It is not the default.
 | `fs.create_dir` | `create_dir(path: str) -> Result[None, io.Error]` | Creates one directory. |
 | `fs.read_dir` | `read_dir(path: str) -> Result[list[str], io.Error]` | Returns the sorted names of the immediate entries. Host paths are decoded lossily. |
 | `fs.remove_file` | `remove_file(path: str) -> Result[None, io.Error]` | Removes a file. |
+| `fs.rename` | `rename(source: str, target: str) -> Result[None, io.Error]` | Renames or moves a path, replacing an existing target file. |
 | `fs.open` | `open(path: str) -> Result[fs.File, io.Error]` | Opens a file for reading. |
 | `fs.create` | `create(path: str) -> Result[fs.File, io.Error]` | Creates or truncates a file for writing. |
 | `fs.append` | `append(path: str) -> Result[fs.File, io.Error]` | Opens a file for appending and creates it if needed. |
@@ -340,6 +341,7 @@ whose shallow stack use you have measured. It is not the default.
 | `fs.File.write_all` | `write_all(text: str) -> Result[None, io.Error]` | Writes all of the text. |
 | `fs.File.write_bytes` | `write_bytes(bytes: list[uint8]) -> Result[None, io.Error]` | Writes all of the bytes. |
 | `fs.File.flush` | `flush() -> Result[None, io.Error]` | Flushes pending writes. |
+| `fs.File.sync` | `sync() -> Result[None, io.Error]` | Flushes pending writes and waits until they reach storage (`fsync`). |
 | `fs.File.close` | `close() -> None` | Closes the handle. |
 
 ## Control-Plane Modules

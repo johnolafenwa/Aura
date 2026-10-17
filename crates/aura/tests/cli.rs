@@ -4575,7 +4575,7 @@ import net
 def serve(path: own str, addresses: Queue[str]) -> Result[None, io.Error]:
     with server = try net.http_listen("127.0.0.1:0"):
         addresses.put(try server.local_addr())
-        req = try server.accept(timeout=5s)
+        mut req = try server.accept(timeout=5s)
         body = try fs.read_to_string(path)
         try req.respond_text(200, body, {{}})
         return Result.Ok(None)
@@ -4620,7 +4620,7 @@ import net
 def serve(addresses: Queue[str]) -> Result[None, io.Error]:
     with listener = try net.http_listen("127.0.0.1:0"):
         addresses.put(try listener.local_addr())
-        request = try listener.accept(timeout=5s)
+        mut request = try listener.accept(timeout=5s)
         try request.respond_text(200, "", {"Content-Length": "16777217"})
         return Result.Ok(None)
 
@@ -11473,6 +11473,30 @@ fn run_executes_bytes_file_io_example() {
 }
 
 #[test]
+fn run_and_direct_backends_run_atomic_save_example() {
+    let output = Command::new(aura_bin())
+        .arg("run")
+        .arg(repo_root().join("examples/io/atomic_save.au"))
+        .output()
+        .expect("failed to run aura run on atomic save example");
+    assert!(
+        output.status.success(),
+        "run should succeed for atomic save example, stderr was:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "second\nfalse\nio.Error.NotFound\n"
+    );
+
+    assert_direct_backend_example_runs(
+        "examples/io/atomic_save.au",
+        "atomic-save-direct",
+        "second\nfalse\nio.Error.NotFound\n",
+    );
+}
+
+#[test]
 fn run_executes_tcp_echo_example() {
     let fixture = repo_root().join("examples/io/tcp_echo.au");
     let output = Command::new(aura_bin())
@@ -13534,7 +13558,7 @@ def run(cwd: own str) -> Result[None, process.Error]:
         stdin: process.Pipe | None = child.stdin()
         match own stdin:
             case process.Pipe as found_pipe:
-                stdin_pipe: process.Pipe = found_pipe
+                mut stdin_pipe: process.Pipe = found_pipe
                 try stdin_pipe.write_all("echo from cat\n", timeout=500ms)
                 try stdin_pipe.flush()
                 stdin_pipe.close()

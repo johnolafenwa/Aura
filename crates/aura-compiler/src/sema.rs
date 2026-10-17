@@ -11293,7 +11293,7 @@ impl<'a> FunctionChecker<'a> {
                         self.reject_stale_narrowing(&path, span, locals)?;
                     }
                 }
-                if let Type::Named(receiver_name, _) = &receiver_ty {
+                if let Type::Named(receiver_name, receiver_args) = &receiver_ty {
                     if let Some(builtin_member) = BuiltinMember::resolve(receiver_name, field) {
                         if explicit_type_args.is_some() && builtin_member != BuiltinMember::ArrayMap
                         {
@@ -11319,6 +11319,14 @@ impl<'a> FunctionChecker<'a> {
                             args,
                             locals,
                         )?;
+                        // ADR-0061 H1: every mutating file, process, and
+                        // network resource method needs a mutable receiver
+                        // place, the same table MIR validation enforces.
+                        if is_builtin_io_resource_type(receiver_name, receiver_args)
+                            && builtin_member.receiver_passing() == ReceiverKind::BorrowMut
+                        {
+                            self.require_mutable_receiver(object, field, span, locals)?;
+                        }
                     }
                 }
                 if receiver_ty == Type::named("Duration") {
@@ -13341,7 +13349,6 @@ impl<'a> FunctionChecker<'a> {
                                     vec![bytes_ty.clone(), crate::builtin_modules::io_error_type()],
                                 )),
                                 BuiltinMember::FileWriteAll => {
-                                    self.require_mutable_receiver(object, field, span, locals)?;
                                     let text_arg = self.bound_argument(
                                         &ordered_args,
                                         0,
@@ -13368,7 +13375,6 @@ impl<'a> FunctionChecker<'a> {
                                     ))
                                 }
                                 BuiltinMember::FileWriteBytes => {
-                                    self.require_mutable_receiver(object, field, span, locals)?;
                                     let bytes_arg = self.bound_argument(
                                         &ordered_args,
                                         0,
@@ -13386,10 +13392,12 @@ impl<'a> FunctionChecker<'a> {
                                         vec![Type::Unit, crate::builtin_modules::io_error_type()],
                                     ))
                                 }
-                                BuiltinMember::FileFlush => Ok(Type::Named(
-                                    "Result".to_string(),
-                                    vec![Type::Unit, crate::builtin_modules::io_error_type()],
-                                )),
+                                BuiltinMember::FileFlush | BuiltinMember::FileSync => {
+                                    Ok(Type::Named(
+                                        "Result".to_string(),
+                                        vec![Type::Unit, crate::builtin_modules::io_error_type()],
+                                    ))
+                                }
                                 BuiltinMember::FileClose => Ok(Type::Unit),
                                 _ => unreachable!("unexpected file builtin member"),
                             };

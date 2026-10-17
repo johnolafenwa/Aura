@@ -976,12 +976,51 @@ impl<'a> FunctionChecker<'a> {
                 ));
             }
         }
+        if let Some(diagnostic) =
+            self.shared_match_receiver_diagnostic(object, method_name, span, locals)
+        {
+            return Err(diagnostic);
+        }
         Err(Diagnostic::coded_at(
             "AU3003",
             span,
             format!("method `{}` requires a mutable receiver", method_name),
         )
         .with_help("declare the receiver place with `mut` before calling a mutating method"))
+    }
+
+    /// ADR-0061 H1: a binding from a bare `match` is a shared loan, so it
+    /// cannot be a mutating method's receiver. Name the capability that
+    /// makes it one, as ADR-0022 Q2 does for a move out of the same binding.
+    fn shared_match_receiver_diagnostic(
+        &self,
+        object: &Expr,
+        method_name: &str,
+        span: crate::diag::Span,
+        locals: &HashMap<String, LocalBinding>,
+    ) -> Option<Diagnostic> {
+        let place = self.borrow_call_place(object)?;
+        let binding = locals.get(&place.root)?;
+        let scrutinee = binding.shared_match_scrutinee.as_deref()?;
+        let mut diagnostic = Diagnostic::coded_at(
+            "AU3003",
+            span,
+            format!(
+                "method `{method_name}` requires a mutable receiver, but `{}` is bound by a shared match on `{scrutinee}`",
+                place.root
+            ),
+        );
+        if let Some(origin) = binding.borrowed_at {
+            diagnostic = diagnostic.with_secondary(origin, "shared match binding is declared here");
+        }
+        // A call result has no place to update, so only `match own` applies.
+        Some(diagnostic.with_help(if super::loans::shared_match_scrutinee_is_place(scrutinee) {
+            format!(
+                "write `match mut {scrutinee}` to update the scrutinee in place, or `match own {scrutinee}` to consume it"
+            )
+        } else {
+            format!("write `match own {scrutinee}` to own the matched value")
+        }))
     }
 
     pub(super) fn is_shared_self_place(

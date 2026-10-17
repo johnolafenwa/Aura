@@ -10655,6 +10655,23 @@ impl FileValue {
         )
     }
 
+    /// Flushes buffered writes, then waits until the host reports the file's
+    /// data and metadata durable (`fsync`).
+    pub fn sync(&self) -> io::Result<()> {
+        let state = self.inner.clone();
+        run_blocking_io(
+            move || {
+                let mut file = lock_mutex(&state.file);
+                let Some(file) = file.as_mut() else {
+                    return Err(closed_resource_error());
+                };
+                file.flush()?;
+                file.sync_all()
+            },
+            current_lightweight_task_cancellation().as_ref(),
+        )
+    }
+
     pub fn close(&self) {
         let mut file = lock_mutex(&self.inner.file);
         *file = None;

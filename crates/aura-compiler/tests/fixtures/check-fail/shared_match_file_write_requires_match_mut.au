@@ -1,0 +1,16 @@
+import fs
+import io
+
+class Log:
+    file: fs.File | None
+
+    def write(mut self, line: str) -> Result[None, io.Error]:
+        match self.file:
+            case fs.File as file:
+                try file.write_all(line)
+            case None:
+                return Result.Ok(None)
+        return Result.Ok(None)
+
+def main() -> int32:
+    return 0

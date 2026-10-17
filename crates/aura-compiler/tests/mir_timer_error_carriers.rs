@@ -35,7 +35,7 @@ fn mir_supervisor_timer_conversion_uses_each_declared_process_carrier() {
 import process
 
 def main() -> int32:
-    supervisor = process.supervisor()
+    mut supervisor = process.supervisor()
     print(supervisor.wait(timeout=Duration.ms(-1)))
     print(supervisor.wait(timeout=Duration.seconds(9223372036854775807)))
     print(supervisor.wait_or_none(timeout=Duration.minutes(9223372036854775807)))

@@ -1,0 +1,6 @@
+error[AU3003]: method `flush` requires a mutable receiver
+ --> crates/aura-compiler/tests/fixtures/check-fail/tcp_stream_flush_requires_mutable_receiver.au:5:16
+  |
+5 |     try stream.flush()
+  |                ^
+  = help: declare the receiver place with `mut` before calling a mutating method

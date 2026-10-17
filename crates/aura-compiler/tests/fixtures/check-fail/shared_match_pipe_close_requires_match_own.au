@@ -1,0 +1,18 @@
+import process
+
+def run() -> Result[None, process.Error]:
+    with child = try process.start(["/bin/cat"], stdin=process.pipe(), stdout=process.null(), stderr=process.null()):
+        match child.stdin():
+            case process.Pipe as stdin_pipe:
+                stdin_pipe.close()
+            case None:
+                return Result.Ok(None)
+        try child.wait_ok(timeout=1s)
+    return Result.Ok(None)
+
+def main() -> int32:
+    match run():
+        case Result.Ok(_):
+            return 0
+        case Result.Err(_):
+            return 1

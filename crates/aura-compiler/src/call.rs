@@ -1064,6 +1064,7 @@ pub enum BuiltinMember {
     FileWriteAll,
     FileWriteBytes,
     FileFlush,
+    FileSync,
     FileClose,
     TcpListenerAccept,
     TcpListenerLocalAddr,
@@ -1408,6 +1409,7 @@ impl BuiltinMember {
             ("fs.File", "write_all") => Some(Self::FileWriteAll),
             ("fs.File", "write_bytes") => Some(Self::FileWriteBytes),
             ("fs.File", "flush") => Some(Self::FileFlush),
+            ("fs.File", "sync") => Some(Self::FileSync),
             ("fs.File", "close") => Some(Self::FileClose),
             ("net.TcpListener", "accept") => Some(Self::TcpListenerAccept),
             ("net.TcpListener", "local_addr") => Some(Self::TcpListenerLocalAddr),
@@ -1618,6 +1620,7 @@ impl BuiltinMember {
             Self::FileWriteAll => "write_all",
             Self::FileWriteBytes => "write_bytes",
             Self::FileFlush => "flush",
+            Self::FileSync => "sync",
             Self::FileClose => "close",
             Self::TcpListenerAccept => "accept",
             Self::TcpListenerLocalAddr => "local_addr",
@@ -1854,6 +1857,7 @@ impl BuiltinMember {
             Self::FileWriteAll => "write_all(text: str) -> Result[None, io.Error]",
             Self::FileWriteBytes => "write_bytes(bytes: list[uint8]) -> Result[None, io.Error]",
             Self::FileFlush => "flush() -> Result[None, io.Error]",
+            Self::FileSync => "sync() -> Result[None, io.Error]",
             Self::FileClose => "close() -> None",
             Self::TcpListenerAccept => "accept(timeout: Duration = ...) -> Result[net.TcpStream, io.Error]",
             Self::TcpListenerLocalAddr => "local_addr() -> Result[str, io.Error]",
@@ -2202,6 +2206,7 @@ impl BuiltinMember {
             Self::FileWriteAll => "Writes all of `text` to the file, returning an `io.Error` on failure.",
             Self::FileWriteBytes => "Writes all of `bytes` to the file, returning an `io.Error` on failure.",
             Self::FileFlush => "Flushes pending file writes to the operating system.",
+            Self::FileSync => "Flushes pending writes and waits until the file's data and metadata reach storage (fsync).",
             Self::FileClose => "Closes the file handle so the resource can no longer be used.",
             Self::TcpListenerAccept => "Accepts the next incoming TCP connection, optionally timing out.",
             Self::TcpListenerLocalAddr => "Returns the bound local address for the listener.",
@@ -2359,6 +2364,7 @@ impl BuiltinMember {
             | Self::FileReadAll
             | Self::FileReadBytes
             | Self::FileFlush
+            | Self::FileSync
             | Self::FileClose
             | Self::TcpListenerLocalAddr
             | Self::TcpListenerClose
@@ -2705,6 +2711,7 @@ impl BuiltinMember {
                 | Self::FileWriteAll
                 | Self::FileWriteBytes
                 | Self::FileFlush
+                | Self::FileSync
                 | Self::FileClose
                 | Self::TcpListenerClose
                 | Self::TcpStreamWriteAll

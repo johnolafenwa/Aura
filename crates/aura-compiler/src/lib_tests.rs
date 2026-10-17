@@ -683,6 +683,11 @@ const ADDITIONAL_EXAMPLE_CASES: &[(&str, &str, &str)] = &[
         "4\n65\n67\n5\n68\n",
     ),
     (
+        "examples/io/atomic_save.au",
+        include_str!("../../../examples/io/atomic_save.au"),
+        "second\nfalse\nio.Error.NotFound\n",
+    ),
+    (
         "examples/io/tcp_bytes.au",
         include_str!("../../../examples/io/tcp_bytes.au"),
         "4\n116\n",

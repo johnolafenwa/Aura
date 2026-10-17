@@ -75,7 +75,7 @@ fn builtin_process_module_type_checks_from_path_context() {
     let entry = temp.path().join("main.au");
     let source = r#"import process
 
-def inspect(child: process.Child, pipe: process.Pipe, completed: process.Completed, status: process.ExitStatus, wait: process.Wait, stdio: process.Stdio, error: process.Error, supervisor: process.Supervisor, event: process.SupervisorEvent, supervisor_wait: process.SupervisorWait, restart: process.RestartPolicy) -> int32:
+def inspect(child: mut process.Child, pipe: mut process.Pipe, completed: process.Completed, status: process.ExitStatus, wait: process.Wait, stdio: process.Stdio, error: process.Error, supervisor: mut process.Supervisor, event: process.SupervisorEvent, supervisor_wait: process.SupervisorWait, restart: process.RestartPolicy) -> int32:
     match own child.stdin():
         case process.Pipe as stdin_pipe:
             print(stdin_pipe.write_all("hello\n", timeout=10ms))

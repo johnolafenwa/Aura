@@ -10713,6 +10713,7 @@ fn direct_backend_emits_object_for_broad_maintained_example_surface() {
         "examples/concurrency/task_group_queue_sum.au",
         "examples/io/read_text_file.au",
         "examples/io/bytes_file_io.au",
+        "examples/io/atomic_save.au",
         "examples/io/process_run.au",
         "examples/io/process_supervisor.au",
         "examples/io/tcp_echo.au",
@@ -11627,6 +11628,7 @@ fn infer_operand_and_rvalue_types_track_plain_classes() {
         ),
         ("fs::create_dir", result_type(Type::Unit, io_error.clone())),
         ("fs::remove_file", result_type(Type::Unit, io_error.clone())),
+        ("fs::rename", result_type(Type::Unit, io_error.clone())),
         (
             "fs::read_dir",
             result_type(
