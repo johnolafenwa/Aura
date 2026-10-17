@@ -337,6 +337,14 @@ glue was about 10 KB of a 941 KB hello world. Step 4 instead gives each
 resource type its own cleanup close entry, which removed the TLS handshake
 code a shared close dispatcher kept in programs that never use TLS.
 
+**Outcome.** Steps 0 through 5 merged in PRs #55, #57, #58, #59, #62, and
+#63. At `bdf9265`, Linux hello world is 927,888 bytes against 5,057,904 at
+the start, and the reference agent is 1,520,368 against 5,384,768. That is
+below the 1.0 to 1.5 MB estimate in section D. The runtime archive is
+61,530,080 bytes. Hello world keeps about 11 KB of `rustls`, `ring`, and
+`tungstenite` drop glue, which step 3 would have removed. The Performance
+chapter has the full table for both platforms.
+
 ## Owner Questions
 
 1. **Crate layout.** Three crates as in [section A](#a-crate-layout).
