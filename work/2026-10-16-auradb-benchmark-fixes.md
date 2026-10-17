@@ -83,3 +83,14 @@ pass fixes the ones that are bugs and records the rest on the roadmap.
 - The MIR interpreter still clones on place reads.
 - Lending a field whose argument list also holds an instance-typed value is
   skipped. A precise alias analysis could cover it.
+
+## Regression After Merge
+
+The forced MIR and direct parity matrix failed on
+`union_narrow_nested_places.au` after PR #60 merged. A narrowed
+`Bag | None` local reaches its fields through a `__union_payload_0` segment,
+and its slot holds the union, so moving `items` out by field name failed
+with `AU4001`. Lending now skips any place with a compiler-generated
+segment. `direct_collection_methods_on_narrowed_union_fields_run` in
+`crates/aura/tests/representation_stats.rs` failed before the fix and
+passes after it.
