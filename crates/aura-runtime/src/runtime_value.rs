@@ -2134,6 +2134,16 @@ fn drop_array_containing_value_iteratively(value: Value, frames: &mut Vec<ArrayC
 }
 
 pub fn try_clone_array_containing_value(value: &Value) -> Result<Value> {
+    // Leaves have no children to visit, so skip the frame machinery.
+    match value {
+        Value::Int(_)
+        | Value::Float(_)
+        | Value::Bool(_)
+        | Value::Unit
+        | Value::String(_)
+        | Value::Duration(_) => return Ok(value.clone()),
+        _ => {}
+    }
     enum CloneFrame<'a> {
         Tuple {
             tuple: &'a TupleValue,

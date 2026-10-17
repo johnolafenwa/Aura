@@ -448,9 +448,34 @@ fn direct_runtime_frame_materialization_count() -> usize {
     DIRECT_RUNTIME_FRAME_MATERIALIZATION_COUNT.with(Cell::get)
 }
 
+/// Hashes an opaque value address. Boxes are at least 8-byte aligned, so
+/// the low bits carry no information; the multiply spreads the rest into
+/// the high bits the hash table reads.
+#[derive(Default)]
+struct AddressHasher(u64);
+
+impl std::hash::Hasher for AddressHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        for byte in bytes {
+            self.0 = (self.0.rotate_left(8) ^ u64::from(*byte)).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+        }
+    }
+
+    fn write_usize(&mut self, address: usize) {
+        self.0 = ((address as u64) >> 3).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    }
+}
+
+/// Live owned references per opaque value address for one direct task.
+type OwnedValueLedger = HashMap<usize, usize, std::hash::BuildHasherDefault<AddressHasher>>;
+
 struct DirectTaskRuntimeState {
     ownership_tracking_active: bool,
-    owned_value_refs: BTreeMap<usize, usize>,
+    owned_value_refs: OwnedValueLedger,
     runtime_error_capture: bool,
     cleanup_stack: Vec<DirectCleanupRegistration>,
     next_cleanup_id: i64,
@@ -504,7 +529,7 @@ impl Default for DirectTaskRuntimeState {
     fn default() -> Self {
         Self {
             ownership_tracking_active: false,
-            owned_value_refs: BTreeMap::new(),
+            owned_value_refs: OwnedValueLedger::default(),
             runtime_error_capture: false,
             cleanup_stack: Vec::new(),
             next_cleanup_id: 1,
@@ -677,7 +702,7 @@ impl Drop for DirectTaskRuntimeScopeGuard {
             .as_ref()
             .map(|current| current.owned_value_refs.clone())
             .unwrap_or_default();
-        let outstanding_owned_value_types = outstanding_owned_values
+        let mut outstanding_owned_value_types = outstanding_owned_values
             .iter()
             .map(|(address, count)| {
                 let type_name = unsafe {
@@ -688,6 +713,7 @@ impl Drop for DirectTaskRuntimeScopeGuard {
                 (*address, *count, type_name)
             })
             .collect::<Vec<_>>();
+        outstanding_owned_value_types.sort_unstable();
         if let Some(current) = current {
             release_direct_task_runtime_state(current);
         }
@@ -13565,7 +13591,7 @@ unsafe fn claim_direct_task_args(args: &[i64], claim_flag_address: usize) {
     // raw buffer references itself. Installing the finished map and flipping
     // the raw atomic flag are then allocation-free, so no partially claimed
     // prefix can exist.
-    let mut owned_value_refs = BTreeMap::new();
+    let mut owned_value_refs = OwnedValueLedger::default();
     for argument in args.iter().copied().filter(|argument| *argument != 0) {
         let count = owned_value_refs.entry(argument as usize).or_insert(0usize);
         *count = count
