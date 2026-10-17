@@ -47,7 +47,8 @@ pub fn emit_host_object_with_metadata(
     program_path: &str,
     program_source: &str,
 ) -> std::result::Result<Vec<u8>, String> {
-    let context = NativeCodegen::new(module, program_path, program_source)?;
+    let module = reachability::prune_unreachable_functions(module);
+    let context = NativeCodegen::new(&module, program_path, program_source)?;
     context.emit()
 }
 
@@ -21833,6 +21834,9 @@ fn collect_task_start_targets(
     }
     targets
 }
+
+#[path = "native_codegen_reachability.rs"]
+mod reachability;
 
 #[path = "native_codegen_callables.rs"]
 mod callables;

@@ -69,7 +69,13 @@ Last updated: 2026-10-16
   longer links the TLS handshake. See `2026-10-16-batch-5-step-4.md`.
 - Step 3 is dropped: John chose to skip it on 2026-10-16 after it measured
   at about 10 KB of drop glue.
-- Remaining: steps 5 and 6 of the delivery plan, one PR per step.
+- Step 5 done locally: types cross to the runtime as compact text
+  descriptors, so hello world, the agent, and the TLS example no longer
+  link `serde_json`. Codegen skips builtin module wrappers the program never reaches, so
+  hello world's object file drops from 172,448 to 21,840 bytes. Hello world
+  is 927,888 bytes and the agent 1,520,368. See
+  `2026-10-16-batch-5-step-5.md`.
+- Remaining: step 6 of the delivery plan, final measurements and docs.
 
 ## Aura 0.4.1 preview release (complete)
 

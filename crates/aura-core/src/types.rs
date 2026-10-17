@@ -6,6 +6,7 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 use crate::diag::{Diagnostic, Result};
+use crate::json_text;
 use crate::ops::ReceiverKind;
 use crate::type_budget::ExpansionBudget;
 
@@ -139,118 +140,9 @@ impl Type {
         module_name: &str,
         canonical_names: &BTreeMap<String, String>,
     ) -> String {
-        fn key(ty: &Type, module: &str, names: &BTreeMap<String, String>) -> serde_json::Value {
-            use serde_json::json;
-            match ty {
-                Type::Unit => json!(["~unit"]),
-                Type::Module(name) => json!(["module", name]),
-                Type::TypeParam(name) => json!(["parameter", name]),
-                Type::ReturnedView(view) => json!([
-                    "returned_view",
-                    view.mutable,
-                    view.origin,
-                    key(&view.pointee, module, names)
-                ]),
-                Type::Named(name, args) => {
-                    let resolved = names.get(name).unwrap_or(name);
-                    let nominal =
-                        if is_builtin_type(resolved) || resolved.contains('.') || module.is_empty()
-                        {
-                            resolved.clone()
-                        } else {
-                            format!("{module}.{resolved}")
-                        };
-                    json!([
-                        "named",
-                        nominal,
-                        args.iter()
-                            .map(|arg| key(arg, module, names))
-                            .collect::<Vec<_>>()
-                    ])
-                }
-                Type::Tuple(elements) => json!([
-                    "tuple",
-                    elements
-                        .iter()
-                        .map(|arg| key(arg, module, names))
-                        .collect::<Vec<_>>()
-                ]),
-                Type::Union(union) => json!([
-                    "union",
-                    union
-                        .members
-                        .iter()
-                        .map(|member| key(member, &union.module_name, &BTreeMap::new()))
-                        .collect::<Vec<_>>()
-                ]),
-                Type::Function {
-                    params,
-                    return_type,
-                } => json!([
-                    "function",
-                    params
-                        .iter()
-                        .map(|p| json!([
-                            p.name,
-                            p.passing,
-                            p.has_default,
-                            p.keyword_only,
-                            key(&p.ty, module, names)
-                        ]))
-                        .collect::<Vec<_>>(),
-                    key(return_type, module, names)
-                ]),
-                Type::Callable(callable) => json!([
-                    "callable",
-                    callable.task,
-                    callable.call_kind,
-                    callable
-                        .params
-                        .iter()
-                        .map(|p| json!([
-                            p.name,
-                            p.passing,
-                            p.has_default,
-                            p.keyword_only,
-                            key(&p.ty, module, names)
-                        ]))
-                        .collect::<Vec<_>>(),
-                    key(&callable.return_type, module, names)
-                ]),
-                Type::Closure {
-                    params,
-                    return_type,
-                    captures,
-                    call_kind,
-                } => json!([
-                    "closure",
-                    call_kind,
-                    params
-                        .iter()
-                        .map(|p| json!([
-                            p.name,
-                            p.passing,
-                            p.has_default,
-                            p.keyword_only,
-                            key(&p.ty, module, names)
-                        ]))
-                        .collect::<Vec<_>>(),
-                    key(return_type, module, names),
-                    captures
-                        .iter()
-                        .map(|capture| json!([
-                            capture.name,
-                            capture.mode,
-                            key(&capture.ty, module, names)
-                        ]))
-                        .collect::<Vec<_>>()
-                ]),
-            }
-        }
-        format!(
-            "aura-type-key-v1:{}",
-            key(self, module_name, canonical_names)
-        )
+        let mut out = String::from("aura-type-key-v1:");
+        push_canonical_key(&mut out, self, module_name, canonical_names);
+        out
     }
 
     pub fn normalize_union(
@@ -636,6 +528,154 @@ impl fmt::Display for Type {
     }
 }
 
+fn receiver_kind_key(kind: ReceiverKind) -> &'static str {
+    match kind {
+        ReceiverKind::Value => "Value",
+        ReceiverKind::Borrow => "Borrow",
+        ReceiverKind::BorrowMut => "BorrowMut",
+    }
+}
+
+fn call_kind_key(kind: ClosureCallKind) -> &'static str {
+    match kind {
+        ClosureCallKind::Repeatable => "Repeatable",
+        ClosureCallKind::MutableRepeatable => "MutableRepeatable",
+        ClosureCallKind::Consuming => "Consuming",
+    }
+}
+
+fn capture_mode_key(mode: ClosureCaptureMode) -> &'static str {
+    match mode {
+        ClosureCaptureMode::Copy => "Copy",
+        ClosureCaptureMode::Move => "Move",
+        ClosureCaptureMode::SharedView => "SharedView",
+        ClosureCaptureMode::MutableView => "MutableView",
+    }
+}
+
+fn push_param_keys(
+    out: &mut String,
+    params: &[FunctionParamContract],
+    module: &str,
+    names: &BTreeMap<String, String>,
+) {
+    json_text::push_array(out, params, |out, param| {
+        out.push('[');
+        json_text::push_string(out, &param.name);
+        out.push(',');
+        json_text::push_string(out, receiver_kind_key(param.passing));
+        out.push(',');
+        json_text::push_bool(out, param.has_default);
+        out.push(',');
+        json_text::push_bool(out, param.keyword_only);
+        out.push(',');
+        push_canonical_key(out, &param.ty, module, names);
+        out.push(']');
+    });
+}
+
+/// Writes a type's structural identity key as compact JSON. The bytes are
+/// the persisted `aura-type-key-v1` format, so they must not change.
+fn push_canonical_key(out: &mut String, ty: &Type, module: &str, names: &BTreeMap<String, String>) {
+    match ty {
+        Type::Unit => out.push_str("[\"~unit\"]"),
+        Type::Module(name) => {
+            out.push_str("[\"module\",");
+            json_text::push_string(out, name);
+            out.push(']');
+        }
+        Type::TypeParam(name) => {
+            out.push_str("[\"parameter\",");
+            json_text::push_string(out, name);
+            out.push(']');
+        }
+        Type::ReturnedView(view) => {
+            out.push_str("[\"returned_view\",");
+            json_text::push_bool(out, view.mutable);
+            out.push(',');
+            json_text::push_number(out, view.origin);
+            out.push(',');
+            push_canonical_key(out, &view.pointee, module, names);
+            out.push(']');
+        }
+        Type::Named(name, args) => {
+            let resolved = names.get(name).unwrap_or(name);
+            let nominal =
+                if is_builtin_type(resolved) || resolved.contains('.') || module.is_empty() {
+                    resolved.clone()
+                } else {
+                    format!("{module}.{resolved}")
+                };
+            out.push_str("[\"named\",");
+            json_text::push_string(out, &nominal);
+            out.push(',');
+            json_text::push_array(out, args, |out, arg| {
+                push_canonical_key(out, arg, module, names)
+            });
+            out.push(']');
+        }
+        Type::Tuple(elements) => {
+            out.push_str("[\"tuple\",");
+            json_text::push_array(out, elements, |out, element| {
+                push_canonical_key(out, element, module, names)
+            });
+            out.push(']');
+        }
+        Type::Union(union) => {
+            out.push_str("[\"union\",");
+            json_text::push_array(out, &union.members, |out, member| {
+                push_canonical_key(out, member, &union.module_name, &BTreeMap::new())
+            });
+            out.push(']');
+        }
+        Type::Function {
+            params,
+            return_type,
+        } => {
+            out.push_str("[\"function\",");
+            push_param_keys(out, params, module, names);
+            out.push(',');
+            push_canonical_key(out, return_type, module, names);
+            out.push(']');
+        }
+        Type::Callable(callable) => {
+            out.push_str("[\"callable\",");
+            json_text::push_bool(out, callable.task);
+            out.push(',');
+            json_text::push_string(out, call_kind_key(callable.call_kind));
+            out.push(',');
+            push_param_keys(out, &callable.params, module, names);
+            out.push(',');
+            push_canonical_key(out, &callable.return_type, module, names);
+            out.push(']');
+        }
+        Type::Closure {
+            params,
+            return_type,
+            captures,
+            call_kind,
+        } => {
+            out.push_str("[\"closure\",");
+            json_text::push_string(out, call_kind_key(*call_kind));
+            out.push(',');
+            push_param_keys(out, params, module, names);
+            out.push(',');
+            push_canonical_key(out, return_type, module, names);
+            out.push(',');
+            json_text::push_array(out, captures, |out, capture| {
+                out.push('[');
+                json_text::push_string(out, &capture.name);
+                out.push(',');
+                json_text::push_string(out, capture_mode_key(capture.mode));
+                out.push(',');
+                push_canonical_key(out, &capture.ty, module, names);
+                out.push(']');
+            });
+            out.push(']');
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct FunctionParamContract {
     pub keyword_only: bool,
@@ -888,3 +928,7 @@ pub fn optional_type(member: Type) -> Type {
     Type::normalize_union(vec![member, Type::Unit], "<builtin>", &BTreeMap::new())
         .expect("builtin optional unions normalize")
 }
+
+#[cfg(test)]
+#[path = "types_tests.rs"]
+pub(crate) mod tests;

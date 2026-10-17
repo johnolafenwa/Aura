@@ -72,14 +72,14 @@
         "toml",
         "http",
         "httparse",
-        "url"
+        "url",
+        "serde_json"
       ],
       "known_present": [
         "libffi",
         "rustls",
         "ring",
-        "tungstenite",
-        "serde_json"
+        "tungstenite"
       ]
     },
     "reference_agent": {
@@ -93,9 +93,7 @@
         "mir_interpreter",
         "toml",
         "http",
-        "httparse"
-      ],
-      "present": [
+        "httparse",
         "serde_json"
       ],
       "known_present": [
@@ -129,7 +127,8 @@
         "builtin_registry",
         "mir_interpreter",
         "http",
-        "httparse"
+        "httparse",
+        "serde_json"
       ],
       "present": [
         "rustls",
@@ -144,7 +143,8 @@
         "parser",
         "analysis",
         "builtin_registry",
-        "mir_interpreter"
+        "mir_interpreter",
+        "serde_json"
       ],
       "present": [
         "tungstenite",
@@ -154,11 +154,11 @@
   },
   "baselines": {
     "linux-x86_64": {
-      "hello_world": 941224,
-      "reference_agent": 1687680,
-      "json": 1488200,
-      "tls": 3434592,
-      "websocket": 3723640
+      "hello_world": 927888,
+      "reference_agent": 1520368,
+      "json": 1364960,
+      "tls": 3258840,
+      "websocket": 3556472
     },
     "darwin-arm64": {
       "hello_world": 926472,

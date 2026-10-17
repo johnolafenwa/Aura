@@ -1317,18 +1317,16 @@ unsafe fn explicit_runtime_type_name(ptr: *mut OpaqueValue) -> Option<String> {
     }
 }
 
-const CANONICAL_RUNTIME_TYPE_PREFIX: &str = "__aura_type_json_v1__:";
-
+/// The runtime type name of a structural type: its type descriptor.
 pub fn canonical_runtime_type_name(ty: &Type) -> String {
-    format!(
-        "{CANONICAL_RUNTIME_TYPE_PREFIX}{}",
-        serde_json::to_string(ty).expect("Aura semantic types must serialize")
-    )
+    aura_core::type_descriptor::encode(ty)
 }
 
 fn canonical_runtime_type_from_name(name: &str) -> Option<Type> {
-    name.strip_prefix(CANONICAL_RUNTIME_TYPE_PREFIX)
-        .and_then(|json| serde_json::from_str(json).ok())
+    if !name.starts_with(aura_core::type_descriptor::DESCRIPTOR_PREFIX) {
+        return None;
+    }
+    aura_core::type_descriptor::decode(name).ok()
 }
 
 fn embedded_runtime_type_name(value: &Value) -> Option<String> {
@@ -2417,9 +2415,7 @@ fn append_direct_ffi_type(encoded: &mut Vec<u8>, ty: &DirectFfiType) {
     let union_text = ty
         .union_type
         .as_ref()
-        .map(|union_type| {
-            serde_json::to_string(union_type).expect("Aura semantic types must serialize")
-        })
+        .map(aura_core::type_descriptor::encode)
         .unwrap_or_default();
     append_direct_ffi_text(encoded, &union_text);
 }
@@ -2497,9 +2493,10 @@ impl<'a> DirectFfiSpecDecoder<'a> {
                 Err("opaque-handle metadata is missing its nominal type".to_string())
             }
             (FfiType::NullableOpaqueHandle, false, false) => {
-                let union_type: Type = serde_json::from_str(&union_text).map_err(|error| {
-                    format!("nullable-handle metadata carries invalid union metadata: {error}")
-                })?;
+                let union_type =
+                    aura_core::type_descriptor::decode(&union_text).map_err(|error| {
+                        format!("nullable-handle metadata carries invalid union metadata: {error}")
+                    })?;
                 let valid = matches!(&union_type, Type::Union(union)
                     if union.members.len() == 2
                         && union.members.contains(&Type::Unit)
@@ -3287,8 +3284,7 @@ fn write_internal_structured_diagnostic_to_fd(
         .get()
         .map(|context| context.path.as_str())
         .unwrap_or("<direct>");
-    let encoded = serde_json::to_vec(&diagnostic.structured(fallback_path))
-        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    let encoded = diagnostic.structured(fallback_path).to_json().into_bytes();
     if encoded.len() > crate::MAX_INTERNAL_DIAGNOSTIC_BYTES {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
@@ -4167,12 +4163,13 @@ pub extern "C-unwind" fn aura_direct_function_value(
         if thunk_ptr == 0 {
             runtime_error("direct runtime received a null function thunk");
         }
-        let signature = serde_json::from_str::<Type>(&decode_bytes(signature_ptr, signature_len))
-            .unwrap_or_else(|error| {
-                runtime_error(format!(
-                    "direct runtime received invalid function signature metadata: {error}"
-                ))
-            });
+        let signature =
+            aura_core::type_descriptor::decode(&decode_bytes(signature_ptr, signature_len))
+                .unwrap_or_else(|error| {
+                    runtime_error(format!(
+                        "direct runtime received invalid function signature metadata: {error}"
+                    ))
+                });
         boxed_value(Value::Function(Box::new(FunctionValue {
             name: decode_bytes(name_ptr, name_len),
             signature,

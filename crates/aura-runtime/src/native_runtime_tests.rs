@@ -5747,8 +5747,7 @@ fn direct_function_value_abi_preserves_signature_capabilities_defaults_and_metad
         ],
         return_type: Box::new(Type::named("int64")),
     };
-    let encoded_signature =
-        serde_json::to_vec(&signature).expect("function signature should serialize");
+    let encoded_signature = super::canonical_runtime_type_name(&signature).into_bytes();
     let function = super::aura_direct_function_value(
         test_native_thunk as *const () as usize as i64,
         0x5eed,
@@ -5813,7 +5812,7 @@ fn direct_function_value_type_patterns_bind_nested_types_and_capabilities() {
     }
 
     fn function_value(signature: &Type, name: &'static [u8]) -> *mut OpaqueValue {
-        let encoded = serde_json::to_vec(signature).expect("function signature should serialize");
+        let encoded = super::canonical_runtime_type_name(&signature).into_bytes();
         super::aura_direct_function_value(
             test_native_thunk as *const () as usize as i64,
             1,
@@ -6071,8 +6070,7 @@ fn direct_function_value_abi_rejects_invalid_signatures_and_missing_native_targe
         params: Vec::new(),
         return_type: Box::new(Type::Unit),
     };
-    let encoded_signature =
-        serde_json::to_vec(&signature).expect("function signature should serialize");
+    let encoded_signature = super::canonical_runtime_type_name(&signature).into_bytes();
     let null_signature = encoded_signature.clone();
     let null_thunk = capture_direct_boundary_error_message(move || {
         super::aura_direct_function_value(
@@ -16940,8 +16938,7 @@ fn native_runtime_function_value_task_handoff_preserves_absent_source_paths() {
                 params: Vec::new(),
                 return_type: Box::new(Type::Unit),
             };
-            let signature =
-                serde_json::to_vec(&signature).expect("function signature should serialize");
+            let signature = super::canonical_runtime_type_name(&signature).into_bytes();
             let function = super::aura_direct_function_value(
                 direct_task_frame_trap as *const () as usize as i64,
                 1,
@@ -17148,7 +17145,7 @@ fn native_runtime_function_value_task_handoff_rejects_invalid_spawn_path_utf8() 
         params: Vec::new(),
         return_type: Box::new(Type::Unit),
     };
-    let signature = serde_json::to_vec(&signature).expect("function signature should serialize");
+    let signature = super::canonical_runtime_type_name(&signature).into_bytes();
     let function = super::aura_direct_function_value(
         direct_task_frame_trap as *const () as usize as i64,
         1,
