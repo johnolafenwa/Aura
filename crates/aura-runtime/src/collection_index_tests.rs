@@ -12,7 +12,7 @@ fn text(value: &str) -> Value {
     Value::String(value.to_string())
 }
 
-fn keys(entries: &MapEntries) -> Vec<Value> {
+fn keys(entries: &DictEntries) -> Vec<Value> {
     entries.iter().map(|(key, _)| key.clone()).collect()
 }
 
@@ -95,7 +95,7 @@ fn deep_keys_hash_without_recursion() {
 
 #[test]
 fn map_keeps_insertion_order_across_the_index_threshold() {
-    let mut entries = MapEntries::new();
+    let mut entries = DictEntries::new();
     for index in (0..100).rev() {
         assert_eq!(entries.insert(int(index), int(index * 10)), None);
     }
@@ -115,7 +115,7 @@ fn map_keeps_insertion_order_across_the_index_threshold() {
 
 #[test]
 fn map_removal_keeps_the_order_of_the_rest() {
-    let mut entries = MapEntries::new();
+    let mut entries = DictEntries::new();
     for index in 0..20 {
         entries.insert(text(&format!("k{index}")), int(index));
     }
@@ -151,9 +151,9 @@ fn map_removal_keeps_the_order_of_the_rest() {
 fn wrapped_entries_find_the_first_equal_key() {
     let mut raw: Vec<(Value, Value)> = (0..12).map(|index| (int(index), int(index))).collect();
     raw.push((int(5), int(-5)));
-    let entries = MapEntries::from(raw);
+    let entries = DictEntries::from(raw);
     assert_eq!(entries.value_of(&int(5)), Some(&int(5)));
-    let clone = MapEntries::cloned_from(entries.to_vec(), &entries);
+    let clone = DictEntries::cloned_from(entries.to_vec(), &entries);
     assert_eq!(clone.value_of(&int(11)), Some(&int(11)));
 }
 
@@ -191,7 +191,7 @@ fn collected_entries_index_and_clone_with_their_index() {
 #[test]
 fn indexed_entries_stay_the_size_of_a_vec() {
     assert_eq!(
-        std::mem::size_of::<MapEntries>(),
+        std::mem::size_of::<DictEntries>(),
         std::mem::size_of::<Vec<(Value, Value)>>()
     );
     assert_eq!(

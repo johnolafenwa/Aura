@@ -23,7 +23,7 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, Once, OnceLock, Weak};
 use std::thread;
 use std::time::{Duration as StdDuration, Instant};
 
-pub use crate::collection_index::{MapEntries, SetElements};
+pub use crate::collection_index::{DictEntries, SetElements};
 use base64::Engine as _;
 use corosensei::stack::{DefaultStack, Stack};
 use corosensei::{Coroutine, CoroutineResult, Yielder};
@@ -2518,7 +2518,7 @@ pub fn try_clone_array_containing_value(value: &Value) -> Result<Value> {
                         state.completed = Some(Value::Map(MapValue {
                             key_type: map.key_type.clone(),
                             value_type: map.value_type.clone(),
-                            entries: MapEntries::cloned_from(entries, &map.entries),
+                            entries: DictEntries::cloned_from(entries, &map.entries),
                         }));
                     }
                 }
@@ -2595,7 +2595,7 @@ pub struct SetValue {
 pub struct MapValue {
     pub key_type: Type,
     pub value_type: Type,
-    pub entries: MapEntries,
+    pub entries: DictEntries,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -7075,7 +7075,7 @@ fn clone_json_runtime_tree(root: &Value) -> Option<Value> {
                             vec![Value::Map(MapValue {
                                 key_type: map.key_type.clone(),
                                 value_type: map.value_type.clone(),
-                                entries: MapEntries::cloned_from(entries, &map.entries),
+                                entries: DictEntries::cloned_from(entries, &map.entries),
                             })],
                         ));
                     }

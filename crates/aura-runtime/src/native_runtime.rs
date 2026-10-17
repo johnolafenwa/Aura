@@ -59,10 +59,10 @@ use crate::runtime_value::{
     wait_all_error, wait_all_ready, wait_all_timed_out, wait_any_cancelled, wait_any_error,
     wait_any_ready, wait_any_timed_out, wait_for_runtime_scheduler,
     yield_now_with_runtime_scheduler, ArrayBinaryOp, ArrayDType, ArrayReduction, ArrayValue,
-    CancellationContext, ChannelValue, ClosureCaptureValue, ClosureEnvironment, EnumVariantValue,
-    FfiHandleValue, FileValue, FloatPowerWidth, FunctionValue, HttpListenerValue,
+    CancellationContext, ChannelValue, ClosureCaptureValue, ClosureEnvironment, DictEntries,
+    EnumVariantValue, FfiHandleValue, FileValue, FloatPowerWidth, FunctionValue, HttpListenerValue,
     HttpResponseValue, InstanceValue, IntegerArithmeticMode, LightweightTaskFailureSignal,
-    MapEntries, MapValue, ProcessChildValue, ProcessChildWaitStatus, ProcessCompletedValue,
+    MapValue, ProcessChildValue, ProcessChildWaitStatus, ProcessCompletedValue,
     ProcessSupervisorValue, ProcessSupervisorWaitStatus, RangeValue, RecvValueResult, RngValue,
     RuntimeSchedulerWakeReason, SendValueError, SetElements, SetValue, TaskCancelledSignal,
     TaskGroupValue, TaskValue, TaskWaitStatus, TcpListenerValue, TcpStreamValue, TlsListenerValue,
@@ -6555,7 +6555,7 @@ pub extern "C-unwind" fn aura_direct_map_empty() -> *mut OpaqueValue {
         boxed_value(Value::Map(MapValue {
             key_type: Type::named("Unknown"),
             value_type: Type::named("Unknown"),
-            entries: MapEntries::new(),
+            entries: DictEntries::new(),
         }))
     })
 }

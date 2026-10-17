@@ -150,7 +150,7 @@ struct Large<T> {
 }
 
 /// The entries of a `dict`: key and value pairs.
-pub type MapEntries = IndexedEntries<(Value, Value)>;
+pub type DictEntries = IndexedEntries<(Value, Value)>;
 
 /// The members of a `set`.
 pub type SetElements = IndexedEntries<Value>;
@@ -405,7 +405,7 @@ impl<T: Keyed> IndexedEntries<T> {
     }
 }
 
-impl MapEntries {
+impl DictEntries {
     pub fn value_of(&self, key: &Value) -> Option<&Value> {
         self.find(key).map(|(_, value)| value)
     }

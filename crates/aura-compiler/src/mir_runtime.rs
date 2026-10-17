@@ -56,10 +56,10 @@ use crate::runtime_value::{
     wait_all_error, wait_all_ready, wait_all_timed_out, wait_any_cancelled, wait_any_error,
     wait_any_ready, wait_any_timed_out, wait_for_runtime_scheduler,
     yield_now_with_runtime_scheduler, ArrayBinaryOp, ArrayDType, ArrayReduction, ArrayValue,
-    CancellationContext, ChannelValue, ClosureCaptureValue, ClosureEnvironment, EnumVariantValue,
-    FfiHandleValue, FileValue, FloatPowerWidth, FunctionValue, HttpExchangeValue,
-    HttpListenerValue, HttpResponseValue, InstanceValue, IntegerArithmeticMode, MapEntries,
-    MapValue, ProcessChildValue, ProcessChildWaitStatus, ProcessCompletedValue, ProcessPipeValue,
+    CancellationContext, ChannelValue, ClosureCaptureValue, ClosureEnvironment, DictEntries,
+    EnumVariantValue, FfiHandleValue, FileValue, FloatPowerWidth, FunctionValue, HttpExchangeValue,
+    HttpListenerValue, HttpResponseValue, InstanceValue, IntegerArithmeticMode, MapValue,
+    ProcessChildValue, ProcessChildWaitStatus, ProcessCompletedValue, ProcessPipeValue,
     ProcessRestartPolicy, ProcessSupervisorValue, ProcessSupervisorWaitStatus, RangeValue,
     RecvValueResult, RngValue, RunOutput, RuntimeSchedulerWakeReason, SendValueError, SetElements,
     SetValue, TaskCancelledSignal, TaskGroupValue, TaskValue, TaskWaitStatus, TcpListenerValue,
@@ -1598,7 +1598,7 @@ enum EntryKeySelector {
 
 /// The position of the entry `key` selects. A key selector uses the hash
 /// index; an encoded selector compares each key's encoding.
-fn entry_key_position(entries: &MapEntries, key: &EntryKeySelector) -> Option<usize> {
+fn entry_key_position(entries: &DictEntries, key: &EntryKeySelector) -> Option<usize> {
     match key {
         EntryKeySelector::Key(key) => entries.position(key),
         EntryKeySelector::Encoded(_) => entries
@@ -4502,7 +4502,7 @@ impl MirRuntime {
                 key_type,
                 value_type,
             } => {
-                let mut values = MapEntries::new();
+                let mut values = DictEntries::new();
                 for entry in entries {
                     let key = self.evaluate_owned_operand(&entry.key, env)?;
                     let value = self.evaluate_owned_operand(&entry.value, env)?;
@@ -4769,7 +4769,7 @@ impl MirRuntime {
                     return Ok(Value::Map(MapValue {
                         key_type: Type::named("Unknown"),
                         value_type: Type::named("Unknown"),
-                        entries: MapEntries::new(),
+                        entries: DictEntries::new(),
                     }));
                 }
 
@@ -4909,7 +4909,7 @@ impl MirRuntime {
                             }))
                         }
                         ("dict", Some(Type::Named(_, args))) if args.len() == 2 => {
-                            let mut entries = MapEntries::new();
+                            let mut entries = DictEntries::new();
                             entries.try_reserve(minimum).map_err(|_| {
                                 Diagnostic::coded("AU4005", "dictionary capacity allocation failed")
                             })?;
