@@ -15,7 +15,7 @@
 use std::collections::TryReserveError;
 use std::hash::{BuildHasher, Hash, Hasher, RandomState};
 use std::ops::Deref;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
 use hashbrown::HashTable;
 
@@ -128,9 +128,9 @@ impl Keyed for (Value, Value) {
 /// The type derefs to a slice for reading. Mutation goes through methods
 /// that keep the index current, so a key can never change in place.
 ///
-/// A small collection is a bare `Vec`. A large one moves its entries and
-/// index behind one box, so the type stays the size of a `Vec` and adding
-/// it to `MapValue` and `SetValue` does not grow `Value`.
+/// A small collection is a `Vec`. A large one keeps its entries and index
+/// together. Either sits behind an `Arc`, so a clone shares the storage and
+/// the first write through a shared handle copies it. Reads never copy.
 #[derive(Debug)]
 pub struct IndexedEntries<T> {
     storage: Storage<T>,
@@ -138,11 +138,11 @@ pub struct IndexedEntries<T> {
 
 #[derive(Debug)]
 enum Storage<T> {
-    Small(Vec<T>),
-    Large(Box<Large<T>>),
+    Small(Arc<Vec<T>>),
+    Large(Arc<Large<T>>),
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct Large<T> {
     entries: Vec<T>,
     /// `(hash, position)` for each distinct key.
@@ -158,19 +158,17 @@ pub type SetElements = IndexedEntries<Value>;
 impl<T> Default for IndexedEntries<T> {
     fn default() -> Self {
         Self {
-            storage: Storage::Small(Vec::new()),
+            storage: Storage::Small(Arc::new(Vec::new())),
         }
     }
 }
 
-impl<T: Clone> Clone for IndexedEntries<T> {
+impl<T> Clone for IndexedEntries<T> {
+    /// Shares the storage. A later write copies it first.
     fn clone(&self) -> Self {
         let storage = match &self.storage {
-            Storage::Small(entries) => Storage::Small(entries.clone()),
-            Storage::Large(large) => Storage::Large(Box::new(Large {
-                entries: large.entries.clone(),
-                index: large.index.clone(),
-            })),
+            Storage::Small(entries) => Storage::Small(Arc::clone(entries)),
+            Storage::Large(large) => Storage::Large(Arc::clone(large)),
         };
         Self { storage }
     }
@@ -191,7 +189,7 @@ impl<T: PartialEq> PartialEq<Vec<T>> for IndexedEntries<T> {
     }
 }
 
-impl<T> IntoIterator for IndexedEntries<T> {
+impl<T: Clone> IntoIterator for IndexedEntries<T> {
     type Item = T;
     type IntoIter = std::vec::IntoIter<T>;
 
@@ -209,19 +207,19 @@ impl<'a, T> IntoIterator for &'a IndexedEntries<T> {
     }
 }
 
-impl<T: Keyed> From<Vec<T>> for IndexedEntries<T> {
+impl<T: Keyed + Clone> From<Vec<T>> for IndexedEntries<T> {
     /// Wraps entries the caller already holds. When two entries have equal
     /// keys, lookups find the first, as a scan of the same entries would.
     fn from(entries: Vec<T>) -> Self {
         let mut collection = Self {
-            storage: Storage::Small(entries),
+            storage: Storage::Small(Arc::new(entries)),
         };
         collection.rebuild_index();
         collection
     }
 }
 
-impl<T: Keyed> FromIterator<T> for IndexedEntries<T> {
+impl<T: Keyed + Clone> FromIterator<T> for IndexedEntries<T> {
     /// Collects entries the caller already holds, as [`From<Vec<T>>`] does.
     fn from_iter<I: IntoIterator<Item = T>>(entries: I) -> Self {
         Self::from(entries.into_iter().collect::<Vec<_>>())
@@ -236,20 +234,6 @@ impl<T> IndexedEntries<T> {
         }
     }
 
-    fn entries_mut(&mut self) -> &mut Vec<T> {
-        match &mut self.storage {
-            Storage::Small(entries) => entries,
-            Storage::Large(large) => &mut large.entries,
-        }
-    }
-
-    pub fn into_vec(self) -> Vec<T> {
-        match self.storage {
-            Storage::Small(entries) => entries,
-            Storage::Large(large) => large.entries,
-        }
-    }
-
     pub fn as_slice(&self) -> &[T] {
         self.entries()
     }
@@ -258,12 +242,37 @@ impl<T> IndexedEntries<T> {
         self.entries().capacity()
     }
 
+    /// Whether another handle shares this storage.
+    pub fn is_shared(&self) -> bool {
+        match &self.storage {
+            Storage::Small(entries) => Arc::strong_count(entries) > 1,
+            Storage::Large(large) => Arc::strong_count(large) > 1,
+        }
+    }
+}
+
+impl<T: Clone> IndexedEntries<T> {
+    /// The entries for writing. Shared storage is copied first.
+    fn entries_mut(&mut self) -> &mut Vec<T> {
+        match &mut self.storage {
+            Storage::Small(entries) => Arc::make_mut(entries),
+            Storage::Large(large) => &mut Arc::make_mut(large).entries,
+        }
+    }
+
+    pub fn into_vec(self) -> Vec<T> {
+        match self.storage {
+            Storage::Small(entries) => Arc::unwrap_or_clone(entries),
+            Storage::Large(large) => Arc::unwrap_or_clone(large).entries,
+        }
+    }
+
     pub fn try_reserve(&mut self, additional: usize) -> Result<(), TryReserveError> {
         self.entries_mut().try_reserve(additional)
     }
 }
 
-impl<T: Keyed> IndexedEntries<T> {
+impl<T: Keyed + Clone> IndexedEntries<T> {
     pub fn new() -> Self {
         Self::default()
     }
@@ -273,7 +282,7 @@ impl<T: Keyed> IndexedEntries<T> {
     pub fn cloned_from(entries: Vec<T>, source: &Self) -> Self {
         match &source.storage {
             Storage::Large(large) if entries.len() == large.entries.len() => Self {
-                storage: Storage::Large(Box::new(Large {
+                storage: Storage::Large(Arc::new(Large {
                     entries,
                     index: large.index.clone(),
                 })),
@@ -310,12 +319,14 @@ impl<T: Keyed> IndexedEntries<T> {
     pub fn push_new(&mut self, entry: T) {
         match &mut self.storage {
             Storage::Small(entries) => {
+                let entries = Arc::make_mut(entries);
                 entries.push(entry);
                 if entries.len() > INDEX_THRESHOLD {
                     self.rebuild_index();
                 }
             }
             Storage::Large(large) => {
+                let large = Arc::make_mut(large);
                 let position = large.entries.len();
                 let hash = hash_value(entry.key());
                 large.entries.push(entry);
@@ -329,8 +340,9 @@ impl<T: Keyed> IndexedEntries<T> {
     /// Removes the entry at `position` and keeps the order of the rest.
     pub fn shift_remove_at(&mut self, position: usize) -> T {
         let removed = match &mut self.storage {
-            Storage::Small(entries) => return entries.remove(position),
+            Storage::Small(entries) => return Arc::make_mut(entries).remove(position),
             Storage::Large(large) => {
+                let large = Arc::make_mut(large);
                 let removed = large.entries.remove(position);
                 let hash = hash_value(removed.key());
                 if let Ok(found) = large
@@ -363,11 +375,20 @@ impl<T: Keyed> IndexedEntries<T> {
 
     pub fn clear(&mut self) {
         match &mut self.storage {
-            Storage::Small(entries) => entries.clear(),
+            Storage::Small(entries) => match Arc::get_mut(entries) {
+                Some(entries) => entries.clear(),
+                None => *entries = Arc::new(Vec::new()),
+            },
             Storage::Large(large) => {
-                let mut entries = std::mem::take(&mut large.entries);
-                entries.clear();
-                self.storage = Storage::Small(entries);
+                let entries = match Arc::get_mut(large) {
+                    Some(large) => {
+                        let mut entries = std::mem::take(&mut large.entries);
+                        entries.clear();
+                        entries
+                    }
+                    None => Vec::new(),
+                };
+                self.storage = Storage::Small(Arc::new(entries));
             }
         }
     }
@@ -382,11 +403,11 @@ impl<T: Keyed> IndexedEntries<T> {
     /// index from the entries.
     fn rebuild_index(&mut self) {
         let entries = match &mut self.storage {
-            Storage::Small(entries) => std::mem::take(entries),
-            Storage::Large(large) => std::mem::take(&mut large.entries),
+            Storage::Small(entries) => std::mem::take(Arc::make_mut(entries)),
+            Storage::Large(large) => std::mem::take(&mut Arc::make_mut(large).entries),
         };
         if entries.len() <= INDEX_THRESHOLD {
-            self.storage = Storage::Small(entries);
+            self.storage = Storage::Small(Arc::new(entries));
             return;
         }
         let mut index = HashTable::with_capacity(entries.len());
@@ -401,7 +422,7 @@ impl<T: Keyed> IndexedEntries<T> {
                 index.insert_unique(hash, (hash, position), |&(hash, _)| hash);
             }
         }
-        self.storage = Storage::Large(Box::new(Large { entries, index }));
+        self.storage = Storage::Large(Arc::new(Large { entries, index }));
     }
 }
 

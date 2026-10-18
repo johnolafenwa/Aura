@@ -189,13 +189,53 @@ fn collected_entries_index_and_clone_with_their_index() {
 }
 
 #[test]
-fn indexed_entries_stay_the_size_of_a_vec() {
-    assert_eq!(
-        std::mem::size_of::<DictEntries>(),
-        std::mem::size_of::<Vec<(Value, Value)>>()
-    );
-    assert_eq!(
-        std::mem::size_of::<SetElements>(),
-        std::mem::size_of::<Vec<Value>>()
-    );
+fn indexed_entries_stay_no_larger_than_a_vec() {
+    assert!(std::mem::size_of::<DictEntries>() <= std::mem::size_of::<Vec<(Value, Value)>>());
+    assert!(std::mem::size_of::<SetElements>() <= std::mem::size_of::<Vec<Value>>());
+}
+
+#[test]
+fn clones_share_storage_until_a_write() {
+    for size in [3, INDEX_THRESHOLD * 4] {
+        let original: DictEntries = (0..size as i64)
+            .map(|index| (int(index), text("v")))
+            .collect();
+        let mut copy = original.clone();
+        assert!(original.is_shared() && copy.is_shared());
+        assert_eq!(copy.as_slice().as_ptr(), original.as_slice().as_ptr());
+
+        copy.insert(int(0), text("changed"));
+        assert!(!original.is_shared() && !copy.is_shared());
+        assert_eq!(original.value_of(&int(0)), Some(&text("v")));
+        assert_eq!(copy.value_of(&int(0)), Some(&text("changed")));
+
+        let mut grown = original.clone();
+        grown.insert(int(size as i64), text("new"));
+        assert_eq!(original.len(), size);
+        assert_eq!(grown.len(), size + 1);
+        assert!(!original.contains_key(&int(size as i64)));
+
+        let mut removed = original.clone();
+        removed.shift_remove(&int(1));
+        assert_eq!(removed.position(&int(2)), Some(1));
+        assert_eq!(original.position(&int(2)), Some(2));
+
+        let mut popped = original.clone();
+        assert!(popped.pop().is_some());
+        assert_eq!(original.len(), size);
+
+        let mut written = original.clone();
+        *written.value_at_mut(0) = text("w");
+        assert_eq!(original.value_of(&int(0)), Some(&text("v")));
+
+        let mut cleared = original.clone();
+        cleared.clear();
+        assert!(cleared.is_empty());
+        assert_eq!(original.len(), size);
+        assert_eq!(original.clone().into_vec().len(), size);
+
+        let mut reserved = original.clone();
+        reserved.try_reserve(4).expect("reserve");
+        assert!(!original.is_shared());
+    }
 }
