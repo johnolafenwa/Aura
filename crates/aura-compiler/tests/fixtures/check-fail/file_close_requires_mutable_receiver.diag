@@ -1,0 +1,6 @@
+error[AU3003]: method `close` requires a mutable receiver
+ --> crates/aura-compiler/tests/fixtures/check-fail/file_close_requires_mutable_receiver.au:6:10
+  |
+6 |     file.close()
+  |          ^
+  = help: declare the receiver place with `mut` before calling a mutating method

@@ -1,7 +1,8 @@
 import fs
 
 def consume(file: own fs.File):
-    file.close()
+    with handle = file:
+        pass
 
 def launch(group: TaskGroup, file: own fs.File):
     group.start_soon(consume, file)

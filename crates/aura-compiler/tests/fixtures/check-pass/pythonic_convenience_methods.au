@@ -10,7 +10,7 @@ def run_process_examples() -> Result[None, process.Error]:
     print(completed.stdout().trim())
 
     with child = try process.start(["/bin/cat"], stdin=process.pipe(), stdout=process.pipe(), stderr=process.null()):
-        match child.stdin():
+        match own child.stdin():
             case process.Pipe as stdin_pipe:
                 try stdin_pipe.write_all("ping\n", timeout=500ms)
                 try stdin_pipe.flush()
@@ -19,7 +19,7 @@ def run_process_examples() -> Result[None, process.Error]:
                 print("missing stdin")
                 return Result.Ok(None)
 
-        match child.stdout():
+        match own child.stdout():
             case process.Pipe as stdout_pipe:
                 line = try stdout_pipe.read_line(timeout=500ms)
                 match own line:

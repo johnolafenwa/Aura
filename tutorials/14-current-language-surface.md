@@ -618,7 +618,7 @@ Bytes are represented as `list[uint8]`.
 | API | Members |
 |-----|---------|
 | `io` | `io.write(...)`, `io.flush()`, `io.read_line()` |
-| `fs` | `fs.exists(...)`, `fs.read_to_string(...)`, `fs.read_bytes(...)`, `fs.write_string(...)`, `fs.write_bytes(...)`, `fs.append_string(...)`, `fs.append_bytes(...)`, `fs.create_dir(...)`, `fs.read_dir(...)`, `fs.remove_file(...)`, `fs.open(...)`, `fs.create(...)`, `fs.append(...)` |
+| `fs` | `fs.exists(...)`, `fs.read_to_string(...)`, `fs.read_bytes(...)`, `fs.write_string(...)`, `fs.write_bytes(...)`, `fs.append_string(...)`, `fs.append_bytes(...)`, `fs.create_dir(...)`, `fs.read_dir(...)`, `fs.remove_file(...)`, `fs.rename(...)`, `fs.open(...)`, `fs.create(...)`, `fs.append(...)` |
 | `fs.File` | `read_all()`, `read_bytes()`, `write_all(...)`, `write_bytes(...)`, `flush()`, `close()` |
 | `net` | `net.connect(...)`, `net.connect_timeout(...)`, `net.listen(...)`, `net.udp_bind(...)`, `net.http_listen(...)`, `net.http_request_text(...)`, `net.http_request_text_timeout(...)`, `net.http_request_bytes(...)`, `net.http_request_bytes_timeout(...)`, `net.websocket_listen(...)`, `net.websocket_connect(...)`, `net.websocket_connect_timeout(...)`, `net.unix_listen(...)`, `net.unix_connect(...)`, `net.unix_connect_timeout(...)`, `net.tls_listen(...)`, `net.tls_connect(...)`, `net.tls_connect_timeout(...)` |
 | `net.TcpListener` | `accept(timeout=...)`, `local_addr()`, `close()` |

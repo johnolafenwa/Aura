@@ -1,0 +1,36 @@
+import fs
+import io
+
+# Write the new contents beside the target, force them to storage, then
+# rename the temporary file over the target in one step.
+def save(path: str, text: str) -> Result[None, io.Error]:
+    temporary = f"{path}.tmp"
+    with file = try fs.create(temporary.clone()):
+        try file.write_all(text)
+        try file.sync()
+    try fs.rename(temporary, path)
+    return Result.Ok(None)
+
+def run() -> Result[None, io.Error]:
+    path = "/tmp/aura-atomic-save-example.txt"
+    try save(path.clone(), "first\n")
+    try save(path.clone(), "second\n")
+    print((try fs.read_to_string(path.clone())).trim())
+    print(fs.exists(f"{path}.tmp"))
+
+    match fs.rename("/tmp/aura-atomic-save-missing.txt", path.clone()):
+        case Result.Ok(_):
+            print("unexpected rename")
+        case Result.Err(error):
+            print(error)
+
+    try fs.remove_file(path)
+    return Result.Ok(None)
+
+def main() -> int32:
+    match run():
+        case Result.Ok(_):
+            return 0
+        case Result.Err(error):
+            print(error)
+            return 1

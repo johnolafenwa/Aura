@@ -1,0 +1,7 @@
+error[AU3003]: method `write_all` requires a mutable receiver, but `file` is bound by a shared match on `self.file`
+ --> crates/aura-compiler/tests/fixtures/check-fail/shared_match_file_write_requires_match_mut.au:10:26
+   |
+10 |                 try file.write_all(line)
+   |                          ^
+  = related crates/aura-compiler/tests/fixtures/check-fail/shared_match_file_write_requires_match_mut.au:9:29: shared match binding is declared here
+  = help: write `match mut self.file` to update the scrutinee in place, or `match own self.file` to consume it

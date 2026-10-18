@@ -10829,6 +10829,36 @@ pub extern "C-unwind" fn aura_direct_fs_read_dir(path: *mut OpaqueValue) -> *mut
 }
 
 #[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_fs_rename(
+    source: *mut OpaqueValue,
+    target: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let source = match unsafe { value_ref(source) } {
+            Value::String(source) => source.clone(),
+            other => runtime_error(format!(
+                "expected `str`, found `{}`",
+                value_type_name(other)
+            )),
+        };
+        let target = match unsafe { value_ref(target) } {
+            Value::String(target) => target.clone(),
+            other => runtime_error(format!(
+                "expected `str`, found `{}`",
+                value_type_name(other)
+            )),
+        };
+        match run_blocking_io(
+            move || std::fs::rename(source, target),
+            Some(&current_cancellation()),
+        ) {
+            Ok(()) => boxed_value(result_ok(Value::Unit)),
+            Err(error) => boxed_value(result_err(io_error(error))),
+        }
+    })
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_fs_remove_file(path: *mut OpaqueValue) -> *mut OpaqueValue {
     task_runtime_boundary(|| match unsafe { value_ref(path) } {
         Value::String(path) => match run_blocking_io(
@@ -10965,6 +10995,20 @@ pub extern "C-unwind" fn aura_direct_file_write_bytes(
 pub extern "C-unwind" fn aura_direct_file_flush(file: *mut OpaqueValue) -> *mut OpaqueValue {
     task_runtime_boundary(|| match unsafe { value_ref(file) } {
         Value::File(file) => match file.flush() {
+            Ok(()) => boxed_value(result_ok(Value::Unit)),
+            Err(error) => boxed_value(result_err(io_error(error))),
+        },
+        other => runtime_error(format!(
+            "expected `fs.File`, found `{}`",
+            value_type_name(other)
+        )),
+    })
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_file_sync(file: *mut OpaqueValue) -> *mut OpaqueValue {
+    task_runtime_boundary(|| match unsafe { value_ref(file) } {
+        Value::File(file) => match file.sync() {
             Ok(()) => boxed_value(result_ok(Value::Unit)),
             Err(error) => boxed_value(result_err(io_error(error))),
         },

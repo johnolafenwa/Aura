@@ -4151,7 +4151,8 @@ impl<'a> AnalysisBuilder<'a> {
                 )),
                 BuiltinMember::FileWriteAll
                 | BuiltinMember::FileWriteBytes
-                | BuiltinMember::FileFlush => Some(Type::Named(
+                | BuiltinMember::FileFlush
+                | BuiltinMember::FileSync => Some(Type::Named(
                     "Result".to_string(),
                     vec![Type::Unit, Type::Named("io.Error".to_string(), Vec::new())],
                 )),
@@ -7595,6 +7596,7 @@ fn builtin_member_completions(receiver_type: &Type) -> Vec<AnalysisCompletion> {
         BuiltinMember::FileWriteAll,
         BuiltinMember::FileWriteBytes,
         BuiltinMember::FileFlush,
+        BuiltinMember::FileSync,
         BuiltinMember::FileClose,
         BuiltinMember::TcpListenerAccept,
         BuiltinMember::TcpListenerLocalAddr,

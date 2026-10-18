@@ -65,6 +65,7 @@ pub(crate) fn has_runtime_named_function(name: &str) -> bool {
                 | "fs::create_dir"
                 | "fs::read_dir"
                 | "fs::remove_file"
+                | "fs::rename"
                 | "fs::open"
                 | "fs::create"
                 | "fs::append"
@@ -25136,9 +25137,13 @@ impl<'a> Lowerer<'a> {
                 "Result".to_string(),
                 vec![bytes_ty.clone(), io_error_ty.clone()],
             )),
-            ("fs.File", "write_all") | ("fs.File", "write_bytes") | ("fs.File", "flush") => Some(
-                Type::Named("Result".to_string(), vec![Type::Unit, io_error_ty.clone()]),
-            ),
+            ("fs.File", "write_all")
+            | ("fs.File", "write_bytes")
+            | ("fs.File", "flush")
+            | ("fs.File", "sync") => Some(Type::Named(
+                "Result".to_string(),
+                vec![Type::Unit, io_error_ty.clone()],
+            )),
             ("fs.File", "close") => Some(Type::Unit),
             ("process.Completed", "status") => Some(Type::named("process.ExitStatus")),
             ("process.Completed", "success") => Some(Type::named("bool")),

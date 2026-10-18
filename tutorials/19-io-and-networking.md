@@ -74,6 +74,7 @@ The one-shot helpers work on text, bytes, and directories:
 - `fs.create_dir(path)`
 - `fs.read_dir(path)`
 - `fs.remove_file(path)`
+- `fs.rename(source, target)`
 
 For a scoped handle, call one of these constructors:
 
@@ -89,6 +90,7 @@ has these members:
 - `write_all(text)`
 - `write_bytes(bytes)`
 - `flush()`
+- `sync()`
 - `close()`
 
 This function reads a whole file as text:

@@ -1,0 +1,14 @@
+import fs
+import io
+
+def run(path: str) -> Result[None, io.Error]:
+    file = try fs.create(path)
+    file.close()
+    return Result.Ok(None)
+
+def main() -> int32:
+    match run("out.txt"):
+        case Result.Ok(_):
+            return 0
+        case Result.Err(_):
+            return 1

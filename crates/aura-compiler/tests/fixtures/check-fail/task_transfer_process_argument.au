@@ -1,7 +1,8 @@
 import process
 
 def consume(child: own process.Child):
-    child.close()
+    with handle = child:
+        pass
 
 def launch(group: TaskGroup, child: own process.Child):
     group.start_soon(consume, child)

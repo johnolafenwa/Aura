@@ -784,6 +784,7 @@ struct NativeCodegen<'a> {
     fs_create_dir: FuncId,
     fs_read_dir: FuncId,
     fs_remove_file: FuncId,
+    fs_rename: FuncId,
     fs_open: FuncId,
     fs_create: FuncId,
     fs_append: FuncId,
@@ -792,6 +793,7 @@ struct NativeCodegen<'a> {
     file_write_all: FuncId,
     file_write_bytes: FuncId,
     file_flush: FuncId,
+    file_sync: FuncId,
     file_close: FuncId,
     process_inherit: FuncId,
     process_null: FuncId,
@@ -1332,6 +1334,7 @@ impl<'a> NativeCodegen<'a> {
             fs_create_dir => ("aura_direct_fs_create_dir", [types::I64], Some(types::I64)),
             fs_read_dir => ("aura_direct_fs_read_dir", [types::I64], Some(types::I64)),
             fs_remove_file => ("aura_direct_fs_remove_file", [types::I64], Some(types::I64)),
+            fs_rename => ("aura_direct_fs_rename", [types::I64, types::I64], Some(types::I64)),
             fs_open => ("aura_direct_fs_open", [types::I64], Some(types::I64)),
             fs_create => ("aura_direct_fs_create", [types::I64], Some(types::I64)),
             fs_append => ("aura_direct_fs_append", [types::I64], Some(types::I64)),
@@ -1340,6 +1343,7 @@ impl<'a> NativeCodegen<'a> {
             file_write_all => ("aura_direct_file_write_all", [types::I64, types::I64], Some(types::I64)),
             file_write_bytes => ("aura_direct_file_write_bytes", [types::I64, types::I64], Some(types::I64)),
             file_flush => ("aura_direct_file_flush", [types::I64], Some(types::I64)),
+            file_sync => ("aura_direct_file_sync", [types::I64], Some(types::I64)),
             file_close => ("aura_direct_file_close", [types::I64], Some(types::I64)),
             process_inherit => ("aura_direct_process_inherit", [], Some(types::I64)),
             process_null => ("aura_direct_process_null", [], Some(types::I64)),
@@ -1846,6 +1850,7 @@ impl<'a> NativeCodegen<'a> {
             fs_create_dir,
             fs_read_dir,
             fs_remove_file,
+            fs_rename,
             fs_open,
             fs_create,
             fs_append,
@@ -1854,6 +1859,7 @@ impl<'a> NativeCodegen<'a> {
             file_write_all,
             file_write_bytes,
             file_flush,
+            file_sync,
             file_close,
             process_inherit,
             process_null,
@@ -3022,6 +3028,9 @@ impl<'a> NativeCodegen<'a> {
         let fs_remove_file = self
             .object
             .declare_func_in_func(self.fs_remove_file, builder.func);
+        let fs_rename = self
+            .object
+            .declare_func_in_func(self.fs_rename, builder.func);
         let fs_open = self.object.declare_func_in_func(self.fs_open, builder.func);
         let fs_create = self
             .object
@@ -3044,6 +3053,9 @@ impl<'a> NativeCodegen<'a> {
         let file_flush = self
             .object
             .declare_func_in_func(self.file_flush, builder.func);
+        let file_sync = self
+            .object
+            .declare_func_in_func(self.file_sync, builder.func);
         let file_close = self
             .object
             .declare_func_in_func(self.file_close, builder.func);
@@ -3676,6 +3688,7 @@ impl<'a> NativeCodegen<'a> {
             fs_create_dir,
             fs_read_dir,
             fs_remove_file,
+            fs_rename,
             fs_open,
             fs_create,
             fs_append,
@@ -3684,6 +3697,7 @@ impl<'a> NativeCodegen<'a> {
             file_write_all,
             file_write_bytes,
             file_flush,
+            file_sync,
             file_close,
             process_inherit,
             process_null,
@@ -5119,6 +5133,7 @@ struct FunctionCompiler<'a> {
     fs_create_dir: cranelift_codegen::ir::FuncRef,
     fs_read_dir: cranelift_codegen::ir::FuncRef,
     fs_remove_file: cranelift_codegen::ir::FuncRef,
+    fs_rename: cranelift_codegen::ir::FuncRef,
     fs_open: cranelift_codegen::ir::FuncRef,
     fs_create: cranelift_codegen::ir::FuncRef,
     fs_append: cranelift_codegen::ir::FuncRef,
@@ -5127,6 +5142,7 @@ struct FunctionCompiler<'a> {
     file_write_all: cranelift_codegen::ir::FuncRef,
     file_write_bytes: cranelift_codegen::ir::FuncRef,
     file_flush: cranelift_codegen::ir::FuncRef,
+    file_sync: cranelift_codegen::ir::FuncRef,
     file_close: cranelift_codegen::ir::FuncRef,
     process_inherit: cranelift_codegen::ir::FuncRef,
     process_null: cranelift_codegen::ir::FuncRef,
@@ -8628,6 +8644,7 @@ impl<'a> FunctionCompiler<'a> {
                 | "fs::create_dir"
                 | "fs::read_dir"
                 | "fs::remove_file"
+                | "fs::rename"
                 | "fs::open"
                 | "fs::create"
                 | "fs::append"
@@ -9298,6 +9315,7 @@ impl<'a> FunctionCompiler<'a> {
             "net::websocket_connect" => &["url"],
             "fs::write_string" | "fs::append_string" => &["path", "text"],
             "fs::write_bytes" | "fs::append_bytes" => &["path", "bytes"],
+            "fs::rename" => &["source", "target"],
             "net::connect_timeout" => &["address", "timeout"],
             "net::unix_connect_timeout" => &["path", "timeout"],
             "net::websocket_connect_timeout" => &["url", "timeout"],
@@ -9329,6 +9347,7 @@ impl<'a> FunctionCompiler<'a> {
             "fs::create_dir" => self.fs_create_dir,
             "fs::read_dir" => self.fs_read_dir,
             "fs::remove_file" => self.fs_remove_file,
+            "fs::rename" => self.fs_rename,
             "fs::open" => self.fs_open,
             "fs::create" => self.fs_create,
             "fs::append" => self.fs_append,
@@ -9425,7 +9444,7 @@ impl<'a> FunctionCompiler<'a> {
                 ),
             )),
             "fs::write_string" | "fs::write_bytes" | "fs::append_string" | "fs::append_bytes"
-            | "fs::create_dir" | "fs::remove_file" => Ok(self.owned_opaque_result(
+            | "fs::create_dir" | "fs::remove_file" | "fs::rename" => Ok(self.owned_opaque_result(
                 results,
                 Type::Named("Result".to_string(), vec![Type::Unit, io_error_ty.clone()]),
             )),
@@ -15416,6 +15435,21 @@ impl<'a> FunctionCompiler<'a> {
                             ),
                         ))
                     }
+                    "sync" => {
+                        if !args.is_empty() {
+                            return Err(
+                                "direct backend expected `sync()` to take no arguments".to_string()
+                            );
+                        }
+                        let inst = self.builder.ins().call(self.file_sync, &[object.values[0]]);
+                        Ok(self.owned_opaque_result(
+                            self.builder.inst_results(inst).to_vec(),
+                            Type::Named(
+                                "Result".to_string(),
+                                vec![Type::Unit, Type::Named("io.Error".to_string(), Vec::new())],
+                            ),
+                        ))
+                    }
                     "close" => {
                         if !args.is_empty() {
                             return Err("direct backend expected `close()` to take no arguments"
@@ -19747,6 +19781,7 @@ fn infer_rvalue_type(
                         | "fs::append_bytes"
                         | "fs::create_dir"
                         | "fs::remove_file"
+                        | "fs::rename"
                 ) =>
             {
                 Some(DirectType::Opaque(Type::Named(
@@ -20396,15 +20431,16 @@ fn builtin_opaque_member_return_type(
             ),
             classes,
         ),
-        ("fs.File", "write_all") | ("fs.File", "write_bytes") | ("fs.File", "flush") => {
-            direct_type(
-                &Type::Named(
-                    "Result".to_string(),
-                    vec![Type::Unit, Type::Named("io.Error".to_string(), Vec::new())],
-                ),
-                classes,
-            )
-        }
+        ("fs.File", "write_all")
+        | ("fs.File", "write_bytes")
+        | ("fs.File", "flush")
+        | ("fs.File", "sync") => direct_type(
+            &Type::Named(
+                "Result".to_string(),
+                vec![Type::Unit, Type::Named("io.Error".to_string(), Vec::new())],
+            ),
+            classes,
+        ),
         ("fs.File", "close") => Some(DirectType::Scalar(ScalarKind::Unit)),
         ("process.Child", "stdin") | ("process.Child", "stdout") | ("process.Child", "stderr") => {
             direct_type(

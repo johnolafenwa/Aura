@@ -20,6 +20,17 @@ in this file.
   public functions or methods on the MIR backend. Constructing or calling a
   private class there used to fail with `AU4001` "unknown MIR class". The
   native backend was not affected.
+- `fs.rename(source, target)` renames or moves a file and replaces an
+  existing target. `fs.File.sync()` flushes a file and waits until its data
+  reaches storage. Together they write a file atomically. See
+  `examples/io/atomic_save.au`.
+- Source change: the checker enforces the documented mutable receiver for
+  every file, process, and network resource method. A `close()`, `flush()`,
+  or write through a binding from a bare `match`, or through an immutable
+  local or parameter, now fails with `AU3003` at check time. It used to
+  pass the checker and fail later with `AU4001` "mutates through shared
+  loan", or run on the MIR backend for an enum payload. Use `match own` or
+  `match mut` for a match binding, and `mut` or `with` for a local.
 
 ## VS Code extension 0.4.1 — 2026-10-16
 

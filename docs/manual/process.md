@@ -137,7 +137,7 @@ def close_stdin(child: process.Child) -> Result[None, process.Error]:
     return Result.Ok(None)
 ```
 
-The accessor returns an owned `process.Pipe | None`. `match own` moves the pipe out of that result, so the arm holds an owned resource that it can write, flush, and close. A bare `match` would bind only a shared view of the pipe.
+The accessor returns an owned `process.Pipe | None`. `match own` moves the pipe out of that result, so the arm holds an owned resource that it can write, flush, and close. A bare `match` binds only a shared view of the pipe. The checker rejects a write, flush, or close through that view with `AU3003` and suggests `match own`.
 
 ## process.Completed
 

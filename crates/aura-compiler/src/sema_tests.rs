@@ -11224,9 +11224,11 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
         ("completed", Type::named("process.Completed")),
         ("supervisor", Type::named("process.Supervisor")),
     ] {
+        // Resource methods that write or close need a mutable place
+        // (ADR-0061 H1), so each resource is a `mut` local here.
         locals.insert(
             name.to_string(),
-            local_binding(ty, false, false, ReceiverKind::Value, false, &[]),
+            local_binding(ty, true, true, ReceiverKind::Value, false, &[]),
         );
     }
     locals.insert(

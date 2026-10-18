@@ -2,7 +2,7 @@ import net
 import process
 
 def main() -> int32:
-    match net.connect_timeout("127.0.0.1:9", Duration.ms(-1)):
+    match own net.connect_timeout("127.0.0.1:9", Duration.ms(-1)):
         case Result.Ok(stream):
             stream.close()
             print("network negative: unexpected")
@@ -11,7 +11,7 @@ def main() -> int32:
             print("network negative")
             print(error)
 
-    match net.connect_timeout("127.0.0.1:9", Duration.seconds(9223372036854775807)):
+    match own net.connect_timeout("127.0.0.1:9", Duration.seconds(9223372036854775807)):
         case Result.Ok(stream):
             stream.close()
             print("network deadline: unexpected")

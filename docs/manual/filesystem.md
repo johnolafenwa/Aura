@@ -23,6 +23,7 @@ Every filesystem API returns `Result[..., io.Error]`, except `fs.exists(...)`, w
 | `fs.create_dir` | `create_dir(path: str) -> Result[None, io.Error]` | Creates one directory. The parent directories must already exist. |
 | `fs.read_dir` | `read_dir(path: str) -> Result[list[str], io.Error]` | Returns the names of the directory's immediate entries, sorted. A name that is not valid UTF-8 is converted lossily. |
 | `fs.remove_file` | `remove_file(path: str) -> Result[None, io.Error]` | Removes a file. |
+| `fs.rename` | `rename(source: str, target: str) -> Result[None, io.Error]` | Renames or moves `source` to `target`. An existing file at `target` is replaced. |
 | `fs.open` | `open(path: str) -> Result[fs.File, io.Error]` | Opens a file for reading. |
 | `fs.create` | `create(path: str) -> Result[fs.File, io.Error]` | Creates or truncates a file for writing. |
 | `fs.append` | `append(path: str) -> Result[fs.File, io.Error]` | Opens a file for appending. Creates it if needed. |
@@ -50,6 +51,7 @@ def show_file() -> Result[None, io.Error]:
 | `write_all` | `write_all(text: str) -> Result[None, io.Error]` | Writes all of `text` to the file. |
 | `write_bytes` | `write_bytes(bytes: list[uint8]) -> Result[None, io.Error]` | Writes all the raw bytes to the file. |
 | `flush` | `flush() -> Result[None, io.Error]` | Flushes pending writes to the operating system. |
+| `sync` | `sync() -> Result[None, io.Error]` | Flushes pending writes, then waits until the file's data and metadata reach storage. This is `fsync`. |
 | `close` | `close() -> None` | Closes the handle. Any later use is invalid. |
 
 ## Text And Bytes
@@ -92,6 +94,14 @@ def append_line(path: str, line: str) -> Result[None, io.Error]:
     return Result.Ok(None)
 ```
 
+## Example: Replace A File Atomically
+
+Write the new contents to a temporary file, call `sync()`, and rename it over the target. A reader then sees either the old file or the new one, never a partial write.
+
+<<< ../../examples/io/atomic_save.au{aura}
+
+`fs.rename` is atomic when `source` and `target` are on the same filesystem. Across filesystems it fails with an `io.Error`. To make the rename itself survive a power loss, the host must also sync the parent directory. Aura has no directory sync call.
+
 ## Error Handling
 
 Filesystem errors are `io.Error` values. Match the variants when the program has a different policy for each case:
@@ -120,7 +130,7 @@ The signatures in the one-shot and `fs.File` tables are normative.
 - Text reads produce `str`. Binary reads produce `list[uint8]`.
 - `fs.open`, `fs.create`, and `fs.append` produce `fs.File`, a non-copy resource type.
 
-`fs.File.write_all`, `write_bytes`, `flush`, and `close` need a mutable receiver place. `read_all` and `read_bytes` work through a shared receiver, even though the host file cursor advances.
+`fs.File.write_all`, `write_bytes`, `flush`, `sync`, and `close` need a mutable receiver place. `read_all` and `read_bytes` work through a shared receiver, even though the host file cursor advances.
 
 The ordinary static rules check a method called on the wrong type, a wrong argument type, and an ignored `Result` where a `try` expression needs one.
 
@@ -132,6 +142,7 @@ Each one-shot operation performs the host filesystem action in the table:
 - The append operations create the file when it is absent and otherwise append to it.
 - `create_dir` creates only one directory.
 - `read_dir` returns the sorted names of immediate entries.
+- `rename` replaces an existing target file in one host operation.
 - `fs.exists` turns any metadata error into `false` by design.
 
 Text is strict UTF-8. Invalid text and reads over 256 MiB return `io.Error.InvalidData`. Byte reads keep the bytes as they are.
@@ -146,7 +157,7 @@ Call arguments are evaluated left to right. The filesystem API shares path, text
 
 `with` owns the bound resource for its lexical scope. It closes the resource exactly once, whether the scope exits normally or by early return, loop transfer, or error propagation. Cleanup runs after the body and does not undo host I/O that already finished.
 
-The shared read methods use interior host state for the file cursor. The write, flush, and close methods mutate, so they need a mutable receiver binding.
+The shared read methods use interior host state for the file cursor. The write, flush, sync, and close methods mutate, so they need a mutable receiver binding. A binding from a bare `match` is shared, so write `match own` or `match mut` before calling them.
 
 ## Diagnostics
 
@@ -179,7 +190,8 @@ Aura 0.4 has none of these:
 - chunked file reading
 - recursive directory operations
 - transactional writes
-- an atomic replace helper
+- a one-call atomic replace helper. Use `sync()` and `fs.rename` as shown above.
+- a directory sync call
 - memory mapping
 - filesystem watchers
 - a permission API

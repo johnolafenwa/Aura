@@ -7398,6 +7398,14 @@ fn mir_runtime_resource_member_helpers_cover_io_process_and_network_paths() {
         ),
         Value::Unit
     );
+    assert_eq!(
+        result_ok_payload(
+            runtime
+                .evaluate_file_method(write_file.clone(), "sync", &[], &mut env)
+                .expect("file sync should succeed")
+        ),
+        Value::Unit
+    );
     let bad_file_write = runtime
         .evaluate_file_method(
             write_file.clone(),
@@ -11108,6 +11116,12 @@ fn mir_runtime_builtin_io_calls_cover_process_filesystem_and_network_paths() {
         Type::named("str"),
         Value::String(write_path.to_string_lossy().into_owned()),
     );
+    let renamed_path = format!("{}.renamed", read_path.to_string_lossy());
+    env.define_typed(
+        "renamed_path",
+        Type::named("str"),
+        Value::String(renamed_path.clone()),
+    );
     env.define_typed(
         "bytes_path",
         Type::named("str"),
@@ -11303,10 +11317,39 @@ fn mir_runtime_builtin_io_calls_cover_process_filesystem_and_network_paths() {
         result_ok_payload(
             call_name(
                 &mut runtime,
+                "fs::rename",
+                &[
+                    mir_arg(Some("source"), Operand::Place("read_path".to_string())),
+                    mir_arg(Some("target"), Operand::Place("renamed_path".to_string())),
+                ],
+                &mut env,
+            )
+            .expect("fs.rename should succeed")
+        ),
+        Value::Unit
+    );
+    assert!(!read_path.exists());
+    assert!(matches!(
+        call_name(
+            &mut runtime,
+            "fs::rename",
+            &[
+                mir_arg(Some("source"), Operand::Place("read_path".to_string())),
+                mir_arg(Some("target"), Operand::Place("renamed_path".to_string())),
+            ],
+            &mut env,
+        )
+        .expect("fs.rename of a missing source returns a typed error"),
+        Value::EnumVariant(_)
+    ));
+    assert_eq!(
+        result_ok_payload(
+            call_name(
+                &mut runtime,
                 "fs::remove_file",
                 &[mir_arg(
                     Some("path"),
-                    Operand::Place("read_path".to_string())
+                    Operand::Place("renamed_path".to_string())
                 )],
                 &mut env,
             )

@@ -7436,13 +7436,13 @@ fn retained_process_and_http_builtin_arguments_lower_with_owned_operands() {
 import process
 import net
 
-def supervise(supervisor: process.Supervisor, name: own str, command: own list[str], cwd: own (str | None), environment: own dict[str, str], stdin: own process.Stdio, stdout: own process.Stdio, stderr: own process.Stdio, restart: own process.RestartPolicy, backoff: own Duration, max_restarts: own int32, group: own bool):
+def supervise(supervisor: mut process.Supervisor, name: own str, command: own list[str], cwd: own (str | None), environment: own dict[str, str], stdin: own process.Stdio, stdout: own process.Stdio, stderr: own process.Stdio, restart: own process.RestartPolicy, backoff: own Duration, max_restarts: own int32, group: own bool):
     supervisor.start(name=name, command=command, cwd=cwd, env=environment, stdin=stdin, stdout=stdout, stderr=stderr, restart=restart, backoff=backoff, max_restarts=max_restarts, group=group)
 
-def respond_text(exchange: net.HttpExchange, status: int32, text: own str, headers: own dict[str, str]):
+def respond_text(exchange: mut net.HttpExchange, status: int32, text: own str, headers: own dict[str, str]):
     exchange.respond_text(status=status, text=text, headers=headers)
 
-def respond_bytes(exchange: net.HttpExchange, status: int32, bytes: own list[uint8], headers: own dict[str, str]):
+def respond_bytes(exchange: mut net.HttpExchange, status: int32, bytes: own list[uint8], headers: own dict[str, str]):
     exchange.respond_bytes(status=status, bytes=bytes, headers=headers)
 "#,
     )

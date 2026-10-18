@@ -1,7 +1,8 @@
 import net
 
 def consume(stream: own net.TlsStream):
-    stream.close()
+    with handle = stream:
+        pass
 
 def launch(group: TaskGroup, stream: own net.TlsStream):
     group.start_soon(consume, stream)

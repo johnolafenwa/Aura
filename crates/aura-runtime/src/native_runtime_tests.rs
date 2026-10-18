@@ -7842,6 +7842,7 @@ fn native_runtime_direct_filesystem_wrappers_cover_file_success_paths() {
         int_vec(&[33]),
     ));
     expect_result_ok_unit(super::aura_direct_file_flush(created_ptr));
+    expect_result_ok_unit(super::aura_direct_file_sync(created_ptr));
     expect_unit(super::aura_direct_file_close(created_ptr));
     unsafe { release_value(created_ptr) };
     assert_eq!(
@@ -7886,9 +7887,17 @@ fn native_runtime_direct_filesystem_wrappers_cover_file_success_paths() {
     expect_unit(super::aura_direct_close_value(close_ptr, 0));
     unsafe { release_value(close_ptr) };
 
-    expect_result_ok_unit(super::aura_direct_fs_remove_file(string_value(&data)));
+    let renamed = format!("{data}.renamed");
+    expect_result_ok_unit(super::aura_direct_fs_rename(
+        string_value(&data),
+        string_value(&renamed),
+    ));
     assert!(!expect_bool_boxed(super::aura_direct_fs_exists(
         string_value(&data)
+    )));
+    expect_result_ok_unit(super::aura_direct_fs_remove_file(string_value(&renamed)));
+    assert!(!expect_bool_boxed(super::aura_direct_fs_exists(
+        string_value(&renamed)
     )));
     let _ = std::fs::remove_dir_all(root);
 }
@@ -7947,6 +7956,10 @@ fn native_runtime_direct_filesystem_wrappers_cover_io_error_results() {
     expect_io_result_error(super::aura_direct_fs_remove_file(string_value(
         &missing_text,
     )));
+    expect_io_result_error(super::aura_direct_fs_rename(
+        string_value(&missing_text),
+        string_value(&file_text),
+    ));
     let invalid_data = expect_result_err_payload(super::aura_direct_fs_read_to_string(
         string_value(&invalid_utf8_text),
     ));
@@ -7997,6 +8010,7 @@ fn native_runtime_direct_filesystem_wrappers_cover_io_error_results() {
         int_vec(&[7, 8]),
     ));
     expect_io_result_error(super::aura_direct_file_flush(file_ptr));
+    expect_io_result_error(super::aura_direct_file_sync(file_ptr));
     unsafe { release_value(file_ptr) };
 
     let _ = std::fs::remove_dir_all(root);
@@ -12808,6 +12822,12 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
             "fs-remove-file-type" => {
                 super::aura_direct_fs_remove_file(bool_value(true));
             }
+            "fs-rename-source-type" => {
+                super::aura_direct_fs_rename(bool_value(true), string_value("/tmp/unused"));
+            }
+            "fs-rename-target-type" => {
+                super::aura_direct_fs_rename(string_value("/tmp/unused"), bool_value(true));
+            }
             "fs-open-type" => {
                 super::aura_direct_fs_open(bool_value(true));
             }
@@ -12834,6 +12854,9 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
             }
             "file-flush-type" => {
                 super::aura_direct_file_flush(bool_value(true));
+            }
+            "file-sync-type" => {
+                super::aura_direct_file_sync(bool_value(true));
             }
             "file-close-type" => {
                 super::aura_direct_file_close(bool_value(true));
@@ -14045,6 +14068,8 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
         ("fs-create-dir-type", "expected `str`, found `bool`"),
         ("fs-read-dir-type", "expected `str`, found `bool`"),
         ("fs-remove-file-type", "expected `str`, found `bool`"),
+        ("fs-rename-source-type", "expected `str`, found `bool`"),
+        ("fs-rename-target-type", "expected `str`, found `bool`"),
         ("fs-open-type", "expected `str`, found `bool`"),
         ("fs-create-type", "expected `str`, found `bool`"),
         ("fs-append-type", "expected `str`, found `bool`"),
@@ -14060,6 +14085,7 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
             "expected `fs.File`, found `bool`",
         ),
         ("file-flush-type", "expected `fs.File`, found `bool`"),
+        ("file-sync-type", "expected `fs.File`, found `bool`"),
         ("file-close-type", "expected `fs.File`, found `bool`"),
         ("contains-arg", "`contains` requires a `str` argument"),
         ("contains-receiver", "expected `str`, found `bool`"),

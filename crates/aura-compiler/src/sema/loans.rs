@@ -472,6 +472,12 @@ pub(super) struct ActiveMatchBorrow {
     pub(super) access: PlacePath,
 }
 
+/// A `shared_match_scrutinee` spelling names a place, not a call result.
+/// Only a place can be respelled as `match mut`.
+pub(super) fn shared_match_scrutinee_is_place(scrutinee: &str) -> bool {
+    !scrutinee.ends_with(')')
+}
+
 impl<'a> FunctionChecker<'a> {
     pub(super) fn ensure_pattern_binding_not_stale(
         &self,
@@ -480,7 +486,11 @@ impl<'a> FunctionChecker<'a> {
         binding: &LocalBinding,
     ) -> Result<()> {
         if let Some(place) = &binding.stale_match_borrow_place {
-            if binding.shared_match_scrutinee.is_some() {
+            if binding
+                .shared_match_scrutinee
+                .as_deref()
+                .is_some_and(shared_match_scrutinee_is_place)
+            {
                 return Err(Diagnostic::coded_at(
                     "AU3002",
                     span,
@@ -607,23 +617,39 @@ impl<'a> FunctionChecker<'a> {
         Ok(())
     }
 
-    /// The scrutinee spelling to quote in a `match own <place>` suggestion.
+    /// The scrutinee spelling to quote in a `match own <scrutinee>` suggestion.
     ///
-    /// Only a bare (shared) match over a named place can be respelled, so a
-    /// temporary scrutinee or an already-explicit capability yields `None`.
+    /// A bare (shared) match over a named place or over a call result can be
+    /// respelled. Any other temporary scrutinee or an already-explicit
+    /// capability yields `None`.
     pub(super) fn shared_match_scrutinee_name(
         &self,
         expr: &Expr,
         capability: ReceiverKind,
+        locals: &HashMap<String, LocalBinding>,
     ) -> Option<String> {
         if capability != ReceiverKind::Borrow {
             return None;
         }
-        matches!(
-            expr.kind,
-            ExprKind::Name(_) | ExprKind::Member { .. } | ExprKind::Index { .. }
-        )
-        .then(|| self.render_place_expr(expr))
+        match &expr.kind {
+            ExprKind::Name(_) | ExprKind::Member { .. } | ExprKind::Index { .. } => {
+                Some(self.render_place_expr(expr))
+            }
+            // A call that returns a view lends from its source place, which
+            // `match own` cannot consume, so only an owned result qualifies.
+            ExprKind::Call { callee, args }
+                if matches!(callee.kind, ExprKind::Name(_) | ExprKind::Member { .. })
+                    && self
+                        .returned_view_call_kind(expr, &mut locals.clone())
+                        .ok()
+                        .flatten()
+                        .is_none() =>
+            {
+                let arguments = if args.is_empty() { "" } else { "..." };
+                Some(format!("{}({arguments})", self.render_place_expr(callee)))
+            }
+            _ => None,
+        }
     }
 
     /// Returns a conservative source place for a bare shared match. Field

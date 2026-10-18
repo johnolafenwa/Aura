@@ -5195,6 +5195,7 @@ impl MirRuntime {
                         | "fs::create_dir"
                         | "fs::read_dir"
                         | "fs::remove_file"
+                        | "fs::rename"
                         | "fs::open"
                         | "fs::create"
                         | "fs::append"
@@ -8089,6 +8090,18 @@ impl MirRuntime {
                     Err(error) => Ok(result_err(io_error(error))),
                 }
             }
+            "fs::rename" => {
+                let bound = bind_builtin_args(&["source", "target"], values)?;
+                let source = expect_string_value(&bound[0].value, "fs.rename(...)")?;
+                let target = expect_string_value(&bound[1].value, "fs.rename(...)")?;
+                match run_blocking_io(
+                    move || std::fs::rename(source, target),
+                    Some(&self.cancellation),
+                ) {
+                    Ok(()) => Ok(result_ok(Value::Unit)),
+                    Err(error) => Ok(result_err(io_error(error))),
+                }
+            }
             "fs::open" | "fs::create" | "fs::append" => {
                 let bound = bind_builtin_args(&["path"], values)?;
                 match &bound[0].value {
@@ -8427,6 +8440,13 @@ impl MirRuntime {
             "flush" => {
                 bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
                 match file.flush() {
+                    Ok(()) => Ok(result_ok(Value::Unit)),
+                    Err(error) => Ok(result_err(io_error(error))),
+                }
+            }
+            "sync" => {
+                bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
+                match file.sync() {
                     Ok(()) => Ok(result_ok(Value::Unit)),
                     Err(error) => Ok(result_err(io_error(error))),
                 }

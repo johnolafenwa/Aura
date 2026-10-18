@@ -1,6 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn aura_bin() -> &'static str {
@@ -13,9 +14,13 @@ struct TempDir {
 
 impl TempDir {
     fn new() -> Self {
+        // Tests in this binary run in parallel, and macOS clocks report only
+        // microseconds, so the counter keeps two directories distinct.
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
         let unique = format!(
-            "aura-lambda-acceptance-{}-{}",
+            "aura-lambda-acceptance-{}-{}-{}",
             std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed),
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .expect("system clock should follow the Unix epoch")
