@@ -1002,7 +1002,7 @@ fn array_slices_report_storage_allocation_failure_for_every_dtype_without_mutati
 fn array_from_vec_validates_shape_and_count_before_allocation_or_conversion() {
     let malformed_source = VecValue {
         element_type: Type::named("int32"),
-        elements: vec![Value::Int(IntegerValue::from_i64(7))],
+        elements: vec![Value::Int(IntegerValue::from_i64(7))].into(),
     };
 
     let rank_error = super::with_array_allocation_budget(0, || {
@@ -1045,7 +1045,7 @@ fn array_from_vec_validates_shape_and_count_before_allocation_or_conversion() {
 fn array_construction_rejects_unsupported_types_and_inexact_scalar_metadata() {
     let unsupported = VecValue {
         element_type: Type::named("str"),
-        elements: vec![Value::String("one".to_string())],
+        elements: vec![Value::String("one".to_string())].into(),
     };
     let from_vec_error = ArrayValue::from_vec(&unsupported, None)
         .expect_err("Array.from_list must reject non-numeric element types");
@@ -1150,7 +1150,7 @@ fn array_containing_language_copies_preserve_reachable_structure_and_independenc
     let cases = vec![
         Value::Vec(VecValue {
             element_type: array_type.clone(),
-            elements: vec![source_array(&[4, 9]), source_array(&[1, 7])],
+            elements: vec![source_array(&[4, 9]), source_array(&[1, 7])].into(),
         }),
         Value::Tuple(TupleValue {
             element_types: vec![Type::named("str"), array_type.clone(), Type::named("int32")],
@@ -1246,7 +1246,7 @@ fn array_containing_language_copies_preserve_empty_containers() {
     let empty_values = vec![
         Value::Vec(VecValue {
             element_type: array_type.clone(),
-            elements: Vec::new(),
+            elements: Vec::new().into(),
         }),
         Value::Tuple(TupleValue {
             element_types: Vec::new(),
@@ -1318,7 +1318,8 @@ fn array_containing_language_copy_reports_outer_shape_and_storage_allocation_fai
                 ArrayStorage::Int32(vec![4, 9].into_boxed_slice()),
             )
             .unwrap(),
-        )],
+        )]
+        .into(),
     });
 
     let expected_failures = [
@@ -1400,7 +1401,8 @@ fn adr0038_partial_capture_copies_release_every_projected_value_after_failure() 
                             )]),
                         })]
                         .into(),
-                    })],
+                    })]
+                    .into(),
                 }),
                 Value::Map(MapValue {
                     key_type: Type::named("str"),
@@ -2928,7 +2930,7 @@ fn adr0038_closure_environment_mutable_capture_helpers_cover_success_and_errors(
                 ty: Type::named("list[int64]"),
                 value: Value::Vec(VecValue {
                     element_type: Type::named("int64"),
-                    elements: vec![Value::Int(IntegerValue::from_signed(1))],
+                    elements: vec![Value::Int(IntegerValue::from_signed(1))].into(),
                 }),
                 source_place: Some("items".to_string()),
                 mutable: true,
@@ -2956,7 +2958,7 @@ fn adr0038_closure_environment_mutable_capture_helpers_cover_success_and_errors(
             0,
             Value::Vec(VecValue {
                 element_type: Type::named("int64"),
-                elements: vec![Value::Int(IntegerValue::from_signed(2))],
+                elements: vec![Value::Int(IntegerValue::from_signed(2))].into(),
             }),
         )
         .expect("mutable captures accept writeback");
@@ -2966,7 +2968,7 @@ fn adr0038_closure_environment_mutable_capture_helpers_cover_success_and_errors(
             .expect("a live capture can be observed"),
         Value::Vec(VecValue {
             element_type: Type::named("int64"),
-            elements: vec![Value::Int(IntegerValue::from_signed(2))],
+            elements: vec![Value::Int(IntegerValue::from_signed(2))].into(),
         })
     );
 
@@ -3266,15 +3268,15 @@ fn bytes_runtime_conversion_rejects_malformed_vec_uint8_values() {
     let not_a_vector = Value::String("not bytes".to_string());
     let wrong_type = Value::Vec(VecValue {
         element_type: Type::named("int32"),
-        elements: Vec::new(),
+        elements: Vec::new().into(),
     });
     let wrong_metadata = Value::Vec(VecValue {
         element_type: Type::named("uint8"),
-        elements: vec![Value::Int(IntegerValue::from_literal(1))],
+        elements: vec![Value::Int(IntegerValue::from_literal(1))].into(),
     });
     let wrong_element = Value::Vec(VecValue {
         element_type: Type::named("uint8"),
-        elements: vec![Value::Bool(true)],
+        elements: vec![Value::Bool(true)].into(),
     });
 
     let error = super::host_bytes_from_runtime(&not_a_vector, "bytes::hex_encode")
@@ -5905,7 +5907,7 @@ fn async_and_process_result_helpers_render_expected_variants() {
         "Ready",
         vec![Value::Vec(VecValue {
             element_type: Type::named("Unknown"),
-            elements: all_ready,
+            elements: all_ready.into(),
         })],
     );
     assert_variant(
@@ -6221,7 +6223,7 @@ fn cast_numeric_value_reports_source_types_for_runtime_values() {
     assert_source_type(
         Value::Vec(VecValue {
             element_type: Type::named("int32"),
-            elements: vec![],
+            elements: vec![].into(),
         }),
         "list",
     );
@@ -7210,7 +7212,7 @@ fn dynamic_json_runtime_conversion_rejects_noncanonical_payload_metadata() {
                 "Array",
                 Value::Vec(VecValue {
                     element_type: Type::named("str"),
-                    elements: Vec::new(),
+                    elements: Vec::new().into(),
                 }),
             ),
             "exactly `list[json.Value]`",
@@ -7305,7 +7307,7 @@ fn dynamic_json_accessors_reject_noncanonical_payload_metadata() {
                 "Array",
                 Value::Vec(VecValue {
                     element_type: Type::named("str"),
-                    elements: Vec::new(),
+                    elements: Vec::new().into(),
                 }),
             ),
         ),
@@ -7611,7 +7613,7 @@ fn dynamic_json_runtime_conversion_rejects_depth_before_building_an_unbounded_cl
             variant_name: "Array".to_string(),
             payloads: vec![Value::Vec(VecValue {
                 element_type: Type::named("json.Value"),
-                elements: vec![value],
+                elements: vec![value].into(),
             })],
         });
     }
@@ -7632,7 +7634,7 @@ fn dynamic_json_runtime_conversion_fits_a_forced_512_kib_task_stack_at_the_depth
                 variant_name: "Array".to_string(),
                 payloads: vec![Value::Vec(VecValue {
                     element_type: Type::named("json.Value"),
-                    elements: vec![value],
+                    elements: vec![value].into(),
                 })],
             });
         }
@@ -11186,7 +11188,8 @@ fn value_equality_and_render_cover_collection_shapes() {
         elements: vec![
             Value::Int(IntegerValue::from_signed(1)),
             Value::Int(IntegerValue::from_signed(2)),
-        ],
+        ]
+        .into(),
     });
     assert_eq!(vec_value.render(), "[1, 2]");
 
@@ -11346,7 +11349,7 @@ fn nested_queue_producer_registration_walks_tuples_collections_instances_and_var
         }),
         Value::Vec(VecValue {
             element_type: Type::named("Queue"),
-            elements: vec![Value::Channel(queue_in_vec.clone())],
+            elements: vec![Value::Channel(queue_in_vec.clone())].into(),
         }),
         Value::Set(SetValue {
             element_type: Type::named("Queue"),
@@ -18051,7 +18054,7 @@ fn malformed_json_runtime_trees_fall_back_to_structural_clones() {
             "Array",
             vec![Value::Vec(VecValue {
                 element_type: Type::named("json.Value"),
-                elements,
+                elements: elements.into(),
             })],
         )
     };
@@ -18510,6 +18513,27 @@ fn array_free_dicts_and_sets_clone_by_sharing() {
         assert_ne!(original.entries.as_ptr(), walked.entries.as_ptr());
         assert_eq!(map, copy);
     }
+    let documents = Value::Vec(VecValue {
+        element_type: Type::Named(
+            "dict".to_string(),
+            vec![Type::named("str"), Type::named("json.Value")],
+        ),
+        elements: vec![map.clone()].into(),
+    });
+    let copy = super::try_clone_array_containing_value(&documents).expect("clone");
+    let (Value::Vec(original), Value::Vec(shared)) = (&documents, &copy) else {
+        panic!("expected lists");
+    };
+    assert_eq!(original.elements.as_ptr(), shared.elements.as_ptr());
+    let unknown_list = Value::Vec(VecValue {
+        element_type: Type::named("Unknown"),
+        elements: vec![documents.clone()].into(),
+    });
+    let copy = super::try_clone_array_containing_value(&unknown_list).expect("clone");
+    let (Value::Vec(original), Value::Vec(walked)) = (&unknown_list, &copy) else {
+        panic!("expected lists");
+    };
+    assert_ne!(original.elements.as_ptr(), walked.elements.as_ptr());
     assert!(super::type_cannot_hold_array(&Type::Unit));
     assert!(super::type_cannot_hold_array(&Type::Tuple(vec![
         Type::named("int32"),

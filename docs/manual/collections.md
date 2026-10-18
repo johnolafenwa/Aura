@@ -445,6 +445,10 @@ Equality consumes neither operand:
 requirements above. Removing methods move stored values out. Shared lookup and
 search operations leave the collection and their arguments in place.
 
+A copy of a collection that cannot hold an `Array` shares its storage with
+the original until either side changes. The first change copies the
+storage, so each copy stays independent and copying takes constant time.
+
 `reserve(additional)` guarantees a capacity of at least `len() + additional`.
 `with_capacity(minimum)` creates an empty collection with a capacity of at
 least `minimum`. Neither changes contents or order.

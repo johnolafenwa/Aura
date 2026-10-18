@@ -199,17 +199,17 @@ document database benchmark ran in the same container:
 
 | AuraDB operation | Before | After | Python 3.13 |
 | --- | ---: | ---: | ---: |
-| `insert_many`, 5,000 documents in memory | 72.6 µs/op | 13.4 µs/op | 0.67 µs/op |
+| `insert_many`, 5,000 documents in memory | 72.6 µs/op | 15.4 µs/op | 0.67 µs/op |
 | `get` by id, 5,000 documents | 45 µs/op | 5 µs/op | 5.8 µs/op |
-| `find` by field scan, 5,000 documents | 188 ms | 80 ms | 13.9 ms |
-| `open` and load, 5,000 documents | 1,252 ms | 284 ms | 14.2 ms |
-| `update` by id, 2,000 documents | 7,895 µs/op | 660 µs/op | 6.0 µs/op |
-| `delete` by id, 2,000 documents | 57,990 µs/op | 10,980 µs/op | 381 µs/op |
+| `find` by field scan, 5,000 documents | 188 ms | 72 ms | 13.9 ms |
+| `open` and load, 5,000 documents | 1,252 ms | 300 ms | 14.2 ms |
+| `update` by id, 2,000 documents | 7,895 µs/op | 25 µs/op | 6.0 µs/op |
+| `delete` by id, 2,000 documents | 57,990 µs/op | 9,130 µs/op | 381 µs/op |
 
-AuraDB's `update` and `delete` copy the document list and rebuild a
-secondary index on each call. A `dict` or `set` copy shares its storage
-until one side writes, so copying a list of documents copies the list but
-not the documents. A `list` copy still copies every element.
+A `list`, `dict`, or `set` copy shares its storage until one side writes,
+so AuraDB's copy of its document list on each `update` costs constant time.
+AuraDB's `delete` recomputes every document's position key on each call,
+and that loop dominates its row.
 
 The AuraDB timer has 1 ms resolution, so the `get` row is coarse.
 
@@ -271,7 +271,7 @@ decisions.
 | Array addition | 1.006974 times NumPy, 1.006524 times the same-session Rust kernel |
 | Array reduction | 6.682308 times NumPy, 1.339087 times the same-session Rust kernel |
 | `record_field_reads` | about 22 times Python 3.13 |
-| AuraDB `update` by id | about 110 times Python 3.13 |
+| AuraDB `update` by id | about 4 times Python 3.13 |
 
 These gaps are specific to these workloads. Scheduling, runtime
 implementation, allocation, and optimizer-barrier choices affect how to read
