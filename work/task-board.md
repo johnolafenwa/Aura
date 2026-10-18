@@ -13,27 +13,14 @@ Last updated: 2026-10-17
   callgrind profile. Step 1 replaces the linear `dict` and `set` storage
   with an insertion-ordered hash index. `dict_build_get` went from 18.47 s
   to 0.71 s and `set_insert_contains` from 24.69 s to 0.062 s.
-- Step 1 merged as PR #66 and step 2 as PR #67 on 2026-10-18. Step 2
-  interns runtime type tags: `int_list_sum` 1.97 s to 1.05 s,
-  `string_list_scan` 1.6 s to 0.88 s. Step 3 borrows operands on direct
-  read paths. Details are in `2026-10-17-batch-7a-hash-dict-set.md`,
-  `2026-10-17-batch-7a-type-tags.md`, and
-  `2026-10-18-batch-7a-borrowed-reads.md`.
-- Remaining: steps 4 to 6 of the checkpoint. The list loop lowering and
-  the ownership ledger are done on a local branch and follow step 3.
-
-## Batch 7a: fs.rename, File.sync, and resource receivers (complete)
-
-- Target: add `fs.rename` and `fs.File.sync()`, and make the checker
-  require a mutable receiver for every writing or closing resource method,
-  with a `match own` hint for bare-match bindings. John chose this on
-  2026-10-17. Hash `dict`, `set`, and value representation are a separate
-  Batch 7a item.
-- Done: both backends implement the two calls. `examples/io/atomic_save.au`
-  shows an atomic save. The checker enforces the receiver table, and
-  `check-pass/pythonic_convenience_methods.au` uses `match own`. Details are
-  in `2026-10-17-batch-7a-fs-and-resource-receivers.md`.
-- Merged as PR #65 after hosted CI passed on Linux and macOS.
+- Merged on 2026-10-18: step 1 as PR #66, step 2 as PR #67, and step 3
+  as PR #68. Step 2 interns runtime type tags and step 3 borrows operands
+  on direct read paths: `int_list_sum` 1.97 s to 0.88 s. Step 4 lowers
+  list `for` loops without a per-element `Lookup` value and makes owned
+  list loops linear: `int_list_sum` 0.88 s to 0.33 s. Details are in the
+  dated `2026-10-1*-batch-7a-*.md` notes.
+- Remaining: step 5, the ownership ledger, and step 6, the final
+  measurements in the Performance chapter.
 
 ## AuraDB benchmark fixes (complete)
 

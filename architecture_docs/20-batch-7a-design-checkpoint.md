@@ -180,9 +180,9 @@ dated work note.
 | --- | --- | --- |
 | 1 | This checkpoint, the benchmark programs, and section A | Merged, PR #66 |
 | 2 | Section B | Merged, PR #67 |
-| 3 | Section C, borrowed reads | In review |
-| 4 | Section D | Planned |
-| 5 | Section E | Planned |
+| 3 | Section C, borrowed reads | Merged, PR #68 |
+| 4 | Section E, list loops | In review |
+| 5 | Section D, ownership ledger | Planned |
 | 6 | Final measurements in the Performance chapter | Planned |
 
 ### Step 1 Measurements
