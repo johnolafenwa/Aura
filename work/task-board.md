@@ -13,12 +13,14 @@ Last updated: 2026-10-17
   callgrind profile. Step 1 replaces the linear `dict` and `set` storage
   with an insertion-ordered hash index. `dict_build_get` went from 18.47 s
   to 0.71 s and `set_insert_contains` from 24.69 s to 0.062 s.
-- Step 1 merged as PR #66 on 2026-10-18. Step 2 interns runtime type
-  tags: `int_list_sum` 1.97 s to 1.05 s, `string_list_scan` 1.6 s to
-  0.88 s. Details are in `2026-10-17-batch-7a-hash-dict-set.md` and
-  `2026-10-17-batch-7a-type-tags.md`.
-- Remaining: steps 3 to 6 of the checkpoint. Steps 3 to 5 are done on a
-  local branch and wait for step 2 to merge.
+- Step 1 merged as PR #66 and step 2 as PR #67 on 2026-10-18. Step 2
+  interns runtime type tags: `int_list_sum` 1.97 s to 1.05 s,
+  `string_list_scan` 1.6 s to 0.88 s. Step 3 borrows operands on direct
+  read paths. Details are in `2026-10-17-batch-7a-hash-dict-set.md`,
+  `2026-10-17-batch-7a-type-tags.md`, and
+  `2026-10-18-batch-7a-borrowed-reads.md`.
+- Remaining: steps 4 to 6 of the checkpoint. The list loop lowering and
+  the ownership ledger are done on a local branch and follow step 3.
 
 ## Batch 7a: fs.rename, File.sync, and resource receivers (complete)
 

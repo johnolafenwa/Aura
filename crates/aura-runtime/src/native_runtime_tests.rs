@@ -24427,3 +24427,32 @@ fn native_runtime_records_only_failing_manager_exits_for_the_trap() {
         }
     });
 }
+
+#[test]
+fn direct_comparisons_borrow_both_operands() {
+    let long = "x".repeat(4096);
+    for (op, expected) in [
+        (5, false),
+        (6, true),
+        (7, false),
+        (8, false),
+        (9, true),
+        (10, true),
+    ] {
+        let left = string_value(&long);
+        let right = string_value("a");
+        let clone_count = super::direct_value_clone_count();
+        let result = super::aura_direct_binary_value_at(op, left, right, 0, 2, 3);
+        assert_eq!(
+            super::direct_value_clone_count(),
+            clone_count,
+            "comparison {op} must read its operands in place"
+        );
+        assert_eq!(expect_bool_boxed(result), expected, "comparison {op}");
+    }
+    let same = string_value("same");
+    let clone_count = super::direct_value_clone_count();
+    let result = super::aura_direct_binary_value_at(5, same, same, 0, 2, 3);
+    assert_eq!(super::direct_value_clone_count(), clone_count);
+    assert!(expect_bool_boxed(result));
+}

@@ -3025,7 +3025,7 @@ fn expect_bytes_value(value: &Value, label: &str) -> Vec<u8> {
     match value {
         Value::Vec(vector)
             if (vector.element_type == Type::named("uint8")
-                || vector.element_type == Type::named("Unknown"))
+                || is_unknown_runtime_type(&vector.element_type))
                 && vector
                     .elements
                     .iter()
@@ -3080,9 +3080,9 @@ fn expect_i32_value(value: &Value, label: &str) -> i32 {
 fn expect_headers_map(value: &Value, label: &str) -> Vec<(String, String)> {
     match value {
         Value::Map(map)
-            if (map.key_type == Type::named("str") || map.key_type == Type::named("Unknown"))
+            if (map.key_type == Type::named("str") || is_unknown_runtime_type(&map.key_type))
                 && (map.value_type == Type::named("str")
-                    || map.value_type == Type::named("Unknown")) =>
+                    || is_unknown_runtime_type(&map.value_type)) =>
         {
             map.entries
                 .iter()
@@ -3195,7 +3195,7 @@ fn expect_command_vec(value: &Value, label: &str) -> Vec<String> {
     match value {
         Value::Vec(vector)
             if vector.element_type == Type::named("str")
-                || vector.element_type == Type::named("Unknown") =>
+                || is_unknown_runtime_type(&vector.element_type) =>
         {
             vector
                 .elements
@@ -3589,6 +3589,12 @@ fn value_type_name(value: impl Borrow<Value>) -> String {
     }
 }
 
+/// Whether a collection's element type is still the placeholder an empty
+/// literal starts with. It compares without building a `Type`.
+fn is_unknown_runtime_type(ty: &Type) -> bool {
+    matches!(ty, Type::Named(name, args) if name == "Unknown" && args.is_empty())
+}
+
 fn inferred_collection_type(value: &Value) -> Type {
     if let Value::Union(union) = value {
         return union.union_type.clone();
@@ -3650,6 +3656,16 @@ fn compare_values(
     right: Value,
     op: BinaryOp,
 ) -> std::result::Result<Value, Diagnostic> {
+    compare_value_refs(&left, &right, op)
+}
+
+/// Compares two values in place. Comparison never needs ownership, so the
+/// direct runtime's comparison entry reads both operands without copying.
+fn compare_value_refs(
+    left: &Value,
+    right: &Value,
+    op: BinaryOp,
+) -> std::result::Result<Value, Diagnostic> {
     if matches!(op, BinaryOp::Eq | BinaryOp::NotEq) {
         return Ok(Value::Bool(match op {
             BinaryOp::Eq => left == right,
@@ -3708,8 +3724,8 @@ fn compare_values(
         })),
         (left, right) => Err(Diagnostic::new(format!(
             "unsupported comparison between `{}` and `{}`",
-            value_type_name(&left),
-            value_type_name(&right)
+            value_type_name(left),
+            value_type_name(right)
         ))),
     }
 }
@@ -5657,10 +5673,12 @@ pub extern "C-unwind" fn aura_direct_vec_push_in_place(
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
         let value = unsafe { consume_owned_value(value) };
-        let inferred = inferred_collection_type(&value);
         with_vector_mut(vec, |vector| {
-            if vector.element_type == Type::named("Unknown") && inferred != Type::named("Unknown") {
-                vector.element_type = inferred;
+            if is_unknown_runtime_type(&vector.element_type) {
+                let inferred = inferred_collection_type(&value);
+                if !is_unknown_runtime_type(&inferred) {
+                    vector.element_type = inferred;
+                }
             }
             vector.elements.push(value);
         });
@@ -6733,17 +6751,18 @@ pub extern "C-unwind" fn aura_direct_map_set_in_place(
     task_runtime_boundary(|| {
         let key = unsafe { consume_owned_value(key) };
         let value = unsafe { consume_owned_value(value) };
-        let inferred_key_type = inferred_collection_type(&key);
-        let inferred_value_type = inferred_collection_type(&value);
         let previous = with_map_mut(map, |map| {
-            if map.key_type == Type::named("Unknown") && inferred_key_type != Type::named("Unknown")
-            {
-                map.key_type = inferred_key_type.clone();
+            if is_unknown_runtime_type(&map.key_type) {
+                let inferred = inferred_collection_type(&key);
+                if !is_unknown_runtime_type(&inferred) {
+                    map.key_type = inferred;
+                }
             }
-            if map.value_type == Type::named("Unknown")
-                && inferred_value_type != Type::named("Unknown")
-            {
-                map.value_type = inferred_value_type.clone();
+            if is_unknown_runtime_type(&map.value_type) {
+                let inferred = inferred_collection_type(&value);
+                if !is_unknown_runtime_type(&inferred) {
+                    map.value_type = inferred;
+                }
             }
             map.entries.insert(key, value)
         });
@@ -7410,10 +7429,12 @@ pub extern "C-unwind" fn aura_direct_set_insert_in_place(
 ) -> i64 {
     task_runtime_boundary(|| {
         let value = unsafe { consume_owned_value(value) };
-        let inferred = inferred_collection_type(&value);
         let inserted = with_set_mut(set, |set| {
-            if set.element_type == Type::named("Unknown") && inferred != Type::named("Unknown") {
-                set.element_type = inferred.clone();
+            if is_unknown_runtime_type(&set.element_type) {
+                let inferred = inferred_collection_type(&value);
+                if !is_unknown_runtime_type(&inferred) {
+                    set.element_type = inferred;
+                }
             }
             set.elements.insert(value)
         });
@@ -7806,6 +7827,29 @@ pub extern "C-unwind" fn aura_direct_binary_value_at(
             0 | 64 => FloatPowerWidth::Float64,
             other => runtime_error(format!("unknown direct floating width `{other}`")),
         };
+        if matches!(
+            op,
+            BinaryOp::Eq
+                | BinaryOp::NotEq
+                | BinaryOp::Less
+                | BinaryOp::LessEq
+                | BinaryOp::Greater
+                | BinaryOp::GreaterEq
+        ) {
+            let compared = unsafe {
+                if left == right {
+                    with_value(left, |value| compare_value_refs(value, value, op))
+                } else {
+                    with_value(left, |left| {
+                        with_value(right, |right| compare_value_refs(left, right, op))
+                    })
+                }
+            };
+            return match compared {
+                Ok(value) => boxed_value(value),
+                Err(error) => runtime_diagnostic_error_at(error, runtime_span(line, column)),
+            };
+        }
         match eval_binary_value_with_float_width(
             unsafe { take_value(left) },
             unsafe { take_value(right) },
@@ -8481,7 +8525,13 @@ pub extern "C-unwind" fn aura_direct_variant_payload(
     value: *mut OpaqueValue,
     index: i64,
 ) -> *mut OpaqueValue {
-    task_runtime_boundary(|| match unsafe { value_ref(value) } {
+    task_runtime_boundary(|| unsafe {
+        with_value(value, |value| direct_variant_payload_clone(value, index))
+    })
+}
+
+fn direct_variant_payload_clone(value: &Value, index: i64) -> *mut OpaqueValue {
+    match value {
         Value::EnumVariant(variant) => match variant.payloads.get(index.max(0) as usize) {
             Some(payload) => boxed_value(payload.clone()),
             None => runtime_error(format!(
@@ -8495,7 +8545,7 @@ pub extern "C-unwind" fn aura_direct_variant_payload(
             "expected enum value, found `{}`",
             value_type_name(other)
         )),
-    })
+    }
 }
 
 #[cfg_attr(not(coverage), no_mangle)]

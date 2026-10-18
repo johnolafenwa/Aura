@@ -137,7 +137,9 @@ programs.
 ## C. Shared Element Types And Borrowed Reads
 
 - Collection element, key, and value types become shared `Arc<Type>` values,
-  so a clone copies a pointer instead of a tree.
+  so a clone copies a pointer instead of a tree. Step 3 drops this part.
+  After section B, type tree clones cost about 1% of the AuraDB `update`
+  profile.
 - Runtime entries that only read an argument borrow it under its lock
   instead of cloning it. This covers dictionary keys, set members,
   comparisons, and string operations.
@@ -177,8 +179,8 @@ dated work note.
 | Step | Scope | Status |
 | --- | --- | --- |
 | 1 | This checkpoint, the benchmark programs, and section A | Merged, PR #66 |
-| 2 | Section B | In review |
-| 3 | Section C | Planned |
+| 2 | Section B | Merged, PR #67 |
+| 3 | Section C, borrowed reads | In review |
 | 4 | Section D | Planned |
 | 5 | Section E | Planned |
 | 6 | Final measurements in the Performance chapter | Planned |
