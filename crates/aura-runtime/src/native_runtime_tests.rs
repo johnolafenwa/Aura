@@ -3589,6 +3589,8 @@ fn direct_json_parse_materialization_allocation_failure_is_au4005_and_preserves_
 #[test]
 fn direct_json_parse_reserves_capacity_before_borrowing_and_copying_the_source() {
     let source = boxed_value(Value::String("null".to_string()));
+    // The source crosses to the parse task the way a task argument does.
+    unsafe { super::share_direct_value(source) };
     let source_address = source as usize;
     let clone_count = super::direct_value_clone_count();
 
@@ -3610,11 +3612,12 @@ fn direct_json_parse_reserves_capacity_before_borrowing_and_copying_the_source()
         crate::runtime_value::yield_now_with_runtime_scheduler();
 
         let source = unsafe { &*(source_address as *mut OpaqueValue) };
-        let mut source_guard = source
-            .value
+        let source_guard = source
+            .shared_lock
             .try_write()
             .expect("codec saturation must park before the direct adapter borrows its source");
-        match &mut *source_guard {
+        // SAFETY: the shared write guard excludes every other access.
+        match unsafe { &mut *source.value.get() } {
             Value::String(source) => *source = "true".to_string(),
             other => panic!("expected direct JSON source str, found {other:?}"),
         }
@@ -24631,4 +24634,80 @@ fn leaf_runtime_type_tags_skip_the_value_lock() {
         Some(name.as_str())
     );
     unsafe { release_value(text) };
+}
+
+#[test]
+fn values_take_the_lock_only_once_shared() {
+    let value = string_value("confined");
+    let opaque = unsafe { &*value };
+    assert!(!opaque.shared.load(Ordering::Acquire));
+    assert!(matches!(
+        opaque.access(true),
+        super::DirectValueAccess::Confined
+    ));
+    unsafe { super::share_direct_value(value) };
+    {
+        let _read = opaque.access(false);
+        assert!(opaque.shared_lock.try_write().is_err());
+        assert!(opaque.shared_lock.try_read().is_ok());
+    }
+    {
+        let _write = opaque.access(true);
+        assert!(opaque.shared_lock.try_read().is_err());
+    }
+    assert_eq!(
+        unsafe { super::value_ref(value) },
+        Value::String("confined".to_string())
+    );
+    unsafe { release_value(value) };
+}
+
+unsafe extern "C-unwind" fn direct_task_returns_shared_flag(
+    args: *const i64,
+    arg_count: usize,
+) -> *mut OpaqueValue {
+    assert_eq!(arg_count, 1);
+    let argument = unsafe { *args } as *mut OpaqueValue;
+    let shared = unsafe { &*argument }.shared.load(Ordering::Acquire);
+    unsafe { super::aura_direct_release_value(argument) };
+    boxed_value(Value::Bool(shared))
+}
+
+#[test]
+fn task_arguments_are_shared_before_the_child_starts() {
+    let argument = string_value("task argument");
+    let argument_address = argument as usize;
+    let result = run_lightweight_root_task(move || {
+        let argument = argument_address as *mut OpaqueValue;
+        let args = super::aura_direct_arg_buffer_new(1);
+        super::aura_direct_arg_buffer_store(args, 0, argument as i64);
+        let group = super::aura_direct_task_group_new();
+        let task = unsafe {
+            super::aura_direct_start_task_call(
+                direct_task_returns_shared_flag as *const () as usize as i64,
+                args,
+                1,
+                1,
+                group,
+                1,
+                0,
+                0,
+            )
+        };
+        let joined = super::aura_direct_task_join(task);
+        let seen = unsafe { take_value(joined) };
+        unsafe {
+            release_value(joined);
+            release_value(task);
+            release_value(group);
+        }
+        Ok(seen)
+    });
+    let seen = result.expect("root task should complete");
+    assert!(
+        matches!(&seen, Value::EnumVariant(variant) if variant.payloads == vec![Value::Bool(true)]),
+        "the child should see its argument shared, found {seen:?}"
+    );
+    assert!(unsafe { &*argument }.shared.load(Ordering::Acquire));
+    unsafe { release_value(argument) };
 }

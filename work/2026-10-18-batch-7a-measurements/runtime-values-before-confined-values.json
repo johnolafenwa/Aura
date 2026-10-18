@@ -1,0 +1,54 @@
+{
+  "aura": "/tmp/claude-0/wt-main/target/release/aura",
+  "commit": "535affabde3cadae614f292a64d275a397405526",
+  "records": {
+    "dict_build_get": {
+      "elapsed_s": 0.34759811499952775,
+      "stdout": "1999900000\n"
+    },
+    "int_list_sum": {
+      "elapsed_s": 0.11613804199987499,
+      "stdout": "99999000000\n"
+    },
+    "record_field_reads": {
+      "elapsed_s": 0.20660001800024475,
+      "stdout": "63080\n"
+    },
+    "set_insert_contains": {
+      "elapsed_s": 0.044788416999836045,
+      "stdout": "20000\n"
+    },
+    "string_list_scan": {
+      "elapsed_s": 0.18616463499984093,
+      "stdout": "10000\n"
+    }
+  },
+  "schema_version": 1,
+  "summary": {
+    "dict_build_get": {
+      "aura_s": 0.34759811499952775,
+      "python_s": 0.039,
+      "ratio": 8.91277217947507
+    },
+    "int_list_sum": {
+      "aura_s": 0.11613804199987499,
+      "python_s": 0.055,
+      "ratio": 2.1116007636340908
+    },
+    "record_field_reads": {
+      "aura_s": 0.20660001800024475,
+      "python_s": 0.011,
+      "ratio": 18.78181981820407
+    },
+    "set_insert_contains": {
+      "aura_s": 0.044788416999836045,
+      "python_s": 0.009,
+      "ratio": 4.976490777759561
+    },
+    "string_list_scan": {
+      "aura_s": 0.18616463499984093,
+      "python_s": 0.02,
+      "ratio": 9.308231749992046
+    }
+  }
+}

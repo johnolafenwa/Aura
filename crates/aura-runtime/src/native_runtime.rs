@@ -8,6 +8,7 @@ use std::borrow::Borrow;
 #[cfg(test)]
 use std::cell::Cell;
 use std::cell::RefCell;
+use std::cell::UnsafeCell;
 use std::collections::{BTreeMap, HashMap};
 use std::io::{self, Write};
 use std::mem;
@@ -1047,10 +1048,97 @@ fn int32_overflow_message(value: i64) -> String {
     format!("integer value `{}` does not fit in `int32`", value)
 }
 
+/// A boxed runtime value handed to generated code as a raw pointer.
+///
+/// A value starts confined to the task thread that created it, and the
+/// accessors read and write it without a lock. Generated code can only hand a
+/// value to another thread as a task argument or through the module-constant
+/// registry. Both paths call [`share_direct_value`] first, and from then on
+/// every access takes `shared_lock`.
 pub struct OpaqueValue {
     ref_count: AtomicUsize,
-    value: RwLock<Value>,
-    runtime_type_name: RwLock<Option<Arc<str>>>,
+    shared: AtomicBool,
+    shared_lock: RwLock<()>,
+    #[cfg(all(debug_assertions, not(test)))]
+    owner_thread: usize,
+    value: UnsafeCell<Value>,
+    runtime_type_name: UnsafeCell<Option<Arc<str>>>,
+}
+
+// The cells are only reached through `OpaqueValue::access`, and a panic
+// during an access leaves the value as consistent as the lock did.
+impl std::panic::RefUnwindSafe for OpaqueValue {}
+
+/// The lock an access to a value needs: none while the value is confined to
+/// its creating thread, and the shared lock once it may be reached by another
+/// thread.
+enum DirectValueAccess<'a> {
+    Confined,
+    SharedRead(#[allow(dead_code)] std::sync::RwLockReadGuard<'a, ()>),
+    SharedWrite(#[allow(dead_code)] std::sync::RwLockWriteGuard<'a, ()>),
+}
+
+/// Debug builds of compiled programs check that an unshared value is only
+/// accessed by the thread that created it. Runtime unit tests hand values
+/// between threads by hand, so they skip the check.
+#[cfg(all(debug_assertions, not(test)))]
+fn direct_value_thread_identity() -> usize {
+    thread_local! {
+        static IDENTITY: u8 = const { 0 };
+    }
+    IDENTITY.with(|identity| identity as *const u8 as usize)
+}
+
+impl OpaqueValue {
+    fn new(value: Value, runtime_type_name: Option<Arc<str>>) -> Self {
+        Self {
+            ref_count: AtomicUsize::new(1),
+            shared: AtomicBool::new(false),
+            shared_lock: RwLock::new(()),
+            #[cfg(all(debug_assertions, not(test)))]
+            owner_thread: direct_value_thread_identity(),
+            value: UnsafeCell::new(value),
+            runtime_type_name: UnsafeCell::new(runtime_type_name),
+        }
+    }
+
+    fn access(&self, write: bool) -> DirectValueAccess<'_> {
+        // Acquire pairs with the release store in `share_direct_value`. The
+        // thread that shares a value is the only one that could have accessed
+        // it unlocked, and every other thread reaches the value through a
+        // synchronizing handoff after the store.
+        if !self.shared.load(Ordering::Acquire) {
+            #[cfg(all(debug_assertions, not(test)))]
+            assert_eq!(
+                self.owner_thread,
+                direct_value_thread_identity(),
+                "direct runtime value reached another thread without being shared"
+            );
+            return DirectValueAccess::Confined;
+        }
+        if write {
+            match self.shared_lock.write() {
+                Ok(guard) => DirectValueAccess::SharedWrite(guard),
+                Err(_) => runtime_error("direct runtime value lock was poisoned"),
+            }
+        } else {
+            match self.shared_lock.read() {
+                Ok(guard) => DirectValueAccess::SharedRead(guard),
+                Err(_) => runtime_error("direct runtime value lock was poisoned"),
+            }
+        }
+    }
+}
+
+/// Marks a value as reachable from more than one thread, so every later
+/// access takes its lock. The caller must be the thread that may have
+/// accessed the value without a lock, and must hand the pointer to the other
+/// thread through a synchronizing operation after this call.
+unsafe fn share_direct_value(ptr: *mut OpaqueValue) {
+    match unsafe { ptr.as_ref() } {
+        Some(value) => value.shared.store(true, Ordering::Release),
+        None => runtime_error("direct runtime received a null opaque value pointer"),
+    }
 }
 
 #[cfg(coverage)]
@@ -1226,11 +1314,7 @@ fn boxed_typed_value(value: Value, runtime_type_name: &str) -> *mut OpaqueValue 
 }
 
 fn boxed_value_with_type(value: Value, runtime_type_name: Option<Arc<str>>) -> *mut OpaqueValue {
-    let value = Box::into_raw(Box::new(OpaqueValue {
-        ref_count: AtomicUsize::new(1),
-        value: RwLock::new(value),
-        runtime_type_name: RwLock::new(runtime_type_name),
-    }));
+    let value = Box::into_raw(Box::new(OpaqueValue::new(value, runtime_type_name)));
     #[cfg(coverage)]
     DIRECT_VALUE_LIVE_COUNT.fetch_add(1, Ordering::Relaxed);
     crate::runtime_value::representation_stats::note_opaque_box();
@@ -1315,11 +1399,11 @@ unsafe fn with_value<T>(ptr: *mut OpaqueValue, read: impl FnOnce(&Value) -> T) -
         Some(value) => value,
         None => runtime_error("direct runtime received a null opaque value pointer"),
     };
-    let guard = match value.value.read() {
-        Ok(guard) => guard,
-        Err(_) => runtime_error("direct runtime value lock was poisoned"),
-    };
-    read(&guard)
+    let _access = value.access(false);
+    // SAFETY: `access` returned either confinement to this thread, which no
+    // other thread can access, or a read guard on the shared lock. Writers
+    // take the write guard, so no `&mut Value` exists meanwhile.
+    read(unsafe { &*value.value.get() })
 }
 
 unsafe fn value_ref(ptr: *mut OpaqueValue) -> Value {
@@ -1339,10 +1423,11 @@ unsafe fn explicit_runtime_type_name(ptr: *mut OpaqueValue) -> Option<String> {
 
 unsafe fn explicit_runtime_type_tag(ptr: *mut OpaqueValue) -> Option<Arc<str>> {
     match ptr.as_ref() {
-        Some(value) => match value.runtime_type_name.read() {
-            Ok(runtime_type_name) => runtime_type_name.clone(),
-            Err(_) => runtime_error("direct runtime type lock was poisoned"),
-        },
+        Some(value) => {
+            let _access = value.access(false);
+            // SAFETY: as in `with_value`.
+            unsafe { (*value.runtime_type_name.get()).clone() }
+        }
         None => runtime_error("direct runtime received a null opaque value pointer"),
     }
 }
@@ -1809,14 +1894,14 @@ fn shared_runtime_type_tag(bytes: &[u8]) -> Arc<RuntimeTypeTag> {
 unsafe fn set_explicit_runtime_type_tag(ptr: *mut OpaqueValue, tag: &RuntimeTypeTag) {
     let runtime_type_name: &str = &tag.name;
     match ptr.as_ref() {
-        Some(value) => match value.runtime_type_name.write() {
-            Ok(mut stored) => {
-                if stored.as_deref() != Some(runtime_type_name) {
-                    *stored = Some(Arc::clone(&tag.name));
-                }
+        Some(value) => {
+            let _access = value.access(true);
+            // SAFETY: as in `value_mut`.
+            let stored = unsafe { &mut *value.runtime_type_name.get() };
+            if stored.as_deref() != Some(runtime_type_name) {
+                *stored = Some(Arc::clone(&tag.name));
             }
-            Err(_) => runtime_error("direct runtime type lock was poisoned"),
-        },
+        }
         None => runtime_error("direct runtime received a null opaque value pointer"),
     }
     if tag.name_only {
@@ -1921,11 +2006,11 @@ unsafe fn value_mut<T>(ptr: *mut OpaqueValue, write: impl FnOnce(&mut Value) -> 
         Some(value) => value,
         None => runtime_error("direct runtime received a null opaque value pointer"),
     };
-    let mut guard = match value.value.write() {
-        Ok(guard) => guard,
-        Err(_) => runtime_error("direct runtime value lock was poisoned"),
-    };
-    write(&mut guard)
+    let _access = value.access(true);
+    // SAFETY: `access` returned either confinement to this thread or the
+    // shared write guard. Generated code never nests a write inside another
+    // access to the same value, which would have deadlocked on the lock.
+    write(unsafe { &mut *value.value.get() })
 }
 
 unsafe fn take_value(ptr: *mut OpaqueValue) -> Value {
@@ -4706,7 +4791,11 @@ pub extern "C-unwind" fn aura_direct_module_constant(
         }
         // The registry owns one untracked reference until runtime shutdown;
         // the thunk's tracked reference remains the caller's read result.
-        unsafe { retain_untracked_value(value) };
+        // Any task thread can read the registry, so the value is shared.
+        unsafe {
+            retain_untracked_value(value);
+            share_direct_value(value);
+        }
         lock_direct_module_constants()
             .insert(key, DirectModuleConstantState::Ready(value as usize));
         direct_module_constant_order()
@@ -14233,6 +14322,9 @@ unsafe fn start_direct_task_call(call: DirectTaskCall) -> *mut OpaqueValue {
                 with_value(arg as *mut OpaqueValue, |value| {
                     collect_queue_values(value, &mut queue_producers)
                 });
+                // The child may run on another worker while this task still
+                // holds the same handle, so both sides lock from here on.
+                share_direct_value(arg as *mut OpaqueValue);
             }
         }
         let group = if task_group.is_null() {
