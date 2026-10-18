@@ -1422,6 +1422,7 @@ fn direct_runtime_resource_ffi_symbols_execute_through_the_library_copy() {
             ScopedValue::new(string_value("127.0.0.1:0")).as_ptr(),
         ));
         let tcp_address = expect_result_ok_string(aura_direct_tcp_listener_local_addr(listener));
+        aura_direct_coverage_share_value(listener);
         let listener_handle = listener as usize;
         let tcp_server = thread::spawn(move || {
             let listener = listener_handle as *mut OpaqueValue;
@@ -1538,6 +1539,7 @@ fn direct_runtime_resource_ffi_symbols_execute_through_the_library_copy() {
             let unix_listener = expect_result_ok_payload(aura_direct_net_unix_listen(
                 ScopedValue::new(string_value(&unix_path)).as_ptr(),
             ));
+            aura_direct_coverage_share_value(unix_listener);
             let unix_listener_handle = unix_listener as usize;
             let unix_server = thread::spawn(move || {
                 let unix_listener = unix_listener_handle as *mut OpaqueValue;
@@ -1635,6 +1637,7 @@ fn direct_runtime_resource_ffi_symbols_execute_through_the_library_copy() {
         ));
         let ws_address =
             expect_result_ok_string(aura_direct_websocket_listener_local_addr(ws_listener));
+        aura_direct_coverage_share_value(ws_listener);
         let ws_listener_handle = ws_listener as usize;
         let ws_server = thread::spawn(move || {
             let ws_listener = ws_listener_handle as *mut OpaqueValue;

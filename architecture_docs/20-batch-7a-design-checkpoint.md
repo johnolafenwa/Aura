@@ -1,6 +1,6 @@
 # Batch 7a design checkpoint: runtime value performance
 
-Status: **Steps 1 to 9 delivered 2026-10-18. Lock removal remains open.**
+Status: **Steps 1 to 9 delivered 2026-10-18. Step 10 removes the lock from values confined to one thread.**
 
 Date: 2026-10-17. Source baseline: `5f68c34` (main after
 [PR #64](https://github.com/johnolafenwa/Aura/pull/64)).
@@ -149,17 +149,31 @@ counter.
 
 ## D. Lock-Free Value Cells And Cheaper Ownership Tracking
 
-- `OpaqueValue` drops its `RwLock`s. The direct backend's ownership rules
-  already guarantee that a value is either shared read-only or held by one
-  writer. A shared value crossing to another worker thread is only read.
-  The cell becomes an `UnsafeCell` behind the existing accessors, which keep
-  their current signatures.
+- `OpaqueValue` keeps its value and type tag in `UnsafeCell`s behind the
+  existing accessors, which keep their signatures. A value starts confined
+  to the thread that created it, and its accessors take no lock.
+- A value reaches another thread in two ways: as a task argument, which the
+  child may read on another worker while the parent still holds the same
+  handle, or through the module-constant registry. Both paths mark the value
+  shared before the handoff. From then on every access takes a per-value
+  `RwLock`, so retagging a shared value stays exclusive.
+- Debug builds of compiled programs record each value's creating thread and
+  stop when another thread reaches an unshared value. The CLI, parity, and
+  scheduler-stress suites run with that check.
 - The per-task registry of owned values moves from a `BTreeMap` keyed by
   address to a cheaper structure, or is skipped on the main task where no
   failure boundary needs it. The step measures both before choosing.
 
 Evidence: the existing task, cancellation, and leak tests; a stress run of
 `npm run test:scheduler-stress`; callgrind counts.
+
+Step 10 measured the lock first. A build with no lock at all, which is not
+sound across threads, ran `int_list_sum` in 0.047 s against 0.109 s. The
+confined-value design reaches the same time: `int_list_sum` goes from 0.11 s
+to 0.048 s, `string_list_scan` from 0.18 s to 0.11 s, and
+`record_field_reads` from 0.20 s to 0.15 s in back-to-back runs against
+main. AuraDB `delete` by id goes from 7,310 µs to 6,250 µs per operation,
+and `open` with 5,000 documents from 250 ms to 201 ms.
 
 ## E. Unboxed Scalars And Strings On Hot Paths
 
@@ -257,7 +271,7 @@ dated work note.
 | 7 | Section E, unboxed comparison results, string literal operands, and leaf type tags | Merged, PR #72 |
 | 8 | Section G, copy-on-write `dict` and `set` storage | Merged, PR #73 |
 | 9 | Section H, copy-on-write `list` storage | Merged, PR #74 |
-| 10 | Section D, lock removal | Not started |
+| 10 | Section D, lock-free confined values | In review |
 
 ### Step 1 Measurements
 

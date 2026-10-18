@@ -184,11 +184,11 @@ diagnostic-grade.
 
 | Program | Before | After | Python 3.13 |
 | --- | ---: | ---: | ---: |
-| `dict_build_get`: 20,000 `str` keys, 200,000 `get` calls | 18.47 s | 0.51 s | 0.040 s |
-| `set_insert_contains`: 20,000 inserts, 200,000 `in` tests | 24.69 s | 0.053 s | 0.011 s |
-| `int_list_sum`: `for` over 100,000 `int64` values, 20 times | 1.96 s | 0.16 s | 0.064 s |
-| `string_list_scan`: 10,000 `str` compared, 100 times | 1.60 s | 0.22 s | 0.022 s |
-| `record_field_reads`: `doc.get("age")` on 5,000 dicts, 20 times | 0.80 s | 0.22 s | 0.010 s |
+| `dict_build_get`: 20,000 `str` keys, 200,000 `get` calls | 18.47 s | 0.31 s | 0.032 s |
+| `set_insert_contains`: 20,000 inserts, 200,000 `in` tests | 24.69 s | 0.038 s | 0.008 s |
+| `int_list_sum`: `for` over 100,000 `int64` values, 20 times | 1.96 s | 0.048 s | 0.048 s |
+| `string_list_scan`: 10,000 `str` compared, 100 times | 1.60 s | 0.11 s | 0.018 s |
+| `record_field_reads`: `doc.get("age")` on 5,000 dicts, 20 times | 0.80 s | 0.15 s | 0.007 s |
 
 Before is `5f68c34`. After is the Batch 7a runtime changes. The programs live
 in `benchmarks/runtime_values/`, and `scripts/bench-runtime-values.py` runs
@@ -199,15 +199,17 @@ document database benchmark ran in the same container:
 
 | AuraDB operation | Before | After | Python 3.13 |
 | --- | ---: | ---: | ---: |
-| `insert_many`, 5,000 documents in memory | 72.6 µs/op | 15.4 µs/op | 0.67 µs/op |
+| `insert_many`, 5,000 documents in memory | 72.6 µs/op | 9.4 µs/op | 0.67 µs/op |
 | `get` by id, 5,000 documents | 45 µs/op | 5 µs/op | 5.8 µs/op |
-| `find` by field scan, 5,000 documents | 188 ms | 72 ms | 13.9 ms |
-| `open` and load, 5,000 documents | 1,252 ms | 300 ms | 14.2 ms |
-| `update` by id, 2,000 documents | 7,895 µs/op | 25 µs/op | 6.0 µs/op |
-| `delete` by id, 2,000 documents | 57,990 µs/op | 9,130 µs/op | 381 µs/op |
+| `find` by field scan, 5,000 documents | 188 ms | 54 ms | 13.9 ms |
+| `open` and load, 5,000 documents | 1,252 ms | 201 ms | 14.2 ms |
+| `update` by id, 2,000 documents | 7,895 µs/op | 20 µs/op | 6.0 µs/op |
+| `delete` by id, 2,000 documents | 57,990 µs/op | 6,250 µs/op | 381 µs/op |
 
 A `list`, `dict`, or `set` copy shares its storage until one side writes,
 so AuraDB's copy of its document list on each `update` costs constant time.
+A value that only one task thread can reach is read and written without a
+lock.
 AuraDB's `delete` recomputes every document's position key on each call,
 and that loop dominates its row.
 
@@ -270,8 +272,8 @@ decisions.
 | Retry | favors Aura |
 | Array addition | 1.006974 times NumPy, 1.006524 times the same-session Rust kernel |
 | Array reduction | 6.682308 times NumPy, 1.339087 times the same-session Rust kernel |
-| `record_field_reads` | about 22 times Python 3.13 |
-| AuraDB `update` by id | about 4 times Python 3.13 |
+| `record_field_reads` | about 21 times Python 3.13 |
+| AuraDB `update` by id | about 3 times Python 3.13 |
 
 These gaps are specific to these workloads. Scheduling, runtime
 implementation, allocation, and optimizer-barrier choices affect how to read
