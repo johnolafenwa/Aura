@@ -708,6 +708,8 @@ struct NativeCodegen<'a> {
     value_as_condition: FuncId,
     unary_value: FuncId,
     binary_value: FuncId,
+    compare_values: FuncId,
+    compare_str_literal: FuncId,
     cast_value: FuncId,
     cast_integer_to_integer: FuncId,
     cast_integer_to_float: FuncId,
@@ -1259,6 +1261,8 @@ impl<'a> NativeCodegen<'a> {
             value_as_condition => ("aura_direct_value_as_condition", [types::I64], Some(types::I64)),
             unary_value => ("aura_direct_unary_value_at", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             binary_value => ("aura_direct_binary_value_at", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
+            compare_values => ("aura_direct_compare_values", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
+            compare_str_literal => ("aura_direct_compare_str_literal", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             cast_value => ("aura_direct_cast_value_at", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             cast_integer_to_integer => ("aura_direct_cast_integer_to_integer", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             cast_integer_to_float => ("aura_direct_cast_integer_to_float", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::F64)),
@@ -1776,6 +1780,8 @@ impl<'a> NativeCodegen<'a> {
             value_as_condition,
             unary_value,
             binary_value,
+            compare_values,
+            compare_str_literal,
             cast_value,
             cast_integer_to_integer,
             cast_integer_to_float,
@@ -2814,6 +2820,12 @@ impl<'a> NativeCodegen<'a> {
         let binary_value = self
             .object
             .declare_func_in_func(self.binary_value, builder.func);
+        let compare_values = self
+            .object
+            .declare_func_in_func(self.compare_values, builder.func);
+        let compare_str_literal = self
+            .object
+            .declare_func_in_func(self.compare_str_literal, builder.func);
         let cast_value = self
             .object
             .declare_func_in_func(self.cast_value, builder.func);
@@ -3621,6 +3633,8 @@ impl<'a> NativeCodegen<'a> {
             value_as_condition,
             unary_value,
             binary_value,
+            compare_values,
+            compare_str_literal,
             cast_value,
             cast_integer_to_integer,
             cast_integer_to_float,
@@ -5067,6 +5081,8 @@ struct FunctionCompiler<'a> {
     value_as_condition: cranelift_codegen::ir::FuncRef,
     unary_value: cranelift_codegen::ir::FuncRef,
     binary_value: cranelift_codegen::ir::FuncRef,
+    compare_values: cranelift_codegen::ir::FuncRef,
+    compare_str_literal: cranelift_codegen::ir::FuncRef,
     cast_value: cranelift_codegen::ir::FuncRef,
     cast_integer_to_integer: cranelift_codegen::ir::FuncRef,
     cast_integer_to_float: cranelift_codegen::ir::FuncRef,
@@ -6523,6 +6539,13 @@ impl<'a> FunctionCompiler<'a> {
                             .then(|| self.operand_integer_kind(left))
                             .flatten()
                     });
+                if is_comparison_op(*op) {
+                    if let Some(result) =
+                        self.compile_str_literal_comparison(*op, left, right, *span)?
+                    {
+                        return Ok(result);
+                    }
+                }
                 let left = self.load_operand_with_integer_hint(left, left_integer_hint)?;
                 let right = self.load_operand_with_integer_hint(right, right_integer_hint)?;
                 self.compile_binary(*op, left, right, Some(*span))
@@ -7156,6 +7179,56 @@ impl<'a> FunctionCompiler<'a> {
         })
     }
 
+    /// Compares a `str` value with a string literal without boxing the
+    /// literal. Returns `None` when neither operand fits that shape.
+    fn compile_str_literal_comparison(
+        &mut self,
+        op: BinaryOp,
+        left: &Operand,
+        right: &Operand,
+        span: Span,
+    ) -> std::result::Result<Option<ValueRef>, String> {
+        let (value, literal, literal_on_left) = match (left, right) {
+            (Operand::String(_), Operand::String(_)) => return Ok(None),
+            (value, Operand::String(literal)) => (value, literal, 0),
+            (Operand::String(literal), value) => (value, literal, 1),
+            _ => return Ok(None),
+        };
+        let loaded = self.load_operand(value)?;
+        if !matches!(&loaded.ty, DirectType::Opaque(ty) if *ty == Type::named("str")) {
+            let literal_value = self.load_operand(&Operand::String(literal.clone()))?;
+            let (left, right) = if literal_on_left == 1 {
+                (literal_value, loaded)
+            } else {
+                (loaded, literal_value)
+            };
+            return self.compile_binary(op, left, right, Some(span)).map(Some);
+        }
+        let (literal_ptr, literal_len) = self.string_constant(literal.as_bytes())?;
+        let opcode = self
+            .builder
+            .ins()
+            .iconst(types::I64, Self::binary_opcode(op));
+        let literal_on_left = self.builder.ins().iconst(types::I64, literal_on_left);
+        let (line, column) = self.span_values(Some(span));
+        let inst = self.builder.ins().call(
+            self.compare_str_literal,
+            &[
+                opcode,
+                loaded.values[0],
+                literal_ptr,
+                literal_len,
+                literal_on_left,
+                line,
+                column,
+            ],
+        );
+        Ok(Some(ValueRef {
+            values: vec![self.builder.inst_results(inst)[0]],
+            ty: DirectType::Scalar(ScalarKind::Bool),
+        }))
+    }
+
     fn compile_binary(
         &mut self,
         op: BinaryOp,
@@ -7274,6 +7347,18 @@ impl<'a> FunctionCompiler<'a> {
             let right = self.ensure_opaque(right)?;
             let binary_opcode = Self::binary_opcode(op);
             let opcode = self.builder.ins().iconst(types::I64, binary_opcode);
+            if is_comparison_op(op) {
+                // The result is a machine `bool`, so no box is built for it.
+                let (line, column) = self.span_values(span);
+                let inst = self.builder.ins().call(
+                    self.compare_values,
+                    &[opcode, left.values[0], right.values[0], line, column],
+                );
+                return Ok(ValueRef {
+                    values: vec![self.builder.inst_results(inst)[0]],
+                    ty: DirectType::Scalar(ScalarKind::Bool),
+                });
+            }
             let float_width = self.builder.ins().iconst(types::I64, 0);
             let (line, column) = self.span_values(span);
             let inst = self.builder.ins().call(
@@ -11269,7 +11354,12 @@ impl<'a> FunctionCompiler<'a> {
                 self.emit_int32_bounds_check(value.values[0], span)?;
             }
             if let DirectType::Opaque(target_ty) = target {
-                self.tag_opaque_runtime_type(&value, target_ty)?;
+                // A leaf tag such as `str` only records the name, and the
+                // value already carries the same static type, so retagging
+                // it would change nothing.
+                if !is_name_only_runtime_type(target_ty) {
+                    self.tag_opaque_runtime_type(&value, target_ty)?;
+                }
             }
             return Ok(value);
         }
@@ -21914,3 +22004,26 @@ mod callables;
 #[cfg(test)]
 #[path = "native_codegen_tests.rs"]
 mod tests;
+
+fn is_comparison_op(op: BinaryOp) -> bool {
+    matches!(
+        op,
+        BinaryOp::Eq
+            | BinaryOp::NotEq
+            | BinaryOp::Less
+            | BinaryOp::LessEq
+            | BinaryOp::Greater
+            | BinaryOp::GreaterEq
+    )
+}
+
+/// Leaf types whose runtime tag never changes the value itself. This
+/// matches the runtime's name-only tags.
+fn is_name_only_runtime_type(ty: &Type) -> bool {
+    matches!(
+        ty,
+        Type::Named(name, args)
+            if args.is_empty()
+                && matches!(name.as_str(), "str" | "bool" | "float32" | "float64" | "Duration")
+    )
+}

@@ -1,8 +1,8 @@
 # Task Board
 
-Last updated: 2026-10-17
+Last updated: 2026-10-18
 
-## Batch 7a: runtime value performance (steps 1 to 5 complete)
+## Batch 7a: runtime value performance (steps 1 to 7 complete)
 
 - Target: implement the runtime half of roadmap Batch 7a, hash-indexed
   `dict` and `set` and the value representation, as planned in the
@@ -11,15 +11,16 @@ Last updated: 2026-10-17
   shared-binding resource-method checker fix ship from a separate thread.
 - Done: hash-indexed `dict` and `set` (PR #66), interned type tags
   (PR #67), borrowed reads (PR #68), list loops without per-element
-  `Lookup` values and linear owned loops (PR #69), and a hashed ownership
-  ledger with the final measurements (PR #70), and unboxed `int64`,
-  `float64`, and `bool` list reads (step 6). `dict_build_get` went from
-  18.47 s to 0.51 s and `int_list_sum` from 1.96 s to 0.16 s.
+  `Lookup` values and linear owned loops (PR #69), a hashed ownership
+  ledger with measurements (PR #70), unboxed `int64`, `float64`, and
+  `bool` list reads (PR #71), and unboxed comparisons (step 7).
+  `dict_build_get` went from 18.47 s to 0.51 s, `int_list_sum` from
+  1.96 s to 0.16 s, and `string_list_scan` from 1.60 s to 0.22 s.
 - Verification: each PR passed hosted CI on Linux and macOS. The
-  Performance chapter records the final runs.
-- Remaining: typed scalar and string operands for `in`, `==`, and `get`,
-  and removal of the per-value lock. Both are not started. The lock guards retagging of shared values,
-  so removing it needs a design change first.
+  Performance chapter records the runs.
+- Remaining: copy-on-write `dict` and `set` storage, then removal of the
+  per-value lock. The lock guards retagging of shared values, so removing
+  it needs a design change first.
 
 ## AuraDB benchmark fixes (complete)
 

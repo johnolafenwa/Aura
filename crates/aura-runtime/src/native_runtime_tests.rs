@@ -13685,6 +13685,13 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
             "vec-index-oob-no-span" => {
                 super::aura_direct_vec_index(int_vec(&[1]), 5, 0, 0);
             }
+            "compare-values-opcode" => {
+                super::aura_direct_compare_values(2, int_value(1), int_value(2), 0, 0);
+            }
+            "compare-str-literal-order-type" => {
+                let text = b"a";
+                super::aura_direct_compare_str_literal(7, int_value(1), text.as_ptr(), 1, 0, 0, 0);
+            }
             "vec-index-scalar-oob" => {
                 super::aura_direct_vec_index_scalar(int_vec(&[1]), 5, 0);
             }
@@ -14674,6 +14681,8 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
             "vec-index-oob-no-span",
             "list index `5` is out of bounds for length `1`",
         ),
+        ("compare-values-opcode", "unknown comparison opcode `2`"),
+        ("compare-str-literal-order-type", "unsupported comparison"),
         (
             "vec-index-scalar-oob",
             "list index `5` is out of bounds for length `1`",
@@ -24557,4 +24566,58 @@ fn scalar_list_reads_return_unboxed_bits() {
     for vec in [ints, floats, flags] {
         unsafe { release_value(vec) };
     }
+}
+
+#[test]
+fn direct_comparisons_return_unboxed_bits() {
+    let left = int_value(3);
+    let right = int_value(5);
+    assert_eq!(super::aura_direct_compare_values(7, left, right, 0, 0), 1);
+    assert_eq!(super::aura_direct_compare_values(5, left, right, 0, 0), 0);
+    assert_eq!(super::aura_direct_compare_values(10, left, left, 0, 0), 1);
+    let text = string_value("user-7");
+    let literal = b"user-7";
+    let other = b"user-8";
+    let compare = |op: i64, bytes: &[u8], on_left: i64| {
+        super::aura_direct_compare_str_literal(op, text, bytes.as_ptr(), bytes.len(), on_left, 0, 0)
+    };
+    assert_eq!(compare(5, literal, 0), 1);
+    assert_eq!(compare(6, literal, 0), 0);
+    assert_eq!(compare(5, other, 0), 0);
+    assert_eq!(compare(7, other, 0), 1);
+    assert_eq!(compare(7, other, 1), 0);
+    assert_eq!(compare(8, literal, 1), 1);
+    assert_eq!(compare(9, other, 1), 1);
+    assert_eq!(compare(10, other, 0), 0);
+    assert_eq!(
+        super::aura_direct_compare_str_literal(5, left, literal.as_ptr(), literal.len(), 1, 0, 0),
+        0
+    );
+    for value in [left, right, text] {
+        unsafe { release_value(value) };
+    }
+}
+
+#[test]
+fn leaf_runtime_type_tags_skip_the_value_lock() {
+    let tag = |ty: Type| {
+        let name = super::canonical_runtime_type_name(&ty);
+        super::interned_runtime_type_tag(name.as_bytes()).name_only
+    };
+    assert!(tag(Type::named("str")));
+    assert!(tag(Type::named("bool")));
+    assert!(tag(Type::named("float64")));
+    assert!(!tag(Type::named("int64")));
+    assert!(!tag(Type::Named(
+        "list".to_string(),
+        vec![Type::named("str")]
+    )));
+    let text = string_value("tagged");
+    let name = super::canonical_runtime_type_name(&Type::named("str"));
+    super::aura_direct_tag_value_type(text, name.as_ptr(), name.len());
+    assert_eq!(
+        unsafe { super::explicit_runtime_type_name(text) }.as_deref(),
+        Some(name.as_str())
+    );
+    unsafe { release_value(text) };
 }
