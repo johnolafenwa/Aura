@@ -1024,7 +1024,7 @@ fn int32_overflow_message(value: i64) -> String {
 pub struct OpaqueValue {
     ref_count: AtomicUsize,
     value: RwLock<Value>,
-    runtime_type_name: RwLock<Option<String>>,
+    runtime_type_name: RwLock<Option<Arc<str>>>,
 }
 
 #[cfg(coverage)]
@@ -1196,10 +1196,10 @@ fn boxed_value(value: Value) -> *mut OpaqueValue {
 }
 
 fn boxed_typed_value(value: Value, runtime_type_name: &str) -> *mut OpaqueValue {
-    boxed_value_with_type(value, Some(runtime_type_name.to_string()))
+    boxed_value_with_type(value, Some(Arc::from(runtime_type_name)))
 }
 
-fn boxed_value_with_type(value: Value, runtime_type_name: Option<String>) -> *mut OpaqueValue {
+fn boxed_value_with_type(value: Value, runtime_type_name: Option<Arc<str>>) -> *mut OpaqueValue {
     let value = Box::into_raw(Box::new(OpaqueValue {
         ref_count: AtomicUsize::new(1),
         value: RwLock::new(value),
@@ -1308,6 +1308,10 @@ fn direct_value_clone_count() -> usize {
 }
 
 unsafe fn explicit_runtime_type_name(ptr: *mut OpaqueValue) -> Option<String> {
+    explicit_runtime_type_tag(ptr).map(|name| name.to_string())
+}
+
+unsafe fn explicit_runtime_type_tag(ptr: *mut OpaqueValue) -> Option<Arc<str>> {
     match ptr.as_ref() {
         Some(value) => match value.runtime_type_name.read() {
             Ok(runtime_type_name) => runtime_type_name.clone(),
@@ -1670,71 +1674,197 @@ fn runtime_type_pattern_matches(
     }
 }
 
-unsafe fn set_explicit_runtime_type_name(ptr: *mut OpaqueValue, runtime_type_name: String) {
+/// A direct-runtime type descriptor decoded once and shared by every value
+/// tagged with it. Codegen tags values with pointers into static descriptor
+/// constants, so the same descriptor recurs on every loop iteration.
+pub(crate) struct RuntimeTypeTag {
+    pub(crate) name: Arc<str>,
+    pub(crate) parsed: Type,
+    pub(crate) integer_kind: Option<IntegerKind>,
+}
+
+/// The shared registry is cleared when it reaches this size. Generated code
+/// only tags with a bounded set of static descriptors, so the limit only
+/// guards against descriptors built at run time. Values keep their own
+/// `Arc`s, so clearing never invalidates a stored tag.
+const RUNTIME_TYPE_TAG_CACHE_LIMIT: usize = 4096;
+
+type RuntimeTypeTagRegistry = Mutex<HashMap<Box<[u8]>, Arc<RuntimeTypeTag>>>;
+
+const RUNTIME_TYPE_TAG_LOOKUP_SLOTS: usize = 64;
+
+type RuntimeTypeTagSlot = Option<(usize, usize, Arc<RuntimeTypeTag>)>;
+
+thread_local! {
+    /// Per-thread direct-mapped lookup keyed by the descriptor's address and
+    /// length, so the hot path hashes nothing and takes no lock. A hit still
+    /// compares the bytes, so a reused buffer cannot return a stale tag.
+    static RUNTIME_TYPE_TAG_LOOKUP: RefCell<[RuntimeTypeTagSlot; RUNTIME_TYPE_TAG_LOOKUP_SLOTS]> =
+        const { RefCell::new([const { None }; RUNTIME_TYPE_TAG_LOOKUP_SLOTS]) };
+}
+
+fn runtime_type_tag_registry() -> &'static RuntimeTypeTagRegistry {
+    static REGISTRY: OnceLock<RuntimeTypeTagRegistry> = OnceLock::new();
+    REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn interned_runtime_type_tag(bytes: &[u8]) -> Arc<RuntimeTypeTag> {
+    let address = bytes.as_ptr() as usize;
+    let len = bytes.len();
+    let slot = ((address >> 3) ^ (address >> 11) ^ len) % RUNTIME_TYPE_TAG_LOOKUP_SLOTS;
+    let cached = RUNTIME_TYPE_TAG_LOOKUP
+        .try_with(|lookup| match &lookup.borrow()[slot] {
+            Some((cached_address, cached_len, tag))
+                if *cached_address == address
+                    && *cached_len == len
+                    && tag.name.as_bytes() == bytes =>
+            {
+                Some(Arc::clone(tag))
+            }
+            _ => None,
+        })
+        .ok()
+        .flatten();
+    if let Some(tag) = cached {
+        return tag;
+    }
+    let tag = shared_runtime_type_tag(bytes);
+    let _ = RUNTIME_TYPE_TAG_LOOKUP.try_with(|lookup| {
+        lookup.borrow_mut()[slot] = Some((address, len, Arc::clone(&tag)));
+    });
+    tag
+}
+
+fn shared_runtime_type_tag(bytes: &[u8]) -> Arc<RuntimeTypeTag> {
+    let registry = runtime_type_tag_registry();
+    let existing = registry
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .get(bytes)
+        .cloned();
+    if let Some(tag) = existing {
+        return tag;
+    }
+    // Decode outside the lock: a malformed descriptor raises a runtime error.
+    let name = str::from_utf8(bytes)
+        .unwrap_or_else(|_| runtime_error("aura direct runtime received invalid UTF-8 bytes"));
+    let tag = Arc::new(RuntimeTypeTag {
+        name: Arc::from(name),
+        parsed: runtime_type_from_name(name),
+        integer_kind: IntegerKind::from_runtime_type_name(name),
+    });
+    let mut registry = registry
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if registry.len() >= RUNTIME_TYPE_TAG_CACHE_LIMIT {
+        registry.clear();
+    }
+    Arc::clone(registry.entry(Box::from(bytes)).or_insert(tag))
+}
+
+/// Applies an interned tag to a value. Each update first checks whether the
+/// value already carries it, so retagging with the same descriptor does not
+/// allocate.
+unsafe fn set_explicit_runtime_type_tag(ptr: *mut OpaqueValue, tag: &RuntimeTypeTag) {
+    let runtime_type_name: &str = &tag.name;
     match ptr.as_ref() {
         Some(value) => match value.runtime_type_name.write() {
-            Ok(mut stored) => *stored = Some(runtime_type_name.clone()),
+            Ok(mut stored) => {
+                if stored.as_deref() != Some(runtime_type_name) {
+                    *stored = Some(Arc::clone(&tag.name));
+                }
+            }
             Err(_) => runtime_error("direct runtime type lock was poisoned"),
         },
         None => runtime_error("direct runtime received a null opaque value pointer"),
     }
-    let parsed = runtime_type_from_name(&runtime_type_name);
+    let parsed = &tag.parsed;
+    fn assign_type(slot: &mut Type, ty: &Type) {
+        if slot != ty {
+            *slot = ty.clone();
+        }
+    }
     unsafe {
         value_mut(ptr, |value| match value {
             Value::Int(integer) => {
-                if let Some(kind) = IntegerKind::from_runtime_type_name(&runtime_type_name) {
+                if let Some(kind) = tag.integer_kind {
                     if let Some(typed) = integer.with_runtime_kind(kind) {
                         *integer = typed;
                     }
                 }
             }
             Value::Vec(vector) => {
-                if let Type::Named(name, args) = &parsed {
+                if let Type::Named(name, args) = parsed {
                     if name == "list" && args.len() == 1 {
-                        vector.element_type = args[0].clone();
+                        assign_type(&mut vector.element_type, &args[0]);
                     }
                 }
             }
             Value::Set(set) => {
-                if let Type::Named(name, args) = &parsed {
+                if let Type::Named(name, args) = parsed {
                     if name == "set" && args.len() == 1 {
-                        set.element_type = args[0].clone();
+                        assign_type(&mut set.element_type, &args[0]);
                     }
                 }
             }
             Value::Map(map) => {
-                if let Type::Named(name, args) = &parsed {
+                if let Type::Named(name, args) = parsed {
                     if name == "dict" && args.len() == 2 {
-                        map.key_type = args[0].clone();
-                        map.value_type = args[1].clone();
+                        assign_type(&mut map.key_type, &args[0]);
+                        assign_type(&mut map.value_type, &args[1]);
                     }
                 }
             }
             Value::Tuple(tuple) => {
-                if let Type::Tuple(element_types) = &parsed {
-                    if element_types.len() == tuple.elements.len() {
+                if let Type::Tuple(element_types) = parsed {
+                    if element_types.len() == tuple.elements.len()
+                        && tuple.element_types != *element_types
+                    {
                         tuple.element_types = element_types.clone();
                     }
                 }
             }
-            Value::Instance(instance) if matches!(&parsed, Type::Named(_, args) if !args.is_empty()) =>
+            Value::Instance(instance) if matches!(parsed, Type::Named(_, args) if !args.is_empty()) =>
             {
-                instance.fields.insert(
-                    DIRECT_RUNTIME_TYPE_FIELD.to_string(),
-                    Value::String(runtime_type_name.clone()),
+                let already_tagged = matches!(
+                    instance.fields.get(DIRECT_RUNTIME_TYPE_FIELD),
+                    Some(Value::String(existing)) if existing == runtime_type_name
                 );
+                if !already_tagged {
+                    instance.fields.insert(
+                        DIRECT_RUNTIME_TYPE_FIELD.to_string(),
+                        Value::String(runtime_type_name.to_string()),
+                    );
+                }
             }
-            Value::EnumVariant(variant) if matches!(&parsed, Type::Named(_, args) if !args.is_empty()) =>
+            Value::EnumVariant(variant) if matches!(parsed, Type::Named(_, args) if !args.is_empty()) =>
             {
-                let base = nominal_runtime_base_name(&variant.enum_name);
-                variant.enum_name =
-                    format!("{base}{DIRECT_RUNTIME_TYPE_SEPARATOR}{runtime_type_name}");
+                // `enum_name` is `base`, or `base SEPARATOR descriptor` once
+                // tagged. A matching descriptor means the rebuilt name would
+                // equal the current one.
+                let base = match variant.enum_name.split_once(DIRECT_RUNTIME_TYPE_SEPARATOR) {
+                    Some((_, embedded)) if embedded == runtime_type_name => None,
+                    Some((base, _)) => Some(base),
+                    None => Some(variant.enum_name.as_str()),
+                };
+                if let Some(base) = base {
+                    // Sized up front: `format!` costs more than the tag lookup.
+                    let mut name = String::with_capacity(
+                        base.len()
+                            + DIRECT_RUNTIME_TYPE_SEPARATOR.len_utf8()
+                            + runtime_type_name.len(),
+                    );
+                    name.push_str(base);
+                    name.push(DIRECT_RUNTIME_TYPE_SEPARATOR);
+                    name.push_str(runtime_type_name);
+                    variant.enum_name = name;
+                }
             }
-            Value::Channel(channel) => channel.set_runtime_type_name(runtime_type_name.clone()),
-            Value::Task(task) => task.set_runtime_type_name(runtime_type_name.clone()),
+            Value::Channel(channel) => channel.set_runtime_type_name(runtime_type_name.to_string()),
+            Value::Task(task) => task.set_runtime_type_name(runtime_type_name.to_string()),
             Value::Function(function) => {
                 if matches!(parsed, Type::Function { .. } | Type::Closure { .. }) {
-                    function.signature = parsed.clone();
+                    assign_type(&mut function.signature, parsed);
                 }
             }
             _ => {}
@@ -7349,7 +7479,7 @@ pub extern "C-unwind" fn aura_direct_set_take_index_in_place(
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_clone_value(value: *mut OpaqueValue) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
-        let runtime_type_name = unsafe { explicit_runtime_type_name(value) };
+        let runtime_type_name = unsafe { explicit_runtime_type_tag(value) };
         let cloned = unsafe { with_value(value, try_clone_array_containing_value) };
         boxed_value_with_type(direct_array_result(cloned, 0, 0), runtime_type_name)
     })
@@ -7362,7 +7492,8 @@ pub extern "C-unwind" fn aura_direct_tag_value_type(
     type_len: usize,
 ) {
     task_runtime_boundary(|| unsafe {
-        set_explicit_runtime_type_name(value, decode_bytes(type_ptr, type_len));
+        let tag = interned_runtime_type_tag(slice::from_raw_parts(type_ptr, type_len));
+        set_explicit_runtime_type_tag(value, &tag);
     })
 }
 

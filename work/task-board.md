@@ -13,11 +13,12 @@ Last updated: 2026-10-17
   callgrind profile. Step 1 replaces the linear `dict` and `set` storage
   with an insertion-ordered hash index. `dict_build_get` went from 18.47 s
   to 0.71 s and `set_insert_contains` from 24.69 s to 0.062 s.
-- Verification: see the step 1 PR. Details are in
-  `2026-10-17-batch-7a-hash-dict-set.md`.
-- Remaining: steps 2 to 6 of the checkpoint: interned type tags, shared
-  element types and borrowed reads, lock-free value cells, unboxed scalars
-  and strings, and final measurements.
+- Step 1 merged as PR #66 on 2026-10-18. Step 2 interns runtime type
+  tags: `int_list_sum` 1.97 s to 1.05 s, `string_list_scan` 1.6 s to
+  0.88 s. Details are in `2026-10-17-batch-7a-hash-dict-set.md` and
+  `2026-10-17-batch-7a-type-tags.md`.
+- Remaining: steps 3 to 6 of the checkpoint. Steps 3 to 5 are done on a
+  local branch and wait for step 2 to merge.
 
 ## AuraDB benchmark fixes (complete)
 
