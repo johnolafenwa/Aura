@@ -201,7 +201,8 @@ fn adr0061_element_place_walkers_report_missing_slots_without_changing_values() 
             entries: vec![(
                 Value::String("a".to_string()),
                 Value::Int(IntegerValue::from_i64(4)),
-            )],
+            )]
+            .into(),
         }),
     );
     for (root, segment, message) in [
@@ -3985,7 +3986,8 @@ fn mir_length_map_len_borrows_receiver_without_snapshot_clone() {
                     Value::String("second-map-key".repeat(64)),
                     Value::String("second-map-value".repeat(64)),
                 ),
-            ],
+            ]
+            .into(),
         }),
         "len",
         2,
@@ -4002,7 +4004,8 @@ fn mir_length_set_len_borrows_receiver_without_snapshot_clone() {
             elements: vec![
                 Value::String("first-set-value".repeat(64)),
                 Value::String("second-set-value".repeat(64)),
-            ],
+            ]
+            .into(),
         }),
         "len",
         2,
@@ -4601,7 +4604,7 @@ fn mir_json_into_accessors_move_payload_allocations_and_consume_places() {
             vec![Value::Map(MapValue {
                 key_type: Type::named("str"),
                 value_type: Type::named("json.Value"),
-                entries,
+                entries: entries.into(),
             })],
         ),
     );
@@ -4661,7 +4664,7 @@ fn mir_json_variant_construction_moves_owned_payload_allocations() {
             Value::Map(MapValue {
                 key_type: Type::named("str"),
                 value_type: Type::named("json.Value"),
-                entries,
+                entries: entries.into(),
             }),
         ),
     ];
@@ -5263,7 +5266,7 @@ fn mir_json_adapters_reject_inexact_runtime_metadata() {
             Value::Map(MapValue {
                 key_type: Type::named("str"),
                 value_type: Type::named("bool"),
-                entries: Vec::new(),
+                entries: Vec::new().into(),
             }),
         ),
     ] {
@@ -5807,7 +5810,7 @@ fn mir_owned_collection_mutators_do_not_clone_inserted_values() {
         let map = MapValue {
             key_type: string_type.clone(),
             value_type: string_type.clone(),
-            entries: Vec::new(),
+            entries: Vec::new().into(),
         };
         env.define_typed("map", map_type.clone(), Value::Map(map.clone()));
         env.define_typed("key", string_type.clone(), Value::String(key));
@@ -5843,7 +5846,7 @@ fn mir_owned_collection_mutators_do_not_clone_inserted_values() {
     let map = MapValue {
         key_type: string_type.clone(),
         value_type: string_type.clone(),
-        entries: Vec::new(),
+        entries: Vec::new().into(),
     };
     env.define_typed("map", map_type.clone(), Value::Map(map.clone()));
     env.define_typed(
@@ -5852,7 +5855,7 @@ fn mir_owned_collection_mutators_do_not_clone_inserted_values() {
         Value::Map(MapValue {
             key_type: string_type.clone(),
             value_type: string_type.clone(),
-            entries: vec![(Value::String(extended_key), Value::String(extended_value))],
+            entries: vec![(Value::String(extended_key), Value::String(extended_value))].into(),
         }),
     );
     runtime
@@ -5878,7 +5881,7 @@ fn mir_owned_collection_mutators_do_not_clone_inserted_values() {
     let set_type = Type::Named("set".to_string(), vec![string_type.clone()]);
     let set = SetValue {
         element_type: string_type.clone(),
-        elements: Vec::new(),
+        elements: Vec::new().into(),
     };
     env.define_typed("set", set_type, Value::Set(set.clone()));
     env.define_typed("added", string_type, Value::String(added));
@@ -5949,7 +5952,7 @@ fn mir_owned_process_and_http_decoders_transfer_string_allocations() {
         Value::Map(MapValue {
             key_type: Type::named("str"),
             value_type: Type::named("str"),
-            entries: vec![(Value::String(header_name), Value::String(header_value))],
+            entries: vec![(Value::String(header_name), Value::String(header_value))].into(),
         }),
         "respond_text(headers=...)",
     )
@@ -6196,7 +6199,7 @@ fn mir_owned_vec_and_set_iteration_take_elements_from_the_private_source() {
         set_type,
         Value::Set(SetValue {
             element_type: Type::named("str"),
-            elements: vec![Value::String(set_text)],
+            elements: vec![Value::String(set_text)].into(),
         }),
     );
     let value = runtime
@@ -6803,7 +6806,8 @@ fn mir_runtime_helper_values_and_streams_cover_optional_result_and_diagnostics()
                 entries: vec![(
                     Value::String("Accept".to_string()),
                     Value::String("*/*".to_string())
-                )],
+                )]
+                .into(),
             }),
             "headers",
         )
@@ -6818,7 +6822,7 @@ fn mir_runtime_helper_values_and_streams_cover_optional_result_and_diagnostics()
         &Value::Map(MapValue {
             key_type: Type::named("str"),
             value_type: Type::named("str"),
-            entries: vec![(Value::Bool(true), Value::String("bad".to_string()))],
+            entries: vec![(Value::Bool(true), Value::String("bad".to_string()))].into(),
         }),
         "headers",
     )
@@ -8603,7 +8607,8 @@ fn mir_runtime_stream_and_http_member_helpers_cover_resource_branches() {
                     entries: vec![(
                         Value::String("Content-Type".to_string()),
                         Value::String("text/plain".to_string()),
-                    )],
+                    )]
+                    .into(),
                 }),
             );
             server_env.define_typed(
@@ -12128,7 +12133,8 @@ fn mir_runtime_member_call_dispatch_covers_builtin_runtime_and_trait_receivers()
             entries: vec![(
                 Value::String("count".to_string()),
                 Value::Int(IntegerValue::from_signed(1)),
-            )],
+            )]
+            .into(),
         }),
     );
     env.define_typed(
@@ -12136,7 +12142,7 @@ fn mir_runtime_member_call_dispatch_covers_builtin_runtime_and_trait_receivers()
         Type::Named("set".to_string(), vec![Type::named("str")]),
         Value::Set(crate::runtime_value::SetValue {
             element_type: Type::named("str"),
-            elements: vec![Value::String("ready".to_string())],
+            elements: vec![Value::String("ready".to_string())].into(),
         }),
     );
     env.define_typed(
@@ -13559,7 +13565,7 @@ fn trait_impl_lookup_and_top_level_run_helpers_cover_runtime_paths() {
     assert_eq!(
         MirRuntime::infer_value_type(&Value::Set(crate::runtime_value::SetValue {
             element_type: Type::named("str"),
-            elements: vec![Value::String("ready".to_string())],
+            elements: vec![Value::String("ready".to_string())].into(),
         })),
         Some(Type::Named("set".to_string(), vec![Type::named("str")]))
     );
@@ -13570,7 +13576,8 @@ fn trait_impl_lookup_and_top_level_run_helpers_cover_runtime_paths() {
             entries: vec![(
                 Value::String("count".to_string()),
                 Value::Int(IntegerValue::from_signed(1)),
-            )],
+            )]
+            .into(),
         })),
         Some(Type::Named(
             "dict".to_string(),
@@ -14034,7 +14041,8 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
             entries: vec![(
                 Value::String("count".to_string()),
                 Value::Int(IntegerValue::from_signed(1)),
-            )],
+            )]
+            .into(),
         }),
     );
     env.define_typed(
@@ -14049,7 +14057,8 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
             entries: vec![(
                 Value::String("next".to_string()),
                 Value::Int(IntegerValue::from_signed(9)),
-            )],
+            )]
+            .into(),
         }),
     );
     env.define_typed(
@@ -14057,7 +14066,7 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
         Type::Named("set".to_string(), vec![Type::named("str")]),
         Value::Set(crate::runtime_value::SetValue {
             element_type: Type::named("str"),
-            elements: vec![Value::String("ready".to_string())],
+            elements: vec![Value::String("ready".to_string())].into(),
         }),
     );
     env.define_typed(
@@ -15021,7 +15030,8 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
             entries: vec![(
                 Value::String("count".to_string()),
                 Value::Int(IntegerValue::from_signed(9)),
-            )],
+            )]
+            .into(),
         }),
     );
     runtime
@@ -15844,7 +15854,8 @@ fn mir_runtime_index_helpers_cover_error_paths() {
         entries: vec![(
             Value::String("count".to_string()),
             Value::Int(IntegerValue::from_signed(1)),
-        )],
+        )]
+        .into(),
     };
     for (field, args, receiver_place, expected) in [
         (
@@ -15905,7 +15916,7 @@ fn mir_runtime_index_helpers_cover_error_paths() {
             crate::runtime_value::MapValue {
                 key_type: Type::named("str"),
                 value_type: Type::named("int32"),
-                entries: vec![],
+                entries: vec![].into(),
             },
             "clear",
             None,
@@ -15921,7 +15932,7 @@ fn mir_runtime_index_helpers_cover_error_paths() {
         .evaluate_set_method(
             crate::runtime_value::SetValue {
                 element_type: Type::named("str"),
-                elements: vec![],
+                elements: vec![].into(),
             },
             "add",
             None,
@@ -15935,7 +15946,7 @@ fn mir_runtime_index_helpers_cover_error_paths() {
 
     let set_value = || crate::runtime_value::SetValue {
         element_type: Type::named("str"),
-        elements: vec![Value::String("ready".to_string())],
+        elements: vec![Value::String("ready".to_string())].into(),
     };
     for (field, args, receiver_place, expected) in [
         (
@@ -20962,11 +20973,11 @@ fn owned_collection_methods_require_their_source_places() {
     let map = || MapValue {
         key_type: Type::named("str"),
         value_type: Type::named("int64"),
-        entries: Vec::new(),
+        entries: Vec::new().into(),
     };
     let set = || SetValue {
         element_type: Type::named("int64"),
-        elements: vec![Value::Int(IntegerValue::from_i64(1))],
+        elements: vec![Value::Int(IntegerValue::from_i64(1))].into(),
     };
     let index = [mir_arg(Some("index"), Operand::Int(0))];
     let additional = [mir_arg(Some("additional"), Operand::Int(4))];
@@ -22022,7 +22033,7 @@ fn http_exchange_and_response_methods_report_invalid_utf8_and_closed_exchanges()
                 Value::Map(MapValue {
                     key_type: Type::named("str"),
                     value_type: Type::named("str"),
-                    entries: Vec::new(),
+                    entries: Vec::new().into(),
                 }),
             );
             env.define_typed(
@@ -22659,7 +22670,7 @@ fn network_listen_and_request_builtins_report_bind_and_connect_failures() {
         value: Value::Map(MapValue {
             key_type: Type::named("str"),
             value_type: Type::named("str"),
-            entries: Vec::new(),
+            entries: Vec::new().into(),
         }),
         ty: Some(Type::Named(
             "dict".to_string(),

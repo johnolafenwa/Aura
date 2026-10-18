@@ -23,6 +23,7 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, Once, OnceLock, Weak};
 use std::thread;
 use std::time::{Duration as StdDuration, Instant};
 
+pub use crate::collection_index::{DictEntries, SetElements};
 use base64::Engine as _;
 use corosensei::stack::{DefaultStack, Stack};
 use corosensei::{Coroutine, CoroutineResult, Yielder};
@@ -2086,8 +2087,10 @@ fn drop_array_containing_value_iteratively(value: Value, frames: &mut Vec<ArrayC
         if let Some(value) = next.take() {
             let frame = match value {
                 Value::Tuple(TupleValue { elements, .. })
-                | Value::Vec(VecValue { elements, .. })
-                | Value::Set(SetValue { elements, .. }) => {
+                | Value::Vec(VecValue { elements, .. }) => {
+                    Some(ArrayCloneCleanupFrame::Values(elements.into_iter()))
+                }
+                Value::Set(SetValue { elements, .. }) => {
                     Some(ArrayCloneCleanupFrame::Values(elements.into_iter()))
                 }
                 Value::Map(MapValue { entries, .. }) => Some(ArrayCloneCleanupFrame::Map {
@@ -2327,7 +2330,7 @@ pub fn try_clone_array_containing_value(value: &Value) -> Result<Value> {
                     if set.elements.is_empty() {
                         Some(Value::Set(SetValue {
                             element_type: set.element_type.clone(),
-                            elements,
+                            elements: elements.into(),
                         }))
                     } else {
                         state.push_frame(CloneFrame::Set {
@@ -2355,7 +2358,7 @@ pub fn try_clone_array_containing_value(value: &Value) -> Result<Value> {
                         Some(Value::Map(MapValue {
                             key_type: map.key_type.clone(),
                             value_type: map.value_type.clone(),
-                            entries,
+                            entries: entries.into(),
                         }))
                     }
                 }
@@ -2477,7 +2480,7 @@ pub fn try_clone_array_containing_value(value: &Value) -> Result<Value> {
                     } else {
                         state.completed = Some(Value::Set(SetValue {
                             element_type: set.element_type.clone(),
-                            elements,
+                            elements: SetElements::cloned_from(elements, &set.elements),
                         }));
                     }
                 }
@@ -2515,7 +2518,7 @@ pub fn try_clone_array_containing_value(value: &Value) -> Result<Value> {
                         state.completed = Some(Value::Map(MapValue {
                             key_type: map.key_type.clone(),
                             value_type: map.value_type.clone(),
-                            entries,
+                            entries: DictEntries::cloned_from(entries, &map.entries),
                         }));
                     }
                 }
@@ -2585,14 +2588,14 @@ pub fn try_clone_array_containing_value(value: &Value) -> Result<Value> {
 #[derive(Clone, Debug)]
 pub struct SetValue {
     pub element_type: Type,
-    pub elements: Vec<Value>,
+    pub elements: SetElements,
 }
 
 #[derive(Clone, Debug)]
 pub struct MapValue {
     pub key_type: Type,
     pub value_type: Type,
-    pub entries: Vec<(Value, Value)>,
+    pub entries: DictEntries,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -6899,43 +6902,21 @@ impl PartialEq for VecValue {
 
 impl PartialEq for SetValue {
     fn eq(&self, other: &Self) -> bool {
-        if self.elements.len() != other.elements.len() {
-            return false;
-        }
-        for element in &self.elements {
-            let mut found = false;
-            for candidate in &other.elements {
-                if candidate == element {
-                    found = true;
-                    break;
-                }
-            }
-            if !found {
-                return false;
-            }
-        }
-        true
+        self.elements.len() == other.elements.len()
+            && self
+                .elements
+                .iter()
+                .all(|element| other.elements.contains_key(element))
     }
 }
 
 impl PartialEq for MapValue {
     fn eq(&self, other: &Self) -> bool {
-        if self.entries.len() != other.entries.len() {
-            return false;
-        }
-        for (key, value) in &self.entries {
-            let mut matched = false;
-            for (candidate_key, candidate_value) in &other.entries {
-                if candidate_key == key {
-                    matched = candidate_value == value;
-                    break;
-                }
-            }
-            if !matched {
-                return false;
-            }
-        }
-        true
+        self.entries.len() == other.entries.len()
+            && self
+                .entries
+                .iter()
+                .all(|(key, value)| other.entries.value_of(key) == Some(value))
     }
 }
 
@@ -7018,7 +6999,7 @@ fn clone_json_runtime_tree(root: &Value) -> Option<Value> {
                             vec![Value::Map(MapValue {
                                 key_type: map.key_type.clone(),
                                 value_type: map.value_type.clone(),
-                                entries,
+                                entries: entries.into(),
                             })],
                         ))
                     } else {
@@ -7094,7 +7075,7 @@ fn clone_json_runtime_tree(root: &Value) -> Option<Value> {
                             vec![Value::Map(MapValue {
                                 key_type: map.key_type.clone(),
                                 value_type: map.value_type.clone(),
-                                entries,
+                                entries: DictEntries::cloned_from(entries, &map.entries),
                             })],
                         ));
                     }
@@ -15556,7 +15537,7 @@ pub fn json_value_to_runtime(value: JsonValue) -> Result<Value> {
                             json_runtime_single_payload(Value::Map(MapValue {
                                 key_type: json_runtime_type("str")?,
                                 value_type: json_runtime_type("json.Value")?,
-                                entries,
+                                entries: entries.into(),
                             }))?,
                         )?);
                     }

@@ -81,12 +81,12 @@ pub fn union_values_equal(left: &Value, right: &Value) -> bool {
     if !member_matches(&left_identity, &right_identity) {
         return false;
     }
-    let payload = |value: &Value| -> Value {
+    fn payload(value: &Value) -> &Value {
         match value {
-            Value::Union(union) => union.payload.clone(),
-            other => other.clone(),
+            Value::Union(union) => &union.payload,
+            other => other,
         }
-    };
+    }
     payload(left) == payload(right)
 }
 

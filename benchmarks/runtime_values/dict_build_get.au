@@ -1,0 +1,20 @@
+def main():
+    n = 20000
+    mut index: dict[str, int64] = {}
+    mut i = 0
+    while i < n:
+        index[f"key-{i}"] = i
+        i += 1
+    mut total = 0
+    mut round = 0
+    while round < 10:
+        mut j = 0
+        while j < n:
+            match index.get(f"key-{j}"):
+                case Lookup.Found(value):
+                    total += value
+                case Lookup.Missing:
+                    total -= 1
+            j += 1
+        round += 1
+    print(total)

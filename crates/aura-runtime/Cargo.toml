@@ -13,6 +13,7 @@ aura-core = { path = "../aura-core" }
 base64 = "0.22"
 corosensei = "0.3.3"
 getrandom = "0.2"
+hashbrown = { version = "0.16", default-features = false }
 httparse = "1"
 libc = "0.2"
 libffi = "5.1.1"

@@ -1,0 +1,30 @@
+import json
+
+
+def main():
+    mut docs: list[dict[str, json.Value]] = []
+    mut i = 0
+    while i < 5000:
+        mut doc: dict[str, json.Value] = {}
+        doc["name"] = json.Value.String(f"user-{i}")
+        doc["age"] = json.Value.Int(18 + i % 60)
+        doc["city"] = json.Value.String("Lagos")
+        doc["active"] = json.Value.Bool(i % 3 != 0)
+        docs.append(doc)
+        i += 1
+    mut adults = 0
+    mut round = 0
+    while round < 20:
+        for doc in docs:
+            match doc.get("age"):
+                case Lookup.Found(value):
+                    match value:
+                        case json.Value.Int(age):
+                            if age >= 40:
+                                adults += 1
+                        case _:
+                            pass
+                case Lookup.Missing:
+                    pass
+        round += 1
+    print(adults)

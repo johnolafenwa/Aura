@@ -1,0 +1,14 @@
+def main():
+    n = 20000
+    mut seen = set[int64]()
+    mut i = 0
+    while i < n:
+        seen.add(i * 7)
+        i += 1
+    mut hits = 0
+    mut j = 0
+    while j < n * 10:
+        if j in seen:
+            hits += 1
+        j += 1
+    print(hits)

@@ -185,6 +185,16 @@ impl PartialEq for IntegerValue {
 
 impl Eq for IntegerValue {}
 
+impl std::hash::Hash for IntegerValue {
+    /// Hashes the numeric value, as equality compares it, so a typed value
+    /// and an untyped literal with the same value hash the same.
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        let (sign, magnitude) = self.sign_magnitude();
+        (sign as u8).hash(state);
+        magnitude.hash(state);
+    }
+}
+
 impl PartialOrd for IntegerValue {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(Ord::cmp(self, other))
