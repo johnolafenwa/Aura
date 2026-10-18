@@ -2,7 +2,7 @@
 
 Last updated: 2026-10-18
 
-## Batch 7a: runtime value performance (steps 1 to 7 complete)
+## Batch 7a: runtime value performance (steps 1 to 8 complete)
 
 - Target: implement the runtime half of roadmap Batch 7a, hash-indexed
   `dict` and `set` and the value representation, as planned in the
@@ -13,13 +13,15 @@ Last updated: 2026-10-18
   (PR #67), borrowed reads (PR #68), list loops without per-element
   `Lookup` values and linear owned loops (PR #69), a hashed ownership
   ledger with measurements (PR #70), unboxed `int64`, `float64`, and
-  `bool` list reads (PR #71), and unboxed comparisons (step 7).
+  `bool` list reads (PR #71), unboxed comparisons (step 7), and
+  copy-on-write `dict` and `set` storage (step 8).
   `dict_build_get` went from 18.47 s to 0.51 s, `int_list_sum` from
-  1.96 s to 0.16 s, and `string_list_scan` from 1.60 s to 0.22 s.
+  1.96 s to 0.16 s, and `string_list_scan` from 1.60 s to 0.22 s. AuraDB
+  `update` by id went from 7,895 µs to 660 µs per operation.
 - Verification: each PR passed hosted CI on Linux and macOS. The
   Performance chapter records the runs.
-- Remaining: copy-on-write `dict` and `set` storage, then removal of the
-  per-value lock. The lock guards retagging of shared values, so removing
+- Remaining: removal of the per-value lock, and sharing for `list`
+  copies. The lock guards retagging of shared values, so removing
   it needs a design change first.
 
 ## AuraDB benchmark fixes (complete)

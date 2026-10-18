@@ -1,6 +1,6 @@
 # Batch 7a design checkpoint: runtime value performance
 
-Status: **Steps 1 to 5 delivered 2026-10-18. Steps 6 and 7 deliver unboxed list reads and comparisons. Copy-on-write collections and lock removal remain open.**
+Status: **Steps 1 to 5 delivered 2026-10-18. Steps 6 to 8 deliver unboxed list reads, unboxed comparisons, and copy-on-write `dict` and `set` storage. Lock removal remains open.**
 
 Date: 2026-10-17. Source baseline: `5f68c34` (main after
 [PR #64](https://github.com/johnolafenwa/Aura/pull/64)).
@@ -212,6 +212,13 @@ Evidence: runtime tests that a write to a clone leaves the original
 unchanged on both sides of the index threshold; the parity matrix;
 callgrind counts on `record_field_reads`; the AuraDB rows.
 
+Step 8 shares array-free collections at the top of the deep clone and at
+every nested level, so a `list` of documents copies the list but not the
+documents. `record_field_reads` drops from 2.64 G to 1.54 G instructions.
+The AuraDB `update` repro drops from 834 M to 407 M. AuraDB `update` by id
+goes from 8,095 µs to 660 µs per operation, and `delete` from 31,630 µs
+to 10,980 µs.
+
 ## F. Delivery Plan
 
 Each step is one pull request with its measurements in the description and a
@@ -226,7 +233,7 @@ dated work note.
 | 5 | Section D, ownership ledger, and the final measurements | Merged, PR #70 |
 | 6 | Section E, unboxed `int64`, `float64`, and `bool` list reads | Merged, PR #71 |
 | 7 | Section E, unboxed comparison results, string literal operands, and leaf type tags | In review |
-| 8 | Section G, copy-on-write `dict` and `set` storage | Not started |
+| 8 | Section G, copy-on-write `dict` and `set` storage | In review |
 | 9 | Section D, lock removal | Not started |
 
 ### Step 1 Measurements

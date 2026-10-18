@@ -1,0 +1,28 @@
+AuraDB benchmarks (bounded; median of reps; 1ms timer resolution)
+insert_many (memory) x1000 | ops=1000 | median=20ms | 50000 ops/s | 20.0 us/op
+insert_many (memory) x5000 | ops=5000 | median=67ms | 74626 ops/s | 13.4 us/op
+insert_many (file, incl. save) x1000 | ops=1000 | median=24ms | 41666 ops/s | 24.0 us/op
+insert_many (file, incl. save) x5000 | ops=5000 | median=108ms | 46296 ops/s | 21.6 us/op
+insert singles (memory) x1000 | ops=1000 | median=25ms | 40000 ops/s | 25.0 us/op
+insert singles autosave (file n~1000) x50 | ops=50 | median=575ms | 86 ops/s | 11500.0 us/op
+get by id (n=1000) | ops=200 | median=2ms | 100000 ops/s | 10.0 us/op
+find city=Lagos scan (n=1000) | median=21ms
+find age>=70 scan (n=1000) | median=23ms
+count city=Lagos (n=1000) | median=19ms
+create_index city (n=1000) | median=12ms
+find city=Lagos indexed (n=1000) | median=2ms
+save (n=1000) | median=11ms
+open+load (n=1000) | median=52ms
+get by id (n=5000) | ops=200 | median=1ms | 200000 ops/s | 5.0 us/op
+find city=Lagos scan (n=5000) | median=80ms
+find age>=70 scan (n=5000) | median=122ms
+count city=Lagos (n=5000) | median=65ms
+create_index city (n=5000) | median=45ms
+find city=Lagos indexed (n=5000) | median=10ms
+save (n=5000) | median=27ms
+open+load (n=5000) | median=284ms
+update by id (memory n=2000) | ops=200 | median=132ms | 1515 ops/s | 660.0 us/op
+delete by id (memory n=2000) | ops=100 | median=1098ms | 91 ops/s | 10980.0 us/op
+delete_where 10% (memory n=2000) | median=38ms
+doc_from_json | ops=2000 | median=106ms | 18867 ops/s | 53.0 us/op
+file size after n=5000 read benches: 427056 bytes
