@@ -187,8 +187,8 @@ diagnostic-grade.
 | `dict_build_get`: 20,000 `str` keys, 200,000 `get` calls | 18.47 s | 0.51 s | 0.040 s |
 | `set_insert_contains`: 20,000 inserts, 200,000 `in` tests | 24.69 s | 0.053 s | 0.011 s |
 | `int_list_sum`: `for` over 100,000 `int64` values, 20 times | 1.96 s | 0.16 s | 0.064 s |
-| `string_list_scan`: 10,000 `str` compared, 100 times | 1.60 s | 0.55 s | 0.024 s |
-| `record_field_reads`: `doc.get("age")` on 5,000 dicts, 20 times | 0.80 s | 0.38 s | 0.008 s |
+| `string_list_scan`: 10,000 `str` compared, 100 times | 1.60 s | 0.22 s | 0.022 s |
+| `record_field_reads`: `doc.get("age")` on 5,000 dicts, 20 times | 0.80 s | 0.22 s | 0.010 s |
 
 Before is `5f68c34`. After is the Batch 7a runtime changes. The programs live
 in `benchmarks/runtime_values/`, and `scripts/bench-runtime-values.py` runs
@@ -199,16 +199,19 @@ document database benchmark ran in the same container:
 
 | AuraDB operation | Before | After | Python 3.13 |
 | --- | ---: | ---: | ---: |
-| `insert_many`, 5,000 documents in memory | 72.6 µs/op | 16.6 µs/op | 0.67 µs/op |
-| `get` by id, 5,000 documents | 45 µs/op | 15 µs/op | 5.8 µs/op |
-| `find` by field scan, 5,000 documents | 188 ms | 108 ms | 13.9 ms |
-| `open` and load, 5,000 documents | 1,252 ms | 683 ms | 14.2 ms |
-| `update` by id, 2,000 documents | 7,895 µs/op | 8,095 µs/op | 6.0 µs/op |
-| `delete` by id, 2,000 documents | 57,990 µs/op | 31,630 µs/op | 381 µs/op |
+| `insert_many`, 5,000 documents in memory | 72.6 µs/op | 13.4 µs/op | 0.67 µs/op |
+| `get` by id, 5,000 documents | 45 µs/op | 5 µs/op | 5.8 µs/op |
+| `find` by field scan, 5,000 documents | 188 ms | 80 ms | 13.9 ms |
+| `open` and load, 5,000 documents | 1,252 ms | 284 ms | 14.2 ms |
+| `update` by id, 2,000 documents | 7,895 µs/op | 660 µs/op | 6.0 µs/op |
+| `delete` by id, 2,000 documents | 57,990 µs/op | 10,980 µs/op | 381 µs/op |
 
-AuraDB's `update` and `delete` copy every document and rebuild a secondary
-index on each call. That copy dominates both rows. Aura values have no
-copy-on-write sharing, so a deep copy costs time proportional to the data.
+AuraDB's `update` and `delete` copy the document list and rebuild a
+secondary index on each call. A `dict` or `set` copy shares its storage
+until one side writes, so copying a list of documents copies the list but
+not the documents. A `list` copy still copies every element.
+
+The AuraDB timer has 1 ms resolution, so the `get` row is coarse.
 
 The [raw reports](https://github.com/johnolafenwa/Aura/blob/main/work/2026-10-18-batch-7a-measurements)
 keep every observation.
@@ -267,8 +270,8 @@ decisions.
 | Retry | favors Aura |
 | Array addition | 1.006974 times NumPy, 1.006524 times the same-session Rust kernel |
 | Array reduction | 6.682308 times NumPy, 1.339087 times the same-session Rust kernel |
-| `record_field_reads` | about 47 times Python 3.13 |
-| AuraDB `update` by id | about 1,350 times Python 3.13 |
+| `record_field_reads` | about 22 times Python 3.13 |
+| AuraDB `update` by id | about 110 times Python 3.13 |
 
 These gaps are specific to these workloads. Scheduling, runtime
 implementation, allocation, and optimizer-barrier choices affect how to read

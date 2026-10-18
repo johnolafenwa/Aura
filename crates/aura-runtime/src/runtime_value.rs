@@ -2090,6 +2090,9 @@ fn drop_array_containing_value_iteratively(value: Value, frames: &mut Vec<ArrayC
                 | Value::Vec(VecValue { elements, .. }) => {
                     Some(ArrayCloneCleanupFrame::Values(elements.into_iter()))
                 }
+                // Shared storage only drops a handle, so it is not walked.
+                Value::Set(SetValue { elements, .. }) if elements.is_shared() => None,
+                Value::Map(MapValue { entries, .. }) if entries.is_shared() => None,
                 Value::Set(SetValue { elements, .. }) => {
                     Some(ArrayCloneCleanupFrame::Values(elements.into_iter()))
                 }
@@ -2133,6 +2136,38 @@ fn drop_array_containing_value_iteratively(value: Value, frames: &mut Vec<ArrayC
     }
 }
 
+/// Whether no value of `ty` can contain an `Array`. Unknown and generic
+/// types answer `false`.
+fn type_cannot_hold_array(ty: &Type) -> bool {
+    match ty {
+        Type::Named(name, args) => match name.as_str() {
+            "str" | "bool" | "float32" | "float64" | "Duration" | "None" | "json.Value" => {
+                args.is_empty()
+            }
+            "list" | "set" | "dict" | "Lookup" => args.iter().all(type_cannot_hold_array),
+            other => args.is_empty() && IntegerKind::from_runtime_type_name(other).is_some(),
+        },
+        Type::Tuple(elements) => elements.iter().all(type_cannot_hold_array),
+        Type::Union(union) => union.members.iter().all(type_cannot_hold_array),
+        Type::Unit => true,
+        _ => false,
+    }
+}
+
+/// A `dict` or `set` shares its storage on clone. Only an `Array` buffer
+/// must be copied, so a collection whose types cannot hold one is shared
+/// instead of walked. The clone is constant time and never recurses.
+fn shared_collection_clone(value: &Value) -> Option<Value> {
+    let shareable = match value {
+        Value::Map(map) => {
+            type_cannot_hold_array(&map.key_type) && type_cannot_hold_array(&map.value_type)
+        }
+        Value::Set(set) => type_cannot_hold_array(&set.element_type),
+        _ => false,
+    };
+    shareable.then(|| value.clone())
+}
+
 pub fn try_clone_array_containing_value(value: &Value) -> Result<Value> {
     // Leaves have no children to visit, so skip the frame machinery.
     match value {
@@ -2143,6 +2178,9 @@ pub fn try_clone_array_containing_value(value: &Value) -> Result<Value> {
         | Value::String(_)
         | Value::Duration(_) => return Ok(value.clone()),
         _ => {}
+    }
+    if let Some(shared) = shared_collection_clone(value) {
+        return Ok(shared);
     }
     enum CloneFrame<'a> {
         Tuple {
@@ -2289,6 +2327,9 @@ pub fn try_clone_array_containing_value(value: &Value) -> Result<Value> {
     loop {
         if let Some(value) = next.take() {
             state.completed = match value {
+                Value::Map(_) | Value::Set(_) if shared_collection_clone(value).is_some() => {
+                    shared_collection_clone(value)
+                }
                 Value::Array(array) => Some(Value::Array(array.try_clone()?)),
                 Value::Tuple(tuple) => {
                     let mut element_types = try_array_buffer(

@@ -18464,3 +18464,55 @@ fn format_width_padding_stays_within_the_string_allocation_limit() {
     assert_eq!(error.code, "AU4005");
     assert_eq!(error.message, limit);
 }
+
+#[test]
+fn array_free_dicts_and_sets_clone_by_sharing() {
+    let map = Value::Map(MapValue {
+        key_type: Type::named("str"),
+        value_type: Type::named("json.Value"),
+        entries: vec![(
+            Value::String("age".to_string()),
+            Value::String("40".to_string()),
+        )]
+        .into(),
+    });
+    let copy = super::try_clone_array_containing_value(&map).expect("clone");
+    let (Value::Map(original), Value::Map(shared)) = (&map, &copy) else {
+        panic!("expected maps");
+    };
+    assert_eq!(original.entries.as_ptr(), shared.entries.as_ptr());
+
+    let set = Value::Set(SetValue {
+        element_type: Type::Named("list".to_string(), vec![Type::named("int64")]),
+        elements: vec![Value::Unit].into(),
+    });
+    let copy = super::try_clone_array_containing_value(&set).expect("clone");
+    let (Value::Set(original), Value::Set(shared)) = (&set, &copy) else {
+        panic!("expected sets");
+    };
+    assert_eq!(original.elements.as_ptr(), shared.elements.as_ptr());
+
+    for unknown in [
+        Type::named("Unknown"),
+        Type::TypeParam("T".to_string()),
+        Type::named("Array"),
+        Type::named("Point"),
+    ] {
+        let map = Value::Map(MapValue {
+            key_type: Type::named("str"),
+            value_type: unknown,
+            entries: vec![(Value::String("k".to_string()), Value::Unit)].into(),
+        });
+        let copy = super::try_clone_array_containing_value(&map).expect("clone");
+        let (Value::Map(original), Value::Map(walked)) = (&map, &copy) else {
+            panic!("expected maps");
+        };
+        assert_ne!(original.entries.as_ptr(), walked.entries.as_ptr());
+        assert_eq!(map, copy);
+    }
+    assert!(super::type_cannot_hold_array(&Type::Unit));
+    assert!(super::type_cannot_hold_array(&Type::Tuple(vec![
+        Type::named("int32"),
+        Type::named("float64"),
+    ])));
+}
