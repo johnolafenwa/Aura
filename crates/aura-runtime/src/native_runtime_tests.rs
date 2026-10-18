@@ -13685,6 +13685,27 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
             "vec-index-oob-no-span" => {
                 super::aura_direct_vec_index(int_vec(&[1]), 5, 0, 0);
             }
+            "vec-index-scalar-oob" => {
+                super::aura_direct_vec_index_scalar(int_vec(&[1]), 5, 0);
+            }
+            "vec-index-scalar-type" => {
+                let vec = super::aura_direct_vec_empty();
+                super::aura_direct_vec_push_in_place(vec, bool_value(true));
+                super::aura_direct_vec_index_scalar(vec, 0, 1);
+            }
+            "vec-index-scalar-kind" => {
+                super::aura_direct_vec_index_scalar(int_vec(&[1]), 0, 9);
+            }
+            "vec-index-scalar-overflow" => {
+                let vec = super::aura_direct_vec_empty();
+                super::aura_direct_vec_push_in_place(
+                    vec,
+                    boxed_value(Value::Int(IntegerValue::from_literal(
+                        (i64::MAX as u128) + 1,
+                    ))),
+                );
+                super::aura_direct_vec_index_scalar(vec, 0, 0);
+            }
             "vec-set-oob-no-span" => {
                 super::aura_direct_vec_set_index_in_place(int_vec(&[1]), 5, int_value(9), 0, 0);
             }
@@ -14652,6 +14673,22 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
         (
             "vec-index-oob-no-span",
             "list index `5` is out of bounds for length `1`",
+        ),
+        (
+            "vec-index-scalar-oob",
+            "list index `5` is out of bounds for length `1`",
+        ),
+        (
+            "vec-index-scalar-type",
+            "direct backend expected `float64`, found `bool`",
+        ),
+        (
+            "vec-index-scalar-kind",
+            "unknown direct scalar list read kind",
+        ),
+        (
+            "vec-index-scalar-overflow",
+            "integer value `9223372036854775808` does not fit in `int64`",
         ),
         (
             "vec-set-oob-no-span",
@@ -24495,5 +24532,29 @@ fn leaf_values_clone_without_frames() {
             crate::runtime_value::try_clone_array_containing_value(&value).expect("leaf clone"),
             value
         );
+    }
+}
+
+#[test]
+fn scalar_list_reads_return_unboxed_bits() {
+    let ints = super::aura_direct_vec_empty();
+    for value in [7, -3] {
+        super::aura_direct_vec_push_in_place(ints, int_value(value));
+    }
+    assert_eq!(super::aura_direct_vec_index_scalar(ints, 0, 0), 7);
+    assert_eq!(super::aura_direct_vec_index_scalar(ints, 1, 0), -3);
+    let floats = super::aura_direct_vec_empty();
+    super::aura_direct_vec_push_in_place(floats, float_value(-2.25));
+    assert_eq!(
+        f64::from_bits(super::aura_direct_vec_index_scalar(floats, 0, 1) as u64),
+        -2.25
+    );
+    let flags = super::aura_direct_vec_empty();
+    super::aura_direct_vec_push_in_place(flags, bool_value(true));
+    super::aura_direct_vec_push_in_place(flags, bool_value(false));
+    assert_eq!(super::aura_direct_vec_index_scalar(flags, 0, 2), 1);
+    assert_eq!(super::aura_direct_vec_index_scalar(flags, 1, 2), 0);
+    for vec in [ints, floats, flags] {
+        unsafe { release_value(vec) };
     }
 }

@@ -650,6 +650,7 @@ struct NativeCodegen<'a> {
     vec_index: FuncId,
     vec_slice: FuncId,
     vec_index_option: FuncId,
+    vec_index_scalar: FuncId,
     vec_span: FuncId,
     vec_take_index_in_place: FuncId,
     vec_set_index_in_place: FuncId,
@@ -1200,6 +1201,7 @@ impl<'a> NativeCodegen<'a> {
             vec_index => ("aura_direct_vec_index", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             vec_slice => ("aura_direct_vec_slice", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             vec_index_option => ("aura_direct_vec_index_option", [types::I64, types::I64], Some(types::I64)),
+            vec_index_scalar => ("aura_direct_vec_index_scalar", [types::I64, types::I64, types::I64], Some(types::I64)),
             vec_span => ("aura_direct_vec_span", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             vec_take_index_in_place => ("aura_direct_vec_take_index_in_place", [types::I64, types::I64], Some(types::I64)),
             vec_set_index_in_place => ("aura_direct_vec_set_index_in_place", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
@@ -1716,6 +1718,7 @@ impl<'a> NativeCodegen<'a> {
             vec_index,
             vec_slice,
             vec_index_option,
+            vec_index_scalar,
             vec_span,
             vec_take_index_in_place,
             vec_set_index_in_place,
@@ -2643,6 +2646,9 @@ impl<'a> NativeCodegen<'a> {
         let vec_index_option = self
             .object
             .declare_func_in_func(self.vec_index_option, builder.func);
+        let vec_index_scalar = self
+            .object
+            .declare_func_in_func(self.vec_index_scalar, builder.func);
         let vec_span = self
             .object
             .declare_func_in_func(self.vec_span, builder.func);
@@ -3557,6 +3563,7 @@ impl<'a> NativeCodegen<'a> {
             vec_index,
             vec_slice,
             vec_index_option,
+            vec_index_scalar,
             vec_span,
             vec_take_index_in_place,
             vec_set_index_in_place,
@@ -5001,6 +5008,7 @@ struct FunctionCompiler<'a> {
     vec_index: cranelift_codegen::ir::FuncRef,
     vec_slice: cranelift_codegen::ir::FuncRef,
     vec_index_option: cranelift_codegen::ir::FuncRef,
+    vec_index_scalar: cranelift_codegen::ir::FuncRef,
     vec_span: cranelift_codegen::ir::FuncRef,
     vec_take_index_in_place: cranelift_codegen::ir::FuncRef,
     vec_set_index_in_place: cranelift_codegen::ir::FuncRef,
@@ -14574,6 +14582,32 @@ impl<'a> FunctionCompiler<'a> {
                             line.values[0],
                             column.values[0],
                         )?;
+                        // Scalar elements come back as raw bits, with no box.
+                        let scalar_kind = match element_direct_ty {
+                            DirectType::Scalar(ScalarKind::Int64) => Some(0),
+                            DirectType::Scalar(ScalarKind::Float64) => Some(1),
+                            DirectType::Scalar(ScalarKind::Bool) => Some(2),
+                            _ => None,
+                        };
+                        if let Some(kind) = scalar_kind {
+                            let kind = self.builder.ins().iconst(types::I64, kind);
+                            let inst = self.builder.ins().call(
+                                self.vec_index_scalar,
+                                &[object.values[0], normalized_index, kind],
+                            );
+                            let bits = self.builder.inst_results(inst)[0];
+                            let value = if scalar_kind == Some(1) {
+                                self.builder
+                                    .ins()
+                                    .bitcast(types::F64, MemFlags::new(), bits)
+                            } else {
+                                bits
+                            };
+                            return Ok(ValueRef {
+                                values: vec![value],
+                                ty: element_direct_ty.clone(),
+                            });
+                        }
                         let inst = self.builder.ins().call(
                             self.vec_index,
                             &[

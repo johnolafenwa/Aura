@@ -1,6 +1,6 @@
 # Batch 7a design checkpoint: runtime value performance
 
-Status: **Steps 1 to 5 delivered 2026-10-18. Unboxed values and lock removal remain open.**
+Status: **Steps 1 to 5 delivered 2026-10-18. Step 6 delivers unboxed scalar list reads. Strings, typed operands, and lock removal remain open.**
 
 Date: 2026-10-17. Source baseline: `5f68c34` (main after
 [PR #64](https://github.com/johnolafenwa/Aura/pull/64)).
@@ -171,6 +171,13 @@ Evidence: the existing task, cancellation, and leak tests; a stress run of
 Evidence: callgrind counts and the micro-benchmarks. The parity matrix pins
 behavior.
 
+Step 6 adds `aura_direct_vec_index_scalar(list, index, kind)`. The native
+code generator calls it for `list[int64]`, `list[float64]`, and `list[bool]`
+element reads, after its existing bounds guard. It returns the element as a
+machine word: the integer, the float bit pattern, or 0 and 1. No box is
+allocated, registered, or released. Under callgrind `int_list_sum` drops from
+2.42 G to 0.55 G instructions, and its wall time from 0.36 s to 0.16 s.
+
 ## F. Delivery Plan
 
 Each step is one pull request with its measurements in the description and a
@@ -182,8 +189,10 @@ dated work note.
 | 2 | Section B | Merged, PR #67 |
 | 3 | Section C, borrowed reads | Merged, PR #68 |
 | 4 | Section E, list loops | Merged, PR #69 |
-| 5 | Section D, ownership ledger, and the final measurements | In review |
-| 6 | Section E, unboxed scalars and strings, and section D, lock removal | Not started |
+| 5 | Section D, ownership ledger, and the final measurements | Merged, PR #70 |
+| 6 | Section E, unboxed `int64`, `float64`, and `bool` list reads | In review |
+| 7 | Section E, typed scalar and string operands for `in`, `==`, and `get` | Not started |
+| 8 | Section D, lock removal | Not started |
 
 ### Step 1 Measurements
 
