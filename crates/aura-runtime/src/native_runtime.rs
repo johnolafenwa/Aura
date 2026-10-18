@@ -1707,6 +1707,18 @@ pub(crate) struct RuntimeTypeTag {
     pub(crate) name: Arc<str>,
     pub(crate) parsed: Type,
     pub(crate) integer_kind: Option<IntegerKind>,
+    /// True when tagging only records the name: the value itself never
+    /// changes, so no value lock is taken.
+    pub(crate) name_only: bool,
+}
+
+fn runtime_type_tag_is_name_only(parsed: &Type) -> bool {
+    matches!(
+        parsed,
+        Type::Named(name, args)
+            if args.is_empty()
+                && matches!(name.as_str(), "str" | "bool" | "float32" | "float64" | "Duration")
+    )
 }
 
 /// The shared registry is cleared when it reaches this size. Generated code
@@ -1774,10 +1786,13 @@ fn shared_runtime_type_tag(bytes: &[u8]) -> Arc<RuntimeTypeTag> {
     // Decode outside the lock: a malformed descriptor raises a runtime error.
     let name = str::from_utf8(bytes)
         .unwrap_or_else(|_| runtime_error("aura direct runtime received invalid UTF-8 bytes"));
+    let parsed = runtime_type_from_name(name);
+    let name_only = runtime_type_tag_is_name_only(&parsed);
     let tag = Arc::new(RuntimeTypeTag {
         name: Arc::from(name),
-        parsed: runtime_type_from_name(name),
+        parsed,
         integer_kind: IntegerKind::from_runtime_type_name(name),
+        name_only,
     });
     let mut registry = registry
         .lock()
@@ -1803,6 +1818,9 @@ unsafe fn set_explicit_runtime_type_tag(ptr: *mut OpaqueValue, tag: &RuntimeType
             Err(_) => runtime_error("direct runtime type lock was poisoned"),
         },
         None => runtime_error("direct runtime received a null opaque value pointer"),
+    }
+    if tag.name_only {
+        return;
     }
     let parsed = &tag.parsed;
     fn assign_type(slot: &mut Type, ty: &Type) {
@@ -7853,6 +7871,103 @@ pub extern "C-unwind" fn aura_direct_binary_value(
             Ok(value) => boxed_value(value),
             Err(error) => runtime_diagnostic_error(error),
         }
+    })
+}
+
+fn direct_comparison_op(op: i64) -> BinaryOp {
+    match op {
+        5 => BinaryOp::Eq,
+        6 => BinaryOp::NotEq,
+        7 => BinaryOp::Less,
+        8 => BinaryOp::LessEq,
+        9 => BinaryOp::Greater,
+        10 => BinaryOp::GreaterEq,
+        other => runtime_error(format!("unknown comparison opcode `{other}`")),
+    }
+}
+
+fn direct_comparison_bit(
+    compared: std::result::Result<Value, Diagnostic>,
+    line: i64,
+    column: i64,
+) -> i64 {
+    match compared {
+        // `compare_value_refs` only produces `bool` values.
+        Ok(value) => i64::from(matches!(value, Value::Bool(true))),
+        Err(error) => runtime_diagnostic_error_at(error, runtime_span(line, column)),
+    }
+}
+
+/// Compares two values and returns the `bool` result as 0 or 1, so no box
+/// is built for the result.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_compare_values(
+    op: i64,
+    left: *mut OpaqueValue,
+    right: *mut OpaqueValue,
+    line: i64,
+    column: i64,
+) -> i64 {
+    task_runtime_boundary(|| {
+        let op = direct_comparison_op(op);
+        let compared = unsafe {
+            if left == right {
+                with_value(left, |value| compare_value_refs(value, value, op))
+            } else {
+                with_value(left, |left| {
+                    with_value(right, |right| compare_value_refs(left, right, op))
+                })
+            }
+        };
+        direct_comparison_bit(compared, line, column)
+    })
+}
+
+/// Compares a value with a string literal held in the program image. The
+/// literal is never boxed. `literal_on_left` is 1 for `"text" < value`.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_compare_str_literal(
+    op: i64,
+    value: *mut OpaqueValue,
+    literal_ptr: *const u8,
+    literal_len: usize,
+    literal_on_left: i64,
+    line: i64,
+    column: i64,
+) -> i64 {
+    task_runtime_boundary(|| {
+        let op = direct_comparison_op(op);
+        // UTF-8 byte order matches `str` order, so a `str` operand compares
+        // bytes and never decodes the literal.
+        let literal = unsafe { slice::from_raw_parts(literal_ptr, literal_len) };
+        let compared = unsafe {
+            with_value(value, |value| match value {
+                Value::String(text) => {
+                    let ordering = if literal_on_left != 0 {
+                        literal.cmp(text.as_bytes())
+                    } else {
+                        text.as_bytes().cmp(literal)
+                    };
+                    Ok(Value::Bool(match op {
+                        BinaryOp::Eq => ordering.is_eq(),
+                        BinaryOp::NotEq => ordering.is_ne(),
+                        BinaryOp::Less => ordering.is_lt(),
+                        BinaryOp::LessEq => ordering.is_le(),
+                        BinaryOp::Greater => ordering.is_gt(),
+                        _ => ordering.is_ge(),
+                    }))
+                }
+                other => {
+                    let literal = Value::String(decode_bytes(literal_ptr, literal_len));
+                    if literal_on_left != 0 {
+                        compare_value_refs(&literal, other, op)
+                    } else {
+                        compare_value_refs(other, &literal, op)
+                    }
+                }
+            })
+        };
+        direct_comparison_bit(compared, line, column)
     })
 }
 

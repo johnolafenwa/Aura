@@ -671,6 +671,29 @@ fn direct_runtime_exported_ffi_symbols_execute_through_the_library_copy() {
             1,
         );
         assert!(expect_bool(ordered));
+        assert_eq!(
+            aura_direct_compare_values(
+                7,
+                ScopedValue::new(int_value(2)).as_ptr(),
+                ScopedValue::new(int_value(3)).as_ptr(),
+                1,
+                1,
+            ),
+            1
+        );
+        let text = b"a";
+        assert_eq!(
+            aura_direct_compare_str_literal(
+                5,
+                ScopedValue::new(aura_direct_string_literal(text.as_ptr(), 1)).as_ptr(),
+                text.as_ptr(),
+                1,
+                0,
+                1,
+                1,
+            ),
+            1
+        );
 
         let floor_at = aura_direct_binary_value_at(
             13,
