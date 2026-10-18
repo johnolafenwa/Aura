@@ -4439,7 +4439,8 @@ impl MirRuntime {
                 elements: elements
                     .iter()
                     .map(|operand| self.evaluate_owned_operand(operand, env))
-                    .collect::<Result<Vec<_>>>()?,
+                    .collect::<Result<Vec<_>>>()?
+                    .into(),
             }))),
             Rvalue::TupleLiteral {
                 elements,
@@ -4750,7 +4751,7 @@ impl MirRuntime {
                     bind_builtin_args(&[], values)?;
                     return Ok(Value::Vec(VecValue {
                         element_type: Type::named("Unknown"),
-                        elements: Vec::new(),
+                        elements: Vec::new().into(),
                     }));
                 }
 
@@ -4905,7 +4906,7 @@ impl MirRuntime {
                             })?;
                             Ok(Value::Vec(VecValue {
                                 element_type: args[0].clone(),
-                                elements,
+                                elements: elements.into(),
                             }))
                         }
                         ("dict", Some(Type::Named(_, args))) if args.len() == 2 => {
@@ -7108,7 +7109,7 @@ impl MirRuntime {
                 }
                 Ok(Value::Vec(VecValue {
                     element_type: map.key_type.clone(),
-                    elements,
+                    elements: elements.into(),
                 }))
             }
             "values" => {
@@ -7122,7 +7123,7 @@ impl MirRuntime {
                 }
                 Ok(Value::Vec(VecValue {
                     element_type: map.value_type.clone(),
-                    elements,
+                    elements: elements.into(),
                 }))
             }
             "items" => {
@@ -7142,7 +7143,7 @@ impl MirRuntime {
                 }
                 Ok(Value::Vec(VecValue {
                     element_type: Type::Tuple(vec![map.key_type.clone(), map.value_type.clone()]),
-                    elements,
+                    elements: elements.into(),
                 }))
             }
             "clear" => {

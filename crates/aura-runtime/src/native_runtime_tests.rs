@@ -693,7 +693,8 @@ fn direct_array_abi_uses_typed_storage_kernels_and_callback_thunks() {
             elements: vec![
                 Value::Int(IntegerValue::from_i64(2)),
                 Value::Int(IntegerValue::from_i64(2)),
-            ],
+            ]
+            .into(),
         })
     );
 
@@ -839,7 +840,7 @@ fn direct_array_abi_accepts_positive_literal_representations_at_signed_boundarie
     };
     let shape = boxed_value(Value::Vec(VecValue {
         element_type: Type::named("int64"),
-        elements: vec![tagged_literal(2, IntegerKind::Int64)],
+        elements: vec![tagged_literal(2, IntegerKind::Int64)].into(),
     }));
     let values = integer_vector(IntegerKind::Int32, &[7, 11]);
     let array = super::aura_direct_array_from_vec(0, values, shape, 17, 19);
@@ -853,7 +854,7 @@ fn direct_array_abi_accepts_positive_literal_representations_at_signed_boundarie
 
     let vector_coordinate = boxed_value(Value::Vec(VecValue {
         element_type: Type::named("int64"),
-        elements: vec![tagged_literal(0, IntegerKind::Int64)],
+        elements: vec![tagged_literal(0, IntegerKind::Int64)].into(),
     }));
     let vector_result = super::aura_direct_array_index(array, vector_coordinate, 31, 37);
     assert_eq!(
@@ -919,7 +920,7 @@ fn direct_array_public_abi_rejects_invalid_codes_and_runtime_values_exactly() {
 
     let malformed_shape = boxed_value(Value::Vec(VecValue {
         element_type: Type::named("int64"),
-        elements: vec![Value::String("one".to_string())],
+        elements: vec![Value::String("one".to_string())].into(),
     }));
     let malformed_shape_address = malformed_shape as usize;
     let diagnostic = capture_diagnostic(move || {
@@ -935,7 +936,7 @@ fn direct_array_public_abi_rejects_invalid_codes_and_runtime_values_exactly() {
 
     let wrong_kind_shape = boxed_value(Value::Vec(VecValue {
         element_type: Type::named("int64"),
-        elements: vec![Value::Int(IntegerValue::from_i32(1))],
+        elements: vec![Value::Int(IntegerValue::from_i32(1))].into(),
     }));
     let wrong_kind_shape_address = wrong_kind_shape as usize;
     let diagnostic = capture_diagnostic(move || {
@@ -1123,7 +1124,7 @@ fn direct_array_public_abi_rejects_invalid_codes_and_runtime_values_exactly() {
 
     let malformed_coordinates = boxed_value(Value::Vec(VecValue {
         element_type: Type::named("int64"),
-        elements: vec![Value::String("zero".to_string())],
+        elements: vec![Value::String("zero".to_string())].into(),
     }));
     let malformed_coordinates_address = malformed_coordinates as usize;
     let array_address = array as usize;
@@ -1144,7 +1145,7 @@ fn direct_array_public_abi_rejects_invalid_codes_and_runtime_values_exactly() {
 
     let wrong_kind_coordinates = boxed_value(Value::Vec(VecValue {
         element_type: Type::named("int64"),
-        elements: vec![Value::Int(IntegerValue::from_i32(0))],
+        elements: vec![Value::Int(IntegerValue::from_i32(0))].into(),
     }));
     let wrong_kind_coordinates_address = wrong_kind_coordinates as usize;
     let array_address = array as usize;
@@ -1476,7 +1477,7 @@ fn direct_nested_array_collection_reads_and_clones_use_fallible_copy() {
 
     let vector = boxed_value(Value::Vec(VecValue {
         element_type: Type::Named("Array".to_string(), vec![Type::named("int32")]),
-        elements: vec![array_value(7)],
+        elements: vec![array_value(7)].into(),
     }));
     let vector_address = vector as usize;
     let diagnostic = allocation_diagnostic(move || {
@@ -2377,7 +2378,8 @@ fn direct_ffi_mutable_bytes_write_back_before_return_validation_failure() {
                 Value::Int(IntegerValue::from_typed_unsigned(2, IntegerKind::Uint8).unwrap()),
                 Value::Int(IntegerValue::from_typed_unsigned(3, IntegerKind::Uint8).unwrap()),
                 Value::Int(IntegerValue::from_typed_unsigned(0, IntegerKind::Uint8).unwrap()),
-            ],
+            ]
+            .into(),
         })
     );
     unsafe { release_value(bytes) };
@@ -3669,7 +3671,8 @@ fn direct_bytes_adapter_propagates_materialization_allocation_failure_as_au4005(
         elements: vec![Value::Int(
             IntegerValue::from_typed_unsigned(0xab, IntegerKind::Uint8)
                 .expect("the test byte fits uint8"),
-        )],
+        )]
+        .into(),
     }));
     let source_elements = unsafe {
         super::with_value(source, |value| match value {
@@ -5059,7 +5062,7 @@ fn native_runtime_timeout_and_option_decoders_cover_error_edges() {
         super::expect_command_vec(
             &Value::Vec(VecValue {
                 element_type: aura_core::types::Type::named("Unknown"),
-                elements: vec![Value::String("echo".to_string())],
+                elements: vec![Value::String("echo".to_string())].into(),
             }),
             "command",
         ),
@@ -5069,7 +5072,7 @@ fn native_runtime_timeout_and_option_decoders_cover_error_edges() {
         let _ = super::expect_command_vec(
             &Value::Vec(VecValue {
                 element_type: aura_core::types::Type::named("int32"),
-                elements: vec![Value::Int(IntegerValue::from_signed(1))],
+                elements: vec![Value::Int(IntegerValue::from_signed(1))].into(),
             }),
             "command",
         );
@@ -5467,7 +5470,7 @@ fn direct_runtime_type_tags_are_interned_and_retagging_is_idempotent() {
     // Lists, maps, and integers pick up the tagged types on every retag.
     let vector = boxed_value(Value::Vec(VecValue {
         element_type: Type::named("Unknown"),
-        elements: Vec::new(),
+        elements: Vec::new().into(),
     }));
     super::aura_direct_tag_value_type(vector, b"list[int64]".as_ptr(), 11);
     super::aura_direct_tag_value_type(vector, b"list[int64]".as_ptr(), 11);
@@ -5575,7 +5578,8 @@ fn direct_runtime_type_tags_preserve_generic_identity_through_clone() {
             element_type: Type::named("int64"),
             elements: vec![Value::Int(
                 IntegerValue::from_typed_signed(9, IntegerKind::Int64).expect("9 fits int64"),
-            )],
+            )]
+            .into(),
         })],
     }));
     super::aura_direct_tag_value_type(
@@ -5646,7 +5650,7 @@ fn direct_runtime_type_tags_preserve_generic_identity_through_clone() {
 
     let vector = boxed_value(Value::Vec(VecValue {
         element_type: Type::named("Unknown"),
-        elements: Vec::new(),
+        elements: Vec::new().into(),
     }));
     super::aura_direct_tag_value_type(vector, b"list[int32]".as_ptr(), "list[int32]".len());
     assert_eq!(super::aura_direct_value_has_runtime_type(vector), 1);
@@ -6425,7 +6429,8 @@ fn native_runtime_process_capture_task_helper_covers_success_and_malformed_resul
             elements: vec![
                 Value::Int(IntegerValue::from_signed(65)),
                 Value::Int(IntegerValue::from_literal(66)),
-            ],
+            ]
+            .into(),
         }))
     }));
     assert_eq!(
@@ -6436,7 +6441,7 @@ fn native_runtime_process_capture_task_helper_covers_success_and_malformed_resul
     let non_byte_integer = TaskValue::from_handle(thread::spawn(|| {
         Ok(Value::Vec(VecValue {
             element_type: aura_core::types::Type::named("uint8"),
-            elements: vec![Value::Int(IntegerValue::from_signed(300))],
+            elements: vec![Value::Int(IntegerValue::from_signed(300))].into(),
         }))
     }));
     let message = capture_runtime_error_message(|| {
@@ -6447,7 +6452,7 @@ fn native_runtime_process_capture_task_helper_covers_success_and_malformed_resul
     let wrong_payload = TaskValue::from_handle(thread::spawn(|| {
         Ok(Value::Vec(VecValue {
             element_type: aura_core::types::Type::named("uint8"),
-            elements: vec![Value::String("bad".to_string())],
+            elements: vec![Value::String("bad".to_string())].into(),
         }))
     }));
     let message = capture_runtime_error_message(|| {
@@ -6458,7 +6463,7 @@ fn native_runtime_process_capture_task_helper_covers_success_and_malformed_resul
     let wrong_result_type = TaskValue::from_handle(thread::spawn(|| {
         Ok(Value::Vec(VecValue {
             element_type: aura_core::types::Type::named("str"),
-            elements: vec![Value::String("bad".to_string())],
+            elements: vec![Value::String("bad".to_string())].into(),
         }))
     }));
     let message = capture_runtime_error_message(|| {
@@ -6481,7 +6486,7 @@ fn native_runtime_process_capture_task_helper_covers_success_and_malformed_resul
             thread::sleep(StdDuration::from_millis(50));
             Ok(Value::Vec(VecValue {
                 element_type: aura_core::types::Type::named("uint8"),
-                elements: Vec::new(),
+                elements: Vec::new().into(),
             }))
         }));
         capture_runtime_error_message(|| {
@@ -10758,7 +10763,7 @@ fn direct_enum_owned_payload_buffer_moves_string_vec_and_map_allocations() {
             "Array",
             Value::Vec(VecValue {
                 element_type: Type::named("json.Value"),
-                elements,
+                elements: elements.into(),
             }),
             Allocation::Vec(elements_ptr),
         ),
@@ -11432,7 +11437,7 @@ fn direct_task_producer_discovery_and_abandoned_args_do_not_clone_values() {
         variant_name: "Ready".to_string(),
         payloads: vec![Value::Vec(VecValue {
             element_type: Type::named("Queue"),
-            elements: vec![Value::Channel(queue)],
+            elements: vec![Value::Channel(queue)].into(),
         })],
     }));
     let clone_count = super::direct_value_clone_count();
@@ -11543,7 +11548,7 @@ fn direct_json_rejects_inexact_int_array_object_and_indent_metadata() {
         variant_name: "Array".to_string(),
         payloads: vec![Value::Vec(VecValue {
             element_type: Type::named("Unknown"),
-            elements: vec![],
+            elements: vec![].into(),
         })],
     }));
     assert!(malformed_json_call("json::into_array", vec![array])
@@ -12229,7 +12234,8 @@ fn native_runtime_private_value_decoders_cover_success_paths() {
                 elements: vec![
                     Value::Int(IntegerValue::from_signed(65)),
                     Value::Int(IntegerValue::from_signed(66)),
-                ],
+                ]
+                .into(),
             }),
             "bytes",
         ),
@@ -12324,7 +12330,8 @@ fn native_runtime_private_value_decoders_cover_success_paths() {
                 elements: vec![
                     Value::String("/bin/echo".to_string()),
                     Value::String("ok".to_string()),
-                ],
+                ]
+                .into(),
             }),
             "command",
         ),
@@ -12359,7 +12366,7 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
                 super::expect_bytes_value(
                     &Value::Vec(VecValue {
                         element_type: aura_core::types::Type::named("uint8"),
-                        elements: vec![Value::Int(IntegerValue::from_signed(300))],
+                        elements: vec![Value::Int(IntegerValue::from_signed(300))].into(),
                     }),
                     "bytes",
                 );
@@ -12418,7 +12425,7 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
                 super::expect_command_vec(
                     &Value::Vec(VecValue {
                         element_type: aura_core::types::Type::named("str"),
-                        elements: vec![Value::Int(IntegerValue::from_signed(1))],
+                        elements: vec![Value::Int(IntegerValue::from_signed(1))].into(),
                     }),
                     "command",
                 );
@@ -14885,7 +14892,7 @@ fn native_runtime_scalar_helpers_cover_comparisons_unary_ops_and_metadata() {
     assert_eq!(
         value_type_name(Value::Vec(VecValue {
             element_type: aura_core::types::Type::named("int32"),
-            elements: Vec::new(),
+            elements: Vec::new().into(),
         })),
         "list"
     );
@@ -14962,7 +14969,7 @@ fn native_runtime_scalar_helpers_cover_comparisons_unary_ops_and_metadata() {
     assert_eq!(
         inferred_collection_type(&Value::Vec(VecValue {
             element_type: aura_core::types::Type::named("int32"),
-            elements: Vec::new(),
+            elements: Vec::new().into(),
         })),
         aura_core::types::Type::Named(
             "list".to_string(),
@@ -15094,11 +15101,11 @@ fn native_runtime_scalar_helpers_cover_comparisons_unary_ops_and_metadata() {
         compare_values(
             Value::Vec(VecValue {
                 element_type: aura_core::types::Type::named("int32"),
-                elements: vec![Value::Int(IntegerValue::from_signed(1))],
+                elements: vec![Value::Int(IntegerValue::from_signed(1))].into(),
             }),
             Value::Vec(VecValue {
                 element_type: aura_core::types::Type::named("int32"),
-                elements: vec![Value::Int(IntegerValue::from_signed(1))],
+                elements: vec![Value::Int(IntegerValue::from_signed(1))].into(),
             }),
             BinaryOp::Eq,
         )
@@ -23872,7 +23879,7 @@ fn adr0061_direct_element_path_helpers_read_and_write_inside_elements() {
     }
     let users = boxed_value(Value::Vec(VecValue {
         element_type: Type::named("Profile"),
-        elements: vec![profile("ada", 1), profile("linus", 2)],
+        elements: vec![profile("ada", 1), profile("linus", 2)].into(),
     })) as usize;
 
     // The whole element, then a projected field through a negative position.
@@ -23949,7 +23956,8 @@ fn adr0061_direct_element_path_helpers_read_and_write_inside_elements() {
                 Value::Int(IntegerValue::from_i64(1)),
                 Value::String("one".to_string()),
             ],
-        })],
+        })]
+        .into(),
     })) as usize;
     assert_eq!(element_path_load(pairs, "[i].1", &[0]).render(), "one");
     element_path_store(pairs, "[i].0", &[0], Value::Int(IntegerValue::from_i64(41)));
@@ -23970,7 +23978,7 @@ fn adr0061_direct_element_path_helpers_read_and_write_inside_elements() {
     }
     let numbers = boxed_value(Value::Vec(VecValue {
         element_type: Type::named("int64"),
-        elements: vec![Value::Int(IntegerValue::from_i64(3))],
+        elements: vec![Value::Int(IntegerValue::from_i64(3))].into(),
     })) as usize;
     assert!(element_load_trap(numbers, "[i].visits", vec![0])
         .message
@@ -23991,7 +23999,8 @@ fn adr0061_direct_element_path_helpers_read_and_write_inside_elements() {
                 elements: vec![
                     Value::Int(IntegerValue::from_i64(5)),
                     Value::Int(IntegerValue::from_i64(6)),
-                ],
+                ]
+                .into(),
             }),
         )]
         .into(),
@@ -24064,7 +24073,8 @@ fn adr0061_direct_element_path_helpers_read_and_write_inside_elements() {
             enum_name: "Shape".to_string(),
             variant_name: "Circle".to_string(),
             payloads: vec![Value::Int(IntegerValue::from_i64(5))],
-        })],
+        })]
+        .into(),
     })) as usize;
     let circle = "[i].__variant_payload_Circle_0";
     assert_eq!(element_path_load(shapes, circle, &[0]).render(), "5");
@@ -24090,7 +24100,8 @@ fn adr0061_direct_element_path_helpers_read_and_write_inside_elements() {
             union_type: Type::named("int64"),
             member_index: 0,
             payload: Value::Int(IntegerValue::from_i64(7)),
-        }))],
+        }))]
+        .into(),
     })) as usize;
     assert_eq!(
         element_path_load(unions, "[i].__union_payload_0", &[0]).render(),
@@ -24183,11 +24194,11 @@ fn adr0061_direct_element_paths_keep_collection_field_and_tuple_storage() {
                 elements: vec![
                     Value::Vec(VecValue {
                         element_type: Type::named("int64"),
-                        elements: vec![Value::Int(IntegerValue::from_i64(5))],
+                        elements: vec![Value::Int(IntegerValue::from_i64(5))].into(),
                     }),
                     Value::Vec(VecValue {
                         element_type: Type::named("int64"),
-                        elements: vec![Value::Int(IntegerValue::from_i64(7))],
+                        elements: vec![Value::Int(IntegerValue::from_i64(7))].into(),
                     }),
                 ],
             }),

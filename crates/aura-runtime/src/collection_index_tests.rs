@@ -239,3 +239,29 @@ fn clones_share_storage_until_a_write() {
         assert!(!original.is_shared());
     }
 }
+
+#[test]
+fn shared_vecs_copy_on_the_first_write() {
+    let original: SharedVec<Value> = vec![int(1), int(2)].into();
+    let mut copy = original.clone();
+    assert!(original.is_shared());
+    assert_eq!(copy.as_ptr(), original.as_ptr());
+    copy.push(int(3));
+    assert!(!original.is_shared());
+    assert_eq!(*original, vec![int(1), int(2)]);
+    assert_eq!(copy, vec![int(1), int(2), int(3)]);
+
+    let mut doubled = original.clone();
+    for value in &mut doubled {
+        *value = int(9);
+    }
+    assert_eq!(original, vec![int(1), int(2)]);
+    assert_eq!(doubled.iter().count(), 2);
+    assert_eq!((&doubled).into_iter().count(), 2);
+    assert_eq!(original.clone().into_iter().count(), 2);
+    assert_eq!(original.clone().into_vec(), vec![int(1), int(2)]);
+    assert!(SharedVec::<Value>::default().is_empty());
+    assert_eq!((0..3).map(int).collect::<SharedVec<_>>().len(), 3);
+    let nan: SharedVec<Value> = vec![Value::Float(f64::NAN)].into();
+    assert_ne!(nan, nan.clone());
+}

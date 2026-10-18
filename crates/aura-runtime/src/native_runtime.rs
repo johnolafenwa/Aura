@@ -5662,7 +5662,7 @@ pub extern "C-unwind" fn aura_direct_vec_empty() -> *mut OpaqueValue {
     task_runtime_boundary(|| {
         boxed_value(Value::Vec(VecValue {
             element_type: Type::named("Unknown"),
-            elements: Vec::new(),
+            elements: Vec::new().into(),
         }))
     })
 }
@@ -6896,7 +6896,7 @@ pub extern "C-unwind" fn aura_direct_map_keys(map: *mut OpaqueValue) -> *mut Opa
         let (key_type, elements) = direct_array_result(result, 0, 0);
         boxed_value(Value::Vec(VecValue {
             element_type: key_type,
-            elements,
+            elements: elements.into(),
         }))
     })
 }
@@ -6915,7 +6915,7 @@ pub extern "C-unwind" fn aura_direct_map_values(map: *mut OpaqueValue) -> *mut O
         let (value_type, elements) = direct_array_result(result, 0, 0);
         boxed_value(Value::Vec(VecValue {
             element_type: value_type,
-            elements,
+            elements: elements.into(),
         }))
     })
 }
@@ -6941,7 +6941,7 @@ pub extern "C-unwind" fn aura_direct_map_items(map: *mut OpaqueValue) -> *mut Op
         let (element_type, elements) = direct_array_result(result, 0, 0);
         boxed_value(Value::Vec(VecValue {
             element_type,
-            elements,
+            elements: elements.into(),
         }))
     })
 }

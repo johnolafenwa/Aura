@@ -1,6 +1,6 @@
 # Batch 7a design checkpoint: runtime value performance
 
-Status: **Steps 1 to 7 delivered 2026-10-18. Step 8 delivers copy-on-write `dict` and `set` storage. Lock removal remains open.**
+Status: **Steps 1 to 8 delivered 2026-10-18. Step 9 delivers copy-on-write `list` storage. Lock removal remains open.**
 
 Date: 2026-10-17. Source baseline: `5f68c34` (main after
 [PR #64](https://github.com/johnolafenwa/Aura/pull/64)).
@@ -205,8 +205,8 @@ every document the same way.
   `dict` or `set` whose key and value types cannot hold an `Array`. It keeps
   the element-by-element copy for any other type, including unknown types,
   because an `Array` buffer must be copied, not shared.
-- `list` keeps its plain `Vec` in this step. Its elements are a public field
-  with about 300 direct uses, so sharing it is a separate change.
+- `list` keeps its plain `Vec` in step 8. Its elements are a public field
+  with about 300 direct uses, so step 9 shares it separately.
 
 Evidence: runtime tests that a write to a clone leaves the original
 unchanged on both sides of the index threshold; the parity matrix;
@@ -218,6 +218,28 @@ documents. `record_field_reads` drops from 2.64 G to 1.54 G instructions.
 The AuraDB `update` repro drops from 834 M to 407 M. AuraDB `update` by id
 goes from 8,095 µs to 660 µs per operation, and `delete` from 31,630 µs
 to 10,980 µs.
+
+## H. Copy-On-Write Lists
+
+`VecValue.elements` becomes a `SharedVec`, a `Vec` behind an `Arc`.
+
+- `SharedVec` derefs to `Vec` for reads. `DerefMut` calls `Arc::make_mut`,
+  so every existing write copies shared storage first and keeps value
+  semantics. The about 300 direct uses compile unchanged. Construction sites
+  add `.into()`.
+- The fallible deep clone shares a `list` whose element type cannot hold an
+  `Array`, as it does for `dict` and `set`.
+- The iterative drop does not walk shared storage. It drops the handle.
+- Equality has no pointer shortcut, because a list holding NaN is not equal
+  to itself.
+
+Evidence: a runtime test that a write to a clone leaves the original
+unchanged; a deep-clone test that array-free lists share and unknown
+element types are copied; the parity matrix; the AuraDB rows.
+
+Step 9 takes AuraDB `update` by id from 660 µs to 25 µs per operation.
+Python 3.13 takes 6.0 µs. AuraDB `delete` stays near 9,000 µs because
+AuraDB recomputes every document's position key on each delete.
 
 ## F. Delivery Plan
 
@@ -233,8 +255,9 @@ dated work note.
 | 5 | Section D, ownership ledger, and the final measurements | Merged, PR #70 |
 | 6 | Section E, unboxed `int64`, `float64`, and `bool` list reads | Merged, PR #71 |
 | 7 | Section E, unboxed comparison results, string literal operands, and leaf type tags | Merged, PR #72 |
-| 8 | Section G, copy-on-write `dict` and `set` storage | In review |
-| 9 | Section D, lock removal | Not started |
+| 8 | Section G, copy-on-write `dict` and `set` storage | Merged, PR #73 |
+| 9 | Section H, copy-on-write `list` storage | In review |
+| 10 | Section D, lock removal | Not started |
 
 ### Step 1 Measurements
 

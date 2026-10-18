@@ -14,7 +14,7 @@
 
 use std::collections::TryReserveError;
 use std::hash::{BuildHasher, Hash, Hasher, RandomState};
-use std::ops::Deref;
+use std::ops::{Deref, DerefMut};
 use std::sync::{Arc, OnceLock};
 
 use hashbrown::HashTable;
@@ -460,6 +460,108 @@ impl SetElements {
         }
         self.push_new(element);
         true
+    }
+}
+
+/// A `Vec` behind an `Arc`, for `list` elements. A clone shares the
+/// storage. Mutable access through `DerefMut` copies shared storage first,
+/// so every existing `Vec` write keeps value semantics.
+#[derive(Debug)]
+pub struct SharedVec<T>(Arc<Vec<T>>);
+
+impl<T> SharedVec<T> {
+    pub fn new() -> Self {
+        Self(Arc::new(Vec::new()))
+    }
+
+    /// Whether another handle shares this storage.
+    pub fn is_shared(&self) -> bool {
+        Arc::strong_count(&self.0) > 1
+    }
+}
+
+impl<T> Default for SharedVec<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<T> Clone for SharedVec<T> {
+    /// Shares the storage. A later write copies it first.
+    fn clone(&self) -> Self {
+        Self(Arc::clone(&self.0))
+    }
+}
+
+impl<T> Deref for SharedVec<T> {
+    type Target = Vec<T>;
+
+    fn deref(&self) -> &Vec<T> {
+        &self.0
+    }
+}
+
+impl<T: Clone> DerefMut for SharedVec<T> {
+    fn deref_mut(&mut self) -> &mut Vec<T> {
+        Arc::make_mut(&mut self.0)
+    }
+}
+
+impl<T: Clone> SharedVec<T> {
+    pub fn into_vec(self) -> Vec<T> {
+        Arc::unwrap_or_clone(self.0)
+    }
+}
+
+impl<T> From<Vec<T>> for SharedVec<T> {
+    fn from(elements: Vec<T>) -> Self {
+        Self(Arc::new(elements))
+    }
+}
+
+impl<T> FromIterator<T> for SharedVec<T> {
+    fn from_iter<I: IntoIterator<Item = T>>(elements: I) -> Self {
+        Self::from(elements.into_iter().collect::<Vec<_>>())
+    }
+}
+
+impl<T: Clone> IntoIterator for SharedVec<T> {
+    type Item = T;
+    type IntoIter = std::vec::IntoIter<T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.into_vec().into_iter()
+    }
+}
+
+impl<'a, T> IntoIterator for &'a SharedVec<T> {
+    type Item = &'a T;
+    type IntoIter = std::slice::Iter<'a, T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter()
+    }
+}
+
+impl<'a, T: Clone> IntoIterator for &'a mut SharedVec<T> {
+    type Item = &'a mut T;
+    type IntoIter = std::slice::IterMut<'a, T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        Arc::make_mut(&mut self.0).iter_mut()
+    }
+}
+
+impl<T: PartialEq> PartialEq for SharedVec<T> {
+    fn eq(&self, other: &Self) -> bool {
+        // No pointer shortcut: a list holding NaN is not equal to itself.
+        self.0 == other.0
+    }
+}
+
+impl<T: PartialEq> PartialEq<Vec<T>> for SharedVec<T> {
+    fn eq(&self, other: &Vec<T>) -> bool {
+        *self.0 == *other
     }
 }
 

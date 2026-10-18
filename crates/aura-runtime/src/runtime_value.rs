@@ -23,7 +23,7 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, Once, OnceLock, Weak};
 use std::thread;
 use std::time::{Duration as StdDuration, Instant};
 
-pub use crate::collection_index::{DictEntries, SetElements};
+pub use crate::collection_index::{DictEntries, SetElements, SharedVec};
 use base64::Engine as _;
 use corosensei::stack::{DefaultStack, Stack};
 use corosensei::{Coroutine, CoroutineResult, Yielder};
@@ -698,7 +698,7 @@ impl PartialEq for EnumVariantValue {
 #[derive(Clone, Debug)]
 pub struct VecValue {
     pub element_type: Type,
-    pub elements: Vec<Value>,
+    pub elements: SharedVec<Value>,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -929,7 +929,7 @@ impl ArrayValue {
     ) -> Result<Self> {
         let vector = VecValue {
             element_type: element_type.clone(),
-            elements,
+            elements: elements.into(),
         };
         let dtype = ArrayDType::from_type(element_type).ok_or_else(|| {
             Diagnostic::coded(
@@ -1019,7 +1019,7 @@ impl ArrayValue {
         }));
         Ok(Value::Vec(VecValue {
             element_type: Type::named("int64"),
-            elements,
+            elements: elements.into(),
         }))
     }
 
@@ -1906,7 +1906,7 @@ pub fn slice_vec_owned(
     }
     Ok(VecValue {
         element_type: vector.element_type.clone(),
-        elements,
+        elements: elements.into(),
     })
 }
 
@@ -2086,11 +2086,14 @@ fn drop_array_containing_value_iteratively(value: Value, frames: &mut Vec<ArrayC
     loop {
         if let Some(value) = next.take() {
             let frame = match value {
-                Value::Tuple(TupleValue { elements, .. })
-                | Value::Vec(VecValue { elements, .. }) => {
+                Value::Tuple(TupleValue { elements, .. }) => {
                     Some(ArrayCloneCleanupFrame::Values(elements.into_iter()))
                 }
                 // Shared storage only drops a handle, so it is not walked.
+                Value::Vec(VecValue { elements, .. }) if elements.is_shared() => None,
+                Value::Vec(VecValue { elements, .. }) => Some(ArrayCloneCleanupFrame::Values(
+                    elements.into_vec().into_iter(),
+                )),
                 Value::Set(SetValue { elements, .. }) if elements.is_shared() => None,
                 Value::Map(MapValue { entries, .. }) if entries.is_shared() => None,
                 Value::Set(SetValue { elements, .. }) => {
@@ -2154,7 +2157,7 @@ fn type_cannot_hold_array(ty: &Type) -> bool {
     }
 }
 
-/// A `dict` or `set` shares its storage on clone. Only an `Array` buffer
+/// A `list`, `dict`, or `set` shares its storage on clone. Only an `Array` buffer
 /// must be copied, so a collection whose types cannot hold one is shared
 /// instead of walked. The clone is constant time and never recurses.
 fn shared_collection_clone(value: &Value) -> Option<Value> {
@@ -2163,6 +2166,7 @@ fn shared_collection_clone(value: &Value) -> Option<Value> {
             type_cannot_hold_array(&map.key_type) && type_cannot_hold_array(&map.value_type)
         }
         Value::Set(set) => type_cannot_hold_array(&set.element_type),
+        Value::Vec(vector) => type_cannot_hold_array(&vector.element_type),
         _ => false,
     };
     shareable.then(|| value.clone())
@@ -2327,7 +2331,9 @@ pub fn try_clone_array_containing_value(value: &Value) -> Result<Value> {
     loop {
         if let Some(value) = next.take() {
             state.completed = match value {
-                Value::Map(_) | Value::Set(_) if shared_collection_clone(value).is_some() => {
+                Value::Vec(_) | Value::Map(_) | Value::Set(_)
+                    if shared_collection_clone(value).is_some() =>
+                {
                     shared_collection_clone(value)
                 }
                 Value::Array(array) => Some(Value::Array(array.try_clone()?)),
@@ -2362,7 +2368,7 @@ pub fn try_clone_array_containing_value(value: &Value) -> Result<Value> {
                     if vector.elements.is_empty() {
                         Some(Value::Vec(VecValue {
                             element_type: vector.element_type.clone(),
-                            elements,
+                            elements: elements.into(),
                         }))
                     } else {
                         state.push_frame(CloneFrame::Vec {
@@ -2510,7 +2516,7 @@ pub fn try_clone_array_containing_value(value: &Value) -> Result<Value> {
                     } else {
                         state.completed = Some(Value::Vec(VecValue {
                             element_type: vector.element_type.clone(),
-                            elements,
+                            elements: elements.into(),
                         }));
                     }
                 }
@@ -7027,7 +7033,7 @@ fn clone_json_runtime_tree(root: &Value) -> Option<Value> {
                             variant,
                             vec![Value::Vec(VecValue {
                                 element_type: vector.element_type.clone(),
-                                elements,
+                                elements: elements.into(),
                             })],
                         ))
                     } else {
@@ -7094,7 +7100,7 @@ fn clone_json_runtime_tree(root: &Value) -> Option<Value> {
                             variant,
                             vec![Value::Vec(VecValue {
                                 element_type: vector.element_type.clone(),
-                                elements,
+                                elements: elements.into(),
                             })],
                         ));
                     }
@@ -14905,7 +14911,7 @@ pub fn runtime_bytes_from_host(bytes: &[u8]) -> Result<Value> {
     }));
     Ok(Value::Vec(VecValue {
         element_type: Type::Named(bytes_runtime_owned_string("uint8")?, Vec::new()),
-        elements,
+        elements: elements.into(),
     }))
 }
 
@@ -15570,7 +15576,7 @@ pub fn json_value_to_runtime(value: JsonValue) -> Result<Value> {
                             "Array",
                             json_runtime_single_payload(Value::Vec(VecValue {
                                 element_type: json_runtime_type("json.Value")?,
-                                elements,
+                                elements: elements.into(),
                             }))?,
                         )?);
                     }
@@ -16328,7 +16334,7 @@ pub fn wait_all_ready(values: Vec<Value>) -> Value {
         variant_name: "Ready".to_string(),
         payloads: vec![Value::Vec(VecValue {
             element_type: Type::named("Unknown"),
-            elements: values,
+            elements: values.into(),
         })],
     })
 }
