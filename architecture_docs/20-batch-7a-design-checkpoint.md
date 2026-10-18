@@ -1,6 +1,6 @@
 # Batch 7a design checkpoint: runtime value performance
 
-Status: **Steps 1 to 5 delivered 2026-10-18. Steps 6 to 8 deliver unboxed list reads, unboxed comparisons, and copy-on-write `dict` and `set` storage. Lock removal remains open.**
+Status: **Steps 1 to 7 delivered 2026-10-18. Step 8 delivers copy-on-write `dict` and `set` storage. Lock removal remains open.**
 
 Date: 2026-10-17. Source baseline: `5f68c34` (main after
 [PR #64](https://github.com/johnolafenwa/Aura/pull/64)).
@@ -232,7 +232,7 @@ dated work note.
 | 4 | Section E, list loops | Merged, PR #69 |
 | 5 | Section D, ownership ledger, and the final measurements | Merged, PR #70 |
 | 6 | Section E, unboxed `int64`, `float64`, and `bool` list reads | Merged, PR #71 |
-| 7 | Section E, unboxed comparison results, string literal operands, and leaf type tags | In review |
+| 7 | Section E, unboxed comparison results, string literal operands, and leaf type tags | Merged, PR #72 |
 | 8 | Section G, copy-on-write `dict` and `set` storage | In review |
 | 9 | Section D, lock removal | Not started |
 

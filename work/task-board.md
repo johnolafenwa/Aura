@@ -13,7 +13,7 @@ Last updated: 2026-10-18
   (PR #67), borrowed reads (PR #68), list loops without per-element
   `Lookup` values and linear owned loops (PR #69), a hashed ownership
   ledger with measurements (PR #70), unboxed `int64`, `float64`, and
-  `bool` list reads (PR #71), unboxed comparisons (step 7), and
+  `bool` list reads (PR #71), unboxed comparisons (PR #72), and
   copy-on-write `dict` and `set` storage (step 8).
   `dict_build_get` went from 18.47 s to 0.51 s, `int_list_sum` from
   1.96 s to 0.16 s, and `string_list_scan` from 1.60 s to 0.22 s. AuraDB
