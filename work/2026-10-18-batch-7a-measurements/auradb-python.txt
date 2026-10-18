@@ -1,0 +1,28 @@
+AuraDB Python benchmarks (bounded; median of reps; nanosecond timer)
+insert_many (memory) x1000 | ops=1000 | median=0.619ms | 1616580 ops/s | 0.619 us/op
+insert_many (memory) x5000 | ops=5000 | median=3.345ms | 1494781 ops/s | 0.669 us/op
+insert_many (file, incl. save) x1000 | ops=1000 | median=7.902ms | 126557 ops/s | 7.902 us/op
+insert_many (file, incl. save) x5000 | ops=5000 | median=28.999ms | 172421 ops/s | 5.800 us/op
+insert singles (memory) x1000 | ops=1000 | median=0.811ms | 1233783 ops/s | 0.811 us/op
+insert singles autosave (file n~1000) x50 | ops=50 | median=368.135ms | 136 ops/s | 7362.701 us/op
+get by id (n=1000) | ops=200 | median=1.201ms | 166523 ops/s | 6.005 us/op
+find city=Lagos scan (n=1000) | median=4.194ms
+find age>=70 scan (n=1000) | median=2.499ms
+count city=Lagos (n=1000) | median=3.504ms
+create_index city (n=1000) | median=0.626ms
+find city=Lagos indexed (n=1000) | median=1.174ms
+save (n=1000) | median=9.660ms
+open+load (n=1000) | median=2.714ms
+get by id (n=5000) | ops=200 | median=1.165ms | 171676 ops/s | 5.825 us/op
+find city=Lagos scan (n=5000) | median=13.938ms
+find age>=70 scan (n=5000) | median=8.491ms
+count city=Lagos (n=5000) | median=13.241ms
+create_index city (n=5000) | median=1.984ms
+find city=Lagos indexed (n=5000) | median=3.470ms
+save (n=5000) | median=20.602ms
+open+load (n=5000) | median=14.190ms
+update by id (memory n=2000) | ops=200 | median=1.192ms | 167798 ops/s | 5.960 us/op
+delete by id (memory n=2000) | ops=100 | median=38.133ms | 2622 ops/s | 381.335 us/op
+delete_where 10% (memory n=2000) | median=4.995ms
+doc_from_json | ops=2000 | median=8.218ms | 243357 ops/s | 4.109 us/op
+file size after n=5000 read benches: 427056 bytes
