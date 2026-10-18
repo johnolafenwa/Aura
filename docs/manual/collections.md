@@ -77,6 +77,10 @@ for value in mut values:
 A bare list or set loop freezes the collection for the duration of the loop.
 `own` selects the source once and consumes it.
 
+Each list loop step takes constant time. A bare loop reads the length once,
+because the frozen list cannot change length. An `own` loop takes its
+elements in order without shifting the rest.
+
 Dictionaries are not iterated directly. They expose eager owned snapshots.
 `items()` returns key/value tuples in insertion order:
 

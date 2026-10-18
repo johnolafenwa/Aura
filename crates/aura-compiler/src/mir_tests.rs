@@ -5006,6 +5006,17 @@ def main():
             } if variant_name == "Found" => {
                 Some((target.as_str(), local_types.get(target.as_str()).copied()))
             }
+            // A shared list loop reads each element with bounded `__index`.
+            Instruction::Assign {
+                target,
+                value:
+                    Rvalue::Call {
+                        callee: CallTarget::Member { field, .. },
+                        ..
+                    },
+            } if field == "__index" => {
+                Some((target.as_str(), local_types.get(target.as_str()).copied()))
+            }
             _ => None,
         })
         .collect::<Vec<_>>();
@@ -5064,6 +5075,14 @@ def main():
                         ..
                     },
             } if matches!(variant_name.as_str(), "Item" | "Found") => Some(target.as_str()),
+            Instruction::Assign {
+                target,
+                value:
+                    Rvalue::Call {
+                        callee: CallTarget::Member { field, .. },
+                        ..
+                    },
+            } if field == "__index" => Some(target.as_str()),
             _ => None,
         })
         .collect::<Vec<_>>();
@@ -5526,12 +5545,10 @@ def main():
                         ..
                     },
                 ..
-            } if field == INTERNAL_VEC_INDEX_OPTION_FIELD => {
-                Some((object, receiver_place.as_deref()))
-            }
+            } if field == INTERNAL_VEC_INDEX_FIELD => Some((object, receiver_place.as_deref())),
             _ => None,
         })
-        .expect("comprehension should lower through optional indexed access");
+        .expect("comprehension should lower through bounded indexed access");
     let Operand::Place(object_place) = object else {
         panic!("module constant collection should be materialized into a place operand")
     };
@@ -5882,12 +5899,10 @@ fn ordinary_for_target_scope_starts_after_iterable_evaluation() {
                         ..
                     },
                 ..
-            } if field == INTERNAL_VEC_INDEX_OPTION_FIELD => {
-                Some((object, receiver_place.as_deref()))
-            }
+            } if field == INTERNAL_VEC_INDEX_FIELD => Some((object, receiver_place.as_deref())),
             _ => None,
         })
-        .expect("Vec iteration should lower through the indexed option helper");
+        .expect("Vec iteration should lower through bounded indexed access");
     assert_eq!(
         iteration_receiver,
         (&Operand::Place("values".to_string()), Some("values"))
@@ -5901,15 +5916,14 @@ fn ordinary_for_target_scope_starts_after_iterable_evaluation() {
             Instruction::Assign {
                 target,
                 value:
-                    Rvalue::VariantPayload {
-                        variant_name,
-                        index: 0,
+                    Rvalue::Call {
+                        callee: CallTarget::Member { field, .. },
                         ..
                     },
-            } if variant_name == "Found" => Some(target),
+            } if field == INTERNAL_VEC_INDEX_FIELD => Some(target),
             _ => None,
         })
-        .expect("Vec iteration should extract the current element");
+        .expect("Vec iteration should read the current element");
     assert!(binding.starts_with("%t"));
     assert_ne!(binding, "values");
 }

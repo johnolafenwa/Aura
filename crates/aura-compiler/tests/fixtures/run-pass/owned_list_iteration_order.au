@@ -1,0 +1,29 @@
+def main():
+    mut words: list[str] = []
+    mut i = 0
+    while i < 3000:
+        words.append(f"w{i}")
+        i += 1
+    mut count = 0
+    mut first = ""
+    mut last = ""
+    for word in own words:
+        if count == 0:
+            first = word.clone()
+        last = word.clone()
+        count += 1
+    print(f"{count} {first} {last}")
+
+    mut early: list[int64] = [5, 6, 7, 8]
+    mut seen: list[int64] = []
+    for value in own early:
+        if value == 7:
+            break
+        seen.append(value)
+    print(seen)
+
+    empty: list[int64] = []
+    mut visits = 0
+    for value in own empty:
+        visits += value
+    print(visits)

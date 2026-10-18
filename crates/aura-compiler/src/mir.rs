@@ -16916,24 +16916,78 @@ impl<'a> Lowerer<'a> {
                         binding
                     }
                 };
+                if let Some(place) = owned_iterable_place.as_ref() {
+                    // Owned iteration takes from the end of the reversed
+                    // private copy, so each step is O(1) instead of shifting
+                    // the remaining elements.
+                    let reversed = self.new_typed_temp(Type::Unit);
+                    self.emit(Instruction::Assign {
+                        target: reversed,
+                        value: Rvalue::Call {
+                            callee: CallTarget::Member {
+                                object: Operand::Place(place.clone()),
+                                field: "reverse".to_string(),
+                                receiver_place: Some(place.clone()),
+                            },
+                            args: Vec::new(),
+                        },
+                    });
+                }
                 let next_value = self.new_typed_temp(lookup_type(element_ty.clone()));
                 let index = self.new_typed_temp(Type::named("int64"));
-                // A span iterates its base from `start` to `start + len`.
+                // A span iterates its base from `start` to `start + len`, and a
+                // whole list from 0 to its length, which the iteration loan
+                // keeps fixed. Owned iteration takes until the copy is empty.
                 let span_bounds = if takes_owned {
                     None
                 } else {
                     self.span_iteration_bounds(&for_stmt.iterable)
                 };
+                let shared_stop = match (&span_bounds, takes_owned) {
+                    (Some((_, stop)), _) => Some(stop.clone()),
+                    (None, true) => None,
+                    (None, false) => {
+                        let length = self.new_typed_temp(Type::named("int64"));
+                        let receiver_place = match &iterable {
+                            Operand::Place(place) | Operand::MovePlace(place) => {
+                                Some(place.clone())
+                            }
+                            _ => self.render_place_expr_option(&for_stmt.iterable),
+                        };
+                        self.emit(Instruction::Assign {
+                            target: length.clone(),
+                            value: Rvalue::Call {
+                                callee: CallTarget::Member {
+                                    object: iterable.clone(),
+                                    field: "len".to_string(),
+                                    receiver_place,
+                                },
+                                args: Vec::new(),
+                            },
+                        });
+                        Some(length)
+                    }
+                };
                 self.emit(Instruction::Assign {
                     target: index.clone(),
-                    value: Rvalue::Use(match &span_bounds {
-                        Some((start, _)) => Operand::Place(start.clone()),
-                        None => Operand::Int(0),
-                    }),
+                    value: if takes_owned {
+                        // Index -1 is the last element of the reversed copy.
+                        Rvalue::Binary {
+                            op: BinaryOp::Sub,
+                            left: Operand::Int(0),
+                            right: Operand::Int(1),
+                            span: for_stmt.span,
+                        }
+                    } else {
+                        Rvalue::Use(match &span_bounds {
+                            Some((start, _)) => Operand::Place(start.clone()),
+                            None => Operand::Int(0),
+                        })
+                    },
                 });
                 self.terminate(Terminator::Goto(self.label(dispatch_block)));
                 self.switch_to(dispatch_block);
-                if let Some((_, stop)) = &span_bounds {
+                if let Some(stop) = &shared_stop {
                     let fetch_block = self.new_block("for_span_fetch");
                     self.emit_span_iteration_bound(
                         stop,
@@ -16942,72 +16996,37 @@ impl<'a> Lowerer<'a> {
                         after_block,
                         for_stmt.span,
                     );
-                }
-                let (iteration_object, iteration_field, iteration_receiver_place) =
-                    if let Some(place) = owned_iterable_place.as_ref() {
-                        (
-                            Operand::MovePlace(place.clone()),
-                            INTERNAL_COLLECTION_TAKE_INDEX_OPTION_FIELD.to_string(),
-                            Some(place.clone()),
-                        )
-                    } else {
-                        (
-                            iterable.clone(),
-                            INTERNAL_VEC_INDEX_OPTION_FIELD.to_string(),
-                            self.render_place_expr_option(&for_stmt.iterable),
-                        )
+                    // The bound check above keeps this read in range, so no
+                    // `Lookup` value is built per element.
+                    let receiver_place = match &iterable {
+                        Operand::Place(place) | Operand::MovePlace(place) => Some(place.clone()),
+                        _ => self.render_place_expr_option(&for_stmt.iterable),
                     };
-                let iteration_receiver_place = match &iteration_object {
-                    Operand::Place(place) | Operand::MovePlace(place) => Some(place.clone()),
-                    _ => iteration_receiver_place,
-                };
-                self.emit(Instruction::Assign {
-                    target: next_value.clone(),
-                    value: Rvalue::Call {
-                        callee: CallTarget::Member {
-                            object: iteration_object,
-                            field: iteration_field,
-                            receiver_place: iteration_receiver_place,
-                        },
-                        args: vec![MirArg {
+                    let mut args = vec![MirArg {
+                        name: None,
+                        value: Operand::Place(index.clone()),
+                        writeback_place: None,
+                    }];
+                    for coordinate in [for_stmt.span.line, for_stmt.span.column] {
+                        args.push(MirArg {
                             name: None,
-                            value: Operand::Place(index.clone()),
+                            value: Operand::Int(coordinate as u128),
                             writeback_place: None,
-                        }],
-                    },
-                });
-                self.terminate(Terminator::Match {
-                    scrutinee: Operand::Place(next_value.clone()),
-                    arms: vec![
-                        MirMatchArm {
-                            enum_name: Some("Lookup".to_string()),
-                            variant_name: Some("Found".to_string()),
-                            wildcard: false,
-                            label: self.label(body_block),
+                        });
+                    }
+                    self.emit(Instruction::Assign {
+                        target: binding.clone(),
+                        value: Rvalue::Call {
+                            callee: CallTarget::Member {
+                                object: iterable.clone(),
+                                field: INTERNAL_VEC_INDEX_FIELD.to_string(),
+                                receiver_place,
+                            },
+                            args,
                         },
-                        MirMatchArm {
-                            enum_name: Some("Lookup".to_string()),
-                            variant_name: Some("Missing".to_string()),
-                            wildcard: false,
-                            label: self.label(after_block),
-                        },
-                    ],
-                    otherwise: self.label(after_block),
-                });
-                self.switch_to(body_block);
-                self.emit(Instruction::Assign {
-                    target: binding.clone(),
-                    value: Rvalue::VariantPayload {
-                        scrutinee: if takes_owned {
-                            Operand::MovePlace(next_value)
-                        } else {
-                            Operand::Place(next_value)
-                        },
-                        variant_name: "Found".to_string(),
-                        index: 0,
-                    },
-                });
-                if !takes_owned {
+                    });
+                    self.terminate(Terminator::Goto(self.label(body_block)));
+                    self.switch_to(body_block);
                     self.emit(Instruction::Assign {
                         target: index.clone(),
                         value: Rvalue::Binary {
@@ -17017,6 +17036,82 @@ impl<'a> Lowerer<'a> {
                             span: for_stmt.span,
                         },
                     });
+                } else {
+                    let (iteration_object, iteration_field, iteration_receiver_place) =
+                        if let Some(place) = owned_iterable_place.as_ref() {
+                            (
+                                Operand::MovePlace(place.clone()),
+                                INTERNAL_COLLECTION_TAKE_INDEX_OPTION_FIELD.to_string(),
+                                Some(place.clone()),
+                            )
+                        } else {
+                            (
+                                iterable.clone(),
+                                INTERNAL_VEC_INDEX_OPTION_FIELD.to_string(),
+                                self.render_place_expr_option(&for_stmt.iterable),
+                            )
+                        };
+                    let iteration_receiver_place = match &iteration_object {
+                        Operand::Place(place) | Operand::MovePlace(place) => Some(place.clone()),
+                        _ => iteration_receiver_place,
+                    };
+                    self.emit(Instruction::Assign {
+                        target: next_value.clone(),
+                        value: Rvalue::Call {
+                            callee: CallTarget::Member {
+                                object: iteration_object,
+                                field: iteration_field,
+                                receiver_place: iteration_receiver_place,
+                            },
+                            args: vec![MirArg {
+                                name: None,
+                                value: Operand::Place(index.clone()),
+                                writeback_place: None,
+                            }],
+                        },
+                    });
+                    self.terminate(Terminator::Match {
+                        scrutinee: Operand::Place(next_value.clone()),
+                        arms: vec![
+                            MirMatchArm {
+                                enum_name: Some("Lookup".to_string()),
+                                variant_name: Some("Found".to_string()),
+                                wildcard: false,
+                                label: self.label(body_block),
+                            },
+                            MirMatchArm {
+                                enum_name: Some("Lookup".to_string()),
+                                variant_name: Some("Missing".to_string()),
+                                wildcard: false,
+                                label: self.label(after_block),
+                            },
+                        ],
+                        otherwise: self.label(after_block),
+                    });
+                    self.switch_to(body_block);
+                    self.emit(Instruction::Assign {
+                        target: binding.clone(),
+                        value: Rvalue::VariantPayload {
+                            scrutinee: if takes_owned {
+                                Operand::MovePlace(next_value)
+                            } else {
+                                Operand::Place(next_value)
+                            },
+                            variant_name: "Found".to_string(),
+                            index: 0,
+                        },
+                    });
+                    if !takes_owned {
+                        self.emit(Instruction::Assign {
+                            target: index.clone(),
+                            value: Rvalue::Binary {
+                                op: BinaryOp::Add,
+                                left: Operand::Place(index),
+                                right: Operand::Int(1),
+                                span: for_stmt.span,
+                            },
+                        });
+                    }
                 }
             }
             Some(Type::Named(name, args)) if name == "set" && args.len() == 1 => {
