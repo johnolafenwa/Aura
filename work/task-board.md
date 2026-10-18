@@ -2,7 +2,7 @@
 
 Last updated: 2026-10-18
 
-## Batch 7a: runtime value performance (steps 1 to 9 complete, step 10 in review)
+## Batch 7a: runtime value performance (complete)
 
 - Target: implement the runtime half of roadmap Batch 7a, hash-indexed
   `dict` and `set` and the value representation, as planned in the
@@ -15,15 +15,16 @@ Last updated: 2026-10-18
   ledger with measurements (PR #70), unboxed `int64`, `float64`, and
   `bool` list reads (PR #71), unboxed comparisons (PR #72),
   copy-on-write `dict` and `set` storage (PR #73), and copy-on-write
-  `list` storage (PR #74). Step 10, lock-free values confined to one
-  thread, is in review.
+  `list` storage (PR #74), and lock-free values confined to one
+  thread (PR #76).
   `dict_build_get` went from 18.47 s to 0.31 s, `int_list_sum` from
   1.96 s to 0.048 s, and `string_list_scan` from 1.60 s to 0.11 s. AuraDB
   `update` by id went from 7,895 µs to 20 µs per operation.
 - Verification: each PR passed hosted CI on Linux and macOS. The
   Performance chapter records the runs.
-- Remaining: merge step 10. A value shared between task threads still
-  takes its lock on every access.
+- Follow-up: a value shared between task threads still takes its lock on
+  every access. Type tagging and the ownership ledger dominate
+  `record_field_reads`.
 
 ## AuraDB benchmark fixes (complete)
 
