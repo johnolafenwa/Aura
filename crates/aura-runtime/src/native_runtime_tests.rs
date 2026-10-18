@@ -24456,3 +24456,44 @@ fn direct_comparisons_borrow_both_operands() {
     assert_eq!(super::direct_value_clone_count(), clone_count);
     assert!(expect_bool_boxed(result));
 }
+
+#[test]
+fn owned_value_ledger_hashes_spread_aligned_addresses() {
+    use std::hash::{BuildHasher, Hasher};
+    let build = std::hash::BuildHasherDefault::<super::AddressHasher>::default();
+    let hashes = (0..64usize)
+        .map(|slot| build.hash_one(0x7f00_0000_1000usize + slot * 16))
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(hashes.len(), 64, "aligned addresses must not collide");
+    let top_bits = hashes
+        .iter()
+        .map(|hash| hash >> 57)
+        .collect::<std::collections::BTreeSet<_>>();
+    assert!(
+        top_bits.len() > 16,
+        "the control bits must vary across addresses"
+    );
+
+    let mut bytes = super::AddressHasher::default();
+    bytes.write(b"ab");
+    let mut other = super::AddressHasher::default();
+    other.write(b"ba");
+    assert_ne!(bytes.finish(), other.finish());
+}
+
+#[test]
+fn leaf_values_clone_without_frames() {
+    for value in [
+        Value::Int(IntegerValue::from_i64(7)),
+        Value::Float(1.5),
+        Value::Bool(true),
+        Value::Unit,
+        Value::String("leaf".to_string()),
+        Value::Duration(3),
+    ] {
+        assert_eq!(
+            crate::runtime_value::try_clone_array_containing_value(&value).expect("leaf clone"),
+            value
+        );
+    }
+}
