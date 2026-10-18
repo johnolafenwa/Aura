@@ -15,7 +15,7 @@ Last updated: 2026-10-18
   ledger with measurements (PR #70), unboxed `int64`, `float64`, and
   `bool` list reads (PR #71), unboxed comparisons (PR #72),
   copy-on-write `dict` and `set` storage (PR #73), and copy-on-write
-  `list` storage (step 9).
+  `list` storage (PR #74).
   `dict_build_get` went from 18.47 s to 0.51 s, `int_list_sum` from
   1.96 s to 0.16 s, and `string_list_scan` from 1.60 s to 0.22 s. AuraDB
   `update` by id went from 7,895 µs to 25 µs per operation.

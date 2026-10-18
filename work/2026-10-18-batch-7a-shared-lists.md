@@ -7,7 +7,7 @@ another collection, or binds one in a loop. Section H of the
 [Batch 7a design checkpoint](../architecture_docs/20-batch-7a-design-checkpoint.md)
 records the design. John's 2026-10-18 decision card offered lists first,
 lock removal first, or closing Batch 7a. Work followed the recommended
-option, lists first, while the card was open.
+option, lists first, and John confirmed it on the card.
 
 ## Work Completed
 

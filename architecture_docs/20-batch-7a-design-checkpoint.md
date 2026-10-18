@@ -1,6 +1,6 @@
 # Batch 7a design checkpoint: runtime value performance
 
-Status: **Steps 1 to 8 delivered 2026-10-18. Step 9 delivers copy-on-write `list` storage. Lock removal remains open.**
+Status: **Steps 1 to 9 delivered 2026-10-18. Lock removal remains open.**
 
 Date: 2026-10-17. Source baseline: `5f68c34` (main after
 [PR #64](https://github.com/johnolafenwa/Aura/pull/64)).
@@ -256,7 +256,7 @@ dated work note.
 | 6 | Section E, unboxed `int64`, `float64`, and `bool` list reads | Merged, PR #71 |
 | 7 | Section E, unboxed comparison results, string literal operands, and leaf type tags | Merged, PR #72 |
 | 8 | Section G, copy-on-write `dict` and `set` storage | Merged, PR #73 |
-| 9 | Section H, copy-on-write `list` storage | In review |
+| 9 | Section H, copy-on-write `list` storage | Merged, PR #74 |
 | 10 | Section D, lock removal | Not started |
 
 ### Step 1 Measurements
