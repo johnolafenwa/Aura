@@ -1,0 +1,14 @@
+def main():
+    mut names: list[str] = []
+    mut i = 0
+    while i < 10000:
+        names.append(f"user-{i % 100}")
+        i += 1
+    mut hits = 0
+    mut round = 0
+    while round < 100:
+        for name in names:
+            if name == "user-7":
+                hits += 1
+        round += 1
+    print(hits)

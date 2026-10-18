@@ -1,0 +1,61 @@
+def main():
+    mut table: dict[str, int64] = {}
+    mut i = 0
+    while i < 20:
+        table[f"k{19 - i}"] = i
+        i += 1
+    print(table.len())
+    print(table["k0"])
+    table["k10"] = 100
+    print(table.keys()[9])
+    match table.remove("k15"):
+        case Lookup.Found(value):
+            print(value)
+        case Lookup.Missing:
+            print("missing")
+    match table.remove("k15"):
+        case Lookup.Found(value):
+            print(value)
+        case Lookup.Missing:
+            print("missing")
+    print(table.keys()[4])
+    print("k15" in table)
+    print("k14" in table)
+    table["k15"] = -1
+    print(table.keys()[18])
+    mut other: dict[str, int64] = {}
+    for key in table.keys():
+        match table.get(key):
+            case Lookup.Found(value):
+                other[key.clone()] = value
+            case Lookup.Missing:
+                pass
+    print(other == table)
+    mut reversed: dict[str, int64] = {}
+    mut j = 19
+    while j >= 0:
+        key = table.keys()[j].clone()
+        value = table[key]
+        reversed[key] = value
+        j -= 1
+    print(reversed == table)
+    table.clear()
+    print(table.len())
+    print("k0" in table)
+
+    mut seen = set[int64]()
+    mut n = 0
+    while n < 30:
+        seen.add(n * 3 % 30)
+        n += 1
+    print(seen.len())
+    print(27 in seen)
+    print(28 in seen)
+    seen.discard(27)
+    seen.remove(0)
+    print(27 in seen)
+    print(seen.len())
+    mut total = 0
+    for value in seen:
+        total = total * 7 % 1000003 + value
+    print(total)

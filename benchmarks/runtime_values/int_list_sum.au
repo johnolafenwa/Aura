@@ -1,0 +1,13 @@
+def main():
+    mut values: list[int64] = []
+    mut i = 0
+    while i < 100000:
+        values.append(i)
+        i += 1
+    mut total = 0
+    mut round = 0
+    while round < 20:
+        for value in values:
+            total += value
+        round += 1
+    print(total)

@@ -67,6 +67,7 @@ dependencies = [
  "base64",
  "corosensei",
  "getrandom",
+ "hashbrown 0.16.1",
  "httparse",
  "libc",
  "libffi",

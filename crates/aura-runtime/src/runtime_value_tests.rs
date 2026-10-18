@@ -1166,7 +1166,8 @@ fn array_containing_language_copies_preserve_reachable_structure_and_independenc
             entries: vec![
                 (Value::String("second".to_string()), source_array(&[6, 3])),
                 (Value::String("first".to_string()), source_array(&[5, 2])),
-            ],
+            ]
+            .into(),
         }),
         Value::Instance(InstanceValue {
             class_name: "ArrayBox".to_string(),
@@ -1253,12 +1254,12 @@ fn array_containing_language_copies_preserve_empty_containers() {
         }),
         Value::Set(SetValue {
             element_type: Type::named("str"),
-            elements: Vec::new(),
+            elements: Vec::new().into(),
         }),
         Value::Map(MapValue {
             key_type: Type::named("str"),
             value_type: array_type.clone(),
-            entries: Vec::new(),
+            entries: Vec::new().into(),
         }),
         Value::Instance(InstanceValue {
             class_name: "EmptyArrayBox".to_string(),
@@ -1285,7 +1286,8 @@ fn array_aware_language_copy_preserves_reachable_scalar_set_order() {
             Value::String("third".to_string()),
             Value::String("first".to_string()),
             Value::String("second".to_string()),
-        ],
+        ]
+        .into(),
     });
 
     let copy = super::try_clone_array_containing_value(&source)
@@ -1396,13 +1398,15 @@ fn adr0038_partial_capture_copies_release_every_projected_value_after_failure() 
                                     payloads: vec![channel_value(channel)],
                                 }),
                             )]),
-                        })],
+                        })]
+                        .into(),
                     })],
                 }),
                 Value::Map(MapValue {
                     key_type: Type::named("str"),
                     value_type: Type::named("Queue"),
-                    entries: vec![(Value::String("queue".to_string()), channel_value(channel))],
+                    entries: vec![(Value::String("queue".to_string()), channel_value(channel))]
+                        .into(),
                 }),
             ],
         })
@@ -1490,7 +1494,7 @@ fn adr0038_partial_capture_copies_release_every_projected_value_after_failure() 
     assert_failure_releases_partial_copies(
         Value::Set(SetValue {
             element_type: Type::Tuple(vec![Type::named("Queue")]),
-            elements: vec![tuple_capture(), tuple_capture()],
+            elements: vec![tuple_capture(), tuple_capture()].into(),
         }),
         &set_channel,
         3,
@@ -1511,7 +1515,8 @@ fn adr0038_partial_capture_copies_release_every_projected_value_after_failure() 
             entries: vec![
                 (integer_key(1), channel_value(&map_key_channel)),
                 (integer_key(2), channel_value(&map_key_channel)),
-            ],
+            ]
+            .into(),
         }),
         &map_key_channel,
         3,
@@ -1532,7 +1537,8 @@ fn adr0038_partial_capture_copies_release_every_projected_value_after_failure() 
             entries: vec![
                 (Value::String("first".to_string()), queue_tuple()),
                 (Value::String("second".to_string()), queue_tuple()),
-            ],
+            ]
+            .into(),
         }),
         &map_value_channel,
         3,
@@ -6222,7 +6228,7 @@ fn cast_numeric_value_reports_source_types_for_runtime_values() {
     assert_source_type(
         Value::Set(SetValue {
             element_type: Type::named("str"),
-            elements: vec![],
+            elements: vec![].into(),
         }),
         "set",
     );
@@ -6230,7 +6236,7 @@ fn cast_numeric_value_reports_source_types_for_runtime_values() {
         Value::Map(MapValue {
             key_type: Type::named("str"),
             value_type: Type::named("int32"),
-            entries: vec![],
+            entries: vec![].into(),
         }),
         "dict",
     );
@@ -7216,7 +7222,7 @@ fn dynamic_json_runtime_conversion_rejects_noncanonical_payload_metadata() {
                 Value::Map(MapValue {
                     key_type: Type::named("int64"),
                     value_type: Type::named("json.Value"),
-                    entries: Vec::new(),
+                    entries: Vec::new().into(),
                 }),
             ),
             "exactly `dict[str, json.Value]`",
@@ -7228,7 +7234,7 @@ fn dynamic_json_runtime_conversion_rejects_noncanonical_payload_metadata() {
                 Value::Map(MapValue {
                     key_type: Type::named("str"),
                     value_type: Type::named("str"),
-                    entries: Vec::new(),
+                    entries: Vec::new().into(),
                 }),
             ),
             "exactly `dict[str, json.Value]`",
@@ -7310,7 +7316,7 @@ fn dynamic_json_accessors_reject_noncanonical_payload_metadata() {
                 Value::Map(MapValue {
                     key_type: Type::named("int64"),
                     value_type: Type::named("json.Value"),
-                    entries: Vec::new(),
+                    entries: Vec::new().into(),
                 }),
             ),
         ),
@@ -7321,7 +7327,7 @@ fn dynamic_json_accessors_reject_noncanonical_payload_metadata() {
                 Value::Map(MapValue {
                     key_type: Type::named("str"),
                     value_type: Type::named("str"),
-                    entries: Vec::new(),
+                    entries: Vec::new().into(),
                 }),
             ),
         ),
@@ -7436,7 +7442,8 @@ fn dynamic_json_host_boundary_rejects_malformed_runtime_shapes() {
             entries: vec![(
                 Value::Int(IntegerValue::from_i64(1)),
                 runtime_json(crate::json_codec::JsonValue::Null),
-            )],
+            )]
+            .into(),
         })],
     );
     let diagnostic = super::runtime_value_to_json(&wrong_key)
@@ -7484,7 +7491,8 @@ fn dynamic_json_host_boundary_rejects_malformed_runtime_shapes() {
                     Value::Int(IntegerValue::from_i64(2)),
                     runtime_json(crate::json_codec::JsonValue::Bool(true)),
                 ),
-            ],
+            ]
+            .into(),
         })],
     );
     let diagnostic = super::runtime_value_to_json(&wrong_later_key)
@@ -11187,21 +11195,23 @@ fn value_equality_and_render_cover_collection_shapes() {
         elements: vec![
             Value::Int(IntegerValue::from_signed(1)),
             Value::Int(IntegerValue::from_signed(2)),
-        ],
+        ]
+        .into(),
     });
     let set_b = Value::Set(SetValue {
         element_type: Type::named("int32"),
         elements: vec![
             Value::Int(IntegerValue::from_signed(2)),
             Value::Int(IntegerValue::from_signed(1)),
-        ],
+        ]
+        .into(),
     });
     assert_eq!(set_a, set_b);
     assert_ne!(
         set_a,
         Value::Set(SetValue {
             element_type: Type::named("int32"),
-            elements: vec![Value::Int(IntegerValue::from_signed(1))],
+            elements: vec![Value::Int(IntegerValue::from_signed(1))].into(),
         })
     );
     assert_ne!(
@@ -11211,14 +11221,15 @@ fn value_equality_and_render_cover_collection_shapes() {
             elements: vec![
                 Value::Int(IntegerValue::from_signed(1)),
                 Value::Int(IntegerValue::from_signed(3)),
-            ],
+            ]
+            .into(),
         })
     );
     assert_eq!(set_a.render(), "{1, 2}");
     assert_eq!(
         Value::Set(SetValue {
             element_type: Type::named("int64"),
-            elements: Vec::new(),
+            elements: Vec::new().into(),
         })
         .render(),
         "set()"
@@ -11236,7 +11247,8 @@ fn value_equality_and_render_cover_collection_shapes() {
                 Value::String("b".to_string()),
                 Value::Int(IntegerValue::from_signed(2)),
             ),
-        ],
+        ]
+        .into(),
     });
     let map_b = Value::Map(MapValue {
         key_type: Type::named("str"),
@@ -11250,7 +11262,8 @@ fn value_equality_and_render_cover_collection_shapes() {
                 Value::String("a".to_string()),
                 Value::Int(IntegerValue::from_signed(1)),
             ),
-        ],
+        ]
+        .into(),
     });
     assert_eq!(map_a, map_b);
     assert_ne!(
@@ -11261,7 +11274,8 @@ fn value_equality_and_render_cover_collection_shapes() {
             entries: vec![(
                 Value::String("a".to_string()),
                 Value::Int(IntegerValue::from_signed(1)),
-            )],
+            )]
+            .into(),
         })
     );
     assert_ne!(
@@ -11278,7 +11292,8 @@ fn value_equality_and_render_cover_collection_shapes() {
                     Value::String("b".to_string()),
                     Value::Int(IntegerValue::from_signed(3)),
                 ),
-            ],
+            ]
+            .into(),
         })
     );
     assert_eq!(map_a.render(), "{a: 1, b: 2}");
@@ -11335,7 +11350,7 @@ fn nested_queue_producer_registration_walks_tuples_collections_instances_and_var
         }),
         Value::Set(SetValue {
             element_type: Type::named("Queue"),
-            elements: vec![Value::Channel(queue_in_set.clone())],
+            elements: vec![Value::Channel(queue_in_set.clone())].into(),
         }),
         Value::Map(MapValue {
             key_type: Type::named("Queue"),
@@ -11343,7 +11358,8 @@ fn nested_queue_producer_registration_walks_tuples_collections_instances_and_var
             entries: vec![(
                 Value::Channel(queue_in_map_key.clone()),
                 Value::Channel(queue_in_map_value.clone()),
-            )],
+            )]
+            .into(),
         }),
         Value::Instance(super::InstanceValue {
             class_name: "Envelope".to_string(),
@@ -18045,7 +18061,7 @@ fn malformed_json_runtime_trees_fall_back_to_structural_clones() {
             vec![Value::Map(MapValue {
                 key_type: Type::named("str"),
                 value_type: Type::named("json.Value"),
-                entries,
+                entries: entries.into(),
             })],
         )
     };
@@ -18089,7 +18105,8 @@ fn host_builtins_cover_retry_cancellation_probes_and_malformed_string_maps() {
         entries: vec![(
             Value::String("a".to_string()),
             Value::Int(IntegerValue::from_literal(1)),
-        )],
+        )]
+        .into(),
     });
     for name in ["json::stringify_map", "toml::stringify_map"] {
         let error = super::evaluate_host_builtin(name, vec![mixed.clone()])

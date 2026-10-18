@@ -2,7 +2,24 @@
 
 Last updated: 2026-10-17
 
-## Batch 7a: fs.rename, File.sync, and resource receivers (in review)
+## Batch 7a: runtime value performance (in progress)
+
+- Target: implement the runtime half of roadmap Batch 7a, hash-indexed
+  `dict` and `set` and the value representation, as planned in the
+  [Batch 7a design checkpoint](../architecture_docs/20-batch-7a-design-checkpoint.md).
+  John approved starting on 2026-10-17. `fs.rename`, file sync, and the
+  shared-binding resource-method checker fix ship from a separate thread.
+- Done: baselines for five micro-benchmarks, AuraDB, and Python, with a
+  callgrind profile. Step 1 replaces the linear `dict` and `set` storage
+  with an insertion-ordered hash index. `dict_build_get` went from 18.47 s
+  to 0.71 s and `set_insert_contains` from 24.69 s to 0.062 s.
+- Verification: see the step 1 PR. Details are in
+  `2026-10-17-batch-7a-hash-dict-set.md`.
+- Remaining: steps 2 to 6 of the checkpoint: interned type tags, shared
+  element types and borrowed reads, lock-free value cells, unboxed scalars
+  and strings, and final measurements.
+
+## Batch 7a: fs.rename, File.sync, and resource receivers (complete)
 
 - Target: add `fs.rename` and `fs.File.sync()`, and make the checker
   require a mutable receiver for every writing or closing resource method,
@@ -13,7 +30,7 @@ Last updated: 2026-10-17
   shows an atomic save. The checker enforces the receiver table, and
   `check-pass/pythonic_convenience_methods.au` uses `match own`. Details are
   in `2026-10-17-batch-7a-fs-and-resource-receivers.md`.
-- Remaining: hosted CI, review, and merge.
+- Merged as PR #65 after hosted CI passed on Linux and macOS.
 
 ## AuraDB benchmark fixes (complete)
 
