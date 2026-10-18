@@ -176,8 +176,8 @@ dated work note.
 
 | Step | Scope | Status |
 | --- | --- | --- |
-| 1 | This checkpoint, the benchmark programs, and section A | In review |
-| 2 | Section B | In progress |
+| 1 | This checkpoint, the benchmark programs, and section A | Merged, PR #66 |
+| 2 | Section B | In review |
 | 3 | Section C | Planned |
 | 4 | Section D | Planned |
 | 5 | Section E | Planned |
