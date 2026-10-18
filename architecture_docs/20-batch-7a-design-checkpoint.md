@@ -1,6 +1,6 @@
 # Batch 7a design checkpoint: runtime value performance
 
-Status: **Steps 1 to 9 delivered 2026-10-18. Step 10 removes the lock from values confined to one thread.**
+Status: **Complete. Steps 1 to 10 delivered 2026-10-18.**
 
 Date: 2026-10-17. Source baseline: `5f68c34` (main after
 [PR #64](https://github.com/johnolafenwa/Aura/pull/64)).
@@ -271,7 +271,7 @@ dated work note.
 | 7 | Section E, unboxed comparison results, string literal operands, and leaf type tags | Merged, PR #72 |
 | 8 | Section G, copy-on-write `dict` and `set` storage | Merged, PR #73 |
 | 9 | Section H, copy-on-write `list` storage | Merged, PR #74 |
-| 10 | Section D, lock-free confined values | In review |
+| 10 | Section D, lock-free confined values | Merged, PR #76 |
 
 ### Step 1 Measurements
 
