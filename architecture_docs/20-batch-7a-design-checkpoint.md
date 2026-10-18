@@ -224,7 +224,7 @@ dated work note.
 | 3 | Section C, borrowed reads | Merged, PR #68 |
 | 4 | Section E, list loops | Merged, PR #69 |
 | 5 | Section D, ownership ledger, and the final measurements | Merged, PR #70 |
-| 6 | Section E, unboxed `int64`, `float64`, and `bool` list reads | In review, PR #71 |
+| 6 | Section E, unboxed `int64`, `float64`, and `bool` list reads | Merged, PR #71 |
 | 7 | Section E, unboxed comparison results, string literal operands, and leaf type tags | In review |
 | 8 | Section G, copy-on-write `dict` and `set` storage | Not started |
 | 9 | Section D, lock removal | Not started |
