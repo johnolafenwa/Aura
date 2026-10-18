@@ -1,6 +1,6 @@
 # Batch 7a design checkpoint: runtime value performance
 
-Status: **Proposed 2026-10-17; implementation started on the owner's go-ahead**
+Status: **Steps 1 to 5 delivered 2026-10-18. Unboxed values and lock removal remain open.**
 
 Date: 2026-10-17. Source baseline: `5f68c34` (main after
 [PR #64](https://github.com/johnolafenwa/Aura/pull/64)).
@@ -181,9 +181,9 @@ dated work note.
 | 1 | This checkpoint, the benchmark programs, and section A | Merged, PR #66 |
 | 2 | Section B | Merged, PR #67 |
 | 3 | Section C, borrowed reads | Merged, PR #68 |
-| 4 | Section E, list loops | In review |
-| 5 | Section D, ownership ledger | Planned |
-| 6 | Final measurements in the Performance chapter | Planned |
+| 4 | Section E, list loops | Merged, PR #69 |
+| 5 | Section D, ownership ledger, and the final measurements | In review |
+| 6 | Section E, unboxed scalars and strings, and section D, lock removal | Not started |
 
 ### Step 1 Measurements
 

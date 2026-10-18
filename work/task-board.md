@@ -2,25 +2,23 @@
 
 Last updated: 2026-10-17
 
-## Batch 7a: runtime value performance (in progress)
+## Batch 7a: runtime value performance (steps 1 to 5 complete)
 
 - Target: implement the runtime half of roadmap Batch 7a, hash-indexed
   `dict` and `set` and the value representation, as planned in the
   [Batch 7a design checkpoint](../architecture_docs/20-batch-7a-design-checkpoint.md).
   John approved starting on 2026-10-17. `fs.rename`, file sync, and the
   shared-binding resource-method checker fix ship from a separate thread.
-- Done: baselines for five micro-benchmarks, AuraDB, and Python, with a
-  callgrind profile. Step 1 replaces the linear `dict` and `set` storage
-  with an insertion-ordered hash index. `dict_build_get` went from 18.47 s
-  to 0.71 s and `set_insert_contains` from 24.69 s to 0.062 s.
-- Merged on 2026-10-18: step 1 as PR #66, step 2 as PR #67, and step 3
-  as PR #68. Step 2 interns runtime type tags and step 3 borrows operands
-  on direct read paths: `int_list_sum` 1.97 s to 0.88 s. Step 4 lowers
-  list `for` loops without a per-element `Lookup` value and makes owned
-  list loops linear: `int_list_sum` 0.88 s to 0.33 s. Details are in the
-  dated `2026-10-1*-batch-7a-*.md` notes.
-- Remaining: step 5, the ownership ledger, and step 6, the final
-  measurements in the Performance chapter.
+- Done: hash-indexed `dict` and `set` (PR #66), interned type tags
+  (PR #67), borrowed reads (PR #68), list loops without per-element
+  `Lookup` values and linear owned loops (PR #69), and a hashed ownership
+  ledger with the final measurements (step 5). `dict_build_get` went from
+  18.47 s to 0.51 s and `int_list_sum` from 1.96 s to 0.36 s.
+- Verification: each PR passed hosted CI on Linux and macOS. The
+  Performance chapter records the final runs.
+- Remaining: unboxed scalars and strings, and removal of the per-value
+  lock. Both are not started. The lock guards retagging of shared values,
+  so removing it needs a design change first.
 
 ## AuraDB benchmark fixes (complete)
 
