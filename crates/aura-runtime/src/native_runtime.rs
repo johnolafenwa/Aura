@@ -2055,6 +2055,14 @@ pub unsafe fn aura_direct_coverage_clone_value(ptr: *mut OpaqueValue) -> Value {
     unsafe { value_ref(ptr) }
 }
 
+/// Lets coverage tests hand a value to a thread they spawn themselves, the
+/// way task start does for generated code.
+#[cfg(coverage)]
+#[doc(hidden)]
+pub unsafe fn aura_direct_coverage_share_value(ptr: *mut OpaqueValue) {
+    unsafe { share_direct_value(ptr) }
+}
+
 unsafe fn consume_opaque_buffer(buffer: *mut i64, count: usize) -> Vec<Value> {
     let handles = unsafe { Vec::from_raw_parts(buffer, count, count) };
     handles
