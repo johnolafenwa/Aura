@@ -1,6 +1,6 @@
 # Batch 7a design checkpoint: runtime value performance
 
-Status: **Steps 1 to 5 delivered 2026-10-18. Step 6 delivers unboxed scalar list reads. Strings, typed operands, and lock removal remain open.**
+Status: **Steps 1 to 5 delivered 2026-10-18. Steps 6 and 7 deliver unboxed list reads and comparisons. Copy-on-write collections and lock removal remain open.**
 
 Date: 2026-10-17. Source baseline: `5f68c34` (main after
 [PR #64](https://github.com/johnolafenwa/Aura/pull/64)).
@@ -178,6 +178,40 @@ machine word: the integer, the float bit pattern, or 0 and 1. No box is
 allocated, registered, or released. Under callgrind `int_list_sum` drops from
 2.42 G to 0.55 G instructions, and its wall time from 0.36 s to 0.16 s.
 
+Step 7 removes three boxes from a string comparison.
+
+- `aura_direct_compare_values` returns a comparison result as 0 or 1, so
+  codegen no longer boxes the `bool` and unboxes it again.
+- `aura_direct_compare_str_literal` compares a `str` value with a literal
+  held in the program image. It compares bytes, so the literal is never
+  boxed or decoded.
+- A type tag for `str`, `bool`, `float32`, `float64`, or `Duration` only
+  records the name. The runtime skips the value lock for those tags, and
+  codegen skips retagging when a value keeps the same static leaf type.
+
+`string_list_scan` drops from 3.76 G to 1.43 G instructions.
+
+## G. Copy-On-Write Collections
+
+Reading a `dict` or `set` element out of a list, or binding it in a `for`
+loop, deep-copies the collection. In `record_field_reads` that copy and its
+release are 60% of all instructions. AuraDB's `update` and `delete` copy
+every document the same way.
+
+- `IndexedEntries` keeps its entries and index behind an `Arc`. A clone
+  shares them. The first write through a shared handle copies them, so
+  value semantics do not change.
+- The fallible deep clone, `try_clone_array_containing_value`, shares a
+  `dict` or `set` whose key and value types cannot hold an `Array`. It keeps
+  the element-by-element copy for any other type, including unknown types,
+  because an `Array` buffer must be copied, not shared.
+- `list` keeps its plain `Vec` in this step. Its elements are a public field
+  with about 300 direct uses, so sharing it is a separate change.
+
+Evidence: runtime tests that a write to a clone leaves the original
+unchanged on both sides of the index threshold; the parity matrix;
+callgrind counts on `record_field_reads`; the AuraDB rows.
+
 ## F. Delivery Plan
 
 Each step is one pull request with its measurements in the description and a
@@ -190,9 +224,10 @@ dated work note.
 | 3 | Section C, borrowed reads | Merged, PR #68 |
 | 4 | Section E, list loops | Merged, PR #69 |
 | 5 | Section D, ownership ledger, and the final measurements | Merged, PR #70 |
-| 6 | Section E, unboxed `int64`, `float64`, and `bool` list reads | In review |
-| 7 | Section E, typed scalar and string operands for `in`, `==`, and `get` | Not started |
-| 8 | Section D, lock removal | Not started |
+| 6 | Section E, unboxed `int64`, `float64`, and `bool` list reads | In review, PR #71 |
+| 7 | Section E, unboxed comparison results, string literal operands, and leaf type tags | In review |
+| 8 | Section G, copy-on-write `dict` and `set` storage | Not started |
+| 9 | Section D, lock removal | Not started |
 
 ### Step 1 Measurements
 
