@@ -818,6 +818,7 @@ fn direct_runtime_exported_ffi_symbols_execute_through_the_library_copy() {
         release(aura_direct_vec_get(vec, 0));
         assert_eq!(expect_i64(aura_direct_vec_index(vec, 1, 1, 1)), 3);
         release(aura_direct_vec_index_option(vec, 8));
+        assert_eq!(aura_direct_vec_index_scalar(vec, 1, 0), 3);
         release(aura_direct_vec_set_in_place(vec, 1, int_value(4)));
         assert_eq!(expect_i64(aura_direct_vec_index(vec, 1, 1, 1)), 4);
         release(aura_direct_vec_set_index_in_place(

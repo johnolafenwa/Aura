@@ -186,7 +186,7 @@ diagnostic-grade.
 | --- | ---: | ---: | ---: |
 | `dict_build_get`: 20,000 `str` keys, 200,000 `get` calls | 18.47 s | 0.51 s | 0.040 s |
 | `set_insert_contains`: 20,000 inserts, 200,000 `in` tests | 24.69 s | 0.053 s | 0.011 s |
-| `int_list_sum`: `for` over 100,000 `int64` values, 20 times | 1.96 s | 0.36 s | 0.064 s |
+| `int_list_sum`: `for` over 100,000 `int64` values, 20 times | 1.96 s | 0.16 s | 0.064 s |
 | `string_list_scan`: 10,000 `str` compared, 100 times | 1.60 s | 0.55 s | 0.024 s |
 | `record_field_reads`: `doc.get("age")` on 5,000 dicts, 20 times | 0.80 s | 0.38 s | 0.008 s |
 

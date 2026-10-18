@@ -6167,6 +6167,47 @@ pub extern "C-unwind" fn aura_direct_vec_index(
     })
 }
 
+/// Reads a scalar list element without boxing it. The caller has already
+/// normalized and bounds-checked `index`. `kind` is 0 for `int64`, 1 for
+/// `float64` (returned as its bit pattern), and 2 for `bool`.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_vec_index_scalar(
+    vec: *mut OpaqueValue,
+    index: i64,
+    kind: i64,
+) -> i64 {
+    task_runtime_boundary(|| {
+        with_vector(vec, |vector| {
+            let element = usize::try_from(index)
+                .ok()
+                .and_then(|index| vector.elements.get(index));
+            match (kind, element) {
+                (0, Some(Value::Int(value))) => {
+                    match value.as_i128().and_then(|value| i64::try_from(value).ok()) {
+                        Some(value) => value,
+                        None => runtime_error(format!(
+                            "integer value `{value}` does not fit in `int64`"
+                        )),
+                    }
+                }
+                (1, Some(Value::Float(value))) => value.to_bits() as i64,
+                (2, Some(Value::Bool(value))) => i64::from(*value),
+                (_, None) => runtime_error(format!(
+                    "list index `{}` is out of bounds for length `{}`",
+                    index,
+                    vector.elements.len()
+                )),
+                (0..=2, Some(other)) => runtime_error(format!(
+                    "direct backend expected `{}`, found `{}`",
+                    ["int64", "float64", "bool"][kind as usize],
+                    value_type_name(other)
+                )),
+                _ => runtime_error("unknown direct scalar list read kind"),
+            }
+        })
+    })
+}
+
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_vec_index_option(
     vec: *mut OpaqueValue,
