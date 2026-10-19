@@ -859,3 +859,43 @@ def main() -> int32:
         error
     );
 }
+
+#[test]
+fn imported_default_arguments_resolve_in_their_own_module() {
+    let temp = TempDir::new("aura-modules-default-scope");
+    temp.write(
+        "lib/conf.au",
+        r#"import math
+
+STEP: int64 = 3
+
+public def advance(n: int64, by: int64 = STEP) -> int64:
+    return n + by
+
+public def rounded(x: float64, floor: int64 = math.floor(2.7)) -> int64:
+    return math.floor(x) + floor
+"#,
+    );
+    let main_path = temp.write(
+        "main.au",
+        r#"import lib.conf
+
+LIMIT: int64 = 7
+
+def capped(n: int64 = LIMIT) -> int64:
+    return n
+
+def main():
+    STEP = 100
+    print(lib.conf.advance(1))
+    print(lib.conf.rounded(4.5))
+    print(capped())
+    print(STEP)
+"#,
+    );
+
+    // A default names its own module's constants and imports. A caller's
+    // local with the same name must not replace them.
+    let output = run_path(&main_path).expect("module defaults should run");
+    assert_eq!(output.stdout, "4\n6\n7\n100\n");
+}

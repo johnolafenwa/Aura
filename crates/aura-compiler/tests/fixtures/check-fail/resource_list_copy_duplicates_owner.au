@@ -1,0 +1,8 @@
+import fs
+import io
+
+class Log:
+    file: fs.File
+
+def copies(logs: list[Log]) -> list[Log]:
+    return logs.copy()

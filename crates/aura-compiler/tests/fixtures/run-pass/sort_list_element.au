@@ -1,0 +1,16 @@
+class Table:
+    rows: list[list[int64]] = []
+
+def main():
+    mut rows = [[3, 1], [5, 2, 4]]
+    i = 1
+    rows[i].sort()
+    rows[0].sort(reverse=true)
+    print(rows)
+    mut by_name: dict[str, list[int64]] = {"a": [30, 4, 200]}
+    by_name["a"].sort()
+    by_name["a"].sort(key=lambda n: -n)
+    print(by_name)
+    mut t = Table(rows=[[2, 1]])
+    t.rows[0].sort()
+    print(t.rows)

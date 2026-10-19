@@ -181,7 +181,7 @@ A generic user-enum payload whose declared type is an unconstrained type paramet
 
 The result is another move value, independent of the source.
 
-**Clone safety.** Copy and move classification is distinct from clone safety. `random.Rng` is more than a move type: it exposes no public duplication route. A clone-producing operation is valid only when its produced type cannot contain an `Rng` through an ordinary value-storing class, enum, or collection path. `Task[T]` and `Queue[T]` stop that traversal, because copying either handle does not observe or copy its stored `T`. Moving, removing, or receiving a value also transfers one owner instead of cloning it.
+**Clone safety.** Copy and move classification is distinct from clone safety. `random.Rng` is more than a move type: it exposes no public duplication route. A clone-producing operation is valid only when its produced type cannot contain an `Rng` through an ordinary value-storing class, enum, or collection path. The same rule applies to live file, process, and network resources, which have one owner and no clone. `Task[T]` and `Queue[T]` stop that traversal, because copying either handle does not observe or copy its stored `T`. Moving, removing, or receiving a value also transfers one owner instead of cloning it.
 
 ## Tuple Types
 

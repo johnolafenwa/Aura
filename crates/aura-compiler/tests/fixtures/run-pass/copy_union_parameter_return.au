@@ -1,0 +1,21 @@
+enum Mode:
+    Fast
+    Slow
+
+def echo_o(v: int64 | None) -> int64 | None:
+    return v
+
+def echo_m(v: Mode | float64) -> Mode | float64:
+    return v
+
+def first(values: list[int64 | None]) -> int64 | None:
+    return values[0]
+
+def main():
+    o: int64 | None = 5
+    print(echo_o(o))
+    print(echo_o(None))
+    print(o)
+    print(echo_m(Mode.Slow))
+    print(echo_m(2.5))
+    print(first([None, 3]))

@@ -1332,6 +1332,7 @@ impl<'a> FunctionChecker<'a> {
     /// element type must be clone-safe; otherwise the reader binds a `view`.
     fn element_read_is_clone_safe(&self, ty: &Type) -> bool {
         self.nonrepeatable_task_result_in(ty).is_none()
+            && self.host_resource_in_type(ty).is_none()
             && matches!(self.rng_clone_safety(ty), RngCloneSafety::Safe)
     }
 
@@ -1350,6 +1351,16 @@ impl<'a> FunctionChecker<'a> {
         if let Some(result_ty) = self.nonrepeatable_task_result_in(ty) {
             return format!(
                 "cannot implicitly copy `{ty}` out of a {container} index; `get({selector})` cannot clone it because that would duplicate the single observation right for task result `{result_ty}`, so use `{transfer}` to transfer ownership instead"
+            );
+        }
+        if let Some(resource_ty) = self.host_resource_in_type(ty) {
+            let view = if container == "dict" {
+                "view value = table[key]"
+            } else {
+                "view value = items[index]"
+            };
+            return format!(
+                "cannot implicitly copy `{ty}` out of a {container} index; resource `{resource_ty}` has one owner, so use `{view}` for shared access or `{transfer}` to transfer ownership"
             );
         }
         match self.rng_clone_safety(ty) {
@@ -1439,7 +1450,19 @@ impl<'a> FunctionChecker<'a> {
     }
 
     fn opaque_handle_in_type(&self, ty: &Type) -> Option<Type> {
-        self.opaque_handle_in_type_inner(ty, &mut BTreeSet::new())
+        self.stored_type_in(ty, Self::is_opaque_handle_type, &mut BTreeSet::new())
+    }
+
+    /// A live host resource such as `fs.File` stored in `ty`. A resource has
+    /// one owner and no clone, so a clone-producing operation must not copy
+    /// it. `net.HttpResponse` and `net.UdpDatagram` are owned data snapshots.
+    fn host_resource_in_type(&self, ty: &Type) -> Option<Type> {
+        let is_resource = |_: &Self, ty: &Type| {
+            matches!(ty, Type::Named(name, args)
+                if is_builtin_io_resource_type(name, args)
+                    && !matches!(name.as_str(), "net.HttpResponse" | "net.UdpDatagram"))
+        };
+        self.stored_type_in(ty, is_resource, &mut BTreeSet::new())
     }
 
     fn require_array_equality_eligible(
@@ -1504,26 +1527,29 @@ impl<'a> FunctionChecker<'a> {
         ))
     }
 
-    fn opaque_handle_in_type_inner(
+    /// The first type stored in `ty`, through unions, tuples, type
+    /// arguments, class fields, and enum payloads, that `found` accepts.
+    fn stored_type_in(
         &self,
         ty: &Type,
+        found: impl Fn(&Self, &Type) -> bool + Copy,
         visiting: &mut BTreeSet<String>,
     ) -> Option<Type> {
-        if self.is_opaque_handle_type(ty) {
+        if found(self, ty) {
             return Some(ty.clone());
         }
         match ty {
             Type::Union(union) => union
                 .members
                 .iter()
-                .find_map(|member| self.opaque_handle_in_type_inner(member, visiting)),
+                .find_map(|member| self.stored_type_in(member, found, visiting)),
             Type::Tuple(elements) => elements
                 .iter()
-                .find_map(|element| self.opaque_handle_in_type_inner(element, visiting)),
+                .find_map(|element| self.stored_type_in(element, found, visiting)),
             Type::Named(name, args) => {
                 if let Some(handle) = args
                     .iter()
-                    .find_map(|arg| self.opaque_handle_in_type_inner(arg, visiting))
+                    .find_map(|arg| self.stored_type_in(arg, found, visiting))
                 {
                     return Some(handle);
                 }
@@ -1540,7 +1566,7 @@ impl<'a> FunctionChecker<'a> {
                         substitutions_from_decl_type_args(&class_info.decl.type_params, args);
                     let handle = class_info.fields.values().find_map(|field| {
                         let field_ty = substitute_type(&field.ty, &substitutions);
-                        self.opaque_handle_in_type_inner(&field_ty, visiting)
+                        self.stored_type_in(&field_ty, found, visiting)
                     });
                     visiting.remove(&key);
                     return handle;
@@ -1562,7 +1588,7 @@ impl<'a> FunctionChecker<'a> {
                         .flat_map(|variant| &variant.payloads)
                         .find_map(|payload| {
                             let payload_ty = substitute_type(&payload.ty, &substitutions);
-                            self.opaque_handle_in_type_inner(&payload_ty, visiting)
+                            self.stored_type_in(&payload_ty, found, visiting)
                         });
                     visiting.remove(&key);
                     return handle;
@@ -1641,6 +1667,18 @@ impl<'a> FunctionChecker<'a> {
             )
             .with_help(
                 "move the value so the opaque handle keeps one owner; use a consuming `pop`, `remove`, or replacement operation when extracting it from a collection",
+            ));
+        }
+        if let Some(resource_ty) = self.host_resource_in_type(ty) {
+            return Err(Diagnostic::coded_at(
+                "AU3007",
+                span,
+                format!(
+                    "cannot use {operation} because duplicating `{ty}` would duplicate resource `{resource_ty}`"
+                ),
+            )
+            .with_help(
+                "a resource has one owner: borrow it with `view` or `match mut`, or take it out of a collection with `pop` or `remove`",
             ));
         }
         let qualifier = match self.rng_clone_safety(ty) {

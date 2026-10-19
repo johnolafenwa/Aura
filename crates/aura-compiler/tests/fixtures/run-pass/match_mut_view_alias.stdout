@@ -1,0 +1,8 @@
+[Box.Items([1, 2]), Box.Empty]
+[Box.Items([1, 2, 3]), Box.Empty]
+[Box.Items([1, 2, 3]), Box.Items([0, 1])]
+-1
+5
+[Box.Items([1, 2, 3, 9, 0]), Box.Items([0, 1])]
+6
+[Box.Items([1, 2, 3, 9, 0, 5]), Box.Items([0, 1])]

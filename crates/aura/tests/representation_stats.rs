@@ -476,3 +476,120 @@ fn direct_collection_methods_on_narrowed_union_fields_run() {
         "2\n1\n[3, 4]\n",
     );
 }
+
+const ALIASED_FIELD_OWNERS: &str = r#"class Bag:
+    items: list[int64]
+
+    def overlap(self, other: Bag) -> int64:
+        return common(self.items, other.items)
+
+    def size_with(self, other: list[int64]) -> int64:
+        return self.items.len() * 10 + other.len()
+
+class Reg:
+    order: list[Bag] = []
+    by: dict[str, Bag] = {}
+
+def common(xs: list[int64], ys: list[int64]) -> int64:
+    return xs.len() * 10 + ys.len()
+
+def pair(x: Bag, y: Bag) -> int64:
+    return common(x.items, y.items)
+
+def by_index(x: Reg, y: Reg) -> int64:
+    return x.order[0].size_with(y.order[0].items)
+
+def by_entry(x: Reg, y: Reg) -> int64:
+    match x.by.lookup("a"):
+        case Lookup.Found(bag):
+            return bag.size_with(y.by["a"].items)
+        case Lookup.Missing:
+            return -1
+
+def main():
+    b = Bag(items=[1, 2, 3])
+    print(b.overlap(b))
+    print(pair(b, b))
+    mut r = Reg()
+    r.order.append(Bag(items=[1, 2]))
+    r.by["a"] = Bag(items=[1, 2, 3, 4])
+    print(by_index(r, r))
+    print(by_entry(r, r))
+    print(b.items)
+"#;
+
+#[test]
+fn direct_lending_does_not_empty_a_field_another_argument_reaches() {
+    // Two borrowed parameters can name one instance, so `x.items` and
+    // `y.items` may be the same field even though the places differ.
+    assert_both_backends(
+        "repr-aliased-field-owners",
+        ALIASED_FIELD_OWNERS,
+        "33\n33\n22\n44\n[1, 2, 3]\n",
+    );
+}
+
+const NESTED_INDEX_WRITES: &str = r#"def main():
+    mut d: dict[str, list[int64]] = {"a": [1]}
+    d["a"][0] = 5
+    mut nested: dict[str, dict[str, int64]] = {"a": {}}
+    nested["a"]["k"] = 3
+    mut grid = [[1], [2]]
+    i = 1
+    grid[i][0] += 40
+    print(d)
+    print(nested)
+    print(grid)
+"#;
+
+#[test]
+fn direct_nested_index_assignment_writes_the_collection() {
+    // The direct backend used to write a temporary copy of `d["a"]`, so the
+    // assignment was silently lost.
+    assert_both_backends(
+        "repr-nested-index-writes",
+        NESTED_INDEX_WRITES,
+        "{a: [5]}\n{a: {k: 3}}\n[[1], [42]]\n",
+    );
+}
+
+const STRING_KEY_LOAN_BRANCHES: &str = r#"def first(d: dict[str, list[int64]], flag: bool) -> int64:
+    match d.lookup("a"):
+        case Lookup.Found(items):
+            if flag:
+                return items[0]
+            print(items)
+        case _:
+            pass
+    return -1
+
+def main():
+    mut d: dict[str, list[int64]] = {"a": [1]}
+    for n in [1, 2, 3]:
+        match d.lookup("a"):
+            case Lookup.Found(items):
+                if n > 1:
+                    print(items.len())
+                else:
+                    print(0)
+            case _:
+                pass
+    view sh = d["a"]
+    if len(d) > 0:
+        print(sh)
+    else:
+        print(0)
+    print(first(d, true))
+    print(first(d, false))
+"#;
+
+#[test]
+fn direct_string_key_loan_ending_in_each_branch_releases_its_key() {
+    // A loan that ends in both arms of an `if` used to release its string
+    // key only on the arm compiled first, so the task leaked the key.
+    assert_both_backends(
+        "repr-string-key-loan-branches",
+        STRING_KEY_LOAN_BRANCHES,
+        "0\n1\n1\n[1]\n1\n[1]\n-1\n",
+    );
+}

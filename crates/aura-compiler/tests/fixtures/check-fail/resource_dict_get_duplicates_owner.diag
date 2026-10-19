@@ -1,0 +1,6 @@
+error[AU3007]: cannot use `dict.get` because duplicating `fs.File` would duplicate resource `fs.File`
+ --> crates/aura-compiler/tests/fixtures/check-fail/resource_dict_get_duplicates_owner.au:6:21
+  |
+6 |     match own files.get("log"):
+  |                     ^
+  = help: a resource has one owner: borrow it with `view` or `match mut`, or take it out of a collection with `pop` or `remove`

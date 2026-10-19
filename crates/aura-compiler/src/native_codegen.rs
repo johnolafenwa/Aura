@@ -6111,7 +6111,14 @@ impl<'a> FunctionCompiler<'a> {
             }
             Instruction::EndLoan { loan } => {
                 self.view_places.remove(loan);
-                for variable in self.view_element_keys.remove(loan).unwrap_or_default() {
+                // A loan that ends in both arms of a branch has one EndLoan
+                // per arm, and each must release the keys, so keep them.
+                for variable in self
+                    .view_element_keys
+                    .get(loan)
+                    .cloned()
+                    .unwrap_or_default()
+                {
                     let key = self.builder.use_var(variable);
                     self.release_opaque_handle(key);
                 }
@@ -9126,10 +9133,14 @@ impl<'a> FunctionCompiler<'a> {
             let overlaps = places.iter().enumerate().any(|(other, entry)| {
                 other != index
                     && entry.as_ref().is_some_and(|(other_resolved, _)| {
-                        other_resolved
-                            .alternatives
-                            .iter()
-                            .any(|candidate| places_overlap(&candidate.place, &alternative.place))
+                        other_resolved.alternatives.iter().any(|candidate| {
+                            places_overlap(&candidate.place, &alternative.place)
+                                || projects_from_other_root(
+                                    &alternative.place,
+                                    &candidate.place,
+                                    !candidate.elements.is_empty(),
+                                )
+                        })
                     })
             });
             if is_instance && !overlaps {
@@ -9922,10 +9933,14 @@ impl<'a> FunctionCompiler<'a> {
             let Ok(argument_resolved) = self.resolve_view_place(argument_place) else {
                 return Ok(None);
             };
-            let overlaps = argument_resolved
-                .alternatives
-                .iter()
-                .any(|candidate| places_overlap(&candidate.place, &alternative.place));
+            let overlaps = argument_resolved.alternatives.iter().any(|candidate| {
+                places_overlap(&candidate.place, &alternative.place)
+                    || projects_from_other_root(
+                        &alternative.place,
+                        &candidate.place,
+                        !candidate.elements.is_empty(),
+                    )
+            });
             if overlaps {
                 return Ok(None);
             }
@@ -18609,7 +18624,6 @@ fn find_concrete_impl_method<'a>(
         .find_map(|trait_impl| trait_impl.methods.iter().find(|method| method.name == field))
 }
 
-/// Whether one dotted place contains the other, or both are the same.
 /// A dotted place whose every segment is a declared field. A narrowed union
 /// local reaches its fields through compiler segments such as
 /// `__union_payload_0`, and its slot holds the union, not the instance, so
@@ -18618,6 +18632,22 @@ fn is_plain_field_path(place: &str) -> bool {
     !place.split('.').any(|segment| segment.starts_with("__"))
 }
 
+/// Whether `other` reaches into a different root than `lent` through a
+/// field or element. Two borrowed parameters can name one instance, so
+/// `x.items` and `y.items` may be the same slot even though the places
+/// differ. A whole value such as `ys` stays readable while a field is lent:
+/// it holds the field's value, not its slot.
+fn projects_from_other_root(lent: &str, other: &str, other_has_elements: bool) -> bool {
+    let root = |place: &str| {
+        place
+            .split_once('.')
+            .map_or(place, |(root, _)| root)
+            .to_string()
+    };
+    root(lent) != root(other) && (other.contains('.') || other_has_elements)
+}
+
+/// Whether one dotted place contains the other, or both are the same.
 fn places_overlap(left: &str, right: &str) -> bool {
     let contains = |outer: &str, inner: &str| {
         inner == outer

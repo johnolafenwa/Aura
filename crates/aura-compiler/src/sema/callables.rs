@@ -836,8 +836,12 @@ impl<'a> FunctionChecker<'a> {
                             ),
                         ));
                     }
+                    // A default sees what a function body sees at module
+                    // scope: module constants and imported modules.
+                    let mut module_scope = HashMap::new();
+                    self.seed_module_scope(&mut module_scope);
                     let default_ty =
-                        self.type_of_expr_hint(default, &mut HashMap::new(), Some(&lowered))?;
+                        self.type_of_expr_hint(default, &mut module_scope, Some(&lowered))?;
                     if default_ty != lowered {
                         return Err(Diagnostic::at(
                             default.span,
@@ -1161,9 +1165,16 @@ impl<'a> FunctionChecker<'a> {
         let mut capture_uses = Vec::new();
         Self::collect_lambda_capture_uses(body, &bound, &mut seen, &mut capture_uses);
 
+        // An imported module is a namespace, not a value: a lambda names it
+        // without capturing it.
+        let is_module = |name: &str| {
+            locals
+                .get(name)
+                .is_some_and(|binding| matches!(binding.ty, Type::Module(_)))
+        };
         let used_outer = capture_uses
             .iter()
-            .filter(|(name, _)| locals.contains_key(name))
+            .filter(|(name, _)| locals.contains_key(name) && !is_module(name))
             .map(|(name, _)| name.clone())
             .collect::<BTreeSet<_>>();
         let explicit_modes = explicit_captures.map(|listed| {
@@ -1205,6 +1216,11 @@ impl<'a> FunctionChecker<'a> {
 
         let mut captures = Vec::new();
         let mut lambda_locals = HashMap::new();
+        for (name, _) in &capture_uses {
+            if is_module(name) {
+                lambda_locals.insert(name.clone(), locals[name].clone());
+            }
+        }
         let capture_sequence = explicit_captures
             .map(|listed| {
                 listed
@@ -1214,7 +1230,7 @@ impl<'a> FunctionChecker<'a> {
             })
             .unwrap_or(capture_uses);
         for (name, capture_span) in capture_sequence {
-            let Some(binding) = locals.get(&name) else {
+            let Some(binding) = locals.get(&name).filter(|_| !is_module(&name)) else {
                 continue;
             };
             self.ensure_pattern_binding_not_stale(&name, capture_span, binding)?;
@@ -2303,8 +2319,18 @@ impl<'a> FunctionChecker<'a> {
                         "internal error: optional parameter is missing its default expression",
                     )
                 })?;
+                // The declaration checked its default in its own module scope,
+                // so the caller's locals must not resolve inside it. Typing it
+                // again in module scope records what an inlined default needs,
+                // such as a union injection. A default that names its own
+                // module's items runs through its generated helper instead.
                 if matches!(default.kind, ExprKind::BuiltinOmitted) {
                     hinted_expected.clone()
+                } else if !has_unresolved_type_params(&hinted_expected) {
+                    let mut module_scope = HashMap::new();
+                    self.seed_module_scope(&mut module_scope);
+                    self.type_of_expr_hint(default, &mut module_scope, Some(&hinted_expected))
+                        .unwrap_or_else(|_| hinted_expected.clone())
                 } else {
                     match self.type_of_expr_hint(default, locals, Some(&hinted_expected)) {
                         Ok(actual) => actual,

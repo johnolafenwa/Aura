@@ -619,7 +619,23 @@ fn build_and_run_default_source(
 }
 
 fn assert_run_and_direct_source_stdout(prefix: &str, source: &str, expected_stdout: &str) {
+    assert_run_and_direct_program_stdout(prefix, source, &[], expected_stdout);
+}
+
+/// Runs `main.au` beside the given module files on both backends.
+fn assert_run_and_direct_program_stdout(
+    prefix: &str,
+    source: &str,
+    modules: &[(&str, &str)],
+    expected_stdout: &str,
+) {
     let (temp, source_path) = write_temp_source(prefix, source);
+    for (relative, module_source) in modules {
+        let module_path = temp.path().join(relative);
+        fs::create_dir_all(module_path.parent().expect("module path has a parent"))
+            .expect("failed to create module directory");
+        fs::write(&module_path, module_source).expect("failed to write module source");
+    }
     let run = Command::new(aura_bin())
         .arg("run")
         .arg(&source_path)
@@ -15374,6 +15390,52 @@ fn imported_module_function_values_store_pass_and_call_on_both_backends() {
         "examples/modules/function_values.au",
         "module-function-values-direct",
         "10\n12\nnone\n",
+    );
+}
+
+#[test]
+fn imported_private_class_in_a_union_keeps_its_module_on_both_backends() {
+    let main = r#"import lib.c
+
+class Item:
+    flag: bool
+
+def main():
+    print(lib.c.run())
+    print(Item(flag=true).flag)
+"#;
+    let module = r#"class Item:
+    n: int64
+
+def make(k: int64) -> Item | None:
+    if k > 0:
+        return Item(n=k)
+    return None
+
+def read(x: Item | None) -> int64:
+    match x:
+        case Item(n=v):
+            return v
+        case None:
+            return 0
+
+public def run() -> int64:
+    s: Item | None = Item(n=3)
+    mut items: list[Item | None] = [Item(n=1), None]
+    items.append(Item(n=5))
+    mut total = read(s) + read(Item(n=2)) + read(make(4)) + read(make(0))
+    for it in items:
+        total = total + read(it)
+    return total
+"#;
+
+    // The root module's `Item` must not capture the imported module's
+    // private `Item` when a union holds it.
+    assert_run_and_direct_program_stdout(
+        "aura-imported-private-class-union",
+        main,
+        &[("lib/c.au", module)],
+        "15\ntrue\n",
     );
 }
 

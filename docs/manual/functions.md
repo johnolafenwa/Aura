@@ -149,6 +149,7 @@ The complete rules are:
 - After the first defaulted positional parameter, every remaining positional parameter must also have a default. Keyword-only parameters bind by name, so a required keyword-only parameter may follow a defaulted one.
 - The default expression must have exactly the declared parameter type.
 - A default expression cannot reference any parameter of the same declaration, including an earlier parameter.
+- A default expression resolves names in its declaring module. It can read that module's constants and imported modules, and a caller's locals never shadow them.
 - Trait method declarations and trait implementation methods cannot declare defaults.
 
 A default is evaluated afresh each time its argument is omitted. It is not a process-global singleton value. A call evaluates its arguments in this order:

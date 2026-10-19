@@ -1,0 +1,49 @@
+class Shelf:
+    tags: dict[str, int64] = {}
+
+def main():
+    mut d: dict[str, list[int64]] = {"a": [1, 2]}
+    d["a"][0] = 5
+    d["a"][1] += 10
+    d["a"][-1] += 1
+    print(d)
+
+    mut nested: dict[str, dict[str, int64]] = {"a": {}}
+    nested["a"]["k"] = 3
+    nested["a"]["k"] += 4
+    print(nested)
+
+    mut grid = [[1, 2], [3, 4]]
+    i = 0
+    grid[i][0] = 33
+    grid[1][0] = 44
+    grid[-1][1] = 55
+    print(grid)
+
+    mut shelves = [Shelf()]
+    shelves[i].tags["u"] = 2
+    shelves[0].tags["v"] = 3
+    print(shelves[0].tags)
+
+    mut named: dict[str, Shelf] = {}
+    named["x"] = Shelf()
+    named["x"].tags["t"] = 1
+    print(named["x"].tags)
+
+    mut deep = [[[0]]]
+    deep[0][0][0] = 7
+    print(deep)
+
+    match mut nested.lookup("a"):
+        case Lookup.Found(inner):
+            inner["q"] = 1
+        case Lookup.Missing:
+            pass
+    print(nested)
+
+    mut rows = [{"a": 1}]
+    for row in mut rows:
+        row["b"] = 2
+    view mut first = rows[0]
+    first["c"] = 3
+    print(rows)

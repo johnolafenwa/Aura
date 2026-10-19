@@ -556,7 +556,11 @@ impl<'a> FunctionChecker<'a> {
                 }
                 if let Some((module_path, function_name)) = self.qualified_module_item(expr) {
                     if let Some(namespace) = self.module_namespace(&module_path) {
-                        if namespace.constants.contains_key(&function_name) {
+                        if let Some(constant) = namespace.constants.get(&function_name) {
+                            // A Copy constant such as `math.pi` is read, not moved.
+                            if self.is_copy_type(&constant.ty) {
+                                return Ok(());
+                            }
                             let rendered = format!("{module_path}.{function_name}");
                             return Err(Diagnostic::coded_at(
                                 "AU3001",

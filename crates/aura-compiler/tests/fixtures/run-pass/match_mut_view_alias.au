@@ -1,0 +1,61 @@
+enum Box:
+    Items(list[int64])
+    Empty
+
+def grow(boxes: mut list[Box], limit: int64) -> int64:
+    view mut b = boxes[0]
+    match mut b:
+        case Box.Items(items) if items.len() > limit:
+            items.append(0)
+            return items.len()
+        case Box.Items(items):
+            items.append(9)
+        case _:
+            pass
+    return -1
+
+def main():
+    mut boxes = [Box.Items([1]), Box.Empty]
+    view mut b = boxes[0]
+    match mut b:
+        case Box.Items(items):
+            items.append(2)
+        case _:
+            pass
+    print(boxes)
+
+    match mut boxes.lookup(0):
+        case Lookup.Found(found):
+            match mut found:
+                case Box.Items(items):
+                    items.append(3)
+                case _:
+                    pass
+        case Lookup.Missing:
+            pass
+    print(boxes)
+
+    for round in [0, 1]:
+        view mut last = boxes[1]
+        match mut last:
+            case Box.Empty:
+                last = Box.Items([round])
+            case Box.Items(items):
+                items.append(round)
+                break
+    print(boxes)
+
+    print(grow(boxes, 10))
+    print(grow(boxes, 1))
+    print(boxes)
+    print(grow_in_place(boxes))
+    print(boxes)
+
+def grow_in_place(boxes: mut list[Box]) -> int64:
+    match mut boxes[0]:
+        case Box.Items(items):
+            items.append(5)
+            return items.len()
+        case _:
+            pass
+    return -1

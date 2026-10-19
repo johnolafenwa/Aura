@@ -2268,7 +2268,12 @@ impl<'a> MirLoanValidationContext<'a> {
             visiting: &mut BTreeSet<String>,
         ) -> bool {
             match ty {
-                Type::Union(_) | Type::Closure { .. } | Type::Callable(_) | Type::Module(_) => true,
+                Type::Closure { .. } | Type::Callable(_) | Type::Module(_) => true,
+                // A union of copy members is itself a copy value.
+                Type::Union(union) => union
+                    .members
+                    .iter()
+                    .any(|member| visit(context, member, visiting)),
                 Type::Tuple(elements) => elements
                     .iter()
                     .any(|element| visit(context, element, visiting)),
@@ -8457,6 +8462,16 @@ fn validate_loan_instruction(
                     .authoritative_callables
                     .retain(|place, _| !mir_place_paths_overlap(place, &destination));
                 for (place, origins) in borrowed_writes {
+                    // A `match mut` writeback rebuilds the value from payloads
+                    // borrowed out of this same destination. Storing them back
+                    // exposes nothing beyond the destination itself.
+                    if !origins.is_empty()
+                        && origins
+                            .iter()
+                            .all(|origin| mir_place_paths_overlap(origin, &destination))
+                    {
+                        continue;
+                    }
                     state.borrowed_value_origins.insert(place, origins);
                 }
                 if task_borrowed_closure {
@@ -10708,6 +10723,9 @@ struct Lowerer<'a> {
     program: &'a Program,
     function_name: &'a str,
     module_name: &'a str,
+    /// The MIR name of the function whose arguments are being lowered next,
+    /// so an omitted default calls that function's generated default helper.
+    default_helper_owner: Option<String>,
     metadata_module_name: Option<String>,
     metadata_owner: Option<ClosureOwner>,
     return_type: Type,
@@ -10909,6 +10927,7 @@ impl<'a> Lowerer<'a> {
             program,
             function_name,
             module_name,
+            default_helper_owner: None,
             metadata_module_name: None,
             metadata_owner: None,
             return_type,
@@ -13201,7 +13220,25 @@ impl<'a> Lowerer<'a> {
         }
 
         if let AssignTarget::Index { object, index } = &assign.target {
-            let lowered_object = self.lower_expr(object);
+            // `d["a"][0] = v`, `rows[i].tags[k] = v`: the inner collection is
+            // an element, so the write goes through a mutable element loan.
+            // `inner[k] = v` through a view writes through the view itself.
+            // Reading either into a temporary would write the copy.
+            let lent_object = if self.is_contextual_element_expr(object) {
+                self.lower_contextual_element_loan(object, true)
+            } else {
+                self.render_place_expr_option(object)
+                    .filter(|place| {
+                        let root = place.split('.').next().unwrap_or_default();
+                        self.view_sources.contains_key(root)
+                    })
+                    .map(Operand::Place)
+            };
+            let receiver_place = match &lent_object {
+                Some(Operand::Place(place)) => Some(place.clone()),
+                _ => self.render_place_expr_option(object),
+            };
+            let lowered_object = lent_object.unwrap_or_else(|| self.lower_expr(object));
             let object_ty = self.infer_expr_type(object);
             let (index_field, set_index_field, index_ty, target_ty) = match object_ty.as_ref() {
                 Some(Type::Named(name, args)) if name == "dict" && args.len() == 2 => (
@@ -13271,7 +13308,7 @@ impl<'a> Lowerer<'a> {
                         callee: CallTarget::Member {
                             object: lowered_object.clone(),
                             field: index_field,
-                            receiver_place: self.render_place_expr_option(object),
+                            receiver_place: receiver_place.clone(),
                         },
                         args: vec![
                             MirArg {
@@ -13315,7 +13352,7 @@ impl<'a> Lowerer<'a> {
                     callee: CallTarget::Member {
                         object: lowered_object,
                         field: set_index_field,
-                        receiver_place: self.render_place_expr_option(object),
+                        receiver_place,
                     },
                     args: vec![
                         MirArg {
@@ -15009,7 +15046,17 @@ impl<'a> Lowerer<'a> {
                         scrutinee_ty.as_ref(),
                     );
                 }
-                let body_endings = ending_loans
+                // `match mut b` over a view writes the arm's bindings back
+                // through `b` after the body, so `b` ends after the writeback.
+                let deferred_end = writeback_root
+                    .as_ref()
+                    .filter(|place| ending_loans.contains(*place))
+                    .cloned();
+                let mut arm_ending_loans = ending_loans.clone();
+                if let Some(loan) = &deferred_end {
+                    arm_ending_loans.remove(loan);
+                }
+                let body_endings = arm_ending_loans
                     .iter()
                     .filter(|loan| {
                         let source_name = self
@@ -15023,7 +15070,7 @@ impl<'a> Lowerer<'a> {
                     })
                     .cloned()
                     .collect::<BTreeSet<_>>();
-                let saved = self.end_loans_before_branch(&ending_loans, &body_endings);
+                let saved = self.end_loans_before_branch(&arm_ending_loans, &body_endings);
                 self.lower_stmts_with_inherited_endings(&arm.body, body_endings);
                 if !self.current_terminated() {
                     self.emit_loan_cleanup_from(self.loan_scopes.len() - 1, None);
@@ -15045,8 +15092,12 @@ impl<'a> Lowerer<'a> {
                             writeback_place,
                             writeback,
                             &state.skip_place,
+                            deferred_end.as_deref(),
                         );
                     } else {
+                        if let Some(loan) = &deferred_end {
+                            self.emit(Instruction::EndLoan { loan: loan.clone() });
+                        }
                         self.terminate(Terminator::Goto(self.label(after_block)));
                     }
                 }
@@ -18620,9 +18671,14 @@ impl<'a> Lowerer<'a> {
 
         match member {
             BuiltinMember::VecSort => {
-                let receiver_place = self
-                    .render_place_expr_option(object)
-                    .expect("checked list.sort receiver should be a mutable place");
+                // `rows[i].sort()` sorts the element in place through a
+                // statement-scoped mutable element loan.
+                let receiver_place = match self.lower_contextual_element_loan(object, true) {
+                    Some(Operand::Place(loan)) => loan,
+                    _ => self
+                        .render_place_expr_option(object)
+                        .expect("checked list.sort receiver should be a mutable place"),
+                };
                 let ordered = member
                     .bind_args(args, expr.span)
                     .expect("checked list.sort arguments should bind during MIR lowering");
@@ -20121,9 +20177,7 @@ impl<'a> Lowerer<'a> {
         if Self::injects_per_arm(expr) {
             return None;
         }
-        let injection = self
-            .program
-            .union_injection(self.module_name, expr.span, expected)?;
+        let injection = self.union_injection_for(expr, expected)?;
         let value = if owned {
             self.lower_expr_for_owned_value(expr, Some(&injection.member_type))
         } else {
@@ -20146,6 +20200,29 @@ impl<'a> Lowerer<'a> {
         })
     }
 
+    /// The checker records an injection with the member names written in the
+    /// declaring module, so a private class of an imported module appears
+    /// unqualified. The expected union carries the runtime names, and the
+    /// lookup already matched it by canonical key, so its members take the
+    /// recorded positions.
+    fn union_injection_for(
+        &self,
+        expr: &Expr,
+        expected: &Type,
+    ) -> Option<crate::sema::UnionInjection> {
+        let mut injection = self
+            .program
+            .union_injection(self.module_name, expr.span, expected)?;
+        if let Some(member) = match expected {
+            Type::Union(union) => union.members.get(injection.member_index),
+            _ => None,
+        } {
+            injection.member_type = member.clone();
+            injection.union_type = expected.clone();
+        }
+        Some(injection)
+    }
+
     fn lower_borrowed_union_injection(
         &mut self,
         expr: &Expr,
@@ -20158,9 +20235,7 @@ impl<'a> Lowerer<'a> {
         if Self::injects_per_arm(expr) {
             return None;
         }
-        let injection = self
-            .program
-            .union_injection(self.module_name, expr.span, expected)?;
+        let injection = self.union_injection_for(expr, expected)?;
         let value =
             self.lower_expr_for_passing(expr, Some(&injection.member_type), ReceiverKind::Borrow);
         let target = self.new_typed_temp(injection.union_type.clone());
@@ -20369,6 +20444,7 @@ impl<'a> Lowerer<'a> {
                             writeback_place,
                             writeback,
                             &state.skip_place,
+                            None,
                         );
                     } else {
                         self.terminate(Terminator::Goto(self.label(after_block)));
@@ -21695,6 +21771,11 @@ impl<'a> Lowerer<'a> {
                                 );
                                 return Operand::Place(temp);
                             }
+                            // A builtin module's defaults name nothing in a
+                            // module scope, so they stay inline.
+                            self.default_helper_owner = (function.decl.type_params.is_empty()
+                                && !is_builtin_module_name(&module_path))
+                            .then(|| imported_module_function_name(&module_path, field));
                             let lowered_args = self.lower_user_args(
                                 &format!("function `{}`", function.decl.name),
                                 &function.decl.params,
@@ -22295,6 +22376,19 @@ impl<'a> Lowerer<'a> {
                         .collect::<Vec<_>>()
                 });
                 let lowered_args = if let Some(function_info) = resolved_function.as_ref() {
+                    // A generic default is specialized at the call site.
+                    self.default_helper_owner = (function_info.decl.type_params.is_empty()
+                        && !is_builtin_module_name(&function_info.module_name))
+                    .then(|| {
+                        if function_info.module_name == self.program.module_name {
+                            name.clone()
+                        } else {
+                            imported_module_function_name(
+                                &function_info.module_name,
+                                &function_info.decl.name,
+                            )
+                        }
+                    });
                     self.lower_user_args_with_types(
                         &format!("function `{}`", name),
                         &function_info.decl.params,
@@ -22805,6 +22899,7 @@ impl<'a> Lowerer<'a> {
             CallConvention::PositionalOrNamed,
         )
         .expect("type-checked user-defined call should bind during MIR lowering");
+        let default_helper_owner = self.default_helper_owner.take();
 
         let mut lowered_by_param = (0..params.len())
             .map(|_| None)
@@ -22875,7 +22970,34 @@ impl<'a> Lowerer<'a> {
             let passing = param_passings
                 .and_then(|passings| passings.get(index))
                 .copied();
-            let value = if let Some(passing) = passing {
+            // A default belongs to its declaration's module scope. Calling
+            // the generated helper keeps the caller's locals and imports from
+            // resolving names inside it, as an indirect call already does.
+            let helper = default_helper_owner
+                .as_ref()
+                .filter(|_| {
+                    !matches!(default.kind, ExprKind::BuiltinOmitted)
+                        && !crate::sema::has_unresolved_type_params(&expected)
+                        && !crate::sema::has_unresolved_type_params(
+                            &self.lower_type_ref_with_provenance(&param.ty),
+                        )
+                })
+                .map(|owner| format!("{owner}::__default_{index}_{}", param.name));
+            let value = if let Some(helper) = helper {
+                let temp = self.new_typed_temp(expected.clone());
+                self.emit(Instruction::Assign {
+                    target: temp.clone(),
+                    value: Rvalue::Call {
+                        callee: CallTarget::Name(helper),
+                        args: Vec::new(),
+                    },
+                });
+                if passing == Some(ReceiverKind::Borrow) {
+                    Operand::Place(temp)
+                } else {
+                    self.move_place_for_type(temp, &expected)
+                }
+            } else if let Some(passing) = passing {
                 self.lower_expr_for_passing(default, Some(&expected), passing)
             } else if is_float_type(&expected) {
                 self.lower_expr_with_expected(default, Some(&expected))
@@ -25573,7 +25695,13 @@ impl<'a> Lowerer<'a> {
 
     fn match_writeback_flag_for_instruction(&self, instruction: &Instruction) -> Option<String> {
         let state = self.match_writeback_stack.last()?;
-        let Instruction::Assign { target, value } = instruction else {
+        // An assignment to a view scrutinee is emitted as a loan write.
+        let (Instruction::Assign { target, value }
+        | Instruction::WriteLoan {
+            loan: target,
+            value,
+        }) = instruction
+        else {
             return None;
         };
         if place_paths_overlap(target, &state.root) || self.rvalue_writes_place(value, &state.root)
@@ -25718,6 +25846,7 @@ impl<'a> Lowerer<'a> {
         writeback_place: &str,
         writeback: &PatternWriteback,
         skip_place: &str,
+        end_loan: Option<&str>,
     ) {
         let writeback_block = self.new_block("match_writeback_apply");
         let skip_block = self.new_block("match_writeback_skip");
@@ -25733,9 +25862,19 @@ impl<'a> Lowerer<'a> {
             target: writeback_place.to_string(),
             value: Rvalue::Use(updated),
         });
+        if let Some(loan) = end_loan {
+            self.emit(Instruction::EndLoan {
+                loan: loan.to_string(),
+            });
+        }
         self.terminate(Terminator::Goto(self.label(after_block)));
 
         self.switch_to(skip_block);
+        if let Some(loan) = end_loan {
+            self.emit(Instruction::EndLoan {
+                loan: loan.to_string(),
+            });
+        }
         self.terminate(Terminator::Goto(self.label(after_block)));
     }
 
@@ -26123,6 +26262,14 @@ fn mir_runtime_class_name(program: &Program, class: &crate::sema::ClassInfo) -> 
     } else {
         format!("{}.{}", class.module_name, class.decl.name)
     }
+}
+
+fn is_builtin_module_name(module_name: &str) -> bool {
+    let module_path = module_name
+        .split('.')
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    crate::builtin_modules::builtin_module_namespace(&module_path).is_some()
 }
 
 fn mir_runtime_enum_name(program: &Program, enum_info: &crate::sema::EnumInfo) -> String {
