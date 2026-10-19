@@ -1,0 +1,79 @@
+import json
+
+
+class SearchArgs:
+    query: str
+    limit: int64
+
+
+def wrong_type(path: own str, expected: own str) -> json.DecodeError:
+    return json.DecodeError(
+        path=path,
+        kind=json.DecodeErrorKind.WrongType(expected=expected, found="another kind"),
+    )
+
+
+impl json.Codec for SearchArgs:
+    def encode(self) -> json.Value:
+        return json.Value.Object(
+            {
+                "query": json.Value.String(self.query.clone()),
+                "limit": json.Value.Int(self.limit),
+            }
+        )
+
+    def decode(value: own json.Value) -> Result[SearchArgs, json.DecodeError]:
+        match own json.into_object(value):
+            case None:
+                return Result.Err(wrong_type("$", "object"))
+            case dict[str, json.Value] as fields:
+                mut query = ""
+                match fields.get("query"):
+                    case Lookup.Found(json.Value.String(text)):
+                        query = text.clone()
+                    case Lookup.Found(_):
+                        return Result.Err(wrong_type("$.query", "string"))
+                    case Lookup.Missing:
+                        return Result.Err(
+                            json.DecodeError(
+                                path="$",
+                                kind=json.DecodeErrorKind.MissingField(name="query"),
+                            )
+                        )
+                mut limit: int64 = 10
+                match fields.get("limit"):
+                    case Lookup.Found(json.Value.Int(count)):
+                        limit = count
+                    case Lookup.Found(_):
+                        return Result.Err(wrong_type("$.limit", "integer"))
+                    case Lookup.Missing:
+                        pass
+                return Result.Ok(SearchArgs(query=query, limit=limit))
+
+    def schema() -> json.Value:
+        query = json.Value.Object({"type": json.Value.String("string")})
+        limit = json.Value.Object({"type": json.Value.String("integer")})
+        properties = json.Value.Object({"query": query, "limit": limit})
+        return json.Value.Object(
+            {"type": json.Value.String("object"), "properties": properties}
+        )
+
+
+def run_tool[T: json.Codec](text: str) -> Result[T, json.DecodeError]:
+    return json.decode_text[T](text)
+
+
+def main():
+    match run_tool[SearchArgs]("{\"query\": \"aura\", \"limit\": 3}"):
+        case Result.Ok(args):
+            print(f"search {args.query} limit {args.limit}")
+            print(json.dumps(json.encode(args)))
+        case Result.Err(error):
+            print(error)
+    for text in ["{\"limit\": 3}", "{\"query\": 7}", "[]"]:
+        match run_tool[SearchArgs](text):
+            case Result.Ok(args):
+                print(args.query)
+            case Result.Err(error):
+                print(error)
+    print(json.dumps(json.schema[SearchArgs]()))

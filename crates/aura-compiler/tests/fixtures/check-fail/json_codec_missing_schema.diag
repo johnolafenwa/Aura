@@ -1,0 +1,5 @@
+error[AU2999]: impl of `json.Codec` for `Tag` is missing method `schema`
+ --> crates/aura-compiler/tests/fixtures/check-fail/json_codec_missing_schema.au:6:1
+  |
+6 | impl json.Codec for Tag:
+  | ^

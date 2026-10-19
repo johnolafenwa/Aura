@@ -768,6 +768,11 @@ const ADDITIONAL_EXAMPLE_CASES: &[(&str, &str, &str)] = &[
         "443\nnot a mode: append\n",
     ),
     (
+        "examples/json/typed_codec.au",
+        include_str!("../../../examples/json/typed_codec.au"),
+        "search aura limit 3\n{\"limit\":3,\"query\":\"aura\"}\n$: missing field `query`\n$.query: expected string, found another kind\n$: expected object, found another kind\n{\"properties\":{\"limit\":{\"type\":\"integer\"},\"query\":{\"type\":\"string\"}},\"type\":\"object\"}\n",
+    ),
+    (
         "examples/traits/builtin_target_traits.au",
         include_str!("../../../examples/traits/builtin_target_traits.au"),
         "list of 2\ntext of 5\n",

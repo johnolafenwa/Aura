@@ -2430,12 +2430,13 @@ pub(crate) fn builtin_imported_binding(
     name: &str,
     span: Span,
 ) -> Result<ImportedBinding> {
-    let namespace = builtin_module_namespace(module_path).ok_or_else(|| {
-        Diagnostic::at(
-            span,
-            format!("cannot resolve builtin module `{}`", module_path.join(".")),
-        )
-    })?;
+    let namespace =
+        crate::builtin_sources::importable_builtin_namespace(module_path).ok_or_else(|| {
+            Diagnostic::at(
+                span,
+                format!("cannot resolve builtin module `{}`", module_path.join(".")),
+            )
+        })?;
     if let Some(function) = namespace.functions.get(name) {
         return Ok(ImportedBinding::Function(function.clone()));
     }
@@ -2447,6 +2448,9 @@ pub(crate) fn builtin_imported_binding(
     }
     if let Some(enum_info) = namespace.enums.get(name) {
         return Ok(ImportedBinding::Enum(enum_info.clone()));
+    }
+    if let Some(trait_info) = namespace.traits.get(name) {
+        return Ok(ImportedBinding::Trait(trait_info.clone()));
     }
     Err(Diagnostic::at(
         span,

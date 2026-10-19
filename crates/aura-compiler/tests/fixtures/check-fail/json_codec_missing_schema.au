@@ -1,0 +1,18 @@
+import json
+
+class Tag:
+    name: str
+
+impl json.Codec for Tag:
+    def encode(self) -> json.Value:
+        return json.Value.String(self.name.clone())
+
+    def decode(value: own json.Value) -> Result[Tag, json.DecodeError]:
+        match own json.into_string(value):
+            case str as name:
+                return Result.Ok(Tag(name=name))
+            case None:
+                return Result.Err(json.DecodeError(path="$", kind=json.DecodeErrorKind.WrongType(expected="string", found="other")))
+
+def main():
+    print(json.dumps(json.encode(Tag(name="a"))))

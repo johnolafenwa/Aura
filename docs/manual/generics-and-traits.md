@@ -323,6 +323,21 @@ Overlap rules:
 - Dispatch selects the unique applicable implementation with the greatest structural specificity. Equal-best matches are ambiguous and rejected.
 - Source order never breaks a tie.
 
+A trait from an imported module can be named through its module, in an implementation, a bound, or a supertrait:
+
+```aura fragment
+import shapes
+
+impl shapes.Make for Gadget:
+    def make(seed: int64) -> Gadget:
+        return Gadget(size=seed)
+
+def build[T: shapes.Make](seed: int64) -> T:
+    return T.make(seed)
+```
+
+The qualified name and a `from shapes import Make` name the same trait. A module alias works too, as in `impl sh.Make for Gadget` after `import shapes as sh`.
+
 Aura 0.5 imposes no separate orphan rule. An implementation must still refer to known, visible types and traits. It takes part only where it is present in the loaded module or package context.
 
 ### Trait Methods On Unions

@@ -972,7 +972,11 @@ impl Parser {
     fn parse_impl(&mut self) -> Result<ImplDecl> {
         let span = self.expect_keyword(TokenKind::KwImpl)?.span;
         let (type_params, type_param_bounds) = self.parse_optional_type_params(true)?;
-        let trait_name = self.expect_identifier()?;
+        let mut trait_name = self.expect_identifier()?;
+        while self.eat_simple(&TokenKind::Dot).is_some() {
+            trait_name.push('.');
+            trait_name.push_str(&self.expect_identifier()?);
+        }
         let mut trait_args = Vec::new();
         if self.eat_simple(&TokenKind::LBracket).is_some() {
             loop {

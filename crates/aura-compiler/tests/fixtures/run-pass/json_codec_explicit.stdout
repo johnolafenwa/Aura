@@ -1,0 +1,9 @@
+{"x":3,"y":4}
+{"x":3,"y":4}
+point 3 4
+$: expected object, found other
+point 1 2
+$: x and y must be integers
+$: invalid JSON at line 1, column 3: EOF while parsing a list
+$ line 1
+{"type":"object"}

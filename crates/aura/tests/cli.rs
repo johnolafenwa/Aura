@@ -9144,6 +9144,15 @@ fn run_and_direct_backends_preserve_the_dynamic_json_surface() {
 }
 
 #[test]
+fn run_and_direct_backends_preserve_the_json_codec_surface() {
+    let source = include_str!("../../aura-compiler/tests/fixtures/run-pass/json_codec_explicit.au");
+    let expected =
+        include_str!("../../aura-compiler/tests/fixtures/run-pass/json_codec_explicit.stdout");
+
+    assert_run_and_direct_source_stdout("aura-json-codec-parity", source, expected);
+}
+
+#[test]
 fn run_and_direct_backends_preserve_vec_algorithm_order_stability_and_ownership() {
     let source = include_str!("../../aura-compiler/tests/fixtures/run-pass/list_algorithms.au");
     let expected =
@@ -16004,6 +16013,113 @@ fn run_and_direct_build_agree_on_the_properties_example() {
         "examples/classes/properties.au",
         "properties-direct",
         expected,
+    );
+}
+
+#[test]
+fn json_codec_implementations_dispatch_across_modules_on_both_backends() {
+    let geometry = r#"from json import Codec, DecodeError, DecodeErrorKind, Value, as_int
+
+public class Size:
+    public width: int64
+
+impl Codec for Size:
+    def encode(self) -> Value:
+        return Value.Int(self.width)
+
+    def decode(value: own Value) -> Result[Size, DecodeError]:
+        match as_int(value):
+            case int64 as width:
+                return Result.Ok(Size(width=width))
+            case None:
+                return Result.Err(DecodeError(path="$", kind=DecodeErrorKind.WrongType(expected="integer", found="other")))
+
+    def schema() -> Value:
+        return Value.Object({"type": Value.String("integer")})
+"#;
+    let main = r#"import json as j
+import geometry
+
+def load[T: j.Codec](text: str) -> Result[T, j.DecodeError]:
+    return j.decode_text[T](text)
+
+def main():
+    size = geometry.Size(width=12)
+    print(j.dumps(j.encode(size)))
+    match load[geometry.Size]("40"):
+        case Result.Ok(loaded):
+            print(loaded.width)
+        case Result.Err(error):
+            print(error)
+    match load[geometry.Size]("\"wide\""):
+        case Result.Ok(loaded):
+            print(loaded.width)
+        case Result.Err(error):
+            print(error)
+    print(j.dumps(j.schema[geometry.Size]()))
+"#;
+    assert_run_and_direct_program_stdout(
+        "aura-json-codec-modules",
+        main,
+        &[("geometry.au", geometry)],
+        "12\n40\n$: expected integer, found other\n{\"type\":\"integer\"}\n",
+    );
+}
+
+#[test]
+fn module_qualified_traits_work_in_bounds_impls_and_supertraits_on_both_backends() {
+    let shapes = r#"public trait Named:
+    def name(self) -> str
+
+public trait Make:
+    def make(seed: int64) -> Self
+
+public def build[T: Make](seed: int64) -> T:
+    return T.make(seed)
+
+public def label[T: Named](value: T) -> str:
+    return f"<{value.name()}>"
+"#;
+    let main = r#"import shapes
+import shapes as sh
+
+trait Described: shapes.Named:
+    def describe(self) -> str
+
+class Gadget:
+    size: int64
+
+impl shapes.Make for Gadget:
+    def make(seed: int64) -> Gadget:
+        return Gadget(size=seed + 1)
+
+impl sh.Named for Gadget:
+    def name(self) -> str:
+        return f"gadget {self.size}"
+
+impl Described for Gadget:
+    def describe(self) -> str:
+        return f"{self.name()}!"
+
+def make_named[T: shapes.Make + sh.Named](seed: int64) -> str:
+    value: T = T.make(seed)
+    return value.name()
+
+def tell[T: Described](value: T) -> str:
+    return value.describe()
+
+def main():
+    gadget: Gadget = shapes.build[Gadget](4)
+    print(gadget.size)
+    print(shapes.label(gadget))
+    print(make_named[Gadget](9))
+    print(tell(gadget))
+"#;
+    assert_run_and_direct_program_stdout(
+        "aura-module-qualified-traits",
+        main,
+        &[("shapes.au", shapes)],
+        "5\n<gadget 5>\ngadget 10\ngadget 5!\n",
     );
 }
 

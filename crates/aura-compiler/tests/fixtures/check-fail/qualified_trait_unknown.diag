@@ -1,0 +1,5 @@
+error[AU2001]: unknown trait `json.Format`
+ --> crates/aura-compiler/tests/fixtures/check-fail/qualified_trait_unknown.au:6:1
+  |
+6 | impl json.Format for Tag:
+  | ^

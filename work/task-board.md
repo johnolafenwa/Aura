@@ -2,19 +2,30 @@
 
 Last updated: 2026-10-19
 
-## Batch 6 step 1: associated methods through a type parameter (in progress)
+## Batch 6 step 2: the `json.Codec` trait (in progress)
+
+- Target: add the `json.Codec` trait, `json.DecodeError`, and the
+  generic `json.encode`, `json.decode`, `json.decode_text`, and `json.schema`
+  functions, with explicit implementations, on both backends. John asked on
+  2026-10-19 for the work to continue through Batch 6 to Batch 7's key
+  decisions.
+- Done: module-qualified trait names in implementations, bounds, and
+  supertraits. The `json` module gains an Aura-source part,
+  `crates/aura-compiler/std/json.au`, that the compiler checks as module
+  `json` and merges into the namespace `import json` binds. Notes are in
+  `2026-10-19-batch-6-step-2-json-codec.md`.
+- Verification: `json_codec_explicit` and three check-fail fixtures, two
+  cross-module CLI tests on both backends, and
+  `examples/json/typed_codec.au`.
+- Next: open the PR, then step 3, derived `encode` and `decode` for classes.
+
+## Batch 6 step 1: associated methods through a type parameter (complete)
 
 - Target: let a generic function call a trait's associated method through
   its bounded type parameter, such as `T.parse(text)`, on both backends.
-  This is step 1 of the ratified Batch 6 delivery plan.
-- Done: the checker records each `T.method(...)` call and each generic
-  function use with its type arguments. MIR lowering makes one copy of each
-  function that needs a concrete type, per type list, named like
-  `build[Widget]`. Unsupported positions report `AU2005`. Notes are in
+- Done: merged in PR #82 (`f43d99a`). Notes are in
   `2026-10-19-batch-6-step-1-associated-type-param-calls.md`.
-- Verification: run-pass and check-fail fixtures, a cross-module CLI test on
-  both backends, and `examples/traits/associated_through_type_param.au`.
-- Next: open the PR, then step 2, the `json.Codec` trait and dispatch.
+- Next: step 2.
 
 ## Batch 6 design checkpoint (complete)
 
