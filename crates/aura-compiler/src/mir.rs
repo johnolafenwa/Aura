@@ -8462,6 +8462,16 @@ fn validate_loan_instruction(
                     .authoritative_callables
                     .retain(|place, _| !mir_place_paths_overlap(place, &destination));
                 for (place, origins) in borrowed_writes {
+                    // A `match mut` writeback rebuilds the value from payloads
+                    // borrowed out of this same destination. Storing them back
+                    // exposes nothing beyond the destination itself.
+                    if !origins.is_empty()
+                        && origins
+                            .iter()
+                            .all(|origin| mir_place_paths_overlap(origin, &destination))
+                    {
+                        continue;
+                    }
                     state.borrowed_value_origins.insert(place, origins);
                 }
                 if task_borrowed_closure {
@@ -15032,7 +15042,17 @@ impl<'a> Lowerer<'a> {
                         scrutinee_ty.as_ref(),
                     );
                 }
-                let body_endings = ending_loans
+                // `match mut b` over a view writes the arm's bindings back
+                // through `b` after the body, so `b` ends after the writeback.
+                let deferred_end = writeback_root
+                    .as_ref()
+                    .filter(|place| ending_loans.contains(*place))
+                    .cloned();
+                let mut arm_ending_loans = ending_loans.clone();
+                if let Some(loan) = &deferred_end {
+                    arm_ending_loans.remove(loan);
+                }
+                let body_endings = arm_ending_loans
                     .iter()
                     .filter(|loan| {
                         let source_name = self
@@ -15046,7 +15066,7 @@ impl<'a> Lowerer<'a> {
                     })
                     .cloned()
                     .collect::<BTreeSet<_>>();
-                let saved = self.end_loans_before_branch(&ending_loans, &body_endings);
+                let saved = self.end_loans_before_branch(&arm_ending_loans, &body_endings);
                 self.lower_stmts_with_inherited_endings(&arm.body, body_endings);
                 if !self.current_terminated() {
                     self.emit_loan_cleanup_from(self.loan_scopes.len() - 1, None);
@@ -15068,8 +15088,12 @@ impl<'a> Lowerer<'a> {
                             writeback_place,
                             writeback,
                             &state.skip_place,
+                            deferred_end.as_deref(),
                         );
                     } else {
+                        if let Some(loan) = &deferred_end {
+                            self.emit(Instruction::EndLoan { loan: loan.clone() });
+                        }
                         self.terminate(Terminator::Goto(self.label(after_block)));
                     }
                 }
@@ -20392,6 +20416,7 @@ impl<'a> Lowerer<'a> {
                             writeback_place,
                             writeback,
                             &state.skip_place,
+                            None,
                         );
                     } else {
                         self.terminate(Terminator::Goto(self.label(after_block)));
@@ -25596,7 +25621,13 @@ impl<'a> Lowerer<'a> {
 
     fn match_writeback_flag_for_instruction(&self, instruction: &Instruction) -> Option<String> {
         let state = self.match_writeback_stack.last()?;
-        let Instruction::Assign { target, value } = instruction else {
+        // An assignment to a view scrutinee is emitted as a loan write.
+        let (Instruction::Assign { target, value }
+        | Instruction::WriteLoan {
+            loan: target,
+            value,
+        }) = instruction
+        else {
             return None;
         };
         if place_paths_overlap(target, &state.root) || self.rvalue_writes_place(value, &state.root)
@@ -25741,6 +25772,7 @@ impl<'a> Lowerer<'a> {
         writeback_place: &str,
         writeback: &PatternWriteback,
         skip_place: &str,
+        end_loan: Option<&str>,
     ) {
         let writeback_block = self.new_block("match_writeback_apply");
         let skip_block = self.new_block("match_writeback_skip");
@@ -25756,9 +25788,19 @@ impl<'a> Lowerer<'a> {
             target: writeback_place.to_string(),
             value: Rvalue::Use(updated),
         });
+        if let Some(loan) = end_loan {
+            self.emit(Instruction::EndLoan {
+                loan: loan.to_string(),
+            });
+        }
         self.terminate(Terminator::Goto(self.label(after_block)));
 
         self.switch_to(skip_block);
+        if let Some(loan) = end_loan {
+            self.emit(Instruction::EndLoan {
+                loan: loan.to_string(),
+            });
+        }
         self.terminate(Terminator::Goto(self.label(after_block)));
     }
 
