@@ -13201,7 +13201,25 @@ impl<'a> Lowerer<'a> {
         }
 
         if let AssignTarget::Index { object, index } = &assign.target {
-            let lowered_object = self.lower_expr(object);
+            // `d["a"][0] = v`, `rows[i].tags[k] = v`: the inner collection is
+            // an element, so the write goes through a mutable element loan.
+            // `inner[k] = v` through a view writes through the view itself.
+            // Reading either into a temporary would write the copy.
+            let lent_object = if self.is_contextual_element_expr(object) {
+                self.lower_contextual_element_loan(object, true)
+            } else {
+                self.render_place_expr_option(object)
+                    .filter(|place| {
+                        let root = place.split('.').next().unwrap_or_default();
+                        self.view_sources.contains_key(root)
+                    })
+                    .map(Operand::Place)
+            };
+            let receiver_place = match &lent_object {
+                Some(Operand::Place(place)) => Some(place.clone()),
+                _ => self.render_place_expr_option(object),
+            };
+            let lowered_object = lent_object.unwrap_or_else(|| self.lower_expr(object));
             let object_ty = self.infer_expr_type(object);
             let (index_field, set_index_field, index_ty, target_ty) = match object_ty.as_ref() {
                 Some(Type::Named(name, args)) if name == "dict" && args.len() == 2 => (
@@ -13271,7 +13289,7 @@ impl<'a> Lowerer<'a> {
                         callee: CallTarget::Member {
                             object: lowered_object.clone(),
                             field: index_field,
-                            receiver_place: self.render_place_expr_option(object),
+                            receiver_place: receiver_place.clone(),
                         },
                         args: vec![
                             MirArg {
@@ -13315,7 +13333,7 @@ impl<'a> Lowerer<'a> {
                     callee: CallTarget::Member {
                         object: lowered_object,
                         field: set_index_field,
-                        receiver_place: self.render_place_expr_option(object),
+                        receiver_place,
                     },
                     args: vec![
                         MirArg {

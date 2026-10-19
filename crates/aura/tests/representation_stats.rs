@@ -528,3 +528,27 @@ fn direct_lending_does_not_empty_a_field_another_argument_reaches() {
         "33\n33\n22\n44\n[1, 2, 3]\n",
     );
 }
+
+const NESTED_INDEX_WRITES: &str = r#"def main():
+    mut d: dict[str, list[int64]] = {"a": [1]}
+    d["a"][0] = 5
+    mut nested: dict[str, dict[str, int64]] = {"a": {}}
+    nested["a"]["k"] = 3
+    mut grid = [[1], [2]]
+    i = 1
+    grid[i][0] += 40
+    print(d)
+    print(nested)
+    print(grid)
+"#;
+
+#[test]
+fn direct_nested_index_assignment_writes_the_collection() {
+    // The direct backend used to write a temporary copy of `d["a"]`, so the
+    // assignment was silently lost.
+    assert_both_backends(
+        "repr-nested-index-writes",
+        NESTED_INDEX_WRITES,
+        "{a: [5]}\n{a: {k: 3}}\n[[1], [42]]\n",
+    );
+}
