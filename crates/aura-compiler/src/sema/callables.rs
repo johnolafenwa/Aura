@@ -2319,13 +2319,18 @@ impl<'a> FunctionChecker<'a> {
                         "internal error: optional parameter is missing its default expression",
                     )
                 })?;
-                // The declaration checked its default in its own module scope
-                // and its generated helper evaluates it there, so the
-                // caller's names must not resolve inside it.
-                if matches!(default.kind, ExprKind::BuiltinOmitted)
-                    || !has_unresolved_type_params(&hinted_expected)
-                {
+                // The declaration checked its default in its own module scope,
+                // so the caller's locals must not resolve inside it. Typing it
+                // again in module scope records what an inlined default needs,
+                // such as a union injection. A default that names its own
+                // module's items runs through its generated helper instead.
+                if matches!(default.kind, ExprKind::BuiltinOmitted) {
                     hinted_expected.clone()
+                } else if !has_unresolved_type_params(&hinted_expected) {
+                    let mut module_scope = HashMap::new();
+                    self.seed_module_scope(&mut module_scope);
+                    self.type_of_expr_hint(default, &mut module_scope, Some(&hinted_expected))
+                        .unwrap_or_else(|_| hinted_expected.clone())
                 } else {
                     match self.type_of_expr_hint(default, locals, Some(&hinted_expected)) {
                         Ok(actual) => actual,

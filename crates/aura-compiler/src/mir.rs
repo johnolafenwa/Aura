@@ -21771,11 +21771,11 @@ impl<'a> Lowerer<'a> {
                                 );
                                 return Operand::Place(temp);
                             }
-                            self.default_helper_owner = function
-                                .decl
-                                .type_params
-                                .is_empty()
-                                .then(|| imported_module_function_name(&module_path, field));
+                            // A builtin module's defaults name nothing in a
+                            // module scope, so they stay inline.
+                            self.default_helper_owner = (function.decl.type_params.is_empty()
+                                && !is_builtin_module_name(&module_path))
+                            .then(|| imported_module_function_name(&module_path, field));
                             let lowered_args = self.lower_user_args(
                                 &format!("function `{}`", function.decl.name),
                                 &function.decl.params,
@@ -22377,17 +22377,18 @@ impl<'a> Lowerer<'a> {
                 });
                 let lowered_args = if let Some(function_info) = resolved_function.as_ref() {
                     // A generic default is specialized at the call site.
-                    self.default_helper_owner =
-                        function_info.decl.type_params.is_empty().then(|| {
-                            if function_info.module_name == self.program.module_name {
-                                name.clone()
-                            } else {
-                                imported_module_function_name(
-                                    &function_info.module_name,
-                                    &function_info.decl.name,
-                                )
-                            }
-                        });
+                    self.default_helper_owner = (function_info.decl.type_params.is_empty()
+                        && !is_builtin_module_name(&function_info.module_name))
+                    .then(|| {
+                        if function_info.module_name == self.program.module_name {
+                            name.clone()
+                        } else {
+                            imported_module_function_name(
+                                &function_info.module_name,
+                                &function_info.decl.name,
+                            )
+                        }
+                    });
                     self.lower_user_args_with_types(
                         &format!("function `{}`", name),
                         &function_info.decl.params,
@@ -26261,6 +26262,14 @@ fn mir_runtime_class_name(program: &Program, class: &crate::sema::ClassInfo) -> 
     } else {
         format!("{}.{}", class.module_name, class.decl.name)
     }
+}
+
+fn is_builtin_module_name(module_name: &str) -> bool {
+    let module_path = module_name
+        .split('.')
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    crate::builtin_modules::builtin_module_namespace(&module_path).is_some()
 }
 
 fn mir_runtime_enum_name(program: &Program, enum_info: &crate::sema::EnumInfo) -> String {

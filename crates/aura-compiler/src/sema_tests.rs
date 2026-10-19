@@ -4598,8 +4598,14 @@ fn membership_and_chain_operands_are_visible_to_defaults_and_argument_reads() {
     ] {
         let rejected = crate::check_source(source)
             .expect_err("a default argument must not reference another parameter");
-        assert_eq!(rejected.code, "AU2001", "{source}");
-        assert_eq!(rejected.message, format!("unknown name `{name}`"), "{source}");
+        assert_eq!(rejected.code, "AU2004", "{source}");
+        assert!(
+            rejected
+                .message
+                .ends_with(&format!("may not reference parameter `{name}`")),
+            "{source}: {}",
+            rejected.message
+        );
     }
 
     // A place read inside a membership test or a chain still conflicts with a
