@@ -1,0 +1,9 @@
+import math
+
+def main():
+    x = math.pi
+    y: float64 = math.nan
+    limits = [math.inf, -math.inf, math.e]
+    print(x)
+    print(y == y)
+    print(limits)
