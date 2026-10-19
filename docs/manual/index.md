@@ -5,7 +5,7 @@ runtime. It covers the complete syntax, name and type rules, ownership,
 execution, module APIs, diagnostics, limits, and tool contracts, in enough
 detail to reconstruct the language accurately.
 
-This Manual documents **Aura 0.4.1 (technical preview)**. The release stamp
+This Manual documents **Aura 0.5.0 (technical preview)**. The release stamp
 below records the implementation baseline commit the Manual was rendered from.
 
 <ReleaseStamp />

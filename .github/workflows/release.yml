@@ -12,7 +12,7 @@ on:
         default: ''
         type: string
       release_tag:
-        description: 'Release identity used in artifact names, such as v0.4.1-preview'
+        description: 'Release identity used in artifact names, such as v0.5.0-preview'
         required: true
         type: string
       publish:

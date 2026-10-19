@@ -5,7 +5,7 @@ Do not treat it as a hardened sandbox for untrusted Aura programs.
 
 ## Supported Version
 
-Only the latest 0.4 preview receives security fixes.
+Only the latest 0.5 preview receives security fixes.
 
 ## Reporting
 
