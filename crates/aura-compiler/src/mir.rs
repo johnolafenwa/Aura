@@ -2268,7 +2268,12 @@ impl<'a> MirLoanValidationContext<'a> {
             visiting: &mut BTreeSet<String>,
         ) -> bool {
             match ty {
-                Type::Union(_) | Type::Closure { .. } | Type::Callable(_) | Type::Module(_) => true,
+                Type::Closure { .. } | Type::Callable(_) | Type::Module(_) => true,
+                // A union of copy members is itself a copy value.
+                Type::Union(union) => union
+                    .members
+                    .iter()
+                    .any(|member| visit(context, member, visiting)),
                 Type::Tuple(elements) => elements
                     .iter()
                     .any(|element| visit(context, element, visiting)),
