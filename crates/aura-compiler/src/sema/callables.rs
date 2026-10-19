@@ -836,8 +836,12 @@ impl<'a> FunctionChecker<'a> {
                             ),
                         ));
                     }
+                    // A default sees what a function body sees at module
+                    // scope: module constants and imported modules.
+                    let mut module_scope = HashMap::new();
+                    self.seed_module_scope(&mut module_scope);
                     let default_ty =
-                        self.type_of_expr_hint(default, &mut HashMap::new(), Some(&lowered))?;
+                        self.type_of_expr_hint(default, &mut module_scope, Some(&lowered))?;
                     if default_ty != lowered {
                         return Err(Diagnostic::at(
                             default.span,
@@ -2315,7 +2319,12 @@ impl<'a> FunctionChecker<'a> {
                         "internal error: optional parameter is missing its default expression",
                     )
                 })?;
-                if matches!(default.kind, ExprKind::BuiltinOmitted) {
+                // The declaration checked its default in its own module scope
+                // and its generated helper evaluates it there, so the
+                // caller's names must not resolve inside it.
+                if matches!(default.kind, ExprKind::BuiltinOmitted)
+                    || !has_unresolved_type_params(&hinted_expected)
+                {
                     hinted_expected.clone()
                 } else {
                     match self.type_of_expr_hint(default, locals, Some(&hinted_expected)) {

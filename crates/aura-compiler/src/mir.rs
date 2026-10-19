@@ -10723,6 +10723,9 @@ struct Lowerer<'a> {
     program: &'a Program,
     function_name: &'a str,
     module_name: &'a str,
+    /// The MIR name of the function whose arguments are being lowered next,
+    /// so an omitted default calls that function's generated default helper.
+    default_helper_owner: Option<String>,
     metadata_module_name: Option<String>,
     metadata_owner: Option<ClosureOwner>,
     return_type: Type,
@@ -10924,6 +10927,7 @@ impl<'a> Lowerer<'a> {
             program,
             function_name,
             module_name,
+            default_helper_owner: None,
             metadata_module_name: None,
             metadata_owner: None,
             return_type,
@@ -21748,6 +21752,11 @@ impl<'a> Lowerer<'a> {
                                 );
                                 return Operand::Place(temp);
                             }
+                            self.default_helper_owner = function
+                                .decl
+                                .type_params
+                                .is_empty()
+                                .then(|| imported_module_function_name(&module_path, field));
                             let lowered_args = self.lower_user_args(
                                 &format!("function `{}`", function.decl.name),
                                 &function.decl.params,
@@ -22348,6 +22357,18 @@ impl<'a> Lowerer<'a> {
                         .collect::<Vec<_>>()
                 });
                 let lowered_args = if let Some(function_info) = resolved_function.as_ref() {
+                    // A generic default is specialized at the call site.
+                    self.default_helper_owner =
+                        function_info.decl.type_params.is_empty().then(|| {
+                            if function_info.module_name == self.program.module_name {
+                                name.clone()
+                            } else {
+                                imported_module_function_name(
+                                    &function_info.module_name,
+                                    &function_info.decl.name,
+                                )
+                            }
+                        });
                     self.lower_user_args_with_types(
                         &format!("function `{}`", name),
                         &function_info.decl.params,
@@ -22858,6 +22879,7 @@ impl<'a> Lowerer<'a> {
             CallConvention::PositionalOrNamed,
         )
         .expect("type-checked user-defined call should bind during MIR lowering");
+        let default_helper_owner = self.default_helper_owner.take();
 
         let mut lowered_by_param = (0..params.len())
             .map(|_| None)
@@ -22928,7 +22950,34 @@ impl<'a> Lowerer<'a> {
             let passing = param_passings
                 .and_then(|passings| passings.get(index))
                 .copied();
-            let value = if let Some(passing) = passing {
+            // A default belongs to its declaration's module scope. Calling
+            // the generated helper keeps the caller's locals and imports from
+            // resolving names inside it, as an indirect call already does.
+            let helper = default_helper_owner
+                .as_ref()
+                .filter(|_| {
+                    !matches!(default.kind, ExprKind::BuiltinOmitted)
+                        && !crate::sema::has_unresolved_type_params(&expected)
+                        && !crate::sema::has_unresolved_type_params(
+                            &self.lower_type_ref_with_provenance(&param.ty),
+                        )
+                })
+                .map(|owner| format!("{owner}::__default_{index}_{}", param.name));
+            let value = if let Some(helper) = helper {
+                let temp = self.new_typed_temp(expected.clone());
+                self.emit(Instruction::Assign {
+                    target: temp.clone(),
+                    value: Rvalue::Call {
+                        callee: CallTarget::Name(helper),
+                        args: Vec::new(),
+                    },
+                });
+                if passing == Some(ReceiverKind::Borrow) {
+                    Operand::Place(temp)
+                } else {
+                    self.move_place_for_type(temp, &expected)
+                }
+            } else if let Some(passing) = passing {
                 self.lower_expr_for_passing(default, Some(&expected), passing)
             } else if is_float_type(&expected) {
                 self.lower_expr_with_expected(default, Some(&expected))
