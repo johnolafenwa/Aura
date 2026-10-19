@@ -29225,7 +29225,7 @@ Do not mix top-level executable statements with `main` in the same file.
 | `io` and `fs` | `io.Error`, `fs.File` |
 | `net` | `net.TcpListener`, `net.TcpStream`, `net.UdpSocket`, `net.UdpDatagram`, `net.HttpListener`, `net.HttpExchange`, `net.HttpResponse`, `net.WebSocketListener`, `net.WebSocket`, `net.UnixListener`, `net.UnixStream`, `net.TlsListener`, `net.TlsStream` |
 | `process` | `process.Child`, `process.Pipe`, `process.Completed`, `process.Supervisor`, `process.ExitStatus`, `process.Wait`, `process.Stdio`, `process.Error`, `process.RestartPolicy`, `process.SupervisorEvent`, `process.SupervisorWait` |
-| `random`, `bytes`, `json` | `random.Rng`, `bytes.Error`, `json.Value`, `json.Error` |
+| `random`, `bytes`, `json` | `random.Rng`, `bytes.Error`, `json.Value`, `json.Error`, `json.DecodeError`, `json.DecodeErrorKind`, and the trait `json.Codec` |
 
 ### Generic And Runtime Types
 
