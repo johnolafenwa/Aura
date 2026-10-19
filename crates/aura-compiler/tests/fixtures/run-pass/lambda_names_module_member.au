@@ -1,0 +1,13 @@
+import math
+
+def apply(f: def(float64) -> float64, x: float64) -> float64:
+    return f(x)
+
+def main():
+    scale = 2.0
+    cosine: def(float64) -> float64 = lambda x: math.cos(x)
+    scaled: def(float64) -> float64 = lambda [scale] x: math.cos(x) * scale
+    print(cosine(0.0))
+    print(scaled(0.0))
+    print(apply(lambda x: math.sin(x), 0.0))
+    print(math.floor(2.5))
