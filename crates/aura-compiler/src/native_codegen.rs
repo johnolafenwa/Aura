@@ -6111,7 +6111,14 @@ impl<'a> FunctionCompiler<'a> {
             }
             Instruction::EndLoan { loan } => {
                 self.view_places.remove(loan);
-                for variable in self.view_element_keys.remove(loan).unwrap_or_default() {
+                // A loan that ends in both arms of a branch has one EndLoan
+                // per arm, and each must release the keys, so keep them.
+                for variable in self
+                    .view_element_keys
+                    .get(loan)
+                    .cloned()
+                    .unwrap_or_default()
+                {
                     let key = self.builder.use_var(variable);
                     self.release_opaque_handle(key);
                 }

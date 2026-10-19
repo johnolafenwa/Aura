@@ -552,3 +552,44 @@ fn direct_nested_index_assignment_writes_the_collection() {
         "{a: [5]}\n{a: {k: 3}}\n[[1], [42]]\n",
     );
 }
+
+const STRING_KEY_LOAN_BRANCHES: &str = r#"def first(d: dict[str, list[int64]], flag: bool) -> int64:
+    match d.lookup("a"):
+        case Lookup.Found(items):
+            if flag:
+                return items[0]
+            print(items)
+        case _:
+            pass
+    return -1
+
+def main():
+    mut d: dict[str, list[int64]] = {"a": [1]}
+    for n in [1, 2, 3]:
+        match d.lookup("a"):
+            case Lookup.Found(items):
+                if n > 1:
+                    print(items.len())
+                else:
+                    print(0)
+            case _:
+                pass
+    view sh = d["a"]
+    if len(d) > 0:
+        print(sh)
+    else:
+        print(0)
+    print(first(d, true))
+    print(first(d, false))
+"#;
+
+#[test]
+fn direct_string_key_loan_ending_in_each_branch_releases_its_key() {
+    // A loan that ends in both arms of an `if` used to release its string
+    // key only on the arm compiled first, so the task leaked the key.
+    assert_both_backends(
+        "repr-string-key-loan-branches",
+        STRING_KEY_LOAN_BRANCHES,
+        "0\n1\n1\n[1]\n1\n[1]\n-1\n",
+    );
+}
