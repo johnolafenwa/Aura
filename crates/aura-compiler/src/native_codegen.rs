@@ -18638,7 +18638,12 @@ fn is_plain_field_path(place: &str) -> bool {
 /// differ. A whole value such as `ys` stays readable while a field is lent:
 /// it holds the field's value, not its slot.
 fn projects_from_other_root(lent: &str, other: &str, other_has_elements: bool) -> bool {
-    let root = |place: &str| place.split_once('.').map_or(place, |(root, _)| root).to_string();
+    let root = |place: &str| {
+        place
+            .split_once('.')
+            .map_or(place, |(root, _)| root)
+            .to_string()
+    };
     root(lent) != root(other) && (other.contains('.') || other_has_elements)
 }
 

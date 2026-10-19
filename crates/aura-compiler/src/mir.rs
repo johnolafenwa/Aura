@@ -20177,9 +20177,7 @@ impl<'a> Lowerer<'a> {
         if Self::injects_per_arm(expr) {
             return None;
         }
-        let injection = self
-            .program
-            .union_injection(self.module_name, expr.span, expected)?;
+        let injection = self.union_injection_for(expr, expected)?;
         let value = if owned {
             self.lower_expr_for_owned_value(expr, Some(&injection.member_type))
         } else {
@@ -20202,6 +20200,29 @@ impl<'a> Lowerer<'a> {
         })
     }
 
+    /// The checker records an injection with the member names written in the
+    /// declaring module, so a private class of an imported module appears
+    /// unqualified. The expected union carries the runtime names, and the
+    /// lookup already matched it by canonical key, so its members take the
+    /// recorded positions.
+    fn union_injection_for(
+        &self,
+        expr: &Expr,
+        expected: &Type,
+    ) -> Option<crate::sema::UnionInjection> {
+        let mut injection = self
+            .program
+            .union_injection(self.module_name, expr.span, expected)?;
+        if let Some(member) = match expected {
+            Type::Union(union) => union.members.get(injection.member_index),
+            _ => None,
+        } {
+            injection.member_type = member.clone();
+            injection.union_type = expected.clone();
+        }
+        Some(injection)
+    }
+
     fn lower_borrowed_union_injection(
         &mut self,
         expr: &Expr,
@@ -20214,9 +20235,7 @@ impl<'a> Lowerer<'a> {
         if Self::injects_per_arm(expr) {
             return None;
         }
-        let injection = self
-            .program
-            .union_injection(self.module_name, expr.span, expected)?;
+        let injection = self.union_injection_for(expr, expected)?;
         let value =
             self.lower_expr_for_passing(expr, Some(&injection.member_type), ReceiverKind::Borrow);
         let target = self.new_typed_temp(injection.union_type.clone());
