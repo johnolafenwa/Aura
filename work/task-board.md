@@ -2,16 +2,15 @@
 
 Last updated: 2026-10-19
 
-## Aura 0.5.0 preview release (in progress)
+## Aura 0.5.0 preview release (complete)
 
 - Target: release 0.5.0-preview with Batch 5, Batch 7a, and the bug hunt
   fixes. John chose to release before Batch 6 on 2026-10-19.
-- Done: versions, docs, and CHANGELOG moved to 0.5.0. Details are in
+- Done: PR #79 merged as `b18cd46e`. The `v0.5.0-preview` tag was pushed
+  after John approved, and Release `39282559004` published the archives,
+  docs, VSIX, and extension 0.5.0. Details are in
   `2026-10-19-v0.5.0-preview-release.md`.
-- Verification: local release checks pass. Hosted CI runs on the release
-  PR.
-- Remaining: merge the release PR and push the tag after John approves.
-  Then start the Batch 6 design checkpoint.
+- Next: the Batch 6 design checkpoint.
 
 ## Bug hunt before 0.5.0-preview (complete)
 
