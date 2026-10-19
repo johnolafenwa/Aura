@@ -2,6 +2,19 @@
 
 Last updated: 2026-10-19
 
+## Batch 6 design checkpoint (awaiting ratification)
+
+- Target: plan Batch 6, typed JSON codecs with schemas and decorators, as a
+  design checkpoint John can ratify. John chose this as the next step after
+  the 0.5.0 release on 2026-10-19.
+- Done: `architecture_docs/21-batch-6-design-checkpoint.md` proposes the
+  `json.Codec` opt-in, strict decode rules, field-path errors, JSON Schema
+  output, the ADR-0053 open items, generic decorators, and an eight-step
+  delivery plan. Notes are in `2026-10-19-batch-6-design-checkpoint.md`.
+- Verification: documentation only.
+- Next: John answers the seven owner questions, then step 1, associated-method
+  calls through a bounded type parameter.
+
 ## Aura 0.5.0 preview release (complete)
 
 - Target: release 0.5.0-preview with Batch 5, Batch 7a, and the bug hunt
