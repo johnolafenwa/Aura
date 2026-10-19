@@ -18629,7 +18629,16 @@ unsafe extern "C-unwind" fn direct_task_cancel_while_holding_argument(
 ) -> *mut OpaqueValue {
     assert_eq!(arg_count, 1);
     let _held_argument = unsafe { *args };
-    assert_eq!(super::aura_direct_cancelled(), 1);
+    // Another worker can start this task before the root cancels its group,
+    // so wait for the cancellation at a cooperative yield point.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while super::aura_direct_cancelled() == 0 {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the root task must cancel this task's group"
+        );
+        super::aura_direct_yield_now();
+    }
     super::task_runtime_boundary(|| std::panic::panic_any(TaskCancelledSignal));
     unreachable!("the cancellation boundary must exit the current lightweight task")
 }

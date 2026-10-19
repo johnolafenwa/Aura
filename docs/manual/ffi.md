@@ -289,7 +289,7 @@ terminate the process, and no backend can make it safe.
 
 ## Status
 
-Implemented in Aura 0.4:
+Implemented in Aura 0.5:
 
 - FFI v0 package opt-in and the root dependency report
 - bodyless `extern "C"` functions and opaque handles

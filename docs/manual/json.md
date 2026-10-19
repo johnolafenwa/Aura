@@ -377,11 +377,11 @@ The fixed limits are:
 
 The codec service for `json.parse` admits two operations across the process.
 Its two 2 MiB-stack workers start lazily and live until the process exits.
-Aura 0.4 has no API to shut down, join, size, or configure the service. The
+Aura 0.5 has no API to shut down, join, size, or configure the service. The
 service capacity does not apply to `json.is_valid`, `json.parse_string_map`,
 or `json.stringify_map`.
 
-Aura 0.4 does not derive schemas or generate codecs for classes and enums.
+Aura 0.5 does not derive schemas or generate codecs for classes and enums.
 Schema validation, MessagePack, CBOR, Protobuf, and other binary formats are
 also not available.
 
@@ -394,9 +394,9 @@ language does not claim that every host out-of-memory condition can be caught.
 ## Status
 
 The value and error model, parse and dump, accessors, ordering, formatting,
-and resource limits are implemented Aura 0.4 behavior.
+and resource limits are implemented Aura 0.5 behavior.
 
 `is_valid`, `stringify_map`, and `parse_string_map` are bounded
-flat-dictionary operations. Aura 0.4 has no streaming JSON codec.
+flat-dictionary operations. Aura 0.5 has no streaming JSON codec.
 
 Design record: [ADR-0021: JSON value model and codec policy](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/decisions/0021-json-value-model-and-codec-policy.md).

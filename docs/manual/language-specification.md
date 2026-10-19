@@ -1,6 +1,6 @@
 # Language Specification
 
-This Manual is the normative specification of the implemented Aura 0.4
+This Manual is the normative specification of the implemented Aura 0.5
 development language. It defines what a conforming implementation must
 provide:
 
@@ -54,7 +54,7 @@ the contract only when the surrounding paragraph says so.
 
 ## Specification Version
 
-This reference describes Aura 0.4 as implemented by the repository that
+This reference describes Aura 0.5 as implemented by the repository that
 contains it. Aura is an advanced technical preview, so source and API
 contracts may change before a tagged stable release.
 
@@ -67,7 +67,7 @@ Any behavior change MUST update these in the same pass:
 - the work record
 
 The repository commit identifies the precise revision of the specification.
-The rendered Manual is stamped with source version 0.4.1 (technical preview)
+The rendered Manual is stamped with source version 0.5.0 (technical preview)
 and its implementation baseline commit. Release builds supply that commit
 without writing a self-referential hash into this source page. The
 [Manual overview](/manual/) gives the exact precedence and the local fallback.
@@ -130,7 +130,7 @@ enum instead.
 | **Copy type** | A type whose values are duplicated, not consumed, by assignment and by-value use. |
 | **Move type** | A type whose by-value use transfers ownership. The source place is then unavailable until it is reinitialized. |
 | **Clone-producing operation** | An operation that creates a second owned structural value and keeps the original. Examples are explicit collection copies, cloned collection reads, and task-result observations. |
-| **Clone-safety obligation** | An inferred callable requirement: a substituted type must not duplicate non-cloneable state through a clone-producing operation. Aura 0.4 protects `random.Rng` state under this contract. |
+| **Clone-safety obligation** | An inferred callable requirement: a substituted type must not duplicate non-cloneable state through a clone-producing operation. Aura 0.5 protects `random.Rng` state and live file, process, and network resources under this contract. |
 | **Borrow** | Temporary access to an existing place without transferring ownership. A shared borrow permits reading. A mutable borrow permits exclusive mutation. |
 | **Owned position** | A source position that consumes a non-copy value. These include an explicit `own` parameter or collection loop, a class field or enum payload constructor, assignment, return, and maintained storing APIs. |
 | **Default parameter mode** | The unmodified `value: T` spelling. Its source contract is shared access for every type. An implementation may pass copy bits directly without changing that contract. The shared mode stays the same after generic specialization. |

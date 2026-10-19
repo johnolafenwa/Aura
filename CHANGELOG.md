@@ -7,36 +7,73 @@ in this file.
 
 ## Unreleased
 
-- A function in a dependency package can call builtin modules such as `fs`
-  and `json`. It used to fail at run time with `AU4001` "unknown MIR
-  function `pkg.fs::exists`".
-- On the direct backend, a method call on a collection field, such as
-  `self.docs.get(i)` or `for doc in self.docs`, no longer copies the whole
-  field. Neither does passing a field such as `self.by_id` to a function
-  parameter, or calling a method on an entry reached through `lookup`.
-  Each of these used to deep-clone the field or entry on every call, so
-  loops over a field were quadratic.
-- A module's private class works when another module calls that module's
-  public functions or methods on the MIR backend. Constructing or calling a
-  private class there used to fail with `AU4001` "unknown MIR class". The
-  native backend was not affected.
-- `fs.rename(source, target)` renames or moves a file and replaces an
-  existing target. `fs.File.sync()` flushes a file and waits until its data
-  reaches storage. Together they write a file atomically. See
-  `examples/io/atomic_save.au`.
-- Source change: the checker enforces the documented mutable receiver for
+## VS Code extension 0.5.0 — 2026-10-19
+
+- Bundles language server 0.5.0. The semantic interface version stays 19.
+
+## 0.5.0 — 2026-10-19 (technical preview)
+
+Aura 0.5.0 makes native executables smaller and collection-heavy programs
+faster, adds `fs.rename` and `fs.File.sync`, and fixes the defects a review
+of the release found. Source written for 0.4.1 may need the changes listed
+under "Breaking changes".
+
+### Breaking changes
+
+- The checker enforces the documented mutable receiver for
   every file, process, and network resource method. A `close()`, `flush()`,
   or write through a binding from a bare `match`, or through an immutable
   local or parameter, now fails with `AU3003` at check time. It used to
   pass the checker and fail later with `AU4001` "mutates through shared
   loan", or run on the MIR backend for an enum payload. Use `match own` or
   `match mut` for a match binding, and `mut` or `with` for a local.
-
-- Source change: `list.get`, `dict.get`, `copy()`, and the other
+- `list.get`, `dict.get`, `copy()`, and the other
   operations that duplicate a value reject a collection that holds a file,
   process, or network resource. They fail with `AU3007` "would duplicate
   resource". A resource has one owner, so borrow it with `view` or
   `match mut`, or take it out with `pop` or `remove`.
+- `aura build` always uses the direct backend. `--backend auto` and
+  `--backend direct` select the same code generator, and a file with no
+  entry point fails with `AU2999`.
+- The native cache format is `v7`. Executables cached by 0.4.1 rebuild on
+  first use.
+
+### Performance
+
+- A native hello world on Linux x86-64 is 927,888 bytes, down from
+  5,057,904. User programs link `libaura_runtime.a` in place of the
+  compiler archive, and a program links only the host builtins it calls.
+  Release archives ship `lib/aura/libaura_runtime.a`, and the installer
+  removes the old `libaura_compiler.a`.
+- `dict` and `set` are hash-indexed. Building and reading a large `dict`
+  went from 18.47 s to 0.31 s in the runtime benchmark.
+- `list`, `dict`, and `set` copy their storage on write, so passing or
+  storing a collection no longer copies its elements. Summing a large
+  `int64` list went from 1.96 s to 0.048 s.
+- A value used by only one thread skips its lock.
+- On the direct backend, a method call on a collection field, such as
+  `self.docs.get(i)` or `for doc in self.docs`, no longer copies the whole
+  field. Neither does passing a field such as `self.by_id` to a function
+  parameter, or calling a method on an entry reached through `lookup`.
+  Each of these used to deep-clone the field or entry on every call, so
+  loops over a field were quadratic.
+
+### Library
+
+- `fs.rename(source, target)` renames or moves a file and replaces an
+  existing target. `fs.File.sync()` flushes a file and waits until its data
+  reaches storage. Together they write a file atomically. See
+  `examples/io/atomic_save.au`.
+
+### Fixes
+
+- A function in a dependency package can call builtin modules such as `fs`
+  and `json`. It used to fail at run time with `AU4001` "unknown MIR
+  function `pkg.fs::exists`".
+- A module's private class works when another module calls that module's
+  public functions or methods on the MIR backend. Constructing or calling a
+  private class there used to fail with `AU4001` "unknown MIR class". The
+  native backend was not affected.
 - On the direct backend, passing two fields that may name the same object,
   such as `use_two(x.items, y.items)` or `b.overlap(b)`, works. It used to
   fail with `AU4001` "has no field". The same holds for a lent element
@@ -61,7 +98,9 @@ in this file.
 - `x = math.nan` binds the constant. It used to fail with `AU3001` "cannot
   move".
 - A default argument can name a module constant or an imported module. The
-  default resolves names in the module that declares the function.
+  default resolves names in the module that declares the function. A
+  default that names another parameter reports `AU2004` "may not reference
+  parameter" in place of `AU2001` "unknown name".
 - On the direct backend, an imported module's private class can share a
   name with a root module class and appear in a union. The build used to
   fail with "unsupported value coercion".

@@ -24,7 +24,7 @@ The installer uses `curl`, `tar`, and `shasum`, which macOS already includes:
 curl -fsSL https://johnolafenwa.github.io/Aura/install.sh | sh
 ```
 
-The script downloads the matching `v0.4.1-preview` archive. It checks the
+The script downloads the matching `v0.5.0-preview` archive. It checks the
 archive against the release's `SHA256SUMS` file before it copies anything
 into the installation prefix.
 
@@ -52,7 +52,7 @@ aura --version
 The command path ends in `.local/bin/aura`. The version begins with:
 
 ```text
-aura 0.4.1-preview
+aura 0.5.0-preview
 ```
 
 ## 5. Run A Program

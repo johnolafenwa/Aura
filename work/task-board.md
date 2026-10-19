@@ -2,20 +2,29 @@
 
 Last updated: 2026-10-19
 
-## Bug hunt before 0.5.0-preview (in progress)
+## Aura 0.5.0 preview release (in progress)
+
+- Target: release 0.5.0-preview with Batch 5, Batch 7a, and the bug hunt
+  fixes. John chose to release before Batch 6 on 2026-10-19.
+- Done: versions, docs, and CHANGELOG moved to 0.5.0. Details are in
+  `2026-10-19-v0.5.0-preview-release.md`.
+- Verification: local release checks pass. Hosted CI runs on the release
+  PR.
+- Remaining: merge the release PR and push the tag after John approves.
+  Then start the Batch 6 design checkpoint.
+
+## Bug hunt before 0.5.0-preview (complete)
 
 - Target: find and fix bugs in the work merged since v0.4.1-preview before
   the 0.5.0-preview release. John chose "Fix all" on 2026-10-19, so every
   confirmed bug gets a regression test and a fix first.
 - Done: two direct-backend field-lending regressions from PR #60 and
-  eleven older bugs. They cover nested index writes, resource duplication
-  through `get` and `copy`, loan release, union Copy parameters,
-  `match mut` over views, element `sort`, lambdas that name modules,
-  module constants, default argument scope, and private class names in
-  unions. Details are in `2026-10-19-pre-0.5.0-bug-hunt.md`.
-- Verification: local workspace tests, clippy, and fmt. Hosted CI runs on
-  the fixes PR.
-- Remaining: merge the fixes PR, then prepare the 0.5.0-preview release.
+  eleven older bugs, merged in PR #78. They cover nested index writes,
+  resource duplication through `get` and `copy`, loan release, union Copy
+  parameters, `match mut` over views, element `sort`, lambdas that name
+  modules, module constants, default argument scope, and private class
+  names in unions. Details are in `2026-10-19-pre-0.5.0-bug-hunt.md`.
+- Verification: hosted CI passed on Linux and macOS for PR #78.
 
 ## Batch 7a: runtime value performance (complete)
 
