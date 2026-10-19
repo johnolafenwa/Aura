@@ -1,6 +1,21 @@
 # Task Board
 
-Last updated: 2026-10-18
+Last updated: 2026-10-19
+
+## Bug hunt before 0.5.0-preview (in progress)
+
+- Target: find and fix bugs in the work merged since v0.4.1-preview before
+  the 0.5.0-preview release. John chose "Fix all" on 2026-10-19, so every
+  confirmed bug gets a regression test and a fix first.
+- Done: two direct-backend field-lending regressions from PR #60 and
+  eleven older bugs. They cover nested index writes, resource duplication
+  through `get` and `copy`, loan release, union Copy parameters,
+  `match mut` over views, element `sort`, lambdas that name modules,
+  module constants, default argument scope, and private class names in
+  unions. Details are in `2026-10-19-pre-0.5.0-bug-hunt.md`.
+- Verification: local workspace tests, clippy, and fmt. Hosted CI runs on
+  the fixes PR.
+- Remaining: merge the fixes PR, then prepare the 0.5.0-preview release.
 
 ## Batch 7a: runtime value performance (complete)
 
@@ -41,18 +56,6 @@ Last updated: 2026-10-18
   regression: a collection method on a field of a narrowed `X | None`
   local failed with `AU4001`. The follow-up PR fixes it with a regression
   test.
-
-## Private classes across modules on MIR (in review)
-
-- Target: fix `AU4001` "unknown MIR class" when an imported module uses its
-  own private class, as John reported against 0.4.1.
-- Done: MIR lowering registers every class an imported module declares,
-  not only its public ones. Two regression tests in
-  `crates/aura-compiler/tests/modules.rs` cover a direct import and a
-  transitive import with a private resource class and a private generic
-  class. Details are in `2026-10-16-private-class-mir-fix.md`.
-- Verification: hosted CI `38915135045` passed on Linux and macOS.
-- Remaining: review and merge.
 
 ## Batch 5: lean native binaries (complete)
 

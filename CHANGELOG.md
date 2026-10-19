@@ -32,6 +32,40 @@ in this file.
   loan", or run on the MIR backend for an enum payload. Use `match own` or
   `match mut` for a match binding, and `mut` or `with` for a local.
 
+- Source change: `list.get`, `dict.get`, `copy()`, and the other
+  operations that duplicate a value reject a collection that holds a file,
+  process, or network resource. They fail with `AU3007` "would duplicate
+  resource". A resource has one owner, so borrow it with `view` or
+  `match mut`, or take it out with `pop` or `remove`.
+- On the direct backend, passing two fields that may name the same object,
+  such as `use_two(x.items, y.items)` or `b.overlap(b)`, works. It used to
+  fail with `AU4001` "has no field". The same holds for a lent element
+  receiver such as `x.order[0].size_with(y.order[0].items)`.
+- A nested index assignment such as `d["a"][0] = 5` or `rows[i][0] += 1`
+  writes the element. The direct backend used to drop the write, and the
+  MIR backend failed at run time.
+- An index assignment through a `view mut`, a `match mut` binding, or a
+  `for ... in mut` element, such as `inner["q"] = 1`, compiles and writes
+  through.
+- A `lookup` or `view` loan over a `dict[str, ...]` that ends in both arms
+  of an `if` no longer panics the direct backend.
+- A function that returns a union parameter of Copy members, such as
+  `def echo(v: int64 | None) -> int64 | None`, runs. It used to fail with
+  "invalid MIR payload projection".
+- `match mut b` works when `b` is a `view mut` alias, and an assignment to
+  a view inside the arm writes through.
+- `rows[i].sort()` sorts the element in place. It used to panic the
+  compiler or fail at run time.
+- A lambda can name a module member, such as `lambda x: math.cos(x)`,
+  without moving the module into the closure.
+- `x = math.nan` binds the constant. It used to fail with `AU3001` "cannot
+  move".
+- A default argument can name a module constant or an imported module. The
+  default resolves names in the module that declares the function.
+- On the direct backend, an imported module's private class can share a
+  name with a root module class and appear in a union. The build used to
+  fail with "unsupported value coercion".
+
 ## VS Code extension 0.4.1 — 2026-10-16
 
 - Bundles language server 0.4.1. The semantic interface version stays 19.
