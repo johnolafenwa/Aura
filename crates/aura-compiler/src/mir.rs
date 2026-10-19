@@ -18667,9 +18667,14 @@ impl<'a> Lowerer<'a> {
 
         match member {
             BuiltinMember::VecSort => {
-                let receiver_place = self
-                    .render_place_expr_option(object)
-                    .expect("checked list.sort receiver should be a mutable place");
+                // `rows[i].sort()` sorts the element in place through a
+                // statement-scoped mutable element loan.
+                let receiver_place = match self.lower_contextual_element_loan(object, true) {
+                    Some(Operand::Place(loan)) => loan,
+                    _ => self
+                        .render_place_expr_option(object)
+                        .expect("checked list.sort receiver should be a mutable place"),
+                };
                 let ordered = member
                     .bind_args(args, expr.span)
                     .expect("checked list.sort arguments should bind during MIR lowering");
