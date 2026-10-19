@@ -1,0 +1,44 @@
+trait Parse:
+    def parse(text: str) -> Result[Self, str]
+
+class Port:
+    number: int64
+
+enum Mode:
+    Read
+    Write
+
+impl Parse for Port:
+    def parse(text: str) -> Result[Port, str]:
+        match parse_int64(text):
+            case Result.Ok(number):
+                return Result.Ok(Port(number=number))
+            case Result.Err(_):
+                return Result.Err(f"not a port: {text}")
+
+impl Parse for Mode:
+    def parse(text: str) -> Result[Mode, str]:
+        if text == "read":
+            return Result.Ok(Mode.Read)
+        if text == "write":
+            return Result.Ok(Mode.Write)
+        return Result.Err(f"not a mode: {text}")
+
+def parse_all[T: Parse](texts: list[str]) -> Result[list[T], str]:
+    mut values: list[T] = []
+    for text in texts:
+        values.append(try T.parse(text))
+    return Result.Ok(values)
+
+def main() -> int32:
+    match parse_all[Port](["80", "443"]):
+        case Result.Ok(ports):
+            print(ports[1].number)
+        case Result.Err(message):
+            print(message)
+    match parse_all[Mode](["read", "append"]):
+        case Result.Ok(modes):
+            print(modes.len())
+        case Result.Err(message):
+            print(message)
+    return 0

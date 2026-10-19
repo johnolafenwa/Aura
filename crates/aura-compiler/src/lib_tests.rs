@@ -763,6 +763,11 @@ const ADDITIONAL_EXAMPLE_CASES: &[(&str, &str, &str)] = &[
         "7\n",
     ),
     (
+        "examples/traits/associated_through_type_param.au",
+        include_str!("../../../examples/traits/associated_through_type_param.au"),
+        "443\nnot a mode: append\n",
+    ),
+    (
         "examples/traits/builtin_target_traits.au",
         include_str!("../../../examples/traits/builtin_target_traits.au"),
         "list of 2\ntext of 5\n",

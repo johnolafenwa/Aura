@@ -1,0 +1,6 @@
+error[AU2005]: function `build` calls an associated method through a type parameter, so it cannot start a task
+ --> crates/aura-compiler/tests/fixtures/check-fail/associated_type_param_task_target.au:16:28
+   |
+16 |         task = group.start(build[Widget], 1)
+   |                            ^
+  = help: start the task with a module-level function that calls it

@@ -125,6 +125,7 @@ impl FunctionChecker<'_> {
         self.type_names.union_probe_work.set(work + 1);
         let mut probe = self.clone();
         probe.union_injections = Default::default();
+        probe.type_param_calls = Default::default();
         probe.active_match_borrow_places = Rc::new(RefCell::new(
             self.active_match_borrow_places.borrow().clone(),
         ));

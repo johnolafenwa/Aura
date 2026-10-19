@@ -1,0 +1,5 @@
+trait Label:
+    def label(self) -> str
+
+def show[T: Label]() -> str:
+    return T.label()

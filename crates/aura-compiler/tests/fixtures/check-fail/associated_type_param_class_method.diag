@@ -1,0 +1,6 @@
+error[AU2005]: `T.make(...)` is supported only in module-level functions
+ --> crates/aura-compiler/tests/fixtures/check-fail/associated_type_param_class_method.au:8:18
+  |
+8 |         return T.make(self.seed)
+  |                  ^
+  = help: move the call into a module-level generic function and call that

@@ -76,6 +76,11 @@ mod unions_security_tests;
 use aura_core::type_budget;
 pub(crate) use unions::narrowed_read_place;
 pub use unions::{NarrowedRead, NarrowedReadId, UnionInjection, UnionInjectionId};
+mod type_param_calls;
+pub(crate) use type_param_calls::{
+    collect_type_param_calls, lookup_type_param_call, specialized_functions,
+};
+pub use type_param_calls::{GenericUse, TypeParamCall, TypeParamCallId};
 #[cfg(test)]
 mod type_budget_tests;
 mod types;
@@ -1077,6 +1082,7 @@ struct FunctionChecker<'a> {
     comprehension_infos: Rc<RefCell<BTreeMap<ComprehensionId, ComprehensionInfo>>>,
     union_injections: Rc<RefCell<BTreeMap<UnionInjectionId, UnionInjection>>>,
     narrowed_reads: Rc<RefCell<BTreeMap<NarrowedReadId, NarrowedRead>>>,
+    type_param_calls: Rc<RefCell<BTreeMap<TypeParamCallId, TypeParamCall>>>,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -2107,6 +2113,7 @@ impl<'a> FunctionChecker<'a> {
             comprehension_infos: Rc::new(RefCell::new(BTreeMap::new())),
             union_injections: type_names.union_injections.clone(),
             narrowed_reads: type_names.narrowed_reads.clone(),
+            type_param_calls: type_names.type_param_calls.clone(),
         }
     }
 
@@ -2151,6 +2158,7 @@ impl<'a> FunctionChecker<'a> {
             comprehension_infos: self.comprehension_infos.clone(),
             union_injections: self.union_injections.clone(),
             narrowed_reads: self.narrowed_reads.clone(),
+            type_param_calls: self.type_param_calls.clone(),
             suppress_narrowing: self.suppress_narrowing.clone(),
             mutated_captures: self.mutated_captures.clone(),
             index_place_read: self.index_place_read.clone(),
@@ -2194,6 +2202,7 @@ impl<'a> FunctionChecker<'a> {
             comprehension_infos: self.comprehension_infos.clone(),
             union_injections: self.union_injections.clone(),
             narrowed_reads: self.narrowed_reads.clone(),
+            type_param_calls: self.type_param_calls.clone(),
             suppress_narrowing: self.suppress_narrowing.clone(),
             mutated_captures: self.mutated_captures.clone(),
             index_place_read: self.index_place_read.clone(),
@@ -2233,6 +2242,7 @@ impl<'a> FunctionChecker<'a> {
             comprehension_infos: self.comprehension_infos.clone(),
             union_injections: self.union_injections.clone(),
             narrowed_reads: self.narrowed_reads.clone(),
+            type_param_calls: self.type_param_calls.clone(),
             suppress_narrowing: self.suppress_narrowing.clone(),
             mutated_captures: self.mutated_captures.clone(),
             index_place_read: self.index_place_read.clone(),
@@ -2272,6 +2282,7 @@ impl<'a> FunctionChecker<'a> {
             comprehension_infos: self.comprehension_infos.clone(),
             union_injections: self.union_injections.clone(),
             narrowed_reads: self.narrowed_reads.clone(),
+            type_param_calls: self.type_param_calls.clone(),
             suppress_narrowing: self.suppress_narrowing.clone(),
             mutated_captures: self.mutated_captures.clone(),
             index_place_read: self.index_place_read.clone(),
@@ -7088,6 +7099,7 @@ impl<'a> FunctionChecker<'a> {
                         None,
                         expr.span,
                         &format!("function `{name}`"),
+                        true,
                     );
                 }
                 if self.resolve_extern_function_info(name).is_some() {
@@ -7562,6 +7574,7 @@ impl<'a> FunctionChecker<'a> {
                             Some(&lowered),
                             expr.span,
                             &format!("function `{name}`"),
+                            true,
                         )
                     }
                     ExprKind::Name(name)
@@ -8243,6 +8256,7 @@ impl<'a> FunctionChecker<'a> {
                             None,
                             expr.span,
                             &format!("function `{module_path}.{function_name}`"),
+                            true,
                         );
                     }
                 }
@@ -8471,6 +8485,7 @@ impl<'a> FunctionChecker<'a> {
                         Some(&lowered),
                         expr.span,
                         &display_name,
+                        true,
                     );
                 }
                 // `Class.method[T]` and `receiver.method[T]` outside call
@@ -10857,16 +10872,9 @@ impl<'a> FunctionChecker<'a> {
                 } else {
                     HashMap::new()
                 };
-                self.type_check_callable_args(
+                self.type_check_recorded_function_call(
+                    function,
                     &format!("function `{}`", name),
-                    &function.decl.type_params,
-                    &function.decl.params,
-                    &function.signature.param_passings,
-                    &function.signature.params,
-                    &function.signature.return_type,
-                    &function.type_param_bounds,
-                    &function.signature.rng_clone_safe_type_params,
-                    &function.signature.array_equality_safe_type_params,
                     args,
                     span,
                     locals,
@@ -10933,6 +10941,17 @@ impl<'a> FunctionChecker<'a> {
                 )
             }
             ExprKind::Member { object, field } => {
+                if let Some(type_param) = self.names_type_param(object, locals) {
+                    return self.type_of_type_param_associated_call(
+                        &type_param,
+                        field,
+                        explicit_type_args,
+                        args,
+                        span,
+                        locals,
+                        expected,
+                    );
+                }
                 let (base_object, object_type_args) = self.peel_specialization(object);
                 if let ExprKind::Name(type_name) = &base_object.kind {
                     if matches!(type_name.as_str(), "list" | "dict" | "set")
@@ -11416,7 +11435,15 @@ impl<'a> FunctionChecker<'a> {
                                 seed_substitutions,
                                 closure_argument_policy,
                             )
-                            .map(|checked| checked.return_type);
+                            .map(|checked| {
+                                self.record_generic_function_use(
+                                    function,
+                                    checked.type_args,
+                                    span,
+                                    GenericUse::Call,
+                                );
+                                checked.return_type
+                            });
                     }
                     if let Some(class) = namespace.classes.get(field) {
                         if let Some(constructor) = class.builtin_constructor() {

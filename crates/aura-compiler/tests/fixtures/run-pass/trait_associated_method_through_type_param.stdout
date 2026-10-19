@@ -1,0 +1,12 @@
+42
+g5
+widget from 1
+gadget from 2
+4
+6
+Result.Ok(Level.Low)
+Result.Ok(Level.High)
+Result.Err(unknown level mid)
+g9
+100
+describe_named:gadget

@@ -1,0 +1,6 @@
+error[AU2005]: function `build` calls an associated method through a type parameter, so it needs a concrete type here
+ --> crates/aura-compiler/tests/fixtures/check-fail/associated_type_param_open_use_in_method.au:11:16
+   |
+11 |         return build[T](self.seed)
+   |                ^
+  = help: call it from a module-level generic function, or pass a concrete type

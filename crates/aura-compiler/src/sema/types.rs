@@ -24,6 +24,11 @@ pub struct TypeDefinitions {
         std::rc::Rc<std::cell::RefCell<BTreeMap<super::UnionInjectionId, super::UnionInjection>>>,
     pub(crate) narrowed_reads:
         std::rc::Rc<std::cell::RefCell<BTreeMap<super::NarrowedReadId, super::NarrowedRead>>>,
+    pub(crate) type_param_calls:
+        std::rc::Rc<std::cell::RefCell<BTreeMap<super::TypeParamCallId, super::TypeParamCall>>>,
+    /// The free functions MIR lowering specializes per concrete type,
+    /// computed once from `type_param_calls` and every imported module's.
+    pub(crate) specialized_functions: std::rc::Rc<std::cell::OnceCell<BTreeSet<(String, String)>>>,
     pub(super) union_probe_work: std::rc::Rc<std::cell::Cell<usize>>,
 }
 
@@ -53,6 +58,8 @@ impl From<BTreeMap<String, crate::diag::Span>> for TypeDefinitions {
             budget: Default::default(),
             union_injections: Default::default(),
             narrowed_reads: Default::default(),
+            type_param_calls: Default::default(),
+            specialized_functions: Default::default(),
             union_probe_work: Default::default(),
         }
     }

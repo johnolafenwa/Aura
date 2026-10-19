@@ -186,6 +186,7 @@ seven real loopback requests.
 | `operator_traits.au` | Operator traits for `+` and unary `-` through `Add[...]` and `Neg[...]` | `6`, `8`, `-6`, `-8` |
 | `ordering_traits.au` | Ordering traits with shared right-hand operands and an explicitly consuming generic selector | `true`, `true`, `true`, `true`, `2` |
 | `trait_associated_factory.au` | Associated trait methods called through the implementing type name | `7` |
+| `associated_through_type_param.au` | An associated trait method called through a bounded type parameter, `T.parse(text)` | `443`, `not a mode: append` |
 | `clone_safety_contract.au` | An inferred clone-safety contract from a generic trait default method, kept through a bounded generic call | `[4, 5]` twice |
 | `display.au` | The prelude `Display` trait for a class and an enum, used by `print`, `str`, f-strings with a width, and nested rendering | `$12.50`, `[  $12.50]`, `paid $12.50`, `[$12.50, $0.05]`, `Invoice(status=due, total=$12.50)` |
 

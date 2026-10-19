@@ -1,0 +1,5 @@
+trait Make:
+    def make(seed: int64) -> Self
+
+def build[T: Make](seed: int64) -> T:
+    return T.create(seed)

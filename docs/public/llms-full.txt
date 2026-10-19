@@ -11689,6 +11689,23 @@ value = Widget.make()
 
 Associated trait methods follow the same rules as receiver methods. Concrete and bound-based dispatch enforce the same substituted clone-safety contract.
 
+### Associated Methods Through A Type Parameter
+
+A generic function can call an associated method through its type parameter. The bound must provide the method, and the method must not take `self`:
+
+<<< ../../examples/traits/associated_through_type_param.au{aura}
+
+`T.parse(text)` calls the implementation for the concrete type at each call site. `parse_all[Port]` uses `Port.parse`, and `parse_all[Mode]` uses `Mode.parse`. A generic function that passes its own type parameter on, such as `build[T](seed)`, works the same way.
+
+The compiler makes one copy of such a function for each concrete type list it is called with. Generic functions that make no such call keep one shared body.
+
+These rules apply:
+
+- The call must be in a module-level function. A method of a class or an implementation cannot make it.
+- The associated method cannot declare its own type parameters.
+- A function that makes the call, directly or through another generic function, cannot be a task target. Start the task with a function that calls it.
+- `T.method` without a call is not a value.
+
 ## Supertraits
 
 A trait can require one or more supertraits:
@@ -11894,6 +11911,7 @@ No generic or trait boundary inserts a hidden clone, coercion, or ownership-mode
 | `AU2002` | Inference failure, wrong generic arity, unsatisfied bound, missing trait satisfaction, ambiguous equal-specificity dispatch, invalid specialization, or substituted type mismatch. |
 | `AU2003` | An operator that no builtin rule or applicable operator trait supplies. |
 | `AU2004` | Call argument binding, and ordinary default arguments in trait methods. |
+| `AU2005` | An unsupported `T.method(...)` call: the method takes `self`, declares type parameters, or is called outside a module-level function, or the function is used as a task target or with a type parameter where no concrete type reaches it. |
 | `AU2006` | A trait method name that collides with a builtin member. Rename the trait method. |
 | `AU2010` | A type parameter that a union-member argument cannot determine. Specialize explicitly. |
 | `AU2013` | A type arm over a type parameter. Use `case None` and a catch-all. |
@@ -11946,6 +11964,7 @@ Implemented:
 
 - invariant generics, local and contextual inference, and explicit specialization
 - nominal traits and bounds, supertraits, and default methods
+- associated methods called through a bounded type parameter, such as `T.parse(text)`
 - generic and specialized implementations with unique-most-specific dispatch
 - operator traits, `Self`, and `From`-based `try` conversion
 - the prelude `Display` trait and its rendering dispatch
@@ -30304,7 +30323,7 @@ against a trait works with any type that provides the trait's methods.
 
 A trait lists method signatures. A method can leave out its body:
 
-```aura check-pass
+```aura
 trait Greeter:
     def greet(self) -> str
 ```
@@ -30312,7 +30331,7 @@ trait Greeter:
 A method can also provide a default implementation, which may call the
 trait's other methods:
 
-```aura check-pass
+```aura
 trait Named:
     def name(self) -> str
     def label(self) -> str:
@@ -30321,14 +30340,14 @@ trait Named:
 
 An empty marker trait uses `pass`:
 
-```aura check-pass
+```aura
 trait Marker:
     pass
 ```
 
 A generic trait uses the same `Name[T]` syntax as a class:
 
-```aura check-pass
+```aura
 trait Mapper[T]:
     def map(self, value: own T) -> T
 ```
@@ -30336,14 +30355,14 @@ trait Mapper[T]:
 Trait methods and impl methods can use `Self` in parameter and return
 positions:
 
-```aura check-pass
+```aura
 trait Combine:
     def combine(self, other: Self) -> Self
 ```
 
 A trait can inherit from another trait:
 
-```aura check-pass
+```aura
 trait Named:
     def name(self) -> str
 
@@ -30400,7 +30419,7 @@ impl Mapper[T] for Box[T]:
 When a generic trait default method clones, Aura infers a clone-safety
 obligation as part of that method's contract:
 
-```aura check-pass
+```aura
 trait Duplicator[T]:
     def duplicate(self, values: list[T]) -> list[T]:
         return values.copy()
@@ -30471,7 +30490,7 @@ Several types can implement the same trait in one program. Each call
 dispatches to the implementation for its concrete type, so `show` prints
 `dog` for a `Dog` and `cat` for a `Cat`:
 
-```aura check-pass
+```aura
 trait Describe:
     def describe(self) -> str
 
@@ -30506,7 +30525,7 @@ Runnable examples:
 A trait method without a receiver is an associated method. Call it through
 the implementing type's name. This prints `7`:
 
-```aura check-pass
+```aura
 trait Factory:
     def make() -> int32
 
@@ -30521,6 +30540,30 @@ print(Widget.make())    # 7
 ```
 
 See [examples/traits/trait_associated_factory.au](../examples/traits/trait_associated_factory.au).
+
+A generic function can call an associated method through its type parameter.
+The bound says the method exists, and the call site picks the type:
+
+```aura
+trait Factory:
+    def make() -> int32
+
+class Widget:
+    value: int32
+
+impl Factory for Widget:
+    def make() -> int32:
+        return 7
+
+def build[T: Factory]() -> int32:
+    return T.make()
+
+print(build[Widget]())    # 7
+```
+
+`T.make()` works in module-level functions. See
+[examples/traits/associated_through_type_param.au](../examples/traits/associated_through_type_param.au)
+for a parser that returns `Result`.
 
 ## Operator Traits
 
@@ -30575,7 +30618,7 @@ See [examples/traits/operator_traits.au](../examples/traits/operator_traits.au).
 
 The ordering trait `Ord[Rhs]` backs `<`, `<=`, `>`, and `>=`:
 
-```aura check-pass
+```aura
 trait Ord[Rhs]:
     def lt(self, rhs: Rhs) -> bool
     def le(self, rhs: Rhs) -> bool
@@ -30598,7 +30641,7 @@ See [examples/traits/ordering_traits.au](../examples/traits/ordering_traits.au).
 
 A trait can target a builtin type as well as your own classes and enums:
 
-```aura check-pass
+```aura
 trait Describe:
     def describe(self) -> str
 

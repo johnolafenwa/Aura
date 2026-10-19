@@ -1,0 +1,5 @@
+error[AU2002]: type parameter `T` has no method `create` in its trait bounds
+ --> crates/aura-compiler/tests/fixtures/check-fail/associated_type_param_missing_method.au:5:14
+  |
+5 |     return T.create(seed)
+  |              ^

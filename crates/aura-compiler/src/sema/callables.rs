@@ -613,6 +613,8 @@ pub(super) struct ResolvedCallableInfo {
 pub(super) struct CheckedCallableTypes {
     pub(super) params: Vec<Type>,
     pub(super) return_type: Type,
+    /// The resolved callee type arguments, in declaration order.
+    pub(super) type_args: Vec<Type>,
 }
 
 impl<'a> FunctionChecker<'a> {
@@ -1515,6 +1517,7 @@ impl<'a> FunctionChecker<'a> {
         explicit_type_args: Option<&[Type]>,
         span: crate::diag::Span,
         display_name: &str,
+        free_function: bool,
     ) -> Result<Type> {
         reject_span_parameter_value(
             &function.signature.params,
@@ -1677,6 +1680,21 @@ impl<'a> FunctionChecker<'a> {
             substitute_type(&function.signature.return_type, &substitutions),
             function.decl.view_return.as_ref(),
         );
+        if free_function {
+            self.record_generic_function_use(
+                function,
+                function
+                    .decl
+                    .type_params
+                    .iter()
+                    .map(|type_param| {
+                        substitute_type(&Type::TypeParam(type_param.clone()), &substitutions)
+                    })
+                    .collect(),
+                span,
+                super::GenericUse::Value,
+            );
+        }
         Ok(Type::Function {
             params,
             return_type: Box::new(return_type),
@@ -1917,6 +1935,12 @@ impl<'a> FunctionChecker<'a> {
                 } else {
                     HashMap::new()
                 };
+                self.record_generic_function_use(
+                    function,
+                    Vec::new(),
+                    callee.span,
+                    super::GenericUse::Task,
+                );
                 Ok(ResolvedCallableInfo {
                     display_name: function_name.clone(),
                     decl: function.decl.clone(),
@@ -2014,6 +2038,12 @@ impl<'a> FunctionChecker<'a> {
                             } else {
                                 HashMap::new()
                             };
+                            self.record_generic_function_use(
+                                function,
+                                Vec::new(),
+                                callee.span,
+                                super::GenericUse::Task,
+                            );
                             return Ok(ResolvedCallableInfo {
                                 display_name: format!("{}.{}", module_path, function_name),
                                 decl: function.decl.clone(),
@@ -2824,6 +2854,12 @@ impl<'a> FunctionChecker<'a> {
         Ok(CheckedCallableTypes {
             params: resolved_param_types,
             return_type: resolved_return_type,
+            type_args: callee_type_params
+                .iter()
+                .map(|type_param| {
+                    substitute_type(&Type::TypeParam(type_param.clone()), &substitutions)
+                })
+                .collect(),
         })
     }
 
@@ -2957,6 +2993,7 @@ impl FunctionChecker<'_> {
             explicit_type_args,
             span,
             &format!("associated method `{owner}.{field}`"),
+            false,
         )
     }
 

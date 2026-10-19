@@ -10690,6 +10690,7 @@ fn direct_backend_emits_object_for_broad_maintained_example_surface() {
         "examples/traits/generic_trait_impl.au",
         "examples/traits/specialized_trait_dispatch.au",
         "examples/traits/trait_associated_factory.au",
+        "examples/traits/associated_through_type_param.au",
         "examples/traits/operator_traits.au",
         "examples/traits/ordering_traits.au",
         "examples/basics/copy_return_selection.au",

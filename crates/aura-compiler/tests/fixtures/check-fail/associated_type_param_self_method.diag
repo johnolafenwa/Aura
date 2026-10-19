@@ -1,0 +1,5 @@
+error[AU2005]: method `label` of trait `Label` takes `self`; call it on a value of type `T`
+ --> crates/aura-compiler/tests/fixtures/check-fail/associated_type_param_self_method.au:5:14
+  |
+5 |     return T.label()
+  |              ^

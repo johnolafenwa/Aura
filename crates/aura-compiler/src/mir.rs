@@ -9870,6 +9870,7 @@ pub fn lower(program: &Program) -> MirModule {
         trait_impls,
         top_level,
     };
+    type_param_calls::specialize_type_param_calls(program, &mut module);
     // Every union the module holds or operates on gets one explicit-tag
     // layout and drop plan (ADR-0052 A9).
     crate::union_layout::plan_module_unions(&mut module, |member| {
@@ -11590,8 +11591,11 @@ impl<'a> Lowerer<'a> {
             {
                 self.associated_method_value_operand(object, field)
             }
-            ExprKind::Specialize { expr, type_args } => {
-                let (runtime_name, function) = self.resolve_function_value_target(expr)?;
+            ExprKind::Specialize {
+                expr: inner,
+                type_args,
+            } => {
+                let (runtime_name, function) = self.resolve_function_value_target(inner)?;
                 let substitutions = substitutions_from_decl_type_args(
                     &function.decl.type_params,
                     &type_args
@@ -11600,7 +11604,7 @@ impl<'a> Lowerer<'a> {
                         .collect::<Vec<_>>(),
                 );
                 Some(Operand::Function {
-                    name: runtime_name,
+                    name: self.specialized_function_use(expr.span, runtime_name),
                     signature: Box::new(self.function_type(function, &substitutions)),
                 })
             }
@@ -11627,14 +11631,14 @@ impl<'a> Lowerer<'a> {
                 let substitutions =
                     substitutions_from_decl_type_args(&function.decl.type_params, &type_args);
                 Some(Operand::Function {
-                    name: runtime_name,
+                    name: self.specialized_function_use(expr.span, runtime_name),
                     signature: Box::new(self.function_type(function, &substitutions)),
                 })
             }
             ExprKind::Name(_) | ExprKind::Member { .. } => {
                 let (runtime_name, function) = self.resolve_function_value_target(expr)?;
                 Some(Operand::Function {
-                    name: runtime_name,
+                    name: self.specialized_function_use(expr.span, runtime_name),
                     signature: Box::new(
                         self.function_type(function, &std::collections::HashMap::new()),
                     ),
@@ -21225,6 +21229,9 @@ impl<'a> Lowerer<'a> {
             };
             return self.lower_call(&ungrouped, inner, args, expected);
         }
+        if let Some(value) = self.lower_type_param_associated_call(expr, callee, args) {
+            return value;
+        }
         let temp = expected
             .cloned()
             .map(|ty| self.new_typed_temp(ty))
@@ -21783,13 +21790,14 @@ impl<'a> Lowerer<'a> {
                                 callee.span,
                                 Some(&function.signature.param_passings),
                             );
+                            let callee_name = self.specialized_function_use(
+                                expr.span,
+                                imported_module_function_name(&module_path, field),
+                            );
                             self.emit(Instruction::Assign {
                                 target: temp.clone(),
                                 value: Rvalue::Call {
-                                    callee: CallTarget::Name(imported_module_function_name(
-                                        &module_path,
-                                        field,
-                                    )),
+                                    callee: CallTarget::Name(callee_name),
                                     args: lowered_args,
                                 },
                             });
@@ -22412,6 +22420,7 @@ impl<'a> Lowerer<'a> {
                 } else {
                     name.clone()
                 };
+                let callee_name = self.specialized_function_use(expr.span, callee_name);
                 self.emit(Instruction::Assign {
                     target: temp.clone(),
                     value: Rvalue::Call {
@@ -23701,6 +23710,9 @@ impl<'a> Lowerer<'a> {
                     },
                     span: expr.span,
                 });
+            }
+            if let Some(ty) = self.type_param_associated_call_type(expr) {
+                return Some(ty);
             }
         }
         match &expr.kind {
@@ -26328,6 +26340,9 @@ fn mir_class_type_name(
 
 #[path = "mir_spans.rs"]
 mod spans;
+
+#[path = "mir_type_param_calls.rs"]
+mod type_param_calls;
 
 pub(crate) use spans::span_member_mutates_receiver;
 

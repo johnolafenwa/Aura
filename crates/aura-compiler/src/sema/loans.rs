@@ -3598,6 +3598,41 @@ impl<'a> FunctionChecker<'a> {
                         }
                     }
                 }
+                if let Some(method) = self.type_param_associated_method(object, field, locals) {
+                    let ordered_args = bind_call_arguments(
+                        "associated method call",
+                        &callable_params_from_decl(&method.decl.params),
+                        args,
+                        callee.span,
+                        CallConvention::PositionalOrNamed,
+                    )?;
+                    for ((argument, param), passing) in ordered_args
+                        .into_iter()
+                        .zip(method.decl.params.iter())
+                        .zip(method.signature.param_passings.iter().copied())
+                    {
+                        let Some(argument) = argument else {
+                            continue;
+                        };
+                        if let Some(path) = self.borrow_call_place(&argument.value) {
+                            if passing == ReceiverKind::Value
+                                && (!include_consumed
+                                    || self
+                                        .place_path_type(&path, locals, argument.value.span)?
+                                        .is_none_or(|ty| self.is_copy_type(&ty)))
+                            {
+                                continue;
+                            }
+                            places.push(BorrowedCallPlace {
+                                path,
+                                passing,
+                                param_name: param.name.clone(),
+                                origin_span: argument.value.span,
+                            });
+                        }
+                    }
+                    return Ok(());
+                }
                 let receiver_ty = self.type_of_expr(object, &mut locals_for_resolution)?;
                 let Type::Named(receiver_name, _) = receiver_ty else {
                     return Ok(());
