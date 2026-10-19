@@ -283,7 +283,7 @@ process. They are not Aura diagnostics. See [FFI v0](/manual/ffi).
 | `AU3004` | ownership or place mode | A source or target in the wrong ownership or place mode. | Use the mode the operation requires, on an addressable place. |
 | `AU3005` | non-copy indexed read | Moving a non-copy value out of a `list`, `dict`, or constant tuple index, or a shared read of an element that cannot be cloned. | Use a `view`, `.clone()`, `pop`, `remove`, or tuple unpacking. |
 | `AU3006` | non-copy indexed compound assignment | A compound assignment such as `+=` on a non-copy `list` or `dict` element. | Rewrite the update so it needs no hidden clone or move of the stored value. |
-| `AU3007` | non-cloneable state duplication | Copying a value that holds `random.Rng`, an opaque FFI handle, or a capturing closure environment. | Move or remove the existing value, or construct a new generator from an explicit seed. |
+| `AU3007` | non-cloneable state duplication | Copying a value that holds `random.Rng`, a live resource such as `fs.File`, an opaque FFI handle, or a capturing closure environment. | Move or remove the existing value, or construct a new generator from an explicit seed. |
 | `AU3008` | non-transferable task/Queue boundary | A task capture, task result, or Queue payload that cannot cross to another task worker. | Pass owned transferable data, and keep host authority on its owning task. |
 | `AU3009` | single-consumer task-result duplication | Copying the right to observe a task's result. | Keep one owner of the task handle and observe its result once. |
 | `AU3010` | view escape or returned provenance | A view that outlives or does not come from its declared origin. | Return an owned clone, index, or handle, or keep the loan inside the owner's region. |
@@ -322,6 +322,8 @@ classification as the rejection:
 - A clone-safe type is directed to the explicit cloned `get` surface.
 - A type carrying non-cloneable `random.Rng` state is directed to `remove`
   alone, because `AU3007` would reject `get` on it.
+- A type carrying a live resource is directed to a `view` or to `remove`,
+  for the same reason.
 - An unresolved generic type is told that `get` requires a clone-safe type,
   and `remove` is offered unconditionally.
 
@@ -332,7 +334,8 @@ read-modify-write would otherwise need a hidden clone or a destructive move of
 the stored value.
 
 **`AU3007` non-cloneable state duplication.** Protected values include
-`random.Rng`, opaque FFI handles, and capturing closure environments. The check
+`random.Rng`, live file, process, and network resources, opaque FFI handles,
+and capturing closure environments. The check
 follows them through collections, user classes, enum payloads, and other value
 wrappers.
 

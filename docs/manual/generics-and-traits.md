@@ -113,7 +113,7 @@ Concrete union properties come from the concrete members after specialization. A
 
 Aura infers clone-safety obligations from the clone-producing operations in a callable's body. When such an operation works on an unresolved type parameter, the checker accepts it and records which declared parameters must be safe to clone. A concrete call discharges those obligations after substitution.
 
-A type is safe to clone when duplicating it cannot duplicate `random.Rng` state through an ordinary class, enum, or collection path. `Task[T]` and `Queue[T]` handles stop this traversal, because an allowed handle copy does not observe or copy `T`. A clone barrier is not an escape from the task-boundary rule. Queue payloads and task results must separately be `Transfer`, and `Task[T]` is non-copy when `T` is not repeatable.
+A type is safe to clone when duplicating it cannot duplicate `random.Rng` state or a live resource such as `fs.File` through an ordinary class, enum, or collection path. `Task[T]` and `Queue[T]` handles stop this traversal, because an allowed handle copy does not observe or copy `T`. A clone barrier is not an escape from the task-boundary rule. Queue payloads and task results must separately be `Transfer`, and `Task[T]` is non-copy when `T` is not repeatable.
 
 Obligations travel with the callable:
 

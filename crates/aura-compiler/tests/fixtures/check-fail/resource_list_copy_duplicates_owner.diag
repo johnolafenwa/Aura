@@ -1,0 +1,6 @@
+error[AU3007]: cannot use `list.copy` because duplicating `list[Log]` would duplicate resource `fs.File`
+ --> crates/aura-compiler/tests/fixtures/check-fail/resource_list_copy_duplicates_owner.au:8:17
+  |
+8 |     return logs.copy()
+  |                 ^
+  = help: a resource has one owner: borrow it with `view` or `match mut`, or take it out of a collection with `pop` or `remove`

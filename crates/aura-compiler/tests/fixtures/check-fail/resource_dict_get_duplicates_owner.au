@@ -1,0 +1,12 @@
+import fs
+import io
+
+def run() -> Result[None, io.Error]:
+    mut files = {"log": try fs.create("/tmp/aura-resource-get")}
+    match own files.get("log"):
+        case Lookup.Found(file):
+            mut handle = file
+            handle.close()
+        case Lookup.Missing:
+            pass
+    return Result.Ok(None)
