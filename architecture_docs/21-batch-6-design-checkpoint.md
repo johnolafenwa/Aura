@@ -1,6 +1,6 @@
 # Batch 6 design checkpoint: typed agent APIs and serialization
 
-Status: **Proposed. Awaiting owner ratification.**
+Status: **Ratified 2026-10-19 by the owner**
 
 Date: 2026-10-19. Source baseline: `8c31f3f` (main after the
 [0.5.0 preview release](../work/2026-10-19-v0.5.0-preview-release.md)).
@@ -394,4 +394,16 @@ None of these block the start. Each names the recommended default first.
 
 ## Ratification Record
 
-Not yet ratified.
+The owner ratified this checkpoint on 2026-10-19 and approved all seven
+recommendations:
+
+1. An empty `impl json.Codec for T` opts a type in.
+2. Decoding rejects unknown keys.
+3. A `T | None` field without a default is required, and the key may hold
+   `null`.
+4. Decoding stops at the first error, which carries its `$.path`.
+5. The enum tag key is `"type"`.
+6. Generic decorators are allowed, inferred per use.
+7. Registration uses explicit lists, with no compiler-collected registry.
+
+Every other rule above is the ratified default.

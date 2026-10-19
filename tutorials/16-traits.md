@@ -8,7 +8,7 @@ against a trait works with any type that provides the trait's methods.
 
 A trait lists method signatures. A method can leave out its body:
 
-```aura check-pass
+```aura
 trait Greeter:
     def greet(self) -> str
 ```
@@ -16,7 +16,7 @@ trait Greeter:
 A method can also provide a default implementation, which may call the
 trait's other methods:
 
-```aura check-pass
+```aura
 trait Named:
     def name(self) -> str
     def label(self) -> str:
@@ -25,14 +25,14 @@ trait Named:
 
 An empty marker trait uses `pass`:
 
-```aura check-pass
+```aura
 trait Marker:
     pass
 ```
 
 A generic trait uses the same `Name[T]` syntax as a class:
 
-```aura check-pass
+```aura
 trait Mapper[T]:
     def map(self, value: own T) -> T
 ```
@@ -40,14 +40,14 @@ trait Mapper[T]:
 Trait methods and impl methods can use `Self` in parameter and return
 positions:
 
-```aura check-pass
+```aura
 trait Combine:
     def combine(self, other: Self) -> Self
 ```
 
 A trait can inherit from another trait:
 
-```aura check-pass
+```aura
 trait Named:
     def name(self) -> str
 
@@ -104,7 +104,7 @@ impl Mapper[T] for Box[T]:
 When a generic trait default method clones, Aura infers a clone-safety
 obligation as part of that method's contract:
 
-```aura check-pass
+```aura
 trait Duplicator[T]:
     def duplicate(self, values: list[T]) -> list[T]:
         return values.copy()
@@ -175,7 +175,7 @@ Several types can implement the same trait in one program. Each call
 dispatches to the implementation for its concrete type, so `show` prints
 `dog` for a `Dog` and `cat` for a `Cat`:
 
-```aura check-pass
+```aura
 trait Describe:
     def describe(self) -> str
 
@@ -210,7 +210,7 @@ Runnable examples:
 A trait method without a receiver is an associated method. Call it through
 the implementing type's name. This prints `7`:
 
-```aura check-pass
+```aura
 trait Factory:
     def make() -> int32
 
@@ -225,6 +225,30 @@ print(Widget.make())    # 7
 ```
 
 See [examples/traits/trait_associated_factory.au](../examples/traits/trait_associated_factory.au).
+
+A generic function can call an associated method through its type parameter.
+The bound says the method exists, and the call site picks the type:
+
+```aura
+trait Factory:
+    def make() -> int32
+
+class Widget:
+    value: int32
+
+impl Factory for Widget:
+    def make() -> int32:
+        return 7
+
+def build[T: Factory]() -> int32:
+    return T.make()
+
+print(build[Widget]())    # 7
+```
+
+`T.make()` works in module-level functions. See
+[examples/traits/associated_through_type_param.au](../examples/traits/associated_through_type_param.au)
+for a parser that returns `Result`.
 
 ## Operator Traits
 
@@ -279,7 +303,7 @@ See [examples/traits/operator_traits.au](../examples/traits/operator_traits.au).
 
 The ordering trait `Ord[Rhs]` backs `<`, `<=`, `>`, and `>=`:
 
-```aura check-pass
+```aura
 trait Ord[Rhs]:
     def lt(self, rhs: Rhs) -> bool
     def le(self, rhs: Rhs) -> bool
@@ -302,7 +326,7 @@ See [examples/traits/ordering_traits.au](../examples/traits/ordering_traits.au).
 
 A trait can target a builtin type as well as your own classes and enums:
 
-```aura check-pass
+```aura
 trait Describe:
     def describe(self) -> str
 

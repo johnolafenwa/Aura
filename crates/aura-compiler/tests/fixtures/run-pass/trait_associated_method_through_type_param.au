@@ -1,0 +1,87 @@
+trait Named:
+    def kind() -> str
+
+trait Make: Named:
+    def make(seed: int64) -> Self
+
+trait Parse[E]:
+    def parse(text: str) -> Result[Self, E]
+
+class Widget:
+    size: int64
+
+class Gadget:
+    label: str
+
+enum Level:
+    Low
+    High
+
+impl Named for Widget:
+    def kind() -> str:
+        return "widget"
+
+impl Make for Widget:
+    def make(seed: int64) -> Widget:
+        return Widget(size=seed * 2)
+
+impl Named for Gadget:
+    def kind() -> str:
+        return "gadget"
+
+impl Make for Gadget:
+    def make(seed: int64) -> Gadget:
+        return Gadget(label=f"g{seed}")
+
+impl Parse[str] for Level:
+    def parse(text: str) -> Result[Level, str]:
+        if text == "low":
+            return Result.Ok(Level.Low)
+        if text == "high":
+            return Result.Ok(Level.High)
+        return Result.Err(f"unknown level {text}")
+
+def build[T: Make](seed: int64) -> T:
+    return T.make(seed)
+
+def describe[T: Make](seed: int64) -> str:
+    return f"{T.kind()} from {seed}"
+
+def build_many[T: Make](count: int64) -> list[T]:
+    mut items: list[T] = []
+    for index in range(count):
+        items.append(build[T](index))
+    return items
+
+def countdown[T: Make](seed: int64) -> T:
+    if seed > 3:
+        return countdown[T](seed - 1)
+    return T.make(seed)
+
+def parse_all[T: Parse[str]](texts: list[str]) -> list[Result[T, str]]:
+    return [T.parse(text) for text in texts]
+
+def build_pair[T: Make](seed: own int64) -> list[T]:
+    make: def(offset: int64) -> T = lambda offset: T.make(seed + offset)
+    return [make(0), make(1)]
+
+def describe_named[T: Make]() -> str:
+    return "describe_named" + ":" + T.kind()
+
+def main() -> None:
+    widget: Widget = build[Widget](21)
+    print(widget.size)
+    gadget: Gadget = build(5)
+    print(gadget.label)
+    print(describe[Widget](1))
+    print(describe[Gadget](2))
+    widgets = build_many[Widget](3)
+    print(widgets[2].size)
+    print(countdown[Widget](9).size)
+    for level in parse_all[Level](["low", "high", "mid"]):
+        print(level)
+    pair = build_pair[Gadget](8)
+    print(pair[1].label)
+    build_widget = build[Widget]
+    print(build_widget(50).size)
+    print(describe_named[Gadget]())

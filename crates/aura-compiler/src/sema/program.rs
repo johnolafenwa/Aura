@@ -383,6 +383,7 @@ pub enum ImportedBinding {
 pub struct ModuleNamespace {
     pub union_injections: BTreeMap<super::UnionInjectionId, super::UnionInjection>,
     pub narrowed_reads: BTreeMap<super::NarrowedReadId, super::NarrowedRead>,
+    pub type_param_calls: BTreeMap<super::TypeParamCallId, super::TypeParamCall>,
     pub all_aliases: BTreeMap<String, AliasInfo>,
     pub aliases: BTreeMap<String, AliasInfo>,
     pub name: String,
@@ -2456,6 +2457,11 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
         .extend(top_level_checker.comprehension_infos.borrow().clone());
 
     super::aliases::validate_alias_contracts(&program, &type_names, &type_arities)?;
+    super::type_param_calls::validate_type_param_calls(
+        &type_names.type_param_calls.borrow(),
+        &program.module_registry,
+        &program.imported_modules,
+    )?;
     Ok(program)
 }
 

@@ -410,6 +410,23 @@ value = Widget.make()
 
 Associated trait methods follow the same rules as receiver methods. Concrete and bound-based dispatch enforce the same substituted clone-safety contract.
 
+### Associated Methods Through A Type Parameter
+
+A generic function can call an associated method through its type parameter. The bound must provide the method, and the method must not take `self`:
+
+<<< ../../examples/traits/associated_through_type_param.au{aura}
+
+`T.parse(text)` calls the implementation for the concrete type at each call site. `parse_all[Port]` uses `Port.parse`, and `parse_all[Mode]` uses `Mode.parse`. A generic function that passes its own type parameter on, such as `build[T](seed)`, works the same way.
+
+The compiler makes one copy of such a function for each concrete type list it is called with. Generic functions that make no such call keep one shared body.
+
+These rules apply:
+
+- The call must be in a module-level function. A method of a class or an implementation cannot make it.
+- The associated method cannot declare its own type parameters.
+- A function that makes the call, directly or through another generic function, cannot be a task target. Start the task with a function that calls it.
+- `T.method` without a call is not a value.
+
 ## Supertraits
 
 A trait can require one or more supertraits:
@@ -615,6 +632,7 @@ No generic or trait boundary inserts a hidden clone, coercion, or ownership-mode
 | `AU2002` | Inference failure, wrong generic arity, unsatisfied bound, missing trait satisfaction, ambiguous equal-specificity dispatch, invalid specialization, or substituted type mismatch. |
 | `AU2003` | An operator that no builtin rule or applicable operator trait supplies. |
 | `AU2004` | Call argument binding, and ordinary default arguments in trait methods. |
+| `AU2005` | An unsupported `T.method(...)` call: the method takes `self`, declares type parameters, or is called outside a module-level function, or the function is used as a task target or with a type parameter where no concrete type reaches it. |
 | `AU2006` | A trait method name that collides with a builtin member. Rename the trait method. |
 | `AU2010` | A type parameter that a union-member argument cannot determine. Specialize explicitly. |
 | `AU2013` | A type arm over a type parameter. Use `case None` and a catch-all. |
@@ -667,6 +685,7 @@ Implemented:
 
 - invariant generics, local and contextual inference, and explicit specialization
 - nominal traits and bounds, supertraits, and default methods
+- associated methods called through a bounded type parameter, such as `T.parse(text)`
 - generic and specialized implementations with unique-most-specific dispatch
 - operator traits, `Self`, and `From`-based `try` conversion
 - the prelude `Display` trait and its rendering dispatch

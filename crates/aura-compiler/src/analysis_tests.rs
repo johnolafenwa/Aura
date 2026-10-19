@@ -49,6 +49,7 @@ fn analysis_resolves_canonical_enums_from_the_module_registry() {
         crate::sema::ModuleNamespace {
             union_injections: Default::default(),
             narrowed_reads: Default::default(),
+            type_param_calls: Default::default(),
             all_aliases: BTreeMap::new(),
             aliases: BTreeMap::new(),
             constants: BTreeMap::new(),
@@ -3565,6 +3566,7 @@ fn analysis_completion_and_inference_helpers_cover_builtin_collection_and_enum_s
     let mut tools_namespace = crate::sema::ModuleNamespace {
         union_injections: Default::default(),
         narrowed_reads: Default::default(),
+        type_param_calls: Default::default(),
         all_aliases: BTreeMap::new(),
         aliases: BTreeMap::new(),
         constants: BTreeMap::new(),
@@ -3595,6 +3597,7 @@ fn analysis_completion_and_inference_helpers_cover_builtin_collection_and_enum_s
         crate::sema::ModuleNamespace {
             union_injections: Default::default(),
             narrowed_reads: Default::default(),
+            type_param_calls: Default::default(),
             all_aliases: BTreeMap::new(),
             aliases: BTreeMap::new(),
             constants: BTreeMap::new(),
@@ -3626,6 +3629,7 @@ fn analysis_completion_and_inference_helpers_cover_builtin_collection_and_enum_s
         crate::sema::ModuleNamespace {
             union_injections: Default::default(),
             narrowed_reads: Default::default(),
+            type_param_calls: Default::default(),
             all_aliases: BTreeMap::new(),
             aliases: BTreeMap::new(),
             constants: BTreeMap::new(),
@@ -4556,6 +4560,7 @@ fn analysis_import_and_match_resolution_helpers_cover_fallbacks() {
         crate::sema::ModuleNamespace {
             union_injections: Default::default(),
             narrowed_reads: Default::default(),
+            type_param_calls: Default::default(),
             all_aliases: BTreeMap::new(),
             aliases: BTreeMap::new(),
             constants: BTreeMap::new(),
@@ -4570,6 +4575,7 @@ fn analysis_import_and_match_resolution_helpers_cover_fallbacks() {
                 crate::sema::ModuleNamespace {
                     union_injections: Default::default(),
                     narrowed_reads: Default::default(),
+                    type_param_calls: Default::default(),
                     all_aliases: BTreeMap::new(),
                     aliases: BTreeMap::new(),
                     constants: BTreeMap::new(),
@@ -4795,6 +4801,7 @@ fn analysis_completion_helpers_cover_top_level_module_and_enum_surfaces() {
     let tools_namespace = crate::sema::ModuleNamespace {
         union_injections: Default::default(),
         narrowed_reads: Default::default(),
+        type_param_calls: Default::default(),
         all_aliases: BTreeMap::new(),
         aliases: BTreeMap::new(),
         constants: BTreeMap::new(),
@@ -4825,6 +4832,7 @@ fn analysis_completion_helpers_cover_top_level_module_and_enum_surfaces() {
         crate::sema::ModuleNamespace {
             union_injections: Default::default(),
             narrowed_reads: Default::default(),
+            type_param_calls: Default::default(),
             all_aliases: BTreeMap::new(),
             aliases: BTreeMap::new(),
             constants: BTreeMap::new(),

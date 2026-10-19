@@ -1,0 +1,17 @@
+trait Make:
+    def make(seed: int64) -> Self
+
+class Widget:
+    size: int64
+
+impl Make for Widget:
+    def make(seed: int64) -> Widget:
+        return Widget(size=seed)
+
+def build[T: Make](seed: int64) -> T:
+    return T.make(seed)
+
+def main() -> None:
+    with TaskGroup() as group:
+        task = group.start(build[Widget], 1)
+        print(task.result_or(Widget(size=0), timeout=1s).size)

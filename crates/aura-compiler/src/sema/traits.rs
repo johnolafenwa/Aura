@@ -1084,6 +1084,16 @@ impl<'a> FunctionChecker<'a> {
         type_param_name: &str,
         method_name: &str,
     ) -> Result<ResolvedTraitMethodInfo> {
+        self.trait_method_from_type_param_with_trait(type_param_name, method_name)
+            .map(|(_, method)| method)
+    }
+
+    /// The bound method and the name of the trait that declares it.
+    pub(super) fn trait_method_from_type_param_with_trait(
+        &self,
+        type_param_name: &str,
+        method_name: &str,
+    ) -> Result<(String, ResolvedTraitMethodInfo)> {
         let mut matches = Vec::new();
         let self_ty = Type::TypeParam(type_param_name.to_string());
         for bound in self
@@ -1100,64 +1110,67 @@ impl<'a> FunctionChecker<'a> {
                             &bound.trait_args,
                             self_ty.clone(),
                         );
-                        matches.push(ResolvedTraitMethodInfo {
-                            module_name: trait_info.module_name.clone(),
-                            decl: method.decl.clone(),
-                            signature: FunctionSignature {
-                                params: method
-                                    .signature
-                                    .params
-                                    .iter()
-                                    .map(|param| substitute_type(param, &trait_substitutions))
-                                    .collect(),
-                                param_passings: method.signature.param_passings.clone(),
-                                return_type: substitute_type(
-                                    &method.signature.return_type,
+                        matches.push((
+                            trait_info.decl.name.clone(),
+                            ResolvedTraitMethodInfo {
+                                module_name: trait_info.module_name.clone(),
+                                decl: method.decl.clone(),
+                                signature: FunctionSignature {
+                                    params: method
+                                        .signature
+                                        .params
+                                        .iter()
+                                        .map(|param| substitute_type(param, &trait_substitutions))
+                                        .collect(),
+                                    param_passings: method.signature.param_passings.clone(),
+                                    return_type: substitute_type(
+                                        &method.signature.return_type,
+                                        &trait_substitutions,
+                                    ),
+                                    rng_clone_safe_type_params: method
+                                        .signature
+                                        .rng_clone_safe_type_params
+                                        .iter()
+                                        .filter(|name| method.decl.type_params.contains(name))
+                                        .cloned()
+                                        .collect(),
+                                    array_equality_safe_type_params: method
+                                        .signature
+                                        .array_equality_safe_type_params
+                                        .iter()
+                                        .filter(|name| method.decl.type_params.contains(name))
+                                        .cloned()
+                                        .collect(),
+                                },
+                                type_param_bounds: substitute_trait_bounds(
+                                    &method.type_param_bounds,
                                     &trait_substitutions,
                                 ),
-                                rng_clone_safe_type_params: method
+                                rng_clone_safe_types: method
                                     .signature
                                     .rng_clone_safe_type_params
                                     .iter()
-                                    .filter(|name| method.decl.type_params.contains(name))
-                                    .cloned()
+                                    .map(|name| {
+                                        substitute_type(
+                                            &Type::TypeParam(name.clone()),
+                                            &trait_substitutions,
+                                        )
+                                    })
                                     .collect(),
-                                array_equality_safe_type_params: method
+                                array_equality_safe_types: method
                                     .signature
                                     .array_equality_safe_type_params
                                     .iter()
-                                    .filter(|name| method.decl.type_params.contains(name))
-                                    .cloned()
+                                    .filter(|name| !method.decl.type_params.contains(name))
+                                    .map(|name| {
+                                        substitute_type(
+                                            &Type::TypeParam(name.clone()),
+                                            &trait_substitutions,
+                                        )
+                                    })
                                     .collect(),
                             },
-                            type_param_bounds: substitute_trait_bounds(
-                                &method.type_param_bounds,
-                                &trait_substitutions,
-                            ),
-                            rng_clone_safe_types: method
-                                .signature
-                                .rng_clone_safe_type_params
-                                .iter()
-                                .map(|name| {
-                                    substitute_type(
-                                        &Type::TypeParam(name.clone()),
-                                        &trait_substitutions,
-                                    )
-                                })
-                                .collect(),
-                            array_equality_safe_types: method
-                                .signature
-                                .array_equality_safe_type_params
-                                .iter()
-                                .filter(|name| !method.decl.type_params.contains(name))
-                                .map(|name| {
-                                    substitute_type(
-                                        &Type::TypeParam(name.clone()),
-                                        &trait_substitutions,
-                                    )
-                                })
-                                .collect(),
-                        });
+                        ));
                     }
                 }
             }

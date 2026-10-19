@@ -16006,3 +16006,50 @@ fn run_and_direct_build_agree_on_the_properties_example() {
         expected,
     );
 }
+
+#[test]
+fn associated_methods_through_type_params_specialize_across_modules_on_both_backends() {
+    let shapes = r#"public trait Make:
+    def make(seed: int64) -> Self
+
+public class Widget:
+    public size: int64
+
+impl Make for Widget:
+    def make(seed: int64) -> Widget:
+        return Widget(size=seed * 2)
+
+public def build[T: Make](seed: int64) -> T:
+    return T.make(seed)
+
+public def build_two[T: Make](seed: int64) -> list[T]:
+    return [build[T](seed), build[T](seed + 1)]
+"#;
+    let main = r#"import shapes
+from shapes import Make, Widget
+
+class Gadget:
+    label: str
+
+impl Make for Gadget:
+    def make(seed: int64) -> Gadget:
+        return Gadget(label=f"g{seed}")
+
+def first[T: Make](seed: int64) -> T:
+    mut items = shapes.build_two[T](seed)
+    return items.pop(0)
+
+def main():
+    print(shapes.build[Widget](4).size)
+    print(shapes.build[shapes.Widget](5).size)
+    print(shapes.build_two[Gadget](7)[1].label)
+    print(first[Widget](10).size)
+    print(first[Gadget](3).label)
+"#;
+    assert_run_and_direct_program_stdout(
+        "aura-type-param-associated-modules",
+        main,
+        &[("shapes.au", shapes)],
+        "8\n10\ng8\n20\ng3\n",
+    );
+}

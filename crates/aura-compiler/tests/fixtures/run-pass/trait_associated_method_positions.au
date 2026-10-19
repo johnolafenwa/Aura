@@ -1,0 +1,80 @@
+trait Parse:
+    def parse(text: str) -> Result[Self, str]
+
+trait Make:
+    def make(seed: int64) -> Self
+    def name() -> str
+    def take(label: own str) -> Self
+
+class Widget:
+    size: int64
+
+impl Make for Widget:
+    def make(seed: int64) -> Widget:
+        return Widget(size=seed)
+    def name() -> str:
+        return "widget"
+    def take(label: own str) -> Widget:
+        return Widget(size=label.len())
+
+impl Parse for Widget:
+    def parse(text: str) -> Result[Widget, str]:
+        match parse_int64(text):
+            case Result.Ok(n):
+                return Result.Ok(Widget(size=n))
+            case Result.Err(_):
+                return Result.Err("bad")
+
+def one[T: Parse](text: str) -> Result[T, str]:
+    value = try T.parse(text)
+    return Result.Ok(value)
+
+def two[T: Parse](text: str) -> int64:
+    mut values: list[Result[T, str]] = []
+    values.append(T.parse(text))
+    return values.len()
+
+def three[T: Make](seed: int64) -> str:
+    label = f"{T.name()}:{seed}"
+    if T.name() == "widget" and T.name().len() > 2:
+        return label
+    return T.name()
+
+def four[T: Make](flag: bool) -> T:
+    return T.make(1) if flag else T.make(2)
+
+def five[T: Make]() -> int64:
+    mut count = 0
+    while T.name().len() > count:
+        count = count + 1
+    return count
+
+def six[T: Make](text: str) -> T:
+    owned = text.clone()
+    return T.take(owned)
+
+def seven[T: Make + Parse](text: str) -> (T, Result[T, str]):
+    return (T.make(3), T.parse(text))
+
+def eight[T: Make]() -> list[str]:
+    return [T.name(), T.name()]
+
+def nine[T: Make](seed: int64) -> str:
+    match T.name():
+        case "widget":
+            return "w"
+        case _:
+            return "other"
+
+def main():
+    print(one[Widget]("5"))
+    print(two[Widget]("x"))
+    print(three[Widget](4))
+    w: Widget = four(true)
+    print(w.size)
+    print(five[Widget]())
+    print(six[Widget]("abc").size)
+    pair = seven[Widget]("9")
+    print(pair[0].size)
+    print(eight[Widget]())
+    print(nine[Widget](1))

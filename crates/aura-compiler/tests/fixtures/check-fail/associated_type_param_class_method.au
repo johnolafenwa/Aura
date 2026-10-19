@@ -1,0 +1,8 @@
+trait Make:
+    def make(seed: int64) -> Self
+
+class Factory[T: Make]:
+    seed: int64
+
+    def fresh(self) -> T:
+        return T.make(self.seed)
