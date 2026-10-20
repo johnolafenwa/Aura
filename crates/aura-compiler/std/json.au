@@ -345,6 +345,21 @@ public def __ref(name: str) -> json.Value:
     return json.Value.Object({"$ref": json.Value.String("#/$defs/" + name)})
 
 
+public def __describe(schema: own json.Value, text: own str) -> json.Value:
+    match own schema:
+        case json.Value.Object(fields):
+            mut described = fields
+            described["description"] = json.Value.String(text)
+            return json.Value.Object(described)
+        case other:
+            return json.Value.Object(
+                {
+                    "allOf": json.Value.Array([other]),
+                    "description": json.Value.String(text),
+                }
+            )
+
+
 public def __with_defs(
     body: own json.Value,
     defs: own dict[str, json.Value],
