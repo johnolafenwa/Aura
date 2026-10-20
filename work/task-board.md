@@ -2,23 +2,30 @@
 
 Last updated: 2026-10-20
 
-## Batch 6 step 4: derived codecs for enums and unions (in progress)
+## Batch 6 step 5: schema descriptions and the agreement test (in progress)
+
+- Target: carry class, enum, and field docstrings into derived schemas as
+  `description`, and test that each derived schema accepts exactly what its
+  decoder accepts. John asked on 2026-10-19 for the work to continue through
+  Batch 6 to Batch 7's key decisions.
+- Done: the derived schema wraps each documented type and field with
+  `json.__describe`. `tests/json_schema_agreement.rs` mutates a valid input
+  for nine fixture types at every position, about 1,500 inputs, and compares
+  the decoder's verdict with a JSON Schema 2020-12 validator for the keywords
+  derived schemas use. Notes are in
+  `2026-10-20-batch-6-step-5-schema-descriptions.md`.
+- Verification: the `json_codec_described` run-pass fixture on both
+  backends, and the agreement test, which fails when the validator ignores
+  `required`.
+- Next: open the PR, then step 6, decorator syntax.
+
+## Batch 6 step 4: derived codecs for enums and unions (complete)
 
 - Target: derive `json.Codec` for enums, and accept union fields whose
-  members have different JSON kinds, on both backends. John asked on
-  2026-10-19 for the work to continue through Batch 6 to Batch 7's key
-  decisions.
-- Done: an enum without payloads encodes as the variant name. Any other
-  enum encodes as an object tagged by `"type"`, with one key per named
-  payload. A union field decodes by JSON kind and has an `anyOf` schema.
-  `AU2046` rejects positional payloads, a payload named `type`, generic
-  enums, and unions whose members share a JSON kind. Notes are in
+  members have different JSON kinds, on both backends.
+- Done: merged in PR #85. Notes are in
   `2026-10-20-batch-6-step-4-enum-codecs.md`.
-- Verification: the `json_codec_derived_enums` run-pass fixture, six new or
-  updated `json_derive_*` check-fail fixtures, a cross-module CLI test on
-  both backends, and `examples/json/derived_codec.au`.
-- Next: open the PR, then step 5, schema descriptions from docstrings and
-  the schema agreement test.
+- Next: step 5.
 
 ## Batch 6 step 3: derived codecs for classes (complete)
 

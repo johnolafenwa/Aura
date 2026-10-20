@@ -1,0 +1,34 @@
+import json
+
+
+enum Mode:
+    """How hard the search works."""
+
+    Fast
+    Thorough
+
+
+impl json.Codec for Mode
+
+
+class Request:
+    """One search request.
+
+    Only the query is required.
+    """
+
+    query: str
+    """Text to "find"."""
+
+    mode: Mode = Mode.Fast
+    """Search mode."""
+
+    limit: uint8 = 10
+
+
+impl json.Codec for Request
+
+
+def main():
+    print(json.dumps(json.schema[Mode]()))
+    print(json.dumps(json.schema[Request](), 2))

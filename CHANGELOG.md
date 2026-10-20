@@ -21,6 +21,8 @@ in this file.
   variant name, and any other enum as an object tagged by `"type"`. A field
   can hold a union whose members have different JSON kinds, such as
   `int64 | str`. `AU2046` reports what cannot be derived.
+- A class, enum, or field docstring becomes the `description` in its derived
+  JSON Schema.
 
 ### Fixed
 

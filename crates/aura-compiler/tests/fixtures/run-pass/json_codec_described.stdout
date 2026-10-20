@@ -1,0 +1,33 @@
+{"description":"How hard the search works.","enum":["Fast","Thorough"]}
+{
+  "$defs": {
+    "Mode": {
+      "description": "How hard the search works.",
+      "enum": [
+        "Fast",
+        "Thorough"
+      ]
+    }
+  },
+  "additionalProperties": false,
+  "description": "One search request.\n\nOnly the query is required.",
+  "properties": {
+    "limit": {
+      "maximum": 255,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "mode": {
+      "$ref": "#/$defs/Mode",
+      "description": "Search mode."
+    },
+    "query": {
+      "description": "Text to \"find\".",
+      "type": "string"
+    }
+  },
+  "required": [
+    "query"
+  ],
+  "type": "object"
+}

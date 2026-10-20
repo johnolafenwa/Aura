@@ -243,6 +243,9 @@ match json.decode_text[Event]("{\"type\": \"Started\"}"):
 A field can also hold a union whose members have different JSON kinds, such
 as `int64 | str`. The decoder picks the member from the JSON kind.
 
+`json.schema[Server]()` returns a JSON Schema that matches the decoder. A
+docstring on the class or on a field becomes that schema's `description`.
+
 Write the methods yourself when the JSON form differs from the fields. Here a
 port encodes as a bare integer:
 

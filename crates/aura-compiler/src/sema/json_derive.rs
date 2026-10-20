@@ -10,7 +10,9 @@
 //! reported at the `impl` line instead.
 
 use super::{BTreeMap, BTreeSet, Diagnostic, ImportedBinding, Item, Module, ModuleContext, Result};
-use crate::ast::{ClassDecl, EnumDecl, Expr, ImplDecl, Stmt, TypeRef, TypeRefKind};
+use crate::ast::{
+    normalize_docstring, ClassDecl, EnumDecl, Expr, ImplDecl, Stmt, TypeRef, TypeRefKind,
+};
 use crate::diag::Span;
 
 /// First line number of generated source.
@@ -984,6 +986,11 @@ impl<'a> Generator<'a> {
         }
         let value = format!("{JSON}.Value");
         let error = format!("{JSON}.DecodeError");
+        let doc = self
+            .enum_decl(name)
+            .and_then(|decl| decl.doc.as_ref())
+            .or_else(|| self.class(name).and_then(|class| class.doc.as_ref()))
+            .map(|doc| normalize_docstring(&doc.text));
         let (encode, decode, schema) = if let Some(decl) = self.enum_decl(name) {
             if is_unit_enum(decl) {
                 self.unit_enum_helpers(decl)
@@ -1003,6 +1010,19 @@ impl<'a> Generator<'a> {
             "def __aura_json_decode_class_{index}(value: own {value}) -> Result[{name}, {error}]:\n{}",
             indent(&decode)
         ));
+        let schema = match doc {
+            Some(doc) => {
+                self.emit(format!(
+                    "def __aura_json_undescribed_{index}(defs: mut dict[str, {value}]) -> {value}:\n{}",
+                    indent(&schema)
+                ));
+                format!(
+                    "return {JSON}.__describe(__aura_json_undescribed_{index}(defs), {})",
+                    literal(&doc)
+                )
+            }
+            None => schema,
+        };
         self.emit(format!(
             "def __aura_json_object_{index}(defs: mut dict[str, {value}]) -> {value}:\n{}",
             indent(&schema)
@@ -1011,13 +1031,9 @@ impl<'a> Generator<'a> {
     }
 
     /// Classifies each field or payload and returns it with its helper.
-    fn fields(
-        &mut self,
-        owner: &str,
-        fields: Vec<(String, &TypeRef, Option<Expr>, String)>,
-    ) -> Result<Vec<Field>> {
+    fn fields(&mut self, owner: &str, fields: Vec<FieldSource>) -> Result<Vec<Field>> {
         let mut result = Vec::new();
-        for (name, ty, default, what) in fields {
+        for (name, ty, default, doc, what) in fields {
             let shape = self.shape(ty, owner, &what, 0)?;
             let helper = self.helper(&shape)?;
             result.push(Field {
@@ -1025,6 +1041,7 @@ impl<'a> Generator<'a> {
                 ty: shape.aura_type(),
                 helper,
                 default,
+                doc,
             });
         }
         Ok(result)
@@ -1047,6 +1064,7 @@ impl<'a> Generator<'a> {
                         field.name.clone(),
                         &field.ty,
                         field.default.clone(),
+                        field.doc.as_ref().map(|doc| normalize_docstring(&doc.text)),
                         format!("field `{}`", field.name),
                     )
                 })
@@ -1148,7 +1166,7 @@ impl<'a> Generator<'a> {
                     .map(|payload| {
                         let payload_name = payload.name.clone().unwrap_or_default();
                         let what = format!("payload `{variant_name}.{payload_name}`");
-                        (payload_name, &payload.ty, None, what)
+                        (payload_name, &payload.ty, None, None, what)
                     })
                     .collect(),
             )?;
@@ -1271,12 +1289,37 @@ impl<'a> Generator<'a> {
     }
 }
 
+/// A field or payload before classification: its name, type, default,
+/// docstring, and the phrase errors use for it.
+type FieldSource<'t> = (String, &'t TypeRef, Option<Expr>, Option<String>, String);
+
 /// One field of a class, or one payload of an enum variant.
 struct Field {
     name: String,
     ty: String,
     helper: usize,
     default: Option<Expr>,
+    /// The normalized docstring, which becomes the property's description.
+    doc: Option<String>,
+}
+
+/// `text` as an Aura string literal.
+fn literal(text: &str) -> String {
+    let mut quoted = String::from("\"");
+    for character in text.chars() {
+        match character {
+            '\\' => quoted.push_str("\\\\"),
+            '"' => quoted.push_str("\\\""),
+            '\n' => quoted.push_str("\\n"),
+            '\t' => quoted.push_str("\\t"),
+            character if character.is_control() => {
+                quoted.push_str(&format!("\\u{{{:x}}}", character as u32))
+            }
+            character => quoted.push(character),
+        }
+    }
+    quoted.push('"');
+    quoted
 }
 
 /// A shape's type as the user writes it.
@@ -1313,10 +1356,12 @@ fn object_schema(target: &str, fields: &[Field], variant: Option<&str>) -> Strin
         required.push(format!("{value}.String(\"type\")"));
     }
     for field in fields {
-        properties.push_str(&format!(
-            "{target}_fields[\"{}\"] = __aura_json_schema_{}(defs)\n",
-            field.name, field.helper
-        ));
+        let schema = format!("__aura_json_schema_{}(defs)", field.helper);
+        let schema = match &field.doc {
+            Some(doc) => format!("{JSON}.__describe({schema}, {})", literal(doc)),
+            None => schema,
+        };
+        properties.push_str(&format!("{target}_fields[\"{}\"] = {schema}\n", field.name));
         if field.default.is_none() {
             required.push(format!("{value}.String(\"{}\")", field.name));
         }

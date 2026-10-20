@@ -447,6 +447,8 @@ decoder:
 - A tuple uses `prefixItems`.
 - A class or enum reached through a field appears once under `$defs` and is
   referenced with `$ref`, which also covers a recursive type.
+- A class, enum, or field docstring becomes a `description`, so a tool
+  that reads the schema sees the same text as `aura doc`.
 
 #### Rejected Types
 
@@ -567,8 +569,7 @@ Aura 0.5 has no API to shut down, join, size, or configure the service. The
 service capacity does not apply to `json.is_valid`, `json.parse_string_map`,
 or `json.stringify_map`.
 
-A derived codec for a generic class or enum is not implemented. A derived
-schema carries no `description` values. Schema validation, MessagePack, CBOR,
+A derived codec for a generic class or enum is not implemented. Schema validation, MessagePack, CBOR,
 Protobuf, and other binary formats are not available.
 
 Collection and string growth controlled by the codec, and both runtime
