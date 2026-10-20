@@ -1,0 +1,6 @@
+error[AU2015]: decorator on `bump` must take and return `Callable[def(n: int64) -> int64]`: callable contract mismatch: parameter `n` would be renamed to `args`; renaming requires an explicit wrapper
+ --> crates/aura-compiler/tests/fixtures/check-fail/decorator_generic_renamed.au:8:1
+  |
+8 | @traced
+  | ^
+  = help: a decorator's callable type names each parameter, so the decorated function must use the same names

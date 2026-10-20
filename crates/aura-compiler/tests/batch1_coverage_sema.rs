@@ -439,7 +439,7 @@ fn callable_pack_constructor_argument_shape_is_checked() {
     rejects_with_code(
         "type Gen[T] = Callable[def() -> T]\ndef main():\n    reader = Gen(lambda: 1)\n    print(1)\n",
         "AU2002",
-        "callable alias `Gen` is generic",
+        "callable alias `Gen` is generic; write its type arguments",
     );
 }
 
@@ -507,7 +507,7 @@ fn thin_alias_adapter_argument_shape_and_contract_are_checked() {
     rejects_with_code(
         "type Thin[T] = def() -> T\ndef main():\n    thin = Thin(lambda: 1)\n    print(1)\n",
         "AU2002",
-        "thin callable alias `Thin` is generic",
+        "callable alias `Thin` is generic; write its type arguments",
     );
     rejects_with_code(
         &format!("{thin}def main():\n    offset = 1\n    thin = Thin(lambda [own offset]: offset)\n    print(1)\n"),

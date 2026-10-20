@@ -3815,7 +3815,19 @@ It cannot pass through a thin `def` parameter, field, element, or annotated resu
 
 `Callable[def(...) -> R]`, `Callable[mut def(...) -> R]`, and `Callable[own def(...) -> R]` are owned storage types. They hold a Shared, Mutable, or Consuming callable with a complete contract and an erased capture set. See [Function Values](/manual/functions#function-values) for contracts. `TaskCallable[...]` is the same storage with every capture proven Transfer.
 
-Packing is explicit. Call a non-generic alias of such a type with one value to pack it. The packed value keeps the closure's own environment.
+Packing is explicit. Call an alias of such a type with one value to pack it. The packed value keeps the closure's own environment. A generic alias takes its type arguments first, as in `Fn[int64, str](value)`. Inside a generic function, the arguments may name its type parameters:
+
+```aura
+type Fn[A, R] = Callable[def(args: A) -> R]
+
+def compose[A, B, C](first: own Fn[A, B], second: own Fn[B, C]) -> Fn[A, C]:
+    return Fn[A, C](lambda [own first, own second] args: second(first(args)))
+
+both = compose(Fn[int64, int64](lambda args: args * 2), Fn[int64, str](lambda args: f"<{args}>"))
+print(both(21))
+```
+
+A generic alias called without type arguments reports `AU2002`.
 
 ```aura
 class Counter:
@@ -5624,6 +5636,7 @@ Each row names a reference area and the tests, fixtures, and maintained examples
 | names, types, calls, traits, patterns, moves, and borrows | `crates/aura-compiler/src/sema_tests.rs`, `tests/fixtures/check-pass`, `tests/fixtures/check-fail` |
 | Prelude `Display` implementation rules, dispatch through `print`, `str`, f-strings, and nested rendering, the custom-Display format subset, trap-before-write `print`, and read-only `@property` declaration, read, and use rules | the `display_*` and `property_*` parse-fail, check-fail, check-path-fail, run-pass, and run-fail fixtures; `properties_hover_complete_and_navigate_as_properties` and `property_hover_and_completion_show_the_getter_docstring`; `examples/traits/display.au` and `examples/classes/properties.au` with their CLI run and direct-build tests; and the MIR/direct parity matrix |
 | Module-level function decorators: parsing and grouping, top-to-bottom evaluation and bottom-to-top application, recursion through the decorated binding, initialization traps, `AU2047` rejections, cross-module calls, hover, `aura doc`, and formatting | the `decorator_*` parse-fail, check-fail, run-pass, and run-fail fixtures; `decorated_functions_work_across_modules_on_both_backends`; `decorated_functions_hover_with_their_decorators_and_hide_generated_names`; `api_docs_list_a_decorated_function_with_its_decorators_and_docstring`; `decorators_attach_to_their_definition`; and `examples/basics/decorators.au` |
+| Generic decorators and generic decorator factories inferred per use, generic callable alias packing, renamed-parameter and `own`-parameter decorator diagnostics | the `decorators_generic` and `callable_alias_generic_pack` run-pass fixtures; the `decorator_generic_*`, `decorator_retry_own_parameter`, and `callable_alias_generic_*` check-fail fixtures; `generic_decorators_infer_each_use_across_modules_on_both_backends`; and `examples/basics/retry_decorator.au` |
 | integer `/` rejection, floor division/remainder, exact float-context integer literals, `.to_float()`, and shortest-roundtrip float printing | lexer/parser/integer/runtime-value unit tests plus `integer_true_division_*`, `floor_division_and_modulo`, `float_context_integer_literals`, `integer_to_float_rounding`, and `float_shortest_roundtrip_printing` fixtures |
 | Decimal separators and hexadecimal/binary/octal integer literals; exact-width bitwise operators; checked, wrapping, and saturating shifts; exact count typing/ranges; compound-store ordering; and MIR/direct parity | focused lexer/parser/sema/integer/MIR/native/runtime tests; literal and shift failure fixtures; the `bitwise_power` runtime fixture; `examples/numbers/bit_packing.au`; language-server and extension coverage; and the forced MIR/direct parity matrix |
 | [Math Module](/manual/math) scalar constants and functions: exact immutable `float64` constant bits, generic once-initialized module storage, exact function signatures, checked `int64` rounding conversions, IEEE-754 identity and exceptional-value classification, finite overflow and domain diagnostics, left-to-right once-only evaluation, and MIR/direct parity | `math_namespace_exposes_exact_generic_float64_constants`, `math_namespace_exposes_the_exact_float64_function_contract`, `math_host_builtins_follow_the_ratified_finite_contract`, `math_host_builtins_classify_every_exception_family`, `math_analysis_exposes_qualified_and_aliased_constant_details`, `math_analysis_completes_and_hovers_the_exact_public_surface`, and focused semantic tests; the `math_module_constants`, `math_module_functions`, and `math_log_domain` fixtures; `examples/numbers/scalar_math.au`; compiler-bridge coverage; and the forced MIR/direct parity matrix |
@@ -11145,7 +11158,7 @@ A safe restriction requires an explicit adapter. For example, declare `type Unar
 
 An adapter cannot rename a slot, invent defaults, or make keyword-only slots positional. It also cannot change parameter types, modes, capabilities, or result guarantees.
 
-Use an adapter to bring each value to a common contract. Calling a non-generic alias of a thin `def` type with one function value or capture-free lambda, such as `Unary(increment)`, yields that alias's contract when the alias admits the value. Otherwise it reports `AU2015`. Thin adapters add no environment. A capturing closure packs into an owned `Callable[...]` storage type instead. See [Closures](/manual/closures#typing-rules). Owned `Callable[...]` and `TaskCallable[...]` constructors keep their own capture, call-kind, and Transfer admission rules.
+Use an adapter to bring each value to a common contract. Calling an alias of a thin `def` type with one function value or capture-free lambda, such as `Unary(increment)`, yields that alias's contract when the alias admits the value. A generic alias takes its type arguments first, as in `Check[int64](is_even)`. Otherwise it reports `AU2015`. Thin adapters add no environment. A capturing closure packs into an owned `Callable[...]` storage type instead. See [Closures](/manual/closures#typing-rules). Owned `Callable[...]` and `TaskCallable[...]` constructors keep their own capture, call-kind, and Transfer admission rules.
 
 ### Generic Function Values
 
@@ -11243,6 +11256,40 @@ This prints `evaluate outer`, `evaluate inner`, `apply inner`, `apply outer`, th
 
 The decorated constant initializes in declaration order with the module's other constants. A decorator expression that reads the decorated name reports `AU2001`, because the binding is not initialized yet. A trap inside a decorator stops module initialization, and no later decorator runs. An importing module never runs the decorators again.
 
+### Generic Decorators
+
+A generic decorator infers its type parameters from each function it decorates. One `traced` serves every one-parameter function whose parameter is named `args`:
+
+```aura
+type Fn[A, R] = Callable[def(args: A) -> R]
+
+def traced[A, R](f: own Fn[A, R]) -> Fn[A, R]:
+    return Fn[A, R](lambda [own f] args: trace_call(f, args))
+
+def trace_call[A, R](f: Fn[A, R], args: A) -> R:
+    print("enter")
+    return f(args)
+
+@traced
+def label(args: str) -> str:
+    return f"<{args}>"
+
+@traced
+def square(args: int64) -> int64:
+    return args * args
+
+print(label("x"))
+print(square(3))
+```
+
+Inference runs once per decorator, against the decorated function's exact type. A type parameter stands for a value type, never for a whole signature, so the decorator fixes the number of parameters, their names, and their modes. A function whose parameter has another name reports `AU2015`. A decorator whose result is a different type reports `AU2002`.
+
+A decorator factory may be generic too. Its own arguments, such as the attempt count in `@retry(3)`, fix what they can. The function it decorates fixes the rest:
+
+<<< ../../examples/basics/retry_decorator.au{aura}
+
+A retry calls the wrapped function again with the same argument, so it needs a shared or Copy parameter. A function that takes `own` arguments fails at the decorator with `AU2002`. Its help points to an explicit loop that builds a new argument for each attempt.
+
 ### Restrictions
 
 The checker rejects these with `AU2047`:
@@ -11253,7 +11300,7 @@ The checker rejects these with `AU2047`:
 - a decorated function that returns a view
 - a decorator line that is not followed by a module-level `def`
 
-A decorator inside a function body, or in a class body other than `@property`, reports `AU2005`. Decorators on classes, enums, and methods are not implemented. A generic decorator cannot return a new closure, because packing a closure needs a non-generic alias.
+A decorator inside a function body, or in a class body other than `@property`, reports `AU2005`. Decorators on classes, enums, and methods are not implemented.
 
 ### Tooling
 
@@ -25558,8 +25605,39 @@ apply bottom to top, so the decorator nearest `def` wraps first. A decorated
 function cannot be generic, cannot be `main`, and cannot give a parameter a
 default.
 
-See [examples/basics/decorators.au](../examples/basics/decorators.au) and
-[Decorators](../docs/manual/functions.md#decorators) in the Manual.
+A decorator can be generic. Its type parameters come from the function it
+decorates, so one decorator serves many signatures:
+
+```aura
+type Fn[A, R] = Callable[def(args: A) -> R]
+
+def logged[A, R](f: own Fn[A, R]) -> Fn[A, R]:
+    return Fn[A, R](lambda [own f] args: log_call(f, args))
+
+def log_call[A, R](f: Fn[A, R], args: A) -> R:
+    print("call")
+    return f(args)
+
+@logged
+def shout(args: str) -> str:
+    return f"{args}!"
+
+@logged
+def double(args: int64) -> int64:
+    return args * 2
+
+def main():
+    print(shout("hi"))
+    print(double(4))
+```
+
+`Fn[A, R](...)` packs the lambda through the generic alias, with the type
+parameters written out. The decorator still fixes the parameter count and
+names, so both functions name their parameter `args`.
+
+See [examples/basics/decorators.au](../examples/basics/decorators.au),
+[examples/basics/retry_decorator.au](../examples/basics/retry_decorator.au),
+and [Decorators](../docs/manual/functions.md#decorators) in the Manual.
 
 ## Current Limits
 

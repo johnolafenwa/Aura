@@ -415,3 +415,10 @@ Step 6 types the decorated binding as `Callable[def(...) -> R]`, not the thin
 a wrapper could not capture the function it wraps. A decorator takes
 `own Callable[...]` and returns the same type. A closure cannot promise
 parameter defaults, so a decorated function cannot declare one.
+
+Step 7 packs a closure through a generic alias with its type arguments
+written out, as in `Fn[A, R](lambda ...)`. A generic decorator factory such
+as `retry[A, R, E](attempts: own int32)` cannot infer `A`, `R`, or `E` from
+its own arguments. The call `retry(3)(f)` infers them from `f` and the
+expected result instead. Parameter names stay part of the contract, so a
+generic decorator fixes the names of the parameters it accepts.

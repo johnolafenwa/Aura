@@ -1,0 +1,5 @@
+error[AU2002]: callable alias `Fn` is generic; write its type arguments, as in `Fn[...](value)`
+ --> crates/aura-compiler/tests/fixtures/check-fail/callable_alias_generic_without_arguments.au:5:14
+  |
+5 |     double = Fn(lambda args: args * 2)
+  |              ^

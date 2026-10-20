@@ -1,0 +1,6 @@
+error[AU2002]: decorator on `send` must take and return `Callable[def(args: own str) -> Result[int64, str]]`: the callable `retry(...)` returns cannot take this argument: expected `Callable[def(args: A) -> Result[R, E]]`, found `Callable[def(args: own str) -> Result[int64, str]]`
+ --> crates/aura-compiler/tests/fixtures/check-fail/decorator_retry_own_parameter.au:24:1
+   |
+24 | @retry(3)
+   | ^
+  = help: `send` consumes `args`, and a wrapper that calls it again, such as a retry, has no argument left to pass; write an explicit loop that builds a new argument for each attempt

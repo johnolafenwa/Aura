@@ -449,8 +449,39 @@ apply bottom to top, so the decorator nearest `def` wraps first. A decorated
 function cannot be generic, cannot be `main`, and cannot give a parameter a
 default.
 
-See [examples/basics/decorators.au](../examples/basics/decorators.au) and
-[Decorators](../docs/manual/functions.md#decorators) in the Manual.
+A decorator can be generic. Its type parameters come from the function it
+decorates, so one decorator serves many signatures:
+
+```aura
+type Fn[A, R] = Callable[def(args: A) -> R]
+
+def logged[A, R](f: own Fn[A, R]) -> Fn[A, R]:
+    return Fn[A, R](lambda [own f] args: log_call(f, args))
+
+def log_call[A, R](f: Fn[A, R], args: A) -> R:
+    print("call")
+    return f(args)
+
+@logged
+def shout(args: str) -> str:
+    return f"{args}!"
+
+@logged
+def double(args: int64) -> int64:
+    return args * 2
+
+def main():
+    print(shout("hi"))
+    print(double(4))
+```
+
+`Fn[A, R](...)` packs the lambda through the generic alias, with the type
+parameters written out. The decorator still fixes the parameter count and
+names, so both functions name their parameter `args`.
+
+See [examples/basics/decorators.au](../examples/basics/decorators.au),
+[examples/basics/retry_decorator.au](../examples/basics/retry_decorator.au),
+and [Decorators](../docs/manual/functions.md#decorators) in the Manual.
 
 ## Current Limits
 

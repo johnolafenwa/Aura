@@ -4,6 +4,45 @@ use crate::ast::{FormatPart, TypeRefKind};
 use crate::diag::Span;
 
 impl FunctionChecker<'_> {
+    /// Specializes a generic callable alias for `Alias[T, ...](value)`, with
+    /// the alias's bounds checked. Returns the written name and the target.
+    pub(super) fn specialize_callable_alias(
+        &self,
+        alias: &AliasInfo,
+        type_args: &[TypeRef],
+        span: Span,
+    ) -> Result<(String, Type)> {
+        let args = type_args
+            .iter()
+            .map(|arg| {
+                lower_type(
+                    arg,
+                    self.type_names,
+                    self.type_arities,
+                    self.canonical_type_names,
+                    &self.type_params,
+                )
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let target = alias.specialized_target(
+            &args,
+            span,
+            self.module_name,
+            self.canonical_type_names,
+            self.type_names.expansion_budget(),
+        )?;
+        self.check_alias_constructor_bounds(
+            alias,
+            &substitutions_from_decl_type_args(&alias.decl.type_params, &args),
+            span,
+        )?;
+        let written = args.iter().map(ToString::to_string).collect::<Vec<_>>();
+        Ok((
+            format!("{}[{}]", alias.decl.name, written.join(", ")),
+            target,
+        ))
+    }
+
     /// Only a written alias supplies a presentation name. Inferred types keep
     /// their normalized spelling, independent of which aliases are in scope.
     pub(super) fn written_alias_type(&self, source: &TypeRef, expanded: &Type) -> Option<String> {
@@ -570,6 +609,28 @@ fn find_type_span(ty: &TypeRef, name: &str) -> Option<crate::diag::Span> {
             .or_else(|| find_type_span(return_type, name)),
         TypeRefKind::Callable { signature, .. } => find_type_span(signature, name),
     }
+}
+
+/// `Alias[T, ...]` written as a callee, split into the alias expression and its
+/// type arguments. The parser keeps `Alias[T](...)` as `Specialize`, and a
+/// specialization with several arguments may reach here as `Index`.
+pub(crate) fn specialized_alias_callee(callee: &Expr) -> Option<(&Expr, Vec<TypeRef>)> {
+    match &callee.kind {
+        ExprKind::Specialize { expr, type_args } => Some((expr.as_ref(), type_args.clone())),
+        ExprKind::Index { object, index } => {
+            let items = match &index.kind {
+                ExprKind::Tuple(items) => items.as_slice(),
+                _ => std::slice::from_ref(index.as_ref()),
+            };
+            let refs = items
+                .iter()
+                .map(FunctionChecker::spawn_type_ref_from_expr)
+                .collect::<Option<Vec<_>>>()?;
+            Some((object.as_ref(), refs))
+        }
+        _ => None,
+    }
+    .filter(|(base, _)| matches!(base.kind, ExprKind::Name(_) | ExprKind::Member { .. }))
 }
 
 /// Shared constructor/member adaptation. Only a resolved type alias can enter

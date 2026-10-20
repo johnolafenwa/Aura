@@ -32,6 +32,15 @@ in this file.
   after it.
 - A module member that holds a shared callable can be called as
   `tools.run(3)`.
+- Generic decorators. `def traced[A, R](f: own Fn[A, R]) -> Fn[A, R]`
+  infers `A` and `R` from each function it decorates. A generic decorator
+  factory such as `@retry(3)` takes the rest of its type parameters from
+  the decorated function.
+- A generic callable alias packs or adapts a value with its type arguments
+  written out, as in `Fn[int64, str](lambda args: f"{args}")`.
+- `factory(...)(args)` infers a generic factory's type parameters from
+  `args` and the expected result when the factory's own arguments leave
+  them open.
 
 ### Changed
 
