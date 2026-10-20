@@ -109,6 +109,17 @@ fn function_signature(function: &FunctionDecl) -> String {
     )
 }
 
+/// A decorated function's signature with its decorator lines above it.
+pub(crate) fn decorated_signature(function: &FunctionDecl, signature: &str) -> String {
+    let mut lines = function
+        .decorators
+        .iter()
+        .map(|decorator| decorator.text.clone())
+        .collect::<Vec<_>>();
+    lines.push(signature.to_string());
+    lines.join("\n")
+}
+
 fn function_declaration(kind: &str, function: &FunctionDecl) -> ApiDeclaration {
     let mut entry = declaration(
         kind,
@@ -141,7 +152,17 @@ pub fn api_module_from_program(module_name: &str, program: &Program) -> ApiModul
     let module = &program.module;
     let mut declarations = Vec::new();
     // A checked program records every declared constant and alias.
+    let decorated = |name: &str| {
+        module.items.iter().any(|item| {
+            matches!(item, Item::Function(function)
+                if !function.decorators.is_empty()
+                    && function.name.strip_prefix(crate::sema::UNDECORATED_PREFIX) == Some(name))
+        })
+    };
     for constant in module.constants.iter().filter(|constant| constant.public) {
+        if decorated(&constant.name) {
+            continue;
+        }
         declarations.push(declaration(
             "constant",
             &constant.name,
@@ -269,6 +290,23 @@ pub fn api_module_from_program(module_name: &str, program: &Program) -> ApiModul
             }
             Item::Function(function) if function.public => {
                 declarations.push(function_declaration("function", function));
+            }
+            Item::Function(function) if !function.decorators.is_empty() => {
+                let Some(name) = function.name.strip_prefix(crate::sema::UNDECORATED_PREFIX) else {
+                    continue;
+                };
+                if !module
+                    .constants
+                    .iter()
+                    .any(|constant| constant.public && constant.name == name)
+                {
+                    continue;
+                }
+                let mut source = function.clone();
+                source.name = name.to_string();
+                let mut entry = function_declaration("function", &source);
+                entry.signature = decorated_signature(&source, &entry.signature);
+                declarations.push(entry);
             }
             Item::ExternFunction(function) if function.public => {
                 declarations.push(declaration(

@@ -1,0 +1,5 @@
+def main():
+    @traced
+    def inner() -> int64:
+        return 1
+    pass

@@ -755,7 +755,7 @@ test("compiler bridge reuses one persistent compiler process", async () => {
 });
 
 test("persistent compiler service sends and accepts the current semantic schema", async () => {
-  assert.equal(SUPPORTED_SEMANTIC_INTERFACE_SCHEMA_VERSION, 19);
+  assert.equal(SUPPORTED_SEMANTIC_INTERFACE_SCHEMA_VERSION, 20);
   const script = [
     "const readline = require('node:readline');",
     "const lines = readline.createInterface({ input: process.stdin });",
@@ -808,7 +808,7 @@ test("persistent compiler service rejects and disposes a mismatched semantic sch
       path: "/virtual/main.au",
       source: "def main():\n    pass\n"
     }),
-    /semantic schema mismatch.*received `8`.*expected `19`/
+    /semantic schema mismatch.*received `8`.*expected `20`/
   );
   assert.equal(service.closed, true);
   assert.equal(invalidations, 1);
@@ -1063,6 +1063,46 @@ test("compiler bridge returns machine-readable analysis for a real example", asy
   assert.ok(Array.isArray(analysis.symbols));
   assert.ok(Array.isArray(analysis.occurrences));
   assert.ok(analysis.symbols.some((symbol) => symbol.name === "Point"));
+});
+
+test("compiler bridge shows decorators in hover and navigates from a decorator line", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aura-lsp-decorators-"));
+  const source = [
+    "type Step = Callable[def(n: int64) -> int64]",
+    "def traced(f: own Step) -> Step:",
+    "    return f",
+    "@traced",
+    "def fact(n: int64) -> int64:",
+    "    return n",
+    "def main():",
+    "    print(fact(3))",
+    ""
+  ].join("\n");
+
+  try {
+    const mainPath = path.join(tempRoot, "main.au");
+    const mainUri = `file://${mainPath}`;
+    setWorkspaceRoots([repoRoot, tempRoot]);
+    const analysis = await analyzeWithCompiler(mainUri, source);
+    assert.ok(analysis);
+    assert.deepEqual(analysis.diagnostics, []);
+    assert.ok(analysis.symbols.every((symbol) => !symbol.name.startsWith("__aura_")));
+
+    const callCharacter = source.split("\n")[7].indexOf("fact") + 1;
+    assert.match(
+      compilerHoverAtPosition(analysis, 7, callCharacter)?.value || "",
+      /@traced\nfunction fact\(n: int64\) -> int64/
+    );
+    assert.deepEqual(
+      compilerDefinitionAtPosition(mainUri, analysis, 3, 2)?.range,
+      {
+        start: { line: 1, character: 4 },
+        end: { line: 1, character: 10 }
+      }
+    );
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
 });
 
 test("compiler bridge exposes extern C symbols, hover, definitions, and completions", async () => {

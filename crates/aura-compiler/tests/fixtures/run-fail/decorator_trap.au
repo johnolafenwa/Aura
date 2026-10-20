@@ -1,0 +1,23 @@
+type Step = Callable[def(n: int64) -> int64]
+type Wrapper = Callable[def(f: own Step) -> Step]
+
+
+def checked(limit: int64) -> Wrapper:
+    print("evaluate checked")
+    assert limit > 0, "limit must be positive"
+    return Wrapper(lambda own f: f)
+
+
+def traced(f: own Step) -> Step:
+    print("never applied")
+    return f
+
+
+@traced
+@checked(0)
+def bump(n: int64) -> int64:
+    return n + 1
+
+
+def main():
+    print(bump(1))

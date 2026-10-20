@@ -354,6 +354,7 @@ fn function_decl(name: &str, return_type: &str) -> FunctionDecl {
         body: Vec::new(),
         span: Span::new(1, 1),
         property: None,
+        decorators: Vec::new(),
         doc: None,
     }
 }
@@ -10793,4 +10794,74 @@ fn imported_definitions_select_the_declared_name_in_their_source_file() {
             "imported definition for `{hover}` should select the declared name"
         );
     }
+}
+
+#[test]
+fn decorated_functions_hover_with_their_decorators_and_hide_generated_names() {
+    let source = [
+        "type Step = Callable[def(n: int64) -> int64]",
+        "def traced(f: own Step) -> Step:",
+        "    return f",
+        "@traced",
+        "def fact(n: int64) -> int64:",
+        "    \"\"\"Multiplies 1 to n.\"\"\"",
+        "    return n",
+        "def main():",
+        "    print(fact(3))",
+        "",
+    ]
+    .join("\n");
+    let analysis = analyze_source(&source);
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "{:?}",
+        analysis.diagnostics
+    );
+    let decorator = occurrence_at(&analysis, 3, 1);
+    assert!(
+        decorator.hover.contains("function traced"),
+        "{}",
+        decorator.hover
+    );
+    assert_eq!(
+        decorator
+            .definition
+            .as_ref()
+            .map(|definition| (definition.line, definition.start_character)),
+        Some((1, 4))
+    );
+    let call = occurrence_at(&analysis, 8, 10);
+    assert_eq!(
+        call.hover,
+        "```aura\n@traced\nfunction fact(n: int64) -> int64\n```\n\nMultiplies 1 to n."
+    );
+    assert_eq!(
+        call.definition
+            .as_ref()
+            .map(|definition| (definition.line, definition.start_character)),
+        Some((4, 4))
+    );
+    assert!(analysis
+        .occurrences
+        .iter()
+        .all(|occurrence| !occurrence.hover.contains("__aura_")));
+    assert!(analysis
+        .symbols
+        .iter()
+        .all(|symbol| !symbol.name.starts_with("__aura_")));
+    let completions = complete_source(&source, 8, 10, None)
+        .expect("completion should succeed")
+        .into_iter()
+        .map(|completion| completion.name)
+        .collect::<Vec<_>>();
+    assert!(
+        completions.iter().any(|label| label == "fact"),
+        "{completions:?}"
+    );
+    assert!(
+        completions
+            .iter()
+            .all(|label| !label.starts_with("__aura_")),
+        "{completions:?}"
+    );
 }

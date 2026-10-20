@@ -16,7 +16,7 @@ const COMPILER_REQUEST_TIMEOUT_MS = 15_000;
 const COMPILER_RESPONSE_LIMIT_BYTES = 16 * 1024 * 1024;
 // The compiler owns the canonical identity; this transport declares the one
 // compiler interface it can safely decode.
-const SUPPORTED_SEMANTIC_INTERFACE_SCHEMA_VERSION = 19;
+const SUPPORTED_SEMANTIC_INTERFACE_SCHEMA_VERSION = 20;
 // The source text each compiler analysis describes, so that its UTF-8 byte
 // columns convert to the UTF-16 positions of that same text.
 const analyzedSources = new WeakMap();

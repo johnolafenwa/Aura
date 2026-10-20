@@ -1,0 +1,5 @@
+error[AU2047]: `main` cannot be decorated
+ --> crates/aura-compiler/tests/fixtures/check-fail/decorator_main.au:8:1
+  |
+8 | @traced
+  | ^

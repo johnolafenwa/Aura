@@ -24,6 +24,7 @@ fn dummy_function(name: &str) -> FunctionDecl {
         body: vec![],
         span: Span::new(1, 1),
         property: None,
+        decorators: Vec::new(),
         doc: None,
     }
 }

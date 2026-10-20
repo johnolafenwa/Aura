@@ -1,14 +1,15 @@
 use crate::ast::{
     Argument, AssertStmt, AssignStmt, AssignTarget, BinaryOp, BindingPattern, BindingTarget,
     BreakStmt, ClassDecl, ClassPattern, ClassPatternField, CompareLink, CompareOp,
-    ComprehensionClause, ComprehensionOutput, ConstantDecl, ContinueStmt, DestructureStmt,
-    DocString, EnumDecl, EnumPayloadFieldDecl, EnumVariantDecl, Expr, ExprKind, ExprStmt,
-    ExternFunctionDecl, ExternOpaqueClassDecl, FieldDecl, ForStmt, FormatPart, FunctionDecl,
-    FunctionTypeParam, IfBranch, IfStmt, ImplDecl, ImportDecl, ImportKind, ImportName, Item,
-    LambdaCapture, LambdaParam, LiteralPattern, LiteralPatternKind, MapEntryExpr, MatchArm,
-    MatchExprArm, MatchStmt, Module, Param, ParamMode, Pattern, ReceiverKind, RestPattern,
-    ReturnStmt, SequencePattern, Stmt, TraitDecl, TuplePattern, TypeAliasDecl, TypeRef,
-    TypeRefKind, UnaryOp, VariantPattern, ViewKind, ViewReturn, ViewStmt, WhileStmt, WithStmt,
+    ComprehensionClause, ComprehensionOutput, ConstantDecl, ContinueStmt, Decorator,
+    DestructureStmt, DocString, EnumDecl, EnumPayloadFieldDecl, EnumVariantDecl, Expr, ExprKind,
+    ExprStmt, ExternFunctionDecl, ExternOpaqueClassDecl, FieldDecl, ForStmt, FormatPart,
+    FunctionDecl, FunctionTypeParam, IfBranch, IfStmt, ImplDecl, ImportDecl, ImportKind,
+    ImportName, Item, LambdaCapture, LambdaParam, LiteralPattern, LiteralPatternKind, MapEntryExpr,
+    MatchArm, MatchExprArm, MatchStmt, Module, Param, ParamMode, Pattern, ReceiverKind,
+    RestPattern, ReturnStmt, SequencePattern, Stmt, TraitDecl, TuplePattern, TypeAliasDecl,
+    TypeRef, TypeRefKind, UnaryOp, VariantPattern, ViewKind, ViewReturn, ViewStmt, WhileStmt,
+    WithStmt,
 };
 use crate::diag::{Diagnostic, Result, Span};
 use crate::integer::IntegerValue;
@@ -24,7 +25,15 @@ fn parse_error(span: Span, message: impl Into<String>) -> Diagnostic {
 
 fn unsupported_decorator_error(span: Span, message: impl Into<String>) -> Diagnostic {
     Diagnostic::coded_at("AU2005", span, message)
-        .with_help("Aura has no general decorators; `@property` before a class method declares a read-only property")
+        .with_help("decorators apply only to module-level functions; in a class body, `@property` before a method declares a read-only property")
+}
+
+fn misplaced_decorator_error(span: Span) -> Diagnostic {
+    Diagnostic::coded_at(
+        "AU2047",
+        span,
+        "a decorator must come directly before a module-level function definition",
+    )
 }
 
 fn property_target_error(span: Span) -> Diagnostic {
@@ -119,9 +128,37 @@ fn validate_rest_targets(target: &BindingTarget, rest_allowed: bool) -> Result<(
 
 pub fn parse(source: &str) -> Result<Module> {
     let tokens = lex(source)?;
-    let module = Parser::new(tokens).parse_module()?;
+    let mut module = Parser::new(tokens).parse_module()?;
     check_module_documentation_limit(&module)?;
+    record_decorator_text(&mut module, source);
     Ok(module)
+}
+
+/// Copies each decorator's source text, from its `@` line up to the next
+/// decorator or the definition. Comment lines inside the group are skipped.
+fn record_decorator_text(module: &mut Module, source: &str) {
+    let lines = source.lines().collect::<Vec<_>>();
+    for item in &mut module.items {
+        let Item::Function(function) = item else {
+            continue;
+        };
+        let ends = function
+            .decorators
+            .iter()
+            .skip(1)
+            .map(|decorator| decorator.span.line)
+            .chain([function.span.line])
+            .collect::<Vec<_>>();
+        for (decorator, end) in function.decorators.iter_mut().zip(ends) {
+            let start = decorator.span.line.saturating_sub(1);
+            decorator.text = lines[start..end.saturating_sub(1).max(start + 1)]
+                .iter()
+                .map(|line| line.trim())
+                .filter(|line| !line.is_empty() && !line.starts_with('#'))
+                .collect::<Vec<_>>()
+                .join(" ");
+        }
+    }
 }
 
 /// Parses compiler-generated source with every line number shifted by
@@ -341,6 +378,11 @@ impl Parser {
     }
 
     fn parse_item(&mut self) -> Result<Item> {
+        if self.at_simple(&TokenKind::At)
+            && !matches!(self.peek_kind(1), Some(TokenKind::Identifier(name)) if name == "property")
+        {
+            return self.parse_decorated_function();
+        }
         if self.at_simple(&TokenKind::At) {
             let property = self.parse_property_marker()?;
             let public = self.eat_simple(&TokenKind::KwPublic).is_some();
@@ -823,6 +865,33 @@ impl Parser {
         })
     }
 
+    /// Parses a group of `@expression` lines and the module-level function
+    /// they decorate. Comments and blank lines may sit inside the group.
+    fn parse_decorated_function(&mut self) -> Result<Item> {
+        let first = self.current_span();
+        let mut decorators = Vec::new();
+        while self.at_simple(&TokenKind::At) {
+            let at = self.expect_simple(TokenKind::At)?.span;
+            if matches!(self.current_kind(), TokenKind::Identifier(name) if name == "property") {
+                return Err(property_target_error(at));
+            }
+            decorators.push(Decorator {
+                expr: self.parse_expr()?,
+                span: at,
+                text: String::new(),
+            });
+            self.expect_newline()?;
+            self.skip_newlines();
+        }
+        let public = self.eat_simple(&TokenKind::KwPublic).is_some();
+        if !self.at_keyword_def() {
+            return Err(misplaced_decorator_error(first));
+        }
+        let mut function = self.parse_function(public)?;
+        function.decorators = decorators;
+        Ok(Item::Function(function))
+    }
+
     /// Parses one `@property` line. `@property` is the only marker Aura
     /// accepts: a general decorator is not part of the language.
     fn parse_property_marker(&mut self) -> Result<Span> {
@@ -917,6 +986,7 @@ impl Parser {
             body,
             span,
             property: None,
+            decorators: Vec::new(),
             doc,
         })
     }
@@ -1082,6 +1152,7 @@ impl Parser {
             body,
             span,
             property: None,
+            decorators: Vec::new(),
             doc,
         })
     }

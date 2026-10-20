@@ -80,6 +80,7 @@ pub(crate) fn synthetic_returned_view_decl(
         body: Vec::new(),
         span,
         property: None,
+        decorators: Vec::new(),
         doc: None,
     })
 }

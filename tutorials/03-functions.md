@@ -415,6 +415,43 @@ cannot be returned through an annotated `def` result.
 See [examples/basics/closures.au](../examples/basics/closures.au) and the
 normative [Closures](../docs/manual/closures.md) page.
 
+## Decorators
+
+A decorator line wraps a module-level function. Write `@` and an expression
+on the line above `def`. The expression must be a callable that takes the
+function and returns a replacement with the same contract.
+
+```aura check-pass
+type Step = Callable[def(n: int64) -> int64]
+
+def traced(f: own Step) -> Step:
+    print("wrapping")
+    return Step(lambda [own f] n: f(n) + 1000)
+
+@traced
+def fact(n: int64) -> int64:
+    if n <= 1:
+        return 1
+    return n * fact(n - 1)
+
+def main():
+    print(fact(3))
+```
+
+This prints `wrapping` once, when the module starts, and then `10006`.
+`Callable[def(n: int64) -> int64]` is owned callable storage. It can hold a
+closure, so `traced` can return a lambda that captures `f`. The wrapped
+function's own name now refers to the decorated value. The recursive call
+`fact(n - 1)` therefore runs through `traced` too.
+
+Several decorators stack. Their expressions evaluate top to bottom, and they
+apply bottom to top, so the decorator nearest `def` wraps first. A decorated
+function cannot be generic, cannot be `main`, and cannot give a parameter a
+default.
+
+See [examples/basics/decorators.au](../examples/basics/decorators.au) and
+[Decorators](../docs/manual/functions.md#decorators) in the Manual.
+
 ## Current Limits
 
 - An ordinary `-> T` return value is owned. `-> view [mut] T from origin` is

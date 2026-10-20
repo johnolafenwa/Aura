@@ -315,7 +315,7 @@ impl<'a> AnalysisBuilder<'a> {
                         ty: info.ty.clone(),
                         trait_bounds: Vec::new(),
                         definition: self.constant_definition(info),
-                        hover: format_value_hover("module constant", &constant.name, &info.ty),
+                        hover: self.constant_hover(&constant.name, info),
                     },
                 );
             }
@@ -633,7 +633,8 @@ impl<'a> AnalysisBuilder<'a> {
         let scope = self.scope_for_position(line, character);
         let mut completions = self.top_level_completions();
         completions.retain(|completion| {
-            completion.kind != "constant" || scope.contains_key(&completion.name)
+            (completion.kind != "constant" || scope.contains_key(&completion.name))
+                && !is_decorator_generated(&completion.name)
         });
         let mut names = completions
             .iter()
@@ -731,7 +732,38 @@ impl<'a> AnalysisBuilder<'a> {
             ty: info.ty.clone(),
             trait_bounds: Vec::new(),
             definition: self.constant_definition(info),
-            hover: format_value_hover("module constant", name, &info.ty),
+            hover: self.constant_hover(name, info),
+        }
+    }
+
+    /// The hover for a module constant. A decorated function shows its
+    /// decorators above its signature.
+    fn constant_hover(&self, name: &str, info: &crate::sema::ConstantInfo) -> String {
+        let generated = format!("{}{}", crate::sema::UNDECORATED_PREFIX, info.decl.name);
+        let function = if info.module_name == self.program.module_name {
+            self.program.functions.get(&generated)
+        } else {
+            self.program
+                .module_registry
+                .get(&info.module_name)
+                .and_then(|namespace| namespace.all_functions.get(&generated))
+        };
+        match function {
+            Some(function) if !function.decl.decorators.is_empty() => {
+                let mut decl = function.decl.clone();
+                decl.name = name.to_string();
+                let decorators = decl
+                    .decorators
+                    .iter()
+                    .map(|decorator| format!("{}\n", decorator.text))
+                    .collect::<String>();
+                format_function_hover(&decl).replacen(
+                    "```aura\n",
+                    &format!("```aura\n{decorators}"),
+                    1,
+                )
+            }
+            _ => format_value_hover("module constant", name, &info.ty),
         }
     }
 
@@ -3104,6 +3136,8 @@ impl<'a> AnalysisBuilder<'a> {
                     self.visit_expr(&link.operand, scope);
                 }
             }
+            // A decorated function's generated parts have no source text.
+            ExprKind::Name(name) if is_decorator_generated(name) => {}
             ExprKind::Name(name) => {
                 if let Some(resolved) = self.resolve_name(name, scope) {
                     let hover = self.narrowed_hover(expr, resolved.hover);
@@ -3340,7 +3374,7 @@ impl<'a> AnalysisBuilder<'a> {
         if let Some(constant) = self.program.constants.get(name) {
             return Some(ResolvedSymbol {
                 hover: append_alias_target(
-                    format_value_hover("module constant", name, &constant.ty),
+                    self.constant_hover(name, constant),
                     name,
                     &constant.module_name,
                     &constant.decl.name,
@@ -3639,7 +3673,7 @@ impl<'a> AnalysisBuilder<'a> {
             }
             if let Some(constant) = namespace.constants.get(field) {
                 return Some(ResolvedMember {
-                    hover: format_value_hover("module constant", field, &constant.ty),
+                    hover: self.constant_hover(field, constant),
                     definition: Some(self.constant_definition(constant)),
                     ty: Some(constant.ty.clone()),
                 });
@@ -6761,6 +6795,11 @@ fn append_alias_target(
     } else {
         format!("{hover}\n\nAlias `{local_name}` for `{module_name}.{target_name}`.")
     }
+}
+
+fn is_decorator_generated(name: &str) -> bool {
+    name.starts_with(crate::sema::UNDECORATED_PREFIX)
+        || name.starts_with(crate::sema::DECORATED_PREFIX)
 }
 
 fn format_function_hover(function_decl: &FunctionDecl) -> String {

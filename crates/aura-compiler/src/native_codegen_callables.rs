@@ -741,7 +741,11 @@ impl NativeCodegen<'_> {
         let buffer_call = builder.ins().call(arg_buffer_new, &[count]);
         let buffer = builder.inst_results(buffer_call)[0];
         for (index, (values, ty)) in captures.iter().zip(&shape.capture_types).enumerate() {
-            retain_direct_values(self, &mut builder, values, ty)?;
+            // Boxing a callable already makes a new reference; any other
+            // handle is shared with the boxed function.
+            if !matches!(ty, DirectType::Callable(_)) {
+                retain_direct_values(self, &mut builder, values, ty)?;
+            }
             let boxed = box_thunk_value(self, &mut builder, values, ty)?;
             let slot = builder.ins().iconst(types::I64, index as i64);
             builder.ins().call(store_owned, &[buffer, slot, boxed]);
@@ -1137,6 +1141,59 @@ pub(super) fn call_callable_box_adapter(
     Ok(builder.inst_results(call)[0])
 }
 
+/// Boxes direct values the caller owns. Boxing a callable makes a separate
+/// reference, so its words are dropped afterwards; every other boxed form
+/// takes the values' handles over.
+pub(super) fn box_owned_thunk_value(
+    codegen: &mut NativeCodegen<'_>,
+    builder: &mut FunctionBuilder<'_>,
+    values: &[Value],
+    ty: &DirectType,
+) -> std::result::Result<Value, String> {
+    let boxed = box_thunk_value(codegen, builder, values, ty)?;
+    if matches!(ty, DirectType::Callable(_)) {
+        call_callable_drop_adapter(codegen, builder, values)?;
+    }
+    Ok(boxed)
+}
+
+/// Calls the `drop` adapter named by a callable's descriptor on the value's
+/// four words.
+fn call_callable_drop_adapter(
+    codegen: &mut NativeCodegen<'_>,
+    builder: &mut FunctionBuilder<'_>,
+    values: &[Value],
+) -> std::result::Result<(), String> {
+    if values.len() != 1 + CALLABLE_ENVIRONMENT_WORDS {
+        return Err(format!(
+            "direct backend expected {} callable words, found {}",
+            1 + CALLABLE_ENVIRONMENT_WORDS,
+            values.len()
+        ));
+    }
+    let slot = builder.create_sized_stack_slot(StackSlotData::new(
+        StackSlotKind::ExplicitSlot,
+        (8 * (1 + CALLABLE_ENVIRONMENT_WORDS)) as u32,
+        3,
+    ));
+    let callable_ptr = builder.ins().stack_addr(types::I64, slot, 0);
+    for (index, value) in values.iter().enumerate() {
+        builder
+            .ins()
+            .store(MemFlags::new(), *value, callable_ptr, (index as i32) * 8);
+    }
+    let adapter = builder
+        .ins()
+        .load(types::I64, MemFlags::new(), values[0], DESCRIPTOR_DROP);
+    let signature = builder
+        .func
+        .import_signature(callable_unary_signature(codegen.call_conv));
+    builder
+        .ins()
+        .call_indirect(signature, adapter, &[callable_ptr]);
+    Ok(())
+}
+
 /// The four words of a boxed function value re-entering as an inline
 /// callable of `signature`: the contract descriptor, the handle, and two
 /// zero words.
@@ -1165,34 +1222,56 @@ impl NativeCodegen<'_> {
     /// Defines every contract descriptor declared while compiling the
     /// module's functions.
     pub(super) fn define_contract_descriptors(&mut self) -> std::result::Result<(), String> {
-        let contracts: Vec<ContractDescriptor> =
-            self.contract_descriptors.values().cloned().collect();
-        for contract in contracts {
-            self.define_contract_handle_adapter(contract.drop, self.release_value, false)?;
-            self.define_contract_handle_adapter(contract.retain, self.retain_value, false)?;
-            self.define_contract_handle_adapter(contract.box_value, self.retain_value, true)?;
-            self.define_contract_invoke(&contract)?;
-            let mut data = DataDescription::new();
-            let mut bytes = vec![0u8; DESCRIPTOR_BYTES];
-            bytes[DESCRIPTOR_ENV_WORDS as usize..DESCRIPTOR_ENV_WORDS as usize + 8]
-                .copy_from_slice(&1u64.to_le_bytes());
-            bytes[DESCRIPTOR_INLINE as usize..DESCRIPTOR_INLINE as usize + 8]
-                .copy_from_slice(&1u64.to_le_bytes());
-            data.define(bytes.into_boxed_slice());
-            for (offset, func_id) in [
-                (DESCRIPTOR_INVOKE, contract.invoke),
-                (DESCRIPTOR_DROP, contract.drop),
-                (DESCRIPTOR_RETAIN, contract.retain),
-                (DESCRIPTOR_BOX, contract.box_value),
-            ] {
-                let func_ref = self.object.declare_func_in_data(func_id, &mut data);
-                data.write_function_addr(offset as u32, func_ref);
+        // An invoke adapter that unboxes a callable result or writeback
+        // declares that callable's contract too, so define until no new
+        // contract appears.
+        let mut defined = HashSet::new();
+        loop {
+            let mut pending = self
+                .contract_descriptors
+                .iter()
+                .filter(|(key, _)| !defined.contains(*key))
+                .map(|(key, contract)| (key.clone(), contract.clone()))
+                .collect::<Vec<_>>();
+            if pending.is_empty() {
+                return Ok(());
             }
-            try_or_string_error!(
-                self.object.define_data(contract.descriptor, &data),
-                "failed to define contract descriptor: {}"
-            );
+            pending.sort_by(|left, right| left.0.cmp(&right.0));
+            for (key, contract) in pending {
+                defined.insert(key);
+                self.define_contract_descriptor(contract)?;
+            }
         }
+    }
+
+    fn define_contract_descriptor(
+        &mut self,
+        contract: ContractDescriptor,
+    ) -> std::result::Result<(), String> {
+        self.define_contract_handle_adapter(contract.drop, self.release_value, false)?;
+        self.define_contract_handle_adapter(contract.retain, self.retain_value, false)?;
+        self.define_contract_handle_adapter(contract.box_value, self.retain_value, true)?;
+        self.define_contract_invoke(&contract)?;
+        let mut data = DataDescription::new();
+        let mut bytes = vec![0u8; DESCRIPTOR_BYTES];
+        bytes[DESCRIPTOR_ENV_WORDS as usize..DESCRIPTOR_ENV_WORDS as usize + 8]
+            .copy_from_slice(&1u64.to_le_bytes());
+        bytes[DESCRIPTOR_INLINE as usize..DESCRIPTOR_INLINE as usize + 8]
+            .copy_from_slice(&1u64.to_le_bytes());
+        data.define(bytes.into_boxed_slice());
+        for (offset, func_id) in [
+            (DESCRIPTOR_INVOKE, contract.invoke),
+            (DESCRIPTOR_DROP, contract.drop),
+            (DESCRIPTOR_RETAIN, contract.retain),
+            (DESCRIPTOR_BOX, contract.box_value),
+        ] {
+            let func_ref = self.object.declare_func_in_data(func_id, &mut data);
+            data.write_function_addr(offset as u32, func_ref);
+        }
+        try_or_string_error!(
+            self.object.define_data(contract.descriptor, &data),
+            "failed to define contract descriptor: {}"
+        );
         Ok(())
     }
 
@@ -1290,7 +1369,8 @@ impl NativeCodegen<'_> {
                 .brif(supplied, box_block, &[], next_block, &[]);
             builder.switch_to_block(box_block);
             builder.seal_block(box_block);
-            let boxed = box_thunk_value(self, &mut builder, &values, ty)?;
+            // The caller transferred these words.
+            let boxed = box_owned_thunk_value(self, &mut builder, &values, ty)?;
             builder
                 .ins()
                 .store(MemFlags::new(), boxed, buffer, (index as i32) * 8);
@@ -1317,8 +1397,13 @@ impl NativeCodegen<'_> {
         let release_value = self
             .object
             .declare_func_in_func(self.release_value, builder.func);
+        // An opaque or callable result keeps the runtime's handle, so only
+        // a value unboxed into direct words releases it.
         let mut returned = unbox_thunk_value(self, &mut builder, raw_result, &contract.return_ty)?;
-        if !matches!(contract.return_ty, DirectType::Opaque(_)) {
+        if !matches!(
+            contract.return_ty,
+            DirectType::Opaque(_) | DirectType::Callable(_)
+        ) {
             builder.ins().call(release_value, &[raw_result]);
         }
         for (index, (ty, mutable)) in contract
@@ -1334,7 +1419,7 @@ impl NativeCodegen<'_> {
                 .ins()
                 .load(types::I64, MemFlags::new(), buffer, (index as i32) * 8);
             returned.extend(unbox_thunk_value(self, &mut builder, raw, ty)?);
-            if !matches!(ty, DirectType::Opaque(_)) {
+            if !matches!(ty, DirectType::Opaque(_) | DirectType::Callable(_)) {
                 builder.ins().call(release_value, &[raw]);
             }
         }

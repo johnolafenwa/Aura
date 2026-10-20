@@ -464,3 +464,11 @@ fn f_string_escapes_and_nested_literals_keep_their_text() {
 "#;
     assert_formats(source, source);
 }
+
+#[test]
+fn decorators_attach_to_their_definition() {
+    assert_formats(
+        "x = 1\n@ tag( \"outer\" )\n\n# kept\n@traced\n\n\ndef run(n: int64) -> int64:\n    return n\nclass Grid:\n    width: int64\n\n    @ property\n\n    def area(self) -> int64:\n        return self.width\n",
+        "x = 1\n\n\n@tag(\"outer\")\n# kept\n@traced\ndef run(n: int64) -> int64:\n    return n\n\n\nclass Grid:\n    width: int64\n\n    @property\n    def area(self) -> int64:\n        return self.width\n",
+    );
+}

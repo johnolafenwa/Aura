@@ -265,17 +265,17 @@ that would collide or change binding. No lexical rename fallback is used.
   stable cross-version serialization API.
 
 `aura lsp` is a persistent JSON-lines compiler service. Every request requires
-`semantic_interface_version: 19` and the string fields `method`, `path`, and
+`semantic_interface_version: 20` and the string fields `method`, `path`, and
 `source`. `id` is optional and is echoed in the response. The supported
 requests are:
 
 ```json
-{"id":1,"semantic_interface_version":19,"method":"analyze","path":"/absolute/app.au","source":"print(1)\n"}
-{"id":2,"semantic_interface_version":19,"method":"complete","path":"/absolute/app.au","source":"value.\n","line":0,"character":6,"trigger":"."}
+{"id":1,"semantic_interface_version":20,"method":"analyze","path":"/absolute/app.au","source":"print(1)\n"}
+{"id":2,"semantic_interface_version":20,"method":"complete","path":"/absolute/app.au","source":"value.\n","line":0,"character":6,"trigger":"."}
 ```
 
 Each response is one line. It contains the same `id`,
-`semantic_interface_version: 19`, and either `result` or an `error` string.
+`semantic_interface_version: 20`, and either `result` or an `error` string.
 
 - The path gives the virtual source its package and import context.
 - Ranges and completion positions are zero-based and use the units of the
@@ -756,7 +756,7 @@ publishes three things into the cache: its binary, that artifact's SHA-256,
 and a key-bound unique entry identity. The cache key covers:
 
 - native cache format `v7`
-- compiler-owned semantic-interface schema version `19`
+- compiler-owned semantic-interface schema version `20`
 - this compiler's version
 - the host target
 - the backend
@@ -855,7 +855,7 @@ directories to mode `0700`.
 
 The language server delegates semantic analysis and completion to the
 persistent compiler service. Every JSON-lines request and response identifies
-semantic-interface schema version `19`. A missing or different identity closes
+semantic-interface schema version `20`. A missing or different identity closes
 the incompatible service. It also invalidates all document analysis before the
 lexical recovery path is used, so cached function-type or ownership metadata
 cannot cross compiler versions. The lexical fallback is recovery-only. It is

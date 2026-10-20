@@ -3,4 +3,4 @@ error[AU2005]: decorator `@staticmethod` is not supported
   |
 4 |     @staticmethod
   |     ^
-  = help: Aura has no general decorators; `@property` before a class method declares a read-only property
+  = help: decorators apply only to module-level functions; in a class body, `@property` before a method declares a read-only property

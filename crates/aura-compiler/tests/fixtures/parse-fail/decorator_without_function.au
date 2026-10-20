@@ -1,0 +1,10 @@
+def traced(value: int64) -> int64:
+    return value
+
+
+@traced
+limit = 3
+
+
+def main():
+    pass

@@ -407,3 +407,11 @@ recommendations:
 7. Registration uses explicit lists, with no compiler-collected registry.
 
 Every other rule above is the ratified default.
+
+## Implementation Notes
+
+Step 6 types the decorated binding as `Callable[def(...) -> R]`, not the thin
+`def` type the E3 example shows. A thin `def` value cannot carry a closure, so
+a wrapper could not capture the function it wraps. A decorator takes
+`own Callable[...]` and returns the same type. A closure cannot promise
+parameter defaults, so a decorated function cannot declare one.

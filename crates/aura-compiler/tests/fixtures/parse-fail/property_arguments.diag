@@ -3,4 +3,4 @@ error[AU2005]: `@property` takes no arguments and stands alone on its line
   |
 4 |     @property()
   |              ^
-  = help: Aura has no general decorators; `@property` before a class method declares a read-only property
+  = help: decorators apply only to module-level functions; in a class body, `@property` before a method declares a read-only property

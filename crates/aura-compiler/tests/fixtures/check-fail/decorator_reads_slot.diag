@@ -1,0 +1,6 @@
+error[AU2001]: module constant `bump` is used before initialization
+ --> crates/aura-compiler/tests/fixtures/check-fail/decorator_reads_slot.au:9:1
+  |
+9 | @after(bump)
+  | ^
+  = related crates/aura-compiler/tests/fixtures/check-fail/decorator_reads_slot.au:10:1: `bump` is declared here

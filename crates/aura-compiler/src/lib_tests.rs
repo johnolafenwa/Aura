@@ -797,6 +797,11 @@ const ADDITIONAL_EXAMPLE_CASES: &[(&str, &str, &str)] = &[
         include_str!("../../../examples/basics/len_and_str.au"),
         "2\n4\n2\n[alpha, beta]\n",
     ),
+    (
+        "examples/basics/decorators.au",
+        include_str!("../../../examples/basics/decorators.au"),
+        "evaluate offset(100)\nevaluate offset(10)\napply offset(10)\napply offset(100)\n112\ncall 2\ncall 1\ncall 0\n0\n",
+    ),
 ];
 
 struct TempDir {

@@ -407,6 +407,84 @@ Task capture ownership does not depend on the target function's call application
 
 A stored `TaskCallable[...]` value is also a valid target. It moves into the start for one child call. An ordinary erased `Callable` is not a valid target, because its environment was never proven `Transfer`. That case reports `AU3008`. See [Concurrency](/manual/concurrency).
 
+## Decorators
+
+A decorator line above a module-level function replaces the function with the result of calling the decorator on it. Write `@` and one expression on each line above `def`.
+
+```aura
+type Step = Callable[def(n: int64) -> int64]
+
+def traced(f: own Step) -> Step:
+    print("wrapping")
+    return Step(lambda [own f] n: f(n) + 1000)
+
+@traced
+def fact(n: int64) -> int64:
+    if n <= 1:
+        return 1
+    return n * fact(n - 1)
+
+print(fact(3))
+```
+
+This prints `wrapping` once, then `10006`.
+
+### The Decorated Binding
+
+The decorated name is a module constant. Its type is `Callable[def(...) -> R]`, built from the function's parameter names, modes, keyword-only boundary, and result type. [Owned Callable Storage](/manual/closures#owned-callable-storage) describes the type. The constant is Shared, so any access can call it. It is not Copy.
+
+A decorator is any expression whose value can be called with that callable and returns the same type. A function name, a call such as `@tag("outer")`, and a module member such as `@tools.traced` all qualify. The usual decorator takes `f: own Callable[...]`, so its returned lambda can capture `f` with `[own f]`.
+
+A decorator whose parameter or result does not match reports `AU2002`. The message names the type the decorator must take and return.
+
+The body of a decorated function calls the decorated binding when it names itself. In the example, `fact(n - 1)` runs through `traced`, so each level adds 1000.
+
+Other modules see only the decorated binding. `from tools import fact` and `tools.fact(3)` both call it.
+
+### Order
+
+Decorator expressions evaluate once, top to bottom. Their results apply bottom to top, so the decorator nearest `def` wraps first.
+
+```aura
+type Step = Callable[def(n: int64) -> int64]
+type Wrapper = Callable[def(f: own Step) -> Step]
+
+def tag(label: own str) -> Wrapper:
+    print(f"evaluate {label}")
+    return Wrapper(lambda [own label] own f: wrap(label.clone(), f))
+
+def wrap(label: own str, f: own Step) -> Step:
+    print(f"apply {label}")
+    return Step(lambda [own f] n: f(n))
+
+@tag("outer")
+@tag("inner")
+def run(n: int64) -> int64:
+    return n
+
+print(run(1))
+```
+
+This prints `evaluate outer`, `evaluate inner`, `apply inner`, `apply outer`, then `1`.
+
+The decorated constant initializes in declaration order with the module's other constants. A decorator expression that reads the decorated name reports `AU2001`, because the binding is not initialized yet. A trap inside a decorator stops module initialization, and no later decorator runs. An importing module never runs the decorators again.
+
+### Restrictions
+
+The checker rejects these with `AU2047`:
+
+- a generic decorated function
+- a decorated `main`
+- a parameter with a default, because a closure has no parameter defaults
+- a decorated function that returns a view
+- a decorator line that is not followed by a module-level `def`
+
+A decorator inside a function body, or in a class body other than `@property`, reports `AU2005`. Decorators on classes, enums, and methods are not implemented. A generic decorator cannot return a new closure, because packing a closure needs a non-generic alias.
+
+### Tooling
+
+Hover on a decorated function shows its decorator lines above the signature. `aura doc` lists it as a function, with its decorators and docstring. `aura fmt` keeps decorator lines directly above their definition.
+
 ## `main`
 
 In the selected entry module, a local function named `main` is the entrypoint when the module has no executable top-level statements. Its only valid signatures are:

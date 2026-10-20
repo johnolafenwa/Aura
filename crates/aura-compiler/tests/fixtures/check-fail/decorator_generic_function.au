@@ -1,0 +1,14 @@
+type Step = Callable[def(n: int64) -> int64]
+
+
+def traced(f: own Step) -> Step:
+    return f
+
+
+@traced
+def identity[T](value: T) -> T:
+    return value
+
+
+def main():
+    pass

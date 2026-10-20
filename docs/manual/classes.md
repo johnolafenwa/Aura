@@ -268,7 +268,7 @@ A getter must have this exact shape:
 - It returns an owned value other than `None`. A view result is rejected.
 - Its name does not collide with a field of the class.
 
-`@property` is the only decorator. It stands alone on the line before `def`, and it takes no arguments. Any other `@name` line is `AU2005`.
+`@property` is the only marker a class body accepts. It stands alone on the line before `def`, and it takes no arguments. Any other `@` line in a class body is `AU2005`. Decorators on module-level functions are described in [Decorators](/manual/functions#decorators).
 
 A property is read-only. The checker rejects each of these with `AU2045`:
 
@@ -447,7 +447,7 @@ An instance call invokes the statically selected inherent or trait method. An as
 | `AU2001` | Unresolved class, field type, method, or member. |
 | `AU2002` | Field, default, or constructor type mismatch. Generic arity or bound failure. A non-copy field in a `copy class`. |
 | `AU2004` | Constructor or method argument-binding failure. |
-| `AU2005` | `__init__` called as a method or used as a value, or a decorator other than a bare `@property` line. |
+| `AU2005` | `__init__` called as a method or used as a value, or a class-body `@` line other than a bare `@property`. |
 | `AU2016` | Invalid `__init__` declaration: a receiver other than bare `self`, its own type parameters, a result other than `None`, `return value`, or a trait member named `__init__`. |
 | `AU2017` | A `with` item whose class has no valid `__exit__` or `close`, or whose `__enter__` has the wrong shape. |
 | `AU2043` | An invalid `Display` implementation. See [Generics And Traits](/manual/generics-and-traits#the-display-trait). |

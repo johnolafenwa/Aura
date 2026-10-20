@@ -75,7 +75,7 @@ String and format-specification diagnostics are described under
 | `AU2002` | type mismatch | A value of the wrong type, a callback with the wrong contract, a type without the ordering an operation needs, or a format specification that does not fit its value. | Make the value's type match the type the position requires. |
 | `AU2003` | unsupported operator | An operator the operand types do not define, including ordering or arithmetic on a union. | Use an operator the operand types define. |
 | `AU2004` | argument binding | Arguments that do not bind to the callee's parameters. | Match the call to the callee's parameter list. |
-| `AU2005` | unsupported syntax or feature | Python-shaped source, a generator expression, a slice step, slice assignment, a decorator other than `@property`, or a reserved FFI contract. | Use the Aura form the message names. |
+| `AU2005` | unsupported syntax or feature | Python-shaped source, a generator expression, a slice step, slice assignment, a decorator in a function or class body other than `@property`, or a reserved FFI contract. | Use the Aura form the message names. |
 | `AU2006` | builtin method collision | A trait method whose name shadows a builtin member of its target. | Rename the trait method. |
 | `AU2007` | builtin function redefinition | A module-level function named after a builtin function. | Rename the function. |
 | `AU2008` | equality unavailable | `==`, `!=`, or an equality-based collection operation on a type without equality. | Use a type that defines equality, or avoid the equality-based operation. |
@@ -94,6 +94,7 @@ String and format-specification diagnostics are described under
 | `AU2044` | invalid property declaration | An `@property` getter outside a class, with a receiver other than `self`, with parameters, type parameters, a `None` or view result, or a name that collides with a field. | Declare `def name(self) -> Type:` in the class body. |
 | `AU2045` | invalid property use | Assignment, compound assignment, a `mut` argument or receiver, `match mut`, a view, or call syntax on a property. | Read the property without parentheses, or bind it to a local and change the local. |
 | `AU2046` | invalid derived implementation | A bodyless `impl` for a trait other than `json.Codec`, for a type from another module, a generic class or enum, or a class with `__init__`. Also a positional enum payload, a field type with no JSON form, or a union whose members a decoder cannot tell apart. | Write the implementation by hand, or change the field to a supported type. See [Derived Codecs](/manual/json#derived-codecs). |
+| `AU2047` | invalid decorator | A decorator on a generic function, on `main`, on a function with a parameter default or a view result, or a decorator line not followed by a module-level `def`. | Remove the decorator, or change the function so a closure can stand in for it. See [Decorators](/manual/functions#decorators). |
 | `AU2999` | general compile-time rejection | A rejection that has no narrower public category. | Follow the message. |
 
 **`AU2002` type mismatch.** List `map`, `filter`, and keyed `sort` require the
@@ -242,8 +243,8 @@ the accepted form, such as `impl[T] Display for Box[T]:`.
 **`AU2044` invalid property declaration.** The message names the getter and
 the rule it breaks, and a related label points at the `@property` line. The
 parser also reports `AU2044` for an `@property` line that is not directly
-before a class method, and for a repeated marker. A decorator other than
-`@property` is `AU2005`.
+before a class method, and for a repeated marker. Another decorator in a class
+body is `AU2005`.
 
 **`AU2045` invalid property use.** The message names the property and the
 rejected action, such as ``property `total` is read-only and cannot be
@@ -255,6 +256,12 @@ computed value, not a method, and cannot be called``.
 for a field or payload, its name and type, such as ``cannot derive `json.Codec` for
 `Bag`: field `items` has the type `set[str]`, which a derived `json.Codec`
 cannot encode``.
+
+**`AU2047` invalid decorator.** The message names the decorated function and
+the rule it breaks, such as ``decorated function `identity` cannot be
+generic``. The primary span is the first `@` line, or the parameter that has a
+default. A decorator whose type does not fit reports `AU2002` instead, and its
+message names the type the decorator must take and return.
 
 **`AU2999` general compile-time rejection.** This is the maintained catch-all
 for compile-time rejections that do not yet have a narrower public category. It
