@@ -12054,7 +12054,20 @@ impl<'a> FunctionCompiler<'a> {
         let fast_block = self.builder.create_block();
         let join_block = self.builder.create_block();
         self.builder.append_block_param(join_block, types::I64);
-        self.emit_list_shared_check(list, &layout, slow_block, fast_block);
+        // Every list form keeps its length in the view.
+        let access = self.emit_list_access(list, &layout);
+        let form = self.builder.ins().iadd_imm(
+            access,
+            -(aura_runtime::native_runtime::DirectListAccess::Values as i64),
+        );
+        let is_list = self.builder.ins().icmp_imm(
+            IntCC::UnsignedLessThan,
+            form,
+            i64::from(aura_runtime::native_runtime::DirectListAccess::LIST_FORMS),
+        );
+        self.builder
+            .ins()
+            .brif(is_list, fast_block, &[], slow_block, &[]);
 
         self.builder.switch_to_block(fast_block);
         self.builder.seal_block(fast_block);
@@ -12075,24 +12088,39 @@ impl<'a> FunctionCompiler<'a> {
         self.builder.block_params(join_block)[0]
     }
 
-    /// Branches to `slow_block` when `list` may be reached by another thread,
-    /// so its list view may change under a lock, and to `fast_block`
-    /// otherwise. Only the creating thread sets the shared lock, before it
-    /// hands the value on, so a plain load is enough.
-    fn emit_list_shared_check(
+    /// Loads the `DirectListAccess` code of `list`, widened to 64 bits.
+    /// Only the creating thread changes the code of a confined value, and it
+    /// clears the code before it hands the value on, so a plain load is
+    /// enough.
+    fn emit_list_access(
         &mut self,
         list: Value,
+        layout: &aura_runtime::native_runtime::DirectListLayout,
+    ) -> Value {
+        self.builder
+            .ins()
+            .uload32(MemFlags::trusted(), list, layout.access_offset)
+    }
+
+    /// Branches to `fast_block` when the list view of `list` has the layout
+    /// `access` names, which also means the value is confined to this
+    /// thread, and to `slow_block` otherwise.
+    fn emit_list_access_check(
+        &mut self,
+        list: Value,
+        access: aura_runtime::native_runtime::DirectListAccess,
         layout: &aura_runtime::native_runtime::DirectListLayout,
         slow_block: cranelift_codegen::ir::Block,
         fast_block: cranelift_codegen::ir::Block,
     ) {
-        let shared =
-            self.builder
-                .ins()
-                .load(types::I64, MemFlags::trusted(), list, layout.shared_offset);
+        let actual = self.emit_list_access(list, layout);
+        let matches = self
+            .builder
+            .ins()
+            .icmp_imm(IntCC::Equal, actual, access as i64);
         self.builder
             .ins()
-            .brif(shared, slow_block, &[], fast_block, &[]);
+            .brif(matches, fast_block, &[], slow_block, &[]);
     }
 
     /// Reads one element of an `Array` indexed by one `int64`. A confined
@@ -12108,11 +12136,12 @@ impl<'a> FunctionCompiler<'a> {
         line: Value,
         column: Value,
     ) -> std::result::Result<ValueRef, String> {
-        let (size, load_ty) = match kind {
-            ScalarKind::Int32 => (4, types::I32),
-            ScalarKind::Int64 => (8, types::I64),
-            ScalarKind::Float32 => (4, types::F32),
-            ScalarKind::Float64 => (8, types::F64),
+        use aura_runtime::native_runtime::DirectListAccess;
+        let (size, load_ty, access) = match kind {
+            ScalarKind::Int32 => (4, types::I32, DirectListAccess::ArrayInt32),
+            ScalarKind::Int64 => (8, types::I64, DirectListAccess::ArrayInt64),
+            ScalarKind::Float32 => (4, types::F32, DirectListAccess::ArrayFloat32),
+            ScalarKind::Float64 => (8, types::F64, DirectListAccess::ArrayFloat64),
             other => return Err(format!("direct backend has no Array dtype `{other:?}`")),
         };
         let layout = aura_runtime::native_runtime::direct_list_layout();
@@ -12122,7 +12151,7 @@ impl<'a> FunctionCompiler<'a> {
         let join_block = self.builder.create_block();
         self.builder
             .append_block_param(join_block, kind.signature_type());
-        self.emit_list_shared_check(array, &layout, slow_block, fast_block);
+        self.emit_list_access_check(array, access, &layout, slow_block, fast_block);
         self.builder.switch_to_block(fast_block);
         self.builder.seal_block(fast_block);
         let flags = MemFlags::trusted();
@@ -12167,10 +12196,10 @@ impl<'a> FunctionCompiler<'a> {
     }
 
     /// Reads a scalar list element as raw bits. `kind` is 0 for `int64`,
-    /// 1 for `float64`, and 2 for `bool`. A confined list in range is read
-    /// in place with one bounds check. A shared list, an index out of range,
-    /// or an integer past `int64` takes the runtime call, which reports the
-    /// same diagnostic as before.
+    /// 1 for `float64`, and 2 for `bool`. A confined list that keeps the
+    /// scalars unboxed is read in place with one bounds check, or none when
+    /// the loop proves the index. Any other list, or an index out of range,
+    /// takes the runtime call, which reports the same diagnostic as before.
     fn emit_scalar_list_read(
         &mut self,
         list: Value,
@@ -12180,68 +12209,42 @@ impl<'a> FunctionCompiler<'a> {
         line: Value,
         column: Value,
     ) -> std::result::Result<Value, String> {
+        use aura_runtime::native_runtime::DirectListAccess;
         let layout = aura_runtime::native_runtime::direct_list_layout();
-        let element_offset = match kind {
-            0 => layout.int_offset,
-            1 => Some(layout.float_offset),
-            _ => Some(layout.bool_offset),
+        let (access, stride) = match kind {
+            0 => (DirectListAccess::Int64, 8),
+            1 => (DirectListAccess::Float64, 8),
+            _ => (DirectListAccess::Bool, 1),
         };
         let slow_block = self.builder.create_block();
+        let fast_block = self.builder.create_block();
         let join_block = self.builder.create_block();
         self.builder.append_block_param(join_block, types::I64);
-        if let Some(element_offset) = element_offset {
-            let fast_block = self.builder.create_block();
-            self.emit_list_shared_check(list, &layout, slow_block, fast_block);
-            self.builder.switch_to_block(fast_block);
-            self.builder.seal_block(fast_block);
-            let flags = MemFlags::trusted();
-            let elements = self
-                .builder
-                .ins()
-                .load(types::I64, flags, list, layout.elements_offset);
-            let position = if proven {
-                index
-            } else {
-                self.emit_list_view_bounds_check(list, index, &layout, slow_block)
-            };
-            let offset = self.builder.ins().imul_imm(position, layout.element_stride);
-            let element = self.builder.ins().iadd(elements, offset);
-            match kind {
-                0 => {
-                    let low = self
-                        .builder
-                        .ins()
-                        .load(types::I64, flags, element, element_offset);
-                    let high =
-                        self.builder
-                            .ins()
-                            .load(types::I64, flags, element, element_offset + 8);
-                    // The element holds a 128-bit integer. It fits `int64`
-                    // when the high half is the sign of the low half.
-                    let sign = self.builder.ins().sshr_imm(low, 63);
-                    let fits = self.builder.ins().icmp(IntCC::Equal, high, sign);
-                    self.builder
-                        .ins()
-                        .brif(fits, join_block, &[low], slow_block, &[]);
-                }
-                1 => {
-                    let bits = self
-                        .builder
-                        .ins()
-                        .load(types::I64, flags, element, element_offset);
-                    self.builder.ins().jump(join_block, &[bits]);
-                }
-                _ => {
-                    let byte =
-                        self.builder
-                            .ins()
-                            .uload8(types::I64, flags, element, element_offset);
-                    self.builder.ins().jump(join_block, &[byte]);
-                }
-            }
+        self.emit_list_access_check(list, access, &layout, slow_block, fast_block);
+        self.builder.switch_to_block(fast_block);
+        self.builder.seal_block(fast_block);
+        let flags = MemFlags::trusted();
+        let elements = self
+            .builder
+            .ins()
+            .load(types::I64, flags, list, layout.elements_offset);
+        let position = if proven {
+            index
         } else {
-            self.builder.ins().jump(slow_block, &[]);
-        }
+            self.emit_list_view_bounds_check(list, index, &layout, slow_block)
+        };
+        let offset = if stride == 1 {
+            position
+        } else {
+            self.builder.ins().imul_imm(position, stride)
+        };
+        let element = self.builder.ins().iadd(elements, offset);
+        let bits = if stride == 1 {
+            self.builder.ins().uload8(types::I64, flags, element, 0)
+        } else {
+            self.builder.ins().load(types::I64, flags, element, 0)
+        };
+        self.builder.ins().jump(join_block, &[bits]);
 
         self.builder.switch_to_block(slow_block);
         self.builder.seal_block(slow_block);

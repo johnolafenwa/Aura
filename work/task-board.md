@@ -17,7 +17,20 @@ Last updated: 2026-10-20
   LLVM and removes it. LLVM's inliner replaces the planned MIR inliner.
 - Next: step 1, below.
 
-## Batch 7 step 6: integer Array kernels (in progress)
+## Batch 7 unboxed scalar lists (in progress)
+
+- Target: store `int64`, `float64`, and `bool` lists unboxed, as John chose
+  on 2026-10-20, after step 6 and before step 7.
+- Done: `ListElements` keeps `Value`s or unboxed scalars and picks the form
+  from the elements. The interpreter and native code read both forms, and
+  native code reads scalar forms in place. Notes are in
+  `2026-10-20-batch-7-unboxed-scalar-lists.md`.
+- Verification: see the work note. `int_list_sum` went from a median of
+  21.0 ms to 9.5 ms, about 4.1x Rust. The other collection programs stay
+  within 1% of their instruction counts.
+- Next: hosted CI, then step 7.
+
+## Batch 7 step 6: integer Array kernels (complete)
 
 - Target: vectorize the `int32` and `int64` Array kernels and keep the
   first-overflow flat index in every diagnostic.
@@ -26,7 +39,9 @@ Last updated: 2026-10-20
   `2026-10-20-batch-7-step-6-integer-array-kernels.md`.
 - Verification: see the work note. Reference tests compare every kernel
   with an exact element-by-element definition.
-- Next: hosted CI, then the unboxed scalar list step, then step 7.
+- Done: merged in PR #96, with fixes for three advisories published that
+  day: RUSTSEC-2026-0381 and RUSTSEC-2026-0382 in the TLS crates, and
+  GHSA-698v-4r3x-3vcv in the docs site's vite.
 
 ## Batch 7 step 5: proven loop reads and Array reads (complete)
 

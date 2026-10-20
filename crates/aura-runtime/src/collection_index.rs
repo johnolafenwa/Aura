@@ -48,19 +48,11 @@ pub fn hash_value(value: &Value) -> u64 {
         while let Value::Union(union) = value {
             value = &union.payload;
         }
+        if hash_scalar(value, &mut hasher) {
+            continue;
+        }
         std::mem::discriminant(value).hash(&mut hasher);
         match value {
-            Value::Int(integer) => integer.hash(&mut hasher),
-            Value::Float(float) => {
-                // `0.0 == -0.0`, so both hash as zero. NaN never equals
-                // anything, so its bits are as good as any hash.
-                if *float == 0.0 {
-                    0u64.hash(&mut hasher);
-                } else {
-                    float.to_bits().hash(&mut hasher);
-                }
-            }
-            Value::Bool(flag) => flag.hash(&mut hasher),
             Value::String(text) => text.hash(&mut hasher),
             Value::Duration(nanoseconds) => nanoseconds.hash(&mut hasher),
             Value::Range(range) => {
@@ -75,7 +67,21 @@ pub fn hash_value(value: &Value) -> u64 {
             }
             Value::Vec(vector) => {
                 vector.elements.len().hash(&mut hasher);
-                pending.extend(vector.elements.iter().rev());
+                match vector.elements.as_values() {
+                    Some(values) => pending.extend(values.iter().rev()),
+                    None => {
+                        // Scalar elements would be the next nodes visited
+                        // and push nothing, so hashing them here in order
+                        // matches hashing the same list of `Value`s.
+                        for element in &vector.elements {
+                            if budget == 0 {
+                                break;
+                            }
+                            budget -= 1;
+                            hash_scalar(&element, &mut hasher);
+                        }
+                    }
+                }
             }
             Value::Instance(instance) => {
                 nominal_runtime_base_name(&instance.class_name).hash(&mut hasher);
@@ -104,6 +110,34 @@ pub fn hash_value(value: &Value) -> u64 {
         }
     }
     hasher.finish()
+}
+
+/// Hashes an `int`, `float`, or `bool` value and returns true, or returns
+/// false for any other value.
+#[inline(always)]
+fn hash_scalar(value: &Value, hasher: &mut impl Hasher) -> bool {
+    match value {
+        Value::Int(integer) => {
+            std::mem::discriminant(value).hash(hasher);
+            integer.hash(hasher);
+        }
+        Value::Float(float) => {
+            std::mem::discriminant(value).hash(hasher);
+            // `0.0 == -0.0`, so both hash as zero. NaN never equals
+            // anything, so its bits are as good as any hash.
+            if *float == 0.0 {
+                0u64.hash(hasher);
+            } else {
+                float.to_bits().hash(hasher);
+            }
+        }
+        Value::Bool(flag) => {
+            std::mem::discriminant(value).hash(hasher);
+            flag.hash(hasher);
+        }
+        _ => return false,
+    }
+    true
 }
 
 /// What a stored entry exposes as its key.

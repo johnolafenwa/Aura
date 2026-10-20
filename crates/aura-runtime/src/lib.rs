@@ -14,6 +14,7 @@ pub mod bytes_codec;
 pub mod collection_index;
 pub mod ffi;
 pub mod json_codec;
+pub mod list_elements;
 pub mod native_runtime;
 pub mod randomness;
 pub mod runtime_config;

@@ -218,7 +218,7 @@ fn adr0061_element_place_walkers_report_missing_slots_without_changing_values() 
         ),
     ] {
         let place = format!("{root}.{segment}");
-        assert_eq!(env.place_ref(&place).unwrap_err().message, message);
+        assert_eq!(env.place_borrow(&place).unwrap_err().message, message);
         let value = env.values.get_mut(root).unwrap();
         let before = value.render();
         assert_eq!(
@@ -229,8 +229,17 @@ fn adr0061_element_place_walkers_report_missing_slots_without_changing_values() 
         );
         assert_eq!(value.render(), before);
     }
+    // `items` keeps its `int64` elements unboxed, so an element is built.
     assert_eq!(env.place_ref("items.[i:0]").unwrap().render(), "3");
-    assert_eq!(env.place_ref("entries.[k:s:61]").unwrap().render(), "4");
+    assert_eq!(
+        env.place_borrow("items.[i:0]").unwrap_err().message,
+        "MIR place `items.[i:0]` holds the scalar `3`, which cannot be borrowed"
+    );
+    assert_eq!(
+        env.place_ref("items.[i:0].field").unwrap_err().message,
+        "cannot access field `field` on non-instance MIR place `items.[i:0].field`"
+    );
+    assert_eq!(env.place_borrow("entries.[k:s:61]").unwrap().render(), "4");
     assert_eq!(
         env.begin_element_loan(
             "bad",
@@ -1380,17 +1389,17 @@ fn adr0038_mir_loan_environment_covers_alias_resolution_and_nested_place_errors(
         .contains("cyclic MIR loan descriptor"));
 
     assert!(env
-        .place_ref("pair.nested.bad")
+        .place_borrow("pair.nested.bad")
         .expect_err("tuple projections must be numeric")
         .message
         .contains("is not a fixed position"));
     assert!(env
-        .place_ref("pair.nested.4")
+        .place_borrow("pair.nested.4")
         .expect_err("tuple projections must be in bounds")
         .message
         .contains("has no element at index 4"));
     assert!(env
-        .place_ref("pair.nested.00")
+        .place_borrow("pair.nested.00")
         .expect_err("tuple projections must use their canonical decimal spelling")
         .message
         .contains("non-canonical tuple projection"));
@@ -2440,7 +2449,7 @@ def main():
         );
     }
 
-    let source_allocation = match env.place_ref("values").unwrap() {
+    let source_allocation = match env.place_borrow("values").unwrap() {
         Value::Array(ArrayValue {
             storage: ArrayStorage::Int32(values),
             ..
@@ -2475,7 +2484,7 @@ def main():
             clone_count,
             "mutable Array.{field} must not clone its receiver before writeback"
         );
-        match env.place_ref("values").unwrap() {
+        match env.place_borrow("values").unwrap() {
             Value::Array(ArrayValue {
                 storage: ArrayStorage::Int32(values),
                 ..
@@ -2566,8 +2575,8 @@ fn mir_nested_array_clone_allocation_failure_is_au4005_and_preserves_source() {
             .into(),
         }),
     );
-    let source_storage = match env.place_ref("nested").unwrap() {
-        Value::Vec(vector) => match &vector.elements[0] {
+    let source_storage = match env.place_borrow("nested").unwrap() {
+        Value::Vec(vector) => match &*vector.elements.get(0).unwrap() {
             Value::Array(ArrayValue {
                 storage: ArrayStorage::Int32(values),
                 ..
@@ -2590,8 +2599,8 @@ fn mir_nested_array_clone_allocation_failure_is_au4005_and_preserves_source() {
     })
     .expect_err("nested Array allocation failure should trap");
     assert_eq!(error.code, "AU4005");
-    match env.place_ref("nested").unwrap() {
-        Value::Vec(vector) => match &vector.elements[0] {
+    match env.place_borrow("nested").unwrap() {
+        Value::Vec(vector) => match &*vector.elements.get(0).unwrap() {
             Value::Array(ArrayValue {
                 storage: ArrayStorage::Int32(values),
                 ..
@@ -3892,7 +3901,7 @@ fn assert_mir_length_call_borrows_receiver(
         "{api} should report the expected length"
     );
     assert!(
-        env.place_ref(receiver_place).is_ok(),
+        env.place_borrow(receiver_place).is_ok(),
         "{api} should preserve its borrowed receiver"
     );
     assert_eq!(
@@ -4108,7 +4117,7 @@ fn mir_tuple_construct_project_and_take_preserve_ownership_boundaries() {
     let super::RvalueOutcome::Value(tuple) = outcome else {
         panic!("expected tuple value");
     };
-    assert!(env.place_ref("text").is_err(), "owned element must move");
+    assert!(env.place_borrow("text").is_err(), "owned element must move");
     assert_eq!(
         env.read_place("number").expect("copy element must remain"),
         Value::Int(IntegerValue::from_signed(7))
@@ -4392,7 +4401,7 @@ def main():
             other => panic!("expected str from {class_name}.{field}, found {other:?}"),
         }
         assert!(
-            env.place_ref(place).is_err(),
+            env.place_borrow(place).is_err(),
             "the source of an own {class_name} receiver must stay consumed"
         );
     }
@@ -4420,7 +4429,7 @@ def main():
         text_ptr,
         "an own trait receiver on a builtin value must not snapshot-clone"
     );
-    assert!(env.place_ref("text").is_err());
+    assert!(env.place_borrow("text").is_err());
 }
 
 fn enum_payloads(value: Value, enum_name: &str, variant_name: &str) -> Vec<Value> {
@@ -4507,11 +4516,11 @@ fn mir_json_borrowed_host_args_reference_the_existing_runtime_value() {
         json_value("String", vec![Value::String("payload".repeat(32))]),
     );
 
-    let text_ptr = match env.place_ref("text").expect("text should exist") {
+    let text_ptr = match env.place_borrow("text").expect("text should exist") {
         Value::String(text) => text.as_ptr(),
         other => panic!("expected str, found {other:?}"),
     };
-    let value_ptr = env.place_ref("value").expect("value should exist") as *const Value;
+    let value_ptr = env.place_borrow("value").expect("value should exist") as *const Value;
 
     let text_operand = Operand::Place("text".to_string());
     let value_operand = Operand::Place("value".to_string());
@@ -4560,7 +4569,7 @@ fn mir_json_into_accessors_move_payload_allocations_and_consume_places() {
         other => panic!("expected str payload, found {other:?}"),
     }
     assert!(
-        env.place_ref("string_value").is_err(),
+        env.place_borrow("string_value").is_err(),
         "the owned source place must be consumed"
     );
 
@@ -4587,12 +4596,12 @@ fn mir_json_into_accessors_move_payload_allocations_and_consume_places() {
     match expect_present(array_result) {
         Value::Vec(value) => assert_eq!(
             value.elements.as_ptr(),
-            values_ptr,
+            values_ptr as usize,
             "owned Vec payload must be transferred, not cloned"
         ),
         other => panic!("expected Vec payload, found {other:?}"),
     }
-    assert!(env.place_ref("array_value").is_err());
+    assert!(env.place_borrow("array_value").is_err());
 
     let entries = vec![(
         Value::String("k".to_string()),
@@ -4629,7 +4638,7 @@ fn mir_json_into_accessors_move_payload_allocations_and_consume_places() {
         ),
         other => panic!("expected Map payload, found {other:?}"),
     }
-    assert!(env.place_ref("object_value").is_err());
+    assert!(env.place_borrow("object_value").is_err());
 }
 
 #[test]
@@ -4690,12 +4699,12 @@ fn mir_json_variant_construction_moves_owned_payload_allocations() {
         };
         match variant.payloads.as_slice() {
             [Value::String(value)] => assert_eq!(value.as_ptr(), text_ptr),
-            [Value::Vec(value)] => assert_eq!(value.elements.as_ptr(), values_ptr),
+            [Value::Vec(value)] => assert_eq!(value.elements.as_ptr(), values_ptr as usize),
             [Value::Map(value)] => assert_eq!(value.entries.as_ptr(), entries_ptr),
             other => panic!("unexpected json.Value.{variant_name} payload: {other:?}"),
         }
         assert!(
-            env.place_ref(place).is_err(),
+            env.place_borrow(place).is_err(),
             "owned json.Value.{variant_name} payload must be moved from its source place"
         );
     }
@@ -4722,7 +4731,7 @@ fn mir_json_wrong_variant_owned_accessor_still_consumes_the_source() {
         optional_absent(Type::named("str"))
     );
     assert!(
-        env.place_ref("value").is_err(),
+        env.place_borrow("value").is_err(),
         "an own argument is consumed even when its variant does not match"
     );
 }
@@ -4760,11 +4769,11 @@ fn mir_json_owned_accessor_moves_a_nested_place_without_cloning_its_payload() {
         other => panic!("expected str payload, found {other:?}"),
     }
     assert!(
-        env.place_ref("holder.value").is_err(),
+        env.place_borrow("holder.value").is_err(),
         "the moved nested field must no longer contain a runtime value"
     );
     assert!(
-        env.place_ref("holder").is_ok(),
+        env.place_borrow("holder").is_ok(),
         "moving a field must preserve the containing instance"
     );
 }
@@ -4853,11 +4862,11 @@ fn mir_json_borrowed_calls_leave_source_allocations_in_place_on_success_and_erro
         Type::named("str"),
         Value::String("{".repeat(32)),
     );
-    let valid_text_ptr = match env.place_ref("valid_text").unwrap() {
+    let valid_text_ptr = match env.place_borrow("valid_text").unwrap() {
         Value::String(value) => value.as_ptr(),
         other => panic!("expected str, found {other:?}"),
     };
-    let invalid_text_ptr = match env.place_ref("invalid_text").unwrap() {
+    let invalid_text_ptr = match env.place_borrow("invalid_text").unwrap() {
         Value::String(value) => value.as_ptr(),
         other => panic!("expected str, found {other:?}"),
     };
@@ -4872,11 +4881,11 @@ fn mir_json_borrowed_calls_leave_source_allocations_in_place_on_success_and_erro
         .expect("json.parse returns parse failures as Result.Err");
         assert!(matches!(parsed, Value::EnumVariant(_)));
     }
-    match env.place_ref("valid_text").unwrap() {
+    match env.place_borrow("valid_text").unwrap() {
         Value::String(value) => assert_eq!(value.as_ptr(), valid_text_ptr),
         other => panic!("expected str, found {other:?}"),
     }
-    match env.place_ref("invalid_text").unwrap() {
+    match env.place_borrow("invalid_text").unwrap() {
         Value::String(value) => assert_eq!(value.as_ptr(), invalid_text_ptr),
         other => panic!("expected str, found {other:?}"),
     }
@@ -4893,7 +4902,7 @@ fn mir_json_borrowed_calls_leave_source_allocations_in_place_on_success_and_erro
         optional_type(Type::named("int64")),
         optional_present(Type::named("int64"), Value::Int(IntegerValue::from_i64(2))),
     );
-    let value_ptr = env.place_ref("string_value").unwrap() as *const Value;
+    let value_ptr = env.place_borrow("string_value").unwrap() as *const Value;
 
     call_name(
         &mut runtime,
@@ -4920,7 +4929,7 @@ fn mir_json_borrowed_calls_leave_source_allocations_in_place_on_success_and_erro
         .unwrap_or_else(|error| panic!("{name} should accept a borrowed json.Value: {error}"));
     }
 
-    let retained = env.place_ref("string_value").unwrap();
+    let retained = env.place_borrow("string_value").unwrap();
     assert_eq!(retained as *const Value, value_ptr);
     match retained {
         Value::EnumVariant(variant) => match variant.payloads.as_slice() {
@@ -4943,7 +4952,7 @@ fn mir_json_borrowed_calls_leave_source_allocations_in_place_on_success_and_erro
         Type::named("json.Value"),
         json_value("String", Vec::new()),
     );
-    let malformed_ptr = env.place_ref("malformed").unwrap() as *const Value;
+    let malformed_ptr = env.place_borrow("malformed").unwrap() as *const Value;
     let error = call_name(
         &mut runtime,
         "json::dumps",
@@ -4956,7 +4965,7 @@ fn mir_json_borrowed_calls_leave_source_allocations_in_place_on_success_and_erro
     .expect_err("malformed json.Value should fail validation");
     assert_eq!(error.code, "AU4001");
     assert_eq!(
-        env.place_ref("malformed").unwrap() as *const Value,
+        env.place_borrow("malformed").unwrap() as *const Value,
         malformed_ptr,
         "borrowed validation failure must not replace or consume the source"
     );
@@ -4971,7 +4980,7 @@ fn mir_json_parse_materialization_allocation_failure_is_au4005_and_preserves_sou
         Type::named("str"),
         Value::String("[null]".to_string()),
     );
-    let source_ptr = match env.place_ref("source").expect("source should exist") {
+    let source_ptr = match env.place_borrow("source").expect("source should exist") {
         Value::String(value) => value.as_ptr(),
         other => panic!("expected str, found {other:?}"),
     };
@@ -4992,7 +5001,7 @@ fn mir_json_parse_materialization_allocation_failure_is_au4005_and_preserves_sou
         "memory allocation failed while materializing parsed JSON"
     );
     match env
-        .place_ref("source")
+        .place_borrow("source")
         .expect("borrowed parse source should survive the trap")
     {
         Value::String(value) => assert_eq!(value.as_ptr(), source_ptr),
@@ -5008,7 +5017,7 @@ fn mir_bytes_adapter_propagates_materialization_allocation_failure_as_au4005() {
         Type::Named("list".to_string(), vec![Type::named("uint8")]),
         bytes_vec_value(vec![0xab]),
     );
-    let source_elements = match env.place_ref("source").expect("source should exist") {
+    let source_elements = match env.place_borrow("source").expect("source should exist") {
         Value::Vec(value) => value.elements.as_ptr(),
         other => panic!("expected list[uint8], found {other:?}"),
     };
@@ -5026,7 +5035,7 @@ fn mir_bytes_adapter_propagates_materialization_allocation_failure_as_au4005() {
         "memory allocation failed while materializing byte data"
     );
     match env
-        .place_ref("source")
+        .place_borrow("source")
         .expect("borrowed byte source should survive the trap")
     {
         Value::Vec(value) => assert_eq!(value.elements.as_ptr(), source_elements),
@@ -5073,7 +5082,7 @@ fn mir_string_to_bytes_member_diagnostics_preserve_the_receiver() {
         .expect_err("str.to_bytes must reject arguments before moving its receiver");
     assert_eq!(error.message, "`to_bytes` does not take arguments");
     match env
-        .place_ref("source")
+        .place_borrow("source")
         .expect("the rejected call must preserve its receiver")
     {
         Value::String(value) => assert_eq!(value.as_ptr(), source_ptr),
@@ -5114,7 +5123,7 @@ fn mir_dynamic_string_to_bytes_borrows_receiver_before_allocation_failure() {
         "dynamic str.to_bytes must borrow its receiver before entering the byte adapter"
     );
     match env
-        .place_ref("source")
+        .place_borrow("source")
         .expect("borrowed str receiver should survive the trap")
     {
         Value::String(value) => assert_eq!(value.as_ptr(), source_ptr),
@@ -5250,7 +5259,7 @@ fn mir_json_adapters_reject_inexact_runtime_metadata() {
     assert_eq!(int_error.code, "AU4001");
     assert!(int_error.message.contains("json.Value.Int"));
     assert!(
-        env.place_ref("int_value").is_ok(),
+        env.place_borrow("int_value").is_ok(),
         "a rejected borrowed accessor must preserve its source"
     );
 
@@ -5293,7 +5302,7 @@ fn mir_json_adapters_reject_inexact_runtime_metadata() {
         assert_eq!(error.code, "AU4001");
         assert!(error.message.contains(&format!("json.Value.{variant}")));
         assert!(
-            env.place_ref(place).is_err(),
+            env.place_borrow(place).is_err(),
             "an own argument remains consumed when metadata validation fails"
         );
     }
@@ -5351,7 +5360,7 @@ fn mir_json_host_boundary_reports_malformed_values_without_hiding_consumption() 
     ] {
         env.define_typed(place, Type::named("json.Value"), value);
         let source_ptr =
-            env.place_ref(place)
+            env.place_borrow(place)
                 .expect("borrowed malformed source should exist") as *const Value;
         let error = call_name(
             &mut runtime,
@@ -5363,7 +5372,7 @@ fn mir_json_host_boundary_reports_malformed_values_without_hiding_consumption() 
         assert_eq!(error.code, "AU4001");
         assert_eq!(error.message, expected_message);
         assert_eq!(
-            env.place_ref(place).unwrap() as *const Value,
+            env.place_borrow(place).unwrap() as *const Value,
             source_ptr,
             "{call} must not replace a malformed borrowed source"
         );
@@ -5399,8 +5408,8 @@ fn mir_json_host_boundary_reports_malformed_values_without_hiding_consumption() 
         .expect_err("json.dumps must validate the runtime `int64 | None` shape");
         assert_eq!(error.code, "AU4001");
         assert_eq!(error.message, expected_message);
-        assert!(env.place_ref(place).is_ok());
-        assert!(env.place_ref("valid_value").is_ok());
+        assert!(env.place_borrow(place).is_ok());
+        assert!(env.place_borrow("valid_value").is_ok());
     }
 
     env.define_typed(
@@ -5488,7 +5497,7 @@ fn mir_json_host_boundary_reports_malformed_values_without_hiding_consumption() 
         assert_eq!(error.code, "AU4001");
         assert_eq!(error.message, expected_message);
         assert!(
-            env.place_ref(place).is_err(),
+            env.place_borrow(place).is_err(),
             "an owned argument is consumed once runtime argument binding succeeds"
         );
     }
@@ -5539,7 +5548,7 @@ fn mir_json_host_argument_errors_preserve_borrowed_sources() {
         "cannot borrow consuming MIR operand `text` in `json::parse`"
     );
     match env
-        .place_ref("text")
+        .place_borrow("text")
         .expect("the rejected consuming borrow must preserve its source")
     {
         Value::String(text) => assert_eq!(text.as_ptr(), text_ptr),
@@ -5576,7 +5585,7 @@ fn mir_json_host_argument_errors_preserve_borrowed_sources() {
         "cannot borrow consuming MIR operand `value`"
     );
     assert!(
-        env.place_ref("value").is_ok(),
+        env.place_borrow("value").is_ok(),
         "the rejected consuming accessor must not consume its source"
     );
 }
@@ -5751,17 +5760,17 @@ fn mir_owned_collection_mutators_do_not_clone_inserted_values() {
             .evaluate_vec_method(vector, method, Some("vector"), &args, &mut env)
             .unwrap_or_else(|error| panic!("Vec.{method} should succeed: {error}"));
         let Value::Vec(updated) = env
-            .place_ref("vector")
+            .place_borrow("vector")
             .expect("mutated vector should be written back")
         else {
             panic!("expected vector writeback");
         };
         assert_eq!(
-            string_ptr(&updated.elements[0]),
+            string_ptr(&updated.elements.get(0).unwrap()),
             payload_ptr,
             "Vec.{method} must transfer its own value argument"
         );
-        assert!(env.place_ref("payload").is_err());
+        assert!(env.place_borrow("payload").is_err());
     }
 
     let mut runtime = test_runtime();
@@ -5791,13 +5800,13 @@ fn mir_owned_collection_mutators_do_not_clone_inserted_values() {
         )
         .expect("Vec.extend should succeed");
     let Value::Vec(updated) = env
-        .place_ref("vector")
+        .place_borrow("vector")
         .expect("vector should be written back")
     else {
         panic!("expected vector writeback");
     };
-    assert_eq!(string_ptr(&updated.elements[0]), extended_ptr);
-    assert!(env.place_ref("other").is_err());
+    assert_eq!(string_ptr(&updated.elements.get(0).unwrap()), extended_ptr);
+    assert!(env.place_borrow("other").is_err());
 
     let map_type = Type::Named(
         "dict".to_string(),
@@ -5831,13 +5840,14 @@ fn mir_owned_collection_mutators_do_not_clone_inserted_values() {
         runtime
             .evaluate_map_method(map, method, Some("map"), &args, &mut env)
             .unwrap_or_else(|error| panic!("Map.{method} should succeed: {error}"));
-        let Value::Map(updated) = env.place_ref("map").expect("map should be written back") else {
+        let Value::Map(updated) = env.place_borrow("map").expect("map should be written back")
+        else {
             panic!("expected map writeback");
         };
         assert_eq!(string_ptr(&updated.entries[0].0), key_ptr);
         assert_eq!(string_ptr(&updated.entries[0].1), value_ptr);
-        assert!(env.place_ref("key").is_err());
-        assert!(env.place_ref("value").is_err());
+        assert!(env.place_borrow("key").is_err());
+        assert!(env.place_borrow("value").is_err());
     }
 
     let mut runtime = test_runtime();
@@ -5870,12 +5880,12 @@ fn mir_owned_collection_mutators_do_not_clone_inserted_values() {
             &mut env,
         )
         .expect("dict.update should succeed");
-    let Value::Map(updated) = env.place_ref("map").expect("map should be written back") else {
+    let Value::Map(updated) = env.place_borrow("map").expect("map should be written back") else {
         panic!("expected map writeback");
     };
     assert_eq!(string_ptr(&updated.entries[0].0), extended_key_ptr);
     assert_eq!(string_ptr(&updated.entries[0].1), extended_value_ptr);
-    assert!(env.place_ref("other").is_err());
+    assert!(env.place_borrow("other").is_err());
 
     let mut runtime = test_runtime();
     let mut env = Env::default();
@@ -5897,11 +5907,11 @@ fn mir_owned_collection_mutators_do_not_clone_inserted_values() {
             &mut env,
         )
         .expect("set.add should succeed");
-    let Value::Set(updated) = env.place_ref("set").expect("set should be written back") else {
+    let Value::Set(updated) = env.place_borrow("set").expect("set should be written back") else {
         panic!("expected set writeback");
     };
     assert_eq!(string_ptr(&updated.elements[0]), added_ptr);
-    assert!(env.place_ref("added").is_err());
+    assert!(env.place_borrow("added").is_err());
 }
 
 #[test]
@@ -6101,7 +6111,7 @@ fn mir_owned_queue_and_task_fallback_adapters_preserve_allocations() {
             panic!("Queue.{method} should enqueue one value");
         };
         expect_string_ptr(received, payload_ptr, &format!("Queue.{method}"));
-        assert!(env.place_ref("payload").is_err());
+        assert!(env.place_borrow("payload").is_err());
     }
 
     let mut runtime = test_runtime();
@@ -6125,7 +6135,7 @@ fn mir_owned_queue_and_task_fallback_adapters_preserve_allocations() {
         )
         .expect("an empty Queue.get_or should return its fallback");
     expect_string_ptr(fallback, queue_fallback_ptr, "Queue.get_or");
-    assert!(env.place_ref("queue_fallback").is_err());
+    assert!(env.place_borrow("queue_fallback").is_err());
 
     let mut runtime = test_runtime();
     let mut env = Env::default();
@@ -6152,7 +6162,7 @@ fn mir_owned_queue_and_task_fallback_adapters_preserve_allocations() {
         )
         .expect("a pending Task.result_or should return its fallback immediately");
     expect_string_ptr(fallback, task_fallback_ptr, "Task.result_or");
-    assert!(env.place_ref("task_fallback").is_err());
+    assert!(env.place_borrow("task_fallback").is_err());
 }
 
 #[test]
@@ -9727,7 +9737,7 @@ fn mir_runtime_writeback_and_spawn_helpers_cover_borrow_mut_edges() {
         )
         .expect("borrow-mut writeback should transfer its returned allocation");
     let Value::String(text_target) = env
-        .place_ref("text_target")
+        .place_borrow("text_target")
         .expect("borrow-mut target should be updated")
     else {
         panic!("expected str borrow-mut target");
@@ -13833,7 +13843,7 @@ fn mir_owned_slice_runtime_uses_scalar_bounds_and_preserves_au4003_spans() {
         "MIR Vec slicing must produce fresh owned storage"
     );
     let Value::Vec(source_after_slice) = env
-        .place_ref("source_vector")
+        .place_borrow("source_vector")
         .expect("the borrowed slice source must remain in its place")
     else {
         panic!("expected source Vec");
@@ -13873,7 +13883,7 @@ fn mir_owned_slice_runtime_uses_scalar_bounds_and_preserves_au4003_spans() {
         "MIR str slicing must allocate a fresh owned result"
     );
     let Value::String(source_after_slice) = env
-        .place_ref("source_text")
+        .place_borrow("source_text")
         .expect("the borrowed str source must remain in its place")
     else {
         panic!("expected source str");
@@ -19082,8 +19092,8 @@ fn mir_assert_fail_attaches_typed_bounded_operands_in_source_order() {
         .value
         .ends_with("... (truncated)"));
     assert!(error.assertion_operands[1].value.len() <= 4_096);
-    assert!(env.place_ref("left_rendered").is_err());
-    assert!(env.place_ref("right_rendered").is_err());
+    assert!(env.place_borrow("left_rendered").is_err());
+    assert!(env.place_borrow("right_rendered").is_err());
 }
 
 #[test]
@@ -19186,7 +19196,7 @@ fn mir_assert_fail_moves_an_owned_message_only_on_the_failure_path() {
     };
     assert_eq!(error.message, "owned message");
     assert!(
-        env.place_ref("message").is_err(),
+        env.place_borrow("message").is_err(),
         "an owned assertion message must be consumed exactly once"
     );
 }
@@ -19266,7 +19276,7 @@ def main():
         "a borrowed message should be snapshotted exactly once for the owned diagnostic"
     );
     match env
-        .place_ref("message")
+        .place_borrow("message")
         .expect("a borrowed assertion message must remain in its source place")
     {
         Value::String(value) => assert_eq!(
@@ -19537,7 +19547,7 @@ fn mir_function_value_runtime_moves_owned_args_writes_back_mut_args_and_traps_ba
         other => panic!("expected the consumed str, found {other:?}"),
     }
     assert!(
-        env.place_ref("text").is_err(),
+        env.place_borrow("text").is_err(),
         "an own indirect argument must leave its source consumed"
     );
 
@@ -19566,7 +19576,7 @@ fn mir_function_value_runtime_moves_owned_args_writes_back_mut_args_and_traps_ba
         Value::Unit
     );
     assert_eq!(
-        env.place_ref("counter")
+        env.place_borrow("counter")
             .expect("counter should remain live"),
         &Value::Int(IntegerValue::from_signed(42))
     );
@@ -19587,7 +19597,7 @@ fn mir_function_value_runtime_moves_owned_args_writes_back_mut_args_and_traps_ba
         "mutable borrowed MIR parameter `value` requires a writeback place"
     );
     assert_eq!(
-        env.place_ref("counter")
+        env.place_borrow("counter")
             .expect("a rejected writeback must preserve the caller's value"),
         &Value::Int(IntegerValue::from_signed(42))
     );
@@ -20026,7 +20036,7 @@ fn mir_runtime_closure_environment_is_by_value_repeatable_and_one_shot_when_cons
         assert_eq!(value, Value::Int(IntegerValue::from_signed(expected)));
     }
     assert_eq!(
-        env.place_ref("offset")
+        env.place_borrow("offset")
             .expect("copy capture source stays live"),
         &Value::Int(IntegerValue::from_signed(40)),
         "copy captures are copied into the closure environment"
@@ -20068,7 +20078,7 @@ fn mir_runtime_closure_environment_is_by_value_repeatable_and_one_shot_when_cons
         panic!("closure construction cannot return from its enclosing function");
     };
     assert!(
-        env.place_ref("text").is_err(),
+        env.place_borrow("text").is_err(),
         "non-Copy capture construction must consume the source place"
     );
     env.define_typed("consuming", consuming_signature, consuming);
@@ -20571,7 +20581,7 @@ def main():
         "`Rng.shuffle(...)` requires a mutable list place"
     );
     assert_eq!(
-        env.place_ref("values")
+        env.place_borrow("values")
             .expect("a rejected shuffle must preserve its input"),
         &Value::Vec(VecValue {
             element_type: Type::named("int64"),

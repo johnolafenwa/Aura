@@ -156,18 +156,18 @@
   },
   "baselines": {
     "linux-x86_64": {
-      "hello_world": 927888,
-      "reference_agent": 1886456,
-      "json": 1364960,
-      "tls": 3258840,
-      "websocket": 3556472
+      "hello_world": 973016,
+      "reference_agent": 1915000,
+      "json": 1506456,
+      "tls": 3303264,
+      "websocket": 3608752
     },
     "darwin-arm64": {
-      "hello_world": 922344,
-      "reference_agent": 1789712,
-      "json": 1307576,
-      "tls": 2823168,
-      "websocket": 3100648
+      "hello_world": 961496,
+      "reference_agent": 1792816,
+      "json": 1431448,
+      "tls": 2860000,
+      "websocket": 3137448
     }
   }
 }

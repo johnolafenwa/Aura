@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 #[cfg(test)]
 use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -889,7 +890,7 @@ impl Env {
         span: crate::diag::Span,
     ) -> Result<()> {
         let resolved = self.resolve_loan_place(source)?;
-        let collection = self.place_ref(&resolved)?;
+        let collection = &*self.place_ref(&resolved)?;
         let segment = match collection {
             Value::Vec(vector) => {
                 let Value::Int(value) = &selector else {
@@ -1088,7 +1089,7 @@ impl Env {
     fn read_member(&self, place: &str, field: &str) -> Result<Value> {
         // The object place may pass through a proven union payload, such as
         // `target.__union_payload_0.inner` after `target is not None`.
-        let current = self.place_ref(place)?;
+        let current = &*self.place_ref(place)?;
         let Value::Instance(instance) = current else {
             return Err(Diagnostic::new(format!(
                 "cannot access field `{}` on non-instance MIR place `{}`",
@@ -1104,7 +1105,9 @@ impl Env {
         }
     }
 
-    fn place_ref(&self, place: &str) -> Result<&Value> {
+    /// The value at `place`. An element of a scalar list is built from its
+    /// bits, so the result may be owned.
+    fn place_ref(&self, place: &str) -> Result<Cow<'_, Value>> {
         let resolved_place = self.resolve_loan_place(place)?;
         let place = resolved_place.as_str();
         let segments = split_place_segments(place)?;
@@ -1137,12 +1140,24 @@ impl Env {
                     ))
                 })?,
                 Value::Vec(vector) if segment.starts_with('[') => {
-                    let index = parse_element_index_segment(segment, place)?;
-                    vector.elements.get(index).ok_or_else(|| {
-                        Diagnostic::new(format!(
-                            "list MIR place `{place}` has no element at index {index}"
-                        ))
-                    })?
+                    let position = parse_element_index_segment(segment, place)?;
+                    match vector.elements.get(position) {
+                        Some(Cow::Borrowed(element)) => element,
+                        Some(Cow::Owned(element)) => {
+                            // A scalar has no fields or elements.
+                            if let Some(next) = rest.get(index + 1) {
+                                return Err(Diagnostic::new(format!(
+                                    "cannot access field `{next}` on non-instance MIR place `{place}`"
+                                )));
+                            }
+                            return Ok(Cow::Owned(element));
+                        }
+                        None => {
+                            return Err(Diagnostic::new(format!(
+                                "list MIR place `{place}` has no element at index {position}"
+                            )))
+                        }
+                    }
                 }
                 Value::Map(map) if segment.starts_with('[') => {
                     let key = parse_entry_key_segment(segment, place)?;
@@ -1174,7 +1189,19 @@ impl Env {
             };
             index += 1;
         }
-        Ok(value)
+        Ok(Cow::Borrowed(value))
+    }
+
+    /// The value at `place`, borrowed. Only a scalar list element is built
+    /// instead of borrowed, and no caller expects a scalar there.
+    fn place_borrow(&self, place: &str) -> Result<&Value> {
+        match self.place_ref(place)? {
+            Cow::Borrowed(value) => Ok(value),
+            Cow::Owned(value) => Err(Diagnostic::new(format!(
+                "MIR place `{place}` holds the scalar `{}`, which cannot be borrowed",
+                value.render()
+            ))),
+        }
     }
 
     fn read_place(&self, place: &str) -> Result<Value> {
@@ -1196,7 +1223,7 @@ impl Env {
         }
         #[cfg(test)]
         MIR_VALUE_CLONE_COUNT.with(|count| count.set(count.get() + 1));
-        let value = self.place_ref(place)?;
+        let value = &*self.place_ref(place)?;
         #[cfg(test)]
         if matches!(value, Value::Array(_)) {
             MIR_ARRAY_PLACE_CLONE_COUNT.with(|count| count.set(count.get() + 1));
@@ -1281,7 +1308,7 @@ impl Env {
     fn tuple_element(&self, place: &str, index: usize) -> Result<Value> {
         let resolved_place = self.resolve_loan_place(place)?;
         let place = resolved_place.as_str();
-        let value = self.place_ref(place)?;
+        let value = &*self.place_ref(place)?;
         let Value::Tuple(tuple) = value else {
             return Err(Diagnostic::new(format!(
                 "cannot project a tuple element from non-tuple MIR place `{place}`"
@@ -1484,7 +1511,7 @@ fn checked_mir_array_dtype(result_type: Option<&Type>) -> ArrayDType {
 }
 
 fn array_place_ref<'a>(env: &'a Env, place: &str) -> Result<&'a ArrayValue> {
-    Ok(checked_mir_array_ref(env.place_ref(place)?))
+    Ok(checked_mir_array_ref(env.place_borrow(place)?))
 }
 
 fn array_place_mut<'a>(env: &'a mut Env, place: &str) -> Result<&'a mut ArrayValue> {
@@ -1966,7 +1993,10 @@ impl MirBorrowedOperand<'_> {
 
 fn borrow_mir_operand<'a>(operand: &'a Operand, env: &'a Env) -> Result<MirBorrowedOperand<'a>> {
     Ok(match operand {
-        Operand::Place(place) => MirBorrowedOperand::Place(env.place_ref(place)?),
+        Operand::Place(place) => match env.place_ref(place)? {
+            Cow::Borrowed(value) => MirBorrowedOperand::Place(value),
+            Cow::Owned(value) => MirBorrowedOperand::Immediate(value),
+        },
         Operand::MovePlace(place) => {
             return Err(Diagnostic::new(format!(
                 "cannot borrow consuming MIR operand `{place}`"
@@ -1993,7 +2023,7 @@ fn borrow_mir_operand<'a>(operand: &'a Operand, env: &'a Env) -> Result<MirBorro
 fn mir_operand_is_array(operand: &Operand, env: &Env) -> Result<bool> {
     match operand {
         Operand::Place(place) | Operand::MovePlace(place) => {
-            Ok(matches!(env.place_ref(place)?, Value::Array(_)))
+            Ok(matches!(*env.place_ref(place)?, Value::Array(_)))
         }
         _ => Ok(false),
     }
@@ -2001,7 +2031,7 @@ fn mir_operand_is_array(operand: &Operand, env: &Env) -> Result<bool> {
 
 fn borrow_mir_string<'a>(operand: &'a Operand, env: &'a Env, call: &str) -> Result<&'a str> {
     match operand {
-        Operand::Place(place) => match env.place_ref(place)? {
+        Operand::Place(place) => match env.place_borrow(place)? {
             Value::String(value) => Ok(value),
             other => Err(Diagnostic::coded(
                 "AU4001",
@@ -2395,7 +2425,7 @@ fn collect_queue_handles(value: &Value, queues: &mut Vec<ChannelValue>) {
             }
         }
         Value::Vec(vector) => {
-            for element in &vector.elements {
+            for element in vector.elements.as_values().unwrap_or_default() {
                 collect_queue_handles(element, queues);
             }
         }
@@ -3372,14 +3402,15 @@ impl MirRuntime {
             };
             self.return_type_stack.pop();
             let updated_receiver = if function.receiver == Some(MirReceiverKind::BorrowMut) {
-                Some(try_clone_mir_value(env.place_ref("self")?)?)
+                Some(try_clone_mir_value(&*env.place_ref("self")?)?)
             } else {
                 None
             };
             let mut updated_params = Vec::new();
             for (index, param) in function.params.iter().enumerate() {
                 if param.passing == MirReceiverKind::BorrowMut {
-                    updated_params.push((index, try_clone_mir_value(env.place_ref(&param.name)?)?));
+                    updated_params
+                        .push((index, try_clone_mir_value(&*env.place_ref(&param.name)?)?));
                 }
             }
             Ok(CallOutcome {
@@ -3743,7 +3774,7 @@ impl MirRuntime {
                 Ok(None)
             }
             Instruction::IndexInRange { list, index } => {
-                let len = match env.place_ref(list)? {
+                let len = match &*env.place_ref(list)? {
                     Value::Vec(vector) => vector.elements.len(),
                     _ => {
                         return Err(Diagnostic::new(format!(
@@ -3751,7 +3782,7 @@ impl MirRuntime {
                         )))
                     }
                 };
-                let position = match env.place_ref(index)? {
+                let position = match &*env.place_ref(index)? {
                     Value::Int(position) => position.as_i128(),
                     _ => None,
                 };
@@ -4181,7 +4212,7 @@ impl MirRuntime {
             Rvalue::NoneTest { value } => {
                 let is_none = match value {
                     Operand::Place(place) | Operand::MovePlace(place) => {
-                        crate::union_runtime::is_none_value(env.place_ref(place)?)
+                        crate::union_runtime::is_none_value(&*env.place_ref(place)?)
                     }
                     other => crate::union_runtime::is_none_value(
                         &self.evaluate_owned_operand(other, env)?,
@@ -4567,7 +4598,7 @@ impl MirRuntime {
                         crate::union_runtime::align_union_value(value, target, "union tag test")
                     }
                     Err(_) => crate::union_runtime::aligned_member_index(
-                        env.place_ref(place)?,
+                        &*env.place_ref(place)?,
                         target,
                         "union tag test",
                     ),
@@ -5345,7 +5376,7 @@ impl MirRuntime {
                 if matches!(field.as_str(), "len" | "byte_len") {
                     if let Operand::Place(place) = object {
                         if let Some(result) =
-                            evaluate_borrowed_length_member(env.place_ref(place)?, field, args)
+                            evaluate_borrowed_length_member(&*env.place_ref(place)?, field, args)
                         {
                             return result;
                         }
@@ -5354,7 +5385,7 @@ impl MirRuntime {
 
                 if field == "to_bytes" {
                     if let Operand::Place(place) = object {
-                        let receiver = env.place_ref(place)?;
+                        let receiver = &*env.place_ref(place)?;
                         if let Value::String(text) = receiver {
                             if !args.is_empty() {
                                 return Err(Diagnostic::new("`to_bytes` does not take arguments"));
@@ -5368,7 +5399,7 @@ impl MirRuntime {
                     if let Operand::Place(place) = object {
                         let values = evaluate_named_args(args, env)?;
                         let (start, end, span) = self.mir_slice_args(values)?;
-                        let result = match env.place_ref(place)? {
+                        let result = match &*env.place_ref(place)? {
                             Value::Vec(vector) => {
                                 slice_vec_owned(vector, start, end).map(Value::Vec)
                             }
@@ -5393,7 +5424,7 @@ impl MirRuntime {
                 }
 
                 if let Operand::Place(place) = object {
-                    if matches!(env.place_ref(place)?, Value::Array(_)) {
+                    if matches!(*env.place_ref(place)?, Value::Array(_)) {
                         return self.evaluate_array_place_method(place, field, args, env);
                     }
                 }
@@ -6705,7 +6736,7 @@ impl MirRuntime {
                 let (_, index) =
                     self.mir_vec_index_from_value(bound[0].value.clone(), vector.elements.len())?;
                 match index.and_then(|index| vector.elements.get(index)) {
-                    Some(value) => try_clone_mir_value(value).map(lookup_found),
+                    Some(value) => try_clone_mir_value(&value).map(lookup_found),
                     None => Ok(lookup_missing()),
                 }
             }
@@ -6749,7 +6780,7 @@ impl MirRuntime {
                             ),
                         )
                     })?;
-                try_clone_mir_value(value)
+                try_clone_mir_value(&value)
             }
             "__slice" => {
                 let values = evaluate_named_args(args, env)?;
@@ -6782,7 +6813,7 @@ impl MirRuntime {
                         updated.elements.len()
                     )));
                 };
-                let previous = std::mem::replace(&mut updated.elements[index], value);
+                let previous = updated.elements.replace(index, value);
                 let Some(place) = receiver_place else {
                     return Err(Diagnostic::new("`set` requires a mutable list place"));
                 };
@@ -6816,7 +6847,7 @@ impl MirRuntime {
                         ),
                     ));
                 };
-                updated.elements[index] = value;
+                updated.elements.replace(index, value);
                 let Some(place) = receiver_place else {
                     return Err(Diagnostic::new(
                         "indexed assignment requires a mutable list place",
@@ -6970,7 +7001,7 @@ impl MirRuntime {
                     return Err(Diagnostic::new("`extend` requires another `list[T]` value"));
                 };
                 let mut updated = vector;
-                updated.elements.extend(other.elements);
+                updated.elements.append(other.elements);
                 let Some(place) = receiver_place else {
                     return Err(Diagnostic::new("`extend` requires a mutable list place"));
                 };
@@ -7600,7 +7631,7 @@ impl MirRuntime {
             }
             "__span_contains" | "__span_find" | "__span_count" => {
                 let elements = crate::runtime_value::span_elements(&vector, int(0)?, int(1)?)?;
-                crate::runtime_value::span_search(elements, &values[2], field)
+                crate::runtime_value::span_search(&elements, &values[2], field)
             }
             "__span_eq" => {
                 let left = crate::runtime_value::span_elements(&vector, int(0)?, int(1)?)?;
@@ -9625,7 +9656,7 @@ impl MirRuntime {
         };
         let mut resolved = Vec::with_capacity(tasks.elements.len());
         for task in &tasks.elements {
-            let Value::Task(task) = task else {
+            let Value::Task(task) = &*task else {
                 return Err(Diagnostic::new(format!(
                     "`{label}` expects `list[Task[T]]`, found `{}`",
                     value.render()
@@ -10226,7 +10257,7 @@ fn ffi_value_from_runtime(value: &Value, ty: &Type) -> Result<FfiValue> {
                 .elements
                 .iter()
                 .map(|element| {
-                    runtime_unsigned_integer(element)
+                    runtime_unsigned_integer(&element)
                         .and_then(|value| u8::try_from(value).ok())
                         .ok_or_else(mismatch)
                 })
@@ -10394,7 +10425,7 @@ fn array_shape_from_runtime(value: &Value) -> Result<Box<[usize]>> {
         .iter()
         .enumerate()
         .map(|(axis, value)| {
-            let value = checked_mir_integer_ref(value);
+            let value = checked_mir_integer_ref(&value);
             debug_assert!(matches!(
                 value.runtime_kind(),
                 None | Some(IntegerKind::Int64)
@@ -10431,9 +10462,11 @@ fn array_coordinates_from_runtime(value: &Value) -> Result<Box<[i64]>> {
     if matches!(value, Value::Int(_)) {
         return Ok(vec![coordinate(value)].into_boxed_slice());
     }
+    let listed;
     let elements = if let Value::Vec(vector) = value {
         debug_assert_eq!(vector.element_type, Type::named("int64"));
-        vector.elements.as_slice()
+        listed = vector.elements.to_vec();
+        listed.as_slice()
     } else {
         let tuple = checked_mir_tuple_ref(value);
         debug_assert_eq!(tuple.element_types.len(), tuple.elements.len());
@@ -10864,7 +10897,7 @@ fn expect_command_vec(value: &Value, label: &str) -> Result<Vec<String>> {
         Value::Vec(vector) if vector.element_type == Type::named("str") => vector
             .elements
             .iter()
-            .map(|element| expect_string_value(element, label))
+            .map(|element| expect_string_value(&element, label))
             .collect(),
         other => Err(Diagnostic::new(format!(
             "`{}` expects `list[str]`, found `{}`",
@@ -10897,11 +10930,11 @@ fn expect_bytes_value(value: &Value, label: &str) -> Result<Vec<u8>> {
                 && vector
                     .elements
                     .iter()
-                    .all(|element| matches!(element, Value::Int(_))) =>
+                    .all(|element| matches!(*element, Value::Int(_))) =>
         {
             let mut bytes = Vec::with_capacity(vector.elements.len());
             for element in &vector.elements {
-                let Value::Int(value) = element else {
+                let Value::Int(value) = *element else {
                     unreachable!()
                 };
                 let byte = value
@@ -10929,7 +10962,7 @@ fn expect_owned_bytes_value(value: Value, label: &str) -> Result<Vec<u8>> {
                 && vector
                     .elements
                     .iter()
-                    .all(|element| matches!(element, Value::Int(_))) =>
+                    .all(|element| matches!(*element, Value::Int(_))) =>
         {
             let mut bytes = Vec::with_capacity(vector.elements.len());
             for element in vector.elements {

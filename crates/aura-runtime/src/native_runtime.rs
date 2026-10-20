@@ -4,7 +4,7 @@
 // raw-pointer and safety-doc lints do not describe them.
 #![allow(clippy::not_unsafe_ptr_arg_deref, clippy::missing_safety_doc)]
 
-use std::borrow::Borrow;
+use std::borrow::{Borrow, Cow};
 #[cfg(test)]
 use std::cell::Cell;
 use std::cell::RefCell;
@@ -18,7 +18,9 @@ use std::process;
 use std::ptr::NonNull;
 use std::slice;
 use std::str;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+#[cfg(any(test, coverage))]
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 #[cfg(test)]
 use std::sync::MutexGuard;
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
@@ -30,6 +32,7 @@ use crate::integer::{
     IntegerKind, IntegerPowerError, IntegerRepresentation, IntegerShiftError, IntegerValue,
 };
 use crate::json_codec;
+use crate::list_elements::ListElements;
 use crate::randomness::{self, SecureRandomError};
 use crate::runtime_value::{
     cancel_current_lightweight_task_boundary, cast_numeric_value, claim_task_result_observations,
@@ -1343,16 +1346,20 @@ fn int32_overflow_message(value: i64) -> String {
 #[repr(C)]
 pub struct OpaqueValue {
     value: UnsafeCell<Value>,
-    /// The address of a `list` value's first element, or 0 for any other
-    /// value. Every write refreshes it, so it is current whenever no access
-    /// is in progress.
+    /// The address of the first element of a `list` value or a rank-1
+    /// `Array`, or 0 for any other value. Every write to a confined value
+    /// refreshes it, so it is current whenever no access is in progress.
     list_elements: std::cell::Cell<usize>,
-    /// The length of a `list` value, or 0 for any other value.
+    /// The length of a `list` value or a rank-1 `Array`, or 0.
     list_len: std::cell::Cell<usize>,
     /// Null while the value is confined to its creating thread. Once the
     /// value is shared, the lock every access takes.
     shared_lock: std::sync::atomic::AtomicPtr<RwLock<()>>,
-    ref_count: AtomicUsize,
+    ref_count: AtomicU32,
+    /// A [`DirectListAccess`] code: what generated code may read in place
+    /// from the list view. It is [`DirectListAccess::None`] once the value
+    /// is shared.
+    list_access: AtomicU32,
     runtime_type_name: UnsafeCell<Option<Arc<str>>>,
     #[cfg(all(debug_assertions, not(test)))]
     owner_thread: usize,
@@ -1394,11 +1401,12 @@ fn direct_value_thread_identity() -> usize {
 
 impl OpaqueValue {
     fn new(value: Value, runtime_type_name: Option<Arc<str>>) -> Self {
-        let (elements, len) = list_view_of(&value);
+        let (access, elements, len) = list_view_of(&value);
         Self {
             list_elements: std::cell::Cell::new(elements),
             list_len: std::cell::Cell::new(len),
-            ref_count: AtomicUsize::new(1),
+            ref_count: AtomicU32::new(1),
+            list_access: AtomicU32::new(access as u32),
             shared_lock: std::sync::atomic::AtomicPtr::new(std::ptr::null_mut()),
             #[cfg(all(debug_assertions, not(test)))]
             owner_thread: direct_value_thread_identity(),
@@ -1408,12 +1416,17 @@ impl OpaqueValue {
     }
 
     /// Records where a `list` value's elements lie. The caller holds
-    /// confinement or the write guard.
+    /// confinement or the write guard. Generated code never reads the view
+    /// of a shared value, so a shared value keeps its view as it was.
     fn refresh_list_view(&self) {
+        if !self.shared_lock.load(Ordering::Acquire).is_null() {
+            return;
+        }
         // SAFETY: the caller has exclusive access, so no `&mut Value` exists.
-        let (elements, len) = list_view_of(unsafe { &*self.value.get() });
+        let (access, elements, len) = list_view_of(unsafe { &*self.value.get() });
         self.list_elements.set(elements);
         self.list_len.set(len);
+        self.list_access.store(access as u32, Ordering::Relaxed);
     }
 
     /// The lock of a shared value, or `None` while it is confined.
@@ -1474,6 +1487,11 @@ unsafe fn share_direct_value(ptr: *mut OpaqueValue) {
                     drop(unsafe { Box::from_raw(lock) });
                 }
             }
+            // Generated code on any thread now calls the runtime, which
+            // takes the lock.
+            value
+                .list_access
+                .store(DirectListAccess::None as u32, Ordering::Release);
         }
         None => runtime_error("direct runtime received a null opaque value pointer"),
     }
@@ -1663,13 +1681,13 @@ fn boxed_value_with_type(value: Value, runtime_type_name: Option<Arc<str>>) -> *
 // These helpers validate the explicit refcount stored in `OpaqueValue`, but they cannot detect
 // stale or forged raw pointers after an object has been freed and the address reused. The
 // codegen/runtime ABI must still guarantee that callers only retain or release live values.
-fn retain_ref_count(ref_count: &AtomicUsize) -> std::result::Result<(), &'static str> {
+fn retain_ref_count(ref_count: &AtomicU32) -> std::result::Result<(), &'static str> {
     loop {
         let current = ref_count.load(Ordering::Relaxed);
         if current == 0 {
             return Err("attempted to retain an already-released direct runtime value");
         }
-        if current == usize::MAX {
+        if current == u32::MAX {
             return Err("direct runtime value reference count overflow");
         }
         if ref_count
@@ -1681,7 +1699,7 @@ fn retain_ref_count(ref_count: &AtomicUsize) -> std::result::Result<(), &'static
     }
 }
 
-fn release_ref_count(ref_count: &AtomicUsize) -> std::result::Result<bool, &'static str> {
+fn release_ref_count(ref_count: &AtomicU32) -> std::result::Result<bool, &'static str> {
     loop {
         let current = ref_count.load(Ordering::Acquire);
         if current == 0 {
@@ -2354,22 +2372,41 @@ unsafe fn value_mut<T>(ptr: *mut OpaqueValue, write: impl FnOnce(&mut Value) -> 
     write(unsafe { &mut *value.value.get() })
 }
 
-/// The element address and length of a `list` value or a rank-1 `Array`,
-/// or zeros for any other value. The storage is on the heap, so the address
-/// stays valid when the box holding the value moves.
-fn list_view_of(value: &Value) -> (usize, usize) {
+/// The access code, element address, and length of a `list` value or a
+/// rank-1 `Array`, or `None` and zeros for any other value. The storage is
+/// on the heap, so the address stays valid when the box holding the value
+/// moves.
+fn list_view_of(value: &Value) -> (DirectListAccess, usize, usize) {
+    use crate::list_elements::ListForm;
+    use crate::runtime_value::ArrayStorage;
     match value {
-        Value::Vec(vector) => (vector.elements.as_ptr() as usize, vector.elements.len()),
-        Value::Array(array) if array.rank() == 1 => {
-            let elements = match &array.storage {
-                crate::runtime_value::ArrayStorage::Int32(values) => values.as_ptr() as usize,
-                crate::runtime_value::ArrayStorage::Int64(values) => values.as_ptr() as usize,
-                crate::runtime_value::ArrayStorage::Float32(values) => values.as_ptr() as usize,
-                crate::runtime_value::ArrayStorage::Float64(values) => values.as_ptr() as usize,
+        Value::Vec(vector) => {
+            let access = match vector.elements.form() {
+                ListForm::Values => DirectListAccess::Values,
+                ListForm::Int64 => DirectListAccess::Int64,
+                ListForm::Float64 => DirectListAccess::Float64,
+                ListForm::Bool => DirectListAccess::Bool,
             };
-            (elements, array.shape[0])
+            (access, vector.elements.as_ptr(), vector.elements.len())
         }
-        _ => (0, 0),
+        Value::Array(array) if array.rank() == 1 => {
+            let (access, elements) = match &array.storage {
+                ArrayStorage::Int32(values) => {
+                    (DirectListAccess::ArrayInt32, values.as_ptr() as usize)
+                }
+                ArrayStorage::Int64(values) => {
+                    (DirectListAccess::ArrayInt64, values.as_ptr() as usize)
+                }
+                ArrayStorage::Float32(values) => {
+                    (DirectListAccess::ArrayFloat32, values.as_ptr() as usize)
+                }
+                ArrayStorage::Float64(values) => {
+                    (DirectListAccess::ArrayFloat64, values.as_ptr() as usize)
+                }
+            };
+            (access, elements, array.shape[0])
+        }
+        _ => (DirectListAccess::None, 0, 0),
     }
 }
 
@@ -2382,43 +2419,70 @@ impl Drop for RefreshListView<'_> {
     }
 }
 
-/// Where generated code finds a list's elements and the scalar inside one
-/// element. Generated code reads a scalar list element in place when the
-/// value is confined to its thread, and calls the runtime otherwise. The
-/// offsets hold for one build of the runtime, so the compiler records
+/// What generated code may read in place from a boxed value's list view.
+/// Each code names one element layout, so one compare checks both that the
+/// value is confined to its thread and that its elements have the layout
+/// the code expects.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u32)]
+pub enum DirectListAccess {
+    /// Not a list or a rank-1 `Array`, or shared with another thread. Every
+    /// read calls the runtime.
+    None = 0,
+    /// A list of `Value`s. Only its length is read in place.
+    Values = 1,
+    /// A list of `int64` elements, 8 bytes each.
+    Int64 = 2,
+    /// A list of `float64` elements, 8 bytes each.
+    Float64 = 3,
+    /// A list of `bool` elements, 1 byte each.
+    Bool = 4,
+    /// A rank-1 `Array[int32]`.
+    ArrayInt32 = 5,
+    /// A rank-1 `Array[int64]`.
+    ArrayInt64 = 6,
+    /// A rank-1 `Array[float32]`.
+    ArrayFloat32 = 7,
+    /// A rank-1 `Array[float64]`.
+    ArrayFloat64 = 8,
+}
+
+impl DirectListAccess {
+    /// The codes of the list forms, which all keep their length in the
+    /// view. They are consecutive from [`DirectListAccess::Values`].
+    pub const LIST_FORMS: u32 = 4;
+}
+
+/// Where generated code finds the list view in a boxed value. The offsets
+/// hold for one build of the runtime, so the compiler records
 /// [`DirectListLayout::fingerprint`] in each executable and
 /// [`aura_direct_check_list_layout`] compares it at startup.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DirectListLayout {
-    /// The offset of the shared lock pointer in an [`OpaqueValue`], which is
-    /// null while the value is confined.
-    pub shared_offset: i32,
+    /// The offset of the `u32` [`DirectListAccess`] code in an
+    /// [`OpaqueValue`].
+    pub access_offset: i32,
     /// The offset of the element address in an [`OpaqueValue`].
     pub elements_offset: i32,
     /// The offset of the element count in an [`OpaqueValue`].
     pub len_offset: i32,
-    /// The size of one element.
-    pub element_stride: i64,
-    /// The offset of an `int64` element's low 64 bits, when both integer
-    /// representations put their 128-bit value there.
-    pub int_offset: Option<i32>,
-    /// The offset of a `float64` element's bits.
-    pub float_offset: i32,
-    /// The offset of a `bool` element's byte.
-    pub bool_offset: i32,
 }
 
 impl DirectListLayout {
-    /// One number that differs whenever any offset differs.
+    /// One number that differs whenever an offset or an access code
+    /// differs.
     pub fn fingerprint(&self) -> i64 {
         let fields = [
-            i64::from(self.shared_offset),
+            i64::from(self.access_offset),
             i64::from(self.elements_offset),
             i64::from(self.len_offset),
-            self.element_stride,
-            self.int_offset.map_or(-1, i64::from),
-            i64::from(self.float_offset),
-            i64::from(self.bool_offset),
+            DirectListAccess::Int64 as i64,
+            DirectListAccess::Float64 as i64,
+            DirectListAccess::Bool as i64,
+            DirectListAccess::ArrayFloat64 as i64,
+            // The element layouts: 8-byte `int64` and `float64`, 1-byte
+            // `bool`.
+            0x0801,
         ];
         fields.iter().fold(0x41_75_72_61_i64, |hash, field| {
             hash.wrapping_mul(0x100_0000_01b3).wrapping_add(*field)
@@ -2428,35 +2492,10 @@ impl DirectListLayout {
 
 /// The layout of this build of the runtime.
 pub fn direct_list_layout() -> DirectListLayout {
-    fn offset_in<T, F>(outer: &T, field: &F) -> i32 {
-        let offset = field as *const F as usize - outer as *const T as usize;
-        i32::try_from(offset).expect("a value field offset fits in i32")
-    }
-    let float = Value::Float(0.0);
-    let float_offset = match &float {
-        Value::Float(bits) => offset_in(&float, bits),
-        _ => unreachable!("a float value is a float"),
-    };
-    let flag = Value::Bool(false);
-    let bool_offset = match &flag {
-        Value::Bool(byte) => offset_in(&flag, byte),
-        _ => unreachable!("a bool value is a bool"),
-    };
-    let integer = Value::Int(IntegerValue::zero());
-    let int_offset = match &integer {
-        Value::Int(inner) => {
-            IntegerValue::wide_payload_offset().map(|payload| offset_in(&integer, inner) + payload)
-        }
-        _ => unreachable!("an integer value is an integer"),
-    };
     DirectListLayout {
-        shared_offset: std::mem::offset_of!(OpaqueValue, shared_lock) as i32,
+        access_offset: std::mem::offset_of!(OpaqueValue, list_access) as i32,
         elements_offset: std::mem::offset_of!(OpaqueValue, list_elements) as i32,
         len_offset: std::mem::offset_of!(OpaqueValue, list_len) as i32,
-        element_stride: std::mem::size_of::<Value>() as i64,
-        int_offset: int_offset.filter(|_| cfg!(target_endian = "little")),
-        float_offset,
-        bool_offset,
     }
 }
 
@@ -3625,11 +3664,11 @@ fn expect_bytes_value(value: &Value, label: &str) -> Vec<u8> {
                 && vector
                     .elements
                     .iter()
-                    .all(|element| matches!(element, Value::Int(_))) =>
+                    .all(|element| matches!(*element, Value::Int(_))) =>
         {
             let mut bytes = Vec::with_capacity(vector.elements.len());
             for element in &vector.elements {
-                let Value::Int(value) = element else {
+                let Value::Int(value) = &*element else {
                     runtime_error(format!("`{}` expects `list[uint8]`", label));
                 };
                 let byte = value
@@ -3796,7 +3835,7 @@ fn expect_command_vec(value: &Value, label: &str) -> Vec<String> {
             vector
                 .elements
                 .iter()
-                .map(|element| expect_string_value(element, label))
+                .map(|element| expect_string_value(&element, label))
                 .collect()
         }
         other => runtime_error(format!(
@@ -6356,7 +6395,7 @@ pub extern "C-unwind" fn aura_direct_vec_get(
         let value = with_vector(vec, |vector| {
             normalize_vec_index(index, vector.elements.len())
                 .and_then(|index| vector.elements.get(index))
-                .map(try_clone_array_containing_value)
+                .map(|element| try_clone_array_containing_value(&element))
                 .transpose()
         });
         let value = direct_array_result(value, 0, 0);
@@ -6377,8 +6416,8 @@ pub extern "C-unwind" fn aura_direct_vec_set_in_place(
             let previous = normalize_vec_index(index, len)
                 .filter(|normalized| *normalized < len)
                 .map(|normalized| {
-                    std::mem::replace(
-                        &mut vector.elements[normalized],
+                    vector.elements.replace(
+                        normalized,
                         replacement
                             .take()
                             .expect("the replacement is consumed once"),
@@ -6520,7 +6559,7 @@ pub extern "C-unwind" fn aura_direct_vec_span(
                 let needle = unsafe { take_value(value) };
                 unlocated(with_vector(vec, |vector| {
                     span_elements(vector, wide(a0), wide(a1))
-                        .and_then(|elements| span_search(elements, &needle, operation))
+                        .and_then(|elements| span_search(&elements, &needle, operation))
                 }))
             }
             "__span_eq" => {
@@ -6530,12 +6569,12 @@ pub extern "C-unwind" fn aura_direct_vec_span(
                     } else {
                         wide(a3)
                     };
-                    span_elements(other, wide(a2), len).map(<[Value]>::to_vec)
+                    span_elements(other, wide(a2), len).map(Cow::into_owned)
                 });
                 unlocated(right.and_then(|right| {
                     with_vector(vec, |vector| {
                         span_elements(vector, wide(a0), wide(a1))
-                            .map(|left| Value::Bool(left == right.as_slice()))
+                            .map(|left| Value::Bool(*left == *right.as_slice()))
                     })
                 }))
             }
@@ -6751,7 +6790,7 @@ pub extern "C-unwind" fn aura_direct_vec_extend_in_place(
         let Value::Vec(other) = other else {
             runtime_error("`extend` requires another `list[T]` value");
         };
-        with_vector_mut(vec, |vector| vector.elements.extend(other.elements));
+        with_vector_mut(vec, |vector| vector.elements.append(other.elements));
         boxed_value(Value::Unit)
     })
 }
@@ -6768,7 +6807,7 @@ pub extern "C-unwind" fn aura_direct_vec_index(
             (
                 normalize_vec_index(index, vector.elements.len())
                     .and_then(|normalized| vector.elements.get(normalized))
-                    .map(try_clone_array_containing_value),
+                    .map(|element| try_clone_array_containing_value(&element)),
                 vector.elements.len(),
             )
         });
@@ -6805,7 +6844,7 @@ pub extern "C-unwind" fn aura_direct_vec_index_scalar(
             let element = usize::try_from(index)
                 .ok()
                 .and_then(|index| vector.elements.get(index));
-            match (kind, element) {
+            match (kind, element.as_deref()) {
                 (0, Some(Value::Int(value))) => {
                     match value.as_i128().and_then(|value| i64::try_from(value).ok()) {
                         Some(value) => value,
@@ -6844,10 +6883,13 @@ fn with_vec_element<T>(
 ) -> T {
     with_vector(list, |vector| {
         let len = vector.elements.len();
-        match normalize_vec_index(index, len).and_then(|normalized| vector.elements.get(normalized))
-        {
-            Some(element) => read(element),
-            None => direct_vec_index_error(index, len, line, column),
+        let Some(position) = normalize_vec_index(index, len).filter(|position| *position < len)
+        else {
+            direct_vec_index_error(index, len, line, column)
+        };
+        match &vector.elements {
+            ListElements::Values(values) => read(&values[position]),
+            scalars => read(&scalars.at(position)),
         }
     })
 }
@@ -6861,7 +6903,14 @@ pub extern "C-unwind" fn aura_direct_vec_check_index(
     line: i64,
     column: i64,
 ) {
-    task_runtime_boundary(|| with_vec_element(list, index, line, column, |_| ()))
+    task_runtime_boundary(|| {
+        with_vector(list, |vector| {
+            let len = vector.elements.len();
+            if normalize_vec_index(index, len).is_none_or(|position| position >= len) {
+                direct_vec_index_error(index, len, line, column)
+            }
+        })
+    })
 }
 
 /// `aura_direct_compare_str_literal` with the compared value read in place
@@ -6969,7 +7018,7 @@ pub extern "C-unwind" fn aura_direct_vec_index_option(
         let value = with_vector(vec, |vector| {
             normalize_vec_index(index, vector.elements.len())
                 .and_then(|normalized| vector.elements.get(normalized))
-                .map(try_clone_array_containing_value)
+                .map(|element| try_clone_array_containing_value(&element))
                 .transpose()
         });
         let value = direct_array_result(value, 0, 0);
@@ -7009,7 +7058,7 @@ pub extern "C-unwind" fn aura_direct_vec_set_index_in_place(
                 Some(normalized) => normalized,
                 None => return Err(vector.elements.len()),
             };
-            vector.elements[normalized] = value;
+            vector.elements.replace(normalized, value);
             Ok(())
         });
         if let Err(len) = result {
@@ -7115,7 +7164,7 @@ fn direct_array_shape(shape: *mut OpaqueValue) -> std::result::Result<Box<[usize
         }
         let mut dimensions = try_array_buffer(shape.elements.len(), "Array shape")?;
         for (axis, dimension) in shape.elements.iter().enumerate() {
-            let Value::Int(dimension) = dimension else {
+            let Value::Int(dimension) = *dimension else {
                 return Err(Diagnostic::coded(
                     "AU4007",
                     format!("array shape axis {axis} is not an int64 value"),
@@ -7150,6 +7199,7 @@ fn direct_array_coordinates(
 ) -> std::result::Result<Box<[i64]>, Diagnostic> {
     unsafe {
         with_value(coordinates, |coordinates| {
+            let listed;
             let (element_types_are_int64, elements): (bool, &[Value]) = match coordinates {
                 Value::Int(coordinate) => {
                     if coordinate.runtime_kind() != Some(IntegerKind::Int64) {
@@ -7164,10 +7214,14 @@ fn direct_array_coordinates(
                     };
                     return Ok(vec![value].into_boxed_slice());
                 }
-                Value::Vec(coordinates) => (
-                    coordinates.element_type == Type::named("int64"),
-                    &coordinates.elements,
-                ),
+                Value::Vec(coordinates) => {
+                    let int64 = coordinates.element_type == Type::named("int64");
+                    if let (true, ListElements::Int64(values)) = (int64, &coordinates.elements) {
+                        return Ok(values.iter().copied().collect());
+                    }
+                    listed = coordinates.elements.to_vec();
+                    (int64, listed.as_slice())
+                }
                 Value::Tuple(coordinates) => (
                     coordinates
                         .element_types
@@ -7929,11 +7983,30 @@ impl DirectElementSelectors<'_> {
     }
 }
 
+/// Follows every step of an element path from `value`. A scalar list
+/// element is built from its bits, so the result may be owned.
+fn direct_element_walk<'a>(
+    value: &'a Value,
+    steps: &[DirectElementPathStep<'_>],
+    selectors: &mut DirectElementSelectors<'_>,
+) -> std::result::Result<Cow<'a, Value>, DirectElementPathError> {
+    let mut current = Cow::Borrowed(value);
+    for step in steps {
+        current = match current {
+            Cow::Borrowed(value) => direct_element_step(value, step, selectors)?,
+            Cow::Owned(value) => {
+                Cow::Owned(direct_element_step(&value, step, selectors)?.into_owned())
+            }
+        };
+    }
+    Ok(current)
+}
+
 fn direct_element_step<'a>(
     value: &'a Value,
     step: &DirectElementPathStep<'_>,
     selectors: &mut DirectElementSelectors<'_>,
-) -> std::result::Result<&'a Value, DirectElementPathError> {
+) -> std::result::Result<Cow<'a, Value>, DirectElementPathError> {
     match step {
         DirectElementPathStep::Index => {
             let index = selectors.next()?;
@@ -7960,10 +8033,12 @@ fn direct_element_step<'a>(
             let key = unsafe { take_value(selectors.next()? as *mut OpaqueValue) };
             map.entries
                 .value_of(&key)
+                .map(Cow::Borrowed)
                 .ok_or_else(|| DirectElementPathError::MissingKey(Box::new(key)))
         }
         DirectElementPathStep::Projection(projection) => {
             direct_value_at_path(value, &[projection], selectors.path)
+                .map(Cow::Borrowed)
                 .map_err(DirectElementPathError::Path)
         }
     }
@@ -8044,12 +8119,9 @@ pub extern "C-unwind" fn aura_direct_element_path_load(
         };
         let result = unsafe {
             with_value(collection, |value| {
-                let mut current = value;
-                for step in &steps {
-                    current = direct_element_step(current, step, &mut selectors)?;
-                }
+                let current = direct_element_walk(value, &steps, &mut selectors)?;
                 selectors.finish()?;
-                Ok(try_clone_array_containing_value(current))
+                Ok(try_clone_array_containing_value(&current))
             })
         };
         match result {
@@ -8083,10 +8155,7 @@ pub extern "C-unwind" fn aura_direct_element_path_probe(
         };
         let result = unsafe {
             with_value(collection, |value| {
-                let mut current = value;
-                for step in &steps {
-                    current = direct_element_step(current, step, &mut selectors)?;
-                }
+                direct_element_walk(value, &steps, &mut selectors)?;
                 selectors.finish()
             })
         };
@@ -11134,7 +11203,7 @@ fn expect_task_vec(value: &Value, context: &str) -> Vec<TaskValue> {
         Value::Vec(vector) => vector
             .elements
             .iter()
-            .map(|value| match value {
+            .map(|value| match &*value {
                 Value::Task(task) => task.clone(),
                 other => runtime_error(format!(
                     "expected `{}` tasks to be `Task`, found `{}`",
