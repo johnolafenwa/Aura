@@ -8,6 +8,10 @@ the timings never include a Cargo build of the runtime:
 - warm: an unchanged source and a filled cache, so the build reuses the binary
 - edit: a source that gains one unused function before each build, so the
   front end runs and the native build cannot reuse the cached binary
+- check: `aura check` alone, which is the front end without native code
+
+`aura build` writes a fresh executable each time and does not read the
+native cache, which only `aura run` reuses, so warm and cold builds match.
 
 One extra cold build runs with a timing wrapper around the C compiler and
 reports how much of the build the final link takes.
@@ -79,12 +83,18 @@ def stage_installed_layout(prefix, aura, runtime):
     return prefix / 'bin/aura'
 
 
-def build(aura, entry, output, cache, env=None):
-    """Run one `aura build`; return its wall time in seconds."""
-    command = [str(aura), 'build', '--backend', 'direct', '-o', str(output), str(entry)]
+def command(aura, mode, entry, output):
+    if mode == 'check':
+        return [str(aura), 'check', str(entry)]
+    return [str(aura), 'build', '--backend', 'direct', '-o', str(output), str(entry)]
+
+
+def build(aura, entry, output, cache, env=None, mode='build'):
+    """Run one `aura build` or `aura check`; return its wall time in seconds."""
     started = time.perf_counter()
     benchmark_process.run_process_group(
-        command, f'aura build {entry.name}', env={**(env or os.environ), 'AURA_CACHE_DIR': str(cache)},
+        command(aura, mode, entry, output), f'aura {mode} {entry.name}',
+        env={**(env or os.environ), 'AURA_CACHE_DIR': str(cache)},
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=1800).check_returncode()
     return time.perf_counter() - started
 
@@ -100,7 +110,7 @@ def measure_subject(aura, name, work, repetitions):
     entry = copy / entry_name
     original = entry.read_text()
     output = work / f'{name}.bin'
-    samples = {'cold': [], 'warm': [], 'edit': []}
+    samples = {'cold': [], 'warm': [], 'edit': [], 'check': []}
     for repetition in range(repetitions):
         cache = pathlib.Path(tempfile.mkdtemp(prefix='cache-', dir=work))
         samples['cold'].append(build(aura, entry, output, cache))
@@ -113,6 +123,8 @@ def measure_subject(aura, name, work, repetitions):
         entry.write_text(edit_source(original, revision))
         samples['edit'].append(build(aura, entry, output, warm_cache))
     entry.write_text(original)
+    for _ in range(repetitions):
+        samples['check'].append(build(aura, entry, output, warm_cache, mode='check'))
     shutil.rmtree(warm_cache)
     log = work / f'{name}.link-times'
     wrapper = work / 'link-wrapper'
@@ -161,7 +173,7 @@ def main():
     for name, row in subjects.items():
         modes = row['modes']
         print(f"{name}: cold {modes['cold']['median_s']:.3f} s, warm {modes['warm']['median_s']:.3f} s, "
-              f"edit {modes['edit']['median_s']:.3f} s, link {row['link']['link_share']:.0%} of a cold build")
+              f"edit {modes['edit']['median_s']:.3f} s, check {modes['check']['median_s']:.3f} s, link {row['link']['link_share']:.0%} of a cold build")
 
 
 if __name__ == '__main__':

@@ -34,6 +34,13 @@ class CompileTimeBenchmarkTests(unittest.TestCase):
         self.assertIn("open('/tmp/link.log', 'a')", wrapper)
         compile(wrapper, 'link-wrapper', 'exec')
 
+    def test_commands_build_with_the_direct_backend_and_check_the_front_end(self):
+        entry = Path('/w/main.au')
+        self.assertEqual(bench.command(Path('/p/aura'), 'build', entry, Path('/w/out')),
+                         ['/p/aura', 'build', '--backend', 'direct', '-o', '/w/out', '/w/main.au'])
+        self.assertEqual(bench.command(Path('/p/aura'), 'check', entry, None),
+                         ['/p/aura', 'check', '/w/main.au'])
+
     def test_summary_reports_median_and_spread_per_mode(self):
         summary = bench.summarize({'cold': [3.0, 1.0, 2.0], 'warm': [0.5]})
         self.assertEqual(summary['cold'], {'median_s': 2.0, 'min_s': 1.0, 'max_s': 3.0, 'samples': 3})
