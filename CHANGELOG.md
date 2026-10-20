@@ -96,6 +96,8 @@ in this file.
   use inside the loop body.
 - `case j.Value.Object(fields)` after `import json as j` failed with
   `AU2001`. Patterns now resolve a module alias.
+- TLS connections use rustls-webpki 0.103.16 and webpki-roots 1.0.10,
+  which fix advisories RUSTSEC-2026-0381 and RUSTSEC-2026-0382.
 
 ## VS Code extension 0.5.0 — 2026-10-19
 
