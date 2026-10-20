@@ -545,6 +545,7 @@ struct NativeCodegen<'a> {
     function_writeback_types: HashMap<String, Vec<DirectType>>,
     call_conv: CallConv,
     runtime_init: FuncId,
+    check_list_layout: FuncId,
     run_root: FuncId,
     enter_call: FuncId,
     exit_call: FuncId,
@@ -656,6 +657,7 @@ struct NativeCodegen<'a> {
     compare_values_at: FuncId,
     vec_element_len: FuncId,
     vec_element_map_get: FuncId,
+    vec_push_scalar: FuncId,
     vec_span: FuncId,
     vec_take_index_in_place: FuncId,
     vec_set_index_in_place: FuncId,
@@ -1103,6 +1105,7 @@ impl<'a> NativeCodegen<'a> {
         declare_runtime_functions!(
             &mut object,
             runtime_init => ("aura_direct_runtime_init", [types::I64, types::I64, types::I64, types::I64], None),
+            check_list_layout => ("aura_direct_check_list_layout", [types::I64], None),
             run_root => ("aura_direct_run_root", [types::I64], Some(types::I32)),
             enter_call => ("aura_direct_enter_frame", [types::I64], None),
             exit_call => ("aura_direct_exit_call", [], None),
@@ -1214,6 +1217,7 @@ impl<'a> NativeCodegen<'a> {
             compare_values_at => ("aura_direct_compare_values_at", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             vec_element_len => ("aura_direct_vec_element_len", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             vec_element_map_get => ("aura_direct_vec_element_map_get", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
+            vec_push_scalar => ("aura_direct_vec_push_scalar", [types::I64, types::I64, types::I64], None),
             vec_span => ("aura_direct_vec_span", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             vec_take_index_in_place => ("aura_direct_vec_take_index_in_place", [types::I64, types::I64], Some(types::I64)),
             vec_set_index_in_place => ("aura_direct_vec_set_index_in_place", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
@@ -1627,6 +1631,7 @@ impl<'a> NativeCodegen<'a> {
             function_writeback_types,
             call_conv,
             runtime_init,
+            check_list_layout,
             run_root,
             enter_call,
             exit_call,
@@ -1738,6 +1743,7 @@ impl<'a> NativeCodegen<'a> {
             compare_values_at,
             vec_element_len,
             vec_element_map_get,
+            vec_push_scalar,
             vec_span,
             vec_take_index_in_place,
             vec_set_index_in_place,
@@ -2676,6 +2682,9 @@ impl<'a> NativeCodegen<'a> {
         let vec_element_map_get = self
             .object
             .declare_func_in_func(self.vec_element_map_get, builder.func);
+        let vec_push_scalar = self
+            .object
+            .declare_func_in_func(self.vec_push_scalar, builder.func);
         let vec_span = self
             .object
             .declare_func_in_func(self.vec_span, builder.func);
@@ -3602,6 +3611,7 @@ impl<'a> NativeCodegen<'a> {
             compare_values_at,
             vec_element_len,
             vec_element_map_get,
+            vec_push_scalar,
             vec_span,
             vec_take_index_in_place,
             vec_set_index_in_place,
@@ -4419,6 +4429,16 @@ impl<'a> NativeCodegen<'a> {
         builder
             .ins()
             .call(runtime_init, &[path_ptr, path_len, source_ptr, source_len]);
+        // Generated code reads list elements at fixed offsets, so a runtime
+        // built with another layout stops here instead of misreading them.
+        let check_list_layout = self
+            .object
+            .declare_func_in_func(self.check_list_layout, builder.func);
+        let fingerprint = builder.ins().iconst(
+            types::I64,
+            aura_runtime::native_runtime::direct_list_layout().fingerprint(),
+        );
+        builder.ins().call(check_list_layout, &[fingerprint]);
         let display_wrappers = self
             .module
             .functions
@@ -5071,6 +5091,7 @@ struct FunctionCompiler<'a> {
     compare_values_at: cranelift_codegen::ir::FuncRef,
     vec_element_len: cranelift_codegen::ir::FuncRef,
     vec_element_map_get: cranelift_codegen::ir::FuncRef,
+    vec_push_scalar: cranelift_codegen::ir::FuncRef,
     vec_span: cranelift_codegen::ir::FuncRef,
     vec_take_index_in_place: cranelift_codegen::ir::FuncRef,
     vec_set_index_in_place: cranelift_codegen::ir::FuncRef,
@@ -11898,6 +11919,21 @@ impl<'a> FunctionCompiler<'a> {
         Ok(())
     }
 
+    /// The value of `value` when an `iconst` defines it.
+    fn integer_constant(&self, value: Value) -> Option<i64> {
+        let dfg = &self.builder.func.dfg;
+        let cranelift_codegen::ir::ValueDef::Result(inst, _) = dfg.value_def(value) else {
+            return None;
+        };
+        match dfg.insts[inst] {
+            cranelift_codegen::ir::InstructionData::UnaryImm {
+                opcode: cranelift_codegen::ir::Opcode::Iconst,
+                imm,
+            } => Some(imm.bits()),
+            _ => None,
+        }
+    }
+
     fn emit_int32_bounds_check(
         &mut self,
         value: Value,
@@ -11909,6 +11945,11 @@ impl<'a> FunctionCompiler<'a> {
         // This check runs on the result of every narrow arithmetic operation,
         // so its cost is what separated `int32` loops from `int64` ones, where
         // the overflow flag comes free with the add.
+        if let Some(constant) = self.integer_constant(value) {
+            if i32::try_from(constant).is_ok() {
+                return Ok(());
+            }
+        }
         let biased = self.builder.ins().iadd_imm(value, -(i32::MIN as i64));
         let overflow =
             self.builder
@@ -11930,6 +11971,161 @@ impl<'a> FunctionCompiler<'a> {
         self.builder.switch_to_block(continue_block);
         self.builder.seal_block(continue_block);
         Ok(())
+    }
+
+    /// The length of `list`, read from its list view when the value is
+    /// confined to this thread (see `aura_runtime::native_runtime::DirectListLayout`).
+    fn emit_list_len(&mut self, list: Value) -> Value {
+        let layout = aura_runtime::native_runtime::direct_list_layout();
+        let slow_block = self.builder.create_block();
+        let fast_block = self.builder.create_block();
+        let join_block = self.builder.create_block();
+        self.builder.append_block_param(join_block, types::I64);
+        self.emit_list_shared_check(list, &layout, slow_block, fast_block);
+
+        self.builder.switch_to_block(fast_block);
+        self.builder.seal_block(fast_block);
+        let len = self
+            .builder
+            .ins()
+            .load(types::I64, MemFlags::trusted(), list, layout.len_offset);
+        self.builder.ins().jump(join_block, &[len]);
+
+        self.builder.switch_to_block(slow_block);
+        self.builder.seal_block(slow_block);
+        let inst = self.builder.ins().call(self.vec_len, &[list]);
+        let len = self.builder.inst_results(inst)[0];
+        self.builder.ins().jump(join_block, &[len]);
+
+        self.builder.switch_to_block(join_block);
+        self.builder.seal_block(join_block);
+        self.builder.block_params(join_block)[0]
+    }
+
+    /// Branches to `slow_block` when `list` may be reached by another thread,
+    /// so its list view may change under a lock, and to `fast_block`
+    /// otherwise. Only the creating thread sets the shared lock, before it
+    /// hands the value on, so a plain load is enough.
+    fn emit_list_shared_check(
+        &mut self,
+        list: Value,
+        layout: &aura_runtime::native_runtime::DirectListLayout,
+        slow_block: cranelift_codegen::ir::Block,
+        fast_block: cranelift_codegen::ir::Block,
+    ) {
+        let shared =
+            self.builder
+                .ins()
+                .load(types::I64, MemFlags::trusted(), list, layout.shared_offset);
+        self.builder
+            .ins()
+            .brif(shared, slow_block, &[], fast_block, &[]);
+    }
+
+    /// Reads a scalar list element as raw bits. `kind` is 0 for `int64`,
+    /// 1 for `float64`, and 2 for `bool`. A confined list in range is read
+    /// in place with one bounds check. A shared list, an index out of range,
+    /// or an integer past `int64` takes the runtime call, which reports the
+    /// same diagnostic as before.
+    fn emit_scalar_list_read(
+        &mut self,
+        list: Value,
+        index: Value,
+        kind: i64,
+        line: Value,
+        column: Value,
+    ) -> std::result::Result<Value, String> {
+        let layout = aura_runtime::native_runtime::direct_list_layout();
+        let element_offset = match kind {
+            0 => layout.int_offset,
+            1 => Some(layout.float_offset),
+            _ => Some(layout.bool_offset),
+        };
+        let slow_block = self.builder.create_block();
+        let join_block = self.builder.create_block();
+        self.builder.append_block_param(join_block, types::I64);
+        if let Some(element_offset) = element_offset {
+            let fast_block = self.builder.create_block();
+            self.emit_list_shared_check(list, &layout, slow_block, fast_block);
+            self.builder.switch_to_block(fast_block);
+            self.builder.seal_block(fast_block);
+            let flags = MemFlags::trusted();
+            let elements = self
+                .builder
+                .ins()
+                .load(types::I64, flags, list, layout.elements_offset);
+            let len = self
+                .builder
+                .ins()
+                .load(types::I64, flags, list, layout.len_offset);
+            let zero = self.builder.ins().iconst(types::I64, 0);
+            let negative = self.builder.ins().icmp(IntCC::SignedLessThan, index, zero);
+            let from_end = self.builder.ins().iadd(len, index);
+            let position = self.builder.ins().select(negative, from_end, index);
+            // One unsigned compare also rejects a position below zero.
+            let out_of_range =
+                self.builder
+                    .ins()
+                    .icmp(IntCC::UnsignedGreaterThanOrEqual, position, len);
+            let in_range_block = self.builder.create_block();
+            self.builder
+                .ins()
+                .brif(out_of_range, slow_block, &[], in_range_block, &[]);
+            self.builder.switch_to_block(in_range_block);
+            self.builder.seal_block(in_range_block);
+            let offset = self.builder.ins().imul_imm(position, layout.element_stride);
+            let element = self.builder.ins().iadd(elements, offset);
+            match kind {
+                0 => {
+                    let low = self
+                        .builder
+                        .ins()
+                        .load(types::I64, flags, element, element_offset);
+                    let high =
+                        self.builder
+                            .ins()
+                            .load(types::I64, flags, element, element_offset + 8);
+                    // The element holds a 128-bit integer. It fits `int64`
+                    // when the high half is the sign of the low half.
+                    let sign = self.builder.ins().sshr_imm(low, 63);
+                    let fits = self.builder.ins().icmp(IntCC::Equal, high, sign);
+                    self.builder
+                        .ins()
+                        .brif(fits, join_block, &[low], slow_block, &[]);
+                }
+                1 => {
+                    let bits = self
+                        .builder
+                        .ins()
+                        .load(types::I64, flags, element, element_offset);
+                    self.builder.ins().jump(join_block, &[bits]);
+                }
+                _ => {
+                    let byte =
+                        self.builder
+                            .ins()
+                            .uload8(types::I64, flags, element, element_offset);
+                    self.builder.ins().jump(join_block, &[byte]);
+                }
+            }
+        } else {
+            self.builder.ins().jump(slow_block, &[]);
+        }
+
+        self.builder.switch_to_block(slow_block);
+        self.builder.seal_block(slow_block);
+        let normalized = self.emit_vec_index_failure_guard(list, index, line, column)?;
+        let kind = self.builder.ins().iconst(types::I64, kind);
+        let inst = self
+            .builder
+            .ins()
+            .call(self.vec_index_scalar, &[list, normalized, kind]);
+        let bits = self.builder.inst_results(inst)[0];
+        self.builder.ins().jump(join_block, &[bits]);
+
+        self.builder.switch_to_block(join_block);
+        self.builder.seal_block(join_block);
+        Ok(self.builder.block_params(join_block)[0])
     }
 
     fn emit_vec_index_failure_guard(
@@ -11995,6 +12191,21 @@ impl<'a> FunctionCompiler<'a> {
                 }
             )),
         }
+    }
+
+    /// Whether storing a receiver back into `place` after an in-place write
+    /// would change nothing: `place` is a plain local holding a handle, so
+    /// the write already changed the value it holds, and no view, mutable
+    /// parameter, or cleanup registration follows it.
+    fn receiver_store_is_redundant(&self, place: &str) -> bool {
+        !place.contains('.')
+            && !self.view_places.contains_key(place)
+            && !self.mutable_param_indices.contains_key(place)
+            && !self
+                .cleanup_places
+                .iter()
+                .any(|cleanup| direct_place_paths_overlap(cleanup, place))
+            && matches!(self.variable_types.get(place), Some(DirectType::Opaque(_)))
     }
 
     fn store_place(&mut self, place: &str, value: ValueRef) -> std::result::Result<(), String> {
@@ -14746,8 +14957,7 @@ impl<'a> FunctionCompiler<'a> {
                                 "direct backend expected `len()` to take no arguments".to_string()
                             );
                         }
-                        let inst = self.builder.ins().call(self.vec_len, &[object.values[0]]);
-                        let len = self.builder.inst_results(inst)[0];
+                        let len = self.emit_list_len(object.values[0]);
                         Ok(ValueRef {
                             values: vec![len],
                             ty: DirectType::Scalar(ScalarKind::Int64),
@@ -14776,6 +14986,37 @@ impl<'a> FunctionCompiler<'a> {
                                     .to_string(),
                             );
                         };
+                        // A scalar is pushed as its bits, with no box.
+                        let scalar_kind = match element_direct_ty {
+                            DirectType::Scalar(ScalarKind::Int64) => Some(0),
+                            DirectType::Scalar(ScalarKind::Float64) => Some(1),
+                            DirectType::Scalar(ScalarKind::Bool) => Some(2),
+                            _ => None,
+                        };
+                        if let Some(kind) = scalar_kind {
+                            let loaded = self.load_operand_with_integer_hint(
+                                &argument.value,
+                                element_direct_ty.scalar_kind(),
+                            )?;
+                            let value = self.coerce_value(loaded, &element_direct_ty)?.values[0];
+                            let bits = if kind == 1 {
+                                self.builder
+                                    .ins()
+                                    .bitcast(types::I64, MemFlags::new(), value)
+                            } else {
+                                value
+                            };
+                            let kind = self.builder.ins().iconst(types::I64, kind);
+                            self.builder
+                                .ins()
+                                .call(self.vec_push_scalar, &[object.values[0], bits, kind]);
+                            if let Some(place) = receiver_place {
+                                if !self.receiver_store_is_redundant(place) {
+                                    self.store_place(place, object.clone())?;
+                                }
+                            }
+                            return Ok(unit_value(&mut self.builder));
+                        }
                         let value = self
                             .load_operand_as_opaque_direct(&argument.value, &element_direct_ty)?;
                         let value = self.transfer_owned_opaque_value(&value);
@@ -14904,12 +15145,6 @@ impl<'a> FunctionCompiler<'a> {
                         let loaded_column = self.load_operand(&column_arg.value)?;
                         let column = self
                             .coerce_value(loaded_column, &DirectType::Scalar(ScalarKind::Int32))?;
-                        let normalized_index = self.emit_vec_index_failure_guard(
-                            object.values[0],
-                            index.values[0],
-                            line.values[0],
-                            column.values[0],
-                        )?;
                         // Scalar elements come back as raw bits, with no box.
                         let scalar_kind = match element_direct_ty {
                             DirectType::Scalar(ScalarKind::Int64) => Some(0),
@@ -14918,12 +15153,13 @@ impl<'a> FunctionCompiler<'a> {
                             _ => None,
                         };
                         if let Some(kind) = scalar_kind {
-                            let kind = self.builder.ins().iconst(types::I64, kind);
-                            let inst = self.builder.ins().call(
-                                self.vec_index_scalar,
-                                &[object.values[0], normalized_index, kind],
-                            );
-                            let bits = self.builder.inst_results(inst)[0];
+                            let bits = self.emit_scalar_list_read(
+                                object.values[0],
+                                index.values[0],
+                                kind,
+                                line.values[0],
+                                column.values[0],
+                            )?;
                             let value = if scalar_kind == Some(1) {
                                 self.builder
                                     .ins()
@@ -14936,6 +15172,12 @@ impl<'a> FunctionCompiler<'a> {
                                 ty: element_direct_ty.clone(),
                             });
                         }
+                        let normalized_index = self.emit_vec_index_failure_guard(
+                            object.values[0],
+                            index.values[0],
+                            line.values[0],
+                            column.values[0],
+                        )?;
                         let inst = self.builder.ins().call(
                             self.vec_index,
                             &[

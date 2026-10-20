@@ -16175,3 +16175,32 @@ def main():
         );
     }
 }
+
+#[test]
+fn native_executables_check_the_list_layout_they_read() {
+    let source = r#"
+def pick(values: list[int64], flags: list[bool], weights: list[float64]) -> int64:
+    if flags[0] and weights[-1] > 0.5:
+        return values[1] + values.len()
+    return 0
+
+def main():
+    print(pick([1, 2], [true], [0.75]))
+"#;
+    let mir = lower_source_to_mir(source).expect("scalar list source should lower");
+    let object = emit_host_object(&mir).expect("scalar list source should emit directly");
+    let referenced = object_referenced_symbols(&object);
+    assert!(
+        referenced
+            .iter()
+            .any(|name| name.ends_with("aura_direct_check_list_layout")),
+        "the entry should check the runtime list layout, referenced: {referenced:?}"
+    );
+    // A shared list or an integer past `int64` still reads through the runtime.
+    assert!(
+        referenced
+            .iter()
+            .any(|name| name.ends_with("aura_direct_vec_index_scalar")),
+        "the slow path should remain, referenced: {referenced:?}"
+    );
+}

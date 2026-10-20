@@ -17,7 +17,18 @@ Last updated: 2026-10-20
   LLVM and removes it. LLVM's inliner replaces the planned MIR inliner.
 - Next: step 1, below.
 
-## Batch 7 step 3: borrowed loop element reads (in progress)
+## Batch 7 step 4: inline list reads (in progress)
+
+- Target: read list lengths and scalar elements inline with one bounds
+  check, from a fixed layout the runtime describes.
+- Done: a list view in each boxed value, a startup layout check, inline
+  `len()` and `int64`, `float64`, and `bool` element reads, and unboxed
+  scalar appends. Notes are in `2026-10-20-batch-7-step-4-inline-list-reads.md`.
+- Verification: see the work note. `int_list_sum` went from 444,958,513 to
+  106,060,271 instructions, and from 47.3 ms to 23.9 ms.
+- Next: hosted CI, then step 5, bounds-check removal in proven loops.
+
+## Batch 7 step 3: borrowed loop element reads (complete)
 
 - Target: remove per-element copies from shared `for` loops over local lists
   whose body only compares, measures, or searches the element.
@@ -29,7 +40,7 @@ Last updated: 2026-10-20
   `2026-10-20-batch-7-step-3-borrowed-loop-reads.md`.
 - Verification: see the work note. `string_list_scan` went from 115.0 ms to
   32.8 ms and `record_field_reads` from 149.9 ms to 122.9 ms.
-- Next: hosted CI, then step 4, inline list length and element reads.
+- Done: merged in PR #93.
 
 ## Batch 7 step 2: cheap call frames (complete)
 

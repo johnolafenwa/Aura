@@ -260,6 +260,40 @@ Callgrind counts fall from 1,159,541,933 to 363,819,459 instructions for
 `record_field_reads`. `representation_stats` pins zero cloned elements for
 a borrowed loop on the direct backend.
 
+### Batch 7 step 4: inline list reads
+
+Step 4 reads list lengths and scalar elements without a runtime call:
+
+- `OpaqueValue` is `repr(C)`. It keeps a list view: the address of a
+  `list` value's first element and its length, or zeros for any other
+  value. `OpaqueValue::new` sets the view and `value_mut` refreshes it when
+  every write ends, including one that unwinds. These are the only places
+  the boxed value changes.
+- The `shared` flag became the shared lock pointer, null while the value is
+  confined. `share_direct_value` allocates the lock. A box stays 160 bytes
+  with the view added.
+- `direct_list_layout` computes the offsets the emitter needs from this
+  build of the runtime: the view and lock fields, the element size, and the
+  payload offsets of `int64`, `float64`, and `bool` elements. Each offset
+  comes from a field or variant reference, so none depends on Rust's enum
+  layout being stable. Both integer representations must keep their 128-bit
+  value at one offset, or `int64` reads stay on the runtime path.
+- The compiler links the same runtime crate and records the layout
+  fingerprint in each executable's entry. `aura_direct_check_list_layout`
+  stops a program whose runtime was built with another layout.
+- `emit_list_len` and `emit_scalar_list_read` load the lock pointer and take
+  the runtime path for a shared list. A confined list is read in place with
+  one unsigned bounds check. An integer element must sign-extend from its
+  low 64 bits, or the read takes the runtime path, which reports the
+  existing overflow error.
+- `aura_direct_vec_push_scalar` appends an `int64`, `float64`, or `bool`
+  from its bits. A plain local receiver is not stored back after the
+  append, because the write already changed the box it holds.
+
+Callgrind counts for `int_list_sum` fall from 444,958,513 to 106,060,271
+instructions. Programs that box many values run up to 1.7% more
+instructions for the view updates.
+
 ## Batch 1 phase 1: normalized types and alias expansion
 
 The first type family establishes a shared producer in `sema/types.rs` for

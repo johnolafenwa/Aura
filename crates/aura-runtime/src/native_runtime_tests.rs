@@ -3613,7 +3613,8 @@ fn direct_json_parse_reserves_capacity_before_borrowing_and_copying_the_source()
 
         let source = unsafe { &*(source_address as *mut OpaqueValue) };
         let source_guard = source
-            .shared_lock
+            .shared_lock()
+            .expect("the codec source is shared with the parsing task")
             .try_write()
             .expect("codec saturation must park before the direct adapter borrows its source");
         // SAFETY: the shared write guard excludes every other access.
@@ -13708,6 +13709,14 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
             "vec-check-index-oob" => {
                 super::aura_direct_vec_check_index(int_vec(&[1]), -2, 3, 9);
             }
+            "vec-push-scalar-kind" => {
+                super::aura_direct_vec_push_scalar(super::aura_direct_vec_empty(), 1, 9);
+            }
+            "list-layout-mismatch" => {
+                super::aura_direct_check_list_layout(
+                    super::direct_list_layout().fingerprint().wrapping_add(1),
+                );
+            }
             "vec-element-read-oob" => {
                 let text = b"a";
                 super::aura_direct_compare_str_literal_at(
@@ -14722,6 +14731,14 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
         (
             "vec-check-index-oob",
             "list index `-2` is out of bounds for length `1`",
+        ),
+        (
+            "vec-push-scalar-kind",
+            "unknown direct scalar list write kind",
+        ),
+        (
+            "list-layout-mismatch",
+            "this executable was built for a different Aura runtime",
         ),
         (
             "vec-element-read-oob",
@@ -24926,7 +24943,7 @@ fn leaf_runtime_type_tags_skip_the_value_lock() {
 fn values_take_the_lock_only_once_shared() {
     let value = string_value("confined");
     let opaque = unsafe { &*value };
-    assert!(!opaque.shared.load(Ordering::Acquire));
+    assert!(!opaque.shared_lock().is_some());
     assert!(matches!(
         opaque.access(true),
         super::DirectValueAccess::Confined
@@ -24934,12 +24951,12 @@ fn values_take_the_lock_only_once_shared() {
     unsafe { super::share_direct_value(value) };
     {
         let _read = opaque.access(false);
-        assert!(opaque.shared_lock.try_write().is_err());
-        assert!(opaque.shared_lock.try_read().is_ok());
+        assert!(opaque.shared_lock().unwrap().try_write().is_err());
+        assert!(opaque.shared_lock().unwrap().try_read().is_ok());
     }
     {
         let _write = opaque.access(true);
-        assert!(opaque.shared_lock.try_read().is_err());
+        assert!(opaque.shared_lock().unwrap().try_read().is_err());
     }
     assert_eq!(
         unsafe { super::value_ref(value) },
@@ -24954,7 +24971,7 @@ unsafe extern "C-unwind" fn direct_task_returns_shared_flag(
 ) -> *mut OpaqueValue {
     assert_eq!(arg_count, 1);
     let argument = unsafe { *args } as *mut OpaqueValue;
-    let shared = unsafe { &*argument }.shared.load(Ordering::Acquire);
+    let shared = unsafe { &*argument }.shared_lock().is_some();
     unsafe { super::aura_direct_release_value(argument) };
     boxed_value(Value::Bool(shared))
 }
@@ -24994,7 +25011,7 @@ fn task_arguments_are_shared_before_the_child_starts() {
         matches!(&seen, Value::EnumVariant(variant) if variant.payloads == vec![Value::Bool(true)]),
         "the child should see its argument shared, found {seen:?}"
     );
-    assert!(unsafe { &*argument }.shared.load(Ordering::Acquire));
+    assert!(unsafe { &*argument }.shared_lock().is_some());
     unsafe { release_value(argument) };
 }
 
@@ -25061,4 +25078,127 @@ fn list_element_reads_borrow_the_element_in_place() {
     for value in [names, groups, other, key, found] {
         unsafe { release_value(value) };
     }
+}
+
+/// Reads element `index` of `list` the way generated code does, from the
+/// list view and the layout offsets.
+fn read_list_view_word(list: *mut OpaqueValue, index: usize, offset: i32) -> i64 {
+    let layout = super::direct_list_layout();
+    let base = list as *const u8;
+    unsafe {
+        let shared = *(base.add(layout.shared_offset as usize) as *const usize);
+        assert_eq!(shared, 0, "the test list is confined to this thread");
+        let elements = *(base.add(layout.elements_offset as usize) as *const usize);
+        let len = *(base.add(layout.len_offset as usize) as *const usize);
+        assert!(index < len, "the test reads inside the list");
+        let element = elements as *const u8;
+        *(element.add(index * layout.element_stride as usize + offset as usize) as *const i64)
+    }
+}
+
+fn list_view_len(list: *mut OpaqueValue) -> usize {
+    let layout = super::direct_list_layout();
+    unsafe { *((list as *const u8).add(layout.len_offset as usize) as *const usize) }
+}
+
+#[test]
+fn list_view_reads_scalar_elements_in_place() {
+    let layout = super::direct_list_layout();
+    let int_offset = layout
+        .int_offset
+        .expect("both integer representations keep their value at one offset");
+    let integers = super::aura_direct_vec_empty();
+    for value in [5, -7, i64::MAX, i64::MIN] {
+        super::aura_direct_vec_push_in_place(integers, super::aura_direct_box_i64(value));
+    }
+    assert_eq!(list_view_len(integers), 4);
+    for (index, expected) in [5, -7, i64::MAX, i64::MIN].into_iter().enumerate() {
+        let low = read_list_view_word(integers, index, int_offset);
+        let high = read_list_view_word(integers, index, int_offset + 8);
+        assert_eq!(low, expected);
+        assert_eq!(high, expected >> 63, "an int64 sign-extends to 128 bits");
+    }
+    let wide = super::aura_direct_vec_empty();
+    super::aura_direct_vec_push_in_place(
+        wide,
+        boxed_value(Value::Int(IntegerValue::from_literal(u64::MAX as u128))),
+    );
+    let low = read_list_view_word(wide, 0, int_offset);
+    let high = read_list_view_word(wide, 0, int_offset + 8);
+    assert_ne!(
+        high,
+        low >> 63,
+        "a value past int64 fails the in-place check"
+    );
+
+    let floats = super::aura_direct_vec_empty();
+    super::aura_direct_vec_push_in_place(floats, boxed_value(Value::Float(2.5)));
+    assert_eq!(
+        f64::from_bits(read_list_view_word(floats, 0, layout.float_offset) as u64),
+        2.5
+    );
+    let flags = super::aura_direct_vec_empty();
+    super::aura_direct_vec_push_in_place(flags, boxed_value(Value::Bool(true)));
+    assert_eq!(read_list_view_word(flags, 0, layout.bool_offset) & 0xff, 1);
+    super::aura_direct_check_list_layout(layout.fingerprint());
+}
+
+#[test]
+fn opaque_values_keep_their_box_size() {
+    // Every boxed value pays for these bytes. The list view fits in the
+    // space a confined value does not need for a lock.
+    #[cfg(target_pointer_width = "64")]
+    assert_eq!(std::mem::size_of::<OpaqueValue>(), 160);
+}
+
+#[test]
+fn list_view_follows_every_write() {
+    let list = super::aura_direct_vec_empty();
+    assert_eq!(list_view_len(list), 0);
+    for value in 0..40 {
+        super::aura_direct_vec_push_in_place(list, super::aura_direct_box_i64(value));
+        assert_eq!(list_view_len(list), value as usize + 1);
+    }
+    let int_offset = super::direct_list_layout().int_offset.unwrap();
+    assert_eq!(read_list_view_word(list, 39, int_offset), 39);
+    super::aura_direct_vec_pop_in_place(list);
+    assert_eq!(list_view_len(list), 39);
+    // A copy shares the storage until one side writes. The writer gets new
+    // storage and the other keeps reading the old one.
+    let copy = boxed_value(unsafe { super::value_ref(list) });
+    super::aura_direct_vec_push_in_place(copy, super::aura_direct_box_i64(99));
+    assert_eq!(list_view_len(copy), 40);
+    assert_eq!(list_view_len(list), 39);
+    assert_eq!(read_list_view_word(copy, 39, int_offset), 99);
+    assert_eq!(read_list_view_word(list, 38, int_offset), 38);
+    expect_unit(super::aura_direct_vec_clear_in_place(list));
+    assert_eq!(list_view_len(list), 0);
+    // A write that unwinds still refreshes the view.
+    let result = std::panic::catch_unwind(|| unsafe {
+        super::value_mut(copy, |value| {
+            *value = Value::Unit;
+            panic!("interrupted write");
+        })
+    });
+    assert!(result.is_err());
+    assert_eq!(list_view_len(copy), 0);
+    assert_eq!(list_view_len(int_value(3)), 0);
+}
+
+#[test]
+fn scalar_pushes_store_the_same_elements_as_boxed_pushes() {
+    let scalars = super::aura_direct_vec_empty();
+    let boxed = super::aura_direct_vec_empty();
+    for value in [0, -3, i64::MAX] {
+        super::aura_direct_vec_push_scalar(scalars, value, 0);
+        super::aura_direct_vec_push_in_place(boxed, super::aura_direct_box_i64(value));
+    }
+    super::aura_direct_vec_push_scalar(scalars, 1.25f64.to_bits() as i64, 1);
+    super::aura_direct_vec_push_in_place(boxed, boxed_value(Value::Float(1.25)));
+    super::aura_direct_vec_push_scalar(scalars, 1, 2);
+    super::aura_direct_vec_push_in_place(boxed, boxed_value(Value::Bool(true)));
+    let render = |list| unsafe { super::with_value(list, |value| format!("{value:?}")) };
+    assert_eq!(render(scalars), render(boxed));
+    assert_eq!(list_view_len(scalars), 5);
+    assert_eq!(super::aura_direct_vec_index_scalar(scalars, 2, 0), i64::MAX);
 }
