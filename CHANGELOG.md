@@ -47,7 +47,7 @@ in this file.
 - The reference tool runner in `examples/agents/tool_runner` is version 2.
   It uses derived codecs and schemas for tool calls and a generic
   `@traced` decorator on each tool. It links the JSON library, so its
-  release executable is 1,886,456 bytes on Linux x86-64 and 1,789,712
+  release executable is 1,915,000 bytes on Linux x86-64 and 1,792,816
   bytes on macOS arm64, and the size gate records those baselines.
 - The semantic interface version is 20, and the native cache format is
   `v8`. Cached executables rebuild once.

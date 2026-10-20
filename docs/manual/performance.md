@@ -611,21 +611,19 @@ Design record:
 
 A native executable contains the Aura runtime code its program can reach.
 A program that never uses TLS, WebSocket, TOML, or JSON does not carry their
-libraries. The counts below are exact bytes from release builds of
-`bdf9265972dd8baf4dbd2ab4008b49bdaf546b22`. The reference agent row comes
-from a release build of version 2 of the agent, which decodes its tool calls
-as JSON.
+libraries. The counts below are exact bytes from release builds that
+include unboxed scalar lists. The size gate records them as its baselines.
 
 | Executable | Linux x86-64 | macOS arm64 |
 | --- | ---: | ---: |
-| Native hello world | 927,888 | 922,344 |
-| Reference agent (`tool_runner`) | 1,886,456 | 1,789,712 |
-| JSON example | 1,364,960 | 1,307,576 |
-| TLS example | 3,258,840 | 2,823,168 |
-| WebSocket example | 3,556,472 | 3,100,648 |
+| Native hello world | 973,016 | 961,496 |
+| Reference agent (`tool_runner`) | 1,915,000 | 1,792,816 |
+| JSON example | 1,506,456 | 1,431,448 |
+| TLS example | 3,303,264 | 2,860,000 |
+| WebSocket example | 3,608,752 | 3,137,448 |
 
-On Linux x86-64, the `aura` compiler is 16,825,120 bytes and the runtime
-archive `libaura_runtime.a` is 61,530,080 bytes. User executables link the
+On Linux x86-64, the `aura` compiler is 17,571,560 bytes and the runtime
+archive `libaura_runtime.a` is 62,558,760 bytes. User executables link the
 runtime archive. It contains no compiler code.
 
 The JSON example is `examples/json/dynamic_values.au`. The TLS example is
