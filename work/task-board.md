@@ -2,24 +2,28 @@
 
 Last updated: 2026-10-20
 
-## Batch 6 step 7: generic decorators and the retry rule (in progress)
+## Batch 6 step 8: the reference agent, version 2 (in progress)
+
+- Target: rewrite the reference tool runner with derived codecs, schemas, and
+  a tracing decorator, and add a tutorial chapter and Manual pages. This is
+  the last Batch 6 step. John asked on 2026-10-19 for the work to continue
+  to Batch 7's key decisions, which come next.
+- Done: `examples/agents/tool_runner` is version 2, with a reusable
+  `src/agent.au` tool layer. Tutorial chapter 27 and the Typed Tool Agent
+  case study teach it. Notes are in
+  `2026-10-20-batch-6-step-8-reference-agent.md`.
+- Verification: the reference package CLI test on both backends, the
+  binary-size bench unit tests, and the documentation example check.
+- Next: open the PR, then bring the Batch 7 decisions to John.
+
+## Batch 6 step 7: generic decorators and the retry rule (complete)
 
 - Target: generic decorators inferred per use, generic decorator factories
   such as `@retry(3)`, and the rule that a retry cannot wrap a function
-  with an `own` parameter, on both backends. John asked on 2026-10-19 for
-  the work to continue through Batch 6 to Batch 7's key decisions.
-- Done: a generic callable alias packs or adapts a value as
-  `Fn[A, R](value)`, in sema and MIR. A call `factory(...)(args)` infers
-  the generic factory's remaining type parameters from the outer call, in
-  sema, MIR typing, and the MIR callable validator. Decorator mismatches
-  report at the innermost decorator, with help for renamed parameters and
-  for `own` parameters. Notes are in
+  with an `own` parameter, on both backends.
+- Done: merged in PR #88. Notes are in
   `2026-10-20-batch-6-step-7-generic-decorators.md`.
-- Verification: run-pass `decorators_generic` and
-  `callable_alias_generic_pack`, five check-fail fixtures, a cross-module
-  CLI test on both backends with stacked factories, and
-  `examples/basics/retry_decorator.au`.
-- Next: open the PR, then step 8, the reference agent example.
+- Next: step 8.
 
 ## Batch 6 step 6: decorators (complete)
 

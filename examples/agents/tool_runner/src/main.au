@@ -1,55 +1,65 @@
+"""Reference tool runner, version 2: typed tools with derived codecs and decorators."""
+
+import agent
 import control
 import json
 import metrics
+from agent import ToolCall, ToolError, traced
 
 
-enum ToolError:
-    InvalidRequest
-    UnknownTool(str)
-    NotReady
+class DoubleArgs:
+    """Doubles a number."""
+
+    value: int64
 
 
-class ToolRequest:
+impl json.Codec for DoubleArgs
+
+
+class IncrementArgs:
+    """Adds a step to a number."""
+
+    value: int64
+    step: int64 = 1
+
+
+impl json.Codec for IncrementArgs
+
+
+class Answer:
+    """A tool's numeric result."""
+
     tool: str
     value: int64
 
-    def to_json(self) -> json.Value:
-        return json.Value.Object({"tool": json.Value.String(self.tool.clone()), "value": json.Value.Int(self.value)})
 
-    def from_json(value: own json.Value) -> Result[ToolRequest, ToolError]:
-        match own json.into_object(value):
-            case dict[str, json.Value] as fields:
-                if fields.len() != 2:
-                    return Result.Err(ToolError.InvalidRequest)
-                match own fields.get("tool"):
-                    case Lookup.Found(json.Value.String(tool)):
-                        match fields.get("value"):
-                            case Lookup.Found(json.Value.Int(number)):
-                                return Result.Ok(ToolRequest(tool=tool, value=number))
-                            case _:
-                                return Result.Err(ToolError.InvalidRequest)
-                    case _:
-                        return Result.Err(ToolError.InvalidRequest)
-            case None:
-                return Result.Err(ToolError.InvalidRequest)
+impl json.Codec for Answer
 
 
-class ToolResult:
-    tool: str
-    value: int64
-
-    def to_json(self) -> json.Value:
-        return json.Value.Object({"tool": json.Value.String(self.tool.clone()), "value": json.Value.Int(self.value)})
-
-    def from_json(value: own json.Value) -> Result[ToolResult, ToolError]:
-        match own ToolRequest.from_json(value):
-            case Result.Ok(request):
-                return Result.Ok(ToolResult(tool=request.tool.clone(), value=request.value))
-            case Result.Err(error):
-                return Result.Err(error)
+@traced("double")
+def double(args: DoubleArgs) -> Result[Answer, ToolError]:
+    return Ok(Answer(tool="double", value=args.value * 2))
 
 
-type Tool = Callable[def(value: int64) -> Result[ToolResult, ToolError]]
+@traced("increment")
+def increment(args: IncrementArgs) -> Result[Answer, ToolError]:
+    return Ok(Answer(tool="increment", value=args.value + args.step))
+
+
+def dispatch(call: own ToolCall) -> Result[json.Value, ToolError]:
+    if call.tool == "double":
+        return agent.run(double, call.args)
+    if call.tool == "increment":
+        return agent.run(increment, call.args)
+    return Err(ToolError.UnknownTool(name=call.tool))
+
+
+def handle(text: str) -> Result[json.Value, ToolError]:
+    match own json.decode_text[ToolCall](text):
+        case Ok(call):
+            return dispatch(call)
+        case Err(error):
+            return Err(ToolError.InvalidRequest(reason=f"{error}"))
 
 
 class Session:
@@ -59,37 +69,11 @@ class Session:
         print(f"closed {self.name}")
 
 
-def scaled(value: int64, factor: int64) -> Result[ToolResult, ToolError]:
-    return Result.Ok(ToolResult(tool="double", value=value * factor))
-
-
-def make_double(factor: int64) -> Tool:
-    owned_factor = factor
-    return Tool(lambda value: scaled(value, owned_factor))
-
-
-class Increment:
-    delta: int64
-
-    def run(self, value: int64) -> Result[ToolResult, ToolError]:
-        return Result.Ok(ToolResult(tool="increment", value=value + self.delta))
-
-
-def dispatch(request: ToolRequest, registry: mut dict[str, Tool]) -> Result[ToolResult, ToolError]:
-    match own registry.remove(request.tool):
-        case Lookup.Found(tool):
-            outcome = tool(value=request.value)
-            registry[request.tool.clone()] = tool
-            return outcome
-        case Lookup.Missing:
-            return Result.Err(ToolError.UnknownTool(request.tool.clone()))
-
-
 def connect_tools() -> Result[int64, ToolError]:
     metrics.increment("tool-runner-attempts", 1)
     if metrics.get("tool-runner-attempts") < 3:
-        return Result.Err(ToolError.NotReady)
-    return Result.Ok(metrics.get("tool-runner-attempts"))
+        return Err(ToolError.NotReady)
+    return Ok(metrics.get("tool-runner-attempts"))
 
 
 def stream_events(events: Queue[str]) -> None:
@@ -101,26 +85,30 @@ def stream_events(events: Queue[str]) -> None:
 
 
 def run_tools() -> Result[int32, ToolError]:
-    mut registry: dict[str, Tool] = {"double": make_double(2), "increment": Tool(Increment(delta=1).run)}
-    request = try ToolRequest.from_json(json.Value.Object({"tool": json.Value.String("double"), "value": json.Value.Int(21)}))
-    print(f"request {json.dumps(request.to_json())}")
-    result = try dispatch(request, registry)
-    decoded = try ToolResult.from_json(result.to_json())
-    print(f"result {json.dumps(decoded.to_json())}")
-    next_request = ToolRequest(tool="increment", value=decoded.value)
-    next_result = try dispatch(next_request, registry)
-    print(f"result {json.dumps(next_result.to_json())}")
-
-    match ToolRequest.from_json(json.Value.Null):
-        case Result.Err(ToolError.InvalidRequest):
-            print("rejected invalid request")
-        case _:
-            return Result.Err(ToolError.InvalidRequest)
-    match dispatch(ToolRequest(tool="missing", value=0), registry):
-        case Result.Err(ToolError.UnknownTool(name)):
-            print(f"unknown tool {name}")
-        case _:
-            return Result.Err(ToolError.InvalidRequest)
+    for spec in [
+        agent.tool[DoubleArgs]("double"),
+        agent.tool[IncrementArgs]("increment"),
+    ]:
+        print(f"tool {spec.name} {json.dumps(spec.schema)}")
+    requests = [
+        '{"tool": "double", "args": {"value": 21}}',
+        '{"tool": "increment", "args": {"value": 42}}',
+        '{"tool": "increment", "args": {"value": 42, "step": 8}}',
+        '{"tool": "double", "args": {"value": "x"}}',
+        '{"tool": "double", "args": {"value": 1, "extra": true}}',
+        '{"tool": "missing", "args": {}}',
+        '{"args": {}}',
+    ]
+    for text in requests:
+        match own handle(text):
+            case Ok(value):
+                print(f"result {json.dumps(value)}")
+            case Err(ToolError.InvalidRequest(reason)):
+                print(f"rejected {reason}")
+            case Err(ToolError.UnknownTool(name)):
+                print(f"unknown tool {name}")
+            case Err(error):
+                return Err(error)
 
     metrics.reset()
     attempts = try control.retry(connect_tools, max_attempts=3, initial_backoff=0ms)
@@ -130,15 +118,15 @@ def run_tools() -> Result[int32, ToolError]:
         group.start(stream_events, events)
         for event in events:
             print(event)
-    return Result.Ok(0)
+    return Ok(0)
 
 
 def main() -> int32:
-    print("tool-runner version 1")
+    print("tool-runner version 2")
     with session = Session(name="tool-runner"):
         match run_tools():
-            case Result.Ok(code):
+            case Ok(code):
                 return code
-            case Result.Err(error):
+            case Err(error):
                 print(error)
                 return 1

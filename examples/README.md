@@ -80,17 +80,19 @@ executable size.
 
 | File | Shows | Prints |
 | --- | --- | --- |
-| `tool_runner/` | The version-1 reference agent package. See the notes below. | Matches `tool_runner/stdout.txt` |
+| `tool_runner/` | The version-2 reference agent package. See the notes below. | Matches `tool_runner/stdout.txt` |
 | `control_plane_foundations.au` | Typed JSON and TOML metadata, path operations, process-local counters, and structured log and trace events | The artifact path, deterministic JSON, TOML validity, and the counter value |
 | `retry_with_backoff.au` | `control.retry` with an immediate first attempt, zero-delay retries, eventual success, and exact final-error exhaustion | `42`, `attempt 2`, `3`, `2` |
 | `retrying_network_worker.au` | An application-level HTTP retry policy over a loopback server. See the notes below. | `recover request 1`, `recover retry 4ms`, `recover request 2`, `recover result 200`, `rate request 1`, `rate retry 6ms`, `rate request 2`, `rate result 429`, `exhaust request 1`, `exhaust retry 3ms`, `exhaust request 2`, `exhaust retry 5ms`, `exhaust request 3`, `exhaust result 503`, `requests 7` |
 
 **`tool_runner/`** shows:
 
-- a `Callable[...]` registry contract that holds a factory-owned closure and a
-  packed bound method
-- remove, call, and reinsert dispatch through a `mut` dictionary
-- typed JSON request and result methods, and Result errors
+- tool argument and result classes with derived `json.Codec` implementations
+- tool specs that carry each argument class's JSON Schema, with docstring
+  descriptions
+- a generic `@traced("name")` decorator factory on each tool
+- typed dispatch that decodes arguments, reports the failing field's path,
+  and encodes results
 - `control.retry`
 - Queue events that a TaskGroup child produces and the parent consumes with
   `for`

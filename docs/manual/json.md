@@ -6,8 +6,10 @@ data. Dumping produces one deterministic JSON string, or traps when the value
 cannot be serialized.
 
 The `json.Codec` trait converts your own classes and enums to and from
-`json.Value`. You write each conversion by hand. See
-[Typed Codecs](#typed-codecs).
+`json.Value`. The compiler derives the conversion and a JSON Schema, or you
+write them by hand. See [Typed Codecs](#typed-codecs). The
+[reference tool runner](https://github.com/johnolafenwa/Aura/tree/main/examples/agents/tool_runner)
+uses derived codecs and schemas for tool calls.
 
 The module also has helpers for flat `dict[str, str]` data. These are separate
 from the dynamic tree.

@@ -38,6 +38,7 @@ and [Manual](../docs/manual/index.md).
 25. [24-multiline-expressions.md](24-multiline-expressions.md)
 26. [25-tuples.md](25-tuples.md)
 27. [26-ffi.md](26-ffi.md)
+28. [27-typed-tool-agents.md](27-typed-tool-agents.md)
 
 `14-current-language-surface.md` is a compact recap of the whole surface. The
 other chapters build it up step by step.
@@ -171,6 +172,10 @@ The tutorial set covers the topics below.
   exponential `Duration` backoff
 - recursive `json.Value` trees, typed parse errors, exact accessors,
   consuming payload extraction, and deterministic compact or pretty dumping
+- the `json.Codec` trait, with derived codecs and JSON Schemas for classes
+  and enums, and decode errors that carry the failing field's path
+- decorators on module-level functions, including generic decorators, used
+  in a typed tool agent
 - `list[uint8]` bytes, strict UTF-8 conversion, canonical hex and base64
   codecs, typed malformed-input errors, and raw SHA-256
 

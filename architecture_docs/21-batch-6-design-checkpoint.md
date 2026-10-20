@@ -422,3 +422,8 @@ as `retry[A, R, E](attempts: own int32)` cannot infer `A`, `R`, or `E` from
 its own arguments. The call `retry(3)(f)` infers them from `f` and the
 expected result instead. Parameter names stay part of the contract, so a
 generic decorator fixes the names of the parameters it accepts.
+
+Step 8 lists tools explicitly, as E4 recommends, but dispatches by name in
+the program rather than through a list of stored functions. A decorated
+binding is a module constant, and a module constant cannot move into an
+owned list. `agent.run(double, args)` borrows the binding instead.

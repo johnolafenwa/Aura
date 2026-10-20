@@ -44,6 +44,9 @@ in this file.
 
 ### Changed
 
+- The reference tool runner in `examples/agents/tool_runner` is version 2.
+  It uses derived codecs and schemas for tool calls and a generic
+  `@traced` decorator on each tool.
 - The semantic interface version is 20, and the native cache format is
   `v8`. Cached executables rebuild once.
 
