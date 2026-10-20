@@ -15,8 +15,20 @@ Last updated: 2026-10-20
   2026-10-20 and chose LLVM as the only native backend. Phase 1 fixes runtime
   costs on Cranelift and ships a release. Phase 2 replaces Cranelift with
   LLVM and removes it. LLVM's inliner replaces the planned MIR inliner.
-- Next: step 1, Rust baselines for the collection programs and
-  compile-time measurement, then proposed numeric targets for John.
+- Next: step 1, below.
+
+## Batch 7 step 1: Rust baselines, build times, and proposed targets (in progress)
+
+- Target: Rust counterparts for the five runtime value programs, a
+  measurement of `aura build` times, and numeric targets for John to ratify
+  before step 2.
+- Done: five Rust references in `benchmarks/rust_baselines`, a Rust lane in
+  `scripts/bench-runtime-values.py`, and `scripts/bench-compile-time.py`.
+  Results and proposed targets are in section E of the checkpoint. Notes are
+  in `2026-10-20-batch-7-step-1-baselines.md`.
+- Verification: script unit tests and the Rust protocol smoke check pass.
+  Measurements ran on a shared Linux container and are diagnostic-grade.
+- Next: John ratifies or changes the targets, then step 2, cheap frames.
 
 ## Batch 6 step 8: the reference agent, version 2 (complete)
 

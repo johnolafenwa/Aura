@@ -264,18 +264,87 @@ matrix kernels.
 
 ## E. Targets And Measurement
 
-The roadmap ratifies numeric targets only after baselining, so step 1 adds
-the missing evidence:
+Step 1 measured every workload against Rust on one Linux x86-64 host. The
+targets below are proposed for the owner to ratify before step 2 starts.
 
-- Rust counterparts for `int_list_sum`, `string_list_scan`,
-  `record_field_reads`, `dict_build_get`, and `set_insert_contains`
-- compile-time measurement of `aura build` for hello world, the reference
-  agent, and the largest example, cold and warm
-- one machine for each supported host architecture running every workload
+### Step 1 Baselines
 
-Step 1 then proposes targets, such as `fib(30)` within 3x Rust and
-`int_list_sum` within 2x Rust, for the owner to ratify before step 2 starts.
-Those numbers are placeholders until the baselines exist.
+The host is a shared four-core Linux x86-64 container with Rust 1.95.0 and
+Python 3.13. It was not quiet, so the numbers are diagnostic-grade. Each row
+is a median of five to eleven runs. The collection rows time the whole
+process. The protocol rows time GO to DONE. Raw reports are in
+`work/2026-10-20-batch-7-step-1-measurements/`.
+
+| Workload | Aura | Rust | Aura / Rust |
+| --- | ---: | ---: | ---: |
+| `fib(30)` | 129.6 ms | 3.95 ms | 32.8x |
+| 10,000 tasks | 397.3 ms | 6.50 ms | 61.1x |
+| TCP fan-out | 120.5 ms | 121.1 ms | 1.0x |
+| `int_list_sum` | 43.7 ms | 2.3 ms | 18.9x |
+| `string_list_scan` | 120.3 ms | 2.7 ms | 44.8x |
+| `dict_build_get` | 321.6 ms | 21.3 ms | 15.1x |
+| `set_insert_contains` | 42.1 ms | 6.1 ms | 6.9x |
+| `record_field_reads` | 145.0 ms | 9.3 ms | 15.6x |
+
+Process startup is about 2.0 ms for an Aura hello world and 1.2 ms for an
+empty Rust program. So the whole-process ratio understates the loop gap for
+the two list programs, where Rust finishes in about 1 ms of work.
+
+`aura build` with the direct backend, from an installed runtime:
+
+| Program | Build | `aura check` | Final link |
+| --- | ---: | ---: | ---: |
+| Hello world | 0.32 s | 0.004 s | 0.23 s |
+| Reference agent | 0.62 s | 0.057 s | 0.21 s |
+| `unix_tls_roundtrip`, the largest single-file example | 0.40 s | 0.009 s | 0.21 s |
+
+The front end is under a tenth of each build. Cranelift code generation and
+the final `cc` link take the rest. `aura build` writes a fresh executable
+each time and does not read the native cache, so a rebuild of unchanged
+source costs the same as a cold build. Only `aura run` reuses cached
+executables.
+
+### Proposed Targets
+
+Each target is a ratio to the matching Rust program on the same host, so it
+transfers between machines. Phase 1 targets gate the Cranelift release at
+step 7. Phase 2 targets gate the LLVM release at step 12.
+
+| Workload | Today | Phase 1, Cranelift | Phase 2, LLVM |
+| --- | ---: | ---: | ---: |
+| `fib(30)` | 32.8x | 8x | 3x |
+| `int_list_sum` | 18.9x | 5x | 2x |
+| `string_list_scan` | 44.8x | 10x | 4x |
+| `dict_build_get` | 15.1x | 8x | 4x |
+| `set_insert_contains` | 6.9x | 5x | 3x |
+| `record_field_reads` | 15.6x | 8x | 4x |
+| TCP fan-out | 1.0x | no regression | no regression |
+| 10,000 tasks | 61.1x | tracked, no target | tracked, no target |
+
+Build and size targets:
+
+- **Phase 1.** Build times stay within 25% of the step 1 numbers.
+- **Phase 2.** A reference agent build takes at most 1.5 s on this host, and
+  a hello world build at most 0.6 s. Every program stays inside the native
+  binaries size gate.
+
+The reasoning behind the targets:
+
+- **`fib(30)`.** About 87% of its time is runtime bookkeeping. If steps 2
+  and 3 remove most of it, Aura lands near 4x to 8x. LLVM's inlining and
+  register allocation then bring it toward 3x.
+- **List loops.** Steps 4 and 5 replace two runtime calls per element with an
+  inline read and one check. Step 6 adds integer kernels. Checked
+  arithmetic stays, so Rust's unchecked vectorized speed is out of reach.
+- **Strings, dicts, sets, and records.** Their time is mostly hashing,
+  formatting, and comparison in runtime code. Phase 1 helps them only
+  through retain and release removal and cheaper calls. Phase 2 helps
+  through runtime inlining.
+- **Tasks.** Task creation cost sits in the scheduler, which no Batch 7 step
+  changes. It stays measured so a regression shows.
+
+Step 7 re-measures on the macOS arm64 baseline host with the contractual
+release runner, as well as on Linux.
 
 ## F. Delivery Plan
 

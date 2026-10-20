@@ -17563,6 +17563,21 @@ Before is `5f68c34`. After is the Batch 7a runtime changes. The programs live
 in `benchmarks/runtime_values/`, and `scripts/bench-runtime-values.py` runs
 them.
 
+The same programs against Rust 1.95 ran later in the same kind of container,
+at `aa52bfc`. Both columns time the whole process. The Rust programs use std
+collections and checked arithmetic.
+
+| Program | Aura | Rust | Aura / Rust |
+| --- | ---: | ---: | ---: |
+| `dict_build_get` | 321.6 ms | 21.3 ms | 15.1x |
+| `set_insert_contains` | 42.1 ms | 6.1 ms | 6.9x |
+| `int_list_sum` | 43.7 ms | 2.3 ms | 18.9x |
+| `string_list_scan` | 120.3 ms | 2.7 ms | 44.8x |
+| `record_field_reads` | 145.0 ms | 9.3 ms | 15.6x |
+
+Process startup is about 2.0 ms for Aura and 1.2 ms for Rust, so the two list
+rows understate the gap inside the loop.
+
 The [AuraDB](https://github.com/johnolafenwa/Aura/blob/main/work/2026-10-16-auradb-benchmark-fixes.md)
 document database benchmark ran in the same container:
 
@@ -17586,6 +17601,23 @@ The AuraDB timer has 1 ms resolution, so the `get` row is coarse.
 
 The [raw reports](https://github.com/johnolafenwa/Aura/blob/main/work/2026-10-18-batch-7a-measurements)
 keep every observation.
+
+### Build Times
+
+`scripts/bench-compile-time.py` times `aura build` with the direct backend
+from an installed runtime. These medians come from the same container at
+`aa52bfc`:
+
+| Program | `aura build` | `aura check` | Final link |
+| --- | ---: | ---: | ---: |
+| `examples/basics/hello_world.au` | 0.32 s | 0.004 s | 0.23 s |
+| `examples/agents/tool_runner` | 0.62 s | 0.057 s | 0.21 s |
+| `examples/io/unix_tls_roundtrip.au` | 0.40 s | 0.009 s | 0.21 s |
+
+Checking takes under a tenth of each build. Native code generation and the
+host C compiler's link take the rest. `aura build` writes a new executable
+every time and does not read the native cache. `aura run` reuses a cached
+executable when the program is unchanged.
 
 ## Optimization Level
 
@@ -17641,7 +17673,8 @@ decisions.
 | Retry | favors Aura |
 | Array addition | 1.006974 times NumPy, 1.006524 times the same-session Rust kernel |
 | Array reduction | 6.682308 times NumPy, 1.339087 times the same-session Rust kernel |
-| `record_field_reads` | about 21 times Python 3.13 |
+| `record_field_reads` | about 21 times Python 3.13, about 16 times Rust |
+| `string_list_scan` | about 45 times Rust |
 | AuraDB `update` by id | about 3 times Python 3.13 |
 
 These gaps are specific to these workloads. Scheduling, runtime
