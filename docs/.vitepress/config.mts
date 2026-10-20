@@ -89,7 +89,8 @@ export default defineConfig({
           items: [
             { text: 'Log Analyzer', link: '/learn/case-studies/log-analyzer' },
             { text: 'Queue Worker Pool', link: '/learn/case-studies/queue-worker-pool' },
-            { text: 'Supervised Process Runner', link: '/learn/case-studies/process-supervisor' }
+            { text: 'Supervised Process Runner', link: '/learn/case-studies/process-supervisor' },
+            { text: 'Typed Tool Agent', link: '/learn/case-studies/tool-agent' }
           ]
         }
       ],

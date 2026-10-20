@@ -95,6 +95,7 @@ Three case studies put the pieces together:
 - [Log Analyzer](/learn/case-studies/log-analyzer): a text-processing tool with parsing, aggregation, and a report.
 - [Queue Worker Pool](/learn/case-studies/queue-worker-pool): a structured-concurrency pattern that shuts down cleanly.
 - [Supervised Process Runner](/learn/case-studies/process-supervisor): a small service supervisor with a restart policy and an event stream.
+- [Typed Tool Agent](/learn/case-studies/tool-agent): a tool-calling agent with derived JSON codecs, schemas, and a tracing decorator.
 
 ## Reading The Manual Alongside Learn
 

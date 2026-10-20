@@ -1,0 +1,64 @@
+"""A small typed tool layer: tracing, tool specs, and typed dispatch."""
+
+import json
+
+
+public enum ToolError:
+    """Why a tool call did not produce a result."""
+
+    InvalidRequest(reason: str)
+    UnknownTool(name: str)
+    NotReady
+
+
+public class ToolCall:
+    """A model's request to run one tool."""
+
+    public tool: str
+    public args: json.Value
+
+
+impl json.Codec for ToolCall
+
+
+public type Fn[A, R] = Callable[def(args: A) -> R]
+public type Decorator[A, R] = Callable[def(f: own Fn[A, R]) -> Fn[A, R]]
+
+
+public def traced[A, R](name: own str) -> Decorator[A, R]:
+    """Builds a decorator that prints a line each time the tool runs."""
+    return Decorator[A, R](lambda [own name] own f: trace(name.clone(), f))
+
+
+def trace[A, R](name: own str, f: own Fn[A, R]) -> Fn[A, R]:
+    return Fn[A, R](lambda [own name, own f] args: trace_call(name, f, args))
+
+
+def trace_call[A, R](name: str, f: Fn[A, R], args: A) -> R:
+    print(f"call {name}")
+    return f(args)
+
+
+public class ToolSpec:
+    """A tool's name and the JSON Schema of its arguments."""
+
+    public name: str
+    public schema: json.Value
+
+
+public def tool[A: json.Codec](name: own str) -> ToolSpec:
+    """Describes a tool whose arguments decode as `A`."""
+    return ToolSpec(name=name, schema=json.schema[A]())
+
+
+public def run[A: json.Codec, R: json.Codec](
+    f: Fn[A, Result[R, ToolError]],
+    args: own json.Value,
+) -> Result[json.Value, ToolError]:
+    """Decodes `args`, calls `f`, and encodes its result."""
+    match own json.decode[A](args):
+        case Ok(decoded):
+            result = try f(decoded)
+            return Ok(json.encode(result))
+        case Err(error):
+            return Err(ToolError.InvalidRequest(reason=f"args {error}"))
