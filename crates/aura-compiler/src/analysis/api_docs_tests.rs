@@ -199,3 +199,42 @@ fn api_docs_include_public_extern_declarations() {
         ]
     );
 }
+
+#[test]
+fn api_docs_list_a_decorated_function_with_its_decorators_and_docstring() {
+    let source = concat!(
+        "public type Step = Callable[def(n: int64) -> int64]\n",
+        "public def traced(f: own Step) -> Step:\n",
+        "    return f\n",
+        "@traced\n",
+        "# A comment inside the group.\n",
+        "@traced\n",
+        "public def fact(n: int64) -> int64:\n",
+        "    \"\"\"Multiplies 1 to n.\"\"\"\n",
+        "    return n\n",
+        "@traced\n",
+        "def hidden(n: int64) -> int64:\n",
+        "    return n\n",
+    );
+    let program = crate::check_source(source).expect("decorated source should check");
+    let module = api_module_from_program("tools", &program);
+    let names = module
+        .declarations
+        .iter()
+        .map(|entry| (entry.kind.as_str(), entry.name.as_str()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        names,
+        [
+            ("type", "Step"),
+            ("function", "traced"),
+            ("function", "fact")
+        ]
+    );
+    let fact = &module.declarations[2];
+    assert_eq!(
+        fact.signature,
+        "@traced\n@traced\ndef fact(n: int64) -> int64"
+    );
+    assert_eq!(fact.doc.as_deref(), Some("Multiplies 1 to n."));
+}

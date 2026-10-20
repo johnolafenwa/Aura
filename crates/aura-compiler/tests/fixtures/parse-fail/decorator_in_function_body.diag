@@ -1,0 +1,6 @@
+error[AU2005]: decorator `@traced` is not supported
+ --> crates/aura-compiler/tests/fixtures/parse-fail/decorator_in_function_body.au:2:5
+  |
+2 |     @traced
+  |     ^
+  = help: decorators apply only to module-level functions; in a class body, `@property` before a method declares a read-only property

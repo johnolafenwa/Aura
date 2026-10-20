@@ -15063,11 +15063,11 @@ fn aura_test_registration_timeout_retains_stdout_in_the_single_json_document() {
 fn native_cache_format_carries_the_runtime_archive_epoch() {
     let main = include_str!("../src/main.rs");
     assert!(
-        main.contains(r#"const NATIVE_CACHE_FORMAT: &str = "aura-native-cache-v7";"#),
+        main.contains(r#"const NATIVE_CACHE_FORMAT: &str = "aura-native-cache-v8";"#),
         "native cache format must invalidate artifacts linked against the compiler archive"
     );
     assert!(
-        !main.contains("aura-native-cache-v6"),
+        !main.contains("aura-native-cache-v7"),
         "the prior cache format must not linger in key material"
     );
 }
@@ -16208,6 +16208,56 @@ def main():
          $.status.type: unknown variant `Lost`\n\
          $.id: expected integer or string, found boolean\n\
          {\"$defs\":{\"Priority\":{\"enum\":[\"Low\",\"High\"]},\"Status\":{\"oneOf\":[{\"additionalProperties\":false,\"properties\":{\"type\":{\"const\":\"Open\"}},\"required\":[\"type\"],\"type\":\"object\"},{\"additionalProperties\":false,\"properties\":{\"reason\":{\"type\":\"string\"},\"type\":{\"const\":\"Closed\"}},\"required\":[\"type\",\"reason\"],\"type\":\"object\"}]}},\"additionalProperties\":false,\"properties\":{\"id\":{\"anyOf\":[{\"type\":\"integer\"},{\"type\":\"string\"}]},\"priority\":{\"$ref\":\"#/$defs/Priority\"},\"status\":{\"$ref\":\"#/$defs/Status\"}},\"required\":[\"id\",\"status\"],\"type\":\"object\"}\n",
+    );
+}
+
+#[test]
+fn decorated_functions_work_across_modules_on_both_backends() {
+    let tools = r#"public type Step = Callable[def(n: int64) -> int64]
+public type Scaled = Callable[def(n: int64, *, scale: int64) -> int64]
+public type Wrapper = Callable[def(f: own Scaled) -> Scaled]
+
+public def traced(f: own Step) -> Step:
+    print("traced")
+    return Step(lambda [own f] n: f(n) + 1000)
+
+public def tag(label: own str) -> Wrapper:
+    print(f"evaluate {label}")
+    return Wrapper(lambda [own label] own f: wrap(label.clone(), f))
+
+def wrap(label: own str, f: own Scaled) -> Scaled:
+    print(f"apply {label}")
+    return Scaled(lambda [own label, own f] n, *, scale: f(n, scale=scale) + label.len())
+
+@traced
+public def fact(n: int64) -> int64:
+    if n <= 1:
+        return 1
+    return n * fact(n - 1)
+"#;
+    let main = r#"import tools
+from tools import fact, tag, traced
+
+@tag("outer")
+@tools.tag("in")
+def run(n: int64, *, scale: int64) -> int64:
+    return n * scale
+
+@traced
+def twice(n: int64) -> int64:
+    return tools.fact(n) * 2
+
+def main():
+    print(fact(3))
+    print(tools.fact(1))
+    print(run(3, scale=10))
+    print(twice(1))
+"#;
+    assert_run_and_direct_program_stdout(
+        "aura-decorated-functions-modules",
+        main,
+        &[("tools.au", tools)],
+        "traced\nevaluate outer\nevaluate in\napply in\napply outer\ntraced\n10006\n1001\n37\n3002\n",
     );
 }
 

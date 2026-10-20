@@ -455,9 +455,10 @@ pub struct FunctionSignature {
 pub(crate) fn check_with_context(module: Module, context: ModuleContext) -> Result<Program> {
     let mut module = module;
     let mut context = context;
+    let decorated = super::decorators::expand(&mut module)?;
     let derived = super::json_derive::expand(&mut module, &mut context)?;
     super::property_reads::check_with_property_reads(module, context, check_with_context_once)
-        .map_err(|error| derived.map_error(error))
+        .map_err(|error| decorated.map_error(derived.map_error(error)))
 }
 
 fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Program> {

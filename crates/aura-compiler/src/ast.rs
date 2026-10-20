@@ -291,8 +291,24 @@ pub struct FunctionDecl {
     /// read-only computed property.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub property: Option<Span>,
+    /// The decorator expressions written above a module-level function, top
+    /// to bottom.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub decorators: Vec<Decorator>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub doc: Option<DocString>,
+}
+
+/// One `@expression` line above a module-level function.
+#[derive(Clone, Debug, Serialize)]
+pub struct Decorator {
+    pub expr: Expr,
+    /// The span of the `@`.
+    pub span: Span,
+    /// The decorator as written, from `@` to the end of its expression, for
+    /// hover and generated documentation.
+    #[serde(skip)]
+    pub text: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]

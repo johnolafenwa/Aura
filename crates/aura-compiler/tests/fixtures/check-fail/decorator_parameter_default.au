@@ -1,0 +1,14 @@
+type Step = Callable[def(n: int64) -> int64]
+
+
+def traced(f: own Step) -> Step:
+    return f
+
+
+@traced
+def bump(n: int64 = 1) -> int64:
+    return n + 1
+
+
+def main():
+    pass

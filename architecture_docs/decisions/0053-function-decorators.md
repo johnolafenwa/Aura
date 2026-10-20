@@ -1,10 +1,10 @@
 # ADR-0053: Function decorators
 
-- Status: Accepted direction; detailed design pending
+- Status: Accepted; open details resolved by the Batch 6 checkpoint
 - Ratified direction: 2026-09-06, user approval of the priority roadmap
 - Date: 2026-08-02
 - Version target: Aura 0.4
-- Implementation: Not started
+- Implementation: Concrete decorators in Batch 6 step 6; generic decorators in step 7
 - Roadmap decision: Batch S1, design-only checkpoint
 - Related: ADR-0013, ADR-0015, ADR-0016, ADR-0022, ADR-0033, ADR-0037,
   ADR-0038, and ADR-0050

@@ -78,7 +78,7 @@ progress on `codex/batch-1-phase-1`. Option removal remains phase 2.
 50. [ADR-0050: Module-level constants and deterministic initialization](0050-module-level-constants.md) — Accepted for Aura 0.3 in Batch S1
 51. [ADR-0051: Import aliases and keyword-only parameter disposition](0051-import-aliases-and-keyword-only-parameters.md) — Accepted for Aura 0.3; future call metadata in ADR-0058 and import polish in ADR-0063
 52. [ADR-0052: Anonymous closed union types](0052-anonymous-closed-union-types.md) — Accepted; detailed design ratified 2026-09-08; implementation in Batch 1
-53. [ADR-0053: Function decorators](0053-function-decorators.md) — Accepted direction; full callable preservation and explicit retry ownership; detailed design pending
+53. [ADR-0053: Function decorators](0053-function-decorators.md) — Accepted; full callable preservation and explicit retry ownership; concrete decorators implemented in Batch 6 step 6
 54. [ADR-0054: Generators and the iterator protocol](0054-generators-and-iterator-protocol.md) — Accepted direction; distinct item/end, persistent failure, close, and initial pinned frames; detailed design pending
 55. [ADR-0055: Display trait and read-only properties](0055-display-trait-and-properties.md) — Accepted direction; independent delivery and explicit effect boundary; detailed design pending
 56. [ADR-0056: Docstrings and documentation metadata](0056-docstrings-and-documentation-metadata.md) — Accepted; implemented in Batch 4 with `aura doc`

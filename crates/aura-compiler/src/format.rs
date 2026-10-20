@@ -593,6 +593,9 @@ impl<'a> Formatter<'a> {
         let mut in_declaration = false;
         let mut previous_end: Option<usize> = None;
         let mut previous_top_comment = false;
+        // A decorator line holds its comments and definition with no blank
+        // line between them.
+        let mut after_decorator = false;
         for (position, entry) in entries.iter().enumerate() {
             let (start, end) = self.entry_lines(*entry);
             let original_blanks =
@@ -622,7 +625,7 @@ impl<'a> Formatter<'a> {
                     }
                 }
             };
-            let blanks = if output.is_empty() || first_in_body {
+            let blanks = if output.is_empty() || first_in_body || after_decorator {
                 0
             } else if level > 0 {
                 original_blanks.min(1)
@@ -642,6 +645,7 @@ impl<'a> Formatter<'a> {
                     if level == 0 {
                         in_declaration = self.is_declaration(line);
                     }
+                    after_decorator = self.is_decorator(line);
                     previous_top_comment = false;
                 }
                 Entry::Comment(index) => {
@@ -721,7 +725,15 @@ impl<'a> Formatter<'a> {
             .count()
     }
 
+    /// Whether this line is an `@` decorator line.
+    fn is_decorator(&self, line: Logical) -> bool {
+        self.toks[line.first].text == "@"
+    }
+
     fn is_declaration(&self, line: Logical) -> bool {
+        if self.is_decorator(line) {
+            return true;
+        }
         let mut index = line.first;
         if self.toks[index].text == "public" && index < line.last {
             index += 1;
@@ -839,6 +851,9 @@ impl<'a> Formatter<'a> {
             return !context.is_some_and(|context| context.slice);
         }
         if left.class == Class::Dot || right.class == Class::Dot {
+            return false;
+        }
+        if index - 1 == first && left.text == "@" {
             return false;
         }
         if self.is_unary(index - 1, first) {

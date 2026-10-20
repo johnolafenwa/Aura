@@ -1,0 +1,5 @@
+error[AU2002]: decorator on `bump` must take and return `Callable[def(n: int64) -> int64]`: result type mismatch for function `stringify`: expected `str`, found `int64`
+ --> crates/aura-compiler/tests/fixtures/check-fail/decorator_wrong_result.au:9:1
+  |
+9 | @stringify
+  | ^

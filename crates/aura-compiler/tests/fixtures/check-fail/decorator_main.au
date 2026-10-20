@@ -1,0 +1,10 @@
+type Entry = Callable[def() -> None]
+
+
+def traced(f: own Entry) -> Entry:
+    return f
+
+
+@traced
+def main():
+    pass

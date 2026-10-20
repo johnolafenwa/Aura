@@ -213,7 +213,9 @@ Aura 0.5 recognizes these punctuation and operator tokens:
 -> @
 ```
 
-`@` begins the `@property` marker on a class method. See
+`@` begins a decorator line above a module-level function, or the
+`@property` marker on a class method. See
+[Decorators](/manual/functions#decorators) and
 [Classes](/manual/classes#properties).
 
 The lexer chooses the longest operator spelling, so `**=`, `<<=`, `>>=`, and

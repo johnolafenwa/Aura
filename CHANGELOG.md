@@ -23,8 +23,27 @@ in this file.
   `int64 | str`. `AU2046` reports what cannot be derived.
 - A class, enum, or field docstring becomes the `description` in its derived
   JSON Schema.
+- Decorators on module-level functions. `@traced` above `def fact` binds
+  `fact` to `traced(fact)`, a `Callable[def(...) -> R]` constant. Decorator
+  expressions evaluate top to bottom and apply bottom to top, and a
+  recursive call goes through the decorated binding. `AU2047` reports a
+  decorator on a generic function, on `main`, on a function with a
+  parameter default or view result, or a decorator line with no function
+  after it.
+- A module member that holds a shared callable can be called as
+  `tools.run(3)`.
+
+### Changed
+
+- The semantic interface version is 20, and the native cache format is
+  `v8`. Cached executables rebuild once.
 
 ### Fixed
+
+- `aura fmt` wrote `@property` as `@ property` and could separate a marker
+  from its method with blank lines.
+- On the direct backend, a callable stored in a module constant that
+  returned another callable could crash or leak when called.
 
 - `case j.Value.Object(fields)` after `import json as j` failed with
   `AU2001`. Patterns now resolve a module alias.

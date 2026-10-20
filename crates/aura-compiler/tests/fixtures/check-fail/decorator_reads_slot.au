@@ -1,0 +1,15 @@
+type Step = Callable[def(n: int64) -> int64]
+type Wrapper = Callable[def(f: own Step) -> Step]
+
+
+def after(other: Step) -> Wrapper:
+    return Wrapper(lambda own f: f)
+
+
+@after(bump)
+def bump(n: int64) -> int64:
+    return n + 1
+
+
+def main():
+    print(bump(1))

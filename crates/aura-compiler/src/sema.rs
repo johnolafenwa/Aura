@@ -52,7 +52,9 @@ use properties::{
 };
 #[cfg(test)]
 use types::type_pattern_specificity;
+mod decorators;
 mod init;
+pub(crate) use decorators::{DECORATED_PREFIX, UNDECORATED_PREFIX};
 mod json_derive;
 pub(crate) use json_derive::GENERATED_LINE_OFFSET;
 mod program;
@@ -11495,6 +11497,33 @@ impl<'a> FunctionChecker<'a> {
                             locals,
                             expected,
                         );
+                    }
+                    // A shared callable constant, such as a decorated
+                    // function, is called through a shared read of its slot.
+                    if namespace.constants.contains_key(field) {
+                        let callee_ty = self.type_of_expr(base_callee, locals)?;
+                        let signature = match callee_ty {
+                            Type::Callable(callable)
+                                if callable.call_kind == ClosureCallKind::Repeatable =>
+                            {
+                                Some((callable.params.clone(), callable.return_type.clone()))
+                            }
+                            Type::Function {
+                                params,
+                                return_type,
+                            } => Some((params, *return_type)),
+                            _ => None,
+                        };
+                        if let Some((params, return_type)) = signature {
+                            return self.type_check_function_value_args(
+                                &params,
+                                &return_type,
+                                args,
+                                span,
+                                locals,
+                                expected,
+                            );
+                        }
                     }
                     return Err(Diagnostic::coded_at(
                         "AU2001",

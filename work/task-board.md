@@ -2,22 +2,34 @@
 
 Last updated: 2026-10-20
 
-## Batch 6 step 5: schema descriptions and the agreement test (in progress)
+## Batch 6 step 6: decorators (in progress)
+
+- Target: decorator syntax on module-level functions, concrete decorators,
+  top-to-bottom evaluation with bottom-to-top application, and recursion
+  through the decorated binding, on both backends. John asked on 2026-10-19
+  for the work to continue through Batch 6 to Batch 7's key decisions.
+- Done: the parser reads `@expression` lines above a module-level `def`.
+  `sema/decorators.rs` rewrites each decorated function into a private
+  undecorated function and a `Callable[def(...) -> R]` constant built by
+  calling the decorators. `AU2047` covers the rejected forms. Hover, `aura
+  doc`, and `aura fmt` show and keep decorator lines. A module member that
+  holds a shared callable can be called as `tools.run(3)`. Three
+  direct-backend callable bugs found on the way are fixed. Notes are in
+  `2026-10-20-batch-6-step-6-decorators.md`.
+- Verification: run-pass `decorators`, run-fail `decorator_trap`, six
+  check-fail and three parse-fail fixtures, a cross-module CLI test on both
+  backends, analysis and API docs tests, a formatter test, and
+  `examples/basics/decorators.au`.
+- Next: open the PR, then step 7, generic decorators and the `@retry` rule.
+
+## Batch 6 step 5: schema descriptions and the agreement test (complete)
 
 - Target: carry class, enum, and field docstrings into derived schemas as
   `description`, and test that each derived schema accepts exactly what its
-  decoder accepts. John asked on 2026-10-19 for the work to continue through
-  Batch 6 to Batch 7's key decisions.
-- Done: the derived schema wraps each documented type and field with
-  `json.__describe`. `tests/json_schema_agreement.rs` mutates a valid input
-  for nine fixture types at every position, about 1,500 inputs, and compares
-  the decoder's verdict with a JSON Schema 2020-12 validator for the keywords
-  derived schemas use. Notes are in
+  decoder accepts.
+- Done: merged in PR #86. Notes are in
   `2026-10-20-batch-6-step-5-schema-descriptions.md`.
-- Verification: the `json_codec_described` run-pass fixture on both
-  backends, and the agreement test, which fails when the validator ignores
-  `required`.
-- Next: open the PR, then step 6, decorator syntax.
+- Next: step 6.
 
 ## Batch 6 step 4: derived codecs for enums and unions (complete)
 

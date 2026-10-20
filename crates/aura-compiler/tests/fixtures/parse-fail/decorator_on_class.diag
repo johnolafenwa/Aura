@@ -1,0 +1,5 @@
+error[AU2047]: a decorator must come directly before a module-level function definition
+ --> crates/aura-compiler/tests/fixtures/parse-fail/decorator_on_class.au:5:1
+  |
+5 | @traced
+  | ^

@@ -1,0 +1,15 @@
+type Step = Callable[def(n: int64) -> int64]
+type Text = Callable[def(n: int64) -> str]
+
+
+def stringify(f: own Step) -> Text:
+    return Text(lambda [own f] n: f"{f(n)}")
+
+
+@stringify
+def bump(n: int64) -> int64:
+    return n + 1
+
+
+def main():
+    print(bump(1))

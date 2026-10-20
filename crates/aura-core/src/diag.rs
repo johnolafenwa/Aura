@@ -218,6 +218,11 @@ pub const DIAGNOSTIC_CODE_REGISTRY: &[DiagnosticCodeInfo] = &[
         title: "invalid derived implementation",
     },
     DiagnosticCodeInfo {
+        code: "AU2047",
+        band: "names/types",
+        title: "invalid decorator",
+    },
+    DiagnosticCodeInfo {
         code: "AU2999",
         band: "names/types",
         title: "general compile-time rejection",

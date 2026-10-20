@@ -1,0 +1,8 @@
+error[AU4001]: limit must be positive
+ --> crates/aura-compiler/tests/fixtures/run-fail/decorator_trap.au:7:5
+  |
+7 |     assert limit > 0, "limit must be positive"
+  |     ^
+  = note: left = 0
+  = note: right = 0
+  = note: Aura call chain (innermost first): checked at 5:1 -> __aura_const_init::decorator_trap::bump at 18:1

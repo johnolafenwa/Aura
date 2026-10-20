@@ -7609,6 +7609,7 @@ fn function_decl(name: &str) -> FunctionDecl {
         body: Vec::new(),
         span: Span::new(1, 1),
         property: None,
+        decorators: Vec::new(),
         doc: None,
     }
 }

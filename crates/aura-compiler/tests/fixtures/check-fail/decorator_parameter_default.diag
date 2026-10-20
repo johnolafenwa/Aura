@@ -1,0 +1,6 @@
+error[AU2047]: decorated function `bump` cannot give parameter `n` a default
+ --> crates/aura-compiler/tests/fixtures/check-fail/decorator_parameter_default.au:9:10
+  |
+9 | def bump(n: int64 = 1) -> int64:
+  |          ^
+  = help: a decorator returns a closure, and a closure has no parameter defaults

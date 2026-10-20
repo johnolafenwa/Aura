@@ -1,0 +1,44 @@
+"""Decorators wrap a module-level function once, when the module starts."""
+
+type Step = Callable[def(n: int64) -> int64]
+type StepDecorator = Callable[def(f: own Step) -> Step]
+
+
+def logged(f: own Step) -> Step:
+    """Prints a line each time the wrapped function runs."""
+    return Step(lambda [own f] n: log_call(f, n))
+
+
+def log_call(f: Step, n: int64) -> int64:
+    print(f"call {n}")
+    return f(n)
+
+
+def offset(by: own int64) -> StepDecorator:
+    """Builds a decorator that adds `by` to each result."""
+    print(f"evaluate offset({by})")
+    return StepDecorator(lambda [own by] own f: add_after(f, by))
+
+
+def add_after(f: own Step, by: own int64) -> Step:
+    print(f"apply offset({by})")
+    return Step(lambda [own f, own by] n: f(n) + by)
+
+
+@offset(100)
+@offset(10)
+def double(n: int64) -> int64:
+    return n * 2
+
+
+@logged
+def countdown(n: int64) -> int64:
+    """Counts down to zero through the decorated binding."""
+    if n == 0:
+        return 0
+    return countdown(n - 1)
+
+
+def main():
+    print(double(1))
+    print(countdown(2))

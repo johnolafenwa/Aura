@@ -1,0 +1,5 @@
+error[AU2047]: decorated function `identity` cannot be generic
+ --> crates/aura-compiler/tests/fixtures/check-fail/decorator_generic_function.au:8:1
+  |
+8 | @traced
+  | ^

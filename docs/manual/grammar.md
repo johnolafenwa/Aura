@@ -226,7 +226,8 @@ comma.
 -> @
 ```
 
-`@` appears only in the `@property` marker of a class method.
+`@` begins a decorator line above a module-level function, or the
+`@property` marker of a class method.
 There is no semicolon, assignment expression, unary plus, or lambda arrow.
 
 ## Modules And Imports
@@ -285,6 +286,7 @@ item
     | [ "public" ], enum-declaration
     | [ "public" ], type-alias-declaration
     | [ "public" ], function-declaration
+    | decorator, { decorator }, [ "public" ], function-declaration
     | [ "public" ], extern-function-declaration
     | [ "public" ], extern-opaque-declaration
     | [ "public" ], trait-declaration
@@ -481,7 +483,7 @@ start on the line directly after the field. A class body whose only entry is a
 docstring is an empty class, the same as `pass`.
 
 `copy` is contextual and is recognized only immediately before `class`.
-`property` after `@` is the only accepted marker name.
+`property` after `@` is the only accepted marker name in a class body.
 A method named `__init__` is the class's initializer. It uses the ordinary
 method grammar. Fields and methods may be interleaved. `pass` permits an otherwise empty class
 body. A comment-only body is not a suite.
@@ -517,6 +519,9 @@ function-declaration
       "(", [ parameter-list ], ")",
       [ return-annotation ],
       ":", NEWLINE, suite ;
+
+decorator
+    = "@", expression, NEWLINE ;
 
 method-declaration
     = "def", identifier, [ bounded-type-parameters ],
@@ -567,6 +572,11 @@ interpreted as an ordinary parameter. Use one of the receiver forms above.
 
 Call sites pass the value directly. They never prefix an argument with a
 capability.
+
+A `decorator` line starts at column 0 and holds one expression. Comment lines
+and blank lines may sit between decorator lines and the definition. Any other
+line ends the group and reports `AU2047`. Only a module-level function takes
+decorators. [Decorators](/manual/functions#decorators) gives the meaning.
 
 Bare means shared access for every type, including declaration-known copy
 types. An ordinary return type annotation is an owned return. A view
@@ -1217,7 +1227,8 @@ The grammar intentionally excludes:
 - semicolons and multiple statements on one physical line
 - backslash line continuation
 - multiline f-strings
-- local item declarations, attributes, and decorators other than `@property`
+- local item declarations, attributes, and decorators on classes, enums,
+  methods, or local functions
 - wildcard and relative-dot import syntax
 - `dict`, `set`, and range patterns
 - call-site capability annotations

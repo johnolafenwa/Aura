@@ -3037,7 +3037,7 @@ fn native_runtime_identity_material(identity: &NativeRuntimeIdentity) -> Option<
 // The compiler-owned semantic schema version is an additional, independent
 // key component, so checked-source changes do not require a cache-container
 // format change.
-const NATIVE_CACHE_FORMAT: &str = "aura-native-cache-v7";
+const NATIVE_CACHE_FORMAT: &str = "aura-native-cache-v8";
 
 /// The exact runtime inputs that a warm native-cache lookup may reuse.
 ///
