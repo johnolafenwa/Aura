@@ -43,12 +43,11 @@ impl DerivedSources {
         if span.line < GENERATED_LINE_OFFSET {
             return diagnostic;
         }
-        let region = self
+        let found = self
             .regions
             .iter()
-            .find(|region| region.lines.contains(&span.line))
-            .or_else(|| self.regions.first());
-        if let Some(region) = region {
+            .find(|region| region.lines.contains(&span.line));
+        if let Some(region) = found.or(self.regions.first()) {
             diagnostic.span = Some(region.span);
             diagnostic.message = format!(
                 "derived `json.Codec` for `{}`: {}",
@@ -92,18 +91,30 @@ pub(super) fn expand(module: &mut Module, context: &mut ModuleContext) -> Result
             .with_help("write the trait's methods in an indented block after `:`"));
         }
         let class = derived_class(module, decl)?;
-        targets.push((index, class.name.clone(), decl.span));
+        targets.push((
+            index,
+            class.name.clone(),
+            decl.span,
+            decl.trait_name.clone(),
+        ));
     }
 
-    let namespace = crate::builtin_sources::importable_builtin_namespace(&["json".to_string()])
-        .ok_or_else(|| Diagnostic::coded_at(CODE, targets[0].2, "cannot load the `json` module"))?;
+    let Some(namespace) =
+        crate::builtin_sources::importable_builtin_namespace(&["json".to_string()])
+    else {
+        return Err(Diagnostic::coded_at(
+            CODE,
+            targets[0].2,
+            "cannot load the `json` module",
+        ));
+    };
     context
         .imported_bindings
         .insert(JSON.to_string(), ImportedBinding::Module(namespace));
 
     let mut generator = Generator::new(module, context);
-    for (_, class, span) in &targets {
-        generator.derive_class(class, *span)?;
+    for (_, class, span, trait_name) in &targets {
+        generator.derive_class(class, *span, trait_name)?;
     }
     let Generator {
         functions,
@@ -126,13 +137,10 @@ pub(super) fn expand(module: &mut Module, context: &mut ModuleContext) -> Result
             span: chunk.span,
         });
     }
-    let generated =
-        crate::parser::parse_generated(&source, GENERATED_LINE_OFFSET - 1).map_err(|error| {
-            DerivedSources {
-                regions: std::mem::take(&mut regions),
-            }
-            .map_error(error)
-        })?;
+    let generated = match crate::parser::parse_generated(&source, GENERATED_LINE_OFFSET - 1) {
+        Ok(generated) => generated,
+        Err(error) => return Err(DerivedSources { regions }.map_error(error)),
+    };
 
     let mut generated_impls = BTreeMap::new();
     let mut generated_items = Vec::new();
@@ -152,7 +160,7 @@ pub(super) fn expand(module: &mut Module, context: &mut ModuleContext) -> Result
             other => generated_items.push(other),
         }
     }
-    for (index, class, _) in &targets {
+    for (index, class, _, _) in &targets {
         if let Item::Impl(decl) = &mut module.items[*index] {
             decl.methods = generated_impls.remove(class).unwrap_or_default();
         }
@@ -358,21 +366,10 @@ impl<'a> Generator<'a> {
         });
     }
 
-    fn derive_class(&mut self, name: &str, span: Span) -> Result<()> {
+    fn derive_class(&mut self, name: &str, span: Span, trait_name: &str) -> Result<()> {
         self.owner = name.to_string();
         self.span = span;
         let index = self.helper(&Shape::Derived(name.to_string()))?;
-        let trait_name = self
-            .module
-            .items
-            .iter()
-            .find_map(|item| match item {
-                Item::Impl(decl) if decl.derived && type_name(&decl.for_type) == name => {
-                    Some(decl.trait_name.clone())
-                }
-                _ => None,
-            })
-            .unwrap_or_else(|| format!("{JSON}.Codec"));
         self.impls.push(Chunk {
             text: format!(
                 "impl {trait_name} for {name}:\n\
