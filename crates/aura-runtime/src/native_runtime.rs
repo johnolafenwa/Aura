@@ -1335,15 +1335,37 @@ fn int32_overflow_message(value: i64) -> String {
 /// accessors read and write it without a lock. Generated code can only hand a
 /// value to another thread as a task argument or through the module-constant
 /// registry. Both paths call [`share_direct_value`] first, and from then on
-/// every access takes `shared_lock`.
+/// every access takes the shared lock.
+///
+/// Generated code reads the list view and the shared lock in place (see
+/// [`DirectListLayout`]), so the layout is `repr(C)`. The fields fill 160
+/// bytes with no padding.
+#[repr(C)]
 pub struct OpaqueValue {
+    value: UnsafeCell<Value>,
+    /// The address of a `list` value's first element, or 0 for any other
+    /// value. Every write refreshes it, so it is current whenever no access
+    /// is in progress.
+    list_elements: std::cell::Cell<usize>,
+    /// The length of a `list` value, or 0 for any other value.
+    list_len: std::cell::Cell<usize>,
+    /// Null while the value is confined to its creating thread. Once the
+    /// value is shared, the lock every access takes.
+    shared_lock: std::sync::atomic::AtomicPtr<RwLock<()>>,
     ref_count: AtomicUsize,
-    shared: AtomicBool,
-    shared_lock: RwLock<()>,
+    runtime_type_name: UnsafeCell<Option<Arc<str>>>,
     #[cfg(all(debug_assertions, not(test)))]
     owner_thread: usize,
-    value: UnsafeCell<Value>,
-    runtime_type_name: UnsafeCell<Option<Arc<str>>>,
+}
+
+impl Drop for OpaqueValue {
+    fn drop(&mut self) {
+        let lock = *self.shared_lock.get_mut();
+        if !lock.is_null() {
+            // SAFETY: `share_direct_value` leaked this box for the value.
+            drop(unsafe { Box::from_raw(lock) });
+        }
+    }
 }
 
 // The cells are only reached through `OpaqueValue::access`, and a panic
@@ -1372,10 +1394,12 @@ fn direct_value_thread_identity() -> usize {
 
 impl OpaqueValue {
     fn new(value: Value, runtime_type_name: Option<Arc<str>>) -> Self {
+        let (elements, len) = list_view_of(&value);
         Self {
+            list_elements: std::cell::Cell::new(elements),
+            list_len: std::cell::Cell::new(len),
             ref_count: AtomicUsize::new(1),
-            shared: AtomicBool::new(false),
-            shared_lock: RwLock::new(()),
+            shared_lock: std::sync::atomic::AtomicPtr::new(std::ptr::null_mut()),
             #[cfg(all(debug_assertions, not(test)))]
             owner_thread: direct_value_thread_identity(),
             value: UnsafeCell::new(value),
@@ -1383,12 +1407,28 @@ impl OpaqueValue {
         }
     }
 
+    /// Records where a `list` value's elements lie. The caller holds
+    /// confinement or the write guard.
+    fn refresh_list_view(&self) {
+        // SAFETY: the caller has exclusive access, so no `&mut Value` exists.
+        let (elements, len) = list_view_of(unsafe { &*self.value.get() });
+        self.list_elements.set(elements);
+        self.list_len.set(len);
+    }
+
+    /// The lock of a shared value, or `None` while it is confined.
+    fn shared_lock(&self) -> Option<&RwLock<()>> {
+        // SAFETY: a non-null pointer is the box `share_direct_value` leaked,
+        // which lives as long as the value.
+        unsafe { self.shared_lock.load(Ordering::Acquire).as_ref() }
+    }
+
     fn access(&self, write: bool) -> DirectValueAccess<'_> {
         // Acquire pairs with the release store in `share_direct_value`. The
         // thread that shares a value is the only one that could have accessed
         // it unlocked, and every other thread reaches the value through a
         // synchronizing handoff after the store.
-        if !self.shared.load(Ordering::Acquire) {
+        let Some(lock) = self.shared_lock() else {
             #[cfg(all(debug_assertions, not(test)))]
             assert_eq!(
                 self.owner_thread,
@@ -1396,14 +1436,14 @@ impl OpaqueValue {
                 "direct runtime value reached another thread without being shared"
             );
             return DirectValueAccess::Confined;
-        }
+        };
         if write {
-            match self.shared_lock.write() {
+            match lock.write() {
                 Ok(guard) => DirectValueAccess::SharedWrite(guard),
                 Err(_) => runtime_error("direct runtime value lock was poisoned"),
             }
         } else {
-            match self.shared_lock.read() {
+            match lock.read() {
                 Ok(guard) => DirectValueAccess::SharedRead(guard),
                 Err(_) => runtime_error("direct runtime value lock was poisoned"),
             }
@@ -1417,7 +1457,24 @@ impl OpaqueValue {
 /// thread through a synchronizing operation after this call.
 unsafe fn share_direct_value(ptr: *mut OpaqueValue) {
     match unsafe { ptr.as_ref() } {
-        Some(value) => value.shared.store(true, Ordering::Release),
+        Some(value) => {
+            if value.shared_lock.load(Ordering::Acquire).is_null() {
+                let lock = Box::into_raw(Box::new(RwLock::new(())));
+                if value
+                    .shared_lock
+                    .compare_exchange(
+                        std::ptr::null_mut(),
+                        lock,
+                        Ordering::AcqRel,
+                        Ordering::Acquire,
+                    )
+                    .is_err()
+                {
+                    // Another thread shared the value first.
+                    drop(unsafe { Box::from_raw(lock) });
+                }
+            }
+        }
         None => runtime_error("direct runtime received a null opaque value pointer"),
     }
 }
@@ -2288,10 +2345,122 @@ unsafe fn value_mut<T>(ptr: *mut OpaqueValue, write: impl FnOnce(&mut Value) -> 
         None => runtime_error("direct runtime received a null opaque value pointer"),
     };
     let _access = value.access(true);
+    // Declared after the access, so it refreshes the list view while the
+    // access still holds, even when `write` unwinds.
+    let _refresh = RefreshListView(value);
     // SAFETY: `access` returned either confinement to this thread or the
     // shared write guard. Generated code never nests a write inside another
     // access to the same value, which would have deadlocked on the lock.
     write(unsafe { &mut *value.value.get() })
+}
+
+/// The element address and length of a `list` value, or zeros for any
+/// other value. The storage is on the heap, so the address stays valid when
+/// the box holding the value moves.
+fn list_view_of(value: &Value) -> (usize, usize) {
+    match value {
+        Value::Vec(vector) => (vector.elements.as_ptr() as usize, vector.elements.len()),
+        _ => (0, 0),
+    }
+}
+
+/// Refreshes a value's list view when a write ends.
+struct RefreshListView<'a>(&'a OpaqueValue);
+
+impl Drop for RefreshListView<'_> {
+    fn drop(&mut self) {
+        self.0.refresh_list_view();
+    }
+}
+
+/// Where generated code finds a list's elements and the scalar inside one
+/// element. Generated code reads a scalar list element in place when the
+/// value is confined to its thread, and calls the runtime otherwise. The
+/// offsets hold for one build of the runtime, so the compiler records
+/// [`DirectListLayout::fingerprint`] in each executable and
+/// [`aura_direct_check_list_layout`] compares it at startup.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DirectListLayout {
+    /// The offset of the shared lock pointer in an [`OpaqueValue`], which is
+    /// null while the value is confined.
+    pub shared_offset: i32,
+    /// The offset of the element address in an [`OpaqueValue`].
+    pub elements_offset: i32,
+    /// The offset of the element count in an [`OpaqueValue`].
+    pub len_offset: i32,
+    /// The size of one element.
+    pub element_stride: i64,
+    /// The offset of an `int64` element's low 64 bits, when both integer
+    /// representations put their 128-bit value there.
+    pub int_offset: Option<i32>,
+    /// The offset of a `float64` element's bits.
+    pub float_offset: i32,
+    /// The offset of a `bool` element's byte.
+    pub bool_offset: i32,
+}
+
+impl DirectListLayout {
+    /// One number that differs whenever any offset differs.
+    pub fn fingerprint(&self) -> i64 {
+        let fields = [
+            i64::from(self.shared_offset),
+            i64::from(self.elements_offset),
+            i64::from(self.len_offset),
+            self.element_stride,
+            self.int_offset.map_or(-1, i64::from),
+            i64::from(self.float_offset),
+            i64::from(self.bool_offset),
+        ];
+        fields.iter().fold(0x41_75_72_61_i64, |hash, field| {
+            hash.wrapping_mul(0x100_0000_01b3).wrapping_add(*field)
+        })
+    }
+}
+
+/// The layout of this build of the runtime.
+pub fn direct_list_layout() -> DirectListLayout {
+    fn offset_in<T, F>(outer: &T, field: &F) -> i32 {
+        let offset = field as *const F as usize - outer as *const T as usize;
+        i32::try_from(offset).expect("a value field offset fits in i32")
+    }
+    let float = Value::Float(0.0);
+    let float_offset = match &float {
+        Value::Float(bits) => offset_in(&float, bits),
+        _ => unreachable!("a float value is a float"),
+    };
+    let flag = Value::Bool(false);
+    let bool_offset = match &flag {
+        Value::Bool(byte) => offset_in(&flag, byte),
+        _ => unreachable!("a bool value is a bool"),
+    };
+    let integer = Value::Int(IntegerValue::zero());
+    let int_offset = match &integer {
+        Value::Int(inner) => {
+            IntegerValue::wide_payload_offset().map(|payload| offset_in(&integer, inner) + payload)
+        }
+        _ => unreachable!("an integer value is an integer"),
+    };
+    DirectListLayout {
+        shared_offset: std::mem::offset_of!(OpaqueValue, shared_lock) as i32,
+        elements_offset: std::mem::offset_of!(OpaqueValue, list_elements) as i32,
+        len_offset: std::mem::offset_of!(OpaqueValue, list_len) as i32,
+        element_stride: std::mem::size_of::<Value>() as i64,
+        int_offset: int_offset.filter(|_| cfg!(target_endian = "little")),
+        float_offset,
+        bool_offset,
+    }
+}
+
+/// Stops a program whose generated code expects another runtime layout.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_check_list_layout(fingerprint: i64) {
+    task_runtime_boundary(|| {
+        if fingerprint != direct_list_layout().fingerprint() {
+            runtime_error(
+                "this executable was built for a different Aura runtime; rebuild it with `aura build`",
+            )
+        }
+    })
 }
 
 unsafe fn take_value(ptr: *mut OpaqueValue) -> Value {
@@ -6132,6 +6301,29 @@ pub extern "C-unwind" fn aura_direct_vec_push_in_place(
             vector.elements.push(value);
         });
         boxed_value(Value::Unit)
+    })
+}
+
+/// Appends a scalar given as its bits, with no box. `kind` is 0 for
+/// `int64`, 1 for `float64` (its bit pattern), and 2 for `bool`.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_vec_push_scalar(vec: *mut OpaqueValue, bits: i64, kind: i64) {
+    task_runtime_boundary(|| {
+        let value = match kind {
+            0 => Value::Int(IntegerValue::from_i64(bits)),
+            1 => Value::Float(f64::from_bits(bits as u64)),
+            2 => Value::Bool(bits != 0),
+            _ => runtime_error("unknown direct scalar list write kind"),
+        };
+        with_vector_mut(vec, |vector| {
+            if is_unknown_runtime_type(&vector.element_type) {
+                let inferred = inferred_collection_type(&value);
+                if !is_unknown_runtime_type(&inferred) {
+                    vector.element_type = inferred;
+                }
+            }
+            vector.elements.push(value);
+        });
     })
 }
 

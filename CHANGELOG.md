@@ -51,6 +51,10 @@ in this file.
   bytes on macOS arm64, and the size gate records those baselines.
 - The semantic interface version is 20, and the native cache format is
   `v8`. Cached executables rebuild once.
+- A native executable checks at startup that its runtime matches the value
+  layout the compiler read lists with. A mismatch stops the program with
+  "this executable was built for a different Aura runtime; rebuild it with
+  `aura build`".
 
 ### Performance
 
@@ -64,6 +68,10 @@ in this file.
   element. Such a loop copies no element. On Linux x86-64,
   `string_list_scan` went from 115.0 ms to 32.8 ms and
   `record_field_reads` from 149.9 ms to 122.9 ms.
+- Native code reads a list's length and its `int64`, `float64`, and `bool`
+  elements inline, with one bounds check, and appends those scalars without
+  a box. `int_list_sum` runs 106,060,271 instructions instead of
+  444,958,513, and went from 47.3 ms to 23.9 ms on Linux x86-64.
 
 ### Fixed
 

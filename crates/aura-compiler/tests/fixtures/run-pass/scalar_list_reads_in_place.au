@@ -1,0 +1,43 @@
+def total(values: list[int64]) -> int64:
+    mut sum = 0
+    for value in values:
+        sum += value
+    return sum
+
+
+def mean(values: list[float64]) -> float64:
+    mut sum = 0.0
+    for value in values:
+        sum += value
+    return sum / (values.len() as float64)
+
+
+def count_true(flags: list[bool]) -> int64:
+    mut count = 0
+    for flag in flags:
+        if flag:
+            count += 1
+    return count
+
+
+def main():
+    mut values: list[int64] = [3, -4, 9223372036854775807, -9223372036854775808]
+    print(values[0] + values[1])
+    print(values[2])
+    print(values[-1])
+    print(values.len())
+    values.append(10)
+    print(values[-1])
+    print(values.len())
+    mut copy = values.copy()
+    copy[0] = 100
+    print(values[0])
+    print(copy[0])
+    values.pop()
+    print(values.len())
+    print(total([1, 2, 3, -6, 7]))
+    print(mean([1.5, 2.5, 4.0]))
+    print(count_true([true, false, true, true]))
+    with TaskGroup() as group:
+        task = group.start(total, [5, 6, 7])
+        print(task.result_or(0, timeout=1s))

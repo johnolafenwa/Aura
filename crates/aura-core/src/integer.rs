@@ -243,6 +243,28 @@ impl IntegerValue {
         }
     }
 
+    /// The byte offset of the 128-bit value inside an `IntegerValue`, when
+    /// the signed and unsigned representations both keep it there. Native
+    /// code reads a list's integer elements in place from this offset.
+    pub fn wide_payload_offset() -> Option<i32> {
+        fn offset(value: &IntegerValue) -> usize {
+            let field = match &value.representation {
+                IntegerRepresentation::Signed(wide) => wide as *const i128 as usize,
+                IntegerRepresentation::Unsigned(wide) => wide as *const u128 as usize,
+            };
+            field - value as *const IntegerValue as usize
+        }
+        let signed = offset(&Self::from_representation(IntegerRepresentation::Signed(
+            -1,
+        )));
+        let unsigned = offset(&Self::from_representation(IntegerRepresentation::Unsigned(
+            1,
+        )));
+        (signed == unsigned)
+            .then_some(signed)
+            .and_then(|offset| i32::try_from(offset).ok())
+    }
+
     pub const fn from_representation(representation: IntegerRepresentation) -> Self {
         Self {
             representation,

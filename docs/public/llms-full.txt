@@ -17757,6 +17757,31 @@ medians. Before is `aa52bfc`.
 `record_field_reads` still spends most of its time looking up the key and
 matching the `json.Value` it finds.
 
+### List Reads
+
+Native code reads a list's length and its `int64`, `float64`, and `bool`
+elements inline. Each read checks the index once against the length. A
+list that another task can reach, an index out of range, or an integer
+too large for `int64` goes through the runtime, which reports the same
+error as before. Appending one of those scalars to a list stores it
+without a box.
+
+Callgrind counts the instructions of each whole process. Before is the
+loop element reads above.
+
+| Program | Before | After |
+| --- | ---: | ---: |
+| `int_list_sum` | 444,958,513 | 106,060,271 |
+| `string_list_scan` | 363,824,369 | 365,899,833 |
+| `record_field_reads` | 1,137,789,339 | 1,154,420,211 |
+| `dict_build_get` | 2,998,211,951 | 3,049,793,892 |
+| `set_insert_contains` | 347,380,497 | 349,860,346 |
+
+`int_list_sum` went from a median of 47.3 ms to 23.9 ms over 11
+alternating runs, about 10 times the Rust reference. The other programs
+run up to 1.7% more instructions. Each boxed value keeps its list's
+element address and length, and every write to a box updates them.
+
 ## Performance Direction
 
 Performance work will address task creation and scheduling, native loop and
