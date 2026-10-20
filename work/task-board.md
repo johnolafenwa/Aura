@@ -1,23 +1,33 @@
 # Task Board
 
-Last updated: 2026-10-19
+Last updated: 2026-10-20
 
-## Batch 6 step 3: derived codecs for classes (in progress)
+## Batch 6 step 4: derived codecs for enums and unions (in progress)
+
+- Target: derive `json.Codec` for enums, and accept union fields whose
+  members have different JSON kinds, on both backends. John asked on
+  2026-10-19 for the work to continue through Batch 6 to Batch 7's key
+  decisions.
+- Done: an enum without payloads encodes as the variant name. Any other
+  enum encodes as an object tagged by `"type"`, with one key per named
+  payload. A union field decodes by JSON kind and has an `anyOf` schema.
+  `AU2046` rejects positional payloads, a payload named `type`, generic
+  enums, and unions whose members share a JSON kind. Notes are in
+  `2026-10-20-batch-6-step-4-enum-codecs.md`.
+- Verification: the `json_codec_derived_enums` run-pass fixture, six new or
+  updated `json_derive_*` check-fail fixtures, a cross-module CLI test on
+  both backends, and `examples/json/derived_codec.au`.
+- Next: open the PR, then step 5, schema descriptions from docstrings and
+  the schema agreement test.
+
+## Batch 6 step 3: derived codecs for classes (complete)
 
 - Target: derive `encode`, `decode`, and `schema` from a bodyless
   `impl json.Codec for C` for a class, with field paths in errors, on both
-  backends. John asked on 2026-10-19 for the work to continue through
-  Batch 6 to Batch 7's key decisions.
-- Done: a checker pre-pass writes the methods as Aura source per class and
-  field type. `AU2046` rejects what cannot be derived. Fixes found on the
-  way: `json.decode` from an imported module, a temporary passed to
-  `json.encode`, and `case j.Value.X` patterns through a module alias. Notes
-  are in `2026-10-19-batch-6-step-3-derived-codecs.md`.
-- Verification: `json_codec_derived`, `json_codec_derived_import_forms`, and
-  `json_aliased_module_patterns` run-pass fixtures, eleven `json_derive_*`
-  check-fail fixtures, a cross-module CLI test on both backends, and
-  `examples/json/derived_codec.au`.
-- Next: open the PR, then step 4, derived codecs for enums and unions.
+  backends.
+- Done: merged in PR #84. Notes are in
+  `2026-10-19-batch-6-step-3-derived-codecs.md`.
+- Next: step 4.
 
 ## Batch 6 step 2: the `json.Codec` trait (complete)
 

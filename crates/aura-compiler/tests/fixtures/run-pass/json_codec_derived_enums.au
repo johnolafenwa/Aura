@@ -1,0 +1,95 @@
+import json
+
+
+enum Level:
+    Low
+    Medium
+    High
+
+
+impl json.Codec for Level
+
+
+enum Shape:
+    Circle(radius: float64)
+    Rect(width: int32, height: int32)
+    Group(name: str, members: list[Shape])
+    Empty
+
+
+impl json.Codec for Shape
+
+
+class Reading:
+    level: Level
+    value: int64 | str | None = None
+    tags: list[bool | float64] = []
+    shape: Shape | None = None
+
+
+impl json.Codec for Reading
+
+
+def show(text: str):
+    match json.decode_text[Reading](text):
+        case Result.Ok(reading):
+            print(json.dumps(json.encode(reading)))
+        case Result.Err(error):
+            print(error)
+
+
+def main():
+    print(json.dumps(json.encode(Level.Medium)))
+    match json.decode_text[Level]("\"High\""):
+        case Result.Ok(level):
+            print(json.dumps(json.encode(level)))
+        case Result.Err(error):
+            print(error)
+    match json.decode_text[Level]("\"Extreme\""):
+        case Result.Ok(_):
+            print("unexpected")
+        case Result.Err(error):
+            print(error)
+
+    group = Shape.Group(
+        name="pair",
+        members=[Shape.Circle(radius=1.5), Shape.Rect(width=2, height=3), Shape.Empty],
+    )
+    encoded = json.dumps(json.encode(group))
+    print(encoded)
+    match json.decode_text[Shape](encoded):
+        case Result.Ok(back):
+            print(json.dumps(json.encode(back)))
+        case Result.Err(error):
+            print(error)
+
+    for text in [
+        "{\"type\": \"Circle\", \"radius\": 2}",
+        "{\"radius\": 2}",
+        "{\"type\": 3}",
+        "{\"type\": \"Hexagon\"}",
+        "{\"type\": \"Rect\", \"width\": 1}",
+        "{\"type\": \"Rect\", \"width\": 1, \"height\": 2, \"depth\": 3}",
+        "{\"type\": \"Empty\", \"extra\": 1}",
+        "{\"type\": \"Group\", \"name\": \"g\", \"members\": [{\"type\": \"Circle\", \"radius\": \"big\"}]}",
+        "\"Circle\"",
+    ]:
+        match json.decode_text[Shape](text):
+            case Result.Ok(shape):
+                print(json.dumps(json.encode(shape)))
+            case Result.Err(error):
+                print(error)
+
+    show("{\"level\": \"Low\"}")
+    show(
+        "{\"level\": \"High\", \"value\": 7, \"tags\": [true, 2, 0.5], \"shape\": {\"type\": \"Empty\"}}"
+    )
+    show("{\"level\": \"High\", \"value\": \"seven\"}")
+    show("{\"level\": \"High\", \"value\": null}")
+    show("{\"level\": \"High\", \"value\": 1.5}")
+    show("{\"level\": \"High\", \"tags\": [\"x\"]}")
+    show("{\"level\": \"Top\"}")
+
+    print(json.dumps(json.schema[Level]()))
+    print(json.dumps(json.schema[Shape]()))
+    print(json.dumps(json.schema[Reading]()))

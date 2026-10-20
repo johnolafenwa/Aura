@@ -1,0 +1,9 @@
+import json
+
+
+enum Reply[T]:
+    Value(item: T)
+    Missing
+
+
+impl[T] json.Codec for Reply[T]

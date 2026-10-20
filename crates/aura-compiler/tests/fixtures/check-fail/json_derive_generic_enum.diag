@@ -1,0 +1,5 @@
+error[AU2046]: a derived `json.Codec` for the generic enum `Reply` is not implemented
+ --> crates/aura-compiler/tests/fixtures/check-fail/json_derive_generic_enum.au:9:1
+  |
+9 | impl[T] json.Codec for Reply[T]
+  | ^

@@ -16123,6 +16123,58 @@ def main():
 }
 
 #[test]
+fn derived_json_enum_codecs_work_across_modules_on_both_backends() {
+    let catalog = r#"import json
+
+public enum Status:
+    Open
+    Closed(reason: str)
+
+impl json.Codec for Status
+
+public enum Priority:
+    Low
+    High
+
+impl json.Codec for Priority
+"#;
+    let main = r#"import json
+import catalog
+
+class Ticket:
+    id: int64 | str
+    status: catalog.Status
+    priority: catalog.Priority = catalog.Priority.Low
+
+impl json.Codec for Ticket
+
+def main():
+    for text in [
+        "{\"id\": 4, \"status\": {\"type\": \"Open\"}}",
+        "{\"id\": \"T-9\", \"status\": {\"type\": \"Closed\", \"reason\": \"done\"}, \"priority\": \"High\"}",
+        "{\"id\": 4, \"status\": {\"type\": \"Lost\"}}",
+        "{\"id\": true, \"status\": {\"type\": \"Open\"}}",
+    ]:
+        match json.decode_text[Ticket](text):
+            case Result.Ok(ticket):
+                print(json.dumps(json.encode(ticket)))
+            case Result.Err(error):
+                print(error)
+    print(json.dumps(json.schema[Ticket]()))
+"#;
+    assert_run_and_direct_program_stdout(
+        "aura-json-derived-enum-modules",
+        main,
+        &[("catalog.au", catalog)],
+        "{\"id\":4,\"priority\":\"Low\",\"status\":{\"type\":\"Open\"}}\n\
+         {\"id\":\"T-9\",\"priority\":\"High\",\"status\":{\"reason\":\"done\",\"type\":\"Closed\"}}\n\
+         $.status.type: unknown variant `Lost`\n\
+         $.id: expected integer or string, found boolean\n\
+         {\"$defs\":{\"Priority\":{\"enum\":[\"Low\",\"High\"]},\"Status\":{\"oneOf\":[{\"additionalProperties\":false,\"properties\":{\"type\":{\"const\":\"Open\"}},\"required\":[\"type\"],\"type\":\"object\"},{\"additionalProperties\":false,\"properties\":{\"reason\":{\"type\":\"string\"},\"type\":{\"const\":\"Closed\"}},\"required\":[\"type\",\"reason\"],\"type\":\"object\"}]}},\"additionalProperties\":false,\"properties\":{\"id\":{\"anyOf\":[{\"type\":\"integer\"},{\"type\":\"string\"}]},\"priority\":{\"$ref\":\"#/$defs/Priority\"},\"status\":{\"$ref\":\"#/$defs/Status\"}},\"required\":[\"id\",\"status\"],\"type\":\"object\"}\n",
+    );
+}
+
+#[test]
 fn module_qualified_traits_work_in_bounds_impls_and_supertraits_on_both_backends() {
     let shapes = r#"public trait Named:
     def name(self) -> str

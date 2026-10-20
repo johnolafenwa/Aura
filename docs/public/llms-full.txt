@@ -6568,7 +6568,7 @@ String and format-specification diagnostics are described under
 | `AU2043` | invalid Display implementation | A `Display` implementation for a type the module does not declare, a builtin, tuple, or union, a partial or bounded generic target, an overlap, or a mismatched `display` method. | Implement `def display(self) -> str` once, in the module that declares the type, for every specialization. |
 | `AU2044` | invalid property declaration | An `@property` getter outside a class, with a receiver other than `self`, with parameters, type parameters, a `None` or view result, or a name that collides with a field. | Declare `def name(self) -> Type:` in the class body. |
 | `AU2045` | invalid property use | Assignment, compound assignment, a `mut` argument or receiver, `match mut`, a view, or call syntax on a property. | Read the property without parentheses, or bind it to a local and change the local. |
-| `AU2046` | invalid derived implementation | A bodyless `impl` for a trait other than `json.Codec`, for a class from another module, a generic class, an enum, or a class with `__init__`, or a field type with no JSON form. | Write the implementation by hand, or change the field to a supported type. See [Derived Codecs](/manual/json#derived-codecs). |
+| `AU2046` | invalid derived implementation | A bodyless `impl` for a trait other than `json.Codec`, for a type from another module, a generic class or enum, or a class with `__init__`. Also a positional enum payload, a field type with no JSON form, or a union whose members a decoder cannot tell apart. | Write the implementation by hand, or change the field to a supported type. See [Derived Codecs](/manual/json#derived-codecs). |
 | `AU2999` | general compile-time rejection | A rejection that has no narrower public category. | Follow the message. |
 
 **`AU2002` type mismatch.** List `map`, `filter`, and keyed `sort` require the
@@ -6726,8 +6726,8 @@ assigned``. A property produces a fresh value on each read, so it has no place
 to write, borrow mutably, or view. Call syntax reports ``property `total` is a
 computed value, not a method, and cannot be called``.
 
-**`AU2046` invalid derived implementation.** The message names the class and,
-for a field, the field and its type, such as ``cannot derive `json.Codec` for
+**`AU2046` invalid derived implementation.** The message names the type and,
+for a field or payload, its name and type, such as ``cannot derive `json.Codec` for
 `Bag`: field `items` has the type `set[str]`, which a derived `json.Codec`
 cannot encode``.
 
@@ -13766,7 +13766,7 @@ Printing a `DecodeError` gives the path and a message, such as
 ### Derived Codecs
 
 Write `impl json.Codec for Name` with no body, and the compiler writes
-`encode`, `decode`, and `schema` for the class `Name`:
+`encode`, `decode`, and `schema` for the class or enum `Name`:
 
 <<< ../../examples/json/derived_codec.au{aura}
 
@@ -13788,6 +13788,7 @@ Each field type has one JSON form:
 | `dict[str, T]` | object | |
 | a tuple such as `(int64, str)` | array of exactly that length | |
 | `T \| None` | the form of `T`, or `null` | |
+| a union of members with different JSON kinds, such as `int64 \| str` | the member's form | The JSON kind picks the member. An integer picks a float member when the union has no integer member. |
 | a class or enum that implements `json.Codec` | its own encoding | |
 
 The decoder is strict:
@@ -13802,35 +13803,80 @@ The decoder is strict:
 - Decoding stops at the first error in document order. The values already
   decoded are dropped.
 
+#### Enums
+
+An enum whose variants have no payloads encodes as the variant name, such as
+`"Low"`. Any other enum encodes as an object. Its `"type"` key names the
+variant, and each named payload is one more key:
+
+```aura
+import json
+
+enum Status:
+    Ready
+    Failed(reason: str, retries: int32)
+
+impl json.Codec for Status
+
+def main():
+    print(json.dumps(json.encode(Status.Ready)))
+    print(json.dumps(json.encode(Status.Failed(reason="timeout", retries=2))))
+```
+
+This prints `{"type":"Ready"}` and
+`{"reason":"timeout","retries":2,"type":"Failed"}`. A variant name the enum
+does not declare is `UnknownVariant`. An object without a `"type"` key is
+`MissingField`. Payload keys follow the class rules, except that a payload
+has no default.
+
+#### Schemas
+
 The derived schema is a JSON Schema 2020-12 document that matches the
-decoder. A class is an object with `properties`, a `required` list of the
-fields without defaults, and `"additionalProperties": false`. A narrow
-integer carries `minimum` and `maximum`. A `T | None` field is an `anyOf`
-with `{"type": "null"}`. A tuple uses `prefixItems`. A class reached through
-a field appears once under `$defs` and is referenced with `$ref`, which also
-covers a recursive class.
+decoder:
+
+- A class is an object with `properties`, a `required` list of the fields
+  without defaults, and `"additionalProperties": false`.
+- An enum without payloads is `{"enum": [...]}`. Any other enum is a `oneOf`
+  with one object per variant. Each object fixes `"type"` with `const`.
+- A narrow integer carries `minimum` and `maximum`.
+- A `T | None` field or a union field is an `anyOf` of its members. `None`
+  is `{"type": "null"}`.
+- A tuple uses `prefixItems`.
+- A class or enum reached through a field appears once under `$defs` and is
+  referenced with `$ref`, which also covers a recursive type.
+
+#### Rejected Types
 
 The checker rejects these with `AU2046`:
 
 - a bodyless implementation of a trait other than `json.Codec`
-- a class declared in another module, a generic class, or an enum
+- a type declared in another module, or a generic class or enum
 - a class that declares `__init__`. Decode a plain wire class and call the
   initializer in an explicit implementation instead.
-- a field of a type with no JSON form: a set, `Array`, `bytes`, `Result`, a
-  callable, `uint64`, `uintsize`, `intsize`, `int128`, or `uint128`
-- a `dict` whose keys are not `str`, or a union other than `T | None`
+- a variant with a positional payload, such as `Failed(str)`. Name the
+  payload: `Failed(reason: str)`.
+- a payload named `type`, which is the variant tag
+- a field or payload of a type with no JSON form: a set, `Array`, `bytes`,
+  `Result`, a callable, `uint64`, `uintsize`, `intsize`, `int128`, or
+  `uint128`
+- a `dict` whose keys are not `str`
+- a union whose members share a JSON kind, such as two classes or
+  `int32 | int64`
+- a union member whose JSON kind the compiler cannot see: `json.Value`, or a
+  class or enum whose codec is explicit or comes from another module
 
 A field of a class or enum type that does not implement `json.Codec` is
 `AU2002`. The message starts with `derived json.Codec for` and names the
-class.
+type.
 
 ```aura check-fail:AU2046
 import json
 
-class Bag:
-    items: set[str]
+enum Status:
+    Ready
+    Failed(str)
 
-impl json.Codec for Bag
+impl json.Codec for Status
 ```
 
 ## Diagnostics
@@ -13916,8 +13962,7 @@ Aura 0.5 has no API to shut down, join, size, or configure the service. The
 service capacity does not apply to `json.is_valid`, `json.parse_string_map`,
 or `json.stringify_map`.
 
-The compiler derives `json.Codec` for classes only. A derived codec for an
-enum or for a union other than `T | None` is not implemented. A derived
+A derived codec for a generic class or enum is not implemented. A derived
 schema carries no `description` values. Schema validation, MessagePack, CBOR,
 Protobuf, and other binary formats are not available.
 
@@ -13932,8 +13977,8 @@ language does not claim that every host out-of-memory condition can be caught.
 The value and error model, parse and dump, accessors, ordering, formatting,
 and resource limits are implemented Aura 0.5 behavior.
 
-The `json.Codec` trait, `json.DecodeError`, derived codecs for classes, and
-the generic `encode`, `decode`, `decode_text`, and `schema` functions are
+The `json.Codec` trait, `json.DecodeError`, derived codecs for classes and
+enums, and the generic `encode`, `decode`, `decode_text`, and `schema` functions are
 implemented on both backends.
 
 `is_valid`, `stringify_map`, and `parse_string_map` are bounded
@@ -32102,7 +32147,33 @@ The decoder is strict. A missing field without a default, an unknown key, the
 wrong JSON kind, and a number outside the field's range are errors. Each
 error's `path` names the field, such as `$.port`. See
 [examples/json/derived_codec.au](../examples/json/derived_codec.au) for nested
-classes, lists, and the derived schema.
+classes, lists, an enum field, and the derived schema.
+
+Enums derive the same way. In an enum without payloads, each variant encodes
+as its name. Otherwise a variant encodes as an object whose `"type"` key
+names it, with one key per named payload:
+
+```aura
+import json
+
+enum Event:
+    Started
+    Moved(x: int64, y: int64)
+
+impl json.Codec for Event
+
+print(json.dumps(json.encode(Event.Moved(x=3, y=4))))
+# {"type":"Moved","x":3,"y":4}
+
+match json.decode_text[Event]("{\"type\": \"Started\"}"):
+    case Result.Ok(_):
+        print("started")
+    case Result.Err(error):
+        print(error)
+```
+
+A field can also hold a union whose members have different JSON kinds, such
+as `int64 | str`. The decoder picks the member from the JSON kind.
 
 Write the methods yourself when the JSON form differs from the fields. Here a
 port encodes as a bare integer:

@@ -1,5 +1,0 @@
-error[AU2046]: a derived `json.Codec` for the enum `Status` is not implemented
- --> crates/aura-compiler/tests/fixtures/check-fail/json_derive_enum.au:9:1
-  |
-9 | impl json.Codec for Status
-  | ^
