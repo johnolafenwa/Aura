@@ -17,7 +17,18 @@ Last updated: 2026-10-20
   LLVM and removes it. LLVM's inliner replaces the planned MIR inliner.
 - Next: step 1, below.
 
-## Batch 7 step 5: proven loop reads and Array reads (in progress)
+## Batch 7 step 6: integer Array kernels (in progress)
+
+- Target: vectorize the `int32` and `int64` Array kernels and keep the
+  first-overflow flat index in every diagnostic.
+- Done: operators, `wrapping_` and `saturating_` forms, and `sum()` run in
+  256-element blocks on machine integers. Notes are in
+  `2026-10-20-batch-7-step-6-integer-array-kernels.md`.
+- Verification: see the work note. Reference tests compare every kernel
+  with an exact element-by-element definition.
+- Next: hosted CI, then the unboxed scalar list step, then step 7.
+
+## Batch 7 step 5: proven loop reads and Array reads (complete)
 
 - Target: drop bounds checks the compiler proves in `for` loops, and read
   `Array` scalar elements without boxing.
@@ -28,9 +39,9 @@ Last updated: 2026-10-20
 - Verification: see the work note. `int_list_sum` went from 106,060,271 to
   78,654,607 instructions. An indexed `float64` Array loop went from 367 ms
   to about 10.8 ms.
-- Open question for John: store `int64`, `float64`, and `bool` lists
-  unboxed. `int_list_sum` is limited by 112-byte elements.
-- Next: hosted CI, then step 6.
+- Decided: John chose to add a step that stores `int64`, `float64`, and
+  `bool` lists unboxed, after step 6 and before step 7.
+- Done: merged in PR #95.
 
 ## Batch 7 step 4: inline list reads (complete)
 

@@ -78,6 +78,11 @@ in this file.
 - Native code reads an element of a one-dimensional `Array` indexed by an
   `int64` inline. A loop reading 2,000,000 `float64` elements by index went
   from 367 ms to about 10.8 ms on Linux x86-64.
+- `int32` and `int64` Array arithmetic and `sum()` run on machine integers
+  in blocks, mostly as vector code, and still report the first overflowing
+  flat index. Adding two one-million-element `int64` arrays
+  takes about 0.9 ms instead of 37 ms, and an `int32` `sum()` of one
+  million elements under 0.1 ms instead of 39 ms.
 
 ### Fixed
 
@@ -91,6 +96,8 @@ in this file.
   use inside the loop body.
 - `case j.Value.Object(fields)` after `import json as j` failed with
   `AU2001`. Patterns now resolve a module alias.
+- TLS connections use rustls-webpki 0.103.16 and webpki-roots 1.0.10,
+  which fix advisories RUSTSEC-2026-0381 and RUSTSEC-2026-0382.
 
 ## VS Code extension 0.5.0 — 2026-10-19
 
