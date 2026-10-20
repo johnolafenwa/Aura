@@ -4015,7 +4015,7 @@ impl<'a> NativeCodegen<'a> {
             }
             let writeback_ty = &param_types[index];
             let writeback_count = writeback_ty.value_count();
-            let boxed_writeback = box_thunk_value(
+            let boxed_writeback = callables::box_owned_thunk_value(
                 self,
                 &mut builder,
                 &results[cursor..cursor + writeback_count],
@@ -4029,7 +4029,12 @@ impl<'a> NativeCodegen<'a> {
             );
             cursor += writeback_count;
         }
-        let boxed = box_thunk_value(self, &mut builder, &results[..return_count], &return_ty)?;
+        let boxed = callables::box_owned_thunk_value(
+            self,
+            &mut builder,
+            &results[..return_count],
+            &return_ty,
+        )?;
         builder.ins().return_(&[boxed]);
         builder.finalize();
 

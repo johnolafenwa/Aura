@@ -16067,6 +16067,43 @@ def main():
 }
 
 #[test]
+fn stored_callables_return_callables_on_both_backends() {
+    let main = r#"type Step = Callable[def(n: int64) -> int64]
+type Maker = Callable[def(k: int64) -> Step]
+type Wrapper = Callable[def(f: own Step) -> Step]
+
+def plus(k: int64) -> Step:
+    return Step(lambda [own k] n: n + k)
+
+def twice(f: own Step) -> Step:
+    return Step(lambda [own f] n: f(f(n)))
+
+maker = Maker(plus)
+wrapper = Wrapper(twice)
+
+def use(make: Maker) -> int64:
+    step = make(10)
+    return step(1)
+
+def main():
+    step = maker(1)
+    print(step(3))
+    print(use(maker))
+    print(maker(2)(5))
+    doubled = wrapper(maker(3))
+    print(doubled(0))
+    local = Maker(lambda k: Step(lambda [own k] n: n * k))
+    print(local(4)(5))
+"#;
+    assert_run_and_direct_program_stdout(
+        "aura-stored-callable-results",
+        main,
+        &[],
+        "4\n11\n7\n6\n20\n",
+    );
+}
+
+#[test]
 fn derived_json_codecs_work_across_modules_on_both_backends() {
     let catalog = r#"import json
 
