@@ -265,7 +265,7 @@ matrix kernels.
 ## E. Targets And Measurement
 
 Step 1 measured every workload against Rust on one Linux x86-64 host. The
-targets below are proposed for the owner to ratify before step 2 starts.
+owner ratified the targets below on 2026-10-20.
 
 ### Step 1 Baselines
 
@@ -304,7 +304,7 @@ each time and does not read the native cache, so a rebuild of unchanged
 source costs the same as a cold build. Only `aura run` reuses cached
 executables.
 
-### Proposed Targets
+### Targets
 
 Each target is a ratio to the matching Rust program on the same host, so it
 transfers between machines. Phase 1 targets gate the Cranelift release at
@@ -356,7 +356,7 @@ Each step is one pull request with its tests, docs, and measurements.
 | --- | --- |
 | 1 | Rust baselines for the collection programs, compile-time measurement, and proposed targets |
 | 2 | Cheap frames: one-time frame text validation, task state passed once, preallocated frame storage. Done: `fib(30)` went from 32.8x to about 8x Rust on Linux |
-| 3 | Explicit retain and release in MIR, and cancellation of matched pairs |
+| 3 | Explicit retain and release in MIR, and cancellation of matched pairs. Done for loop element copies: a shared `for` loop that only compares, measures, or searches its element reads it in place. `string_list_scan` went from 44.8x to about 12x Rust and `record_field_reads` from 15.6x to about 13x |
 | 4 | Inline list length and element reads from a fixed internal layout, with one bounds check |
 | 5 | Bounds-check removal in proven `for` loops, and direct `Array` element reads |
 | 6 | Vectorized integer Array kernels with ordered first-trap reporting |
@@ -414,5 +414,6 @@ The owner decided on 2026-10-20:
 4. **SIMD.** Vectorization stays inside the current Array contracts, with no
    new language surface.
 
-Every other rule above is the ratified default. Step 1 proposes the numeric
-targets, which the owner ratifies before step 2 starts.
+Every other rule above is the ratified default. On 2026-10-20 the owner also
+approved every numeric target that step 1 proposed, listed in
+[Targets](#targets).

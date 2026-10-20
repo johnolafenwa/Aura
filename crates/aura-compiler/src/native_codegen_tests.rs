@@ -16126,3 +16126,52 @@ def main() -> int32:
     }
     emit_host_object(&mir).expect("builtin constant source should compile directly");
 }
+
+#[test]
+fn native_borrowed_loop_reads_elements_in_place() {
+    let source = r#"
+def scan(names: list[str], docs: list[dict[str, int64]], other: str) -> int64:
+    mut hits = 0
+    for name in names:
+        if name == "x":
+            hits += name.len()
+        if other != name:
+            hits += 1
+    for doc in docs:
+        match doc.get("age"):
+            case Lookup.Found(age):
+                hits += age
+            case Lookup.Missing:
+                pass
+    return hits
+
+def main():
+    print(scan(["x"], [{"age": 1}], "y"))
+"#;
+    let mir = lower_source_to_mir(source).expect("borrowed loop source should lower");
+    let object = emit_host_object(&mir).expect("borrowed loop source should emit directly");
+    let referenced = object_referenced_symbols(&object);
+    for symbol in [
+        "aura_direct_vec_check_index",
+        "aura_direct_compare_str_literal_at",
+        "aura_direct_compare_values_at",
+        "aura_direct_vec_element_len",
+        "aura_direct_vec_element_map_get",
+    ] {
+        assert!(
+            referenced.iter().any(|name| name.ends_with(symbol)),
+            "the loops should call `{symbol}`, referenced: {referenced:?}"
+        );
+    }
+    for symbol in [
+        "aura_direct_vec_index",
+        "aura_direct_element_path_load",
+        "aura_direct_element_path_probe",
+        "aura_direct_element_path_take",
+    ] {
+        assert!(
+            !referenced.iter().any(|name| name.ends_with(symbol)),
+            "a borrowed loop read should not call `{symbol}`"
+        );
+    }
+}

@@ -58,6 +58,12 @@ in this file.
   finds its task state without a map search. Naive recursive `fib(30)` went
   from 129.3 ms to 34.7 ms on Linux x86-64, about 8 times the Rust
   reference. Frame records, the call depth limit, and traces are unchanged.
+- A shared `for` loop over a local list of `str`, `list`, `dict`, or `set`
+  values reads each element in place when the body only compares it with
+  `==` or `!=`, calls `len()` on it, or calls `get(key)` on a `dict`
+  element. Such a loop copies no element. On Linux x86-64,
+  `string_list_scan` went from 115.0 ms to 32.8 ms and
+  `record_field_reads` from 149.9 ms to 122.9 ms.
 
 ### Fixed
 
@@ -66,6 +72,9 @@ in this file.
 - On the direct backend, a callable stored in a module constant that
   returned another callable could crash or leak when called.
 
+- A `view` or a `for x in mut` element used inside a later `while` or `for`
+  loop failed to compile with `AU4001`, because its loan ended at its last
+  use inside the loop body.
 - `case j.Value.Object(fields)` after `import json as j` failed with
   `AU2001`. Patterns now resolve a module alias.
 

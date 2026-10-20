@@ -1,0 +1,42 @@
+# A view or a loop element loan that a later loop reads stays active for
+# every iteration of that loop, and ends once the loop is done.
+
+def count_view_reads(names: list[str]) -> int64:
+    mut hits = 0
+    view first = names[0]
+    mut i = 0
+    while i < 3:
+        if first == "x":
+            hits += 1
+        i += 1
+    return hits
+
+
+def count_pairs(left: mut list[str], right: list[str]) -> int64:
+    mut pairs = 0
+    for a in mut left:
+        for b in right:
+            if a == b:
+                pairs += 1
+        a = a + "!"
+    return pairs
+
+
+def count_repeats(left: mut list[str]) -> int64:
+    mut seen = 0
+    for a in mut left:
+        mut i = 0
+        while i < 2:
+            if a == "x":
+                seen += 1
+            i += 1
+    return seen
+
+
+def main():
+    print(count_view_reads(["x", "y"]))
+    mut left = ["x", "y", "x"]
+    print(count_pairs(left, ["x", "z", "x"]))
+    print(left)
+    mut again = ["x", "y"]
+    print(count_repeats(again))
