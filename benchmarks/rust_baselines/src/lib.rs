@@ -1,4 +1,5 @@
 //! Equivalent work and wire protocols; black_box prevents benchmark elimination.
+use std::collections::{HashMap, HashSet};
 use std::hint::black_box;
 use std::io::{self, Write};
 use std::time::Duration;
@@ -105,6 +106,11 @@ pub fn run(name: &str) {
             assert_eq!(checksum, 4_096_000_000.0);
             println!("DONE numeric-arrays sum 1024 {checksum:.1}");
         }
+        "dict_build_get" => println!("{}", dict_build_get(black_box(20_000))),
+        "set_insert_contains" => println!("{}", set_insert_contains(black_box(20_000))),
+        "int_list_sum" => println!("{}", int_list_sum(black_box(100_000))),
+        "string_list_scan" => println!("{}", string_list_scan(black_box(10_000))),
+        "record_field_reads" => println!("{}", record_field_reads(black_box(5_000))),
         "tasks_10000" => runtime().block_on(async {
             ready(
                 "READY release-performance tasks 10000",
@@ -126,6 +132,104 @@ pub fn run(name: &str) {
         _ => panic!("unknown workload"),
     }
     io::stdout().flush().unwrap();
+}
+
+// The runtime value programs match benchmarks/runtime_values/*.au: whole
+// process, checked arithmetic, std collections, keys built the same way.
+fn dict_build_get(n: i64) -> i64 {
+    let mut index: HashMap<String, i64> = HashMap::new();
+    for i in 0..n {
+        index.insert(format!("key-{i}"), i);
+    }
+    let mut total: i64 = 0;
+    for _ in 0..10 {
+        for j in 0..n {
+            total = match index.get(&format!("key-{j}")) {
+                Some(value) => total.checked_add(*value).unwrap(),
+                None => total.checked_sub(1).unwrap(),
+            };
+        }
+    }
+    assert_eq!(total, 1_999_900_000);
+    total
+}
+
+fn set_insert_contains(n: i64) -> i64 {
+    let mut seen: HashSet<i64> = HashSet::new();
+    for i in 0..n {
+        seen.insert(i.checked_mul(7).unwrap());
+    }
+    let mut hits: i64 = 0;
+    for j in 0..n * 10 {
+        if seen.contains(&black_box(j)) {
+            hits = hits.checked_add(1).unwrap();
+        }
+    }
+    assert_eq!(hits, 20_000);
+    hits
+}
+
+fn int_list_sum(n: i64) -> i64 {
+    let mut values: Vec<i64> = Vec::new();
+    for i in 0..n {
+        values.push(i);
+    }
+    let mut total: i64 = 0;
+    for _ in 0..20 {
+        for value in black_box(&values) {
+            total = total.checked_add(*value).unwrap();
+        }
+    }
+    assert_eq!(total, 99_999_000_000);
+    total
+}
+
+fn string_list_scan(n: i64) -> i64 {
+    let mut names: Vec<String> = Vec::new();
+    for i in 0..n {
+        names.push(format!("user-{}", i % 100));
+    }
+    let mut hits: i64 = 0;
+    for _ in 0..100 {
+        for name in black_box(&names) {
+            if name == "user-7" {
+                hits = hits.checked_add(1).unwrap();
+            }
+        }
+    }
+    assert_eq!(hits, 10_000);
+    hits
+}
+
+#[allow(dead_code)]
+enum JsonValue {
+    String(String),
+    Int(i64),
+    Bool(bool),
+}
+
+fn record_field_reads(n: i64) -> i64 {
+    let mut docs: Vec<HashMap<String, JsonValue>> = Vec::new();
+    for i in 0..n {
+        let mut doc = HashMap::new();
+        doc.insert("name".to_string(), JsonValue::String(format!("user-{i}")));
+        doc.insert("age".to_string(), JsonValue::Int(18 + i % 60));
+        doc.insert("city".to_string(), JsonValue::String("Lagos".to_string()));
+        doc.insert("active".to_string(), JsonValue::Bool(i % 3 != 0));
+        docs.push(doc);
+    }
+    let mut adults: i64 = 0;
+    for _ in 0..20 {
+        for doc in black_box(&docs) {
+            if let Some(JsonValue::Int(age)) = doc.get("age") {
+                if *age >= 40 {
+                    adults = adults.checked_add(1).unwrap();
+                }
+            }
+        }
+    }
+    assert_eq!(adults, 63_080);
+    adults
 }
 
 async fn tcp_fanout() {

@@ -12,7 +12,10 @@ class RustBaselineTests(unittest.TestCase):
         self.assertEqual(set(rust_baselines.CONTRACTS), {
             "fib30", "tasks_10000", "tcp_fanout", "retrying_worker",
             "int32_loop", "int64_loop", "startup", "float64_add", "float64_sum",
+            "dict_build_get", "set_insert_contains", "int_list_sum", "string_list_scan",
+            "record_field_reads",
         })
+        self.assertEqual(rust_baselines.CONTRACTS["int_list_sum"], (b"", b"", b"99999000000\n"))
         self.assertEqual(rust_baselines.CONTRACTS["int32_loop"], (b"", b"", b"10000000\n"))
         self.assertEqual(rust_baselines.CONTRACTS["retrying_worker"][2],
                          b"DONE release-performance retrying-worker 112 18112\n")
