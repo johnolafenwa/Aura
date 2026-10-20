@@ -5064,6 +5064,9 @@ pub fn sleep_with_runtime_scheduler(
 thread_local! {
     static CURRENT_LIGHTWEIGHT_TASK_CONTEXT: RefCell<Option<Rc<LightweightTaskContext>>> =
         const { RefCell::new(None) };
+    // The id of CURRENT_LIGHTWEIGHT_TASK_CONTEXT, kept beside it so the per-call
+    // runtime state lookup reads one cell instead of cloning the context.
+    static CURRENT_LIGHTWEIGHT_TASK_ID: Cell<Option<u64>> = const { Cell::new(None) };
     static CURRENT_LIGHTWEIGHT_TASK_CANCELLATION: std::cell::RefCell<Option<CancellationContext>> =
         const { std::cell::RefCell::new(None) };
     static CURRENT_LIGHTWEIGHT_TASK_EXIT: std::cell::RefCell<Option<TaskExecutionResult>> =
@@ -5161,7 +5164,10 @@ struct LightweightTaskContextGuard {
 
 impl Drop for LightweightTaskContextGuard {
     fn drop(&mut self) {
-        CURRENT_LIGHTWEIGHT_TASK_CONTEXT.with(|slot| *slot.borrow_mut() = self.previous.take());
+        let previous = self.previous.take();
+        CURRENT_LIGHTWEIGHT_TASK_ID
+            .with(|slot| slot.set(previous.as_ref().map(|context| context.task_id)));
+        CURRENT_LIGHTWEIGHT_TASK_CONTEXT.with(|slot| *slot.borrow_mut() = previous);
         CURRENT_LIGHTWEIGHT_TASK_CANCELLATION
             .with(|slot| *slot.borrow_mut() = self.previous_cancellation.take());
     }
@@ -5176,6 +5182,7 @@ fn enter_lightweight_task_context(
         *slot = Some(context.clone());
         previous
     });
+    CURRENT_LIGHTWEIGHT_TASK_ID.with(|slot| slot.set(Some(context.task_id)));
     let previous_cancellation = CURRENT_LIGHTWEIGHT_TASK_CANCELLATION.with(|slot| {
         let mut slot = slot.borrow_mut();
         let previous = slot.clone();
@@ -5206,7 +5213,7 @@ pub fn current_lightweight_task_cancellation() -> Option<CancellationContext> {
 }
 
 pub fn current_lightweight_task_id() -> Option<u64> {
-    with_current_lightweight_task_context(|context| context.task_id)
+    CURRENT_LIGHTWEIGHT_TASK_ID.with(Cell::get)
 }
 
 #[cfg(test)]

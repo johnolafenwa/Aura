@@ -207,6 +207,30 @@ instructions, an executable attribution script, binary hashes, the reverted
 experiment and all paired timings. These are diagnostic quiet-host observations,
 not post-reboot release results.
 
+### Batch 7 step 2: static frame descriptors
+
+Batch 7 step 2 acts on the first three findings without changing the frame
+contract:
+
+- Codegen emits one writable `DirectFrameDescriptor` per function: a
+  validation flag, line, column, and the path and name as pointer and
+  length. The prologue calls `aura_direct_enter_frame(descriptor)`. The
+  runtime validates the text on the first call and sets the flag, so later
+  calls skip UTF-8 validation.
+- The call stack stores one descriptor pointer per call and builds the
+  `RuntimeCallFrame` only when a diagnostic captures frames. A spilled stack
+  keeps its allocation, so recursion does not allocate per call.
+- The current task id lives in its own thread-local cell, and the per-worker
+  state map caches the last entry it returned. Insertion and removal clear
+  the cache.
+- Returned-view records exist only for calls that receive mutable sinks or
+  hand a view back.
+
+Callgrind counts for the whole `fib(30)` process fall from 1,917,708,454 to
+568,735,408 instructions. Frame records, ancestry, the depth limit of 256,
+and parity are unchanged. Design record:
+[Batch 7 design checkpoint](22-batch-7-design-checkpoint.md).
+
 ## Batch 1 phase 1: normalized types and alias expansion
 
 The first type family establishes a shared producer in `sema/types.rs` for

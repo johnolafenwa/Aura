@@ -52,6 +52,13 @@ in this file.
 - The semantic interface version is 20, and the native cache format is
   `v8`. Cached executables rebuild once.
 
+### Performance
+
+- A native call enters its frame from one static record per function and
+  finds its task state without a map search. Naive recursive `fib(30)` went
+  from 129.3 ms to 34.7 ms on Linux x86-64, about 8 times the Rust
+  reference. Frame records, the call depth limit, and traces are unchanged.
+
 ### Fixed
 
 - `aura fmt` wrote `@property` as `@ property` and could separate a marker
