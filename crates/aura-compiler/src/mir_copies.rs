@@ -329,3 +329,7 @@ fn replace_comparison_operand(instruction: &mut Instruction, copy: &str, loan: &
     }
     false
 }
+
+#[cfg(test)]
+#[path = "mir_copies_tests.rs"]
+mod tests;
