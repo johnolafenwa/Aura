@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Runtime value benchmarks: direct-backend wall time against Python; schema 1."""
+"""Runtime value benchmarks: direct-backend wall time against Python and Rust; schema 2."""
 from __future__ import annotations
 import argparse
 import json
@@ -10,14 +10,15 @@ import sys
 import tempfile
 import time
 try:
-    from scripts import benchmark_process
+    from scripts import benchmark_process, rust_baselines
 except ImportError:
     import benchmark_process
+    import rust_baselines
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 BENCH_DIR = ROOT / 'benchmarks/runtime_values'
 PROGRAMS = ('dict_build_get', 'set_insert_contains', 'string_list_scan', 'int_list_sum',
             'record_field_reads')
-REPORT_SCHEMA_VERSION = 1
+REPORT_SCHEMA_VERSION = 2
 
 
 def resolve_aura():
@@ -53,16 +54,22 @@ def parse_reference(stdout):
     return reference
 
 
-def summarize(records, reference):
-    """Pair Aura and Python results, which must agree, and report the ratio."""
+def summarize(records, reference, rust):
+    """Pair Aura, Python, and Rust results, which must agree, and report the ratios."""
     summary = {}
     for name, record in records.items():
+        aura_result = record['stdout'].strip()
         python_result, python_seconds = reference[name]
-        if record['stdout'].strip() != python_result:
-            raise ValueError(f'{name}: Aura printed {record["stdout"].strip()!r}, '
+        if aura_result != python_result:
+            raise ValueError(f'{name}: Aura printed {aura_result!r}, '
                              f'Python printed {python_result!r}')
+        rust_result, rust_seconds = rust[name]['stdout'].strip(), rust[name]['elapsed_s']
+        if aura_result != rust_result:
+            raise ValueError(f'{name}: Aura printed {aura_result!r}, Rust printed {rust_result!r}')
         summary[name] = {'aura_s': record['elapsed_s'], 'python_s': python_seconds,
-                         'ratio': record['elapsed_s'] / python_seconds if python_seconds else None}
+                         'ratio': record['elapsed_s'] / python_seconds if python_seconds else None,
+                         'rust_s': rust_seconds,
+                         'rust_ratio': record['elapsed_s'] / rust_seconds if rust_seconds else None}
     return summary
 
 
@@ -79,9 +86,10 @@ def main():
     commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip()
     if not args.allow_dirty and subprocess.check_output(['git', 'status', '--porcelain'], cwd=ROOT):
         parser.error('measurement requires a clean checkout (or --allow-dirty)')
-    records = {}
+    records, rust = {}, {}
     with tempfile.TemporaryDirectory(prefix='aura-runtime-values-bench-') as directory:
         work = pathlib.Path(directory)
+        rust_binaries, rust_build = rust_baselines.build(work / 'rust-target')
         for name in args.programs:
             binary = work / name
             subprocess.run([str(aura), 'build', '--backend', 'direct', '-o', str(binary),
@@ -89,15 +97,19 @@ def main():
                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=900)
             stdout, elapsed = time_command([str(binary)], name, args.repetitions)
             records[name] = {'stdout': stdout, 'elapsed_s': elapsed}
+            stdout, elapsed = time_command([str(rust_binaries[name])], f'{name} (Rust)',
+                                           args.repetitions)
+            rust[name] = {'stdout': stdout, 'elapsed_s': elapsed}
     reference = subprocess.run([args.python, str(BENCH_DIR / 'reference.py'), *args.programs],
                                check=True, stdout=subprocess.PIPE, text=True, timeout=900).stdout
-    summary = summarize(records, parse_reference(reference))
+    summary = summarize(records, parse_reference(reference), rust)
     report = {'schema_version': REPORT_SCHEMA_VERSION, 'commit': commit, 'aura': str(aura),
-              'records': records, 'summary': summary}
+              'records': records, 'rust_records': rust, 'rust_build': rust_build,
+              'summary': summary}
     args.raw_json.write_text(json.dumps(report, indent=2, sort_keys=True) + '\n')
     for name, row in summary.items():
-        print(f"{name}: aura {row['aura_s']:.3f} s, python {row['python_s']:.3f} s, "
-              f"ratio {row['ratio']:.1f}x")
+        print(f"{name}: aura {row['aura_s']:.3f} s, python {row['python_s']:.3f} s "
+              f"({row['ratio']:.1f}x), rust {row['rust_s']:.3f} s ({row['rust_ratio']:.1f}x)")
 
 
 if __name__ == '__main__':

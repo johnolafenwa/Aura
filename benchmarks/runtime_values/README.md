@@ -6,8 +6,9 @@ reads from JSON-shaped records.
 
 `scripts/bench-runtime-values.py` builds each program with the direct
 backend, runs it three times, and records the median wall time with commit
-provenance. It then runs `reference.py`, which does the same work in Python,
-and checks that both print the same result.
+provenance. It runs the matching [Rust reference](../rust_baselines/README.md)
+the same way. It then runs `reference.py`, which does the same work in Python.
+All three must print the same result.
 
 ```sh
 cargo build --release -p aura

@@ -25,6 +25,12 @@ CONTRACTS = {
     'startup': (b'', b'', b''),
     'float64_add': (b'READY numeric-arrays add 1000000 512\n', b'GO numeric-arrays add\n', b'DONE numeric-arrays add 512 2048.0\n'),
     'float64_sum': (b'READY numeric-arrays sum 1000000 1024\n', b'GO numeric-arrays sum\n', b'DONE numeric-arrays sum 1024 4096000000.0\n'),
+    # Whole-process runtime value programs; output matches benchmarks/runtime_values.
+    'dict_build_get': (b'', b'', b'1999900000\n'),
+    'set_insert_contains': (b'', b'', b'20000\n'),
+    'int_list_sum': (b'', b'', b'99999000000\n'),
+    'string_list_scan': (b'', b'', b'10000\n'),
+    'record_field_reads': (b'', b'', b'63080\n'),
 }
 
 

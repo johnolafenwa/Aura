@@ -19,12 +19,22 @@ class RuntimeValuesBenchmarkTests(unittest.TestCase):
         self.assertEqual(parsed['int_list_sum'], ('99', 0.038))
         self.assertEqual(parsed['dict_build_get'], ('7', 1.5))
 
-    def test_summary_requires_matching_results_and_reports_the_ratio(self):
+    def test_every_program_has_a_rust_reference(self):
+        for name in bench.PROGRAMS:
+            self.assertIn(name, bench.rust_baselines.CONTRACTS)
+
+    def test_summary_requires_matching_results_and_reports_the_ratios(self):
         records = {'int_list_sum': {'stdout': '99\n', 'elapsed_s': 0.38}}
-        summary = bench.summarize(records, {'int_list_sum': ('99', 0.038)})
+        rust = {'int_list_sum': {'stdout': '99\n', 'elapsed_s': 0.019}}
+        summary = bench.summarize(records, {'int_list_sum': ('99', 0.038)}, rust)
         self.assertAlmostEqual(summary['int_list_sum']['ratio'], 10.0)
+        self.assertAlmostEqual(summary['int_list_sum']['rust_s'], 0.019)
+        self.assertAlmostEqual(summary['int_list_sum']['rust_ratio'], 20.0)
         with self.assertRaisesRegex(ValueError, 'Python printed'):
-            bench.summarize(records, {'int_list_sum': ('98', 0.038)})
+            bench.summarize(records, {'int_list_sum': ('98', 0.038)}, rust)
+        with self.assertRaisesRegex(ValueError, 'Rust printed'):
+            bench.summarize(records, {'int_list_sum': ('99', 0.038)},
+                            {'int_list_sum': {'stdout': '98\n', 'elapsed_s': 0.019}})
 
 
 if __name__ == '__main__':

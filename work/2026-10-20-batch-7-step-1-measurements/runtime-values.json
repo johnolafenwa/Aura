@@ -1,0 +1,193 @@
+{
+  "aura": "/home/claude/Aura/target/release/aura",
+  "commit": "7798aec4e1e7714b7c1e090c889b734524b0bc8b",
+  "records": {
+    "dict_build_get": {
+      "elapsed_s": 0.3215915399998721,
+      "stdout": "1999900000\n"
+    },
+    "int_list_sum": {
+      "elapsed_s": 0.04371129700007259,
+      "stdout": "99999000000\n"
+    },
+    "record_field_reads": {
+      "elapsed_s": 0.14497764299994742,
+      "stdout": "63080\n"
+    },
+    "set_insert_contains": {
+      "elapsed_s": 0.042057564000060665,
+      "stdout": "20000\n"
+    },
+    "string_list_scan": {
+      "elapsed_s": 0.12025067600006878,
+      "stdout": "10000\n"
+    }
+  },
+  "rust_build": {
+    "binaries": {
+      "dict_build_get": {
+        "bytes": 401880,
+        "path": "/tmp/aura-runtime-values-bench-ydiqao68/rust-target/release/dict_build_get",
+        "sha256": "1de801382918141782513492e492784a842b48b43fa59079d29f0d5de9a9d31b"
+      },
+      "fib30": {
+        "bytes": 396688,
+        "path": "/tmp/aura-runtime-values-bench-ydiqao68/rust-target/release/fib30",
+        "sha256": "fe386edd9c063c55b70530bbeabfe9f8976a79c9595c9af66e6b6e102ea23ef0"
+      },
+      "float64_add": {
+        "bytes": 427144,
+        "path": "/tmp/aura-runtime-values-bench-ydiqao68/rust-target/release/float64_add",
+        "sha256": "d0760d71d27292496af073efdb988c6378fccfd7e02da43bdc4c7b45798b5585"
+      },
+      "float64_sum": {
+        "bytes": 425752,
+        "path": "/tmp/aura-runtime-values-bench-ydiqao68/rust-target/release/float64_sum",
+        "sha256": "bb987bf8dd82868fe85effbaa55cf1e7fb3e05446c19039371c08a2b55512a21"
+      },
+      "int32_loop": {
+        "bytes": 392304,
+        "path": "/tmp/aura-runtime-values-bench-ydiqao68/rust-target/release/int32_loop",
+        "sha256": "604bf0b2c4a72bcc4952fa82fa81d632af994e470e858f599b811324c3d7f0c2"
+      },
+      "int64_loop": {
+        "bytes": 393272,
+        "path": "/tmp/aura-runtime-values-bench-ydiqao68/rust-target/release/int64_loop",
+        "sha256": "4a2776aa0fb2e47a00756c70b1e0edad30c9514ba28b0b32650e0e31a63be6ed"
+      },
+      "int_list_sum": {
+        "bytes": 390656,
+        "path": "/tmp/aura-runtime-values-bench-ydiqao68/rust-target/release/int_list_sum",
+        "sha256": "3370df5db02d1062c18a5f94eb52a2b8fd9eb469908ab18eb56343c7fa1b6d74"
+      },
+      "record_field_reads": {
+        "bytes": 403424,
+        "path": "/tmp/aura-runtime-values-bench-ydiqao68/rust-target/release/record_field_reads",
+        "sha256": "88bd6c61b3d4f915e6d3fbbd6645eb7818d8144ca68b49cba9938825164f4985"
+      },
+      "retrying_worker": {
+        "bytes": 710568,
+        "path": "/tmp/aura-runtime-values-bench-ydiqao68/rust-target/release/retrying_worker",
+        "sha256": "e9cc08b3c79b10d9a2348a633a89cc7c66b62535ab998d8af4a1e133a46277ae"
+      },
+      "set_insert_contains": {
+        "bytes": 397264,
+        "path": "/tmp/aura-runtime-values-bench-ydiqao68/rust-target/release/set_insert_contains",
+        "sha256": "d3d97905de7de56c5e2f477b94039209ce2bdd85031d3c4fe3702d2b8230051b"
+      },
+      "startup": {
+        "bytes": 384000,
+        "path": "/tmp/aura-runtime-values-bench-ydiqao68/rust-target/release/startup",
+        "sha256": "38c3da95c8dee0511b5dee66a4443d741c88c993ec02812ff06aeb981f257c1f"
+      },
+      "string_list_scan": {
+        "bytes": 392088,
+        "path": "/tmp/aura-runtime-values-bench-ydiqao68/rust-target/release/string_list_scan",
+        "sha256": "fc1b0958dfd91b4b14574bd4bcf5ea77e7205f4ae1686e2f53a54a78d1d89282"
+      },
+      "tasks_10000": {
+        "bytes": 635080,
+        "path": "/tmp/aura-runtime-values-bench-ydiqao68/rust-target/release/tasks_10000",
+        "sha256": "cec68adf98fc653b91f390d64a161c3147fbf0c4b0a15e98bb89e88fafc4e08c"
+      },
+      "tcp_fanout": {
+        "bytes": 713792,
+        "path": "/tmp/aura-runtime-values-bench-ydiqao68/rust-target/release/tcp_fanout",
+        "sha256": "f89216180618c81314fdfceb4ff461a296261641a898545990a285d8336bc544"
+      }
+    },
+    "command": [
+      "cargo",
+      "+1.95.0",
+      "build",
+      "--release",
+      "--locked",
+      "--manifest-path",
+      "/home/claude/Aura/benchmarks/rust_baselines/Cargo.toml",
+      "--target-dir",
+      "/tmp/aura-runtime-values-bench-ydiqao68/rust-target",
+      "--bins"
+    ],
+    "sources": {
+      "Cargo.lock": "66ec0fa5d32b453c950160d8b2d9e9c03ec4e2962395ef6d936f7fd72482bc2c",
+      "Cargo.toml": "caf487def3eeed0cce06490500b22dd72acafe3342fdc2b2e50b8cdf3c082874",
+      "rust-toolchain.toml": "28ba63ba51f7635afd6b0663f2613a1037ab602a039a889e991b1164b84d4714",
+      "src/bin/dict_build_get.rs": "30dd1778c64b0634c1003f0adc57f03a5ba94038c7c97ffc14bc2b4d90cc0244",
+      "src/bin/fib30.rs": "25649ec59cd0a94d94aacf0c26a1c5c248084a5293c95415012e86f27fc9bc0c",
+      "src/bin/float64_add.rs": "5eceb77794ba5b03e611b3bded9cf11aad29267b11fc313debf66d0272db599b",
+      "src/bin/float64_sum.rs": "17c2ed939b8df2ba20f5447650299a051461471f7cf4a6bd75433b67915126a7",
+      "src/bin/int32_loop.rs": "88b1452987c2b4c618eb5d240314f044a5ba65f2b0cef2520c3e2e775aa1643f",
+      "src/bin/int64_loop.rs": "75eb7f40ec810e63b450df36a57516c15203ea98bebff6bb5d1fb20b23f408ac",
+      "src/bin/int_list_sum.rs": "7d617454979ce8890f31a1c8a12928217488496a9586cc8d8b812ef12e7c1012",
+      "src/bin/record_field_reads.rs": "a6608216b17bae37c92826fea7bc4a3a3bbc49ce7806b6b7d017fa447de20823",
+      "src/bin/retrying_worker.rs": "280e77612f5f8145ea470abb240e03be9f13d4aa73a84f3f9a0d8b407d722634",
+      "src/bin/set_insert_contains.rs": "f3b158ee57f6b03764c2cd03577ebc62071efd6610efa07a66f4e6e67b5e249e",
+      "src/bin/startup.rs": "0aac043da872bcbbba039d10660d9612fa90de1c802336b36bb25c84596662ce",
+      "src/bin/string_list_scan.rs": "3000d7290c19d7fccc29a0b80199cac72c65df4c03bb1addfbf9a98a9465dcc8",
+      "src/bin/tasks_10000.rs": "6fca48624f108e0340e52f52865830163647745f76398cf5bb393728680b7145",
+      "src/bin/tcp_fanout.rs": "9dcdccfb754664c2eb226124eeae5b1ddcb99479b8851619530042f8dc6efbac",
+      "src/lib.rs": "5bb7681c026992c5c6ea1fdbfa551b4ad3fb11f5e9b75fb03af2fe198e078dd2"
+    },
+    "toolchain": "rustc 1.95.0 (59807616e 2026-04-14)\nbinary: rustc\ncommit-hash: 59807616e1fa2540724bfbac14d7976d7e4a3860\ncommit-date: 2026-04-14\nhost: x86_64-unknown-linux-gnu\nrelease: 1.95.0\nLLVM version: 22.1.2\n"
+  },
+  "rust_records": {
+    "dict_build_get": {
+      "elapsed_s": 0.021316027000011672,
+      "stdout": "1999900000\n"
+    },
+    "int_list_sum": {
+      "elapsed_s": 0.002314515000080064,
+      "stdout": "99999000000\n"
+    },
+    "record_field_reads": {
+      "elapsed_s": 0.0092827920000218,
+      "stdout": "63080\n"
+    },
+    "set_insert_contains": {
+      "elapsed_s": 0.006114870000146766,
+      "stdout": "20000\n"
+    },
+    "string_list_scan": {
+      "elapsed_s": 0.0026831269999547658,
+      "stdout": "10000\n"
+    }
+  },
+  "schema_version": 2,
+  "summary": {
+    "dict_build_get": {
+      "aura_s": 0.3215915399998721,
+      "python_s": 0.033,
+      "ratio": 9.745198181814306,
+      "rust_ratio": 15.08684240265299,
+      "rust_s": 0.021316027000011672
+    },
+    "int_list_sum": {
+      "aura_s": 0.04371129700007259,
+      "python_s": 0.073,
+      "ratio": 0.5987848904119534,
+      "rust_ratio": 18.88572638265923,
+      "rust_s": 0.002314515000080064
+    },
+    "record_field_reads": {
+      "aura_s": 0.14497764299994742,
+      "python_s": 0.01,
+      "ratio": 14.497764299994742,
+      "rust_ratio": 15.617892009172127,
+      "rust_s": 0.0092827920000218
+    },
+    "set_insert_contains": {
+      "aura_s": 0.042057564000060665,
+      "python_s": 0.012,
+      "ratio": 3.5047970000050555,
+      "rust_ratio": 6.877916292423424,
+      "rust_s": 0.006114870000146766
+    },
+    "string_list_scan": {
+      "aura_s": 0.12025067600006878,
+      "python_s": 0.021,
+      "ratio": 5.726222666669941,
+      "rust_ratio": 44.81736272718215,
+      "rust_s": 0.0026831269999547658
+    }
+  }
+}
