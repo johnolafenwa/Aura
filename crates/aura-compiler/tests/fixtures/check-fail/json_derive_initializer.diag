@@ -1,0 +1,6 @@
+error[AU2046]: cannot derive `json.Codec` for `User` because it declares `__init__`
+ --> crates/aura-compiler/tests/fixtures/check-fail/json_derive_initializer.au:11:1
+   |
+11 | impl json.Codec for User
+   | ^
+  = help: decode a plain wire class and call the initializer in an explicit implementation

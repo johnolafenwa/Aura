@@ -1,0 +1,5 @@
+error[AU2046]: cannot derive `json.Codec` for `Handler`: field `run` has a callable type, which has no JSON form
+ --> crates/aura-compiler/tests/fixtures/check-fail/json_derive_callable_field.au:5:10
+  |
+5 |     run: def(int64) -> int64
+  |          ^

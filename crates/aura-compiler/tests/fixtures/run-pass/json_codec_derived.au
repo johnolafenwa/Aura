@@ -1,0 +1,149 @@
+import json
+
+
+class Money:
+    cents: int64
+
+
+impl json.Codec for Money:
+    def encode(self) -> json.Value:
+        return json.Value.String(f"{self.cents}c")
+
+    def decode(value: own json.Value) -> Result[Money, json.DecodeError]:
+        match own json.into_string(value):
+            case str as text:
+                match text.strip_suffix("c"):
+                    case str as digits:
+                        match parse_int64(digits):
+                            case Result.Ok(cents):
+                                return Result.Ok(Money(cents=cents))
+                            case Result.Err(_):
+                                pass
+                    case None:
+                        pass
+            case None:
+                pass
+        return Result.Err(
+            json.DecodeError(
+                path="$",
+                kind=json.DecodeErrorKind.Invalid(message="expected cents"),
+            )
+        )
+
+    def schema() -> json.Value:
+        return json.Value.Object({"type": json.Value.String("string")})
+
+
+class Scalars:
+    flag: bool
+    small: int8
+    medium: int32
+    large: int64
+    count: uint16
+    ratio: float64
+    narrow: float32
+    name: str
+    raw: json.Value
+
+
+impl json.Codec for Scalars
+
+
+type Labels = list[str]
+
+
+class Tag:
+    label: str
+    aliases: Labels = []
+    single: (str,) = ("x",)
+    weight: uint8 = 1
+
+
+impl json.Codec for Tag
+
+
+class Node:
+    name: str
+    tags: list[Tag] = []
+    scores: dict[str, float64] = {}
+    span: (int64, int64)
+    price: Money | None = None
+    next: indirect Node | None = None
+    secret: str = "hidden"
+
+
+impl json.Codec for Node
+
+
+class Empty:
+    pass
+
+
+impl json.Codec for Empty
+
+
+def show(text: str):
+    match json.decode_text[Node](text):
+        case Result.Ok(node):
+            print(json.dumps(json.encode(node)))
+        case Result.Err(error):
+            print(error)
+
+
+def main():
+    scalars = Scalars(
+        flag=true,
+        small=-5,
+        medium=70000,
+        large=9000000000,
+        count=65535,
+        ratio=2.5,
+        narrow=0.5,
+        name="mixed",
+        raw=json.Value.Array([json.Value.Null]),
+    )
+    encoded = json.dumps(json.encode(scalars))
+    print(encoded)
+    match json.decode_text[Scalars](encoded):
+        case Result.Ok(back):
+            print(
+                f"{back.small} {back.medium} {back.large} {back.count} {back.ratio} {back.name}"
+            )
+        case Result.Err(error):
+            print(error)
+
+    show(
+        "{\"name\": \"root\", \"span\": [1, 2], \"tags\": [{\"label\": \"a\"}, {\"label\": \"b\", \"weight\": 9}], \"scores\": {\"x\": 1, \"y\": 0.25}, \"price\": \"125c\", \"next\": {\"name\": \"leaf\", \"span\": [3, 4], \"next\": null}}"
+    )
+    show("{\"span\": [1, 2]}")
+    show("{\"name\": \"n\", \"span\": [1, 2], \"color\": \"red\"}")
+    show("{\"name\": \"n\", \"span\": [1]}")
+    show("{\"name\": \"n\", \"span\": [1, \"2\"]}")
+    show(
+        "{\"name\": \"n\", \"span\": [1, 2], \"tags\": [{\"label\": \"a\"}, {\"label\": \"b\", \"weight\": 256}]}"
+    )
+    show("{\"name\": \"n\", \"span\": [1, 2], \"scores\": {\"x\": true}}")
+    show("{\"name\": \"n\", \"span\": [1, 2], \"price\": \"oops\"}")
+    show(
+        "{\"name\": \"n\", \"span\": [1, 2], \"next\": {\"name\": 3, \"span\": [0, 0]}}"
+    )
+    show("{\"name\": \"n\", \"span\": [1.5, 2]}")
+    show("[]")
+
+    match json.decode_text[Scalars](
+        "{\"flag\": true, \"small\": 1, \"medium\": 1, \"large\": 1, \"count\": -1, \"ratio\": 1, \"narrow\": 1, \"name\": \"x\", \"raw\": {}}"
+    ):
+        case Result.Ok(_):
+            print("unexpected")
+        case Result.Err(error):
+            print(error)
+
+    print(json.dumps(json.encode(Empty())))
+    match json.decode_text[Empty]("{}"):
+        case Result.Ok(_):
+            print("empty ok")
+        case Result.Err(error):
+            print(error)
+
+    print(json.dumps(json.schema[Tag]()))
+    print(json.dumps(json.schema[Node]()))

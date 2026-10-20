@@ -1,0 +1,33 @@
+import json as j
+from json import Codec, Value
+
+
+class Point:
+    x: int64
+    y: int64
+
+
+impl j.Codec for Point
+
+
+class Shape:
+    points: list[Point]
+    extra: Value
+
+
+impl Codec for Shape
+
+
+def main():
+    match j.decode_text[Shape](
+        "{\"points\": [{\"x\": 1, \"y\": 2}], \"extra\": [true]}"
+    ):
+        case Result.Ok(shape):
+            print(j.dumps(j.encode(shape)))
+        case Result.Err(error):
+            print(error)
+    match j.decode_text[Shape]("{\"points\": [{\"x\": 1}], \"extra\": null}"):
+        case Result.Ok(_):
+            print("unexpected")
+        case Result.Err(error):
+            print(error)

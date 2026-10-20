@@ -1,0 +1,8 @@
+import json
+
+
+class Box[T]:
+    item: T
+
+
+impl json.Codec for Box

@@ -2018,7 +2018,10 @@ impl<'a> AnalysisBuilder<'a> {
             return declared_name_range(text, span, name, file_path);
         }
         let Some(path) = file_path.clone() else {
-            return range_from_span_with_path(span, name.len(), file_path);
+            // A builtin module has no file. The Aura-source part of one, such
+            // as `json.encode`, carries spans into a source the editor cannot
+            // open, so it points at the same place a host builtin does.
+            return range_from_span_with_path(Span::new(1, 1), name.len(), file_path);
         };
         let mut sources = self.module_sources.borrow_mut();
         let lines = sources.entry(path).or_insert_with_key(|path| {
@@ -5756,6 +5759,14 @@ impl<'a> AnalysisBuilder<'a> {
         hover: String,
         definition: Option<AnalysisRange>,
     ) {
+        // Derived implementations are compiler-written source with no place
+        // in the editor's file.
+        let generated =
+            |range: &AnalysisRange| range.line + 1 >= crate::sema::GENERATED_LINE_OFFSET;
+        if generated(&range) {
+            return;
+        }
+        let definition = definition.filter(|definition| !generated(definition));
         self.output.occurrences.push(AnalysisOccurrence {
             line: range.line,
             start_character: range.start_character,

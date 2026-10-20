@@ -1,0 +1,5 @@
+error[AU2046]: cannot derive `json.Codec` for `Bag`: field `items` has the type `set[str]`, which a derived `json.Codec` cannot encode
+ --> crates/aura-compiler/tests/fixtures/check-fail/json_derive_unsupported_field.au:5:12
+  |
+5 |     items: set[str]
+  |            ^

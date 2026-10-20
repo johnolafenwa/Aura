@@ -1,0 +1,5 @@
+error[AU2002]: derived `json.Codec` for `Outer`: type `Inner` does not implement trait `json.Codec`
+ --> crates/aura-compiler/tests/fixtures/check-fail/json_derive_field_without_codec.au:12:1
+   |
+12 | impl json.Codec for Outer
+   | ^

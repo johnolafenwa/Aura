@@ -338,6 +338,8 @@ def build[T: shapes.Make](seed: int64) -> T:
 
 The qualified name and a `from shapes import Make` name the same trait. A module alias works too, as in `impl sh.Make for Gadget` after `import shapes as sh`.
 
+An implementation with no body, such as `impl json.Codec for Point`, asks the compiler to derive the methods. Only `json.Codec` can be derived, and the checker rejects any other bodyless implementation with `AU2046`. See [Derived Codecs](/manual/json#derived-codecs).
+
 Aura 0.5 imposes no separate orphan rule. An implementation must still refer to known, visible types and traits. It takes part only where it is present in the loaded module or package context.
 
 ### Trait Methods On Unions

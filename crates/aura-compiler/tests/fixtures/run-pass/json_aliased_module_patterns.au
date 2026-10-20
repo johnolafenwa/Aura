@@ -1,0 +1,20 @@
+import json as j
+
+
+def describe(value: own j.Value) -> str:
+    match own value:
+        case j.Value.Object(fields):
+            return f"object with {fields.len()} keys"
+        case j.Value.Bool(flag):
+            return f"bool {flag}"
+        case j.Value.Null:
+            return "null"
+        case _:
+            return "other"
+
+
+def main():
+    print(describe(j.Value.Object({"a": j.Value.Null})))
+    print(describe(j.Value.Bool(true)))
+    print(describe(j.Value.Null))
+    print(describe(j.Value.Int(3)))

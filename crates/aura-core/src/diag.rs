@@ -213,6 +213,11 @@ pub const DIAGNOSTIC_CODE_REGISTRY: &[DiagnosticCodeInfo] = &[
         title: "invalid property use",
     },
     DiagnosticCodeInfo {
+        code: "AU2046",
+        band: "names/types",
+        title: "invalid derived implementation",
+    },
+    DiagnosticCodeInfo {
         code: "AU2999",
         band: "names/types",
         title: "general compile-time rejection",

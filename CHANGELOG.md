@@ -7,6 +7,23 @@ in this file.
 
 ## Unreleased
 
+### Added
+
+- A generic function can call a trait's associated method through its
+  bounded type parameter, as in `T.parse(text)` for `T: Parse`.
+- Trait names can be module-qualified in implementations, bounds, and
+  supertraits, as in `impl shapes.Make for Gadget`.
+- The `json.Codec` trait, `json.DecodeError`, and the generic
+  `json.encode`, `json.decode`, `json.decode_text`, and `json.schema`
+  functions.
+- `impl json.Codec for Name` with no body derives `encode`, `decode`, and a
+  JSON Schema for a class. `AU2046` reports what cannot be derived.
+
+### Fixed
+
+- `case j.Value.Object(fields)` after `import json as j` failed with
+  `AU2001`. Patterns now resolve a module alias.
+
 ## VS Code extension 0.5.0 — 2026-10-19
 
 - Bundles language server 0.5.0. The semantic interface version stays 19.

@@ -1,0 +1,9 @@
+import json
+
+
+enum Status:
+    Ready
+    Failed(reason: str)
+
+
+impl json.Codec for Status

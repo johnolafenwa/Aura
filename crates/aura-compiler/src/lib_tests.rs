@@ -773,6 +773,11 @@ const ADDITIONAL_EXAMPLE_CASES: &[(&str, &str, &str)] = &[
         "search aura limit 3\n{\"limit\":3,\"query\":\"aura\"}\n$: missing field `query`\n$.query: expected string, found another kind\n$: expected object, found another kind\n{\"properties\":{\"limit\":{\"type\":\"integer\"},\"query\":{\"type\":\"string\"}},\"type\":\"object\"}\n",
     ),
     (
+        "examples/json/derived_codec.au",
+        include_str!("../../../examples/json/derived_codec.au"),
+        "search aura limit 10 filters 1\n{\"cursor\":null,\"filters\":[{\"field\":\"lang\",\"values\":[\"en\"]}],\"limit\":10,\"query\":\"aura\"}\n$.limit: number out of range for uint8\n$.filters[0].values[0]: expected string, found integer\n$: unknown field `page`\n{\"$defs\":{\"Filter\":{\"additionalProperties\":false,\"properties\":{\"field\":{\"type\":\"string\"},\"values\":{\"items\":{\"type\":\"string\"},\"type\":\"array\"}},\"required\":[\"field\",\"values\"],\"type\":\"object\"}},\"additionalProperties\":false,\"properties\":{\"cursor\":{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"null\"}]},\"filters\":{\"items\":{\"$ref\":\"#/$defs/Filter\"},\"type\":\"array\"},\"limit\":{\"maximum\":255,\"minimum\":0,\"type\":\"integer\"},\"query\":{\"type\":\"string\"}},\"required\":[\"query\"],\"type\":\"object\"}\n",
+    ),
+    (
         "examples/traits/builtin_target_traits.au",
         include_str!("../../../examples/traits/builtin_target_traits.au"),
         "list of 2\ntext of 5\n",

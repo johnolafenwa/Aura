@@ -1,0 +1,8 @@
+import json
+
+
+class Reading:
+    value: int64 | str
+
+
+impl json.Codec for Reading

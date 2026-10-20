@@ -16067,6 +16067,62 @@ def main():
 }
 
 #[test]
+fn derived_json_codecs_work_across_modules_on_both_backends() {
+    let catalog = r#"import json
+
+public class Item:
+    public name: str
+    public tags: list[str] = []
+    secret: int64 = 7
+
+impl json.Codec for Item
+
+public def round_trip(text: str) -> str:
+    match json.decode_text[Item](text):
+        case Result.Ok(item):
+            return json.dumps(json.encode(item))
+        case Result.Err(error):
+            return f"{error}"
+"#;
+    let main = r#"import json as j
+import catalog
+
+class Order:
+    item: catalog.Item
+    count: int32
+
+impl j.Codec for Order
+
+def main():
+    print(catalog.round_trip("{\"name\": \"pen\", \"secret\": 3}"))
+    print(catalog.round_trip("{\"name\": 1}"))
+    match j.decode_text[Order]("{\"item\": {\"name\": \"ink\", \"tags\": [\"blue\"]}, \"count\": 2}"):
+        case Result.Ok(order):
+            print(f"{order.item.name} x{order.count}")
+            print(j.dumps(j.encode(order)))
+        case Result.Err(error):
+            print(error)
+    match j.decode_text[Order]("{\"item\": {\"name\": \"ink\", \"extra\": true}, \"count\": 2}"):
+        case Result.Ok(_):
+            print("unexpected")
+        case Result.Err(error):
+            print(error)
+    print(j.dumps(j.schema[Order]()))
+"#;
+    assert_run_and_direct_program_stdout(
+        "aura-json-derived-modules",
+        main,
+        &[("catalog.au", catalog)],
+        "{\"name\":\"pen\",\"secret\":3,\"tags\":[]}\n\
+         $.name: expected string, found integer\n\
+         ink x2\n\
+         {\"count\":2,\"item\":{\"name\":\"ink\",\"secret\":7,\"tags\":[\"blue\"]}}\n\
+         $.item: unknown field `extra`\n\
+         {\"$defs\":{\"Item\":{\"additionalProperties\":false,\"properties\":{\"name\":{\"type\":\"string\"},\"secret\":{\"type\":\"integer\"},\"tags\":{\"items\":{\"type\":\"string\"},\"type\":\"array\"}},\"required\":[\"name\"],\"type\":\"object\"}},\"additionalProperties\":false,\"properties\":{\"count\":{\"maximum\":2147483647,\"minimum\":-2147483648,\"type\":\"integer\"},\"item\":{\"$ref\":\"#/$defs/Item\"}},\"required\":[\"item\",\"count\"],\"type\":\"object\"}\n",
+    );
+}
+
+#[test]
 fn module_qualified_traits_work_in_bounds_impls_and_supertraits_on_both_backends() {
     let shapes = r#"public trait Named:
     def name(self) -> str

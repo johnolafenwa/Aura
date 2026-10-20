@@ -1138,6 +1138,33 @@ fn find_type_namespace_path(
     }
 }
 
+/// A recorded generic use names its type arguments as the recording module
+/// spells them; the importer that specializes it needs qualified names.
+fn qualify_type_param_call_for_export(
+    program: &Program,
+    call: &sema::TypeParamCall,
+) -> sema::TypeParamCall {
+    match call {
+        sema::TypeParamCall::Generic {
+            owner,
+            callee_module,
+            callee,
+            type_args,
+            kind,
+        } => sema::TypeParamCall::Generic {
+            owner: owner.clone(),
+            callee_module: callee_module.clone(),
+            callee: callee.clone(),
+            type_args: type_args
+                .iter()
+                .map(|(name, ty)| (name.clone(), qualify_export_type(program, ty)))
+                .collect(),
+            kind: *kind,
+        },
+        other => other.clone(),
+    }
+}
+
 fn qualify_export_type(program: &Program, ty: &sema::Type) -> sema::Type {
     match ty {
         sema::Type::Union(union) => {
@@ -1661,7 +1688,18 @@ fn exported_namespace(path: &[String], program: &Program) -> ModuleNamespace {
     let mut namespace = ModuleNamespace {
         union_injections: program.type_definitions.union_injections.borrow().clone(),
         narrowed_reads: program.type_definitions.narrowed_reads.borrow().clone(),
-        type_param_calls: program.type_definitions.type_param_calls.borrow().clone(),
+        type_param_calls: program
+            .type_definitions
+            .type_param_calls
+            .borrow()
+            .iter()
+            .map(|(id, call)| {
+                (
+                    id.clone(),
+                    qualify_type_param_call_for_export(program, call),
+                )
+            })
+            .collect(),
         all_aliases: program
             .aliases_in_scope()
             .map(|(name, info)| (name.clone(), qualify_alias_info_for_export(program, info)))

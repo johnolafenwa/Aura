@@ -93,6 +93,7 @@ String and format-specification diagnostics are described under
 | `AU2043` | invalid Display implementation | A `Display` implementation for a type the module does not declare, a builtin, tuple, or union, a partial or bounded generic target, an overlap, or a mismatched `display` method. | Implement `def display(self) -> str` once, in the module that declares the type, for every specialization. |
 | `AU2044` | invalid property declaration | An `@property` getter outside a class, with a receiver other than `self`, with parameters, type parameters, a `None` or view result, or a name that collides with a field. | Declare `def name(self) -> Type:` in the class body. |
 | `AU2045` | invalid property use | Assignment, compound assignment, a `mut` argument or receiver, `match mut`, a view, or call syntax on a property. | Read the property without parentheses, or bind it to a local and change the local. |
+| `AU2046` | invalid derived implementation | A bodyless `impl` for a trait other than `json.Codec`, for a class from another module, a generic class, an enum, or a class with `__init__`, or a field type with no JSON form. | Write the implementation by hand, or change the field to a supported type. See [Derived Codecs](/manual/json#derived-codecs). |
 | `AU2999` | general compile-time rejection | A rejection that has no narrower public category. | Follow the message. |
 
 **`AU2002` type mismatch.** List `map`, `filter`, and keyed `sort` require the
@@ -249,6 +250,11 @@ rejected action, such as ``property `total` is read-only and cannot be
 assigned``. A property produces a fresh value on each read, so it has no place
 to write, borrow mutably, or view. Call syntax reports ``property `total` is a
 computed value, not a method, and cannot be called``.
+
+**`AU2046` invalid derived implementation.** The message names the class and,
+for a field, the field and its type, such as ``cannot derive `json.Codec` for
+`Bag`: field `items` has the type `set[str]`, which a derived `json.Codec`
+cannot encode``.
 
 **`AU2999` general compile-time rejection.** This is the maintained catch-all
 for compile-time rejections that do not yet have a narrower public category. It

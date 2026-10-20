@@ -603,16 +603,18 @@ docstring-suite = INDENT, docstring, DEDENT ;
 
 impl-declaration
     = "impl", [ bounded-type-parameters ],
-      identifier, [ "[", type-list, "]" ],
+      identifier-path, [ "[", type-list, "]" ],
       "for", type,
-      ":", NEWLINE, INDENT,
-      impl-member, { impl-member },
-      DEDENT ;
+      ( NEWLINE
+      | ":", NEWLINE, INDENT, impl-member, { impl-member }, DEDENT ) ;
 
 impl-member
     = "pass", NEWLINE
     | method-declaration ;
 ```
+
+An implementation without `:` and a suite asks the compiler to derive its
+methods. Only `json.Codec` can be derived.
 
 Trait-declaration type parameters use the plain form. Bounds on them are
 expressed through supertraits or method constraints, not inline in the trait

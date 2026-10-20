@@ -364,3 +364,32 @@ fn initializer_classes_expose_the_initializer_contract() {
         .expect("class completion");
     assert_eq!(class.detail, "Counter(start: int64, *, step: int64 = ...)");
 }
+
+#[test]
+fn derived_codec_source_stays_out_of_references_and_rename() {
+    let source = "import json\nclass Point:\n    x: int64\nimpl json.Codec for Point\ndef main():\n    print(json.dumps(json.encode(Point(x=1))))\n";
+    let analysis = crate::analysis::analyze_path_source(path(), source);
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "{:?}",
+        analysis.diagnostics
+    );
+    assert!(analysis
+        .occurrences
+        .iter()
+        .all(|occurrence| occurrence.line < 6
+            && occurrence
+                .definition
+                .as_ref()
+                .is_none_or(|definition| definition.line < 6)));
+    let references = references_path_source(path(), source, 1, 7, true);
+    assert_eq!(
+        references
+            .iter()
+            .map(|range| range.line)
+            .collect::<Vec<_>>(),
+        vec![1, 3, 5]
+    );
+    let renamed = rename_path_source(path(), source, 1, 7, "Spot").expect("class rename");
+    assert_eq!(renamed.edits.len(), 3);
+}

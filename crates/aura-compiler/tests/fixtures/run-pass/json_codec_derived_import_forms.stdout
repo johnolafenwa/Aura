@@ -1,0 +1,2 @@
+{"extra":[true],"points":[{"x":1,"y":2}]}
+$.points[0]: missing field `y`

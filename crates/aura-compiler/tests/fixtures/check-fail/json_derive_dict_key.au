@@ -1,0 +1,8 @@
+import json
+
+
+class Index:
+    rows: dict[int64, str]
+
+
+impl json.Codec for Index

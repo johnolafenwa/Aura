@@ -1,0 +1,4 @@
+import json
+
+
+impl json.Codec for str
