@@ -18540,3 +18540,181 @@ fn array_free_dicts_and_sets_clone_by_sharing() {
         Type::named("float64"),
     ])));
 }
+
+/// Integer values that mix small numbers with both extremes, from a fixed
+/// seed, so the kernels see overflow in different lanes of each chunk.
+fn mixed_integers(len: usize, seed: u64, small: i128, min: i128, max: i128) -> Vec<i128> {
+    let mut state = seed;
+    (0..len)
+        .map(|_| {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            match (state >> 33) % 64 {
+                0 => max,
+                1 => min,
+                2 => max / 2 + 1,
+                _ => ((state >> 40) as i128 % (2 * small + 1)) - small,
+            }
+        })
+        .collect()
+}
+
+fn integer_array(dtype: ArrayDType, values: &[i128]) -> ArrayValue {
+    let storage = match dtype {
+        ArrayDType::Int32 => {
+            ArrayStorage::Int32(values.iter().map(|value| *value as i32).collect())
+        }
+        _ => ArrayStorage::Int64(values.iter().map(|value| *value as i64).collect()),
+    };
+    ArrayValue::new(vec![values.len()].into_boxed_slice(), storage).unwrap()
+}
+
+/// The kernel result the per-element definition gives: each element in
+/// order, computed exactly and then checked, wrapped, or saturated.
+fn reference_integer_binary(
+    dtype: ArrayDType,
+    left: &[i128],
+    right: &[i128],
+    operation: ArrayBinaryOp,
+    mode: IntegerArithmeticMode,
+) -> std::result::Result<Vec<i128>, String> {
+    let (min, max, bits) = match dtype {
+        ArrayDType::Int32 => (i32::MIN as i128, i32::MAX as i128, 32),
+        _ => (i64::MIN as i128, i64::MAX as i128, 64),
+    };
+    let mut output = Vec::new();
+    for (index, (&left, &right)) in left.iter().zip(right).enumerate() {
+        let exact = match operation {
+            ArrayBinaryOp::Add => left + right,
+            ArrayBinaryOp::Sub => left - right,
+            _ => left * right,
+        };
+        output.push(match mode {
+            IntegerArithmeticMode::Checked if exact < min || exact > max => {
+                return Err(format!(
+                    "array {} overflowed at flat index {index}",
+                    operation.name()
+                ));
+            }
+            IntegerArithmeticMode::Checked => exact,
+            IntegerArithmeticMode::Wrapping => {
+                let shift = 128 - bits;
+                (exact << shift) >> shift
+            }
+            IntegerArithmeticMode::Saturating => exact.clamp(min, max),
+        });
+    }
+    Ok(output)
+}
+
+fn integer_array_values(array: &ArrayValue) -> Vec<i128> {
+    match &array.storage {
+        ArrayStorage::Int32(values) => values.iter().map(|value| *value as i128).collect(),
+        ArrayStorage::Int64(values) => values.iter().map(|value| *value as i128).collect(),
+        _ => panic!("integer kernels return integer storage"),
+    }
+}
+
+#[test]
+fn integer_array_kernels_match_the_ordered_element_definition() {
+    for (dtype, small, min, max) in [
+        (ArrayDType::Int32, 1_000, i32::MIN as i128, i32::MAX as i128),
+        (
+            ArrayDType::Int64,
+            1_000_000,
+            i64::MIN as i128,
+            i64::MAX as i128,
+        ),
+    ] {
+        for (len, seed) in [(0, 1), (7, 2), (255, 3), (256, 4), (1_000, 5), (4_099, 6)] {
+            let left = mixed_integers(len, seed, small, min, max);
+            let right = mixed_integers(len, seed + 100, small, min, max);
+            let left_array = integer_array(dtype, &left);
+            let right_array = integer_array(dtype, &right);
+            for operation in [ArrayBinaryOp::Add, ArrayBinaryOp::Sub, ArrayBinaryOp::Mul] {
+                for mode in [
+                    IntegerArithmeticMode::Checked,
+                    IntegerArithmeticMode::Wrapping,
+                    IntegerArithmeticMode::Saturating,
+                ] {
+                    let expected = reference_integer_binary(dtype, &left, &right, operation, mode);
+                    let actual = left_array
+                        .binary(&right_array, operation, mode)
+                        .map(|array| integer_array_values(&array))
+                        .map_err(|error| error.message);
+                    assert_eq!(
+                        actual, expected,
+                        "{dtype:?} {operation:?} {mode:?} len {len}"
+                    );
+                    for scalar_left in [false, true] {
+                        let scalar = right.first().copied().unwrap_or(3);
+                        let scalars = vec![scalar; len];
+                        let expected = if scalar_left {
+                            reference_integer_binary(dtype, &scalars, &left, operation, mode)
+                        } else {
+                            reference_integer_binary(dtype, &left, &scalars, operation, mode)
+                        };
+                        let scalar_value = match dtype {
+                            ArrayDType::Int32 => Value::Int(IntegerValue::from_i32(scalar as i32)),
+                            _ => Value::Int(IntegerValue::from_i64(scalar as i64)),
+                        };
+                        let actual = left_array
+                            .scalar_binary(&scalar_value, scalar_left, operation, mode)
+                            .map(|array| integer_array_values(&array))
+                            .map_err(|error| error.message);
+                        assert_eq!(
+                            actual, expected,
+                            "{dtype:?} {operation:?} {mode:?} scalar_left {scalar_left} len {len}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn integer_array_sums_report_the_first_prefix_that_overflows() {
+    for (dtype, small, min, max) in [
+        (ArrayDType::Int32, 1_000, i32::MIN as i128, i32::MAX as i128),
+        (
+            ArrayDType::Int64,
+            1_000_000,
+            i64::MIN as i128,
+            i64::MAX as i128,
+        ),
+    ] {
+        let mut cases = vec![
+            vec![max, 1, -1],
+            vec![min, -1, 1],
+            vec![max, -1, 1, 1],
+            vec![1; 3_000],
+        ];
+        for seed in 1..40 {
+            cases.push(mixed_integers(1_500, seed, small, min, max));
+            // Small values whose running sum stays in range end to end.
+            cases.push(mixed_integers(2_100, seed, small, -small, small));
+        }
+        for values in cases {
+            let mut prefix = 0_i128;
+            let mut expected = Ok(0);
+            for (index, value) in values.iter().enumerate() {
+                prefix += value;
+                if prefix < min || prefix > max {
+                    expected = Err(format!("array addition overflowed at flat index {index}"));
+                    break;
+                }
+                expected = Ok(prefix);
+            }
+            let actual = integer_array(dtype, &values)
+                .reduce(ArrayReduction::Sum)
+                .map(|value| match value {
+                    Value::Int(sum) => sum.as_i128().unwrap(),
+                    other => panic!("an integer sum is an integer, found {other:?}"),
+                })
+                .map_err(|error| error.message);
+            assert_eq!(actual, expected, "{dtype:?} sum of {} values", values.len());
+        }
+    }
+}

@@ -359,7 +359,7 @@ Each step is one pull request with its tests, docs, and measurements.
 | 3 | Explicit retain and release in MIR, and cancellation of matched pairs. Done for loop element copies: a shared `for` loop that only compares, measures, or searches its element reads it in place. `string_list_scan` went from 44.8x to about 12x Rust and `record_field_reads` from 15.6x to about 13x |
 | 4 | Inline list length and element reads from a fixed internal layout, with one bounds check. Done for `int64`, `float64`, and `bool` elements, plus unboxed scalar appends: `int_list_sum` went from 18.9x to about 10x Rust |
 | 5 | Bounds-check removal in proven `for` loops, and direct `Array` element reads. Done for `for` loops over a list or a span, and for rank-1 `Array` reads by one `int64`: `int_list_sum` went from 106 to 79 million instructions, and indexed `float64` Array reads run about 34 times faster |
-| 6 | Vectorized integer Array kernels with ordered first-trap reporting |
+| 6 | Vectorized integer Array kernels with ordered first-trap reporting. Done: `int32` and `int64` operators, `wrapping_` and `saturating_` forms, and `sum()` run in 256-element blocks on machine integers. One-million-element `int64` addition went from about 37 ms to 0.9 ms |
 | 7 | Re-measurement against the targets, then a preview release on Cranelift |
 
 Steps 2 and 6 do not depend on the others. Step 4 depends on step 3 for the

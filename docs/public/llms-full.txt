@@ -17799,6 +17799,28 @@ element takes 112 bytes, so 100,000 elements do not fit in the processor
 cache. The same loop over 10,000 elements runs about twice as fast per
 element.
 
+### Integer Array Kernels
+
+The `int32` and `int64` Array operators, their `wrapping_` and
+`saturating_` forms, and `sum()` run on machine integers in blocks of 256
+elements. Checked mode computes a whole block, then scans a block that
+overflowed for its first failing element. So `AU4002` names the same flat
+index as an element-by-element loop. `sum()` adds a block at once when its
+largest value cannot push the running sum out of range. Otherwise it adds
+that block element by element and reports the first prefix that overflows.
+
+Each program below repeats one operation 100 times on one-million-element
+arrays. Each time is the fastest whole-process run on Linux x86-64, of three
+runs before and five after. Times include building the inputs, about 45 ms.
+
+| Operation | Before | After |
+| --- | ---: | ---: |
+| `int64` `left + right` | 3,724 ms | 138 ms |
+| `int32` `sum()` | 3,974 ms | 47 ms |
+| `int64` `sum()` | 4,080 ms | 100 ms |
+| `int32` `wrapping_mul` | 2,935 ms | 58 ms |
+| `int32` `max()`, unchanged | 68 ms | 52 ms |
+
 ## Performance Direction
 
 Performance work will address task creation and scheduling, native loop and

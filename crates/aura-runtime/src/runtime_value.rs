@@ -1122,12 +1122,10 @@ impl ArrayValue {
         let shape = self.try_shape()?;
         let storage = match (&self.storage, &other.storage) {
             (ArrayStorage::Int32(left), ArrayStorage::Int32(right)) => ArrayStorage::Int32(
-                array_integer_binary(left, right, operation, mode, IntegerValue::from_i32)?
-                    .into_boxed_slice(),
+                array_integer_binary(left, right, operation, mode)?.into_boxed_slice(),
             ),
             (ArrayStorage::Int64(left), ArrayStorage::Int64(right)) => ArrayStorage::Int64(
-                array_integer_binary(left, right, operation, mode, IntegerValue::from_i64)?
-                    .into_boxed_slice(),
+                array_integer_binary(left, right, operation, mode)?.into_boxed_slice(),
             ),
             (ArrayStorage::Float32(left), ArrayStorage::Float32(right)) => ArrayStorage::Float32(
                 array_float32_binary(left, right, operation, mode)?.into_boxed_slice(),
@@ -1152,29 +1150,15 @@ impl ArrayValue {
             ArrayStorage::Int32(values) => {
                 let scalar = array_int32_scalar(scalar, 0)?;
                 ArrayStorage::Int32(
-                    array_integer_scalar_binary(
-                        values,
-                        scalar,
-                        scalar_left,
-                        operation,
-                        mode,
-                        IntegerValue::from_i32,
-                    )?
-                    .into_boxed_slice(),
+                    array_integer_scalar_binary(values, scalar, scalar_left, operation, mode)?
+                        .into_boxed_slice(),
                 )
             }
             ArrayStorage::Int64(values) => {
                 let scalar = array_int64_scalar(scalar, 0)?;
                 ArrayStorage::Int64(
-                    array_integer_scalar_binary(
-                        values,
-                        scalar,
-                        scalar_left,
-                        operation,
-                        mode,
-                        IntegerValue::from_i64,
-                    )?
-                    .into_boxed_slice(),
+                    array_integer_scalar_binary(values, scalar, scalar_left, operation, mode)?
+                        .into_boxed_slice(),
                 )
             }
             ArrayStorage::Float32(values) => {
@@ -1485,95 +1469,283 @@ fn array_arithmetic_error(
     )
 }
 
-fn apply_integer_array_operation(
-    left: IntegerValue,
-    right: IntegerValue,
-    operation: ArrayBinaryOp,
-    mode: IntegerArithmeticMode,
-    index: usize,
-) -> Result<IntegerValue> {
-    let result = match (mode, operation) {
-        (IntegerArithmeticMode::Checked, ArrayBinaryOp::Add) => left.checked_add(right),
-        (IntegerArithmeticMode::Checked, ArrayBinaryOp::Sub) => left.checked_sub(right),
-        (IntegerArithmeticMode::Checked, ArrayBinaryOp::Mul) => left.checked_mul(right),
-        (IntegerArithmeticMode::Wrapping, ArrayBinaryOp::Add) => left.wrapping_add(right),
-        (IntegerArithmeticMode::Wrapping, ArrayBinaryOp::Sub) => left.wrapping_sub(right),
-        (IntegerArithmeticMode::Wrapping, ArrayBinaryOp::Mul) => left.wrapping_mul(right),
-        (IntegerArithmeticMode::Saturating, ArrayBinaryOp::Add) => left.saturating_add(right),
-        (IntegerArithmeticMode::Saturating, ArrayBinaryOp::Sub) => left.saturating_sub(right),
-        (IntegerArithmeticMode::Saturating, ArrayBinaryOp::Mul) => left.saturating_mul(right),
-        (_, ArrayBinaryOp::Div) => {
-            return Err(Diagnostic::coded(
-                "AU4001",
-                "array division is supported only for float32 and float64",
-            ));
-        }
-    };
-    result
-        .filter(|result| result.runtime_kind() == left.runtime_kind())
-        .ok_or_else(|| array_arithmetic_error("AU4002", operation, index, "overflowed"))
+/// The primitive integer operations an `int32` or `int64` Array kernel
+/// runs on its storage.
+trait ArrayInteger: Copy + Default + std::ops::BitOr<Output = Self> {
+    /// The wrapped result, and a mask that is negative when the exact
+    /// result overflowed.
+    fn overflowing(self, rhs: Self, operation: ArrayBinaryOp) -> (Self, Self);
+    fn is_negative(self) -> bool;
+    fn wrapping(self, rhs: Self, operation: ArrayBinaryOp) -> Self;
+    fn saturating(self, rhs: Self, operation: ArrayBinaryOp) -> Self;
 }
 
-fn array_integer_binary<T>(
+macro_rules! array_integer {
+    ($($ty:ty),*) => {$(
+        impl ArrayInteger for $ty {
+            #[inline(always)]
+            fn overflowing(self, rhs: Self, operation: ArrayBinaryOp) -> (Self, Self) {
+                // Sign masks vectorize, where the carry flag does not.
+                match operation {
+                    ArrayBinaryOp::Add => {
+                        let sum = self.wrapping_add(rhs);
+                        (sum, (self ^ sum) & (rhs ^ sum))
+                    }
+                    ArrayBinaryOp::Sub => {
+                        let difference = self.wrapping_sub(rhs);
+                        (difference, (self ^ rhs) & (self ^ difference))
+                    }
+                    _ => {
+                        let (product, overflow) = self.overflowing_mul(rhs);
+                        (product, -(overflow as Self))
+                    }
+                }
+            }
+
+            #[inline(always)]
+            fn is_negative(self) -> bool {
+                self < 0
+            }
+
+            #[inline(always)]
+            fn wrapping(self, rhs: Self, operation: ArrayBinaryOp) -> Self {
+                match operation {
+                    ArrayBinaryOp::Add => self.wrapping_add(rhs),
+                    ArrayBinaryOp::Sub => self.wrapping_sub(rhs),
+                    _ => self.wrapping_mul(rhs),
+                }
+            }
+
+            #[inline(always)]
+            fn saturating(self, rhs: Self, operation: ArrayBinaryOp) -> Self {
+                match operation {
+                    ArrayBinaryOp::Add => self.saturating_add(rhs),
+                    ArrayBinaryOp::Sub => self.saturating_sub(rhs),
+                    _ => self.saturating_mul(rhs),
+                }
+            }
+        }
+    )*};
+}
+
+array_integer!(i32, i64);
+
+/// Elements per block of an integer kernel. A checked block is computed in
+/// full with its overflow flags combined, and only a block that overflowed
+/// is scanned again for its first failing element.
+const ARRAY_KERNEL_BLOCK: usize = 256;
+
+fn integer_array_division_error() -> Diagnostic {
+    Diagnostic::coded(
+        "AU4001",
+        "array division is supported only for float32 and float64",
+    )
+}
+
+/// One operand of an integer Array kernel: the other array's storage, or a
+/// scalar repeated for every element.
+#[derive(Clone, Copy)]
+enum IntegerLanes<'a, T> {
+    Array(&'a [T]),
+    Scalar(T),
+}
+
+impl<'a, T: Copy> IntegerLanes<'a, T> {
+    /// The operand's elements `start..start + len`. A scalar fills `buffer`
+    /// once and lends its prefix, so every block zips two slices.
+    #[inline(always)]
+    fn block(&self, buffer: &'a [T], start: usize, len: usize) -> &'a [T] {
+        match self {
+            Self::Array(values) => &values[start..start + len],
+            Self::Scalar(_) => &buffer[..len],
+        }
+    }
+}
+
+/// Runs one integer kernel over `len` element pairs. Wrapping and
+/// saturating modes cannot fail. Checked mode reports the first overflowing
+/// flat index, as an element-by-element loop would. The operation is fixed
+/// in each closure, so every block loop compiles to straight-line code.
+fn integer_array_kernel<T: ArrayInteger + Default>(
+    len: usize,
+    left: IntegerLanes<'_, T>,
+    right: IntegerLanes<'_, T>,
+    operation: ArrayBinaryOp,
+    mode: IntegerArithmeticMode,
+) -> Result<Vec<T>> {
+    use ArrayBinaryOp::{Add, Mul, Sub};
+    use IntegerArithmeticMode::{Checked, Saturating, Wrapping};
+    let mut output = try_array_buffer(len, "array arithmetic result")?;
+    if operation == ArrayBinaryOp::Div {
+        return if len == 0 {
+            Ok(output)
+        } else {
+            Err(integer_array_division_error())
+        };
+    }
+    let blocks = IntegerBlocks { left, right, len };
+    let first_overflow = match (mode, operation) {
+        (Checked, Add) => blocks.checked(&mut output, |l, r| l.overflowing(r, Add)),
+        (Checked, Sub) => blocks.checked(&mut output, |l, r| l.overflowing(r, Sub)),
+        (Checked, _) => blocks.checked(&mut output, |l, r| l.overflowing(r, Mul)),
+        (Wrapping, Add) => blocks.exact(&mut output, |l, r| l.wrapping(r, Add)),
+        (Wrapping, Sub) => blocks.exact(&mut output, |l, r| l.wrapping(r, Sub)),
+        (Wrapping, _) => blocks.exact(&mut output, |l, r| l.wrapping(r, Mul)),
+        (Saturating, Add) => blocks.exact(&mut output, |l, r| l.saturating(r, Add)),
+        (Saturating, Sub) => blocks.exact(&mut output, |l, r| l.saturating(r, Sub)),
+        (Saturating, _) => blocks.exact(&mut output, |l, r| l.saturating(r, Mul)),
+    };
+    match first_overflow {
+        Some(index) => Err(array_arithmetic_error(
+            "AU4002",
+            operation,
+            index,
+            "overflowed",
+        )),
+        None => Ok(output),
+    }
+}
+
+/// The two operands of an integer kernel, walked in blocks.
+struct IntegerBlocks<'a, T> {
+    left: IntegerLanes<'a, T>,
+    right: IntegerLanes<'a, T>,
+    len: usize,
+}
+
+impl<T: Copy + Default> IntegerBlocks<'_, T> {
+    /// Calls `run` with the flat start of each block and both operands'
+    /// elements there, until `run` returns `false`.
+    #[inline(always)]
+    fn each_block(&self, mut run: impl FnMut(usize, &[T], &[T]) -> bool) {
+        let fill = |lanes: IntegerLanes<'_, T>| match lanes {
+            IntegerLanes::Scalar(scalar) => [scalar; ARRAY_KERNEL_BLOCK],
+            IntegerLanes::Array(_) => [T::default(); ARRAY_KERNEL_BLOCK],
+        };
+        let (left_buffer, right_buffer) = (fill(self.left), fill(self.right));
+        for start in (0..self.len).step_by(ARRAY_KERNEL_BLOCK) {
+            let block_len = ARRAY_KERNEL_BLOCK.min(self.len - start);
+            let lhs = self.left.block(&left_buffer, start, block_len);
+            let rhs = self.right.block(&right_buffer, start, block_len);
+            if !run(start, lhs, rhs) {
+                return;
+            }
+        }
+    }
+
+    /// Appends `apply` of each pair to `output`, and returns the flat index
+    /// of the first pair that overflows.
+    #[inline(always)]
+    fn checked(&self, output: &mut Vec<T>, apply: impl Fn(T, T) -> (T, T)) -> Option<usize>
+    where
+        T: ArrayInteger,
+    {
+        let mut first = None;
+        let mut values = [T::default(); ARRAY_KERNEL_BLOCK];
+        self.each_block(|start, lhs, rhs| {
+            let mut mask = T::default();
+            for ((slot, &l), &r) in values[..lhs.len()].iter_mut().zip(lhs).zip(rhs) {
+                let (value, overflow) = apply(l, r);
+                *slot = value;
+                mask = mask | overflow;
+            }
+            if mask.is_negative() {
+                first = lhs
+                    .iter()
+                    .zip(rhs)
+                    .position(|(&l, &r)| apply(l, r).1.is_negative())
+                    .map(|offset| start + offset);
+                return false;
+            }
+            output.extend_from_slice(&values[..lhs.len()]);
+            true
+        });
+        first
+    }
+
+    #[inline(always)]
+    fn exact(&self, output: &mut Vec<T>, apply: impl Fn(T, T) -> T) -> Option<usize> {
+        self.each_block(|_, lhs, rhs| {
+            output.extend(lhs.iter().zip(rhs).map(|(&l, &r)| apply(l, r)));
+            true
+        });
+        None
+    }
+}
+
+fn array_integer_binary<T: ArrayInteger + Default>(
     left: &[T],
     right: &[T],
     operation: ArrayBinaryOp,
     mode: IntegerArithmeticMode,
-    to_integer: impl Fn(T) -> IntegerValue,
-) -> Result<Vec<T>>
-where
-    T: Copy + TryFrom<i128>,
-{
-    let mut output = try_array_buffer(left.len(), "array arithmetic result")?;
-    for (index, (&left, &right)) in left.iter().zip(right).enumerate() {
-        let result = apply_integer_array_operation(
-            to_integer(left),
-            to_integer(right),
-            operation,
-            mode,
-            index,
-        )?;
-        output.push(
-            T::try_from(
-                result
-                    .as_i128()
-                    .expect("int32 and int64 array results fit i128"),
-            )
-            .map_err(|_| array_arithmetic_error("AU4002", operation, index, "overflowed"))?,
-        );
-    }
-    Ok(output)
+) -> Result<Vec<T>> {
+    integer_array_kernel(
+        left.len(),
+        IntegerLanes::Array(left),
+        IntegerLanes::Array(&right[..left.len()]),
+        operation,
+        mode,
+    )
 }
 
-fn array_integer_scalar_binary<T>(
+fn array_integer_scalar_binary<T: ArrayInteger + Default>(
     values: &[T],
     scalar: T,
     scalar_left: bool,
     operation: ArrayBinaryOp,
     mode: IntegerArithmeticMode,
-    to_integer: impl Fn(T) -> IntegerValue,
-) -> Result<Vec<T>>
-where
-    T: Copy + TryFrom<i128>,
-{
-    let mut output = try_array_buffer(values.len(), "array arithmetic result")?;
-    for (index, &value) in values.iter().enumerate() {
-        let (left, right) = if scalar_left {
-            (to_integer(scalar), to_integer(value))
-        } else {
-            (to_integer(value), to_integer(scalar))
-        };
-        let result = apply_integer_array_operation(left, right, operation, mode, index)?;
-        output.push(
-            T::try_from(
-                result
-                    .as_i128()
-                    .expect("int32 and int64 array results fit i128"),
-            )
-            .map_err(|_| array_arithmetic_error("AU4002", operation, index, "overflowed"))?,
-        );
+) -> Result<Vec<T>> {
+    let (left, right) = if scalar_left {
+        (IntegerLanes::Scalar(scalar), IntegerLanes::Array(values))
+    } else {
+        (IntegerLanes::Array(values), IntegerLanes::Scalar(scalar))
+    };
+    integer_array_kernel(values.len(), left, right, operation, mode)
+}
+
+/// The checked sum of an integer Array, in order. A block whose running
+/// sum cannot leave `min..=max`, given its largest magnitude, is added with
+/// one vectorized pass. Any other block is added element by element to
+/// find the first prefix that overflows.
+fn checked_integer_array_sum<T: ArrayInteger + Ord + Into<i128>>(
+    values: &[T],
+    min: i128,
+    max: i128,
+) -> Result<i128> {
+    let mut sum = 0_i128;
+    for (block_index, block) in values.chunks(ARRAY_KERNEL_BLOCK).enumerate() {
+        let first = block[0];
+        let (low, high, block_sum) =
+            block[1..]
+                .iter()
+                .fold((first, first, first), |(low, high, sum), &value| {
+                    (
+                        low.min(value),
+                        high.max(value),
+                        sum.wrapping(value, ArrayBinaryOp::Add),
+                    )
+                });
+        let largest = Into::<i128>::into(low)
+            .abs()
+            .max(Into::<i128>::into(high).abs());
+        let bound = largest * block.len() as i128;
+        if sum - bound >= min && sum + bound <= max {
+            sum += Into::<i128>::into(block_sum);
+            continue;
+        }
+        for (offset, value) in block.iter().enumerate() {
+            sum += (*value).into();
+            if sum < min || sum > max {
+                return Err(array_arithmetic_error(
+                    "AU4002",
+                    ArrayBinaryOp::Add,
+                    block_index * ARRAY_KERNEL_BLOCK + offset,
+                    "overflowed",
+                ));
+            }
+        }
     }
-    Ok(output)
+    Ok(sum)
 }
 
 fn validate_float_array_mode(mode: IntegerArithmeticMode) -> Result<()> {
@@ -1732,17 +1904,8 @@ fn array_float64_scalar_binary(
 fn reduce_int32_array(values: &[i32], reduction: ArrayReduction) -> Result<Value> {
     match reduction {
         ArrayReduction::Sum => {
-            let mut sum = IntegerValue::from_i32(0);
-            for (index, value) in values.iter().copied().enumerate() {
-                sum = apply_integer_array_operation(
-                    sum,
-                    IntegerValue::from_i32(value),
-                    ArrayBinaryOp::Add,
-                    IntegerArithmeticMode::Checked,
-                    index,
-                )?;
-            }
-            Ok(Value::Int(sum))
+            let sum = checked_integer_array_sum(values, i32::MIN.into(), i32::MAX.into())?;
+            Ok(Value::Int(IntegerValue::from_i32(sum as i32)))
         }
         ArrayReduction::Min => Ok(Value::Int(IntegerValue::from_i32(
             *values.iter().min().expect("empty arrays were rejected"),
@@ -1762,17 +1925,8 @@ fn reduce_int32_array(values: &[i32], reduction: ArrayReduction) -> Result<Value
 fn reduce_int64_array(values: &[i64], reduction: ArrayReduction) -> Result<Value> {
     match reduction {
         ArrayReduction::Sum => {
-            let mut sum = IntegerValue::from_i64(0);
-            for (index, value) in values.iter().copied().enumerate() {
-                sum = apply_integer_array_operation(
-                    sum,
-                    IntegerValue::from_i64(value),
-                    ArrayBinaryOp::Add,
-                    IntegerArithmeticMode::Checked,
-                    index,
-                )?;
-            }
-            Ok(Value::Int(sum))
+            let sum = checked_integer_array_sum(values, i64::MIN.into(), i64::MAX.into())?;
+            Ok(Value::Int(IntegerValue::from_i64(sum as i64)))
         }
         ArrayReduction::Min => Ok(Value::Int(IntegerValue::from_i64(
             *values.iter().min().expect("empty arrays were rejected"),
