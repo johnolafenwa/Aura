@@ -1,6 +1,6 @@
 # Batch 6 design checkpoint: typed agent APIs and serialization
 
-Status: **Ratified 2026-10-19 by the owner**
+Status: **Ratified 2026-10-19 by the owner. Complete: steps 1 to 8 merged.**
 
 Date: 2026-10-19. Source baseline: `8c31f3f` (main after the
 [0.5.0 preview release](../work/2026-10-19-v0.5.0-preview-release.md)).

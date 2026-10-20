@@ -2,7 +2,19 @@
 
 Last updated: 2026-10-20
 
-## Batch 6 step 8: the reference agent, version 2 (in progress)
+## Batch 7 design checkpoint: Rust-class native performance (waiting on John)
+
+- Target: bring Batch 7's four key decisions to John, as he asked on
+  2026-10-19: the native backend, inlining, bounds checks, and SIMD.
+- Done: `architecture_docs/22-batch-7-design-checkpoint.md` records where
+  native time goes, the options for each decision, a recommended default,
+  and a ten-step delivery plan. Notes are in
+  `2026-10-20-batch-7-design-checkpoint.md`.
+- Verification: documentation checks only. The checkpoint changes no code.
+- Next: John answers the four owner questions. No Batch 7 code starts
+  before then.
+
+## Batch 6 step 8: the reference agent, version 2 (complete)
 
 - Target: rewrite the reference tool runner with derived codecs, schemas, and
   a tracing decorator, and add a tutorial chapter and Manual pages. This is
@@ -14,7 +26,8 @@ Last updated: 2026-10-20
   `2026-10-20-batch-6-step-8-reference-agent.md`.
 - Verification: the reference package CLI test on both backends, the
   binary-size bench unit tests, and the documentation example check.
-- Next: open the PR, then bring the Batch 7 decisions to John.
+- Done: merged in PR #89. Batch 6 is complete.
+- Next: the Batch 7 design checkpoint.
 
 ## Batch 6 step 7: generic decorators and the retry rule (complete)
 

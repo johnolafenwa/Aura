@@ -14,16 +14,12 @@ In Aura, the direct backend:
 
 The code generator lives in [`native_codegen.rs`](../crates/aura-compiler/src/native_codegen.rs). The runtime ABI it targets lives in [`native_runtime.rs`](../crates/aura-runtime/src/native_runtime.rs).
 
-## Aura's two native build modes
+## Native build backend
 
-From the CLI's perspective:
-
-- `--backend direct`
-  always uses the direct backend
-- `--backend auto`
-  tries direct first, then falls back to a MIR-runtime launcher binary if direct fails
-
-That behavior is implemented in [`crates/aura/src/main.rs`](../crates/aura/src/main.rs).
+`aura build` always emits through the direct backend. `--backend direct` and
+`--backend auto` are accepted spellings of that one backend. No MIR-runtime
+launcher fallback exists. The flag is parsed in
+[`crates/aura/src/main.rs`](../crates/aura/src/main.rs).
 
 ## The direct backend pipeline
 
