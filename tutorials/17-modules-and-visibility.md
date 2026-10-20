@@ -45,6 +45,9 @@ from helpers.counter import Counter
 After this line you write `Counter` without the module path. You can import
 public functions, classes, enums, traits, and module constants this way.
 
+A trait can also stay behind its module path. After `import pkg.named`, write
+`impl pkg.named.Named for User:` or a bound such as `T: pkg.named.Named`.
+
 ## Module Constants
 
 A module constant is a top-level binding that comes before any top-level

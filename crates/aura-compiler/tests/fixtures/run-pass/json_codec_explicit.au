@@ -1,0 +1,78 @@
+import json
+
+
+class Point:
+    x: int64
+    y: int64
+
+
+impl json.Codec for Point:
+    def encode(self) -> json.Value:
+        return json.Value.Object(
+            {"x": json.Value.Int(self.x), "y": json.Value.Int(self.y)}
+        )
+
+    def decode(value: own json.Value) -> Result[Point, json.DecodeError]:
+        match own json.into_object(value):
+            case dict[str, json.Value] as fields:
+                match (json.as_int(fields["x"]), json.as_int(fields["y"])):
+                    case (int64 as x, int64 as y):
+                        return Result.Ok(Point(x=x, y=y))
+                    case _:
+                        return Result.Err(
+                            json.DecodeError(
+                                path="$",
+                                kind=json.DecodeErrorKind.Invalid(
+                                    message="x and y must be integers"
+                                ),
+                            )
+                        )
+            case None:
+                return Result.Err(
+                    json.DecodeError(
+                        path="$",
+                        kind=json.DecodeErrorKind.WrongType(
+                            expected="object",
+                            found="other",
+                        ),
+                    )
+                )
+
+    def schema() -> json.Value:
+        return json.Value.Object({"type": json.Value.String("object")})
+
+
+def round_trip[T: json.Codec](value: T) -> Result[T, json.DecodeError]:
+    return json.decode[T](json.encode(value))
+
+
+def show(result: Result[Point, json.DecodeError]):
+    match result:
+        case Result.Ok(point):
+            print(f"point {point.x} {point.y}")
+        case Result.Err(error):
+            print(error)
+
+
+def main():
+    point = Point(x=3, y=4)
+    print(json.dumps(json.encode(point)))
+    print(json.dumps(point.encode()))
+    show(round_trip(point))
+    show(Point.decode(json.Value.Null))
+    show(json.decode_text[Point]("{\"x\": 1, \"y\": 2}"))
+    show(json.decode_text[Point]("{\"x\": true, \"y\": 2}"))
+    show(json.decode_text[Point]("[1"))
+    match json.decode_text[Point]("[1"):
+        case Result.Err(
+            json.DecodeError(
+                path=path,
+                kind=json.DecodeErrorKind.Parse(
+                    json.Error.Syntax(_message, line, _column)
+                ),
+            )
+        ):
+            print(f"{path} line {line}")
+        case _:
+            print("unexpected")
+    print(json.dumps(json.schema[Point]()))

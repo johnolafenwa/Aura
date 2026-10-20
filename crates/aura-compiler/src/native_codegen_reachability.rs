@@ -83,7 +83,10 @@ pub(super) fn prune_unreachable_functions(module: &MirModule) -> MirModule {
 }
 
 fn is_builtin_wrapper(function: &MirFunction) -> bool {
+    // A `Display` wrapper is a root: the renderer reaches it by its name's
+    // prefix, not through a call.
     function.source_path.is_none()
+        && crate::mir::display_wrapper_type_name(&function.name).is_none()
         && crate::builtin_modules::builtin_module_namespace(std::slice::from_ref(
             &function.module_name,
         ))

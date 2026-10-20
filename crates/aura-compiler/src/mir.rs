@@ -10289,11 +10289,25 @@ fn lower_trait_impl(
         });
     }
     MirTraitImpl {
-        trait_name: trait_impl.trait_name.clone(),
+        trait_name: runtime_trait_name(program, module_name, &trait_impl.trait_name),
         trait_args: trait_impl.trait_args.clone(),
         for_type: trait_impl.for_type.clone(),
         methods,
     }
+}
+
+/// The name both backends dispatch a trait by: its declared name, whether
+/// the implementation wrote it bare, imported, or module-qualified.
+fn runtime_trait_name(program: &Program, module_name: &str, written: &str) -> String {
+    let info = if module_name == program.module_name {
+        program.traits.get(written)
+    } else {
+        program
+            .module_registry
+            .get(module_name)
+            .and_then(|namespace| namespace.all_traits.get(written))
+    };
+    info.map_or_else(|| written.to_string(), |info| info.decl.name.clone())
 }
 
 fn format_trait_args(args: &[Type]) -> String {
@@ -26302,7 +26316,11 @@ fn mir_runtime_enum_name(program: &Program, enum_info: &crate::sema::EnumInfo) -
         .split('.')
         .map(str::to_string)
         .collect::<Vec<_>>();
-    if crate::builtin_modules::builtin_module_namespace(&module_path).is_some() {
+    // Host enums of builtin modules keep their bare runtime names. Enums of
+    // a builtin module's Aura-source part are qualified like any module's.
+    if crate::builtin_modules::builtin_module_namespace(&module_path)
+        .is_some_and(|namespace| namespace.enums.contains_key(&enum_info.decl.name))
+    {
         enum_info.decl.name.clone()
     } else {
         qualified_name

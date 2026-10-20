@@ -1,0 +1,76 @@
+# The Aura-source part of the builtin `json` module. The compiler checks this
+# file as module `json` and merges its public items with the host functions
+# and enums that `builtin_modules.rs` declares.
+import json
+
+
+public trait Codec:
+    def encode(self) -> json.Value
+    def decode(value: own json.Value) -> Result[Self, DecodeError]
+    def schema() -> json.Value
+
+
+public enum DecodeErrorKind:
+    Parse(error: json.Error)
+    MissingField(name: str)
+    UnknownField(name: str)
+    WrongType(expected: str, found: str)
+    OutOfRange(type_name: str)
+    UnknownVariant(name: str)
+    Invalid(message: str)
+
+
+public class DecodeError:
+    public path: str
+    public kind: DecodeErrorKind
+
+
+impl Display for DecodeError:
+    def display(self) -> str:
+        return f"{self.path}: {describe(self.kind)}"
+
+
+def describe(kind: DecodeErrorKind) -> str:
+    match kind:
+        case DecodeErrorKind.Parse(json.Error.Syntax(message, line, column)):
+            return f"invalid JSON at line {line}, column {column}: {message}"
+        case DecodeErrorKind.Parse(json.Error.NumberOutOfRange(line, column)):
+            return f"number out of range at line {line}, column {column}"
+        case DecodeErrorKind.Parse(json.Error.NestingTooDeep(limit, line, column)):
+            return f"nesting deeper than {limit} at line {line}, column {column}"
+        case DecodeErrorKind.Parse(json.Error.InputTooLarge(actual_bytes, limit_bytes)):
+            return f"input of {actual_bytes} bytes exceeds the {limit_bytes}-byte limit"
+        case DecodeErrorKind.MissingField(name):
+            return f"missing field `{name}`"
+        case DecodeErrorKind.UnknownField(name):
+            return f"unknown field `{name}`"
+        case DecodeErrorKind.WrongType(expected, found):
+            return f"expected {expected}, found {found}"
+        case DecodeErrorKind.OutOfRange(type_name):
+            return f"number out of range for {type_name}"
+        case DecodeErrorKind.UnknownVariant(name):
+            return f"unknown variant `{name}`"
+        case DecodeErrorKind.Invalid(message):
+            return message.clone()
+
+
+public def encode[T: Codec](value: T) -> json.Value:
+    return value.encode()
+
+
+public def decode[T: Codec](value: own json.Value) -> Result[T, DecodeError]:
+    return T.decode(value)
+
+
+public def decode_text[T: Codec](text: str) -> Result[T, DecodeError]:
+    match own json.parse(text):
+        case Result.Ok(value):
+            return T.decode(value)
+        case Result.Err(error):
+            return Result.Err(
+                DecodeError(path="$", kind=DecodeErrorKind.Parse(error=error))
+            )
+
+
+public def schema[T: Codec]() -> json.Value:
+    return T.schema()

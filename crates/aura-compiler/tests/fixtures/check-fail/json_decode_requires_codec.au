@@ -1,0 +1,4 @@
+import json
+
+def main():
+    result = json.decode[int64](json.Value.Int(3))

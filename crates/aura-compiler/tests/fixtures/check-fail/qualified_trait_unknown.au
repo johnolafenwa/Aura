@@ -1,0 +1,11 @@
+import json
+
+class Tag:
+    name: str
+
+impl json.Format for Tag:
+    def format(self) -> str:
+        return self.name
+
+def main():
+    pass

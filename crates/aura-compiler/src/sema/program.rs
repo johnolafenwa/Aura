@@ -573,6 +573,7 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
                     &mut type_arities,
                     &mut canonical_type_names,
                 );
+                register_visible_namespace_traits(namespace, name, &mut imported_traits);
                 imported_modules.insert(name.clone(), namespace.clone());
             }
         }
@@ -2532,6 +2533,21 @@ fn register_visible_namespace_types(
             arities,
             canonical_names,
         );
+    }
+}
+
+/// Makes each trait an imported module exports nameable as
+/// `prefix.Trait` in bounds, supertraits, and implementations.
+fn register_visible_namespace_traits(
+    namespace: &ModuleNamespace,
+    prefix: &str,
+    traits: &mut BTreeMap<String, TraitInfo>,
+) {
+    for (name, info) in &namespace.traits {
+        traits.insert(format!("{prefix}.{name}"), info.clone());
+    }
+    for (name, child) in &namespace.modules {
+        register_visible_namespace_traits(child, &format!("{prefix}.{name}"), traits);
     }
 }
 

@@ -174,18 +174,56 @@ it. It rejects comments, trailing commas, leading-zero integers, `NaN`, and
 infinities.
 
 Use `json.Value` when the shape is truly dynamic or your application code
-checks it.
+checks it. For a fixed shape, implement `json.Codec` as the next section
+shows.
 
 These are not implemented:
 
-- derived class and enum schemas
-- generated codecs
+- derived `json.Codec` implementations
 - a streaming JSON API
 - an arbitrary-precision number type
 
 For flat `dict[str, str]` data, `json.is_valid`, `json.stringify_map`, and
 `json.parse_string_map` provide separate typed operations. They are not part
 of the dynamic `json.Value` API.
+
+## Convert Your Own Types
+
+Implement `json.Codec` to turn a class into JSON and back. The trait has
+three methods: `encode`, `decode`, and `schema`.
+
+```aura
+import json
+
+class Port:
+    number: int64
+
+impl json.Codec for Port:
+    def encode(self) -> json.Value:
+        return json.Value.Int(self.number)
+
+    def decode(value: own json.Value) -> Result[Port, json.DecodeError]:
+        match json.as_int(value):
+            case int64 as number:
+                return Result.Ok(Port(number=number))
+            case None:
+                kind = json.DecodeErrorKind.WrongType(expected="integer", found="another kind")
+                return Result.Err(json.DecodeError(path="$", kind=kind))
+
+    def schema() -> json.Value:
+        return json.Value.Object({"type": json.Value.String("integer")})
+
+match json.decode_text[Port]("8080"):
+    case Result.Ok(port):
+        print(port.number)    # 8080
+    case Result.Err(error):
+        print(error)
+```
+
+`json.decode_text[Port]` parses the text and calls `Port.decode`. A failure is
+a `json.DecodeError` whose `path` names the field, such as `$.query`. See
+[examples/json/typed_codec.au](../examples/json/typed_codec.au) for a class
+with several fields and an optional default.
 
 ## Full Contract
 

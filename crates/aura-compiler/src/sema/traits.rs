@@ -414,9 +414,14 @@ impl<'a> FunctionChecker<'a> {
                         return false;
                     };
                     let implemented = self.resolved_trait_bound_for_impl(candidate, &substitutions);
+                    let wanted = self.trait_bound_identity(&supertrait, &trait_info.module_name);
                     self.trait_bound_closure(&implemented, &trait_impl.for_type)
                         .into_iter()
-                        .any(|candidate| candidate == supertrait)
+                        .any(|bound| {
+                            bound == supertrait
+                                || self.trait_bound_identity(&bound, &candidate.module_name)
+                                    == wanted
+                        })
                 });
             if !implemented_elsewhere {
                 return Err(Diagnostic::at(
@@ -887,7 +892,13 @@ impl<'a> FunctionChecker<'a> {
     }
 
     fn trait_bound_identity(&self, bound: &TraitBound, module: &str) -> String {
-        let name = if bound.trait_name.contains('.') {
+        let local_qualified = (module == self.module_name)
+            .then(|| self.traits.get(&bound.trait_name))
+            .flatten()
+            .filter(|_| bound.trait_name.contains('.'));
+        let name = if let Some(info) = local_qualified {
+            format!("{}.{}", info.module_name, info.decl.name)
+        } else if bound.trait_name.contains('.') {
             bound.trait_name.clone()
         } else {
             let info = self
@@ -1022,10 +1033,12 @@ impl<'a> FunctionChecker<'a> {
         for bound in bounds {
             let mut presentation = bound.clone();
             if let Some((_, leaf)) = bound.trait_name.rsplit_once('.') {
-                let conflicts = self.traits.get(leaf).is_some_and(|info| {
-                    format!("{}.{}", info.module_name, info.decl.name) != bound.trait_name
+                // Present the bare name only when it names this same trait
+                // here; otherwise the qualified name is the one to write.
+                let same = self.traits.get(leaf).is_some_and(|info| {
+                    format!("{}.{}", info.module_name, info.decl.name) == bound.trait_name
                 });
-                if !conflicts {
+                if same {
                     presentation.trait_name = leaf.to_string();
                 }
             }

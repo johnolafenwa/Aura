@@ -1,0 +1,5 @@
+error[AU2002]: type `int64` does not implement trait `json.Codec`
+ --> crates/aura-compiler/tests/fixtures/check-fail/json_decode_requires_codec.au:4:19
+  |
+4 |     result = json.decode[int64](json.Value.Int(3))
+  |                   ^

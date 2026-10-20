@@ -5,9 +5,12 @@ The `json` module represents any JSON data as one recursive enum,
 data. Dumping produces one deterministic JSON string, or traps when the value
 cannot be serialized.
 
+The `json.Codec` trait converts your own classes and enums to and from
+`json.Value`. You write each conversion by hand. See
+[Typed Codecs](#typed-codecs).
+
 The module also has helpers for flat `dict[str, str]` data. These are separate
-from the dynamic tree. The module does not derive schemas from your classes or
-enums.
+from the dynamic tree.
 
 | API | Signature | Contract |
 | --- | --- | --- |
@@ -16,6 +19,10 @@ enums.
 | `json.is_valid` | `is_valid(text: str) -> bool` | Reports whether the text is valid JSON. |
 | `json.stringify_map` | `stringify_map(value: dict[str, str]) -> Result[str, str]` | Serializes a flat string dictionary in sorted-key order. |
 | `json.parse_string_map` | `parse_string_map(text: str) -> Result[dict[str, str], str]` | Parses a JSON object whose values are all strings. |
+| `json.encode` | `encode[T: json.Codec](value: T) -> json.Value` | Calls `value.encode()`. |
+| `json.decode` | `decode[T: json.Codec](value: own json.Value) -> Result[T, json.DecodeError]` | Calls `T.decode(value)`. |
+| `json.decode_text` | `decode_text[T: json.Codec](text: str) -> Result[T, json.DecodeError]` | Parses `text`, then calls `T.decode`. |
+| `json.schema` | `schema[T: json.Codec]() -> json.Value` | Calls `T.schema()`. |
 
 ## Example
 
@@ -299,6 +306,62 @@ There is no global mutable parser configuration, serializer setting, or
 key-order setting. The global codec service carries work, not parse state
 that the language can see.
 
+## Typed Codecs
+
+A type implements `json.Codec` to convert itself to and from `json.Value`:
+
+```aura fragment
+trait Codec:
+    def encode(self) -> json.Value
+    def decode(value: own json.Value) -> Result[Self, json.DecodeError]
+    def schema() -> json.Value
+```
+
+- `encode` reads the value and builds a new tree.
+- `decode` takes the tree by ownership and returns the value or the first
+  error.
+- `schema` returns a JSON Schema document that describes what `decode`
+  accepts.
+
+An implementation defines all three methods. The compiler does not derive
+them.
+
+This program decodes tool arguments from text and reports errors with the
+path of the field that failed:
+
+<<< ../../examples/json/typed_codec.au{aura}
+
+`json.decode[T](value)` and `T.decode(value)` are the same call. The generic
+form lets a function bounded by `T: json.Codec` decode any such type. See
+[Associated Methods Through A Type Parameter](/manual/generics-and-traits#associated-methods-through-a-type-parameter).
+
+`json.decode_text` reports a parse failure as `DecodeErrorKind.Parse` with path
+`$`.
+
+### Decode Errors
+
+`json.DecodeError` is a class with two public fields:
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `path` | `str` | Where the error is. `$` is the root, `.name` a key, and `[3]` an array position, as in `$.items[3].name`. |
+| `kind` | `json.DecodeErrorKind` | What went wrong. |
+
+`json.DecodeErrorKind` has these variants:
+
+| Variant | Meaning |
+| --- | --- |
+| `Parse(error: json.Error)` | The text is not valid JSON. |
+| `MissingField(name: str)` | A required key is absent. |
+| `UnknownField(name: str)` | A key names no field. |
+| `WrongType(expected: str, found: str)` | The value has the wrong JSON kind. |
+| `OutOfRange(type_name: str)` | A number does not fit the field's type. |
+| `UnknownVariant(name: str)` | A string or tag names no enum variant. |
+| `Invalid(message: str)` | A check in a hand-written decoder failed. |
+
+Printing a `DecodeError` gives the path and a message, such as
+`$.query: expected string, found another kind`.
+
 ## Diagnostics
 
 Compile-time codes:
@@ -306,7 +369,7 @@ Compile-time codes:
 | Code | Cause |
 | --- | --- |
 | `AU2001` | Unknown `json` name, enum variant, function, or accessor. |
-| `AU2002` | Type mismatch in an argument, constructor payload, return, or annotation. |
+| `AU2002` | Type mismatch in an argument, constructor payload, return, or annotation, or a type argument to `json.decode` that does not implement `json.Codec`. |
 | `AU2004` | Wrong arity, argument name, or positional/named binding. |
 
 The ordinary ownership diagnostics apply to moved Values, Errors, strings,
@@ -381,9 +444,8 @@ Aura 0.5 has no API to shut down, join, size, or configure the service. The
 service capacity does not apply to `json.is_valid`, `json.parse_string_map`,
 or `json.stringify_map`.
 
-Aura 0.5 does not derive schemas or generate codecs for classes and enums.
-Schema validation, MessagePack, CBOR, Protobuf, and other binary formats are
-also not available.
+The compiler does not derive `json.Codec` implementations. Schema validation,
+MessagePack, CBOR, Protobuf, and other binary formats are not available.
 
 Collection and string growth controlled by the codec, and both runtime
 conversion trees, use fallible allocation and report failure as `AU4005`. An
@@ -395,6 +457,10 @@ language does not claim that every host out-of-memory condition can be caught.
 
 The value and error model, parse and dump, accessors, ordering, formatting,
 and resource limits are implemented Aura 0.5 behavior.
+
+The `json.Codec` trait, `json.DecodeError`, and the generic `encode`,
+`decode`, `decode_text`, and `schema` functions are implemented on both
+backends.
 
 `is_valid`, `stringify_map`, and `parse_string_map` are bounded
 flat-dictionary operations. Aura 0.5 has no streaming JSON codec.
