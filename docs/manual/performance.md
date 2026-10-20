@@ -414,6 +414,23 @@ alternating runs, about 10 times the Rust reference. The other programs
 run up to 1.7% more instructions. Each boxed value keeps its list's
 element address and length, and every write to a box updates them.
 
+A shared `for` loop over a list or a span reads each element with no
+bounds check and advances its index with no overflow check. The loop
+already compares the index with the length, and the list cannot change
+length while the loop borrows it. `int_list_sum` runs 78,654,607
+instructions instead of 106,060,271.
+
+An `Array` with one dimension, indexed by one `int64`, is read inline the
+same way, with one bounds check. A loop that reads each of 100,000
+`float64` elements by index, 20 times, runs 63,478,022 instructions
+instead of 3,445,483,320, and takes about 10.8 ms instead of 367 ms. An
+`Array` with more dimensions reads through the runtime.
+
+`int_list_sum` still spends most of its time waiting on memory. Each list
+element takes 112 bytes, so 100,000 elements do not fit in the processor
+cache. The same loop over 10,000 elements runs about twice as fast per
+element.
+
 ## Performance Direction
 
 Performance work will address task creation and scheduling, native loop and

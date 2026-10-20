@@ -785,6 +785,16 @@ pub enum Instruction {
     /// one on each semantic backedge; runtimes amortize the actual yield with
     /// a per-function fuel counter.
     Safepoint,
+    /// Records that `index` selects an element of the list `list` here:
+    /// `0 <= index < list.len()`. A `for` loop over a whole list or a span
+    /// emits it after its bound check, because the iteration loan keeps the
+    /// length fixed. A backend may then read the element and advance the
+    /// index by one without a bounds or overflow check. The interpreter
+    /// checks the claim.
+    IndexInRange {
+        list: String,
+        index: String,
+    },
     BeginLoan {
         loan: String,
         source: String,
@@ -8800,6 +8810,11 @@ fn validate_loan_instruction(
             }
         }
         Instruction::Eval { value } => validate_loan_operand(function, value, context, state)?,
+        Instruction::IndexInRange { list, index } => {
+            for place in [list, index] {
+                validate_loan_operand(function, &Operand::Place(place.clone()), context, state)?;
+            }
+        }
         Instruction::PushCleanup { place, action } => {
             if place_has_borrowed_value_origin(place, state) {
                 return Err(format!(
@@ -9607,6 +9622,7 @@ pub(crate) fn instruction_place_mentions<'a>(
 ) {
     match instruction {
         Instruction::Safepoint => {}
+        Instruction::IndexInRange { list, index } => mentions.extend([list.as_str(), index]),
         Instruction::BeginLoan { source, .. } | Instruction::PushCleanup { place: source, .. } => {
             mentions.push(source)
         }
@@ -17139,6 +17155,12 @@ impl<'a> Lowerer<'a> {
                             writeback_place: None,
                         });
                     }
+                    if let Operand::Place(list) = &iterable {
+                        self.emit(Instruction::IndexInRange {
+                            list: list.clone(),
+                            index: index.clone(),
+                        });
+                    }
                     self.emit(Instruction::Assign {
                         target: binding.clone(),
                         value: Rvalue::Call {
@@ -17150,8 +17172,8 @@ impl<'a> Lowerer<'a> {
                             args,
                         },
                     });
-                    self.terminate(Terminator::Goto(self.label(body_block)));
-                    self.switch_to(body_block);
+                    // The advance follows the read, so the fact above covers
+                    // it too.
                     self.emit(Instruction::Assign {
                         target: index.clone(),
                         value: Rvalue::Binary {
@@ -17161,6 +17183,8 @@ impl<'a> Lowerer<'a> {
                             span: for_stmt.span,
                         },
                     });
+                    self.terminate(Terminator::Goto(self.label(body_block)));
+                    self.switch_to(body_block);
                 } else {
                     let (iteration_object, iteration_field, iteration_receiver_place) =
                         if let Some(place) = owned_iterable_place.as_ref() {

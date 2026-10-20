@@ -72,6 +72,12 @@ in this file.
   elements inline, with one bounds check, and appends those scalars without
   a box. `int_list_sum` runs 106,060,271 instructions instead of
   444,958,513, and went from 47.3 ms to 23.9 ms on Linux x86-64.
+- A shared `for` loop over a list or a span reads each element without a
+  bounds check and advances its index without an overflow check.
+  `int_list_sum` runs 78,654,607 instructions instead of 106,060,271.
+- Native code reads an element of a one-dimensional `Array` indexed by an
+  `int64` inline. A loop reading 2,000,000 `float64` elements by index went
+  from 367 ms to about 10.8 ms on Linux x86-64.
 
 ### Fixed
 

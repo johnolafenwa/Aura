@@ -25202,3 +25202,68 @@ fn scalar_pushes_store_the_same_elements_as_boxed_pushes() {
     assert_eq!(list_view_len(scalars), 5);
     assert_eq!(super::aura_direct_vec_index_scalar(scalars, 2, 0), i64::MAX);
 }
+
+#[test]
+fn rank_one_arrays_expose_their_storage_as_a_list_view() {
+    fn view(array: *mut OpaqueValue) -> (usize, usize) {
+        let layout = super::direct_list_layout();
+        let base = array as *const u8;
+        unsafe {
+            (
+                *(base.add(layout.elements_offset as usize) as *const usize),
+                *(base.add(layout.len_offset as usize) as *const usize),
+            )
+        }
+    }
+    let array = |shape: Vec<usize>, storage| {
+        boxed_value(Value::Array(
+            ArrayValue::new(shape.into_boxed_slice(), storage).unwrap(),
+        ))
+    };
+    let int64 = array(
+        vec![3],
+        ArrayStorage::Int64(vec![4, -5, 6].into_boxed_slice()),
+    );
+    let (elements, len) = view(int64);
+    assert_eq!(len, 3);
+    assert_eq!(unsafe { *(elements as *const i64).add(1) }, -5);
+    let nine = super::aura_direct_box_i64(9);
+    let fill = super::aura_direct_array_fill_in_place(int64, nine, 0, 0);
+    unsafe {
+        super::aura_direct_release_value(fill);
+        super::aura_direct_release_value(nine);
+    }
+    let (elements, len) = view(int64);
+    assert_eq!(len, 3);
+    assert_eq!(
+        unsafe { *(elements as *const i64).add(2) },
+        9,
+        "the view follows a write"
+    );
+
+    let int32 = array(vec![2], ArrayStorage::Int32(vec![7, -8].into_boxed_slice()));
+    let (elements, len) = view(int32);
+    assert_eq!((len, unsafe { *(elements as *const i32).add(1) }), (2, -8));
+    let float32 = array(vec![1], ArrayStorage::Float32(vec![1.5].into_boxed_slice()));
+    let (elements, _) = view(float32);
+    assert_eq!(unsafe { *(elements as *const f32) }, 1.5);
+    let float64 = array(
+        vec![1],
+        ArrayStorage::Float64(vec![2.25].into_boxed_slice()),
+    );
+    let (elements, _) = view(float64);
+    assert_eq!(unsafe { *(elements as *const f64) }, 2.25);
+
+    let grid = array(
+        vec![2, 2],
+        ArrayStorage::Int64(vec![1, 2, 3, 4].into_boxed_slice()),
+    );
+    assert_eq!(
+        view(grid),
+        (0, 0),
+        "another rank always takes the runtime path"
+    );
+    for value in [int64, int32, float32, float64, grid] {
+        unsafe { super::aura_direct_release_value(value) };
+    }
+}

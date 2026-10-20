@@ -16204,3 +16204,49 @@ def main():
         "the slow path should remain, referenced: {referenced:?}"
     );
 }
+
+#[test]
+fn proven_loop_reads_need_no_overflow_or_bounds_trap() {
+    let source = r#"
+def main():
+    values: list[int64] = [1, 2, 3]
+    mut sum = 0
+    for value in values:
+        sum = sum.wrapping_add(value)
+    print(sum)
+"#;
+    let mir = lower_source_to_mir(source).expect("a list loop should lower");
+    let object = emit_host_object(&mir).expect("a list loop should emit directly");
+    let referenced = object_referenced_symbols(&object);
+    assert!(
+        !referenced
+            .iter()
+            .any(|name| name.ends_with("aura_direct_fail_integer_overflow")),
+        "the loop index advances without an overflow check, referenced: {referenced:?}"
+    );
+    // A shared list still reads through the runtime.
+    assert!(
+        referenced
+            .iter()
+            .any(|name| name.ends_with("aura_direct_vec_index_scalar")),
+        "the shared path should remain, referenced: {referenced:?}"
+    );
+}
+
+#[test]
+fn rank_one_array_reads_keep_the_runtime_path_for_other_shapes() {
+    let source = r#"
+def main():
+    values = Array[int32].from_list([1, 2, 3], [3])
+    print(values[1] + values[-1])
+"#;
+    let mir = lower_source_to_mir(source).expect("an Array read should lower");
+    let object = emit_host_object(&mir).expect("an Array read should emit directly");
+    let referenced = object_referenced_symbols(&object);
+    assert!(
+        referenced
+            .iter()
+            .any(|name| name.ends_with("aura_direct_array_index")),
+        "a shared array or another rank reads through the runtime, referenced: {referenced:?}"
+    );
+}

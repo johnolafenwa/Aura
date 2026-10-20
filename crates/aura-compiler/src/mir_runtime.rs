@@ -228,6 +228,7 @@ fn reject_untrusted_extern_calls(module: &MirModule) -> Result<()> {
                 _ => None,
             },
             Instruction::Safepoint
+            | Instruction::IndexInRange { .. }
             | Instruction::BeginLoan { .. }
             | Instruction::BeginElementLoan { .. }
             | Instruction::BeginReturnedLoan { .. }
@@ -275,6 +276,7 @@ fn function_uses_lightweight_tasks(function: &MirFunction) -> bool {
             .any(|instruction| match instruction {
                 Instruction::Assign { value, .. } => rvalue_uses_lightweight_tasks(value),
                 Instruction::Safepoint
+                | Instruction::IndexInRange { .. }
                 | Instruction::BeginLoan { .. }
                 | Instruction::BeginElementLoan { .. }
                 | Instruction::BeginReturnedLoan { .. }
@@ -3738,6 +3740,26 @@ impl MirRuntime {
             }
             Instruction::Eval { value } => {
                 let _ = self.evaluate_owned_operand(value, env)?;
+                Ok(None)
+            }
+            Instruction::IndexInRange { list, index } => {
+                let len = match env.place_ref(list)? {
+                    Value::Vec(vector) => vector.elements.len(),
+                    _ => {
+                        return Err(Diagnostic::new(format!(
+                            "invalid MIR claims an in-range index into non-list `{list}`"
+                        )))
+                    }
+                };
+                let position = match env.place_ref(index)? {
+                    Value::Int(position) => position.as_i128(),
+                    _ => None,
+                };
+                if position.is_none_or(|position| position < 0 || position >= len as i128) {
+                    return Err(Diagnostic::new(format!(
+                        "invalid MIR claims `{index}` is in range for `{list}` of length {len}"
+                    )));
+                }
                 Ok(None)
             }
             Instruction::PushCleanup { place, action } => {

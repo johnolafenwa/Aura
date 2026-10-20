@@ -294,6 +294,39 @@ Callgrind counts for `int_list_sum` fall from 444,958,513 to 106,060,271
 instructions. Programs that box many values run up to 1.7% more
 instructions for the view updates.
 
+### Batch 7 step 5: proven loop reads and Array reads
+
+Step 5 moves the proof that a loop read is in range into MIR:
+
+- `Instruction::IndexInRange { list, index }` states that
+  `0 <= index < list.len()`. The `for` lowering over a whole list or a span
+  emits it after the bound check, then the `__index` read, then
+  `index = index + 1`. The iteration loan keeps the length fixed. The MIR
+  interpreter checks each claim and stops with an invalid MIR error when
+  one is false, so the fixtures test every claim the lowering makes.
+- `compile_block` keeps the fact for the read and the advance that follow
+  it, and drops it at any other instruction. `ProvenAccess::Read` skips the
+  negative-index normalization and the bounds check on the confined path,
+  and skips the guard before the boxed `aura_direct_vec_index` call.
+  `ProvenAccess::Advance` adds without an overflow check, because the index
+  is below a list length.
+- The list view covers a rank-1 `Array`: the address of its storage and
+  its element count. Any other rank keeps a zero view, so its reads fail
+  the inline bounds check and take the runtime path with the rank
+  diagnostic. `emit_array_element_read` loads `int32`, `int64`,
+  `float32`, and `float64` elements in place.
+- A shared lock still sends each read to the runtime. The step keeps the
+  per-element lock and view loads. Hoisting them out of a loop needs a
+  proof that the loop body cannot share the list, which a later step can
+  add.
+
+`for i in range(len(xs))` reads keep their bounds check. Proving them needs
+a body analysis that shows `xs` keeps its length.
+
+Callgrind counts for `int_list_sum` fall from 106,060,271 to 78,654,607
+instructions. A loop that reads 2,000,000 `float64` Array elements by index
+falls from 3,445,483,320 to 63,478,022.
+
 ## Batch 1 phase 1: normalized types and alias expansion
 
 The first type family establishes a shared producer in `sema/types.rs` for

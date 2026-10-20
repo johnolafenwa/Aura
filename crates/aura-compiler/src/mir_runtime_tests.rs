@@ -22854,3 +22854,61 @@ fn native_runtime_diagnostic_rendering_keeps_the_bare_prefix() {
         "unexpected runtime diagnostic rendering: {rendered}"
     );
 }
+
+#[test]
+fn index_in_range_facts_are_checked_by_the_interpreter() {
+    let mut runtime = test_runtime();
+    let mut env = Env::default();
+    env.define_typed(
+        "values",
+        Type::Named("list".to_string(), vec![Type::named("int64")]),
+        Value::Vec(VecValue {
+            element_type: Type::named("int64"),
+            elements: vec![
+                Value::Int(IntegerValue::from_i64(3)),
+                Value::Int(IntegerValue::from_i64(4)),
+            ]
+            .into(),
+        }),
+    );
+    env.define_typed("flag", Type::named("bool"), Value::Bool(true));
+    let mut cleanup = Vec::new();
+    let mut fuel = crate::mir::MIR_LOOP_SAFEPOINT_INTERVAL;
+    let mut claim = |runtime: &mut MirRuntime, env: &mut Env, list: &str, index: i64| {
+        env.define_typed(
+            "index",
+            Type::named("int64"),
+            Value::Int(IntegerValue::from_i64(index)),
+        );
+        runtime.execute_instruction(
+            &Instruction::IndexInRange {
+                list: list.to_string(),
+                index: "index".to_string(),
+            },
+            env,
+            &mut cleanup,
+            &mut fuel,
+        )
+    };
+    for index in [0, 1] {
+        claim(&mut runtime, &mut env, "values", index).expect("the index is in range");
+    }
+    for index in [-1, 2] {
+        let error = claim(&mut runtime, &mut env, "values", index)
+            .expect_err("an index outside the list is a false claim");
+        assert!(
+            error
+                .message
+                .contains("is in range for `values` of length 2"),
+            "{}",
+            error.message
+        );
+    }
+    let error =
+        claim(&mut runtime, &mut env, "flag", 0).expect_err("only a list has in-range indexes");
+    assert!(
+        error.message.contains("non-list `flag`"),
+        "{}",
+        error.message
+    );
+}

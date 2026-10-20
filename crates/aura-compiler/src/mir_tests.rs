@@ -13813,3 +13813,67 @@ fn comparison_of_a_loan_reads_the_loan_without_a_copy() {
         } if left == "first"
     )));
 }
+
+#[test]
+fn list_loops_claim_their_index_in_range_before_the_read_and_advance() {
+    let module = crate::lower_source_to_mir(
+        r#"
+def total(values: Span[int64]) -> int64:
+    mut sum = 0
+    for value in values:
+        sum += value
+    return sum
+
+def main():
+    values: list[int64] = [1, 2, 3]
+    mut sum = 0
+    for value in values:
+        sum += value
+    print(sum + total(values[1:]))
+"#,
+    )
+    .expect("list loops should lower");
+    for name in ["main", "total"] {
+        let function = module
+            .functions
+            .iter()
+            .find(|function| function.name == name)
+            .expect("the function should lower");
+        let claims = function
+            .blocks
+            .iter()
+            .flat_map(|block| block.instructions.windows(3))
+            .filter(|window| {
+                let Instruction::IndexInRange { list, index } = &window[0] else {
+                    return false;
+                };
+                let reads = matches!(
+                    &window[1],
+                    Instruction::Assign {
+                        value: Rvalue::Call {
+                            callee: CallTarget::Member { object: Operand::Place(object), field, .. },
+                            args,
+                        },
+                        ..
+                    } if object == list
+                        && field == INTERNAL_VEC_INDEX_FIELD
+                        && matches!(&args[0].value, Operand::Place(place) if place == index)
+                );
+                let advances = matches!(
+                    &window[2],
+                    Instruction::Assign {
+                        target,
+                        value: Rvalue::Binary {
+                            op: BinaryOp::Add,
+                            left: Operand::Place(left),
+                            right: Operand::Int(1),
+                            ..
+                        },
+                    } if target == index && left == index
+                );
+                reads && advances
+            })
+            .count();
+        assert_eq!(claims, 1, "`{name}` should claim one loop index in range");
+    }
+}

@@ -358,7 +358,7 @@ Each step is one pull request with its tests, docs, and measurements.
 | 2 | Cheap frames: one-time frame text validation, task state passed once, preallocated frame storage. Done: `fib(30)` went from 32.8x to about 8x Rust on Linux |
 | 3 | Explicit retain and release in MIR, and cancellation of matched pairs. Done for loop element copies: a shared `for` loop that only compares, measures, or searches its element reads it in place. `string_list_scan` went from 44.8x to about 12x Rust and `record_field_reads` from 15.6x to about 13x |
 | 4 | Inline list length and element reads from a fixed internal layout, with one bounds check. Done for `int64`, `float64`, and `bool` elements, plus unboxed scalar appends: `int_list_sum` went from 18.9x to about 10x Rust |
-| 5 | Bounds-check removal in proven `for` loops, and direct `Array` element reads |
+| 5 | Bounds-check removal in proven `for` loops, and direct `Array` element reads. Done for `for` loops over a list or a span, and for rank-1 `Array` reads by one `int64`: `int_list_sum` went from 106 to 79 million instructions, and indexed `float64` Array reads run about 34 times faster |
 | 6 | Vectorized integer Array kernels with ordered first-trap reporting |
 | 7 | Re-measurement against the targets, then a preview release on Cranelift |
 
