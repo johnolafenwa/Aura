@@ -240,6 +240,55 @@ enum DirectType {
 /// The words after a callable's descriptor.
 const CALLABLE_ENVIRONMENT_WORDS: usize = 3;
 
+/// What an `IndexInRange { list, index }` fact proves about the
+/// instruction after it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ProvenAccess {
+    None,
+    /// `list.__index(index, ..)`: the element exists, so the read needs no
+    /// bounds check.
+    Read,
+    /// `index = index + 1`: `index` is below a list length, so the sum
+    /// cannot overflow.
+    Advance,
+}
+
+impl ProvenAccess {
+    fn of(instruction: &Instruction, list: &str, index: &str) -> Self {
+        let Instruction::Assign { target, value } = instruction else {
+            return Self::None;
+        };
+        match value {
+            Rvalue::Call {
+                callee:
+                    CallTarget::Member {
+                        object: Operand::Place(object),
+                        field,
+                        ..
+                    },
+                args,
+            } if object == list
+                && field == "__index"
+                && target != list
+                && target != index
+                && matches!(
+                    args.first(),
+                    Some(MirArg { value: Operand::Place(place), .. }) if place == index
+                ) =>
+            {
+                Self::Read
+            }
+            Rvalue::Binary {
+                op: BinaryOp::Add,
+                left: Operand::Place(left),
+                right: Operand::Int(1),
+                ..
+            } if target == index && left == index => Self::Advance,
+            _ => Self::None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct DirectCallableType {
     /// The value's static contract (`Type::Function`, `Type::Closure`, or
@@ -3490,6 +3539,7 @@ impl<'a> NativeCodegen<'a> {
             trait_impls: self.trait_impls.clone(),
             return_type: function.return_type.clone(),
             owned_opaque_temporaries: OwnedTemporaries::default(),
+            proven_access: ProvenAccess::None,
             view_places: HashMap::new(),
             view_element_keys: HashMap::new(),
             view_selector_vars,
@@ -4964,6 +5014,9 @@ struct FunctionCompiler<'a> {
     trait_impls: Vec<MirTraitImpl>,
     return_type: Type,
     owned_opaque_temporaries: OwnedTemporaries,
+    /// What an `IndexInRange` fact proves about the instruction being
+    /// compiled.
+    proven_access: ProvenAccess,
     view_places: HashMap<String, DirectViewPlace>,
     view_selector_vars: HashMap<String, Variable>,
     /// Owned dictionary keys held by entry loans, released at `EndLoan`.
@@ -5955,8 +6008,22 @@ impl<'a> FunctionCompiler<'a> {
         }
         self.owned_opaque_temporaries.clear();
 
+        let mut in_range: Option<(&str, &str)> = None;
         for (instruction_index, instruction) in block.instructions.iter().enumerate() {
-            self.compile_instruction(&block.label, instruction_index, instruction)?;
+            if let Instruction::IndexInRange { list, index } = instruction {
+                in_range = Some((list, index));
+                continue;
+            }
+            self.proven_access = in_range.map_or(ProvenAccess::None, |(list, index)| {
+                ProvenAccess::of(instruction, list, index)
+            });
+            // The fact covers the element read and then the one advance.
+            if self.proven_access != ProvenAccess::Read {
+                in_range = None;
+            }
+            let compiled = self.compile_instruction(&block.label, instruction_index, instruction);
+            self.proven_access = ProvenAccess::None;
+            compiled?;
         }
         self.compile_terminator(&block.terminator, return_ty)?;
         Ok(())
@@ -5969,6 +6036,8 @@ impl<'a> FunctionCompiler<'a> {
         instruction: &Instruction,
     ) -> std::result::Result<(), String> {
         match instruction {
+            // `compile_block` reads the fact for the instructions after it.
+            Instruction::IndexInRange { .. } => {}
             Instruction::Safepoint => {
                 let Some(fuel_variable) = self.safepoint_fuel else {
                     return Ok(());
@@ -7660,6 +7729,10 @@ impl<'a> FunctionCompiler<'a> {
             ty: ty.clone(),
         };
         let value = match op {
+            // An index below a list length advances without overflow.
+            BinaryOp::Add if self.proven_access == ProvenAccess::Advance => {
+                arithmetic(self.builder.ins().iadd(left, right))
+            }
             BinaryOp::Add => {
                 let (result, overflow) = if kind.is_signed() {
                     self.builder.ins().sadd_overflow(left, right)
@@ -12022,6 +12095,77 @@ impl<'a> FunctionCompiler<'a> {
             .brif(shared, slow_block, &[], fast_block, &[]);
     }
 
+    /// Reads one element of an `Array` indexed by one `int64`. A confined
+    /// rank-1 array in range is read in place from its list view. Any other
+    /// array or position takes the runtime call, which reports the rank or
+    /// range diagnostic.
+    fn emit_array_element_read(
+        &mut self,
+        array: Value,
+        coordinate: ValueRef,
+        kind: ScalarKind,
+        element_ty: Type,
+        line: Value,
+        column: Value,
+    ) -> std::result::Result<ValueRef, String> {
+        let (size, load_ty) = match kind {
+            ScalarKind::Int32 => (4, types::I32),
+            ScalarKind::Int64 => (8, types::I64),
+            ScalarKind::Float32 => (4, types::F32),
+            ScalarKind::Float64 => (8, types::F64),
+            other => return Err(format!("direct backend has no Array dtype `{other:?}`")),
+        };
+        let layout = aura_runtime::native_runtime::direct_list_layout();
+        let element_direct_ty = DirectType::Scalar(kind);
+        let slow_block = self.builder.create_block();
+        let fast_block = self.builder.create_block();
+        let join_block = self.builder.create_block();
+        self.builder
+            .append_block_param(join_block, kind.signature_type());
+        self.emit_list_shared_check(array, &layout, slow_block, fast_block);
+        self.builder.switch_to_block(fast_block);
+        self.builder.seal_block(fast_block);
+        let flags = MemFlags::trusted();
+        let elements = self
+            .builder
+            .ins()
+            .load(types::I64, flags, array, layout.elements_offset);
+        let position =
+            self.emit_list_view_bounds_check(array, coordinate.values[0], &layout, slow_block);
+        let offset = self.builder.ins().imul_imm(position, size);
+        let element = self.builder.ins().iadd(elements, offset);
+        let value = match kind {
+            ScalarKind::Int32 => self.builder.ins().sload32(flags, element, 0),
+            ScalarKind::Float32 => {
+                let narrow = self.builder.ins().load(load_ty, flags, element, 0);
+                self.builder.ins().fpromote(types::F64, narrow)
+            }
+            _ => self.builder.ins().load(load_ty, flags, element, 0),
+        };
+        self.builder.ins().jump(join_block, &[value]);
+
+        self.builder.switch_to_block(slow_block);
+        self.builder.seal_block(slow_block);
+        let caller_owned = self.owned_opaque_temporaries.clone();
+        let coordinates = self.ensure_opaque(coordinate)?;
+        let inst = self.builder.ins().call(
+            self.array_index,
+            &[array, coordinates.values[0], line, column],
+        );
+        let result = self.owned_opaque_result(self.builder.inst_results(inst).to_vec(), element_ty);
+        let result = self.coerce_value(result, &element_direct_ty)?;
+        self.release_temporary_owned_since(&caller_owned);
+        self.builder.ins().jump(join_block, &[result.values[0]]);
+        self.owned_opaque_temporaries = caller_owned;
+
+        self.builder.switch_to_block(join_block);
+        self.builder.seal_block(join_block);
+        Ok(ValueRef {
+            values: vec![self.builder.block_params(join_block)[0]],
+            ty: element_direct_ty,
+        })
+    }
+
     /// Reads a scalar list element as raw bits. `kind` is 0 for `int64`,
     /// 1 for `float64`, and 2 for `bool`. A confined list in range is read
     /// in place with one bounds check. A shared list, an index out of range,
@@ -12032,6 +12176,7 @@ impl<'a> FunctionCompiler<'a> {
         list: Value,
         index: Value,
         kind: i64,
+        proven: bool,
         line: Value,
         column: Value,
     ) -> std::result::Result<Value, String> {
@@ -12054,25 +12199,11 @@ impl<'a> FunctionCompiler<'a> {
                 .builder
                 .ins()
                 .load(types::I64, flags, list, layout.elements_offset);
-            let len = self
-                .builder
-                .ins()
-                .load(types::I64, flags, list, layout.len_offset);
-            let zero = self.builder.ins().iconst(types::I64, 0);
-            let negative = self.builder.ins().icmp(IntCC::SignedLessThan, index, zero);
-            let from_end = self.builder.ins().iadd(len, index);
-            let position = self.builder.ins().select(negative, from_end, index);
-            // One unsigned compare also rejects a position below zero.
-            let out_of_range =
-                self.builder
-                    .ins()
-                    .icmp(IntCC::UnsignedGreaterThanOrEqual, position, len);
-            let in_range_block = self.builder.create_block();
-            self.builder
-                .ins()
-                .brif(out_of_range, slow_block, &[], in_range_block, &[]);
-            self.builder.switch_to_block(in_range_block);
-            self.builder.seal_block(in_range_block);
+            let position = if proven {
+                index
+            } else {
+                self.emit_list_view_bounds_check(list, index, &layout, slow_block)
+            };
             let offset = self.builder.ins().imul_imm(position, layout.element_stride);
             let element = self.builder.ins().iadd(elements, offset);
             match kind {
@@ -12126,6 +12257,38 @@ impl<'a> FunctionCompiler<'a> {
         self.builder.switch_to_block(join_block);
         self.builder.seal_block(join_block);
         Ok(self.builder.block_params(join_block)[0])
+    }
+
+    /// Normalizes a negative `index` against a list view's length, and
+    /// continues in a new block when the position is in range or in `slow`
+    /// when it is not.
+    fn emit_list_view_bounds_check(
+        &mut self,
+        list: Value,
+        index: Value,
+        layout: &aura_runtime::native_runtime::DirectListLayout,
+        slow: cranelift_codegen::ir::Block,
+    ) -> Value {
+        let len = self
+            .builder
+            .ins()
+            .load(types::I64, MemFlags::trusted(), list, layout.len_offset);
+        let zero = self.builder.ins().iconst(types::I64, 0);
+        let negative = self.builder.ins().icmp(IntCC::SignedLessThan, index, zero);
+        let from_end = self.builder.ins().iadd(len, index);
+        let position = self.builder.ins().select(negative, from_end, index);
+        // One unsigned compare also rejects a position below zero.
+        let out_of_range =
+            self.builder
+                .ins()
+                .icmp(IntCC::UnsignedGreaterThanOrEqual, position, len);
+        let in_range = self.builder.create_block();
+        self.builder
+            .ins()
+            .brif(out_of_range, slow, &[], in_range, &[]);
+        self.builder.switch_to_block(in_range);
+        self.builder.seal_block(in_range);
+        position
     }
 
     fn emit_vec_index_failure_guard(
@@ -14720,7 +14883,6 @@ impl<'a> FunctionCompiler<'a> {
                         let [coordinate_arg, line_arg, column_arg] = <&[MirArg; 3]>::try_from(args)
                             .expect("MIR lowering emits three arguments for Array indexing");
                         let coordinates = self.load_operand(&coordinate_arg.value)?;
-                        let coordinates = self.ensure_opaque(coordinates)?;
                         let integer_hint = Some(ScalarKind::Int32);
                         let line =
                             self.load_operand_with_integer_hint(&line_arg.value, integer_hint)?;
@@ -14730,6 +14892,19 @@ impl<'a> FunctionCompiler<'a> {
                             self.load_operand_with_integer_hint(&column_arg.value, integer_hint)?;
                         let column =
                             self.coerce_value(column, &DirectType::Scalar(ScalarKind::Int32))?;
+                        if coordinates.ty == DirectType::Scalar(ScalarKind::Int64) {
+                            if let DirectType::Scalar(kind) = element_direct_ty {
+                                return self.emit_array_element_read(
+                                    object.values[0],
+                                    coordinates,
+                                    kind,
+                                    element_ty,
+                                    line.values[0],
+                                    column.values[0],
+                                );
+                            }
+                        }
+                        let coordinates = self.ensure_opaque(coordinates)?;
                         let inst = self.builder.ins().call(
                             self.array_index,
                             &[
@@ -15152,11 +15327,13 @@ impl<'a> FunctionCompiler<'a> {
                             DirectType::Scalar(ScalarKind::Bool) => Some(2),
                             _ => None,
                         };
+                        let proven = self.proven_access == ProvenAccess::Read;
                         if let Some(kind) = scalar_kind {
                             let bits = self.emit_scalar_list_read(
                                 object.values[0],
                                 index.values[0],
                                 kind,
+                                proven,
                                 line.values[0],
                                 column.values[0],
                             )?;
@@ -15172,12 +15349,16 @@ impl<'a> FunctionCompiler<'a> {
                                 ty: element_direct_ty.clone(),
                             });
                         }
-                        let normalized_index = self.emit_vec_index_failure_guard(
-                            object.values[0],
-                            index.values[0],
-                            line.values[0],
-                            column.values[0],
-                        )?;
+                        let normalized_index = if proven {
+                            index.values[0]
+                        } else {
+                            self.emit_vec_index_failure_guard(
+                                object.values[0],
+                                index.values[0],
+                                line.values[0],
+                                column.values[0],
+                            )?
+                        };
                         let inst = self.builder.ins().call(
                             self.vec_index,
                             &[
@@ -19675,7 +19856,7 @@ fn validate_function_in_reachable(
         }
         for instruction in &block.instructions {
             match instruction {
-                Instruction::Safepoint => {}
+                Instruction::Safepoint | Instruction::IndexInRange { .. } => {}
                 Instruction::BeginElementLoan { selector, .. }
                 | Instruction::ReborrowElement { selector, .. } => validate_operand(selector)?,
                 Instruction::BeginLoan { .. }

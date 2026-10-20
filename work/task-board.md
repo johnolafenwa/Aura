@@ -17,7 +17,22 @@ Last updated: 2026-10-20
   LLVM and removes it. LLVM's inliner replaces the planned MIR inliner.
 - Next: step 1, below.
 
-## Batch 7 step 4: inline list reads (in progress)
+## Batch 7 step 5: proven loop reads and Array reads (in progress)
+
+- Target: drop bounds checks the compiler proves in `for` loops, and read
+  `Array` scalar elements without boxing.
+- Done: `Instruction::IndexInRange` in MIR, checked by the interpreter. A
+  loop over a list or a span reads without a bounds check and advances its
+  index without an overflow check. Rank-1 `Array` reads by one `int64` are
+  inline. Notes are in `2026-10-20-batch-7-step-5-proven-loop-reads.md`.
+- Verification: see the work note. `int_list_sum` went from 106,060,271 to
+  78,654,607 instructions. An indexed `float64` Array loop went from 367 ms
+  to about 10.8 ms.
+- Open question for John: store `int64`, `float64`, and `bool` lists
+  unboxed. `int_list_sum` is limited by 112-byte elements.
+- Next: hosted CI, then step 6.
+
+## Batch 7 step 4: inline list reads (complete)
 
 - Target: read list lengths and scalar elements inline with one bounds
   check, from a fixed layout the runtime describes.
@@ -26,7 +41,7 @@ Last updated: 2026-10-20
   scalar appends. Notes are in `2026-10-20-batch-7-step-4-inline-list-reads.md`.
 - Verification: see the work note. `int_list_sum` went from 444,958,513 to
   106,060,271 instructions, and from 47.3 ms to 23.9 ms.
-- Next: hosted CI, then step 5, bounds-check removal in proven loops.
+- Done: merged in PR #94.
 
 ## Batch 7 step 3: borrowed loop element reads (complete)
 

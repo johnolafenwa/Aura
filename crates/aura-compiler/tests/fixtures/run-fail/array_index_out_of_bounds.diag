@@ -1,0 +1,6 @@
+error[AU4003]: array coordinate -4 on axis 0 normalizes to -1, outside 0..3
+ --> crates/aura-compiler/tests/fixtures/run-fail/array_index_out_of_bounds.au:3:18
+  |
+3 |     print(values[-4])
+  |                  ^
+  = note: Aura call chain (innermost first): main at 1:1

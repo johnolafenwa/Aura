@@ -2354,12 +2354,21 @@ unsafe fn value_mut<T>(ptr: *mut OpaqueValue, write: impl FnOnce(&mut Value) -> 
     write(unsafe { &mut *value.value.get() })
 }
 
-/// The element address and length of a `list` value, or zeros for any
-/// other value. The storage is on the heap, so the address stays valid when
-/// the box holding the value moves.
+/// The element address and length of a `list` value or a rank-1 `Array`,
+/// or zeros for any other value. The storage is on the heap, so the address
+/// stays valid when the box holding the value moves.
 fn list_view_of(value: &Value) -> (usize, usize) {
     match value {
         Value::Vec(vector) => (vector.elements.as_ptr() as usize, vector.elements.len()),
+        Value::Array(array) if array.rank() == 1 => {
+            let elements = match &array.storage {
+                crate::runtime_value::ArrayStorage::Int32(values) => values.as_ptr() as usize,
+                crate::runtime_value::ArrayStorage::Int64(values) => values.as_ptr() as usize,
+                crate::runtime_value::ArrayStorage::Float32(values) => values.as_ptr() as usize,
+                crate::runtime_value::ArrayStorage::Float64(values) => values.as_ptr() as usize,
+            };
+            (elements, array.shape[0])
+        }
         _ => (0, 0),
     }
 }
