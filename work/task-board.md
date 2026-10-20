@@ -11,7 +11,10 @@ Last updated: 2026-10-20
   and a ten-step delivery plan. Notes are in
   `2026-10-20-batch-7-design-checkpoint.md`.
 - Verification: documentation checks only. The checkpoint changes no code.
-- Ratified: John chose "Approve all" on 2026-10-20.
+- Ratified: John approved the bounds-check and SIMD recommendations on
+  2026-10-20 and chose LLVM as the only native backend. Phase 1 fixes runtime
+  costs on Cranelift and ships a release. Phase 2 replaces Cranelift with
+  LLVM and removes it. LLVM's inliner replaces the planned MIR inliner.
 - Next: step 1, Rust baselines for the collection programs and
   compile-time measurement, then proposed numeric targets for John.
 

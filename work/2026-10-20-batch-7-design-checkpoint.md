@@ -30,6 +30,9 @@ for the work to continue through Batch 6 to these decisions.
 
 ## Follow-Up
 
-- John approved all four recommendations on 2026-10-20.
+- John decided on 2026-10-20. Bounds checks and SIMD follow the
+  recommendations. The backend is LLVM through inkwell, as the only native
+  backend, after the runtime work. A release on Cranelift ships between the
+  two phases, and Cranelift is removed in step 11.
 - Step 1 adds Rust baselines for the collection programs and compile-time
   measurements, then proposes numeric targets to ratify.

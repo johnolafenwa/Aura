@@ -1,6 +1,6 @@
 # ADR-0064: Native backend strategy and codegen boundary
 
-- Status: Accepted direction; detailed design pending
+- Status: Accepted; Batch 7 backend decided 2026-10-20 (LLVM, replacing Cranelift)
 - Date: 2026-09-06
 - Implementation: Pre-Batch-1 items 1–7 delivered; measurements published with grades and provenance
 - Roadmap: Pre-Batch-1 foundations; incremental boundary work from Batch 1;
@@ -75,6 +75,12 @@ C emission is a serious candidate because it avoids a separate LLVM build
 dependency and makes the freestanding targets of Batches 12–13 cheaper to
 support. Decide using measured runtime, compilation, code-size, diagnostic,
 and toolchain results. No backend switch occurs before Batch 7.
+
+**Decided 2026-10-20.** The owner chose LLVM through inkwell as Aura's only
+native backend. Batch 7 first fixes runtime costs on Cranelift and ships a
+release. It then replaces Cranelift with LLVM and removes Cranelift, so
+Aura keeps one native backend and the MIR interpreter. The plan is in the
+[Batch 7 design checkpoint](../22-batch-7-design-checkpoint.md).
 
 ## Why the switch is not first
 

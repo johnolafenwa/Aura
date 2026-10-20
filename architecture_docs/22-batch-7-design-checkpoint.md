@@ -16,7 +16,8 @@ four decisions the owner makes before the work starts:
 
 Each section states what the code does today, the options, and the
 recommended default. [Owner Questions](#owner-questions) collects the four
-choices. The [delivery plan](#f-delivery-plan) assumes every recommendation.
+choices, and the [Ratification Record](#ratification-record) states what the
+owner decided. The [delivery plan](#f-delivery-plan) follows those decisions.
 
 The record this checkpoint completes is
 [ADR-0064](decisions/0064-native-backend-strategy-and-codegen-boundary.md),
@@ -150,6 +151,21 @@ optimizer closes, the last step prototypes C emission behind the boundary
 and brings the measured comparison back to the owner. LLVM stays out unless
 that comparison shows C cannot reach the targets.
 
+### Owner Decision
+
+The owner chose LLVM, after the runtime work:
+
+- Phase 1 fixes the runtime costs on Cranelift and ships a release.
+- Phase 2 replaces Cranelift with an LLVM emitter through inkwell. Aura then
+  has one native backend. Cranelift is removed, not kept as a second
+  backend.
+- The MIR interpreter stays. It runs `aura run`, and the forced parity matrix
+  compares it with the LLVM build.
+
+The reasons are one optimizer on every host, identical output across
+machines, full debug information, cross-compilation from one library, and
+inlining of runtime code when Aura's LLVM matches the one rustc uses.
+
 ## B. Inlining
 
 ### Today
@@ -180,6 +196,13 @@ recursive cycle, and keeps evaluation order, cleanup order, and
 one-observation semantics. Inlining the frame record means a push and pop of
 a constant pointer, which costs a few instructions. Runtime fast paths are
 section C's work and need no inliner.
+
+### Owner Decision
+
+Cheap frames come first, in phase 1. With LLVM chosen, Aura writes no MIR
+inliner. LLVM's inliner does the work in phase 2, under the same rule: an
+inlined call keeps its frame record, so traps, ancestry, and the depth limit
+stay exact.
 
 ## C. Bounds Checks
 
@@ -258,21 +281,37 @@ Those numbers are placeholders until the baselines exist.
 
 Each step is one pull request with its tests, docs, and measurements.
 
+### Phase 1: Runtime Costs On Cranelift
+
 | Step | Work |
 | --- | --- |
 | 1 | Rust baselines for the collection programs, compile-time measurement, and proposed targets |
 | 2 | Cheap frames: one-time frame text validation, task state passed once, preallocated frame storage |
-| 3 | 32-bit overflow arithmetic for `int32` and narrower widths |
-| 4 | Explicit retain and release in MIR, and cancellation of matched pairs |
-| 5 | Inline list length and element reads from a fixed internal layout, with one bounds check |
-| 6 | Bounds-check removal in proven `for` loops, and direct `Array` element reads |
-| 7 | MIR inliner for small non-recursive functions that keeps frame records |
-| 8 | Vectorized integer Array kernels with ordered first-trap reporting |
-| 9 | `NativeBuilder` boundary, then re-measurement against the targets |
-| 10 | A C emission prototype behind the boundary, only if step 9 leaves a gap that needs a general optimizer |
+| 3 | Explicit retain and release in MIR, and cancellation of matched pairs |
+| 4 | Inline list length and element reads from a fixed internal layout, with one bounds check |
+| 5 | Bounds-check removal in proven `for` loops, and direct `Array` element reads |
+| 6 | Vectorized integer Array kernels with ordered first-trap reporting |
+| 7 | Re-measurement against the targets, then a preview release on Cranelift |
 
-Steps 2, 3, and 8 do not depend on the others. Step 5 depends on step 4 for
-the retain and release it emits inline.
+Steps 2 and 6 do not depend on the others. Step 4 depends on step 3 for the
+retain and release it emits inline. Steps 3 and 5 work on MIR, so phase 2
+keeps them.
+
+### Phase 2: LLVM As The Only Native Backend
+
+| Step | Work |
+| --- | --- |
+| 8 | Move the semantic decisions left in `native_codegen.rs` into checked MIR or a shared lowering, so an emitter only translates |
+| 9 | LLVM emitter through inkwell, pinned to the LLVM version rustc uses. CI and release builds provide libLLVM. The forced parity matrix, size gates, and per-function sections pass on LLVM |
+| 10 | Runtime fast paths and inlining across the runtime boundary, with frame records kept |
+| 11 | LLVM becomes the only native backend. Cranelift code and dependencies are removed, and the native cache format, size baselines, and docs are updated |
+| 12 | Re-measurement against the targets, then a release |
+
+During steps 9 and 10, both emitters build in CI so parity failures point at
+the new emitter. Step 11 ends that.
+
+Two facts need checking at step 9 before the emitter grows: whether inkwell
+supports LLVM 22, and how much libLLVM adds to the `aura` binary.
 
 ## Owner Questions
 
@@ -294,18 +333,17 @@ Each names the recommended default first.
 
 ## Ratification Record
 
-The owner ratified this checkpoint on 2026-10-20 and approved all four
-recommendations:
+The owner decided on 2026-10-20:
 
-1. Cranelift stays the release backend. Batch 7 finishes the `NativeBuilder`
-   boundary, and a C emission prototype follows only if a gap remains that
-   needs a general optimizer.
-2. Frames become cheap first. A MIR inliner then inlines small,
-   non-recursive functions and keeps their frame records.
-3. Every bounds check stays observable. The compiler removes only checks it
-   proves redundant.
-4. Vectorization stays inside the current Array contracts, with no new
-   language surface.
+1. **Backend.** LLVM through inkwell becomes Aura's only native backend,
+   after the runtime work. Cranelift is removed in step 11. The runtime
+   work ships first in a release built on Cranelift.
+2. **Inlining.** Frames become cheap first. LLVM's inliner replaces the
+   planned MIR inliner, and inlined calls keep their frame records.
+3. **Bounds checks.** Every bounds check stays observable. The compiler
+   removes only checks it proves redundant.
+4. **SIMD.** Vectorization stays inside the current Array contracts, with no
+   new language surface.
 
 Every other rule above is the ratified default. Step 1 proposes the numeric
 targets, which the owner ratifies before step 2 starts.
