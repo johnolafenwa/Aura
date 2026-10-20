@@ -651,6 +651,11 @@ struct NativeCodegen<'a> {
     vec_slice: FuncId,
     vec_index_option: FuncId,
     vec_index_scalar: FuncId,
+    vec_check_index: FuncId,
+    compare_str_literal_at: FuncId,
+    compare_values_at: FuncId,
+    vec_element_len: FuncId,
+    vec_element_map_get: FuncId,
     vec_span: FuncId,
     vec_take_index_in_place: FuncId,
     vec_set_index_in_place: FuncId,
@@ -1204,6 +1209,11 @@ impl<'a> NativeCodegen<'a> {
             vec_slice => ("aura_direct_vec_slice", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             vec_index_option => ("aura_direct_vec_index_option", [types::I64, types::I64], Some(types::I64)),
             vec_index_scalar => ("aura_direct_vec_index_scalar", [types::I64, types::I64, types::I64], Some(types::I64)),
+            vec_check_index => ("aura_direct_vec_check_index", [types::I64, types::I64, types::I64, types::I64], None),
+            compare_str_literal_at => ("aura_direct_compare_str_literal_at", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
+            compare_values_at => ("aura_direct_compare_values_at", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
+            vec_element_len => ("aura_direct_vec_element_len", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
+            vec_element_map_get => ("aura_direct_vec_element_map_get", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             vec_span => ("aura_direct_vec_span", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             vec_take_index_in_place => ("aura_direct_vec_take_index_in_place", [types::I64, types::I64], Some(types::I64)),
             vec_set_index_in_place => ("aura_direct_vec_set_index_in_place", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
@@ -1723,6 +1733,11 @@ impl<'a> NativeCodegen<'a> {
             vec_slice,
             vec_index_option,
             vec_index_scalar,
+            vec_check_index,
+            compare_str_literal_at,
+            compare_values_at,
+            vec_element_len,
+            vec_element_map_get,
             vec_span,
             vec_take_index_in_place,
             vec_set_index_in_place,
@@ -2646,6 +2661,21 @@ impl<'a> NativeCodegen<'a> {
         let vec_index_scalar = self
             .object
             .declare_func_in_func(self.vec_index_scalar, builder.func);
+        let vec_check_index = self
+            .object
+            .declare_func_in_func(self.vec_check_index, builder.func);
+        let compare_str_literal_at = self
+            .object
+            .declare_func_in_func(self.compare_str_literal_at, builder.func);
+        let compare_values_at = self
+            .object
+            .declare_func_in_func(self.compare_values_at, builder.func);
+        let vec_element_len = self
+            .object
+            .declare_func_in_func(self.vec_element_len, builder.func);
+        let vec_element_map_get = self
+            .object
+            .declare_func_in_func(self.vec_element_map_get, builder.func);
         let vec_span = self
             .object
             .declare_func_in_func(self.vec_span, builder.func);
@@ -3567,6 +3597,11 @@ impl<'a> NativeCodegen<'a> {
             vec_slice,
             vec_index_option,
             vec_index_scalar,
+            vec_check_index,
+            compare_str_literal_at,
+            compare_values_at,
+            vec_element_len,
+            vec_element_map_get,
             vec_span,
             vec_take_index_in_place,
             vec_set_index_in_place,
@@ -4440,6 +4475,18 @@ struct LentArgument {
     restore: bool,
 }
 
+/// A list element a loan lends, read in place by a runtime helper (see
+/// `FunctionCompiler::borrowed_list_element`).
+struct BorrowedListElement {
+    /// The local holding the list.
+    list: String,
+    /// The variable holding the element's position.
+    index: Variable,
+    element_type: Type,
+    /// The index expression a bounds trap names.
+    span: Span,
+}
+
 /// A member-call receiver moved out of its owner for one call instead of
 /// cloned (see `FunctionCompiler::lendable_receiver`).
 struct LentReceiver {
@@ -5019,6 +5066,11 @@ struct FunctionCompiler<'a> {
     vec_slice: cranelift_codegen::ir::FuncRef,
     vec_index_option: cranelift_codegen::ir::FuncRef,
     vec_index_scalar: cranelift_codegen::ir::FuncRef,
+    vec_check_index: cranelift_codegen::ir::FuncRef,
+    compare_str_literal_at: cranelift_codegen::ir::FuncRef,
+    compare_values_at: cranelift_codegen::ir::FuncRef,
+    vec_element_len: cranelift_codegen::ir::FuncRef,
+    vec_element_map_get: cranelift_codegen::ir::FuncRef,
     vec_span: cranelift_codegen::ir::FuncRef,
     vec_take_index_in_place: cranelift_codegen::ir::FuncRef,
     vec_set_index_in_place: cranelift_codegen::ir::FuncRef,
@@ -6544,6 +6596,11 @@ impl<'a> FunctionCompiler<'a> {
                     });
                 if is_comparison_op(*op) {
                     if let Some(result) =
+                        self.compile_borrowed_element_comparison(*op, left, right, *span)?
+                    {
+                        return Ok(result);
+                    }
+                    if let Some(result) =
                         self.compile_str_literal_comparison(*op, left, right, *span)?
                     {
                         return Ok(result);
@@ -7180,6 +7237,72 @@ impl<'a> FunctionCompiler<'a> {
             values: vec![result],
             ty: bool_ty,
         })
+    }
+
+    /// Compares a lent list element where it lies (see
+    /// `borrowed_list_element`). Returns `None` when neither operand is one.
+    fn compile_borrowed_element_comparison(
+        &mut self,
+        op: BinaryOp,
+        left: &Operand,
+        right: &Operand,
+        span: Span,
+    ) -> std::result::Result<Option<ValueRef>, String> {
+        let (selection, other, element_on_left) =
+            if let Some(selection) = self.borrowed_list_element(left) {
+                (selection, right, 1)
+            } else if let Some(selection) = self.borrowed_list_element(right) {
+                (selection, left, 0)
+            } else {
+                return Ok(None);
+            };
+        let opcode = self
+            .builder
+            .ins()
+            .iconst(types::I64, Self::binary_opcode(op));
+        let (line, column) = self.span_values(Some(span));
+        let inst = match other {
+            Operand::String(literal) => {
+                let (list, index) = self.load_borrowed_list_element(&selection)?;
+                let (literal_ptr, literal_len) = self.string_constant(literal.as_bytes())?;
+                let literal_on_left = self.builder.ins().iconst(types::I64, 1 - element_on_left);
+                self.builder.ins().call(
+                    self.compare_str_literal_at,
+                    &[
+                        opcode,
+                        list,
+                        index,
+                        literal_ptr,
+                        literal_len,
+                        literal_on_left,
+                        line,
+                        column,
+                    ],
+                )
+            }
+            other => {
+                let other = self.load_operand(other)?;
+                let other = self.ensure_opaque(other)?;
+                let (list, index) = self.load_borrowed_list_element(&selection)?;
+                let element_on_left = self.builder.ins().iconst(types::I64, element_on_left);
+                self.builder.ins().call(
+                    self.compare_values_at,
+                    &[
+                        opcode,
+                        list,
+                        index,
+                        other.values[0],
+                        element_on_left,
+                        line,
+                        column,
+                    ],
+                )
+            }
+        };
+        Ok(Some(ValueRef {
+            values: vec![self.builder.inst_results(inst)[0]],
+            ty: DirectType::Scalar(ScalarKind::Bool),
+        }))
     }
 
     /// Compares a `str` value with a string literal without boxing the
@@ -9833,11 +9956,107 @@ impl<'a> FunctionCompiler<'a> {
         receiver_place: Option<&str>,
         args: &[MirArg],
     ) -> std::result::Result<ValueRef, String> {
+        if let Some(result) = self.compile_borrowed_element_member_call(object, field, args)? {
+            return Ok(result);
+        }
         if let Some(lent) = self.lendable_receiver(object, field, args)? {
             return self.compile_lent_member_call(lent, field, receiver_place, args);
         }
         let object = self.load_operand(object)?;
         self.compile_member_call_on_receiver(object, field, receiver_place, args)
+    }
+
+    /// The loan behind `operand` when it lends one element of a local list
+    /// that a runtime helper can read where it lies: a `str`, `list`, `dict`,
+    /// or `set` selected by position, with no projection or condition. Such
+    /// an element is compared, measured, or searched without a copy.
+    fn borrowed_list_element(&self, operand: &Operand) -> Option<BorrowedListElement> {
+        let Operand::Place(place) = operand else {
+            return None;
+        };
+        let resolved = self.view_places.get(place)?;
+        let [alternative] = resolved.alternatives.as_slice() else {
+            return None;
+        };
+        let [selector] = alternative.elements.as_slice() else {
+            return None;
+        };
+        let lendable = alternative.conditions.is_empty()
+            && alternative.union_payloads.is_empty()
+            && !alternative.place.contains('.')
+            && selector.kind == DirectElementKind::List
+            && selector.projection.is_empty()
+            && crate::mir_copies::lendable_loop_element(&selector.element_type)
+            && matches!(
+                self.variable_types.get(&alternative.place),
+                Some(DirectType::Opaque(Type::Named(name, _))) if name == "list"
+            );
+        lendable.then(|| BorrowedListElement {
+            list: alternative.place.clone(),
+            index: selector.variable,
+            element_type: selector.element_type.clone(),
+            span: selector.span,
+        })
+    }
+
+    /// The list handle and position words of a lent element.
+    fn load_borrowed_list_element(
+        &mut self,
+        selection: &BorrowedListElement,
+    ) -> std::result::Result<(Value, Value), String> {
+        let list = self.load_root(&selection.list)?;
+        let index = self.builder.use_var(selection.index);
+        Ok((list.values[0], index))
+    }
+
+    /// `len()` or `get(key)` on a lent list element, read where it lies (see
+    /// `borrowed_list_element`). Returns `None` for any other call.
+    fn compile_borrowed_element_member_call(
+        &mut self,
+        object: &Operand,
+        field: &str,
+        args: &[MirArg],
+    ) -> std::result::Result<Option<ValueRef>, String> {
+        let Some(selection) = self.borrowed_list_element(object) else {
+            return Ok(None);
+        };
+        if !crate::mir_copies::borrowed_element_method(&selection.element_type, field, args.len())
+            || self
+                .find_trait_method(&selection.element_type, field)
+                .is_some()
+            || args
+                .iter()
+                .any(|argument| argument.name.is_some() || argument.writeback_place.is_some())
+        {
+            return Ok(None);
+        }
+        let (line, column) = self.span_operands(selection.span);
+        match (field, args, &selection.element_type) {
+            ("get", [key], Type::Named(_, entry_types)) => {
+                let key_direct_ty = ensure_direct_type(&entry_types[0], &self.classes, "dict key")?;
+                let key = self.load_operand_as_opaque_direct(&key.value, &key_direct_ty)?;
+                let (list, index) = self.load_borrowed_list_element(&selection)?;
+                let inst = self.builder.ins().call(
+                    self.vec_element_map_get,
+                    &[list, index, key.values[0], line, column],
+                );
+                Ok(Some(self.owned_opaque_result(
+                    self.builder.inst_results(inst).to_vec(),
+                    optional_type(entry_types[1].clone()),
+                )))
+            }
+            _ => {
+                let (list, index) = self.load_borrowed_list_element(&selection)?;
+                let inst = self
+                    .builder
+                    .ins()
+                    .call(self.vec_element_len, &[list, index, line, column]);
+                Ok(Some(ValueRef {
+                    values: vec![self.builder.inst_results(inst)[0]],
+                    ty: DirectType::Scalar(ScalarKind::Int64),
+                }))
+            }
+        }
     }
 
     /// Decides whether a member call's receiver can be lent out of its
@@ -10639,6 +10858,14 @@ impl<'a> FunctionCompiler<'a> {
         // Bounds or presence are checked once at creation. A single
         // unconditional selection is probed in place; otherwise probe the
         // selected slot through the loan and drop the copy.
+        if let Some(selection) = self.borrowed_list_element(&Operand::Place(loan.to_string())) {
+            let (list, index) = self.load_borrowed_list_element(&selection)?;
+            let (line, column) = self.span_operands(selection.span);
+            self.builder
+                .ins()
+                .call(self.vec_check_index, &[list, index, line, column]);
+            return Ok(());
+        }
         let resolved = self.resolve_view_place(loan)?;
         if let [alternative] = resolved.alternatives.as_slice() {
             if alternative.conditions.is_empty() && !alternative.elements.is_empty() {

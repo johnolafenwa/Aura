@@ -6631,6 +6631,134 @@ pub extern "C-unwind" fn aura_direct_vec_index_scalar(
     })
 }
 
+/// Runs `read` on one element of `list` where it lies, so nothing is cloned
+/// or boxed. A negative index counts from the end. An index out of range
+/// traps with the list-index diagnostic at `line:column`.
+fn with_vec_element<T>(
+    list: *mut OpaqueValue,
+    index: i64,
+    line: i64,
+    column: i64,
+    read: impl FnOnce(&Value) -> T,
+) -> T {
+    with_vector(list, |vector| {
+        let len = vector.elements.len();
+        match normalize_vec_index(index, len).and_then(|normalized| vector.elements.get(normalized))
+        {
+            Some(element) => read(element),
+            None => direct_vec_index_error(index, len, line, column),
+        }
+    })
+}
+
+/// Checks that `index` selects an element of `list`, as an element loan
+/// does when it begins, without building any value.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_vec_check_index(
+    list: *mut OpaqueValue,
+    index: i64,
+    line: i64,
+    column: i64,
+) {
+    task_runtime_boundary(|| with_vec_element(list, index, line, column, |_| ()))
+}
+
+/// `aura_direct_compare_str_literal` with the compared value read in place
+/// from element `index` of `list`.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_compare_str_literal_at(
+    op: i64,
+    list: *mut OpaqueValue,
+    index: i64,
+    literal_ptr: *const u8,
+    literal_len: usize,
+    literal_on_left: i64,
+    line: i64,
+    column: i64,
+) -> i64 {
+    task_runtime_boundary(|| {
+        let op = direct_comparison_op(op);
+        let compared = with_vec_element(list, index, line, column, |value| {
+            compare_with_str_literal(op, value, literal_ptr, literal_len, literal_on_left)
+        });
+        direct_comparison_bit(compared, line, column)
+    })
+}
+
+/// `aura_direct_compare_values` with one operand read in place from element
+/// `index` of `list`. `element_on_left` is 1 for `element < other`.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_compare_values_at(
+    op: i64,
+    list: *mut OpaqueValue,
+    index: i64,
+    other: *mut OpaqueValue,
+    element_on_left: i64,
+    line: i64,
+    column: i64,
+) -> i64 {
+    task_runtime_boundary(|| {
+        let op = direct_comparison_op(op);
+        let compared = with_vec_element(list, index, line, column, |element| unsafe {
+            with_value(other, |other| {
+                if element_on_left != 0 {
+                    compare_value_refs(element, other, op)
+                } else {
+                    compare_value_refs(other, element, op)
+                }
+            })
+        });
+        direct_comparison_bit(compared, line, column)
+    })
+}
+
+/// `len()` of element `index` of `list`, a `str`, `list`, `dict`, or `set`,
+/// read in place.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_vec_element_len(
+    list: *mut OpaqueValue,
+    index: i64,
+    line: i64,
+    column: i64,
+) -> i64 {
+    task_runtime_boundary(|| {
+        let len = with_vec_element(list, index, line, column, |element| match element {
+            Value::String(text) => text.chars().count(),
+            Value::Vec(vector) => vector.elements.len(),
+            Value::Map(map) => map.entries.len(),
+            Value::Set(set) => set.elements.len(),
+            other => runtime_error(format!(
+                "`len()` is not defined for `{}`",
+                value_type_name(other)
+            )),
+        });
+        match i64::try_from(len) {
+            Ok(len) => len,
+            Err(_) => runtime_error("length does not fit in the direct runtime range"),
+        }
+    })
+}
+
+/// `get(key)` on the `dict` at element `index` of `list`, read in place.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_vec_element_map_get(
+    list: *mut OpaqueValue,
+    index: i64,
+    key: *mut OpaqueValue,
+    line: i64,
+    column: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        with_vec_element(list, index, line, column, |element| match element {
+            Value::Map(map) => direct_map_lookup(map, key),
+            other => runtime_error(format!(
+                "expected `dict`, found `{}`",
+                value_type_name(other)
+            )),
+        })
+    })
+}
+
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_vec_index_option(
     vec: *mut OpaqueValue,
@@ -7218,18 +7346,22 @@ pub extern "C-unwind" fn aura_direct_map_get(
     map: *mut OpaqueValue,
     key: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    task_runtime_boundary(|| {
-        let value = with_map(map, |map| unsafe {
-            with_value(key, |key| {
-                map.entries
-                    .value_of(key)
-                    .map(try_clone_array_containing_value)
-                    .transpose()
-            })
-        });
-        let value = direct_array_result(value, 0, 0);
-        boxed_value(value.map(lookup_found).unwrap_or_else(lookup_missing))
-    })
+    task_runtime_boundary(|| with_map(map, |map| direct_map_lookup(map, key)))
+}
+
+/// `Lookup.Found` with a copy of the value stored under `key`, or
+/// `Lookup.Missing`.
+fn direct_map_lookup(map: &MapValue, key: *mut OpaqueValue) -> *mut OpaqueValue {
+    let value = unsafe {
+        with_value(key, |key| {
+            map.entries
+                .value_of(key)
+                .map(try_clone_array_containing_value)
+                .transpose()
+        })
+    };
+    let value = direct_array_result(value, 0, 0);
+    boxed_value(value.map(lookup_found).unwrap_or_else(lookup_missing))
 }
 
 #[cfg_attr(not(coverage), no_mangle)]
@@ -8342,38 +8474,50 @@ pub extern "C-unwind" fn aura_direct_compare_str_literal(
 ) -> i64 {
     task_runtime_boundary(|| {
         let op = direct_comparison_op(op);
-        // UTF-8 byte order matches `str` order, so a `str` operand compares
-        // bytes and never decodes the literal.
-        let literal = unsafe { slice::from_raw_parts(literal_ptr, literal_len) };
         let compared = unsafe {
-            with_value(value, |value| match value {
-                Value::String(text) => {
-                    let ordering = if literal_on_left != 0 {
-                        literal.cmp(text.as_bytes())
-                    } else {
-                        text.as_bytes().cmp(literal)
-                    };
-                    Ok(Value::Bool(match op {
-                        BinaryOp::Eq => ordering.is_eq(),
-                        BinaryOp::NotEq => ordering.is_ne(),
-                        BinaryOp::Less => ordering.is_lt(),
-                        BinaryOp::LessEq => ordering.is_le(),
-                        BinaryOp::Greater => ordering.is_gt(),
-                        _ => ordering.is_ge(),
-                    }))
-                }
-                other => {
-                    let literal = Value::String(decode_bytes(literal_ptr, literal_len));
-                    if literal_on_left != 0 {
-                        compare_value_refs(&literal, other, op)
-                    } else {
-                        compare_value_refs(other, &literal, op)
-                    }
-                }
+            with_value(value, |value| {
+                compare_with_str_literal(op, value, literal_ptr, literal_len, literal_on_left)
             })
         };
         direct_comparison_bit(compared, line, column)
     })
+}
+
+fn compare_with_str_literal(
+    op: BinaryOp,
+    value: &Value,
+    literal_ptr: *const u8,
+    literal_len: usize,
+    literal_on_left: i64,
+) -> std::result::Result<Value, Diagnostic> {
+    match value {
+        // UTF-8 byte order matches `str` order, so a `str` operand compares
+        // bytes and never decodes the literal.
+        Value::String(text) => {
+            let literal = unsafe { slice::from_raw_parts(literal_ptr, literal_len) };
+            let ordering = if literal_on_left != 0 {
+                literal.cmp(text.as_bytes())
+            } else {
+                text.as_bytes().cmp(literal)
+            };
+            Ok(Value::Bool(match op {
+                BinaryOp::Eq => ordering.is_eq(),
+                BinaryOp::NotEq => ordering.is_ne(),
+                BinaryOp::Less => ordering.is_lt(),
+                BinaryOp::LessEq => ordering.is_le(),
+                BinaryOp::Greater => ordering.is_gt(),
+                _ => ordering.is_ge(),
+            }))
+        }
+        other => {
+            let literal = Value::String(decode_bytes(literal_ptr, literal_len));
+            if literal_on_left != 0 {
+                compare_value_refs(&literal, other, op)
+            } else {
+                compare_value_refs(other, &literal, op)
+            }
+        }
+    }
 }
 
 #[cfg_attr(not(coverage), no_mangle)]

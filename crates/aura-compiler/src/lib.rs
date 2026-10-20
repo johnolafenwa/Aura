@@ -12,6 +12,7 @@ pub(crate) use aura_runtime::json_codec;
 pub mod lexer;
 pub mod limits;
 pub mod mir;
+mod mir_copies;
 pub mod mir_runtime;
 mod native_codegen;
 use aura_runtime::native_runtime;

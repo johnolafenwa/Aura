@@ -1,0 +1,113 @@
+# A `for` loop over a list reads each element in place when its body only
+# compares the element, measures it with `len()`, or looks a key up with
+# `get()`. These loops cover every exit edge and each element kind.
+
+def count_matches(names: list[str], target: str) -> int64:
+    mut hits = 0
+    for name in names:
+        if name == target:
+            hits += 1
+        if "b" == name:
+            hits += 10
+        if name != "a":
+            hits += 100
+        if target != name:
+            hits += 1000
+    return hits
+
+
+def first_longer(names: list[str], limit: int64) -> int64:
+    mut index = 0
+    for name in names:
+        if name.len() > limit:
+            return index
+        index += 1
+    return -1
+
+
+def total_ages(docs: list[dict[str, int64]]) -> int64:
+    mut total = 0
+    for doc in docs:
+        match doc.get("age"):
+            case Lookup.Found(age):
+                total += age
+            case Lookup.Missing:
+                total -= 1
+        total += doc.len() * 100
+    return total
+
+
+def group_sizes(groups: list[list[str]], sets: list[set[int64]]) -> int64:
+    mut total = 0
+    for group in groups:
+        if group.len() == 0:
+            continue
+        if group == ["stop"]:
+            break
+        total += group.len()
+    for values in sets:
+        total += values.len() * 10
+    return total
+
+
+def nested_pairs(left: list[str], right: list[str]) -> int64:
+    mut pairs = 0
+    for a in left:
+        for b in right:
+            if a == b:
+                pairs += 1
+    return pairs
+
+
+def checked(ok: bool) -> Result[int64, str]:
+    if ok:
+        return Result.Ok(1)
+    return Result.Err("found a bad word")
+
+
+def count_good(words: list[str]) -> Result[int64, str]:
+    mut good = 0
+    for word in words:
+        good += try checked(word != "bad")
+    return Result.Ok(good)
+
+
+def last_kept(names: list[str]) -> str:
+    # This body copies the element, so the loop keeps its copying read.
+    mut last = ""
+    for name in names:
+        if name == "skip":
+            continue
+        last = name.clone()
+    return last
+
+
+def count_unused(names: list[str]) -> int64:
+    mut count = 0
+    for _ in names:
+        count += 1
+    return count
+
+
+def main():
+    names = ["a", "b", "c", "b"]
+    print(count_matches(names, "b"))
+    print(count_matches([], "b"))
+    print(first_longer(["x", "yy", "zzz"], 1))
+    print(first_longer(["x"], 5))
+    print(total_ages([{"age": 30}, {"name": 1}, {"age": 12, "id": 2}]))
+    print(group_sizes([["a"], [], ["b", "c"], ["stop"], ["never"]], [{1, 2}, set[int64]()]))
+    print(nested_pairs(["x", "y", "x"], ["x", "z", "x"]))
+    match count_good(["fine", "ok"]):
+        case Result.Ok(good):
+            print(good)
+        case Result.Err(message):
+            print(message)
+    match count_good(["fine", "bad", "ok"]):
+        case Result.Ok(good):
+            print(good)
+        case Result.Err(message):
+            print(message)
+    print(last_kept(["one", "skip", "two", "skip"]))
+    print(count_unused(names))
+    print(names)

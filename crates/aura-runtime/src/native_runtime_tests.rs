@@ -13705,6 +13705,28 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
             "vec-index-scalar-oob" => {
                 super::aura_direct_vec_index_scalar(int_vec(&[1]), 5, 0);
             }
+            "vec-check-index-oob" => {
+                super::aura_direct_vec_check_index(int_vec(&[1]), -2, 3, 9);
+            }
+            "vec-element-read-oob" => {
+                let text = b"a";
+                super::aura_direct_compare_str_literal_at(
+                    5,
+                    int_vec(&[1]),
+                    4,
+                    text.as_ptr(),
+                    1,
+                    0,
+                    0,
+                    0,
+                );
+            }
+            "vec-element-len-type" => {
+                super::aura_direct_vec_element_len(int_vec(&[1]), 0, 0, 0);
+            }
+            "vec-element-map-get-type" => {
+                super::aura_direct_vec_element_map_get(int_vec(&[1]), 0, string_value("age"), 0, 0);
+            }
             "vec-index-scalar-type" => {
                 let vec = super::aura_direct_vec_empty();
                 super::aura_direct_vec_push_in_place(vec, bool_value(true));
@@ -14696,6 +14718,22 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
         (
             "vec-index-scalar-oob",
             "list index `5` is out of bounds for length `1`",
+        ),
+        (
+            "vec-check-index-oob",
+            "list index `-2` is out of bounds for length `1`",
+        ),
+        (
+            "vec-element-read-oob",
+            "list index `4` is out of bounds for length `1`",
+        ),
+        (
+            "vec-element-len-type",
+            "`len()` is not defined for `integer`",
+        ),
+        (
+            "vec-element-map-get-type",
+            "expected `dict`, found `integer`",
         ),
         (
             "vec-index-scalar-type",
@@ -24958,4 +24996,69 @@ fn task_arguments_are_shared_before_the_child_starts() {
     );
     assert!(unsafe { &*argument }.shared.load(Ordering::Acquire));
     unsafe { release_value(argument) };
+}
+
+#[test]
+fn list_element_reads_borrow_the_element_in_place() {
+    let names = super::aura_direct_vec_empty();
+    for name in ["user-7", "user-8"] {
+        super::aura_direct_vec_push_in_place(names, string_value(name));
+    }
+    super::aura_direct_vec_check_index(names, 1, 0, 0);
+    super::aura_direct_vec_check_index(names, -2, 0, 0);
+    let literal = b"user-7";
+    let compare_literal = |index: i64, op: i64, on_left: i64| {
+        super::aura_direct_compare_str_literal_at(
+            op,
+            names,
+            index,
+            literal.as_ptr(),
+            literal.len(),
+            on_left,
+            0,
+            0,
+        )
+    };
+    assert_eq!(compare_literal(0, 5, 0), 1);
+    assert_eq!(compare_literal(-1, 5, 0), 0);
+    assert_eq!(compare_literal(1, 6, 1), 1);
+    let other = string_value("user-8");
+    assert_eq!(
+        super::aura_direct_compare_values_at(5, names, 1, other, 1, 0, 0),
+        1
+    );
+    assert_eq!(
+        super::aura_direct_compare_values_at(6, names, 0, other, 0, 0, 0),
+        1
+    );
+    assert_eq!(super::aura_direct_vec_element_len(names, 0, 0, 0), 6);
+
+    let groups = super::aura_direct_vec_empty();
+    super::aura_direct_vec_push_in_place(groups, int_vec(&[1, 2, 3]));
+    super::aura_direct_vec_push_in_place(groups, string_map(&[("age", "41")]));
+    let set = super::aura_direct_set_empty();
+    super::aura_direct_set_insert_in_place(set, int_value(4));
+    super::aura_direct_vec_push_in_place(groups, set);
+    assert_eq!(super::aura_direct_vec_element_len(groups, 0, 0, 0), 3);
+    assert_eq!(super::aura_direct_vec_element_len(groups, 1, 0, 0), 1);
+    assert_eq!(super::aura_direct_vec_element_len(groups, 2, 0, 0), 1);
+    let key = string_value("age");
+    let found = super::aura_direct_vec_element_map_get(groups, 1, key, 0, 0);
+    match unsafe { take_value(found) } {
+        Value::EnumVariant(variant) if variant.variant_name == "Found" => {
+            assert_eq!(
+                variant.single_payload(),
+                Some(&Value::String("41".to_string()))
+            );
+        }
+        other => panic!("expected Lookup.Found, found {other:?}"),
+    }
+    // Nothing above copied an element out of either list.
+    match unsafe { take_value(names) } {
+        Value::Vec(vector) => assert_eq!(vector.elements.len(), 2),
+        other => panic!("expected a list, found {other:?}"),
+    }
+    for value in [names, groups, other, key, found] {
+        unsafe { release_value(value) };
+    }
 }

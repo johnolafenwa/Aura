@@ -231,6 +231,35 @@ Callgrind counts for the whole `fib(30)` process fall from 1,917,708,454 to
 and parity are unchanged. Design record:
 [Batch 7 design checkpoint](22-batch-7-design-checkpoint.md).
 
+### Batch 7 step 3: borrowed loop element reads
+
+Step 3 removes the per-element copy from shared `for` loops whose body only
+reads the element:
+
+- MIR lowering lends each element of a local list to the loop binding, the
+  way `for x in mut` does, when the element is a `str`, `list`, `dict`, or
+  `set` and `mir_copies::body_only_borrows` accepts the body. The binding
+  may appear only as a side of `==` or `!=`, as the receiver of `len()`, or
+  as the receiver of `get(key)` on a `dict`. Every other loop lowers as
+  before.
+- A read of the binding is an explicit `ReadLoan` copy.
+  `mir_copies::cancel_loan_copies` removes a copy whose only use is the next
+  comparison in the same block, and the comparison reads the loan.
+- The direct backend reads a lent list element where it lies. The loan
+  start checks the index with `aura_direct_vec_check_index`. Comparisons
+  call `aura_direct_compare_str_literal_at` or
+  `aura_direct_compare_values_at`, and `len()` and `get(key)` call
+  `aura_direct_vec_element_len` and `aura_direct_vec_element_map_get`.
+  Each helper reports the same out-of-bounds diagnostic as a list index.
+- A loan that is live before a loop stays active through the loop body.
+  Before this step, a `view` or a `for x in mut` element used inside a later
+  loop ended at its last use in the body and failed with `AU4001`.
+
+Callgrind counts fall from 1,159,541,933 to 363,819,459 instructions for
+`string_list_scan` and from 1,373,117,275 to 1,137,797,396 for
+`record_field_reads`. `representation_stats` pins zero cloned elements for
+a borrowed loop on the direct backend.
+
 ## Batch 1 phase 1: normalized types and alias expansion
 
 The first type family establishes a shared producer in `sema/types.rs` for

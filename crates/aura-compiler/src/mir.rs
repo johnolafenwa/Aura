@@ -9562,7 +9562,7 @@ fn terminator_successors(terminator: &Terminator) -> Vec<&str> {
     }
 }
 
-fn terminator_place_mentions(terminator: &Terminator) -> Vec<&str> {
+pub(crate) fn terminator_place_mentions(terminator: &Terminator) -> Vec<&str> {
     let mut mentions = Vec::new();
     match terminator {
         Terminator::Return(operand)
@@ -9601,7 +9601,10 @@ fn operand_place_mention<'a>(operand: &'a Operand, mentions: &mut Vec<&'a str>) 
 
 /// Every place an instruction reads, lends, or names, except an `Assign`
 /// target.
-fn instruction_place_mentions<'a>(instruction: &'a Instruction, mentions: &mut Vec<&'a str>) {
+pub(crate) fn instruction_place_mentions<'a>(
+    instruction: &'a Instruction,
+    mentions: &mut Vec<&'a str>,
+) {
     match instruction {
         Instruction::Safepoint => {}
         Instruction::BeginLoan { source, .. } | Instruction::PushCleanup { place: source, .. } => {
@@ -10896,6 +10899,9 @@ struct LoopLabels {
     continue_label: String,
     cleanup_depth: usize,
     loan_depth: usize,
+    /// Loans active when the loop began. The next iteration reads them
+    /// again, so none of them ends inside the loop body.
+    outer_loans: BTreeSet<String>,
 }
 
 struct ReturnRedirect {
@@ -12259,7 +12265,7 @@ impl<'a> Lowerer<'a> {
                 Some(Terminator::Return(spec.default_return));
         }
 
-        MirFunction {
+        let mut function = MirFunction {
             name: spec.name,
             module_name: self.module_name.to_string(),
             source_path: if self.module_name == self.program.module_name {
@@ -12296,7 +12302,9 @@ impl<'a> Lowerer<'a> {
                     terminator: block.terminator.unwrap_or(Terminator::Unreachable),
                 })
                 .collect(),
-        }
+        };
+        crate::mir_copies::cancel_loan_copies(&mut function);
+        function
     }
 
     fn finish_with_generated(mut self, spec: MirFunctionSpec) -> Vec<MirFunction> {
@@ -12316,6 +12324,13 @@ impl<'a> Lowerer<'a> {
         mut inherited_endings: BTreeSet<String>,
     ) {
         self.loan_scopes.push(Vec::new());
+        // A loan that was active when an enclosing loop began is read again
+        // by that loop's next iteration, so it cannot end in this body.
+        let loop_live = self
+            .loop_stack
+            .iter()
+            .flat_map(|labels| labels.outer_loans.iter().cloned())
+            .collect::<BTreeSet<_>>();
         for (index, stmt) in statements.iter().enumerate() {
             let needed_after = self
                 .view_sources
@@ -12326,9 +12341,10 @@ impl<'a> Lowerer<'a> {
                         .get(*loan)
                         .map(String::as_str)
                         .unwrap_or(loan);
-                    statements[index + 1..]
-                        .iter()
-                        .any(|later| crate::sema::stmt_references_name(later, source_name))
+                    loop_live.contains(*loan)
+                        || statements[index + 1..]
+                            .iter()
+                            .any(|later| crate::sema::stmt_references_name(later, source_name))
                 })
                 .cloned()
                 .collect::<BTreeSet<_>>();
@@ -12350,9 +12366,10 @@ impl<'a> Lowerer<'a> {
                             .get(*loan)
                             .map(String::as_str)
                             .unwrap_or(loan);
-                        !statements[index + 1..]
-                            .iter()
-                            .any(|later| crate::sema::stmt_references_name(later, source_name))
+                        !loop_live.contains(*loan)
+                            && !statements[index + 1..]
+                                .iter()
+                                .any(|later| crate::sema::stmt_references_name(later, source_name))
                             && !self.loan_has_active_descendant(loan)
                     })
                     .cloned()
@@ -12378,9 +12395,10 @@ impl<'a> Lowerer<'a> {
                         .get(*loan)
                         .map(String::as_str)
                         .unwrap_or(loan);
-                    !statements[index + 1..]
-                        .iter()
-                        .any(|later| crate::sema::stmt_references_name(later, source_name))
+                    !loop_live.contains(*loan)
+                        && !statements[index + 1..]
+                            .iter()
+                            .any(|later| crate::sema::stmt_references_name(later, source_name))
                         && !self.loan_has_active_descendant(loan)
                 })
                 .cloned()
@@ -16789,6 +16807,7 @@ impl<'a> Lowerer<'a> {
             continue_label: self.label(safepoint_block),
             cleanup_depth: self.with_stack.len(),
             loan_depth: self.loan_scopes.len(),
+            outer_loans: self.view_sources.keys().cloned().collect(),
         });
         let target_scope = self.fresh_scoped_binding_target_slots(&for_stmt.target, &tuple_ty);
         self.scoped_names.push(target_scope);
@@ -16841,9 +16860,11 @@ impl<'a> Lowerer<'a> {
                 &iterable_ty,
                 Some(Type::Named(name, args)) if name == "list" && args.len() == 1
             );
-        let iterable = if mutable_list_iteration {
+        let lent_list_iteration =
+            self.lendable_list_iteration(for_stmt, checked_binding, iterable_ty.as_ref());
+        let iterable = if mutable_list_iteration || lent_list_iteration {
             // Each iteration lends the element in place; see
-            // `lower_mutable_list_iteration`.
+            // `lower_list_iteration_by_loan`.
             Operand::Unit
         } else if for_stmt.borrow_mode == Some(ReceiverKind::Value) {
             let source = self.lower_expr_for_owned_value(&for_stmt.iterable, iterable_ty.as_ref());
@@ -16881,9 +16902,15 @@ impl<'a> Lowerer<'a> {
             ),
             BindingTarget::Tuple { .. } | BindingTarget::Rest { .. } => None,
         };
-        if mutable_list_iteration {
+        if mutable_list_iteration || lent_list_iteration {
             let binding = simple_binding.expect("sema refuses `mut` tuple loop targets");
-            self.lower_mutable_list_iteration(for_stmt, binding, target_scope, lower_body);
+            self.lower_list_iteration_by_loan(
+                for_stmt,
+                binding,
+                target_scope,
+                lower_body,
+                mutable_list_iteration,
+            );
             return;
         }
         let dispatch_block = self.new_block("for_iter");
@@ -17334,6 +17361,7 @@ impl<'a> Lowerer<'a> {
             continue_label: self.label(safepoint_block),
             cleanup_depth: self.with_stack.len(),
             loan_depth: self.loan_scopes.len(),
+            outer_loans: self.view_sources.keys().cloned().collect(),
         });
         self.switch_to(body_block);
         self.scoped_names.push(target_scope);
@@ -17364,12 +17392,53 @@ impl<'a> Lowerer<'a> {
     /// they happen, so a later trap cannot discard an earlier write, and a
     /// non-Copy element is never cloned. The loan ends on every edge out of
     /// the body: fallthrough, `continue`, `break`, and `return`.
-    fn lower_mutable_list_iteration(
+    /// Whether a shared loop lends each element of its list instead of
+    /// copying it out: the iterable is a local list, not a view or a
+    /// constant, and the body only reads the binding in place (see
+    /// `mir_copies::body_only_borrows`).
+    fn lendable_list_iteration(
+        &self,
+        for_stmt: &crate::ast::ForStmt,
+        checked_binding: Option<&ComprehensionClauseInfo>,
+        iterable_ty: Option<&Type>,
+    ) -> bool {
+        if checked_binding.is_some()
+            || !matches!(for_stmt.borrow_mode, None | Some(ReceiverKind::Borrow))
+        {
+            return false;
+        }
+        let Some(Type::Named(name, args)) = iterable_ty else {
+            return false;
+        };
+        if name != "list" || args.len() != 1 || !crate::mir_copies::lendable_loop_element(&args[0])
+        {
+            return false;
+        }
+        let BindingTarget::Name { name: binding, .. } = &for_stmt.target else {
+            return false;
+        };
+        let ExprKind::Name(iterable) = &grouped_mir_expr(&for_stmt.iterable).kind else {
+            return false;
+        };
+        if self.resolve_constant_info(iterable).is_some() {
+            return false;
+        }
+        let local = self.render_local_name(iterable);
+        self.local_types.contains_key(&local)
+            && !self.view_sources.contains_key(&local)
+            && crate::mir_copies::body_only_borrows(&for_stmt.body, binding, &args[0])
+    }
+
+    /// `for x in mut items`, and a shared loop that only reads `x` in place:
+    /// each iteration lends element `i` to the binding through an element
+    /// loan, so writes land in the list and reads copy nothing.
+    fn lower_list_iteration_by_loan(
         &mut self,
         for_stmt: &crate::ast::ForStmt,
         binding: String,
         target_scope: HashMap<String, String>,
         lower_body: &mut dyn FnMut(&mut Self),
+        mutable: bool,
     ) {
         let span = for_stmt.span;
         let int64 = Type::named("int64");
@@ -17446,6 +17515,7 @@ impl<'a> Lowerer<'a> {
             continue_label: self.label(continue_block),
             cleanup_depth: self.with_stack.len(),
             loan_depth,
+            outer_loans: self.view_sources.keys().cloned().collect(),
         });
         self.scoped_names.push(target_scope);
         let element = Expr {
@@ -17459,14 +17529,14 @@ impl<'a> Lowerer<'a> {
             span: for_stmt.iterable.span,
         };
         let (collection, selector, projection, selector_span) = self
-            .element_loan_source(&element, true)
-            .expect("a checked `mut` list iterable is an element-loan source");
+            .element_loan_source(&element, mutable)
+            .expect("a lent list iterable is an element-loan source");
         self.emit_element_loan(
             &binding,
             &collection,
             selector,
             projection,
-            true,
+            mutable,
             selector_span,
         );
         self.view_sources.insert(binding.clone(), collection);
@@ -17527,6 +17597,7 @@ impl<'a> Lowerer<'a> {
             continue_label: self.label(safepoint_block),
             cleanup_depth: self.with_stack.len(),
             loan_depth: self.loan_scopes.len(),
+            outer_loans: self.view_sources.keys().cloned().collect(),
         });
         self.switch_to(body_block);
         self.lower_stmts(&while_stmt.body);

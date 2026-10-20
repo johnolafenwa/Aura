@@ -17371,8 +17371,10 @@ import-time initialization are outside the Aura 0.5 language contract.
 
 This page records Aura's performance measurements. Each one has an exact
 workload, pinned source commits, raw observations, and content hashes. The
-measurements guide engineering. They are not language semantic guarantees or
-ratified numeric targets.
+measurements guide engineering. They are not language semantic guarantees.
+The speed targets for native code are ratios to matching Rust programs. The
+[design record](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/22-batch-7-design-checkpoint.md#targets)
+lists them.
 
 ## Current Measurements
 
@@ -17659,9 +17661,8 @@ The same-session controls:
 | NumPy Array sum, per operation | 0.169047 ms | 0.168981 ms | -0.0394% |
 
 Every control drifts by less than 5%, including CPython startup. No repeated
-before and after pair was needed. No numeric speed target is ratified. The
-measurements and dispersion from this M2 Pro host feed later performance
-decisions.
+before and after pair was needed. The measurements and dispersion from this
+M2 Pro host feed later performance decisions.
 
 ## Current Performance Gaps
 
@@ -17673,8 +17674,8 @@ decisions.
 | Retry | favors Aura |
 | Array addition | 1.006974 times NumPy, 1.006524 times the same-session Rust kernel |
 | Array reduction | 6.682308 times NumPy, 1.339087 times the same-session Rust kernel |
-| `record_field_reads` | about 21 times Python 3.13, about 16 times Rust |
-| `string_list_scan` | about 45 times Rust |
+| `record_field_reads` | about 18 times Python 3.13, about 13 times Rust |
+| `string_list_scan` | about 12 times Rust |
 | AuraDB `update` by id | about 3 times Python 3.13 |
 
 These gaps are specific to these workloads. Scheduling, runtime
@@ -17716,6 +17717,45 @@ On the shared Linux container, 15 alternating GO to DONE runs give a
 `fib(30)` median of 129.3 ms at `aa52bfc` and 34.7 ms with descriptors. The
 Rust reference takes about 4 ms. Creating and joining 10,000 tasks is
 unchanged at about 446 ms.
+
+### Loop Element Reads
+
+A shared `for` loop over a local list reads each element in place when the
+element is a `str`, `list`, `dict`, or `set` and the body uses it only in
+these ways:
+
+- as a side of `==` or `!=`
+- as the receiver of `len()`
+- as the receiver of `get(key)`, for a `dict` element
+
+Any other use, such as passing the element to a function, storing it, or
+capturing it in a lambda, makes the loop copy each element as before.
+
+```aura
+def count_matches(names: list[str], wanted: str) -> int64:
+    mut hits = 0
+    for name in names:
+        if name == wanted:
+            hits += 1
+    return hits
+
+def main():
+    print(count_matches(["ada", "bo", "ada"], "ada"))
+```
+
+On the shared Linux container, 11 alternating whole-process runs give these
+medians. Before is `aa52bfc`.
+
+| Program | Before | After |
+| --- | ---: | ---: |
+| `string_list_scan` | 115.0 ms | 32.8 ms |
+| `record_field_reads` | 149.9 ms | 122.9 ms |
+| `dict_build_get` | 298.2 ms | 283.4 ms |
+| `set_insert_contains` | 33.6 ms | 33.0 ms |
+| `int_list_sum` | 44.7 ms | 45.6 ms |
+
+`record_field_reads` still spends most of its time looking up the key and
+matching the `json.Value` it finds.
 
 ## Performance Direction
 

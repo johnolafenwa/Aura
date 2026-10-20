@@ -17,7 +17,21 @@ Last updated: 2026-10-20
   LLVM and removes it. LLVM's inliner replaces the planned MIR inliner.
 - Next: step 1, below.
 
-## Batch 7 step 2: cheap call frames (in progress)
+## Batch 7 step 3: borrowed loop element reads (in progress)
+
+- Target: remove per-element copies from shared `for` loops over local lists
+  whose body only compares, measures, or searches the element.
+- Done: MIR lends each element when `body_only_borrows` accepts the body, a
+  pass cancels loan copies consumed by a comparison, and the direct backend
+  reads the element in place through five runtime helpers. A loan live
+  before a loop now stays active through the loop body, which fixes an
+  `AU4001` failure. Notes are in
+  `2026-10-20-batch-7-step-3-borrowed-loop-reads.md`.
+- Verification: see the work note. `string_list_scan` went from 115.0 ms to
+  32.8 ms and `record_field_reads` from 149.9 ms to 122.9 ms.
+- Next: hosted CI, then step 4, inline list length and element reads.
+
+## Batch 7 step 2: cheap call frames (complete)
 
 - Target: cut the per-call frame cost on the direct backend without
   changing frame records, the depth limit, or parity.
@@ -28,7 +42,7 @@ Last updated: 2026-10-20
 - Verification: the workspace tests, the backend parity matrix, clippy,
   fmt, and the native binaries gate pass locally. Callgrind counts for
   `fib(30)` fall from 1,917,708,454 to 568,735,408 instructions.
-- Next: hosted CI, then step 3, explicit retain and release in MIR.
+- Done: merged in PR #92.
 
 ## Batch 7 step 1: Rust baselines, build times, and proposed targets (complete)
 
@@ -41,7 +55,8 @@ Last updated: 2026-10-20
   in `2026-10-20-batch-7-step-1-baselines.md`.
 - Verification: script unit tests and the Rust protocol smoke check pass.
   Measurements ran on a shared Linux container and are diagnostic-grade.
-- Done: merged in PR #91. The targets wait for John's ratification.
+- Done: merged in PR #91. John approved every proposed target on
+  2026-10-20.
 
 ## Batch 6 step 8: the reference agent, version 2 (complete)
 

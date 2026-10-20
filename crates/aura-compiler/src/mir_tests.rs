@@ -13705,3 +13705,111 @@ def main():
         .expect_err("a variant must be declared by its enum");
     assert!(error.contains("Signal.Missing"), "{error}");
 }
+
+const BORROWED_LOOP_SOURCE: &str = r#"
+def scan(names: list[str], docs: list[dict[str, int64]]) -> int64:
+    mut hits = 0
+    for name in names:
+        if name == "x":
+            hits += name.len()
+        if "y" != name:
+            hits += 1
+    for doc in docs:
+        match doc.get("age"):
+            case Lookup.Found(age):
+                hits += age
+            case Lookup.Missing:
+                pass
+    return hits
+
+def copies(names: list[str]) -> str:
+    mut last = ""
+    for name in names:
+        last = name.clone()
+    return last
+
+def viewed(names: list[str]) -> bool:
+    view first = names[0]
+    return first == "a"
+
+def main():
+    print(scan(["x"], [{"age": 1}]))
+    print(copies(["a"]))
+    print(viewed(["a"]))
+"#;
+
+fn function_instructions<'a>(module: &'a MirModule, name: &str) -> Vec<&'a Instruction> {
+    module
+        .functions
+        .iter()
+        .find(|function| function.name == name)
+        .unwrap_or_else(|| panic!("{name} should lower"))
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .collect()
+}
+
+fn calls_member(instruction: &Instruction, member: &str) -> bool {
+    matches!(
+        instruction,
+        Instruction::Assign {
+            value: Rvalue::Call {
+                callee: CallTarget::Member { field, .. },
+                ..
+            },
+            ..
+        } if field == member
+    )
+}
+
+#[test]
+fn shared_list_loop_that_only_borrows_lends_each_element() {
+    let module =
+        crate::lower_source_to_mir(BORROWED_LOOP_SOURCE).expect("borrowed loops should lower");
+    validate_loan_flow(&module).expect("borrowed loops should validate");
+    let scan = function_instructions(&module, "scan");
+    for source in ["names", "docs"] {
+        assert!(
+            scan.iter().any(|instruction| matches!(
+                instruction,
+                Instruction::BeginElementLoan { source: loan_source, mutable: false, .. }
+                    if loan_source == source
+            )),
+            "the loop over `{source}` should lend each element"
+        );
+    }
+    // The comparisons read the element through the loan: no copy is made.
+    assert!(!scan
+        .iter()
+        .any(|instruction| matches!(instruction, Instruction::ReadLoan { .. })));
+    assert!(!scan
+        .iter()
+        .any(|instruction| calls_member(instruction, INTERNAL_VEC_INDEX_FIELD)));
+
+    // A body that copies the element keeps one copying read per element.
+    let copies = function_instructions(&module, "copies");
+    assert!(copies
+        .iter()
+        .any(|instruction| calls_member(instruction, INTERNAL_VEC_INDEX_FIELD)));
+    assert!(!copies
+        .iter()
+        .any(|instruction| matches!(instruction, Instruction::BeginElementLoan { .. })));
+}
+
+#[test]
+fn comparison_of_a_loan_reads_the_loan_without_a_copy() {
+    let module =
+        crate::lower_source_to_mir(BORROWED_LOOP_SOURCE).expect("borrowed loops should lower");
+    let viewed = function_instructions(&module, "viewed");
+    assert!(!viewed
+        .iter()
+        .any(|instruction| matches!(instruction, Instruction::ReadLoan { .. })));
+    assert!(viewed.iter().any(|instruction| matches!(
+        instruction,
+        Instruction::Assign {
+            value: Rvalue::Binary { op: BinaryOp::Eq, left: Operand::Place(left), .. },
+            ..
+        } if left == "first"
+    )));
+}

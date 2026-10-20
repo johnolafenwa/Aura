@@ -593,3 +593,57 @@ fn direct_string_key_loan_ending_in_each_branch_releases_its_key() {
         "0\n1\n1\n[1]\n1\n[1]\n-1\n",
     );
 }
+
+/// Loops whose bodies only compare an element, measure it, or look a key up
+/// in it, over 1,000 strings and 1,000 dictionaries, ten times each.
+const BORROWED_LOOP_READS: &str = r#"def main():
+    mut names: list[str] = []
+    mut docs: list[dict[str, int64]] = []
+    mut i = 0
+    while i < 1000:
+        names.append(f"user-{i % 10}")
+        mut doc: dict[str, int64] = {}
+        doc["age"] = i % 50
+        docs.append(doc)
+        i += 1
+    mut hits = 0
+    mut total = 0
+    mut round = 0
+    while round < 10:
+        for name in names:
+            if name == "user-7":
+                hits += 1
+            if name.len() > 6:
+                hits += 1000
+        for doc in docs:
+            match doc.get("age"):
+                case Lookup.Found(age):
+                    total += age
+                case Lookup.Missing:
+                    pass
+        round += 1
+    print(hits)
+    print(total)
+"#;
+
+#[test]
+fn direct_borrowed_loop_reads_copy_no_element() {
+    let (_, direct) = assert_both_backends(
+        "repr-borrowed-loop-reads",
+        BORROWED_LOOP_READS,
+        "1000\n245000\n",
+    );
+    // Each of the 20,000 iterations used to copy its element into a fresh
+    // box, for 65,003 boxes in all. Reading in place leaves the 15,003 boxes
+    // of the setup loop and the boxes of the 10,000 `get` calls, which box
+    // their key and their result.
+    assert_eq!(
+        direct.cloned_elements, 0,
+        "a borrowed loop read copied elements on the direct backend"
+    );
+    assert!(
+        direct.opaque_boxes <= 45_003,
+        "borrowed loop reads built {} boxes on the direct backend",
+        direct.opaque_boxes
+    );
+}
